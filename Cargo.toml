@@ -1,0 +1,21 @@
+[package]
+name = "rontodoc"
+version = "0.1.0"
+edition = "2024"
+authors = ["Paul Adamson"]
+description = "A blazing fast, Rust-based ontology documentation generator."
+license = "Apache-2.0"
+
+[dependencies]
+
+# Optimization for release builds
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true # Automatically strip symbols for smaller binaries
+
+[lints.clippy]
+pedantic = "warn"
+nursery = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
