@@ -1,12 +1,25 @@
 [package]
 name = "rontodoc"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 authors = ["Paul Adamson"]
 description = "A blazing fast, Rust-based ontology documentation generator."
 license = "Apache-2.0"
 
 [dependencies]
+clap = { version = "4.4", features = ["derive"] }
+oxigraph = "0.3"
+askama = "0.12"
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+
+[dev-dependencies]
+playwright-rs = "0.8.2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+warp = "0.3"
+assert_cmd = "2.0"
+pretty_assertions = "1.4"
+tempfile = "3.8"
 
 # Optimization for release builds
 [profile.release]

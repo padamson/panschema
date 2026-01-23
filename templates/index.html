@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>{{ title }}</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            line-height: 1.6;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        h1,
+        h2,
+        h3 {
+            color: #005A9C;
+        }
+
+        .entity {
+            border: 1px solid #ccc;
+            margin-bottom: 20px;
+            padding: 10px;
+            border-radius: 4px;
+        }
+
+        .entity h3 {
+            margin-top: 0;
+        }
+
+        .label {
+            font-weight: bold;
+        }
+
+        .comment {
+            font-style: italic;
+            color: #555;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>{{ title }}</h1>
+    <div class="metadata">
+        <p><strong>Version:</strong> {{ version }}</p>
+        <p><strong>Description:</strong> {{ description }}</p>
+    </div>
+
+    <div id="abstract">
+        <h2>Abstract</h2>
+        <p>{{ abstract_text }}</p>
+    </div>
+
+
+    <div id="namespaces">
+        <h2>Namespaces</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Prefix</th>
+                    <th>URI</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for ns in namespaces %}
+                <tr>
+                    <td>{{ ns.0 }}</td>
+                    <td>{{ ns.1 }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div id="toc">
+        <h2>Table of Contents</h2>
+        <ul>
+            <li><a href="#abstract">Abstract</a></li>
+            <li><a href="#namespaces">Namespaces</a></li>
+            <li><a href="#classes">Classes</a></li>
+            <li><a href="#objectproperties">Object Properties</a></li>
+            <li><a href="#dataproperties">Data Properties</a></li>
+            <li><a href="#annotationproperties">Annotation Properties</a></li>
+            <li><a href="#namedindividuals">Named Individuals</a></li>
+            <li><a href="#crossreference">Cross Reference</a></li>
+        </ul>
+    </div>
+
+    <div id="crossreference">
+        <h2>Cross Reference</h2>
+
+        <div class="crossref-section">
+            <h3>Classes</h3>
+            <ul class="crossref-list">
+                {% for entity in classes %}
+                <li><a href="#{{ entity.id }}">{{ entity.label }}</a></li>
+                {% endfor %}
+            </ul>
+        </div>
+
+        <div class="crossref-section">
+            <h3>Object Properties</h3>
+            <ul class="crossref-list">
+                {% for entity in object_properties %}
+                <li><a href="#{{ entity.id }}">{{ entity.label }}</a></li>
+                {% endfor %}
+            </ul>
+        </div>
+
+        <div class="crossref-section">
+            <h3>Data Properties</h3>
+            <ul class="crossref-list">
+                {% for entity in data_properties %}
+                <li><a href="#{{ entity.id }}">{{ entity.label }}</a></li>
+                {% endfor %}
+            </ul>
+        </div>
+
+        <div class="crossref-section">
+            <h3>Annotation Properties</h3>
+            <ul class="crossref-list">
+                {% for entity in annotation_properties %}
+                <li><a href="#{{ entity.id }}">{{ entity.label }}</a></li>
+                {% endfor %}
+            </ul>
+        </div>
+
+        <div class="crossref-section">
+            <h3>Named Individuals</h3>
+            <ul class="crossref-list">
+                {% for entity in named_individuals %}
+                <li><a href="#{{ entity.id }}">{{ entity.label }}</a></li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
+
+    <div id="classes">
+        <h2>Classes</h2>
+        {% for class in classes %}
+        <div class="entity" id="{{ class.id }}">
+            <h3>{{ class.label }}</h3>
+            <p><span class="label">IRI:</span> <code>{{ class.iri }}</code></p>
+
+            {% if !class.superclasses.is_empty() %}
+            <p><span class="label">Superclasses:</span>
+                {% for sc in class.superclasses %}
+                <a href="#{{ sc.label }}">{{ sc.label }}</a>{% if !loop.last %}, {% endif %}
+                {% endfor %}
+            </p>
+            {% endif %}
+
+            {% if !class.disjoints.is_empty() %}
+            <p><span class="label">Disjoint With:</span>
+                {% for dj in class.disjoints %}
+                <a href="#{{ dj.label }}">{{ dj.label }}</a>{% if !loop.last %}, {% endif %}
+                {% endfor %}
+            </p>
+            {% endif %}
+
+            <p class="comment">{{ class.comment }}</p>
+        </div>
+        {% endfor %}
+    </div>
+
+    <div id="objectproperties">
+        <h2>Object Properties</h2>
+        {% for prop in object_properties %}
+        <div class="entity" id="{{ prop.id }}">
+            <h3>{{ prop.label }}</h3>
+            <p><span class="label">IRI:</span> <code>{{ prop.iri }}</code></p>
+            <p class="comment">{{ prop.comment }}</p>
+        </div>
+        {% endfor %}
+    </div>
+
+    <div id="dataproperties">
+        <h2>Data Properties</h2>
+        {% for prop in data_properties %}
+        <div class="entity" id="{{ prop.id }}">
+            <h3>{{ prop.label }}</h3>
+            <p><span class="label">IRI:</span> <code>{{ prop.iri }}</code></p>
+            <p class="comment">{{ prop.comment }}</p>
+        </div>
+        {% endfor %}
+    </div>
+
+    <div id="annotationproperties">
+        <h2>Annotation Properties</h2>
+        {% for prop in annotation_properties %}
+        <div class="entity" id="{{ prop.id }}">
+            <h3>{{ prop.label }}</h3>
+            <p><span class="label">IRI:</span> <code>{{ prop.iri }}</code></p>
+            <p class="comment">{{ prop.comment }}</p>
+        </div>
+        {% endfor %}
+    </div>
+
+    <div id="namedindividuals">
+        <h2>Named Individuals</h2>
+        {% for ind in named_individuals %}
+        <div class="entity" id="{{ ind.id }}">
+            <h3>{{ ind.label }}</h3>
+            <p><span class="label">IRI:</span> <code>{{ ind.iri }}</code></p>
+            <p class="comment">{{ ind.comment }}</p>
+        </div>
+        {% endfor %}
+    </div>
+</body>
+
+</html>

@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Example Ontology</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            line-height: 1.6;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        h1,
+        h2,
+        h3 {
+            color: #005A9C;
+        }
+
+        .entity {
+            border: 1px solid #ccc;
+            margin-bottom: 20px;
+            padding: 10px;
+            border-radius: 4px;
+        }
+
+        .entity h3 {
+            margin-top: 0;
+        }
+
+        .label {
+            font-weight: bold;
+        }
+
+        .comment {
+            font-style: italic;
+            color: #555;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Example Ontology</h1>
+    <div class="metadata">
+        <p><strong>Version:</strong> 1.0.0</p>
+        <p><strong>Description:</strong> An example ontology for testing rontodoc.</p>
+    </div>
+
+    <div id="abstract">
+        <h2>Abstract</h2>
+        <p>An example ontology for testing rontodoc.</p>
+    </div>
+
+    <div id="namespaces">
+        <h2>Namespaces</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Prefix</th>
+                    <th>URI</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td></td>
+                    <td>http://example.org/ontology/</td>
+                </tr>
+                <tr>
+                    <td>dc</td>
+                    <td>http://purl.org/dc/elements/1.1/</td>
+                </tr>
+                <tr>
+                    <td>owl</td>
+                    <td>http://www.w3.org/2002/07/owl#</td>
+                </tr>
+                <tr>
+                    <td>rdf</td>
+                    <td>http://www.w3.org/1999/02/22-rdf-syntax-ns#</td>
+                </tr>
+                <tr>
+                    <td>rdfs</td>
+                    <td>http://www.w3.org/2000/01/rdf-schema#</td>
+                </tr>
+                <tr>
+                    <td>xml</td>
+                    <td>http://www.w3.org/XML/1998/namespace</td>
+                </tr>
+                <tr>
+                    <td>xsd</td>
+                    <td>http://www.w3.org/2001/XMLSchema#</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div id="toc">
+        <h2>Table of Contents</h2>
+        <ul>
+            <li><a href="#abstract">Abstract</a></li>
+            <li><a href="#namespaces">Namespaces</a></li>
+            <li><a href="#classes">Classes</a></li>
+            <li><a href="#objectproperties">Object Properties</a></li>
+            <li><a href="#dataproperties">Data Properties</a></li>
+            <li><a href="#annotationproperties">Annotation Properties</a></li>
+            <li><a href="#namedindividuals">Named Individuals</a></li>
+            <li><a href="#crossreference">Cross Reference</a></li>
+        </ul>
+    </div>
+
+    <div id="crossreference">
+        <h2>Cross Reference</h2>
+
+        <div class="crossref-section">
+            <h3>Classes</h3>
+            <ul class="crossref-list">
+                <li><a href="#Man">Man</a></li>
+                <li><a href="#Person">Person</a></li>
+                <li><a href="#Student">Student</a></li>
+                <li><a href="#Woman">Woman</a></li>
+            </ul>
+        </div>
+
+        <div class="crossref-section">
+            <h3>Object Properties</h3>
+            <ul class="crossref-list">
+                <li><a href="#knows">knows</a></li>
+            </ul>
+        </div>
+
+        <div class="crossref-section">
+            <h3>Data Properties</h3>
+            <ul class="crossref-list">
+                <li><a href="#age">age</a></li>
+            </ul>
+        </div>
+
+        <div class="crossref-section">
+            <h3>Annotation Properties</h3>
+            <ul class="crossref-list">
+                <li><a href="#definition">definition</a></li>
+            </ul>
+        </div>
+
+        <div class="crossref-section">
+            <h3>Named Individuals</h3>
+            <ul class="crossref-list">
+                <li><a href="#John">John</a></li>
+            </ul>
+        </div>
+    </div>
+
+    <div id="classes">
+        <h2>Classes</h2>
+
+        <div class="entity" id="Man">
+            <h3>Man</h3>
+            <p><span class="label">IRI:</span> <code>http://example.org/ontology/Man</code></p>
+
+            <p><span class="label">Superclasses:</span>
+                <a href="#Person">Person</a>
+            </p>
+
+
+
+            <p><span class="label">Disjoint With:</span>
+                <a href="#Woman">Woman</a>
+            </p>
+
+
+            <p class="comment"></p>
+        </div>
+
+        <div class="entity" id="Person">
+            <h3>Person</h3>
+            <p><span class="label">IRI:</span> <code>http://example.org/ontology/Person</code></p>
+
+
+
+
+
+            <p class="comment">A human being.</p>
+        </div>
+
+        <div class="entity" id="Student">
+            <h3>Student</h3>
+            <p><span class="label">IRI:</span> <code>http://example.org/ontology/Student</code></p>
+
+            <p><span class="label">Superclasses:</span>
+                <a href="#Person">Person</a>
+            </p>
+
+
+
+
+            <p class="comment"></p>
+        </div>
+
+        <div class="entity" id="Woman">
+            <h3>Woman</h3>
+            <p><span class="label">IRI:</span> <code>http://example.org/ontology/Woman</code></p>
+
+            <p><span class="label">Superclasses:</span>
+                <a href="#Person">Person</a>
+            </p>
+
+            <p><span class="label">Disjoint With:</span>
+                <a href="#Man">Man</a>
+            </p>
+
+
+
+
+            <p class="comment"></p>
+        </div>
+
+    </div>
+
+    <div id="objectproperties">
+        <h2>Object Properties</h2>
+
+        <div class="entity" id="knows">
+            <h3>knows</h3>
+            <p><span class="label">IRI:</span> <code>http://example.org/ontology/knows</code></p>
+            <p class="comment">A relationship between two people.</p>
+        </div>
+
+    </div>
+
+    <div id="dataproperties">
+        <h2>Data Properties</h2>
+
+        <div class="entity" id="age">
+            <h3>age</h3>
+            <p><span class="label">IRI:</span> <code>http://example.org/ontology/age</code></p>
+            <p class="comment">The age of a person.</p>
+        </div>
+
+    </div>
+
+    <div id="annotationproperties">
+        <h2>Annotation Properties</h2>
+        <div class="entity" id="definition">
+            <h3>definition</h3>
+            <p><span class="label">IRI:</span> <code>http://example.org/ontology/definition</code></p>
+            <p class="comment">A definition of a term.</p>
+        </div>
+    </div>
+
+    <div id="namedindividuals">
+        <h2>Named Individuals</h2>
+        <div class="entity" id="John">
+            <h3>John</h3>
+            <p><span class="label">IRI:</span> <code>http://example.org/ontology/John</code></p>
+            <p class="comment">An instance of Person.</p>
+        </div>
+    </div>
+</body>
+
+</html>

@@ -41,11 +41,40 @@ cargo build
 
 ### Running Tests
 
-We use `cargo-nextest` for comprehensive testing:
+Run the full test suite (Unit + E2E):
+
+```bash
+cargo test
+```
+
+Or using `cargo-nextest` (recommended for speed):
 
 ```bash
 cargo nextest run
 ```
+
+### Manual Verification (Preview)
+
+To generate the reference documentation used for testing and serve it locally for manual inspection:
+
+```bash
+./scripts/preview.sh
+```
+
+This will:
+1. Generate documentation from `tests/fixtures/reference.ttl` to `target/doc-preview`
+2. Start a local server at `http://localhost:3030` using a pure Rust file server
+
+### Hot Reload
+
+For a faster development loop, you can run the preview script in watch mode. This requires `cargo-watch` to be installed (`cargo install cargo-watch`).
+
+```bash
+./scripts/preview.sh --watch
+```
+
+This will automatically rebuild the binary and regenerate the documentation whenever you change the source code (`src/`) or the reference ontology (`tests/fixtures/reference.ttl`).
+
 
 ## 🤝 Contributing
 
