@@ -24,6 +24,18 @@
         <a href="#class-{{ class.id }}" class="entity-link class-link">{{ class.label }}</a>
 {%- endfor %}
     </div>
+    <div class="class-cards">
+{%- for class in class_data %}
+        {%- let id = class.id.as_str() %}
+        {%- let label = class.label.as_str() %}
+        {%- let iri = class.iri.as_str() %}
+        {%- let description = class.description.as_deref() %}
+        {%- let superclass = class.superclass.as_ref() %}
+        {%- let subclasses = class.subclasses.as_slice() %}
+        {%- let properties = empty_properties %}
+        {% include "components/class_card.html" %}
+{%- endfor %}
+    </div>
 {%- endif %}
 </section>
 
@@ -93,6 +105,10 @@
 
     .prop-link:hover {
         background-color: color-mix(in srgb, var(--color-property) 10%, transparent);
+    }
+
+    .class-cards {
+        margin-top: var(--space-6);
     }
 </style>
 {% endblock %}

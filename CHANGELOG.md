@@ -28,3 +28,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Responsive mobile layout with slide-out sidebar (768px breakpoint).
 - End-to-end browser tests using playwright-rs.
 - Cross-browser E2E testing support (chromium, firefox, webkit) via `BROWSER` env var.
+- Class extraction from OWL ontologies (owl:Class with rdfs:label, rdfs:comment, rdfs:subClassOf).
+- Class cards in documentation showing label, description, IRI, and class hierarchy.
+- Class hierarchy display (superclass/subclass relationships with links).

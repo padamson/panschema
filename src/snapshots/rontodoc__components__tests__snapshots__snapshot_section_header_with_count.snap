@@ -1,9 +1,9 @@
 ---
 source: src/components.rs
-assertion_line: 514
+assertion_line: 596
 expression: html
 ---
-<div class="section-header" id="classes">
+<div class="section-header">
     <h2 class="section-title">
         Classes
         <span class="section-count">5</span>

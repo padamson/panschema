@@ -157,7 +157,128 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         browser_name
     );
 
-    // 6. Test navigation links exist and are clickable
+    // 6. Verify classes are extracted and displayed (not empty)
+    // The section header should show count of 5 (Animal, Cat, Dog, Mammal, Person)
+    let class_section = page.locator("#classes").await;
+    let class_section_html = class_section
+        .inner_html()
+        .await
+        .expect("Failed to get classes section");
+    assert!(
+        class_section_html.contains(">5<"),
+        "[{}] Classes section should show count of 5, got: {}",
+        browser_name,
+        class_section_html
+    );
+
+    // Verify some class links are present
+    let class_links = page.locator(".class-link").await;
+    let class_link_count = class_links
+        .count()
+        .await
+        .expect("Failed to count class links");
+    assert_eq!(
+        class_link_count, 5,
+        "[{}] Should have 5 class links",
+        browser_name
+    );
+
+    // Verify specific classes are present
+    assert!(
+        class_section_html.contains("Animal"),
+        "[{}] Classes section should contain 'Animal'",
+        browser_name
+    );
+    assert!(
+        class_section_html.contains("Dog"),
+        "[{}] Classes section should contain 'Dog'",
+        browser_name
+    );
+
+    // 6b. Verify class cards are rendered with full content
+    let class_cards = page.locator(".class-card").await;
+    let class_card_count = class_cards
+        .count()
+        .await
+        .expect("Failed to count class cards");
+    assert_eq!(
+        class_card_count, 5,
+        "[{}] Should have 5 class cards",
+        browser_name
+    );
+
+    // Verify class card content: Dog should show description
+    let dog_card = page.locator("#class-Dog").await;
+    let dog_card_html = dog_card.inner_html().await.expect("Failed to get Dog card");
+    assert!(
+        dog_card_html.contains("A domesticated carnivorous mammal"),
+        "[{}] Dog card should show description, got: {}",
+        browser_name,
+        dog_card_html
+    );
+
+    // Verify class card shows IRI
+    assert!(
+        dog_card_html.contains("http://example.org/rontodoc/reference#Dog"),
+        "[{}] Dog card should show IRI",
+        browser_name
+    );
+
+    // 6c. Verify class hierarchy relationships are displayed
+    // Dog should show "Subclass of" Mammal
+    assert!(
+        dog_card_html.contains("Subclass of"),
+        "[{}] Dog card should show 'Subclass of'",
+        browser_name
+    );
+    assert!(
+        dog_card_html.contains("href=\"#class-Mammal\""),
+        "[{}] Dog card should link to Mammal as superclass",
+        browser_name
+    );
+
+    // Mammal should show "Superclass of" (Dog and Cat)
+    let mammal_card = page.locator("#class-Mammal").await;
+    let mammal_card_html = mammal_card
+        .inner_html()
+        .await
+        .expect("Failed to get Mammal card");
+    assert!(
+        mammal_card_html.contains("Superclass of"),
+        "[{}] Mammal card should show 'Superclass of'",
+        browser_name
+    );
+    assert!(
+        mammal_card_html.contains("href=\"#class-Dog\""),
+        "[{}] Mammal card should link to Dog as subclass",
+        browser_name
+    );
+
+    // Animal should show "Superclass of" Mammal (root class)
+    let animal_card = page.locator("#class-Animal").await;
+    let animal_card_html = animal_card
+        .inner_html()
+        .await
+        .expect("Failed to get Animal card");
+    assert!(
+        animal_card_html.contains("Superclass of"),
+        "[{}] Animal card should show 'Superclass of'",
+        browser_name
+    );
+
+    // Person should NOT show "Subclass of" (it's a root class)
+    let person_card = page.locator("#class-Person").await;
+    let person_card_html = person_card
+        .inner_html()
+        .await
+        .expect("Failed to get Person card");
+    assert!(
+        !person_card_html.contains("Subclass of"),
+        "[{}] Person card should not show 'Subclass of' (it's a root class)",
+        browser_name
+    );
+
+    // 7. Test sidebar navigation links exist and are clickable
     let classes_link = page.locator("a[href='#classes']").await;
     let link_count = classes_link.count().await.expect("Failed to count links");
     assert!(
@@ -205,7 +326,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         browser_name
     );
 
-    // 7. Verify mobile menu toggle element exists (CSS hides it on desktop)
+    // 8. Verify mobile menu toggle element exists (CSS hides it on desktop)
     let mobile_toggle = page.locator(".mobile-menu-toggle").await;
     let toggle_count = mobile_toggle
         .count()
