@@ -59,11 +59,12 @@ Define the structural HTML layout for generated docs using the component workflo
 End-to-end browser tests for generated documentation.
 
 **Acceptance Criteria:**
-- [ ] playwright-rs dev dependency added and configured
-- [ ] E2E test: verify index.html renders correctly in browser
-- [ ] E2E test: verify navigation links work
-- [ ] E2E test: verify responsive layout on mobile viewport
-- [ ] CI runs E2E tests (headless browser)
+- [x] playwright-rs dev dependency added and configured
+- [x] E2E test: verify index.html renders correctly in browser
+- [x] E2E test: verify navigation links work
+- [x] E2E test: verify responsive layout on mobile viewport (element presence)
+- [x] CI runs E2E tests (headless browser)
+- [x] Cross-browser testing (chromium, firefox, webkit) via BROWSER env var
 
 ### Slice 6: Release & CD Setup
 Publish to crates.io and enable continuous deployment.

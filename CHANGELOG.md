@@ -26,3 +26,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CSS design tokens for consistent theming (colors, typography, spacing).
 - Dark mode support via `prefers-color-scheme` media query.
 - Responsive mobile layout with slide-out sidebar (768px breakpoint).
+- End-to-end browser tests using playwright-rs.
+- Cross-browser E2E testing support (chromium, firefox, webkit) via `BROWSER` env var.

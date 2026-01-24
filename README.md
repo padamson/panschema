@@ -33,6 +33,12 @@ cargo install rontodoc
 
 - Rust 1.85+ (edition 2024)
 - `cargo-nextest` (recommended for testing)
+- Node.js 20+ and Playwright browsers (for E2E tests)
+
+```bash
+# Install Playwright browsers (version must match playwright-rs)
+npx playwright@1.56.1 install
+```
 
 ### Building
 
@@ -42,16 +48,24 @@ cargo build
 
 ### Running Tests
 
-Run the full test suite (Unit + E2E):
-
-```bash
-cargo test
-```
-
-Or using `cargo-nextest` (recommended for speed):
+Run the full test suite (unit + E2E):
 
 ```bash
 cargo nextest run
+```
+
+Cross-browser E2E testing:
+
+```bash
+# Default: chromium only
+cargo nextest run
+
+# Specific browser
+BROWSER=firefox cargo nextest run
+BROWSER=webkit cargo nextest run
+
+# All browsers (used in CI)
+BROWSER=all cargo nextest run
 ```
 
 ### Manual Verification (Preview with hot reload)

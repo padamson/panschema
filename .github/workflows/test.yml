@@ -47,6 +47,14 @@ jobs:
     - name: Install cargo-nextest
       uses: taiki-e/install-action@nextest
 
+    - name: Setup Node.js (for Playwright)
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Install Playwright browsers
+      run: npx playwright@1.56.1 install --with-deps
+
     - name: Check formatting
       run: cargo fmt -- --check
 
@@ -58,6 +66,10 @@ jobs:
 
     - name: Run tests (release)
       run: cargo nextest run
+      env:
+        BROWSER: all
 
     - name: Run tests (with dev feature)
       run: cargo nextest run --features dev
+      env:
+        BROWSER: all
