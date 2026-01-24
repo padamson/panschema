@@ -16,7 +16,7 @@ serde = { version = "1.0", features = ["derive"] }
 [dev-dependencies]
 playwright-rs = "0.8.2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-warp = "0.3"
+warp = "0.4"
 assert_cmd = "2.0"
 pretty_assertions = "1.4"
 tempfile = "3.8"
