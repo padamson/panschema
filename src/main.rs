@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 
+#[cfg(feature = "dev")]
+mod components;
 mod model;
 mod parser;
 mod renderer;
@@ -50,6 +52,21 @@ enum Commands {
         #[arg(short, long, default_value = "3000")]
         port: u16,
     },
+    /// Generate style guide showing all UI components (dev feature only)
+    #[cfg(feature = "dev")]
+    Styleguide {
+        /// Output directory for style guide
+        #[arg(short, long, default_value = "output")]
+        output: PathBuf,
+
+        /// Start dev server to preview style guide
+        #[arg(long)]
+        serve: bool,
+
+        /// Port for dev server (requires --serve)
+        #[arg(short, long, default_value = "3000")]
+        port: u16,
+    },
 }
 
 fn generate(input: &Path, output: &Path) -> anyhow::Result<()> {
@@ -60,6 +77,21 @@ fn generate(input: &Path, output: &Path) -> anyhow::Result<()> {
         metadata.title(),
         output.display()
     );
+    Ok(())
+}
+
+#[cfg(feature = "dev")]
+fn generate_styleguide(output: &Path) -> anyhow::Result<()> {
+    use std::fs;
+
+    let data = components::SampleData::default();
+    let html = components::ComponentRenderer::styleguide(&data)?;
+
+    fs::create_dir_all(output)?;
+    let output_path = output.join("styleguide.html");
+    fs::write(&output_path, html)?;
+
+    println!("Generated style guide at {}", output_path.display());
     Ok(())
 }
 
@@ -77,6 +109,18 @@ async fn main() -> anyhow::Result<()> {
             port,
         }) => {
             server::serve(&input, &output, port).await?;
+        }
+        #[cfg(feature = "dev")]
+        Some(Commands::Styleguide {
+            output,
+            serve,
+            port,
+        }) => {
+            generate_styleguide(&output)?;
+            if serve {
+                println!("Starting style guide server on port {port}...");
+                server::serve_static(&output, port).await?;
+            }
         }
         None => {
             // Default behavior: generate if input provided
@@ -129,6 +173,33 @@ mod tests {
                 assert_eq!(port, 8080);
             }
             _ => panic!("Expected Serve command"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "dev")]
+    fn cli_parses_styleguide_subcommand() {
+        let cli = Cli::try_parse_from([
+            "rontodoc",
+            "styleguide",
+            "--output",
+            "styleguide-output",
+            "--serve",
+            "--port",
+            "4000",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Styleguide {
+                output,
+                serve,
+                port,
+            }) => {
+                assert_eq!(output, PathBuf::from("styleguide-output"));
+                assert!(serve);
+                assert_eq!(port, 4000);
+            }
+            _ => panic!("Expected Styleguide command"),
         }
     }
 }

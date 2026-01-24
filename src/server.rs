@@ -97,3 +97,40 @@ pub async fn serve(input: &Path, output: &Path, port: u16) -> anyhow::Result<()>
 
     Ok(())
 }
+
+/// Start a simple static file server with live reload (no input file watching).
+#[cfg(feature = "dev")]
+pub async fn serve_static(output: &Path, port: u16) -> anyhow::Result<()> {
+    // Create live reload layer
+    let livereload = LiveReloadLayer::new();
+    let reloader = livereload.reloader();
+
+    // Set up file watcher for output directory to trigger browser reload
+    let mut output_watcher = notify::recommended_watcher(move |res: Result<Event, _>| {
+        if let Ok(event) = res {
+            if event.kind.is_modify() || event.kind.is_create() {
+                reloader.reload();
+            }
+        }
+    })?;
+    output_watcher.watch(output, RecursiveMode::Recursive)?;
+
+    // Build the router
+    let app = Router::new()
+        .fallback_service(ServeDir::new(output))
+        .layer(livereload);
+
+    let addr = format!("0.0.0.0:{port}");
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+
+    println!("Server running at http://localhost:{port}");
+    println!("Watching {} for changes...", output.display());
+    println!("Press Ctrl+C to stop");
+
+    // Keep watcher alive
+    let _output_watcher = output_watcher;
+
+    axum::serve(listener, app).await?;
+
+    Ok(())
+}

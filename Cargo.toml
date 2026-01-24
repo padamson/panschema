@@ -39,6 +39,10 @@ notify = "6"
 tower-http = { version = "0.5", features = ["fs"] }
 tower-livereload = "0.9"
 
+[features]
+# Enable development tools (styleguide command, component preview)
+dev = []
+
 [dev-dependencies]
 # Snapshot testing
 insta = "1"

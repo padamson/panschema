@@ -6,7 +6,7 @@ This file provides guidance for Claude Code when working on the rontodoc project
 
 **rontodoc** is a Rust-based ontology documentation generator designed to replace heavy Java-based tools (Widoco, LODE) with a fast, single-binary alternative. The goal is to make documenting OWL/RDF ontologies as easy as documenting a Rust crate.
 
-**Current Status:** Slices 1a, 1b & 2 complete - working pipeline with dev server and hot reload.
+**Current Status:** Slices 1a, 1b, 2 & 3 complete - working pipeline with dev server, hot reload, and component workflow.
 
 ## Build Commands
 
@@ -30,13 +30,22 @@ rontodoc/
 │   ├── features/              # Feature specifications
 │   └── templates/             # ADR and feature templates
 ├── src/
-│   ├── main.rs                # CLI entry point (generate/serve subcommands)
+│   ├── main.rs                # CLI entry point (generate/serve/styleguide)
+│   ├── components.rs          # Component rendering for isolated preview
 │   ├── model.rs               # OntologyMetadata struct
 │   ├── parser.rs              # Turtle parsing with sophia
 │   ├── renderer.rs            # HTML generation with askama
-│   └── server.rs              # Dev server with hot reload
+│   ├── server.rs              # Dev server with hot reload
+│   └── snapshots/             # Insta snapshot files
 ├── templates/
-│   └── index.html             # Askama HTML template
+│   ├── base.html              # Base layout template
+│   ├── index.html             # Main documentation page
+│   ├── styleguide.html        # Component showcase page
+│   └── components/            # Reusable UI components
+│       ├── header.html
+│       ├── footer.html
+│       ├── hero.html
+│       └── metadata_card.html
 ├── tests/
 │   ├── fixtures/
 │   │   └── reference.ttl      # Reference ontology for testing
@@ -85,6 +94,7 @@ Pre-commit hooks enforce these automatically.
 
 - [WHY.md](WHY.md) - Project motivation and vision
 - [docs/ROADMAP.md](docs/ROADMAP.md) - Feature roadmap and release plan
+- [docs/components.md](docs/components.md) - Component development guide
 - [docs/adr/001-core-architecture.md](docs/adr/001-core-architecture.md) - Pipeline architecture
 - [docs/adr/002-crate-selection.md](docs/adr/002-crate-selection.md) - Dependency decisions
 - [docs/features/01-foundational-ui-stack.md](docs/features/01-foundational-ui-stack.md) - First feature spec
@@ -93,7 +103,6 @@ Pre-commit hooks enforce these automatically.
 
 ## Next Steps (Project TODOs)
 
-- Implement Slice 3: Component Design Workflow (Storybook-like)
 - Implement Slice 4: Documentation Layout Structure
 - Implement Slice 5: E2E Testing with Playwright
 - Implement Slice 6: Release & CD Setup (crates.io publishing)

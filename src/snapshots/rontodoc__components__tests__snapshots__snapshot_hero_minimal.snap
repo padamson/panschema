@@ -1,0 +1,40 @@
+---
+source: src/components.rs
+assertion_line: 235
+expression: html
+---
+<section class="hero">
+    <h1 class="hero-title">Test Ontology</h1>
+</section>
+<style>
+    .hero {
+        padding: 3rem 0 2rem;
+        text-align: center;
+    }
+
+    .hero-title {
+        margin: 0 0 0.5rem 0;
+        font-size: 2.5rem;
+        font-weight: 700;
+        color: var(--color-text);
+    }
+
+    .hero-description {
+        margin: 0;
+        font-size: 1.125rem;
+        color: var(--color-text-muted);
+        max-width: 600px;
+        margin-left: auto;
+        margin-right: auto;
+    }
+
+    @media (max-width: 640px) {
+        .hero-title {
+            font-size: 1.75rem;
+        }
+
+        .hero-description {
+            font-size: 1rem;
+        }
+    }
+</style>

@@ -65,6 +65,22 @@ This will:
 2. Start a local server at `http://localhost:3000`
 3. Watch for changes and regenerate automatically
 
+### Style Guide (rontodoc Contributors Only)
+
+For contributors developing rontodoc's UI components, build with the `dev` feature:
+
+```bash
+# Build with dev tools enabled
+cargo build --features dev
+
+# Generate and serve the style guide
+cargo run --features dev -- styleguide --serve
+```
+
+Open http://localhost:3000/styleguide.html to see all components.
+
+See [docs/components.md](docs/components.md) for the full component development guide.
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please match our existing standards:

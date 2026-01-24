@@ -50,8 +50,14 @@ jobs:
     - name: Check formatting
       run: cargo fmt -- --check
 
-    - name: Clippy
-      run: cargo clippy --all-targets --all-features -- -D warnings
+    - name: Clippy (release)
+      run: cargo clippy --all-targets -- -D warnings
 
-    - name: Run tests
+    - name: Clippy (with dev feature)
+      run: cargo clippy --all-targets --features dev -- -D warnings
+
+    - name: Run tests (release)
       run: cargo nextest run
+
+    - name: Run tests (with dev feature)
+      run: cargo nextest run --features dev

@@ -40,10 +40,10 @@ Enable rapid iteration during development.
 Storybook-like capability for UI component development.
 
 **Acceptance Criteria:**
-- [ ] Isolated component templates can be previewed independently
-- [ ] Style guide page showing all UI components
-- [ ] Documentation for adding new components
-- [ ] Snapshot tests (insta) for component HTML output
+- [x] Isolated component templates can be previewed independently
+- [x] Style guide page showing all UI components
+- [x] Documentation for adding new components
+- [x] Snapshot tests (insta) for component HTML output
 
 ### Slice 4: Documentation Layout Structure
 Define the structural HTML layout for generated docs using the component workflow.
