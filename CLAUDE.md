@@ -6,7 +6,7 @@ This file provides guidance for Claude Code when working on the rontodoc project
 
 **rontodoc** is a Rust-based ontology documentation generator designed to replace heavy Java-based tools (Widoco, LODE) with a fast, single-binary alternative. The goal is to make documenting OWL/RDF ontologies as easy as documenting a Rust crate.
 
-**Current Status:** Slices 1a & 1b complete - working pipeline that parses .ttl and generates HTML documentation.
+**Current Status:** Slices 1a, 1b & 2 complete - working pipeline with dev server and hot reload.
 
 ## Build Commands
 
@@ -30,10 +30,11 @@ rontodoc/
 │   ├── features/              # Feature specifications
 │   └── templates/             # ADR and feature templates
 ├── src/
-│   ├── main.rs                # CLI entry point
+│   ├── main.rs                # CLI entry point (generate/serve subcommands)
 │   ├── model.rs               # OntologyMetadata struct
 │   ├── parser.rs              # Turtle parsing with sophia
-│   └── renderer.rs            # HTML generation with askama
+│   ├── renderer.rs            # HTML generation with askama
+│   └── server.rs              # Dev server with hot reload
 ├── templates/
 │   └── index.html             # Askama HTML template
 ├── tests/
@@ -92,7 +93,6 @@ Pre-commit hooks enforce these automatically.
 
 ## Next Steps (Project TODOs)
 
-- Implement Slice 2: Dev Server with Hot Reload
 - Implement Slice 3: Component Design Workflow (Storybook-like)
 - Implement Slice 4: Documentation Layout Structure
 - Implement Slice 5: E2E Testing with Playwright

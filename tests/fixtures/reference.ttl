@@ -7,7 +7,7 @@
 # Ontology metadata
 <http://example.org/rontodoc/reference> a owl:Ontology ;
     rdfs:label "Rontodoc Reference Ontology" ;
-    rdfs:comment "A reference ontology for testing rontodoc documentation generation." ;
+    rdfs:comment "A reference ontology for testing `rontodoc` documentation generation." ;
     owl:versionInfo "0.1.0" .
 
 # Classes

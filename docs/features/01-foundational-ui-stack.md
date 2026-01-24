@@ -30,11 +30,11 @@ Minimal end-to-end pipeline proving the architecture works.
 Enable rapid iteration during development.
 
 **Acceptance Criteria:**
-- [ ] `rontodoc serve` starts axum-based HTTP server on port 3000
-- [ ] Serves generated documentation from output directory
-- [ ] File watcher (notify) detects changes to input .ttl
-- [ ] Regenerates documentation on change
-- [ ] Browser receives update (via reload or WebSocket)
+- [x] `rontodoc serve` starts axum-based HTTP server on port 3000
+- [x] Serves generated documentation from output directory
+- [x] File watcher (notify) detects changes to input .ttl
+- [x] Regenerates documentation on change
+- [x] Browser receives update (via tower-livereload)
 
 ### Slice 3: Component Design Workflow
 Storybook-like capability for UI component development.
