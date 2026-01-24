@@ -6,15 +6,83 @@
     <title>rontodoc Style Guide</title>
     <style>
         :root {
+            /* Colors - Light mode */
             --color-primary: #2563eb;
-            --color-primary-dark: #1d4ed8;
+            --color-primary-hover: #1d4ed8;
+            --color-accent: #8b5cf6;
+
             --color-text: #1f2937;
             --color-text-muted: #6b7280;
+            --color-text-inverse: #ffffff;
+
             --color-bg: #ffffff;
             --color-bg-secondary: #f9fafb;
+            --color-bg-tertiary: #f3f4f6;
+
             --color-border: #e5e7eb;
+            --color-border-strong: #d1d5db;
+
+            /* Semantic colors for ontology elements */
+            --color-class: #3b82f6;
+            --color-property: #10b981;
+            --color-individual: #f59e0b;
+            --color-datatype: #8b5cf6;
+
+            /* Typography */
             --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
             --font-mono: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace;
+
+            --text-xs: 0.75rem;
+            --text-sm: 0.875rem;
+            --text-base: 1rem;
+            --text-lg: 1.125rem;
+            --text-xl: 1.25rem;
+            --text-2xl: 1.5rem;
+            --text-3xl: 2rem;
+
+            /* Spacing */
+            --space-1: 0.25rem;
+            --space-2: 0.5rem;
+            --space-3: 0.75rem;
+            --space-4: 1rem;
+            --space-6: 1.5rem;
+            --space-8: 2rem;
+            --space-12: 3rem;
+
+            /* Layout */
+            --sidebar-width: 260px;
+            --content-max-width: 900px;
+            --header-height: 60px;
+
+            /* Shadows */
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+            --shadow-md: 0 4px 6px rgba(0,0,0,0.07);
+            --shadow-lg: 0 10px 15px rgba(0,0,0,0.1);
+
+            /* Borders */
+            --radius-sm: 0.25rem;
+            --radius-md: 0.5rem;
+            --radius-lg: 0.75rem;
+
+            /* Transitions */
+            --transition-fast: 150ms ease;
+            --transition-base: 200ms ease;
+        }
+
+        /* Dark mode */
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --color-text: #f9fafb;
+                --color-text-muted: #9ca3af;
+                --color-text-inverse: #111827;
+
+                --color-bg: #111827;
+                --color-bg-secondary: #1f2937;
+                --color-bg-tertiary: #374151;
+
+                --color-border: #374151;
+                --color-border-strong: #4b5563;
+            }
         }
 
         * { box-sizing: border-box; }
@@ -109,6 +177,10 @@
             padding: 0;
         }
 
+        .preview-padded {
+            padding: 1.5rem;
+        }
+
         .component-file {
             font-size: 0.875rem;
             color: var(--color-text-muted);
@@ -119,6 +191,28 @@
             background-color: var(--color-bg-secondary);
             padding: 0.125rem 0.375rem;
             border-radius: 0.25rem;
+        }
+
+        /* Sidebar preview container */
+        .sidebar-preview-container {
+            display: flex;
+            background-color: var(--color-bg-secondary);
+            min-height: 300px;
+        }
+
+        .sidebar-preview {
+            width: 260px;
+            padding: var(--space-4);
+            border-right: 1px solid var(--color-border);
+        }
+
+        .sidebar-preview-content {
+            flex: 1;
+            padding: var(--space-4);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--color-text-muted);
         }
     </style>
 </head>
@@ -169,11 +263,127 @@
             </p>
             <div class="component-preview">
                 <div class="preview-label">Preview</div>
-                <div class="preview-content" style="padding: 1rem;">
+                <div class="preview-content preview-padded">
                     {% include "components/metadata_card.html" %}
                 </div>
             </div>
             <p class="component-file">Template: <code>templates/components/metadata_card.html</code></p>
+        </section>
+
+        <!-- Sidebar Component -->
+        <section class="component-section">
+            <h2 class="component-name">Sidebar Navigation</h2>
+            <p class="component-description">
+                Collapsible navigation tree showing ontology structure. Displays classes and properties with counts.
+            </p>
+            <div class="component-preview">
+                <div class="preview-label">Preview</div>
+                <div class="preview-content">
+                    <div class="sidebar-preview-container">
+                        <div class="sidebar-preview">
+                            {%- let active_section = "overview" %}
+                            {% include "components/sidebar.html" %}
+                        </div>
+                        <div class="sidebar-preview-content">
+                            Main content area
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <p class="component-file">Template: <code>templates/components/sidebar.html</code></p>
+        </section>
+
+        <!-- Namespace Table Component -->
+        <section class="component-section">
+            <h2 class="component-name">Namespace Table</h2>
+            <p class="component-description">
+                Displays prefix/IRI namespace mappings. Includes copy-to-clipboard functionality for IRIs.
+            </p>
+            <div class="component-preview">
+                <div class="preview-label">Preview</div>
+                <div class="preview-content preview-padded">
+                    {% include "components/namespace_table.html" %}
+                </div>
+            </div>
+            <p class="component-file">Template: <code>templates/components/namespace_table.html</code></p>
+        </section>
+
+        <!-- Section Header Component -->
+        <section class="component-section">
+            <h2 class="component-name">Section Header</h2>
+            <p class="component-description">
+                Section title with optional count badge and description. Used to introduce major content sections.
+            </p>
+            <div class="component-preview">
+                <div class="preview-label">Preview</div>
+                <div class="preview-content preview-padded">
+                    {%- let id = "classes" %}
+                    {%- let title = "Classes" %}
+                    {%- let count = Some(3) %}
+                    {%- let description = Some("All classes defined in this ontology.") %}
+                    {% include "components/section_header.html" %}
+                </div>
+            </div>
+            <p class="component-file">Template: <code>templates/components/section_header.html</code></p>
+        </section>
+
+        <!-- Class Card Component -->
+        <section class="component-section">
+            <h2 class="component-name">Class Card</h2>
+            <p class="component-description">
+                Displays a single class with its IRI, description, superclass, subclasses, and associated properties.
+            </p>
+            <div class="component-preview">
+                <div class="preview-label">Preview</div>
+                <div class="preview-content preview-padded">
+                    {%- let id = sample_class.id %}
+                    {%- let label = sample_class.label %}
+                    {%- let iri = sample_class.iri %}
+                    {%- let description = sample_class.description %}
+                    {%- let superclass = sample_class.superclass %}
+                    {%- let subclasses = sample_class.subclasses %}
+                    {%- let properties = sample_class.properties %}
+                    {% include "components/class_card.html" %}
+                </div>
+            </div>
+            <p class="component-file">Template: <code>templates/components/class_card.html</code></p>
+        </section>
+
+        <!-- Property Card Component -->
+        <section class="component-section">
+            <h2 class="component-name">Property Card</h2>
+            <p class="component-description">
+                Displays a property with its IRI, type (object/data), domain, range, and characteristics.
+            </p>
+            <div class="component-preview">
+                <div class="preview-label">Preview - Object Property</div>
+                <div class="preview-content preview-padded">
+                    {%- let id = sample_property.id %}
+                    {%- let label = sample_property.label %}
+                    {%- let iri = sample_property.iri %}
+                    {%- let property_type = sample_property.property_type %}
+                    {%- let description = sample_property.description %}
+                    {%- let domain = sample_property.domain %}
+                    {%- let range = sample_property.range %}
+                    {%- let characteristics = sample_property.characteristics %}
+                    {% include "components/property_card.html" %}
+                </div>
+            </div>
+            <div class="component-preview" style="margin-top: 1rem;">
+                <div class="preview-label">Preview - Data Property</div>
+                <div class="preview-content preview-padded">
+                    {%- let id = sample_data_property.id %}
+                    {%- let label = sample_data_property.label %}
+                    {%- let iri = sample_data_property.iri %}
+                    {%- let property_type = sample_data_property.property_type %}
+                    {%- let description = sample_data_property.description %}
+                    {%- let domain = sample_data_property.domain %}
+                    {%- let range = sample_data_property.range %}
+                    {%- let characteristics = sample_data_property.characteristics %}
+                    {% include "components/property_card.html" %}
+                </div>
+            </div>
+            <p class="component-file">Template: <code>templates/components/property_card.html</code></p>
         </section>
 
         <!-- Footer Component -->
@@ -191,58 +401,74 @@
             <p class="component-file">Template: <code>templates/components/footer.html</code></p>
         </section>
 
-        <!-- Typography -->
+        <!-- Design Tokens -->
         <section class="component-section">
-            <h2 class="component-name">Typography</h2>
+            <h2 class="component-name">Design Tokens</h2>
             <p class="component-description">
-                Base typography styles and design tokens used throughout the documentation.
+                CSS custom properties for colors, typography, and spacing used throughout the documentation.
             </p>
+
+            <h3 style="font-size: 1.125rem; margin: 1.5rem 0 1rem;">Colors</h3>
             <div class="component-preview">
-                <div class="preview-label">Preview</div>
-                <div class="preview-content" style="padding: 1.5rem;">
-                    <h1 style="margin-top: 0;">Heading 1</h1>
-                    <h2>Heading 2</h2>
-                    <h3>Heading 3</h3>
-                    <p>Body text with <a href="#">links</a> and <code>inline code</code>.</p>
-                    <p class="mono">Monospace text for IRIs and code.</p>
+                <div class="preview-label">Semantic Colors</div>
+                <div class="preview-content preview-padded" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 1rem;">
+                    <div>
+                        <div style="width: 100%; height: 48px; background-color: var(--color-class); border-radius: var(--radius-sm);"></div>
+                        <p style="margin: 0.5rem 0 0; font-size: var(--text-sm);">Class</p>
+                        <code style="font-size: var(--text-xs); color: var(--color-text-muted);">--color-class</code>
+                    </div>
+                    <div>
+                        <div style="width: 100%; height: 48px; background-color: var(--color-property); border-radius: var(--radius-sm);"></div>
+                        <p style="margin: 0.5rem 0 0; font-size: var(--text-sm);">Property</p>
+                        <code style="font-size: var(--text-xs); color: var(--color-text-muted);">--color-property</code>
+                    </div>
+                    <div>
+                        <div style="width: 100%; height: 48px; background-color: var(--color-individual); border-radius: var(--radius-sm);"></div>
+                        <p style="margin: 0.5rem 0 0; font-size: var(--text-sm);">Individual</p>
+                        <code style="font-size: var(--text-xs); color: var(--color-text-muted);">--color-individual</code>
+                    </div>
+                    <div>
+                        <div style="width: 100%; height: 48px; background-color: var(--color-datatype); border-radius: var(--radius-sm);"></div>
+                        <p style="margin: 0.5rem 0 0; font-size: var(--text-sm);">Datatype</p>
+                        <code style="font-size: var(--text-xs); color: var(--color-text-muted);">--color-datatype</code>
+                    </div>
                 </div>
             </div>
-        </section>
 
-        <!-- Colors -->
-        <section class="component-section">
-            <h2 class="component-name">Colors</h2>
-            <p class="component-description">
-                Design tokens for colors used in the documentation theme.
-            </p>
+            <div class="component-preview" style="margin-top: 1rem;">
+                <div class="preview-label">Base Colors</div>
+                <div class="preview-content preview-padded" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 1rem;">
+                    <div>
+                        <div style="width: 100%; height: 48px; background-color: var(--color-primary); border-radius: var(--radius-sm);"></div>
+                        <p style="margin: 0.5rem 0 0; font-size: var(--text-sm);">Primary</p>
+                        <code style="font-size: var(--text-xs); color: var(--color-text-muted);">--color-primary</code>
+                    </div>
+                    <div>
+                        <div style="width: 100%; height: 48px; background-color: var(--color-text); border-radius: var(--radius-sm);"></div>
+                        <p style="margin: 0.5rem 0 0; font-size: var(--text-sm);">Text</p>
+                        <code style="font-size: var(--text-xs); color: var(--color-text-muted);">--color-text</code>
+                    </div>
+                    <div>
+                        <div style="width: 100%; height: 48px; background-color: var(--color-text-muted); border-radius: var(--radius-sm);"></div>
+                        <p style="margin: 0.5rem 0 0; font-size: var(--text-sm);">Text Muted</p>
+                        <code style="font-size: var(--text-xs); color: var(--color-text-muted);">--color-text-muted</code>
+                    </div>
+                    <div>
+                        <div style="width: 100%; height: 48px; background-color: var(--color-bg-secondary); border: 1px solid var(--color-border); border-radius: var(--radius-sm);"></div>
+                        <p style="margin: 0.5rem 0 0; font-size: var(--text-sm);">Background</p>
+                        <code style="font-size: var(--text-xs); color: var(--color-text-muted);">--color-bg-secondary</code>
+                    </div>
+                </div>
+            </div>
+
+            <h3 style="font-size: 1.125rem; margin: 1.5rem 0 1rem;">Typography</h3>
             <div class="component-preview">
                 <div class="preview-label">Preview</div>
-                <div class="preview-content" style="padding: 1.5rem; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem;">
-                    <div>
-                        <div style="width: 100%; height: 60px; background-color: var(--color-primary); border-radius: 0.25rem;"></div>
-                        <p style="margin: 0.5rem 0 0 0; font-size: 0.875rem;">Primary</p>
-                        <code style="font-size: 0.75rem;">#2563eb</code>
-                    </div>
-                    <div>
-                        <div style="width: 100%; height: 60px; background-color: var(--color-text); border-radius: 0.25rem;"></div>
-                        <p style="margin: 0.5rem 0 0 0; font-size: 0.875rem;">Text</p>
-                        <code style="font-size: 0.75rem;">#1f2937</code>
-                    </div>
-                    <div>
-                        <div style="width: 100%; height: 60px; background-color: var(--color-text-muted); border-radius: 0.25rem;"></div>
-                        <p style="margin: 0.5rem 0 0 0; font-size: 0.875rem;">Text Muted</p>
-                        <code style="font-size: 0.75rem;">#6b7280</code>
-                    </div>
-                    <div>
-                        <div style="width: 100%; height: 60px; background-color: var(--color-bg-secondary); border: 1px solid var(--color-border); border-radius: 0.25rem;"></div>
-                        <p style="margin: 0.5rem 0 0 0; font-size: 0.875rem;">Background Secondary</p>
-                        <code style="font-size: 0.75rem;">#f9fafb</code>
-                    </div>
-                    <div>
-                        <div style="width: 100%; height: 60px; background-color: var(--color-border); border-radius: 0.25rem;"></div>
-                        <p style="margin: 0.5rem 0 0 0; font-size: 0.875rem;">Border</p>
-                        <code style="font-size: 0.75rem;">#e5e7eb</code>
-                    </div>
+                <div class="preview-content preview-padded">
+                    <p style="font-size: var(--text-3xl); margin: 0 0 0.5rem;">Heading (--text-3xl)</p>
+                    <p style="font-size: var(--text-xl); margin: 0 0 0.5rem;">Subheading (--text-xl)</p>
+                    <p style="font-size: var(--text-base); margin: 0 0 0.5rem;">Body text (--text-base) with <a href="#">links</a> and <code style="background: var(--color-bg-tertiary); padding: 0.125rem 0.375rem; border-radius: var(--radius-sm);">inline code</code>.</p>
+                    <p style="font-size: var(--text-sm); color: var(--color-text-muted); margin: 0;">Muted text (--text-sm)</p>
                 </div>
             </div>
         </section>

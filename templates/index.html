@@ -1,37 +1,98 @@
-{% extends "base.html" %}
+{% extends "layout.html" %}
 
-{% block content %}
+{% block sidebar %}
+{%- let active_section = active_section %}
+{% include "components/sidebar.html" %}
+{% endblock %}
+
+{% block main_content %}
 {% include "components/hero.html" %}
 {% include "components/metadata_card.html" %}
+{% include "components/namespace_table.html" %}
 
 <section id="classes">
-    <h2>Classes</h2>
-    <p class="placeholder-text">Classes will be listed here in a future release.</p>
+    {%- let id = "classes" %}
+    {%- let title = "Classes" %}
+    {%- let count = Some(classes.len()) %}
+    {%- let description = Some("Classes defined in this ontology.") %}
+    {% include "components/section_header.html" %}
+{%- if classes.is_empty() %}
+    <p class="placeholder-text">No classes defined in this ontology.</p>
+{%- else %}
+    <div class="entity-list">
+{%- for class in classes %}
+        <a href="#class-{{ class.id }}" class="entity-link class-link">{{ class.label }}</a>
+{%- endfor %}
+    </div>
+{%- endif %}
 </section>
 
 <section id="properties">
-    <h2>Properties</h2>
-    <p class="placeholder-text">Properties will be listed here in a future release.</p>
+    {%- let id = "properties" %}
+    {%- let title = "Properties" %}
+    {%- let count = Some(properties.len()) %}
+    {%- let description = Some("Properties defined in this ontology.") %}
+    {% include "components/section_header.html" %}
+{%- if properties.is_empty() %}
+    <p class="placeholder-text">No properties defined in this ontology.</p>
+{%- else %}
+    <div class="entity-list">
+{%- for prop in properties %}
+        <a href="#prop-{{ prop.id }}" class="entity-link prop-link">{{ prop.label }}</a>
+{%- endfor %}
+    </div>
+{%- endif %}
 </section>
 {% endblock %}
 
-{% block extra_styles %}
+{% block page_styles %}
 <style>
-    section {
-        margin: 2rem 0;
-    }
-
-    section h2 {
-        font-size: 1.5rem;
-        margin-bottom: 1rem;
-        color: var(--color-text);
-        border-bottom: 2px solid var(--color-border);
-        padding-bottom: 0.5rem;
-    }
-
     .placeholder-text {
         color: var(--color-text-muted);
         font-style: italic;
+        padding: var(--space-4);
+        background-color: var(--color-bg-secondary);
+        border-radius: var(--radius-md);
+        text-align: center;
+    }
+
+    .entity-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--space-2);
+    }
+
+    .entity-link {
+        display: inline-flex;
+        align-items: center;
+        padding: var(--space-2) var(--space-3);
+        background-color: var(--color-bg-secondary);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-md);
+        font-size: var(--text-sm);
+        transition: all var(--transition-fast);
+    }
+
+    .entity-link:hover {
+        text-decoration: none;
+        border-color: var(--color-primary);
+        box-shadow: var(--shadow-sm);
+    }
+
+    .class-link {
+        color: var(--color-class);
+    }
+
+    .class-link:hover {
+        background-color: color-mix(in srgb, var(--color-class) 10%, transparent);
+    }
+
+    .prop-link {
+        color: var(--color-property);
+    }
+
+    .prop-link:hover {
+        background-color: color-mix(in srgb, var(--color-property) 10%, transparent);
     }
 </style>
 {% endblock %}

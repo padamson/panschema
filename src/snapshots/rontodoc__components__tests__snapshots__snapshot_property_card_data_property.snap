@@ -1,0 +1,66 @@
+---
+source: src/components.rs
+assertion_line: 596
+expression: html
+---
+<article class="entity-card property-card" id="prop-name">
+    <header class="entity-header">
+        <div class="entity-badge property-badge">Data Property</div>
+        <h3 class="entity-title">name</h3>
+        <button class="copy-btn" data-copy="https://example.org/ontology#name" title="Copy IRI">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+        </button>
+    </header>
+
+    <div class="entity-iri">
+        <code class="mono">https://example.org/ontology#name</code>
+    </div>
+
+    <p class="entity-description">The name of a person.</p>
+
+    <div class="entity-details">
+        <div class="detail-row">
+            <dt>Domain</dt>
+            <dd><a href="#class-person" class="entity-ref class-ref">Person</a></dd>
+        </div>
+        <div class="detail-row">
+            <dt>Range</dt>
+            <dd>
+                <span class="entity-ref datatype-ref">xsd:string</span>
+            </dd>
+        </div>
+    </div>
+</article>
+<style>
+    .property-badge {
+        background-color: color-mix(in srgb, var(--color-property) 15%, transparent);
+        color: var(--color-property);
+    }
+
+    .datatype-ref {
+        color: var(--color-datatype);
+    }
+
+    .datatype-ref:hover {
+        background-color: color-mix(in srgb, var(--color-datatype) 10%, transparent);
+    }
+
+    .characteristics {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--space-2);
+    }
+
+    .characteristic-badge {
+        display: inline-flex;
+        padding: var(--space-1) var(--space-2);
+        font-size: var(--text-xs);
+        font-weight: 500;
+        color: var(--color-text-muted);
+        background-color: var(--color-bg-tertiary);
+        border-radius: var(--radius-sm);
+    }
+</style>

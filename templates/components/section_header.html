@@ -1,0 +1,52 @@
+<div class="section-header" id="{{ id }}">
+    <h2 class="section-title">
+        {{ title }}
+{%- if let Some(count) = count %}
+        <span class="section-count">{{ count }}</span>
+{%- endif %}
+    </h2>
+{%- if let Some(desc) = description %}
+    <p class="section-description">{{ desc }}</p>
+{%- endif %}
+</div>
+<style>
+    .section-header {
+        margin-bottom: var(--space-6);
+        padding-top: var(--space-8);
+    }
+
+    .section-header:first-child {
+        padding-top: 0;
+    }
+
+    .section-title {
+        display: flex;
+        align-items: center;
+        gap: var(--space-3);
+        font-size: var(--text-2xl);
+        font-weight: 600;
+        color: var(--color-text);
+        margin: 0 0 var(--space-2) 0;
+    }
+
+    .section-count {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 1.75rem;
+        height: 1.75rem;
+        padding: 0 var(--space-2);
+        font-size: var(--text-sm);
+        font-weight: 500;
+        color: var(--color-text-muted);
+        background-color: var(--color-bg-secondary);
+        border-radius: 9999px;
+    }
+
+    .section-description {
+        margin: 0;
+        font-size: var(--text-base);
+        color: var(--color-text-muted);
+        max-width: 65ch;
+    }
+</style>

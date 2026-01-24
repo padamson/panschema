@@ -20,3 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reusable components: header, footer, hero, metadata card.
 - Snapshot tests using insta for component HTML output.
 - Component development documentation (`docs/components.md`).
+- Two-column documentation layout with fixed sidebar navigation.
+- Fixed header that stays visible while scrolling.
+- New components: sidebar, namespace table, class card, property card, section header.
+- CSS design tokens for consistent theming (colors, typography, spacing).
+- Dark mode support via `prefers-color-scheme` media query.
+- Responsive mobile layout with slide-out sidebar (768px breakpoint).

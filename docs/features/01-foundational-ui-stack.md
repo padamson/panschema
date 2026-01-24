@@ -49,11 +49,11 @@ Storybook-like capability for UI component development.
 Define the structural HTML layout for generated docs using the component workflow.
 
 **Acceptance Criteria:**
-- [ ] Base template with header, navigation, content area, footer
-- [ ] Responsive CSS (mobile-friendly)
-- [ ] Navigation structure for classes, properties, individuals
-- [ ] Ontology overview page with metadata (title, description, version)
-- [ ] Placeholder pages for class/property/individual listings
+- [x] Base template with header, navigation, content area, footer
+- [x] Responsive CSS (mobile-friendly)
+- [x] Navigation structure for classes, properties, individuals
+- [x] Ontology overview page with metadata (title, description, version)
+- [x] Placeholder pages for class/property/individual listings
 
 ### Slice 5: E2E Testing with Playwright
 End-to-end browser tests for generated documentation.
