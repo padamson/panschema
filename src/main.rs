@@ -1,5 +1,9 @@
 use clap::Parser;
 
+mod model;
+mod parser;
+mod renderer;
+
 /// A blazing fast, Rust-based ontology documentation generator.
 #[derive(Parser)]
 #[command(name = "rontodoc")]
@@ -18,9 +22,11 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     if let Some(input) = cli.input {
+        let metadata = parser::parse_ontology(&input)?;
+        renderer::render(&metadata, &cli.output)?;
         println!(
-            "rontodoc: will generate docs from {} to {}",
-            input.display(),
+            "Generated documentation for '{}' in {}",
+            metadata.title(),
             cli.output.display()
         );
     } else {

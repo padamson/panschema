@@ -6,7 +6,7 @@ This file provides guidance for Claude Code when working on the rontodoc project
 
 **rontodoc** is a Rust-based ontology documentation generator designed to replace heavy Java-based tools (Widoco, LODE) with a fast, single-binary alternative. The goal is to make documenting OWL/RDF ontologies as easy as documenting a Rust crate.
 
-**Current Status:** Slice 1a complete - project scaffold with CLI, dependencies, and passing CI checks.
+**Current Status:** Slices 1a & 1b complete - working pipeline that parses .ttl and generates HTML documentation.
 
 ## Build Commands
 
@@ -30,10 +30,16 @@ rontodoc/
 │   ├── features/              # Feature specifications
 │   └── templates/             # ADR and feature templates
 ├── src/
-│   └── main.rs                # CLI entry point
+│   ├── main.rs                # CLI entry point
+│   ├── model.rs               # OntologyMetadata struct
+│   ├── parser.rs              # Turtle parsing with sophia
+│   └── renderer.rs            # HTML generation with askama
+├── templates/
+│   └── index.html             # Askama HTML template
 ├── tests/
-│   └── fixtures/
-│       └── reference.ttl      # Reference ontology for testing
+│   ├── fixtures/
+│   │   └── reference.ttl      # Reference ontology for testing
+│   └── integration.rs         # E2E integration tests
 ├── Cargo.toml                 # Project manifest
 ├── CHANGELOG.md               # Keep updated with changes
 ├── README.md                  # User-facing documentation
@@ -86,6 +92,8 @@ Pre-commit hooks enforce these automatically.
 
 ## Next Steps (Project TODOs)
 
-- Push to GitHub and verify CI runs green
-- Tag v0.0.1 to verify release workflow
-- Implement Slice 1b: Walking Skeleton (parse .ttl → generate HTML)
+- Implement Slice 2: Dev Server with Hot Reload
+- Implement Slice 3: Component Design Workflow (Storybook-like)
+- Implement Slice 4: Documentation Layout Structure
+- Implement Slice 5: E2E Testing with Playwright
+- Implement Slice 6: Release & CD Setup (crates.io publishing)
