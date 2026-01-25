@@ -7,39 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-01-24
+
+Initial release of rontodoc — a fast, single-binary ontology documentation generator.
+
 ### Added
 - CLI with `generate` and `serve` subcommands.
-- `styleguide` subcommand for rontodoc development (requires `--features dev`).
-- Turtle (.ttl) parser using sophia crate to extract ontology metadata (IRI, label, comment, version).
-- HTML renderer using askama templates to generate documentation.
-- Development server (`rontodoc serve`) with hot reload using axum and tower-livereload.
-- File watcher (notify) that auto-regenerates documentation on input file changes.
-- Reference ontology (`tests/fixtures/reference.ttl`) for testing.
-- Component-driven UI development workflow with isolated component templates.
-- Style guide (`rontodoc styleguide`) showing all UI components.
-- Reusable components: header, footer, hero, metadata card.
-- Snapshot tests using insta for component HTML output.
-- Component development documentation (`docs/components.md`).
-- Two-column documentation layout with fixed sidebar navigation.
-- Fixed header that stays visible while scrolling.
-- New components: sidebar, namespace table, class card, property card, section header.
-- CSS design tokens for consistent theming (colors, typography, spacing).
-- Dark mode support via `prefers-color-scheme` media query.
-- Responsive mobile layout with slide-out sidebar (768px breakpoint).
-- End-to-end browser tests using playwright-rs.
-- Cross-browser E2E testing support (chromium, firefox, webkit) via `BROWSER` env var.
-- Class extraction from OWL ontologies (owl:Class with rdfs:label, rdfs:comment, rdfs:subClassOf).
-- Class cards in documentation showing label, description, IRI, and class hierarchy.
-- Class hierarchy display (superclass/subclass relationships with links).
-- Property extraction from OWL ontologies (owl:ObjectProperty, owl:DatatypeProperty).
-- Property cards showing label, description, type badge, domain, range, and inverse relationships.
-- Domain/range displayed as links to classes; datatype ranges shown as text.
-- Simplified sidebar navigation with section links (Classes, Properties) instead of individual entities.
-- Individual extraction from OWL ontologies (owl:NamedIndividual with rdf:type, property values).
-- Individual cards showing label, IRI, type(s) linked to class cards, and property values linked to property cards.
-- New `individual_card` component with snapshot tests.
-- Individual card added to style guide.
-- Sidebar Individuals link with count badge.
+- Turtle (.ttl) parser for OWL ontologies: classes, properties, individuals, and metadata.
+- Class cards with labels, descriptions, IRIs, and class hierarchy (superclass/subclass links).
+- Property cards with type badges, domain/range, and inverse-of relationships.
+- Individual cards with type links and property values.
+- Sidebar navigation with section links and count badges.
+- Development server with hot reload for live documentation preview.
+- Responsive two-column layout with dark mode support.
+- Component-driven UI with style guide (`--features dev`).
 
-### Changed
-- Renamed "Overview" to "Metadata" in sidebar navigation and metadata card heading.
+[Unreleased]: https://github.com/padamson/rontodoc/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/padamson/rontodoc/releases/tag/v0.1.0

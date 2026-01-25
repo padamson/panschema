@@ -98,21 +98,24 @@ Building on Feature 01 (Foundational UI Stack), this feature adds actual ontolog
 
 ### Slice 4: Release v0.1.0
 
-**Status:** Not Started
+**Status:** In Progress
 
 **User Value:** Users can install rontodoc from crates.io and generate useful documentation.
 
 **Acceptance Criteria:**
-- [ ] crates.io account configured with API token
-- [ ] GitHub secret for CARGO_REGISTRY_TOKEN
-- [ ] Release workflow publishes to crates.io on tag
+- [x] crates.io account configured with API token
+- [x] GitHub secret for CARGO_REGISTRY_TOKEN
+- [x] Release workflow publishes to crates.io on tag
 - [ ] Tag v0.1.0 and verify CD pipeline
 - [ ] `cargo install rontodoc` works from crates.io
-- [ ] Remove "(Note: Not yet published to crates.io)" from README
+- [x] Remove "(Note: Not yet published to crates.io)" from README
 
 **Notes:**
 - Moved from Feature 01 Slice 6
 - Only release once slices 1-3 provide real value
+- Cargo.toml version bumped from 0.0.1 to 0.1.0
+- CHANGELOG streamlined for initial release
+- `publish-crate` job added to release workflow (runs after all platform builds pass)
 
 ---
 
@@ -123,20 +126,4 @@ Building on Feature 01 (Foundational UI Stack), this feature adds actual ontolog
 | Slice 1: Classes | Must Have | Feature 01 | Completed |
 | Slice 2: Properties | Must Have | Slice 1 | Completed |
 | Slice 3: Individuals | Should Have | Slice 2 | Completed |
-| Slice 4: Release | Must Have | Slice 1-3 | Not Started |
-
----
-
-## Definition of Done
-
-The feature is complete when ALL of the following are true:
-
-- [ ] All acceptance criteria from user story are met
-- [ ] All vertical slices marked as "Completed"
-- [ ] All tests passing: `cargo nextest run`
-- [ ] Library documentation complete with examples: `cargo doc`
-- [ ] Code formatted: `cargo fmt --check`
-- [ ] No clippy warnings: `cargo clippy -- -D warnings`
-- [ ] README.md updated
-- [ ] CHANGELOG.md updated
-- [ ] v0.1.0 published to crates.io
+| Slice 4: Release | Must Have | Slice 1-3 | In Progress |

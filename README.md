@@ -25,8 +25,6 @@ We aim to:
 cargo install rontodoc
 ```
 
-*(Note: Not yet published to crates.io)*
-
 ## 🛠️ Development
 
 ### Prerequisites

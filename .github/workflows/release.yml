@@ -9,8 +9,41 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: stable
+        components: rustfmt, clippy
+
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@nextest
+
+    - name: Setup Node.js (for Playwright)
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Install Playwright browsers
+      run: npx playwright@1.56.1 install --with-deps
+
+    - name: Check formatting
+      run: cargo fmt -- --check
+
+    - name: Clippy
+      run: cargo clippy --all-targets --all-features -- -D warnings
+
+    - name: Run tests
+      run: cargo nextest run --features dev
+
   build-release:
     name: Build ${{ matrix.target }}
+    needs: test
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -34,13 +67,10 @@ jobs:
         toolchain: stable
         target: ${{ matrix.target }}
 
-    - name: Install cargo-nextest & parse-changelog
+    - name: Install parse-changelog
       uses: taiki-e/install-action@v2
       with:
-        tool: cargo-nextest,parse-changelog
-
-    - name: Run tests
-      run: cargo nextest run --target ${{ matrix.target }}
+        tool: parse-changelog
 
     - name: Build Release
       run: cargo build --release --target ${{ matrix.target }} --verbose
@@ -86,3 +116,20 @@ jobs:
         body_path: release_notes.md
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-crate:
+    name: Publish to crates.io
+    needs: build-release
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: stable
+
+    - name: Publish to crates.io
+      run: cargo publish
+      env:
+        CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
