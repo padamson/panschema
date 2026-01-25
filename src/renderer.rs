@@ -4,6 +4,7 @@ use std::path::Path;
 use askama::Template;
 
 use crate::model::OntologyMetadata;
+use crate::parser::extract_id_from_iri;
 
 /// Entity reference for sidebar navigation.
 #[derive(Debug, Clone)]
@@ -30,6 +31,26 @@ pub struct ClassData {
     pub subclasses: Vec<EntityRef>,
 }
 
+/// Range reference for property cards - either a class link or a datatype name.
+#[derive(Debug, Clone)]
+pub struct RangeRef {
+    pub class_ref: Option<EntityRef>,
+    pub datatype: String,
+}
+
+/// Full property data for rendering property cards.
+#[derive(Debug, Clone)]
+pub struct PropertyData {
+    pub id: String,
+    pub label: String,
+    pub iri: String,
+    pub property_type: String,
+    pub description: Option<String>,
+    pub domain: Option<EntityRef>,
+    pub range: Option<RangeRef>,
+    pub characteristics: Vec<String>,
+}
+
 #[derive(Template)]
 #[template(path = "index.html")]
 struct IndexTemplate<'a> {
@@ -41,6 +62,7 @@ struct IndexTemplate<'a> {
     classes: &'a [EntityRef],
     class_data: &'a [ClassData],
     properties: &'a [EntityRef],
+    property_data: &'a [PropertyData],
     namespaces: &'a [Namespace],
     /// Empty slice for class cards that don't have properties yet
     empty_properties: &'a [EntityRef],
@@ -124,8 +146,76 @@ pub fn render(metadata: &OntologyMetadata, output_dir: &Path) -> anyhow::Result<
         })
         .collect();
 
-    // Empty for now - will be populated when parser extracts properties
-    let properties: Vec<EntityRef> = vec![];
+    // Convert extracted properties to EntityRef for sidebar navigation
+    let properties: Vec<EntityRef> = metadata
+        .properties
+        .iter()
+        .map(|p| EntityRef {
+            id: p.id.clone(),
+            label: p.display_label().to_string(),
+        })
+        .collect();
+
+    // Build full property data for rendering property cards
+    let property_data: Vec<PropertyData> = metadata
+        .properties
+        .iter()
+        .map(|p| {
+            // Resolve domain to a class EntityRef
+            let domain = p.domain_iri.as_ref().and_then(|domain_iri| {
+                metadata
+                    .classes
+                    .iter()
+                    .find(|c| &c.iri == domain_iri)
+                    .map(|c| EntityRef {
+                        id: c.id.clone(),
+                        label: c.display_label().to_string(),
+                    })
+            });
+
+            // Resolve range - check if it's a class or a datatype
+            let range = p.range_iri.as_ref().map(|range_iri| {
+                let class_ref = metadata
+                    .classes
+                    .iter()
+                    .find(|c| &c.iri == range_iri)
+                    .map(|c| EntityRef {
+                        id: c.id.clone(),
+                        label: c.display_label().to_string(),
+                    });
+
+                let datatype = extract_id_from_iri(range_iri);
+
+                RangeRef {
+                    class_ref,
+                    datatype,
+                }
+            });
+
+            // Build characteristics list
+            let mut characteristics = Vec::new();
+            if let Some(inverse_iri) = &p.inverse_of_iri {
+                let inverse_label = metadata
+                    .properties
+                    .iter()
+                    .find(|ip| &ip.iri == inverse_iri)
+                    .map(|ip| ip.display_label().to_string())
+                    .unwrap_or_else(|| extract_id_from_iri(inverse_iri));
+                characteristics.push(format!("Inverse of: {}", inverse_label));
+            }
+
+            PropertyData {
+                id: p.id.clone(),
+                label: p.display_label().to_string(),
+                iri: p.iri.clone(),
+                property_type: p.property_type.display().to_string(),
+                description: p.comment.clone(),
+                domain,
+                range,
+                characteristics,
+            }
+        })
+        .collect();
 
     let template = IndexTemplate {
         title: metadata.title(),
@@ -136,6 +226,7 @@ pub fn render(metadata: &OntologyMetadata, output_dir: &Path) -> anyhow::Result<
         classes: &classes,
         class_data: &class_data,
         properties: &properties,
+        property_data: &property_data,
         namespaces: &namespaces,
         empty_properties: &[],
     };
@@ -160,6 +251,7 @@ mod tests {
             comment: Some("A test ontology.".to_string()),
             version: Some("1.0.0".to_string()),
             classes: vec![],
+            properties: vec![],
         };
 
         let temp_dir = std::env::temp_dir().join("rontodoc_test");
@@ -189,6 +281,7 @@ mod tests {
                 comment: Some("A living creature.".to_string()),
                 superclass_iri: None,
             }],
+            properties: vec![],
         };
 
         let temp_dir = std::env::temp_dir().join("rontodoc_class_test");
@@ -246,6 +339,7 @@ mod tests {
                     superclass_iri: Some("http://example.org/test#Mammal".to_string()),
                 },
             ],
+            properties: vec![],
         };
 
         let temp_dir = std::env::temp_dir().join("rontodoc_hierarchy_test");
@@ -267,6 +361,175 @@ mod tests {
         assert!(
             html.contains("Superclass of"),
             "Should show 'Superclass of' label"
+        );
+
+        // Cleanup
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn renders_property_cards_with_domain_and_range() {
+        use crate::model::{OntologyProperty, PropertyType};
+
+        let metadata = OntologyMetadata {
+            iri: "http://example.org/test".to_string(),
+            label: Some("Test Ontology".to_string()),
+            comment: None,
+            version: None,
+            classes: vec![
+                OntologyClass {
+                    iri: "http://example.org/test#Animal".to_string(),
+                    id: "Animal".to_string(),
+                    label: Some("Animal".to_string()),
+                    comment: None,
+                    superclass_iri: None,
+                },
+                OntologyClass {
+                    iri: "http://example.org/test#Person".to_string(),
+                    id: "Person".to_string(),
+                    label: Some("Person".to_string()),
+                    comment: None,
+                    superclass_iri: None,
+                },
+            ],
+            properties: vec![OntologyProperty {
+                iri: "http://example.org/test#hasOwner".to_string(),
+                id: "hasOwner".to_string(),
+                label: Some("has owner".to_string()),
+                comment: Some("Relates an animal to its owner.".to_string()),
+                property_type: PropertyType::ObjectProperty,
+                domain_iri: Some("http://example.org/test#Animal".to_string()),
+                range_iri: Some("http://example.org/test#Person".to_string()),
+                inverse_of_iri: None,
+            }],
+        };
+
+        let temp_dir = std::env::temp_dir().join("rontodoc_prop_test");
+        render(&metadata, &temp_dir).expect("Render failed");
+
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("Failed to read output");
+
+        // Verify property card is rendered
+        assert!(
+            html.contains("property-card"),
+            "Should contain property card"
+        );
+        assert!(
+            html.contains("id=\"prop-hasOwner\""),
+            "Should have property anchor"
+        );
+        assert!(
+            html.contains("Object Property"),
+            "Should show property type badge"
+        );
+        assert!(html.contains("has owner"), "Should contain property label");
+        assert!(
+            html.contains("Relates an animal to its owner."),
+            "Should contain property description"
+        );
+
+        // Verify domain links to class
+        assert!(html.contains("Domain"), "Should show Domain label");
+        assert!(
+            html.contains("href=\"#class-Animal\""),
+            "Domain should link to Animal"
+        );
+
+        // Verify range links to class
+        assert!(html.contains("Range"), "Should show Range label");
+        assert!(
+            html.contains("href=\"#class-Person\""),
+            "Range should link to Person"
+        );
+
+        // Cleanup
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn renders_datatype_property_with_xsd_range() {
+        use crate::model::{OntologyProperty, PropertyType};
+
+        let metadata = OntologyMetadata {
+            iri: "http://example.org/test".to_string(),
+            label: Some("Test Ontology".to_string()),
+            comment: None,
+            version: None,
+            classes: vec![],
+            properties: vec![OntologyProperty {
+                iri: "http://example.org/test#hasAge".to_string(),
+                id: "hasAge".to_string(),
+                label: Some("has age".to_string()),
+                comment: None,
+                property_type: PropertyType::DatatypeProperty,
+                domain_iri: None,
+                range_iri: Some("http://www.w3.org/2001/XMLSchema#integer".to_string()),
+                inverse_of_iri: None,
+            }],
+        };
+
+        let temp_dir = std::env::temp_dir().join("rontodoc_datatype_prop_test");
+        render(&metadata, &temp_dir).expect("Render failed");
+
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("Failed to read output");
+
+        // Verify datatype property renders
+        assert!(
+            html.contains("Datatype Property"),
+            "Should show Datatype Property badge"
+        );
+        assert!(
+            html.contains("integer"),
+            "Should display xsd:integer as range"
+        );
+
+        // Cleanup
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn renders_inverse_of_as_characteristic() {
+        use crate::model::{OntologyProperty, PropertyType};
+
+        let metadata = OntologyMetadata {
+            iri: "http://example.org/test".to_string(),
+            label: Some("Test Ontology".to_string()),
+            comment: None,
+            version: None,
+            classes: vec![],
+            properties: vec![
+                OntologyProperty {
+                    iri: "http://example.org/test#hasOwner".to_string(),
+                    id: "hasOwner".to_string(),
+                    label: Some("has owner".to_string()),
+                    comment: None,
+                    property_type: PropertyType::ObjectProperty,
+                    domain_iri: None,
+                    range_iri: None,
+                    inverse_of_iri: None,
+                },
+                OntologyProperty {
+                    iri: "http://example.org/test#owns".to_string(),
+                    id: "owns".to_string(),
+                    label: Some("owns".to_string()),
+                    comment: None,
+                    property_type: PropertyType::ObjectProperty,
+                    domain_iri: None,
+                    range_iri: None,
+                    inverse_of_iri: Some("http://example.org/test#hasOwner".to_string()),
+                },
+            ],
+        };
+
+        let temp_dir = std::env::temp_dir().join("rontodoc_inverse_test");
+        render(&metadata, &temp_dir).expect("Render failed");
+
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("Failed to read output");
+
+        // Verify inverse relationship shown as characteristic
+        assert!(
+            html.contains("Inverse of: has owner"),
+            "Should show inverse of characteristic"
         );
 
         // Cleanup

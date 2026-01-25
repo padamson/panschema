@@ -166,6 +166,7 @@ pub struct SidebarComponent<'a> {
     pub active_section: &'a str,
     pub classes: &'a [EntityRef],
     pub properties: &'a [EntityRef],
+    pub namespaces: &'a [Namespace],
 }
 
 /// Namespace table component template.
@@ -293,11 +294,13 @@ impl ComponentRenderer {
         active_section: &str,
         classes: &[EntityRef],
         properties: &[EntityRef],
+        namespaces: &[Namespace],
     ) -> anyhow::Result<String> {
         let template = SidebarComponent {
             active_section,
             classes,
             properties,
+            namespaces,
         };
         Ok(template.render()?)
     }
@@ -563,13 +566,19 @@ mod tests {
                 EntityRef::new("name", "name"),
                 EntityRef::new("member-of", "memberOf"),
             ];
-            let html = ComponentRenderer::sidebar("overview", &classes, &properties).unwrap();
+            let namespaces = vec![
+                Namespace::new("ex", "https://example.org/ontology#"),
+                Namespace::new("rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#"),
+            ];
+            let html =
+                ComponentRenderer::sidebar("overview", &classes, &properties, &namespaces).unwrap();
             insta::assert_snapshot!(html);
         }
 
         #[test]
         fn snapshot_sidebar_empty() {
-            let html = ComponentRenderer::sidebar("overview", &[], &[]).unwrap();
+            let namespaces = vec![Namespace::new("ex", "https://example.org/ontology#")];
+            let html = ComponentRenderer::sidebar("overview", &[], &[], &namespaces).unwrap();
             insta::assert_snapshot!(html);
         }
 

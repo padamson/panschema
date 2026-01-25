@@ -1,6 +1,6 @@
 ---
 source: src/components.rs
-assertion_line: 514
+assertion_line: 517
 expression: html
 ---
 <header class="site-header">
@@ -9,6 +9,7 @@ expression: html
             <a href="/" class="site-title">Test Ontology</a>
             <ul class="nav-links">
                 <li><a href="#overview">Overview</a></li>
+                <li><a href="#namespaces">Namespaces</a></li>
                 <li><a href="#classes">Classes</a></li>
                 <li><a href="#properties">Properties</a></li>
             </ul>

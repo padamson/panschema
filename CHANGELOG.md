@@ -31,3 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Class extraction from OWL ontologies (owl:Class with rdfs:label, rdfs:comment, rdfs:subClassOf).
 - Class cards in documentation showing label, description, IRI, and class hierarchy.
 - Class hierarchy display (superclass/subclass relationships with links).
+- Property extraction from OWL ontologies (owl:ObjectProperty, owl:DatatypeProperty).
+- Property cards showing label, description, type badge, domain, range, and inverse relationships.
+- Domain/range displayed as links to classes; datatype ranges shown as text.
+- Simplified sidebar navigation with section links (Classes, Properties) instead of individual entities.

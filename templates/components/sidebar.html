@@ -2,31 +2,15 @@
     <h2 class="sidebar-title">Navigation</h2>
     <ul class="sidebar-nav">
         <li><a href="#overview" class="sidebar-link{% if active_section == "overview" %} active{% endif %}">Overview</a></li>
-        <li><a href="#namespaces" class="sidebar-link{% if active_section == "namespaces" %} active{% endif %}">Namespaces</a></li>
-    </ul>
-</nav>
+        <li><a href="#namespaces" class="sidebar-link{% if active_section == "namespaces" %} active{% endif %}">Namespaces <span class="badge">{{ namespaces.len() }}</span></a></li>
 {%- if !classes.is_empty() %}
-
-<nav class="sidebar-section">
-    <h2 class="sidebar-title">Classes <span class="badge">{{ classes.len() }}</span></h2>
-    <ul class="sidebar-nav">
-{%- for class in classes %}
-        <li><a href="#class-{{ class.id }}" class="sidebar-link{% if active_section == class.id %} active{% endif %}">{{ class.label }}</a></li>
-{%- endfor %}
-    </ul>
-</nav>
+        <li><a href="#classes" class="sidebar-link{% if active_section == "classes" %} active{% endif %}">Classes <span class="badge">{{ classes.len() }}</span></a></li>
 {%- endif %}
 {%- if !properties.is_empty() %}
-
-<nav class="sidebar-section">
-    <h2 class="sidebar-title">Properties <span class="badge">{{ properties.len() }}</span></h2>
-    <ul class="sidebar-nav">
-{%- for prop in properties %}
-        <li><a href="#prop-{{ prop.id }}" class="sidebar-link{% if active_section == prop.id %} active{% endif %}">{{ prop.label }}</a></li>
-{%- endfor %}
+        <li><a href="#properties" class="sidebar-link{% if active_section == "properties" %} active{% endif %}">Properties <span class="badge">{{ properties.len() }}</span></a></li>
+{%- endif %}
     </ul>
 </nav>
-{%- endif %}
 <style>
     .sidebar-section {
         margin-bottom: var(--space-6);

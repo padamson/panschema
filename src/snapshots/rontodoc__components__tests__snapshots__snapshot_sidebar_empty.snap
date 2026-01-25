@@ -1,13 +1,13 @@
 ---
 source: src/components.rs
-assertion_line: 491
+assertion_line: 582
 expression: html
 ---
 <nav class="sidebar-section">
     <h2 class="sidebar-title">Navigation</h2>
     <ul class="sidebar-nav">
         <li><a href="#overview" class="sidebar-link active">Overview</a></li>
-        <li><a href="#namespaces" class="sidebar-link">Namespaces</a></li>
+        <li><a href="#namespaces" class="sidebar-link">Namespaces <span class="badge">1</span></a></li>
     </ul>
 </nav>
 <style>

@@ -278,12 +278,115 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         browser_name
     );
 
-    // 7. Test sidebar navigation links exist and are clickable
-    let classes_link = page.locator("a[href='#classes']").await;
+    // 6d. Verify properties are extracted and displayed
+    let prop_section = page.locator("#properties").await;
+    let prop_section_html = prop_section
+        .inner_html()
+        .await
+        .expect("Failed to get properties section");
+    assert!(
+        prop_section_html.contains(">4<"),
+        "[{}] Properties section should show count of 4, got: {}",
+        browser_name,
+        prop_section_html
+    );
+
+    // Verify property links are present
+    let prop_links = page.locator(".prop-link").await;
+    let prop_link_count = prop_links
+        .count()
+        .await
+        .expect("Failed to count property links");
+    assert_eq!(
+        prop_link_count, 4,
+        "[{}] Should have 4 property links",
+        browser_name
+    );
+
+    // 6e. Verify property cards are rendered with full content
+    let prop_cards = page.locator(".property-card").await;
+    let prop_card_count = prop_cards
+        .count()
+        .await
+        .expect("Failed to count property cards");
+    assert_eq!(
+        prop_card_count, 4,
+        "[{}] Should have 4 property cards",
+        browser_name
+    );
+
+    // Verify object property card: hasOwner
+    let has_owner_card = page.locator("#prop-hasOwner").await;
+    let has_owner_html = has_owner_card
+        .inner_html()
+        .await
+        .expect("Failed to get hasOwner card");
+    assert!(
+        has_owner_html.contains("Object Property"),
+        "[{}] hasOwner should show Object Property badge",
+        browser_name
+    );
+    assert!(
+        has_owner_html.contains("Relates an animal to its owner"),
+        "[{}] hasOwner should show description",
+        browser_name
+    );
+    assert!(
+        has_owner_html.contains("Domain"),
+        "[{}] hasOwner should show Domain",
+        browser_name
+    );
+    assert!(
+        has_owner_html.contains("href=\"#class-Animal\""),
+        "[{}] hasOwner domain should link to Animal",
+        browser_name
+    );
+    assert!(
+        has_owner_html.contains("Range"),
+        "[{}] hasOwner should show Range",
+        browser_name
+    );
+    assert!(
+        has_owner_html.contains("href=\"#class-Person\""),
+        "[{}] hasOwner range should link to Person",
+        browser_name
+    );
+
+    // Verify datatype property card: hasAge
+    let has_age_card = page.locator("#prop-hasAge").await;
+    let has_age_html = has_age_card
+        .inner_html()
+        .await
+        .expect("Failed to get hasAge card");
+    assert!(
+        has_age_html.contains("Datatype Property"),
+        "[{}] hasAge should show Datatype Property badge",
+        browser_name
+    );
+    assert!(
+        has_age_html.contains("integer"),
+        "[{}] hasAge range should show integer datatype",
+        browser_name
+    );
+
+    // Verify inverse property: owns shows inverseOf characteristic
+    let owns_card = page.locator("#prop-owns").await;
+    let owns_html = owns_card
+        .inner_html()
+        .await
+        .expect("Failed to get owns card");
+    assert!(
+        owns_html.contains("Inverse of: has owner"),
+        "[{}] owns should show inverse of characteristic",
+        browser_name
+    );
+
+    // 7. Test navigation links exist and are clickable
+    let classes_link = page.locator(".nav-links a[href='#classes']").await;
     let link_count = classes_link.count().await.expect("Failed to count links");
     assert!(
         link_count > 0,
-        "[{}] Classes navigation link should exist",
+        "[{}] Classes navigation link should exist in header",
         browser_name
     );
 

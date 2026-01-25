@@ -8,7 +8,14 @@
 {% block main_content %}
 {% include "components/hero.html" %}
 {% include "components/metadata_card.html" %}
-{% include "components/namespace_table.html" %}
+<section id="namespaces">
+    {%- let id = "namespaces" %}
+    {%- let title = "Namespaces" %}
+    {%- let count = Some(namespaces.len()) %}
+    {%- let description = Some("Namespace prefixes used in this ontology.") %}
+    {% include "components/section_header.html" %}
+    {% include "components/namespace_table.html" %}
+</section>
 
 <section id="classes">
     {%- let id = "classes" %}
@@ -51,6 +58,19 @@
     <div class="entity-list">
 {%- for prop in properties %}
         <a href="#prop-{{ prop.id }}" class="entity-link prop-link">{{ prop.label }}</a>
+{%- endfor %}
+    </div>
+    <div class="property-cards">
+{%- for prop in property_data %}
+        {%- let id = prop.id.as_str() %}
+        {%- let label = prop.label.as_str() %}
+        {%- let iri = prop.iri.as_str() %}
+        {%- let property_type = prop.property_type.as_str() %}
+        {%- let description = prop.description.as_deref() %}
+        {%- let domain = prop.domain.as_ref() %}
+        {%- let range = prop.range.as_ref() %}
+        {%- let characteristics = prop.characteristics.as_slice() %}
+        {% include "components/property_card.html" %}
 {%- endfor %}
     </div>
 {%- endif %}
@@ -108,6 +128,10 @@
     }
 
     .class-cards {
+        margin-top: var(--space-6);
+    }
+
+    .property-cards {
         margin-top: var(--space-6);
     }
 </style>

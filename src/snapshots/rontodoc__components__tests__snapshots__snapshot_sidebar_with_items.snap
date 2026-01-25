@@ -1,29 +1,15 @@
 ---
 source: src/components.rs
-assertion_line: 485
+assertion_line: 575
 expression: html
 ---
 <nav class="sidebar-section">
     <h2 class="sidebar-title">Navigation</h2>
     <ul class="sidebar-nav">
         <li><a href="#overview" class="sidebar-link active">Overview</a></li>
-        <li><a href="#namespaces" class="sidebar-link">Namespaces</a></li>
-    </ul>
-</nav>
-
-<nav class="sidebar-section">
-    <h2 class="sidebar-title">Classes <span class="badge">2</span></h2>
-    <ul class="sidebar-nav">
-        <li><a href="#class-person" class="sidebar-link">Person</a></li>
-        <li><a href="#class-organization" class="sidebar-link">Organization</a></li>
-    </ul>
-</nav>
-
-<nav class="sidebar-section">
-    <h2 class="sidebar-title">Properties <span class="badge">2</span></h2>
-    <ul class="sidebar-nav">
-        <li><a href="#prop-name" class="sidebar-link">name</a></li>
-        <li><a href="#prop-member-of" class="sidebar-link">memberOf</a></li>
+        <li><a href="#namespaces" class="sidebar-link">Namespaces <span class="badge">2</span></a></li>
+        <li><a href="#classes" class="sidebar-link">Classes <span class="badge">2</span></a></li>
+        <li><a href="#properties" class="sidebar-link">Properties <span class="badge">2</span></a></li>
     </ul>
 </nav>
 <style>

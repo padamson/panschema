@@ -1,10 +1,10 @@
 ---
 source: src/components.rs
-assertion_line: 246
+assertion_line: 548
 expression: html
 ---
 <section class="metadata-card" id="overview">
-    <h2 class="metadata-heading">Ontology Metadata</h2>
+    <h2 class="metadata-heading">Overview</h2>
     <dl class="metadata-list">
         <div class="metadata-item">
             <dt>IRI</dt>

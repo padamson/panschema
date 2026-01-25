@@ -47,23 +47,29 @@ Building on Feature 01 (Foundational UI Stack), this feature adds actual ontolog
 
 ### Slice 2: Property Extraction & Display
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** Users see their ontology's properties with types, domains, ranges, and descriptions.
 
 **Acceptance Criteria:**
-- [ ] Parser extracts owl:ObjectProperty entities
-- [ ] Parser extracts owl:DatatypeProperty entities
-- [ ] Parser extracts rdfs:domain and rdfs:range for properties
-- [ ] Parser extracts owl:inverseOf relationships
-- [ ] Properties section displays all properties (not "0" count)
-- [ ] Property cards show label, description, type, domain, range
-- [ ] E2E test verifies properties are rendered from reference.ttl
+- [x] Parser extracts owl:ObjectProperty entities
+- [x] Parser extracts owl:DatatypeProperty entities
+- [x] Parser extracts rdfs:domain and rdfs:range for properties
+- [x] Parser extracts owl:inverseOf relationships
+- [x] Properties section displays all properties (not "0" count)
+- [x] Property cards show label, description, type, domain, range
+- [x] E2E test verifies properties are rendered from reference.ttl
 
 **Notes:**
 - Uses existing property_card component
-- Domain/range displayed as links to classes (when applicable)
+- Domain/range resolved to class links (EntityRef) when the IRI matches a known class, otherwise displayed as datatype text (e.g., xsd:integer)
+- Inverse-of relationships displayed as characteristics on property cards (e.g., "Inverse of: has owner")
 - Reference ontology has: hasOwner, owns (object); hasName, hasAge (datatype)
+- Sidebar simplified from individual entity listings to section-level links (Overview, Namespaces, Classes, Properties) with count badges
+- Namespace count badge and section header with count added to main layout
+- namespace_table.html refactored to remove its own heading/section wrapper (now wrapped by section_header in index.html)
+- Metadata card heading renamed from "Ontology Metadata" to "Overview" for consistency with sidebar
+- "Namespaces" link added to header navigation
 
 ---
 
@@ -111,7 +117,7 @@ Building on Feature 01 (Foundational UI Stack), this feature adds actual ontolog
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | Slice 1: Classes | Must Have | Feature 01 | Completed |
-| Slice 2: Properties | Must Have | Slice 1 | Not Started |
+| Slice 2: Properties | Must Have | Slice 1 | Completed |
 | Slice 3: Individuals | Should Have | Slice 2 | Not Started |
 | Slice 4: Release | Must Have | Slice 1-3 | Not Started |
 
