@@ -122,19 +122,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         title
     );
 
-    // 3. Verify hero section displays ontology info
-    let hero_title = page.locator(".hero-title").await;
-    let hero_count = hero_title
-        .count()
-        .await
-        .expect("Failed to count hero titles");
-    assert!(
-        hero_count > 0,
-        "[{}] Hero title should be present",
-        browser_name
-    );
-
-    // 4. Verify sidebar is present
+    // 3. Verify sidebar is present
     let sidebar = page.locator(".sidebar").await;
     let sidebar_count = sidebar.count().await.expect("Failed to count sidebars");
     assert!(
@@ -381,12 +369,12 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         browser_name
     );
 
-    // 7. Test navigation links exist and are clickable
-    let classes_link = page.locator(".nav-links a[href='#classes']").await;
+    // 7. Test sidebar navigation links exist and are clickable
+    let classes_link = page.locator(".sidebar-link[href='#classes']").await;
     let link_count = classes_link.count().await.expect("Failed to count links");
     assert!(
         link_count > 0,
-        "[{}] Classes navigation link should exist in header",
+        "[{}] Classes navigation link should exist in sidebar",
         browser_name
     );
 
@@ -426,6 +414,41 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     assert!(
         section_count > 0,
         "[{}] Classes section should exist as link target",
+        browser_name
+    );
+
+    // 7b. Verify scroll spy: after scrolling to #classes, the "Classes" sidebar
+    //     link should be active and "Overview" should not.
+    let mut scroll_spy_updated = false;
+    for _ in 0..30 {
+        let classes_active = page
+            .evaluate_value(
+                "document.querySelector('.sidebar-link[href=\"#classes\"]')?.classList.contains('active') ?? false",
+            )
+            .await
+            .unwrap_or_default();
+        if classes_active.contains("true") {
+            scroll_spy_updated = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        scroll_spy_updated,
+        "[{}] Scroll spy should mark Classes sidebar link as active after scrolling to #classes",
+        browser_name
+    );
+
+    // Overview should no longer be active
+    let overview_active = page
+        .evaluate_value(
+            "document.querySelector('.sidebar-link[href=\"#overview\"]')?.classList.contains('active') ?? false",
+        )
+        .await
+        .unwrap_or_default();
+    assert!(
+        !overview_active.contains("true"),
+        "[{}] Overview sidebar link should not be active when viewing #classes",
         browser_name
     );
 

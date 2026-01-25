@@ -5,15 +5,7 @@ expression: html
 ---
 <header class="site-header">
     <div class="container">
-        <nav class="header-nav">
-            <a href="/" class="site-title">Test Ontology</a>
-            <ul class="nav-links">
-                <li><a href="#overview">Overview</a></li>
-                <li><a href="#namespaces">Namespaces</a></li>
-                <li><a href="#classes">Classes</a></li>
-                <li><a href="#properties">Properties</a></li>
-            </ul>
-        </nav>
+        <a href="/" class="site-title">Test Ontology</a>
     </div>
 </header>
 <style>
@@ -27,19 +19,13 @@ expression: html
         border-bottom: 1px solid var(--color-border);
         padding: 1rem 0;
         z-index: 20;
+        display: flex;
+        align-items: center;
     }
 
     /* Offset body content for fixed header */
     body {
         padding-top: var(--header-height);
-    }
-
-    .header-nav {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        flex-wrap: wrap;
-        gap: 1rem;
     }
 
     .site-title {
@@ -50,23 +36,6 @@ expression: html
 
     .site-title:hover {
         text-decoration: none;
-        color: var(--color-primary);
-    }
-
-    .nav-links {
-        display: flex;
-        list-style: none;
-        margin: 0;
-        padding: 0;
-        gap: 1.5rem;
-    }
-
-    .nav-links a {
-        color: var(--color-text-muted);
-        font-size: 0.875rem;
-    }
-
-    .nav-links a:hover {
         color: var(--color-primary);
     }
 </style>

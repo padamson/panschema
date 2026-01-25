@@ -71,7 +71,7 @@ BROWSER=all cargo nextest run
 ### Manual Verification (Preview with hot reload)
 
 ```bash
-rontodoc serve --input tests/fixtures/reference.ttl
+rontodoc serve --input path/to/reference.ttl
 ```
 
 This will:
@@ -79,7 +79,7 @@ This will:
 2. Start a local server at `http://localhost:3000`
 3. Watch for changes and regenerate automatically
 
-### Style Guide (rontodoc Contributors Only)
+### UI Component Style Guide (rontodoc Contributors Only)
 
 For contributors developing rontodoc's UI components, build with the `dev` feature:
 
@@ -94,6 +94,14 @@ cargo run --features dev -- styleguide --serve
 Open http://localhost:3000/styleguide.html to see all components.
 
 See [docs/components.md](docs/components.md) for the full component development guide.
+
+### Serve Reference Ontology with Auto-Recompile (rontodoc Contributors Only)
+
+To auto-recompile and restart the server when Rust source or templates change, use [cargo-watch](https://crates.io/crates/cargo-watch):
+
+```bash
+cargo watch -x 'run -- serve --input tests/fixtures/reference.ttl'
+```
 
 ## 🤝 Contributing
 

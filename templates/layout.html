@@ -120,6 +120,7 @@
             position: fixed;
             left: 0;
             top: 0;
+            height: 100vh;
             z-index: 50;
             transform: translateX(-100%);
             transition: transform var(--transition-base);
@@ -211,5 +212,26 @@
             }
         });
     });
+
+    // Scroll spy: highlight sidebar link for the visible section
+    (function() {
+        const sections = document.querySelectorAll('section[id], .metadata-card[id]');
+        const sidebarLinks = document.querySelectorAll('.sidebar-link');
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    const id = entry.target.id;
+                    sidebarLinks.forEach(link => {
+                        link.classList.toggle('active', link.getAttribute('href') === '#' + id);
+                    });
+                }
+            });
+        }, {
+            rootMargin: '-80px 0px -75% 0px'
+        });
+
+        sections.forEach(section => observer.observe(section));
+    })();
 </script>
 {% endblock %}
