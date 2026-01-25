@@ -98,7 +98,7 @@ Building on Feature 01 (Foundational UI Stack), this feature adds actual ontolog
 
 ### Slice 4: Release v0.1.0
 
-**Status:** In Progress
+**Status:** Completed
 
 **User Value:** Users can install rontodoc from crates.io and generate useful documentation.
 
@@ -106,8 +106,8 @@ Building on Feature 01 (Foundational UI Stack), this feature adds actual ontolog
 - [x] crates.io account configured with API token
 - [x] GitHub secret for CARGO_REGISTRY_TOKEN
 - [x] Release workflow publishes to crates.io on tag
-- [ ] Tag v0.1.0 and verify CD pipeline
-- [ ] `cargo install rontodoc` works from crates.io
+- [x] Tag v0.1.0 and verify CD pipeline
+- [x] `cargo install rontodoc` works from crates.io
 - [x] Remove "(Note: Not yet published to crates.io)" from README
 
 **Notes:**
@@ -115,7 +115,7 @@ Building on Feature 01 (Foundational UI Stack), this feature adds actual ontolog
 - Only release once slices 1-3 provide real value
 - Cargo.toml version bumped from 0.0.1 to 0.1.0
 - CHANGELOG streamlined for initial release
-- `publish-crate` job added to release workflow (runs after all platform builds pass)
+- Release workflow uses 3-job pipeline: test (fmt, clippy, nextest with Playwright) → build-release (4 platforms) → publish-crate
 
 ---
 
@@ -126,4 +126,4 @@ Building on Feature 01 (Foundational UI Stack), this feature adds actual ontolog
 | Slice 1: Classes | Must Have | Feature 01 | Completed |
 | Slice 2: Properties | Must Have | Slice 1 | Completed |
 | Slice 3: Individuals | Should Have | Slice 2 | Completed |
-| Slice 4: Release | Must Have | Slice 1-3 | In Progress |
+| Slice 4: Release | Must Have | Slice 1-3 | Completed |

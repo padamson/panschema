@@ -1,12 +1,13 @@
 ---
 source: src/components.rs
-assertion_line: 603
 expression: html
 ---
 <div class="section-header">
     <h2 class="section-title">
-        Overview
+        Classes
+        <span class="section-count">5</span>
     </h2>
+    <p class="section-description">All classes defined in this ontology.</p>
 </div>
 <style>
     .section-header {

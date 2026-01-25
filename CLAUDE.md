@@ -1,12 +1,12 @@
 # CLAUDE.md
 
-This file provides guidance for Claude Code when working on the rontodoc project.
+This file provides guidance for Claude Code when working on the panschema project.
 
 ## Project Overview
 
-**rontodoc** is a Rust-based ontology documentation generator designed to replace heavy Java-based tools (Widoco, LODE) with a fast, single-binary alternative. The goal is to make documenting OWL/RDF ontologies as easy as documenting a Rust crate.
+**panschema** is a universal CLI for schema conversion, documentation, validation, and comparison. Think of it as pandoc for data modeling — supporting OWL, LinkML, JSON Schema, and more.
 
-**Current Status:** Slices 1a, 1b, 2 & 3 complete - working pipeline with dev server, hot reload, and component workflow.
+**Current Status:** v0.2.0 - Reader/Writer architecture complete with OWL input and HTML output.
 
 ## Build Commands
 
@@ -23,7 +23,7 @@ cargo clippy --all-targets --all-features -- -D warnings  # Lint
 ## Project Structure
 
 ```
-rontodoc/
+panschema/
 ├── .github/workflows/         # CI (test.yml) and release (release.yml)
 ├── docs/
 │   ├── adr/                   # Architecture Decision Records
@@ -32,33 +32,40 @@ rontodoc/
 ├── src/
 │   ├── main.rs                # CLI entry point (generate/serve/styleguide)
 │   ├── components.rs          # Component rendering for isolated preview
-│   ├── model.rs               # OntologyMetadata struct
-│   ├── parser.rs              # Turtle parsing with sophia
-│   ├── renderer.rs            # HTML generation with askama
+│   ├── io.rs                  # Reader/Writer traits and FormatRegistry
+│   ├── linkml.rs              # LinkML IR (SchemaDefinition, ClassDefinition, etc.)
+│   ├── owl_model.rs           # OWL-specific types for OwlReader
+│   ├── owl_reader.rs          # OWL/Turtle → LinkML IR
+│   ├── html_writer.rs         # LinkML IR → HTML documentation
 │   ├── server.rs              # Dev server with hot reload
 │   └── snapshots/             # Insta snapshot files
 ├── templates/
-│   ├── base.html              # Base layout template
 │   ├── index.html             # Main documentation page
 │   ├── styleguide.html        # Component showcase page
 │   └── components/            # Reusable UI components
-│       ├── header.html
-│       ├── footer.html
-│       ├── hero.html
-│       └── metadata_card.html
 ├── tests/
 │   ├── fixtures/
 │   │   └── reference.ttl      # Reference ontology for testing
-│   └── integration.rs         # E2E integration tests
+│   ├── e2e.rs                 # Browser tests with Playwright
+│   └── integration.rs         # CLI integration tests
 ├── Cargo.toml                 # Project manifest
 ├── CHANGELOG.md               # Keep updated with changes
 ├── README.md                  # User-facing documentation
 └── WHY.md                     # Project motivation/vision
 ```
 
+## Architecture
+
+panschema uses a Reader/Writer architecture with LinkML as the internal representation:
+
+```
+Input File → Reader → LinkML IR → Writer → Output
+   (TTL)    (OwlReader)  (SchemaDefinition)  (HtmlWriter)  (HTML)
+```
+
 ## Reference Ontology
 
-The reference ontology at `tests/fixtures/reference.ttl` is used for testing and serves as the canonical example of rontodoc in action.
+The reference ontology at `tests/fixtures/reference.ttl` is used for testing and serves as the canonical example.
 
 ## Development Methodology
 
@@ -94,15 +101,6 @@ Pre-commit hooks enforce these automatically.
 
 - [WHY.md](WHY.md) - Project motivation and vision
 - [docs/ROADMAP.md](docs/ROADMAP.md) - Feature roadmap and release plan
-- [docs/components.md](docs/components.md) - Component development guide
-- [docs/adr/001-core-architecture.md](docs/adr/001-core-architecture.md) - Pipeline architecture
-- [docs/adr/002-crate-selection.md](docs/adr/002-crate-selection.md) - Dependency decisions
-- [docs/features/01-foundational-ui-stack.md](docs/features/01-foundational-ui-stack.md) - First feature spec
-- [docs/templates/TEMPLATE_FEATURES.md](docs/templates/TEMPLATE_FEATURES.md) - Feature template
-- [docs/templates/TEMPLATE_ADR.md](docs/templates/TEMPLATE_ADR.md) - ADR template
-
-## Next Steps (Project TODOs)
-
-- Implement Slice 4: Documentation Layout Structure
-- Implement Slice 5: E2E Testing with Playwright
-- Implement Slice 6: Release & CD Setup (crates.io publishing)
+- [docs/adr/003-linkml-as-internal-representation.md](docs/adr/003-linkml-as-internal-representation.md) - IR architecture
+- [docs/adr/004-reader-writer-architecture.md](docs/adr/004-reader-writer-architecture.md) - Reader/Writer design
+- [docs/features/03-reader-writer-architecture.md](docs/features/03-reader-writer-architecture.md) - Feature spec

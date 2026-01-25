@@ -8,40 +8,17 @@ on:
 permissions:
   contents: write
 
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
 jobs:
+  # Run full cross-platform test suite before building release artifacts
   test:
     name: Test
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v6
+    uses: ./.github/workflows/test.yml
 
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@master
-      with:
-        toolchain: stable
-        components: rustfmt, clippy
-
-    - name: Install cargo-nextest
-      uses: taiki-e/install-action@nextest
-
-    - name: Setup Node.js (for Playwright)
-      uses: actions/setup-node@v4
-      with:
-        node-version: '20'
-
-    - name: Install Playwright browsers
-      run: npx playwright@1.56.1 install --with-deps
-
-    - name: Check formatting
-      run: cargo fmt -- --check
-
-    - name: Clippy
-      run: cargo clippy --all-targets --all-features -- -D warnings
-
-    - name: Run tests
-      run: cargo nextest run --features dev
-
-  build-release:
+  build:
     name: Build ${{ matrix.target }}
     needs: test
     runs-on: ${{ matrix.os }}
@@ -51,12 +28,16 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            archive: tar.gz
           - os: macos-latest
             target: x86_64-apple-darwin
+            archive: tar.gz
           - os: macos-latest
             target: aarch64-apple-darwin
+            archive: tar.gz
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            archive: zip
 
     steps:
     - uses: actions/checkout@v6
@@ -67,20 +48,28 @@ jobs:
         toolchain: stable
         target: ${{ matrix.target }}
 
-    - name: Install parse-changelog
-      uses: taiki-e/install-action@v2
+    - name: Cache Cargo
+      uses: actions/cache@v5
       with:
-        tool: parse-changelog
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-${{ matrix.target }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-${{ matrix.target }}-cargo-release-
 
     - name: Build Release
-      run: cargo build --release --target ${{ matrix.target }} --verbose
+      run: cargo build --release --target ${{ matrix.target }}
 
     - name: Strip binary (Linux/macOS)
       if: matrix.os != 'windows-latest'
       shell: bash
       run: |
-        if [ -f target/${{ matrix.target }}/release/rontodoc ]; then
-          strip target/${{ matrix.target }}/release/rontodoc
+        if [ -f target/${{ matrix.target }}/release/panschema ]; then
+          strip target/${{ matrix.target }}/release/panschema
         fi
 
     - name: Create archive (Unix)
@@ -88,38 +77,62 @@ jobs:
       shell: bash
       run: |
         cd target/${{ matrix.target }}/release
-        tar czf rontodoc-${{ github.ref_name }}-${{ matrix.target }}.tar.gz rontodoc
-        mv rontodoc-${{ github.ref_name }}-${{ matrix.target }}.tar.gz ../../..
+        tar czf ../../../panschema-${{ github.ref_name }}-${{ matrix.target }}.tar.gz panschema
 
     - name: Create archive (Windows)
       if: matrix.os == 'windows-latest'
       shell: bash
       run: |
         cd target/${{ matrix.target }}/release
-        7z a rontodoc-${{ github.ref_name }}-${{ matrix.target }}.zip rontodoc.exe
-        mv rontodoc-${{ github.ref_name }}-${{ matrix.target }}.zip ../../..
+        7z a ../../../panschema-${{ github.ref_name }}-${{ matrix.target }}.zip panschema.exe
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: panschema-${{ matrix.target }}
+        path: panschema-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}
+        if-no-files-found: error
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Install parse-changelog
+      uses: taiki-e/install-action@v2
+      with:
+        tool: parse-changelog
 
     - name: Get version
       id: get_version
-      shell: bash
       run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
     - name: Generate Release Notes
-      shell: bash
       run: parse-changelog CHANGELOG.md ${{ steps.get_version.outputs.version }} > release_notes.md
 
-    - name: Upload Release Asset
-      uses: softprops/action-gh-release@v2
-      if: startsWith(github.ref, 'refs/tags/')
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
       with:
-        files: rontodoc-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.os == 'windows-latest' && 'zip' || 'tar.gz' }}
+        path: artifacts
+        merge-multiple: true
+
+    - name: List artifacts
+      run: ls -la artifacts/
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: artifacts/*
         body_path: release_notes.md
+        fail_on_unmatched_files: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   publish-crate:
     name: Publish to crates.io
-    needs: build-release
+    needs: release
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v6

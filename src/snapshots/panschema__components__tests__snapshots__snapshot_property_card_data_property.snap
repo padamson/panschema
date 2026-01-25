@@ -1,6 +1,5 @@
 ---
 source: src/components.rs
-assertion_line: 596
 expression: html
 ---
 <article class="entity-card property-card" id="prop-name">

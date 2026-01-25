@@ -5,6 +5,8 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  # Allow this workflow to be called by other workflows (e.g., release.yml)
+  workflow_call:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -52,8 +54,32 @@ jobs:
       with:
         node-version: '20'
 
+    - name: Get Playwright version
+      id: playwright-version
+      shell: bash
+      run: echo "version=1.56.1" >> $GITHUB_OUTPUT
+
+    - name: Cache Playwright browsers
+      uses: actions/cache@v5
+      id: playwright-cache
+      with:
+        path: |
+          ~/.cache/ms-playwright
+          ~/Library/Caches/ms-playwright
+          ~/AppData/Local/ms-playwright
+        key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+
     - name: Install Playwright browsers
+      if: steps.playwright-cache.outputs.cache-hit != 'true'
       run: npx playwright@1.56.1 install --with-deps
+
+    - name: Install Playwright dependencies (cached)
+      if: steps.playwright-cache.outputs.cache-hit == 'true'
+      shell: bash
+      run: |
+        if [ "$RUNNER_OS" == "Linux" ]; then
+          npx playwright@1.56.1 install-deps
+        fi
 
     - name: Check formatting
       run: cargo fmt -- --check

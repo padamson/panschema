@@ -1,6 +1,5 @@
 ---
 source: src/components.rs
-assertion_line: 593
 expression: html
 ---
 <div class="namespace-table">

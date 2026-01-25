@@ -4,14 +4,20 @@ use clap::{Parser, Subcommand};
 
 #[cfg(feature = "dev")]
 mod components;
-mod model;
-mod parser;
-mod renderer;
+mod html_writer;
+mod io;
+mod linkml;
+mod owl_model;
+mod owl_reader;
 mod server;
 
-/// A blazing fast, Rust-based ontology documentation generator.
+use html_writer::HtmlWriter;
+use io::Writer;
+use owl_reader::OwlReader;
+
+/// A universal CLI for schema conversion, documentation, validation, and comparison.
 #[derive(Parser)]
-#[command(name = "rontodoc")]
+#[command(name = "panschema")]
 #[command(version, about, long_about = None)]
 struct Cli {
     #[command(subcommand)]
@@ -70,11 +76,20 @@ enum Commands {
 }
 
 fn generate(input: &Path, output: &Path) -> anyhow::Result<()> {
-    let metadata = parser::parse_ontology(input)?;
-    renderer::render(&metadata, output)?;
+    use io::Reader;
+
+    let reader = OwlReader::new();
+    let schema = reader.read(input).map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    let writer = HtmlWriter::new();
+    writer
+        .write(&schema, output)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    let title = schema.title.as_deref().unwrap_or(&schema.name);
     println!(
         "Generated documentation for '{}' in {}",
-        metadata.title(),
+        title,
         output.display()
     );
     Ok(())
@@ -127,7 +142,7 @@ async fn main() -> anyhow::Result<()> {
             if let Some(input) = cli.input {
                 generate(&input, &cli.output)?;
             } else {
-                println!("rontodoc: no input specified. Use --help for usage.");
+                println!("panschema: no input specified. Use --help for usage.");
             }
         }
     }
@@ -141,7 +156,7 @@ mod tests {
 
     #[test]
     fn cli_parses_with_defaults() {
-        let cli = Cli::try_parse_from(["rontodoc"]).unwrap();
+        let cli = Cli::try_parse_from(["panschema"]).unwrap();
         assert_eq!(cli.output, PathBuf::from("output"));
         assert!(cli.input.is_none());
         assert!(cli.command.is_none());
@@ -150,7 +165,12 @@ mod tests {
     #[test]
     fn cli_parses_generate_subcommand() {
         let cli = Cli::try_parse_from([
-            "rontodoc", "generate", "--input", "test.ttl", "--output", "docs",
+            "panschema",
+            "generate",
+            "--input",
+            "test.ttl",
+            "--output",
+            "docs",
         ])
         .unwrap();
         match cli.command {
@@ -164,9 +184,15 @@ mod tests {
 
     #[test]
     fn cli_parses_serve_subcommand() {
-        let cli =
-            Cli::try_parse_from(["rontodoc", "serve", "--input", "test.ttl", "--port", "8080"])
-                .unwrap();
+        let cli = Cli::try_parse_from([
+            "panschema",
+            "serve",
+            "--input",
+            "test.ttl",
+            "--port",
+            "8080",
+        ])
+        .unwrap();
         match cli.command {
             Some(Commands::Serve { input, port, .. }) => {
                 assert_eq!(input, PathBuf::from("test.ttl"));
@@ -180,7 +206,7 @@ mod tests {
     #[cfg(feature = "dev")]
     fn cli_parses_styleguide_subcommand() {
         let cli = Cli::try_parse_from([
-            "rontodoc",
+            "panschema",
             "styleguide",
             "--output",
             "styleguide-output",

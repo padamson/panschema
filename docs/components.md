@@ -1,17 +1,22 @@
 # Component Development Guide
 
-rontodoc uses a component-driven development workflow inspired by Storybook. Components are isolated, documented in a style guide, and validated with snapshot tests.
+panschema uses a component-driven development workflow inspired by Storybook. Components are isolated, documented in a style guide, and validated with snapshot tests.
 
 > **Note:** The styleguide command requires building with the `dev` feature flag.
 
 ## Quick Start
 
 ```bash
-# Preview the style guide with live reload
-cargo run --features dev -- styleguide --serve
+# One-time setup: install cargo-watch
+cargo install cargo-watch
+
+# Preview the style guide with hot reload
+cargo watch -w src -w templates -x 'run --features dev -- styleguide --serve'
 ```
 
 Open http://localhost:3000/styleguide.html
+
+> **Note:** Templates are compiled into the binary via Askama, so changes to `templates/` or `src/components.rs` require a rebuild. The `cargo watch` command handles this automatically.
 
 ## Directory Structure
 

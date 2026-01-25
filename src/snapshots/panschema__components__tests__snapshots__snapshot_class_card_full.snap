@@ -1,13 +1,12 @@
 ---
 source: src/components.rs
-assertion_line: 560
 expression: html
 ---
-<article class="entity-card class-card" id="class-thing">
+<article class="entity-card class-card" id="class-person">
     <header class="entity-header">
         <div class="entity-badge class-badge">Class</div>
-        <h3 class="entity-title">Thing</h3>
-        <button class="copy-btn" data-copy="https://example.org/ontology#Thing" title="Copy IRI">
+        <h3 class="entity-title">Person</h3>
+        <button class="copy-btn" data-copy="https://example.org/ontology#Person" title="Copy IRI">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
                 <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
@@ -16,10 +15,30 @@ expression: html
     </header>
 
     <div class="entity-iri">
-        <code class="mono">https://example.org/ontology#Thing</code>
+        <code class="mono">https://example.org/ontology#Person</code>
     </div>
 
+    <p class="entity-description">Represents a human being.</p>
+
     <div class="entity-details">
+        <div class="detail-row">
+            <dt>Subclass of</dt>
+            <dd><a href="#class-thing" class="entity-ref class-ref">Thing</a></dd>
+        </div>
+        <div class="detail-row">
+            <dt>Superclass of</dt>
+            <dd>
+                <a href="#class-employee" class="entity-ref class-ref">Employee</a>,
+                <a href="#class-customer" class="entity-ref class-ref">Customer</a>
+            </dd>
+        </div>
+        <div class="detail-row">
+            <dt>Properties</dt>
+            <dd>
+                <a href="#prop-name" class="entity-ref prop-ref">name</a>,
+                <a href="#prop-age" class="entity-ref prop-ref">age</a>
+            </dd>
+        </div>
     </div>
 </article>
 <style>

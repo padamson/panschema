@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-01-25
+
+Project renamed from **rontodoc** to **panschema** to reflect broader schema support.
+
+### Added
+- **LinkML Internal Representation (IR)**: Canonical data model based on LinkML metamodel
+- **Reader/Writer Architecture**: Extensible pipeline for multi-format support
+- `OwlReader`: Parses OWL/Turtle to LinkML IR
+- `HtmlWriter`: Generates HTML documentation from LinkML IR
+- Support for OWL individuals with type links and property values
+
+### Changed
+- **BREAKING**: Binary renamed from `rontodoc` to `panschema`
+- **BREAKING**: Crate renamed from `rontodoc` to `panschema`
+- Internal architecture refactored to use Reader → IR → Writer pipeline
+- Classes map to LinkML `ClassDefinition` with hierarchy preserved
+- Properties map to LinkML `SlotDefinition` with domain/range
+- XSD datatypes mapped to LinkML built-in types
+
+### Removed
+- Old monolithic parser and renderer (replaced by Reader/Writer architecture)
+
 ## [0.1.0] - 2026-01-24
 
 Initial release of rontodoc — a fast, single-binary ontology documentation generator.
@@ -22,5 +44,6 @@ Initial release of rontodoc — a fast, single-binary ontology documentation gen
 - Responsive two-column layout with dark mode support.
 - Component-driven UI with style guide (`--features dev`).
 
-[Unreleased]: https://github.com/padamson/rontodoc/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/padamson/rontodoc/releases/tag/v0.1.0
+[Unreleased]: https://github.com/padamson/panschema/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/padamson/panschema/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/padamson/panschema/releases/tag/v0.1.0

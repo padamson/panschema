@@ -1,36 +1,85 @@
-# Why rontodoc?
+# Why panschema?
 
-## Information Architecture for the AI Era
+## The Problem: Data Modeling is Fragmented
 
-We are at a transition point in how we define and document data structures:
+Data modeling spans many schema languages, each with its own ecosystem:
 
-1.  **Ontologies are becoming critical infrastructure** - as AI agents need structured context to operate reliably.
-2.  **Documentation tools are stuck in the past** - relying on heavy Java runtimes (Widoco, LODE) and complex setups.
-3.  **CI/CD is non-negotiable** - documentation must drift-check against code/schema automatically.
+| Schema Language | Domain | Tools |
+|----------------|--------|-------|
+| **OWL/RDF** | Semantic Web, Knowledge Graphs | Protégé, Widoco, LODE |
+| **LinkML** | Data modeling, FAIR data | gen-linkml |
+| **JSON Schema** | APIs, Configuration | Various generators |
+| **SHACL** | RDF validation | SHACL validators |
+| **SQL DDL** | Databases | Database-specific |
 
-`rontodoc` exists to bring the speed, safety, and simplicity of **Rust** to the world of ontology documentation.
+Each has its own documentation tools, conversion utilities, and validation approaches. Teams working across domains must learn multiple toolchains.
 
-## The Problem
+## The Vision: pandoc for Data Modeling
 
-Current ontology documentation tools often require:
-- A JVM installed
-- Complex XML/XSLT configurations
-- Slow startup times making them painful for "save-and-view" loops
+**pandoc** revolutionized document conversion — one tool that speaks every document format.
+
+**panschema** aims to do the same for data modeling:
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│  OWL/TTL    │     │             │     │    HTML     │
+│  LinkML     │ ──► │  LinkML IR  │ ──► │  Markdown   │
+│  JSON Schema│     │ (canonical) │     │  LinkML     │
+│  SHACL      │     │             │     │  JSON Schema│
+└─────────────┘     └─────────────┘     └─────────────┘
+    Readers              Core              Writers
+```
+
+### Core Capabilities
+
+1. **Convert** between schema languages
+   - OWL → LinkML → JSON Schema
+   - Preserve semantics across formats
+
+2. **Generate documentation** from any format
+   - Beautiful, responsive HTML
+   - Searchable, AI-readable
+
+3. **Validate** schemas
+   - Check syntax and semantics
+   - Verify compatibility between versions
+
+4. **Compare** schemas
+   - Diff two schemas
+   - Track changes over time
+
+## Why Rust?
+
+Current ontology tools often require:
+- A JVM (Widoco, LODE, Protégé)
+- Python environments (LinkML generators)
+- Slow startup times
 - Heavy CI containers
 
-Meanwhile, the Rust ecosystem offers blazing fast parsers and template engines, but lacks a dedicated, opinionated documentation generator for OWL/RDF.
+panschema is:
+- **Single Binary**: No runtime dependencies
+- **Blazing Fast**: Millisecond documentation generation
+- **CI Native**: Perfect for GitHub Actions
+- **Memory Safe**: Rust's guarantees
 
-## The Solution
+## The Goal
 
-`rontodoc` aims to be:
+Make working with any schema language as easy as working with Markdown:
 
-- **Single Binary**: No JVM, no Python venv. Just one executable.
-- **Blazing Fast**: Generates complex ontology documentation sites with graph visualization, live search, and filtering in milliseconds.
-- **Modern Design**: Responsive, searchable, and AI-readable documentation out of the box.
-- **CI Native**: Designed to run in GitHub Actions with zero setup.
+```bash
+# Document an ontology
+panschema doc ontology.ttl
 
-## Vision
+# Convert OWL to LinkML
+panschema convert input.ttl --to linkml
 
-We want to make documenting an OWL/RDF ontology as easy as documenting a Rust crate.
+# Validate a schema
+panschema validate schema.yaml
 
-> "If it's not documented, it doesn't exist. If the documentation is hard to build, it won't be documented."
+# Compare two versions
+panschema diff v1.ttl v2.ttl
+```
+
+> "If it's not documented, it doesn't exist. If documentation is hard, it won't happen."
+
+panschema makes it easy.

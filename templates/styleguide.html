@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>rontodoc Style Guide</title>
+    <title>panschema Style Guide</title>
     <style>
         :root {
             /* Colors - Light mode */
@@ -193,6 +193,17 @@
             border-radius: 0.25rem;
         }
 
+        /* Header preview container - isolates fixed positioning */
+        .header-preview-container {
+            position: relative;
+            height: 60px;
+            overflow: hidden;
+        }
+
+        .header-preview-container .site-header {
+            position: absolute;
+        }
+
         /* Sidebar preview container */
         .sidebar-preview-container {
             display: flex;
@@ -216,11 +227,11 @@
         }
     </style>
 </head>
-<body>
+<body style="padding-top: 0 !important;">
     <header class="styleguide-header">
         <div class="container">
-            <h1>rontodoc Style Guide</h1>
-            <p>UI component reference for ontology documentation</p>
+            <h1>panschema Style Guide</h1>
+            <p>Component reference for developers</p>
         </div>
     </header>
 
@@ -234,7 +245,9 @@
             <div class="component-preview">
                 <div class="preview-label">Preview</div>
                 <div class="preview-content">
-                    {% include "components/header.html" %}
+                    <div class="header-preview-container">
+                        {% include "components/header.html" %}
+                    </div>
                 </div>
             </div>
             <p class="component-file">Template: <code>templates/components/header.html</code></p>
@@ -498,7 +511,7 @@
     <footer class="site-footer" style="margin-top: 3rem; padding: 2rem 0; border-top: 1px solid var(--color-border); background-color: var(--color-bg-secondary);">
         <div class="container">
             <p style="margin: 0; font-size: 0.875rem; color: var(--color-text-muted); text-align: center;">
-                rontodoc Style Guide — Component reference for developers
+                panschema Style Guide — Component reference for developers
             </p>
         </div>
     </footer>

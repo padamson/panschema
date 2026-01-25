@@ -1,6 +1,5 @@
 ---
 source: src/components.rs
-assertion_line: 235
 expression: html
 ---
 <section class="hero">

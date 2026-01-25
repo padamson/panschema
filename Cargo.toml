@@ -1,13 +1,13 @@
 [package]
-name = "rontodoc"
-version = "0.1.0"
+name = "panschema"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Paul Adamson"]
-description = "A blazing fast, Rust-based ontology documentation generator"
+description = "A universal CLI for schema conversion, documentation, validation, and comparison"
 license = "Apache-2.0"
-repository = "https://github.com/padamson/rontodoc"
-keywords = ["ontology", "owl", "rdf", "documentation"]
+repository = "https://github.com/padamson/panschema"
+keywords = ["ontology", "owl", "rdf", "linkml", "documentation"]
 categories = ["command-line-utilities", "development-tools::build-utils"]
 
 [dependencies]
@@ -23,6 +23,7 @@ askama = "0.12"
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml = "0.9"
 
 # Error handling
 thiserror = "1"

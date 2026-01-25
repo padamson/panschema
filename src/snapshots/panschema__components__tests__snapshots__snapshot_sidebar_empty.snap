@@ -1,6 +1,5 @@
 ---
 source: src/components.rs
-assertion_line: 582
 expression: html
 ---
 <nav class="sidebar-section">

@@ -1,31 +1,91 @@
-# rontodoc
+# panschema
 
-> 🦕 A blazing fast, Rust-based ontology documentation generator.
+> A universal CLI for schema conversion, documentation, validation, and comparison.
 
-**Status:** 🚧 Active Development
+**Status:** Active Development
 
-## 🎯 Why rontodoc?
+## Vision
 
-Read our [WHY.md](WHY.md) to understand the vision behind this project.
+**panschema** aims to be the universal tool for data modeling workflows:
 
-**TL;DR:** Ontology documentation needs to be CI-native, fast, and easy to deploy. `rontodoc` replaces heavy Java-based tools with a single, high-performance binary that fits perfectly into modern development workflows.
+- **Convert** between schema languages (LinkML, OWL/TTL, JSON Schema, SHACL, SQL DDL)
+- **Generate documentation** from any supported format
+- **Validate** schemas and check compatibility
+- **Compare** schemas and track changes
 
-## 🚀 Vision
+Think of it as **pandoc for data modeling** — a single tool that speaks all schema languages.
 
-We aim to:
-- Generate complete documentation sites in milliseconds
-- Run natively in CI without complex dependencies (JVM, etc.)
-- Provide modern, responsive, and accessible UI templates
-- Support OWL and RDF standards out of the box
-- Develop a robust tool using test-driven development with unit and integration tests as well as E2E tests using [playwright-rs](https://crates.io/crates/playwright-rs)
+## Current Features (v0.2.0)
 
-## 📦 Installation
+- **OWL/Turtle input** → HTML documentation
+- **LinkML IR** as canonical internal representation
+- **Fast**: Generate complete documentation in milliseconds
+- **CI-native**: Single binary, no JVM or complex dependencies
+- **Hot reload**: Development server with live preview
+
+## Installation
 
 ```bash
-cargo install rontodoc
+cargo install panschema
 ```
 
-## 🛠️ Development
+Or download pre-built binaries from [GitHub Releases](https://github.com/padamson/panschema/releases).
+
+## Quick Start
+
+Generate documentation from an OWL ontology:
+
+```bash
+panschema generate --input ontology.ttl --output docs/
+```
+
+Start a development server with hot reload:
+
+```bash
+panschema serve --input ontology.ttl
+```
+
+Open http://localhost:3000 to view the documentation.
+
+## Supported Formats
+
+### Input Formats
+| Format | Status | Extension |
+|--------|--------|-----------|
+| OWL/Turtle | Full support | `.ttl` |
+| LinkML YAML | Coming soon | `.yaml` |
+| JSON Schema | Planned | `.json` |
+| SHACL | Planned | `.ttl` |
+
+### Output Formats
+| Format | Status |
+|--------|--------|
+| HTML Documentation | Full support |
+| LinkML YAML | Planned |
+| Markdown | Planned |
+| JSON Schema | Planned |
+
+## Architecture
+
+panschema uses a Reader/Writer architecture with LinkML as the internal representation:
+
+```
+Input File → Reader → LinkML IR → Writer → Output
+   (TTL)    (OwlReader)  (SchemaDefinition)  (HtmlWriter)  (HTML)
+```
+
+This design enables:
+- Adding new input formats by implementing the `Reader` trait
+- Adding new output formats by implementing the `Writer` trait
+- Format-agnostic documentation and conversion
+
+## Why panschema?
+
+Read our [WHY.md](WHY.md) to understand the full vision.
+
+**TL;DR:** Data modeling is fragmented across many schema languages. panschema provides a unified interface — fast, CI-native, and extensible.
+
+## Development
 
 ### Prerequisites
 
@@ -34,80 +94,36 @@ cargo install rontodoc
 - Node.js 20+ and Playwright browsers (for E2E tests)
 
 ```bash
-# Install Playwright browsers (version must match playwright-rs)
+# Install Playwright browsers
 npx playwright@1.56.1 install
 ```
 
-### Building
+### Building & Testing
 
 ```bash
 cargo build
+cargo nextest run --features dev
 ```
 
-### Running Tests
-
-Run the full test suite (unit + E2E):
+### Manual Verification
 
 ```bash
-cargo nextest run
+panschema serve --input tests/fixtures/reference.ttl
 ```
 
-Cross-browser E2E testing:
+### UI Component Style Guide
 
 ```bash
-# Default: chromium only
-cargo nextest run
-
-# Specific browser
-BROWSER=firefox cargo nextest run
-BROWSER=webkit cargo nextest run
-
-# All browsers (used in CI)
-BROWSER=all cargo nextest run
+cargo watch -w src -w templates -x 'run --features dev -- styleguide --serve'
 ```
 
-### Manual Verification (Preview with hot reload)
+## Contributing
 
-```bash
-rontodoc serve --input path/to/reference.ttl
-```
+Contributions are welcome! Please follow our standards:
+- **TDD First**: Write tests before implementation
+- **Strict Linting**: Pass `cargo fmt` and `cargo clippy`
+- **Pre-commit**: Use our pre-commit hooks
 
-This will:
-1. Generate documentation from `tests/fixtures/reference.ttl` to `output/`
-2. Start a local server at `http://localhost:3000`
-3. Watch for changes and regenerate automatically
-
-### UI Component Style Guide (rontodoc Contributors Only)
-
-For contributors developing rontodoc's UI components, build with the `dev` feature:
-
-```bash
-# Build with dev tools enabled
-cargo build --features dev
-
-# Generate and serve the style guide
-cargo run --features dev -- styleguide --serve
-```
-
-Open http://localhost:3000/styleguide.html to see all components.
-
-See [docs/components.md](docs/components.md) for the full component development guide.
-
-### Serve Reference Ontology with Auto-Recompile (rontodoc Contributors Only)
-
-To auto-recompile and restart the server when Rust source or templates change, use [cargo-watch](https://crates.io/crates/cargo-watch):
-
-```bash
-cargo watch -x 'run -- serve --input tests/fixtures/reference.ttl'
-```
-
-## 🤝 Contributing
-
-Contributions are welcome! Please match our existing standards:
-- **TDD First**: Write tests before implementation.
-- **Strict Linting**: Pass `cargo fmt` and `cargo clippy`.
-- **Pre-commit**: Use our pre-commit hooks to ensure quality.
-
-## 📄 License
+## License
 
 Apache-2.0

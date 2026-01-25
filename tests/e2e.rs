@@ -30,10 +30,10 @@ fn find_available_port() -> u16 {
 
 /// Generate documentation to a temporary directory.
 fn generate_docs() -> PathBuf {
-    let output_dir = std::env::temp_dir().join(format!("rontodoc_e2e_{}", std::process::id()));
+    let output_dir = std::env::temp_dir().join(format!("panschema_e2e_{}", std::process::id()));
     let _ = fs::remove_dir_all(&output_dir);
 
-    let status = Command::new(env!("CARGO_BIN_EXE_rontodoc"))
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "--input",
             "tests/fixtures/reference.ttl",
@@ -41,9 +41,9 @@ fn generate_docs() -> PathBuf {
             output_dir.to_str().unwrap(),
         ])
         .status()
-        .expect("Failed to execute rontodoc");
+        .expect("Failed to execute panschema");
 
-    assert!(status.success(), "rontodoc failed to generate docs");
+    assert!(status.success(), "panschema failed to generate docs");
     output_dir
 }
 
@@ -116,7 +116,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     // 2. Verify page title
     let title = page.title().await.expect("Failed to get page title");
     assert!(
-        title.contains("Rontodoc Reference Ontology"),
+        title.contains("panschema Reference Ontology"),
         "[{}] Page title should contain ontology name, got: {}",
         browser_name,
         title
@@ -135,12 +135,12 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     let body = page.locator("body").await;
     let page_content = body.inner_html().await.expect("Failed to get page content");
     assert!(
-        page_content.contains("http://example.org/rontodoc/reference"),
+        page_content.contains("http://example.org/panschema/reference"),
         "[{}] Page should display ontology IRI",
         browser_name
     );
     assert!(
-        page_content.contains("0.1.0"),
+        page_content.contains("0.2.0"),
         "[{}] Page should display version",
         browser_name
     );
@@ -207,7 +207,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
 
     // Verify class card shows IRI
     assert!(
-        dog_card_html.contains("http://example.org/rontodoc/reference#Dog"),
+        dog_card_html.contains("http://example.org/panschema/reference#Dog"),
         "[{}] Dog card should show IRI",
         browser_name
     );

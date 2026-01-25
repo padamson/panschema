@@ -1,14 +1,14 @@
-@prefix : <http://example.org/rontodoc/reference#> .
+@prefix : <http://example.org/panschema/reference#> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 
 # Ontology metadata
-<http://example.org/rontodoc/reference> a owl:Ontology ;
-    rdfs:label "Rontodoc Reference Ontology" ;
-    rdfs:comment "A reference ontology for testing `rontodoc` documentation generation." ;
-    owl:versionInfo "0.1.0" .
+<http://example.org/panschema/reference> a owl:Ontology ;
+    rdfs:label "panschema Reference Ontology" ;
+    rdfs:comment "A reference ontology for testing `panschema` documentation generation." ;
+    owl:versionInfo "0.2.0" .
 
 # Classes
 :Animal a owl:Class ;

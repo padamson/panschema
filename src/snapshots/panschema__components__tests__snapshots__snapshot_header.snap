@@ -1,6 +1,5 @@
 ---
 source: src/components.rs
-assertion_line: 517
 expression: html
 ---
 <header class="site-header">

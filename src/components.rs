@@ -14,8 +14,9 @@
 //! 4. Add the component to the style guide template
 //! 5. Write snapshot tests for the component
 
-// These components are primarily used for testing and the styleguide feature.
-// They will be used more extensively as we build out the documentation layout.
+// Allow dead code in this module - these components and renderer methods are
+// infrastructure for the styleguide and component testing. They are used via
+// tests gated behind #[cfg(feature = "dev")] and through the styleguide command.
 #![allow(dead_code)]
 
 use askama::Template;
@@ -116,7 +117,9 @@ impl Default for SampleData {
             title: "Example Ontology".to_string(),
             iri: "https://example.org/ontology/example".to_string(),
             version: Some("1.0.0".to_string()),
-            comment: Some("An example ontology for demonstrating rontodoc components.".to_string()),
+            comment: Some(
+                "An example ontology for demonstrating panschema components.".to_string(),
+            ),
             classes: vec![
                 EntityRef::new("person", "Person"),
                 EntityRef::new("organization", "Organization"),
@@ -552,7 +555,7 @@ mod tests {
     #[test]
     fn footer_renders() {
         let html = ComponentRenderer::footer().unwrap();
-        assert!(html.contains("rontodoc"));
+        assert!(html.contains("panschema"));
         assert!(html.contains("site-footer"));
     }
 

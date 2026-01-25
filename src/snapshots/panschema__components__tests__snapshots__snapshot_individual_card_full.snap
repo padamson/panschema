@@ -1,6 +1,5 @@
 ---
 source: src/components.rs
-assertion_line: 836
 expression: html
 ---
 <article class="entity-card individual-card" id="ind-john-doe">

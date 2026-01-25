@@ -6,12 +6,19 @@ use tokio::sync::mpsc;
 use tower_http::services::ServeDir;
 use tower_livereload::LiveReloadLayer;
 
-use crate::{parser, renderer};
+use crate::html_writer::HtmlWriter;
+use crate::io::{Reader, Writer};
+use crate::owl_reader::OwlReader;
 
 /// Regenerate documentation from input ontology
 fn regenerate(input: &Path, output: &Path) -> anyhow::Result<()> {
-    let metadata = parser::parse_ontology(input)?;
-    renderer::render(&metadata, output)?;
+    let reader = OwlReader::new();
+    let schema = reader.read(input).map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    let writer = HtmlWriter::new();
+    writer
+        .write(&schema, output)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
     Ok(())
 }
 

@@ -3,10 +3,10 @@ use std::process::Command;
 
 #[test]
 fn generates_documentation_from_reference_ontology() {
-    let output_dir = std::env::temp_dir().join("rontodoc_integration_test");
+    let output_dir = std::env::temp_dir().join("panschema_integration_test");
     let _ = fs::remove_dir_all(&output_dir);
 
-    let status = Command::new(env!("CARGO_BIN_EXE_rontodoc"))
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "--input",
             "tests/fixtures/reference.ttl",
@@ -14,9 +14,9 @@ fn generates_documentation_from_reference_ontology() {
             output_dir.to_str().unwrap(),
         ])
         .status()
-        .expect("Failed to execute rontodoc");
+        .expect("Failed to execute panschema");
 
-    assert!(status.success(), "rontodoc exited with error");
+    assert!(status.success(), "panschema exited with error");
 
     let index_path = output_dir.join("index.html");
     assert!(index_path.exists(), "index.html was not generated");
@@ -25,14 +25,14 @@ fn generates_documentation_from_reference_ontology() {
 
     // Verify key content
     assert!(
-        html.contains("Rontodoc Reference Ontology"),
+        html.contains("panschema Reference Ontology"),
         "Missing ontology title"
     );
     assert!(
-        html.contains("http://example.org/rontodoc/reference"),
+        html.contains("http://example.org/panschema/reference"),
         "Missing ontology IRI"
     );
-    assert!(html.contains("0.1.0"), "Missing version");
+    assert!(html.contains("0.2.0"), "Missing version");
     assert!(
         html.contains("A reference ontology for testing"),
         "Missing description"

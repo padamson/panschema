@@ -1,6 +1,5 @@
 ---
 source: src/components.rs
-assertion_line: 556
 expression: html
 ---
 <section class="metadata-card" id="metadata">

@@ -1,4 +1,4 @@
-# Pre-commit hooks for rontodoc
+# Pre-commit hooks for panschema
 # Install: pip install pre-commit && pre-commit install
 # Setup: npx playwright@1.56.1 install (required for E2E tests, version must match playwright-rs)
 # Run manually: pre-commit run --all-files

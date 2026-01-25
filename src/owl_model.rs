@@ -1,3 +1,8 @@
+//! OWL ontology model types
+//!
+//! These types represent the OWL ontology structure as parsed from Turtle files.
+//! They are internal to the OwlReader implementation.
+
 /// Metadata extracted from an ontology
 #[derive(Debug, Clone)]
 pub struct OntologyMetadata {
@@ -48,16 +53,6 @@ pub enum PropertyType {
     DatatypeProperty,
 }
 
-impl PropertyType {
-    /// Returns a display string for the property type
-    pub fn display(&self) -> &str {
-        match self {
-            PropertyType::ObjectProperty => "Object Property",
-            PropertyType::DatatypeProperty => "Datatype Property",
-        }
-    }
-}
-
 /// A property (owl:ObjectProperty or owl:DatatypeProperty) extracted from an ontology
 #[derive(Debug, Clone)]
 pub struct OntologyProperty {
@@ -89,8 +84,6 @@ impl OntologyProperty {
 /// A property value assertion on a named individual
 #[derive(Debug, Clone)]
 pub struct PropertyValue {
-    /// The property IRI (e.g., "http://example.org/rontodoc/reference#hasName")
-    pub property_iri: String,
     /// A short identifier for the property
     pub property_id: String,
     /// The property label (rdfs:label), if known
@@ -190,15 +183,6 @@ mod tests {
             inverse_of_iri: None,
         };
         assert_eq!(prop.display_label(), "hasOwner");
-    }
-
-    #[test]
-    fn property_type_display() {
-        assert_eq!(PropertyType::ObjectProperty.display(), "Object Property");
-        assert_eq!(
-            PropertyType::DatatypeProperty.display(),
-            "Datatype Property"
-        );
     }
 
     #[test]
