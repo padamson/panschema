@@ -281,7 +281,7 @@
                 <div class="preview-content">
                     <div class="sidebar-preview-container">
                         <div class="sidebar-preview">
-                            {%- let active_section = "overview" %}
+                            {%- let active_section = "metadata" %}
                             {% include "components/sidebar.html" %}
                         </div>
                         <div class="sidebar-preview-content">
@@ -384,6 +384,27 @@
                 </div>
             </div>
             <p class="component-file">Template: <code>templates/components/property_card.html</code></p>
+        </section>
+
+        <!-- Individual Card Component -->
+        <section class="component-section">
+            <h2 class="component-name">Individual Card</h2>
+            <p class="component-description">
+                Displays a named individual with its IRI, type(s), and property values.
+            </p>
+            <div class="component-preview">
+                <div class="preview-label">Preview</div>
+                <div class="preview-content preview-padded">
+                    {%- let id = sample_individual.id %}
+                    {%- let label = sample_individual.label %}
+                    {%- let iri = sample_individual.iri %}
+                    {%- let description = sample_individual.description %}
+                    {%- let types = sample_individual.types %}
+                    {%- let property_values = sample_individual.property_values %}
+                    {% include "components/individual_card.html" %}
+                </div>
+            </div>
+            <p class="component-file">Template: <code>templates/components/individual_card.html</code></p>
         </section>
 
         <!-- Footer Component -->

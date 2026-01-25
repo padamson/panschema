@@ -75,20 +75,24 @@ Building on Feature 01 (Foundational UI Stack), this feature adds actual ontolog
 
 ### Slice 3: Individual Extraction & Display
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** Users see example individuals with their types and property values.
 
 **Acceptance Criteria:**
-- [ ] Parser extracts named individuals (entities with rdf:type pointing to a class)
-- [ ] Parser extracts property values for individuals
-- [ ] Individuals section displays all individuals
-- [ ] Individual cards show label, type(s), and property values
-- [ ] E2E test verifies individuals are rendered from reference.ttl
+- [x] Parser extracts named individuals (entities with rdf:type pointing to a class)
+- [x] Parser extracts property values for individuals
+- [x] Individuals section displays all individuals
+- [x] Individual cards show label, type(s), and property values
+- [x] E2E test verifies individuals are rendered from reference.ttl
 
 **Notes:**
-- May need a new individual_card component (or extend class_card)
-- Reference ontology has: fido (a Dog with name and age)
+- New `individual_card` component with snapshot tests (full and minimal variants)
+- Individuals identified by `rdf:type owl:NamedIndividual` in reference ontology
+- Type(s) displayed as links to class cards; property values displayed with links to property cards
+- Sidebar updated with Individuals link and count badge
+- "Overview" renamed to "Metadata" in sidebar and metadata card for consistency
+- Reference ontology has: fido (a Dog with hasName="Fido" and hasAge=5)
 
 ---
 
@@ -118,7 +122,7 @@ Building on Feature 01 (Foundational UI Stack), this feature adds actual ontolog
 |-------|----------|------------|--------|
 | Slice 1: Classes | Must Have | Feature 01 | Completed |
 | Slice 2: Properties | Must Have | Slice 1 | Completed |
-| Slice 3: Individuals | Should Have | Slice 2 | Not Started |
+| Slice 3: Individuals | Should Have | Slice 2 | Completed |
 | Slice 4: Release | Must Have | Slice 1-3 | Not Started |
 
 ---

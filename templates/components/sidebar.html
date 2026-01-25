@@ -1,13 +1,16 @@
 <nav class="sidebar-section">
     <h2 class="sidebar-title">Navigation</h2>
     <ul class="sidebar-nav">
-        <li><a href="#overview" class="sidebar-link{% if active_section == "overview" %} active{% endif %}">Overview</a></li>
+        <li><a href="#metadata" class="sidebar-link{% if active_section == "metadata" %} active{% endif %}">Metadata</a></li>
         <li><a href="#namespaces" class="sidebar-link{% if active_section == "namespaces" %} active{% endif %}">Namespaces <span class="badge">{{ namespaces.len() }}</span></a></li>
 {%- if !classes.is_empty() %}
         <li><a href="#classes" class="sidebar-link{% if active_section == "classes" %} active{% endif %}">Classes <span class="badge">{{ classes.len() }}</span></a></li>
 {%- endif %}
 {%- if !properties.is_empty() %}
         <li><a href="#properties" class="sidebar-link{% if active_section == "properties" %} active{% endif %}">Properties <span class="badge">{{ properties.len() }}</span></a></li>
+{%- endif %}
+{%- if !individuals.is_empty() %}
+        <li><a href="#individuals" class="sidebar-link{% if active_section == "individuals" %} active{% endif %}">Individuals <span class="badge">{{ individuals.len() }}</span></a></li>
 {%- endif %}
     </ul>
 </nav>

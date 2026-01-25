@@ -60,7 +60,7 @@
     rdfs:comment "A human being." .
 
 # Example individual
-:fido a :Dog ;
+:fido a owl:NamedIndividual , :Dog ;
     rdfs:label "Fido" ;
     :hasName "Fido" ;
     :hasAge 5 .

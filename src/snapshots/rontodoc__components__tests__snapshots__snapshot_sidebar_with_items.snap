@@ -1,15 +1,16 @@
 ---
 source: src/components.rs
-assertion_line: 575
+assertion_line: 683
 expression: html
 ---
 <nav class="sidebar-section">
     <h2 class="sidebar-title">Navigation</h2>
     <ul class="sidebar-nav">
-        <li><a href="#overview" class="sidebar-link active">Overview</a></li>
+        <li><a href="#metadata" class="sidebar-link active">Metadata</a></li>
         <li><a href="#namespaces" class="sidebar-link">Namespaces <span class="badge">2</span></a></li>
         <li><a href="#classes" class="sidebar-link">Classes <span class="badge">2</span></a></li>
         <li><a href="#properties" class="sidebar-link">Properties <span class="badge">2</span></a></li>
+        <li><a href="#individuals" class="sidebar-link">Individuals <span class="badge">1</span></a></li>
     </ul>
 </nav>
 <style>

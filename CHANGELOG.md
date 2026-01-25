@@ -35,3 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Property cards showing label, description, type badge, domain, range, and inverse relationships.
 - Domain/range displayed as links to classes; datatype ranges shown as text.
 - Simplified sidebar navigation with section links (Classes, Properties) instead of individual entities.
+- Individual extraction from OWL ontologies (owl:NamedIndividual with rdf:type, property values).
+- Individual cards showing label, IRI, type(s) linked to class cards, and property values linked to property cards.
+- New `individual_card` component with snapshot tests.
+- Individual card added to style guide.
+- Sidebar Individuals link with count badge.
+
+### Changed
+- Renamed "Overview" to "Metadata" in sidebar navigation and metadata card heading.

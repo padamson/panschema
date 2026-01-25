@@ -13,6 +13,8 @@ pub struct OntologyMetadata {
     pub classes: Vec<OntologyClass>,
     /// Properties defined in the ontology
     pub properties: Vec<OntologyProperty>,
+    /// Named individuals defined in the ontology
+    pub individuals: Vec<OntologyIndividual>,
 }
 
 /// A class (owl:Class) extracted from an ontology
@@ -84,6 +86,43 @@ impl OntologyProperty {
     }
 }
 
+/// A property value assertion on a named individual
+#[derive(Debug, Clone)]
+pub struct PropertyValue {
+    /// The property IRI (e.g., "http://example.org/rontodoc/reference#hasName")
+    pub property_iri: String,
+    /// A short identifier for the property
+    pub property_id: String,
+    /// The property label (rdfs:label), if known
+    pub property_label: Option<String>,
+    /// The value as a string
+    pub value: String,
+}
+
+/// A named individual (owl:NamedIndividual) extracted from an ontology
+#[derive(Debug, Clone)]
+pub struct OntologyIndividual {
+    /// The individual IRI
+    pub iri: String,
+    /// A short identifier derived from the IRI
+    pub id: String,
+    /// The individual label (rdfs:label)
+    pub label: Option<String>,
+    /// The individual description (rdfs:comment)
+    pub comment: Option<String>,
+    /// IRIs of the types (rdf:type pointing to a class, excluding owl:NamedIndividual)
+    pub type_iris: Vec<String>,
+    /// Property value assertions on this individual
+    pub property_values: Vec<PropertyValue>,
+}
+
+impl OntologyIndividual {
+    /// Returns the display label (label if available, otherwise id)
+    pub fn display_label(&self) -> &str {
+        self.label.as_deref().unwrap_or(&self.id)
+    }
+}
+
 impl OntologyMetadata {
     /// Returns the display title (label if available, otherwise IRI)
     pub fn title(&self) -> &str {
@@ -104,6 +143,7 @@ mod tests {
             version: None,
             classes: vec![],
             properties: vec![],
+            individuals: vec![],
         };
         assert_eq!(meta.title(), "My Ontology");
     }
@@ -117,6 +157,7 @@ mod tests {
             version: None,
             classes: vec![],
             properties: vec![],
+            individuals: vec![],
         };
         assert_eq!(meta.title(), "http://example.org/onto");
     }
@@ -170,6 +211,32 @@ mod tests {
             superclass_iri: None,
         };
         assert_eq!(class.display_label(), "Animal");
+    }
+
+    #[test]
+    fn individual_display_label_uses_label_when_present() {
+        let ind = OntologyIndividual {
+            iri: "http://example.org/onto#fido".to_string(),
+            id: "fido".to_string(),
+            label: Some("Fido".to_string()),
+            comment: None,
+            type_iris: vec![],
+            property_values: vec![],
+        };
+        assert_eq!(ind.display_label(), "Fido");
+    }
+
+    #[test]
+    fn individual_display_label_falls_back_to_id() {
+        let ind = OntologyIndividual {
+            iri: "http://example.org/onto#fido".to_string(),
+            id: "fido".to_string(),
+            label: None,
+            comment: None,
+            type_iris: vec![],
+            property_values: vec![],
+        };
+        assert_eq!(ind.display_label(), "fido");
     }
 
     #[test]

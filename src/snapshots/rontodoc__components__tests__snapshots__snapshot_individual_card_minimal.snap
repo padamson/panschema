@@ -1,0 +1,30 @@
+---
+source: src/components.rs
+assertion_line: 850
+expression: html
+---
+<article class="entity-card individual-card" id="ind-thing-1">
+    <header class="entity-header">
+        <div class="entity-badge individual-badge">Individual</div>
+        <h3 class="entity-title">Thing 1</h3>
+        <button class="copy-btn" data-copy="https://example.org/ontology#Thing1" title="Copy IRI">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+        </button>
+    </header>
+
+    <div class="entity-iri">
+        <code class="mono">https://example.org/ontology#Thing1</code>
+    </div>
+
+    <div class="entity-details">
+    </div>
+</article>
+<style>
+    .individual-badge {
+        background-color: color-mix(in srgb, var(--color-individual) 15%, transparent);
+        color: var(--color-individual);
+    }
+</style>

@@ -74,6 +74,34 @@
     </div>
 {%- endif %}
 </section>
+
+<section id="individuals">
+    {%- let id = "individuals" %}
+    {%- let title = "Individuals" %}
+    {%- let count = Some(individuals.len()) %}
+    {%- let description = Some("Named individuals defined in this ontology.") %}
+    {% include "components/section_header.html" %}
+{%- if individuals.is_empty() %}
+    <p class="placeholder-text">No individuals defined in this ontology.</p>
+{%- else %}
+    <div class="entity-list">
+{%- for ind in individuals %}
+        <a href="#ind-{{ ind.id }}" class="entity-link individual-link">{{ ind.label }}</a>
+{%- endfor %}
+    </div>
+    <div class="individual-cards">
+{%- for ind in individual_data %}
+        {%- let id = ind.id.as_str() %}
+        {%- let label = ind.label.as_str() %}
+        {%- let iri = ind.iri.as_str() %}
+        {%- let description = ind.description.as_deref() %}
+        {%- let types = ind.types.as_slice() %}
+        {%- let property_values = ind.property_values.as_slice() %}
+        {% include "components/individual_card.html" %}
+{%- endfor %}
+    </div>
+{%- endif %}
+</section>
 {% endblock %}
 
 {% block page_styles %}
@@ -130,7 +158,19 @@
         margin-top: var(--space-6);
     }
 
+    .individual-link {
+        color: var(--color-individual);
+    }
+
+    .individual-link:hover {
+        background-color: color-mix(in srgb, var(--color-individual) 10%, transparent);
+    }
+
     .property-cards {
+        margin-top: var(--space-6);
+    }
+
+    .individual-cards {
         margin-top: var(--space-6);
     }
 </style>

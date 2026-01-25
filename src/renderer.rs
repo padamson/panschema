@@ -51,6 +51,25 @@ pub struct PropertyData {
     pub characteristics: Vec<String>,
 }
 
+/// A resolved property value for rendering individual cards.
+#[derive(Debug, Clone)]
+pub struct PropertyValueData {
+    pub property_label: String,
+    pub property_ref: Option<EntityRef>,
+    pub value: String,
+}
+
+/// Full individual data for rendering individual cards.
+#[derive(Debug, Clone)]
+pub struct IndividualData {
+    pub id: String,
+    pub label: String,
+    pub iri: String,
+    pub description: Option<String>,
+    pub types: Vec<EntityRef>,
+    pub property_values: Vec<PropertyValueData>,
+}
+
 #[derive(Template)]
 #[template(path = "index.html")]
 struct IndexTemplate<'a> {
@@ -63,6 +82,8 @@ struct IndexTemplate<'a> {
     class_data: &'a [ClassData],
     properties: &'a [EntityRef],
     property_data: &'a [PropertyData],
+    individuals: &'a [EntityRef],
+    individual_data: &'a [IndividualData],
     namespaces: &'a [Namespace],
     /// Empty slice for class cards that don't have properties yet
     empty_properties: &'a [EntityRef],
@@ -217,16 +238,87 @@ pub fn render(metadata: &OntologyMetadata, output_dir: &Path) -> anyhow::Result<
         })
         .collect();
 
+    // Convert extracted individuals to EntityRef for sidebar navigation
+    let individuals: Vec<EntityRef> = metadata
+        .individuals
+        .iter()
+        .map(|i| EntityRef {
+            id: i.id.clone(),
+            label: i.display_label().to_string(),
+        })
+        .collect();
+
+    // Build full individual data for rendering individual cards
+    let individual_data: Vec<IndividualData> = metadata
+        .individuals
+        .iter()
+        .map(|i| {
+            // Resolve type IRIs to EntityRefs (link to class cards)
+            let types: Vec<EntityRef> = i
+                .type_iris
+                .iter()
+                .filter_map(|type_iri| {
+                    metadata
+                        .classes
+                        .iter()
+                        .find(|c| &c.iri == type_iri)
+                        .map(|c| EntityRef {
+                            id: c.id.clone(),
+                            label: c.display_label().to_string(),
+                        })
+                })
+                .collect();
+
+            // Resolve property values
+            let property_values: Vec<PropertyValueData> = i
+                .property_values
+                .iter()
+                .map(|pv| {
+                    let property_ref = metadata
+                        .properties
+                        .iter()
+                        .find(|p| p.iri == pv.property_iri)
+                        .map(|p| EntityRef {
+                            id: p.id.clone(),
+                            label: p.display_label().to_string(),
+                        });
+                    let property_label = pv
+                        .property_label
+                        .clone()
+                        .or_else(|| property_ref.as_ref().map(|r| r.label.clone()))
+                        .unwrap_or_else(|| pv.property_id.clone());
+
+                    PropertyValueData {
+                        property_label,
+                        property_ref,
+                        value: pv.value.clone(),
+                    }
+                })
+                .collect();
+
+            IndividualData {
+                id: i.id.clone(),
+                label: i.display_label().to_string(),
+                iri: i.iri.clone(),
+                description: i.comment.clone(),
+                types,
+                property_values,
+            }
+        })
+        .collect();
+
     let template = IndexTemplate {
         title: metadata.title(),
         iri: &metadata.iri,
         version: metadata.version.as_deref(),
         comment: metadata.comment.as_deref(),
-        active_section: "overview",
+        active_section: "metadata",
         classes: &classes,
         class_data: &class_data,
         properties: &properties,
         property_data: &property_data,
+        individuals: &individuals,
+        individual_data: &individual_data,
         namespaces: &namespaces,
         empty_properties: &[],
     };
@@ -252,6 +344,7 @@ mod tests {
             version: Some("1.0.0".to_string()),
             classes: vec![],
             properties: vec![],
+            individuals: vec![],
         };
 
         let temp_dir = std::env::temp_dir().join("rontodoc_test");
@@ -282,6 +375,7 @@ mod tests {
                 superclass_iri: None,
             }],
             properties: vec![],
+            individuals: vec![],
         };
 
         let temp_dir = std::env::temp_dir().join("rontodoc_class_test");
@@ -340,6 +434,7 @@ mod tests {
                 },
             ],
             properties: vec![],
+            individuals: vec![],
         };
 
         let temp_dir = std::env::temp_dir().join("rontodoc_hierarchy_test");
@@ -402,6 +497,7 @@ mod tests {
                 range_iri: Some("http://example.org/test#Person".to_string()),
                 inverse_of_iri: None,
             }],
+            individuals: vec![],
         };
 
         let temp_dir = std::env::temp_dir().join("rontodoc_prop_test");
@@ -466,6 +562,7 @@ mod tests {
                 range_iri: Some("http://www.w3.org/2001/XMLSchema#integer".to_string()),
                 inverse_of_iri: None,
             }],
+            individuals: vec![],
         };
 
         let temp_dir = std::env::temp_dir().join("rontodoc_datatype_prop_test");
@@ -519,6 +616,7 @@ mod tests {
                     inverse_of_iri: Some("http://example.org/test#hasOwner".to_string()),
                 },
             ],
+            individuals: vec![],
         };
 
         let temp_dir = std::env::temp_dir().join("rontodoc_inverse_test");
@@ -530,6 +628,110 @@ mod tests {
         assert!(
             html.contains("Inverse of: has owner"),
             "Should show inverse of characteristic"
+        );
+
+        // Cleanup
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn renders_individual_cards_with_type_and_properties() {
+        use crate::model::{OntologyIndividual, OntologyProperty, PropertyType, PropertyValue};
+
+        let metadata = OntologyMetadata {
+            iri: "http://example.org/test".to_string(),
+            label: Some("Test Ontology".to_string()),
+            comment: None,
+            version: None,
+            classes: vec![OntologyClass {
+                iri: "http://example.org/test#Dog".to_string(),
+                id: "Dog".to_string(),
+                label: Some("Dog".to_string()),
+                comment: None,
+                superclass_iri: None,
+            }],
+            properties: vec![
+                OntologyProperty {
+                    iri: "http://example.org/test#hasName".to_string(),
+                    id: "hasName".to_string(),
+                    label: Some("has name".to_string()),
+                    comment: None,
+                    property_type: PropertyType::DatatypeProperty,
+                    domain_iri: None,
+                    range_iri: None,
+                    inverse_of_iri: None,
+                },
+                OntologyProperty {
+                    iri: "http://example.org/test#hasAge".to_string(),
+                    id: "hasAge".to_string(),
+                    label: Some("has age".to_string()),
+                    comment: None,
+                    property_type: PropertyType::DatatypeProperty,
+                    domain_iri: None,
+                    range_iri: None,
+                    inverse_of_iri: None,
+                },
+            ],
+            individuals: vec![OntologyIndividual {
+                iri: "http://example.org/test#fido".to_string(),
+                id: "fido".to_string(),
+                label: Some("Fido".to_string()),
+                comment: None,
+                type_iris: vec!["http://example.org/test#Dog".to_string()],
+                property_values: vec![
+                    PropertyValue {
+                        property_iri: "http://example.org/test#hasAge".to_string(),
+                        property_id: "hasAge".to_string(),
+                        property_label: Some("has age".to_string()),
+                        value: "5".to_string(),
+                    },
+                    PropertyValue {
+                        property_iri: "http://example.org/test#hasName".to_string(),
+                        property_id: "hasName".to_string(),
+                        property_label: Some("has name".to_string()),
+                        value: "Fido".to_string(),
+                    },
+                ],
+            }],
+        };
+
+        let temp_dir = std::env::temp_dir().join("rontodoc_individual_test");
+        render(&metadata, &temp_dir).expect("Render failed");
+
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("Failed to read output");
+
+        // Verify individual card is rendered
+        assert!(
+            html.contains("individual-card"),
+            "Should contain individual card"
+        );
+        assert!(
+            html.contains("id=\"ind-fido\""),
+            "Should have individual anchor"
+        );
+        assert!(html.contains("Individual"), "Should show Individual badge");
+        assert!(html.contains("Fido"), "Should contain individual label");
+
+        // Verify type links to class
+        assert!(
+            html.contains("href=\"#class-Dog\""),
+            "Type should link to Dog class"
+        );
+
+        // Verify property values
+        assert!(
+            html.contains("has age"),
+            "Should show property label 'has age'"
+        );
+        assert!(
+            html.contains("has name"),
+            "Should show property label 'has name'"
+        );
+
+        // Verify sidebar has individuals link
+        assert!(
+            html.contains("href=\"#individuals\""),
+            "Sidebar should have individuals link"
         );
 
         // Cleanup

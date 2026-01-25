@@ -3,8 +3,8 @@ source: src/components.rs
 assertion_line: 556
 expression: html
 ---
-<section class="metadata-card" id="overview">
-    <h2 class="metadata-heading">Overview</h2>
+<section class="metadata-card" id="metadata">
+    <h2 class="metadata-heading">Metadata</h2>
     <dl class="metadata-list">
         <div class="metadata-item">
             <dt>IRI</dt>

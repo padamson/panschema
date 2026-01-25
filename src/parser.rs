@@ -9,7 +9,10 @@ use sophia::api::term::SimpleTerm;
 use sophia::inmem::graph::FastGraph;
 use sophia::turtle::parser::turtle;
 
-use crate::model::{OntologyClass, OntologyMetadata, OntologyProperty, PropertyType};
+use crate::model::{
+    OntologyClass, OntologyIndividual, OntologyMetadata, OntologyProperty, PropertyType,
+    PropertyValue,
+};
 
 /// OWL namespace
 const OWL_NS: &str = "http://www.w3.org/2002/07/owl#";
@@ -94,6 +97,11 @@ pub fn parse_ontology(path: &Path) -> anyhow::Result<OntologyMetadata> {
         &owl_inverse_of_term,
     )?;
 
+    // Extract all owl:NamedIndividual entities
+    let owl_named_individual = owl.get("NamedIndividual")?;
+    let owl_named_individual_term: SimpleTerm = owl_named_individual.into_term();
+    let individuals = extract_individuals(&graph, &owl_named_individual_term)?;
+
     Ok(OntologyMetadata {
         iri,
         label,
@@ -101,6 +109,7 @@ pub fn parse_ontology(path: &Path) -> anyhow::Result<OntologyMetadata> {
         version,
         classes,
         properties,
+        individuals,
     })
 }
 
@@ -300,6 +309,129 @@ fn extract_properties(
     Ok(properties)
 }
 
+/// Extract all owl:NamedIndividual entities from the graph
+fn extract_individuals(
+    graph: &FastGraph,
+    owl_named_individual: &SimpleTerm<'_>,
+) -> anyhow::Result<Vec<OntologyIndividual>> {
+    // Helper to get a string literal for a predicate
+    fn get_literal_value<T: Term>(
+        graph: &FastGraph,
+        subject: &SimpleTerm,
+        predicate: T,
+    ) -> Option<String> {
+        graph
+            .triples_matching([subject], [predicate], Any)
+            .filter_map(Result::ok)
+            .filter_map(|t| match t.o() {
+                SimpleTerm::LiteralLanguage(lit, _) => Some(lit.to_string()),
+                SimpleTerm::LiteralDatatype(lit, _) => Some(lit.to_string()),
+                _ => None,
+            })
+            .next()
+    }
+
+    // RDF/RDFS/OWL namespace prefixes for filtering metadata predicates
+    const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    const RDFS_NS: &str = "http://www.w3.org/2000/01/rdf-schema#";
+
+    // Find all subjects with rdf:type owl:NamedIndividual
+    let ind_iris: Vec<SimpleTerm> = graph
+        .triples_matching(Any, [rdf::type_], [owl_named_individual])
+        .filter_map(Result::ok)
+        .map(|t| t.s().to_owned())
+        .collect();
+
+    let mut individuals = Vec::new();
+
+    for ind_iri in ind_iris {
+        // Skip blank nodes and non-IRI subjects
+        let iri = match &ind_iri {
+            SimpleTerm::Iri(iri) => iri.to_string(),
+            _ => continue,
+        };
+
+        let id = extract_id_from_iri(&iri);
+        let label = get_literal_value(graph, &ind_iri, rdfs::label);
+        let comment = get_literal_value(graph, &ind_iri, rdfs::comment);
+
+        // Extract type IRIs (excluding owl:NamedIndividual and OWL built-ins)
+        let type_iris: Vec<String> = graph
+            .triples_matching([&ind_iri], [rdf::type_], Any)
+            .filter_map(Result::ok)
+            .filter_map(|t| match t.o() {
+                SimpleTerm::Iri(iri) => {
+                    let iri_str = iri.to_string();
+                    if iri_str.starts_with(OWL_NS) || iri_str.starts_with(RDF_NS) {
+                        None
+                    } else {
+                        Some(iri_str)
+                    }
+                }
+                _ => None,
+            })
+            .collect();
+
+        // Extract property values (all triples except metadata predicates)
+        let mut property_values: Vec<PropertyValue> = graph
+            .triples_matching([&ind_iri], Any, Any)
+            .filter_map(Result::ok)
+            .filter_map(|t| {
+                // Get the predicate IRI
+                let pred_iri = match t.p() {
+                    SimpleTerm::Iri(iri) => iri.to_string(),
+                    _ => return None,
+                };
+
+                // Skip metadata predicates
+                if pred_iri.starts_with(RDF_NS) || pred_iri.starts_with(RDFS_NS) {
+                    return None;
+                }
+
+                // Get the object value as a string
+                let value = match t.o() {
+                    SimpleTerm::LiteralLanguage(lit, _) => lit.to_string(),
+                    SimpleTerm::LiteralDatatype(lit, _) => lit.to_string(),
+                    SimpleTerm::Iri(iri) => iri.to_string(),
+                    _ => return None,
+                };
+
+                let property_id = extract_id_from_iri(&pred_iri);
+
+                // Look up the property's rdfs:label in the graph
+                let pred_term: SimpleTerm = SimpleTerm::Iri(
+                    sophia::api::term::IriRef::new_unchecked(pred_iri.clone().into()),
+                );
+                let property_label = get_literal_value(graph, &pred_term, rdfs::label);
+
+                Some(PropertyValue {
+                    property_iri: pred_iri,
+                    property_id,
+                    property_label,
+                    value,
+                })
+            })
+            .collect();
+
+        // Sort property values by property_id for consistent ordering
+        property_values.sort_by(|a, b| a.property_id.cmp(&b.property_id));
+
+        individuals.push(OntologyIndividual {
+            iri,
+            id,
+            label,
+            comment,
+            type_iris,
+            property_values,
+        });
+    }
+
+    // Sort individuals by display_label for consistent ordering
+    individuals.sort_by(|a, b| Ord::cmp(a.display_label(), b.display_label()));
+
+    Ok(individuals)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,5 +558,59 @@ mod tests {
             has_name.range_iri,
             Some("http://www.w3.org/2001/XMLSchema#string".to_string())
         );
+    }
+
+    #[test]
+    fn extracts_individuals_from_reference_ontology() {
+        let path = PathBuf::from("tests/fixtures/reference.ttl");
+        let meta = parse_ontology(&path).expect("Failed to parse reference ontology");
+
+        // Reference ontology has 1 individual: fido
+        assert_eq!(meta.individuals.len(), 1);
+
+        let fido = &meta.individuals[0];
+        assert_eq!(fido.id, "fido");
+        assert_eq!(fido.label, Some("Fido".to_string()));
+        assert_eq!(fido.iri, "http://example.org/rontodoc/reference#fido");
+    }
+
+    #[test]
+    fn extracts_individual_types() {
+        let path = PathBuf::from("tests/fixtures/reference.ttl");
+        let meta = parse_ontology(&path).expect("Failed to parse reference ontology");
+
+        let fido = &meta.individuals[0];
+        // fido is a Dog (owl:NamedIndividual should be filtered out)
+        assert_eq!(fido.type_iris.len(), 1);
+        assert_eq!(
+            fido.type_iris[0],
+            "http://example.org/rontodoc/reference#Dog"
+        );
+    }
+
+    #[test]
+    fn extracts_individual_property_values() {
+        let path = PathBuf::from("tests/fixtures/reference.ttl");
+        let meta = parse_ontology(&path).expect("Failed to parse reference ontology");
+
+        let fido = &meta.individuals[0];
+        // fido has hasAge=5 and hasName="Fido"
+        assert_eq!(fido.property_values.len(), 2);
+
+        let has_age = fido
+            .property_values
+            .iter()
+            .find(|pv| pv.property_id == "hasAge")
+            .unwrap();
+        assert_eq!(has_age.value, "5");
+        assert_eq!(has_age.property_label, Some("has age".to_string()));
+
+        let has_name = fido
+            .property_values
+            .iter()
+            .find(|pv| pv.property_id == "hasName")
+            .unwrap();
+        assert_eq!(has_name.value, "Fido");
+        assert_eq!(has_name.property_label, Some("has name".to_string()));
     }
 }

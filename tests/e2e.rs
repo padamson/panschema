@@ -369,6 +369,87 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         browser_name
     );
 
+    // 6f. Verify individuals are extracted and displayed
+    let ind_section = page.locator("#individuals").await;
+    let ind_section_html = ind_section
+        .inner_html()
+        .await
+        .expect("Failed to get individuals section");
+    assert!(
+        ind_section_html.contains(">1<"),
+        "[{}] Individuals section should show count of 1, got: {}",
+        browser_name,
+        ind_section_html
+    );
+
+    // Verify individual links are present
+    let ind_links = page.locator(".individual-link").await;
+    let ind_link_count = ind_links
+        .count()
+        .await
+        .expect("Failed to count individual links");
+    assert_eq!(
+        ind_link_count, 1,
+        "[{}] Should have 1 individual link",
+        browser_name
+    );
+
+    // Verify individual cards are rendered
+    let ind_cards = page.locator(".individual-card").await;
+    let ind_card_count = ind_cards
+        .count()
+        .await
+        .expect("Failed to count individual cards");
+    assert_eq!(
+        ind_card_count, 1,
+        "[{}] Should have 1 individual card",
+        browser_name
+    );
+
+    // Verify individual card content: fido
+    let fido_card = page.locator("#ind-fido").await;
+    let fido_card_html = fido_card
+        .inner_html()
+        .await
+        .expect("Failed to get fido card");
+    assert!(
+        fido_card_html.contains("Individual"),
+        "[{}] Fido card should show Individual badge",
+        browser_name
+    );
+    assert!(
+        fido_card_html.contains("Fido"),
+        "[{}] Fido card should show label 'Fido'",
+        browser_name
+    );
+    assert!(
+        fido_card_html.contains("href=\"#class-Dog\""),
+        "[{}] Fido card should link to Dog class as type",
+        browser_name
+    );
+    assert!(
+        fido_card_html.contains("has name"),
+        "[{}] Fido card should show 'has name' property",
+        browser_name
+    );
+    assert!(
+        fido_card_html.contains("has age"),
+        "[{}] Fido card should show 'has age' property",
+        browser_name
+    );
+
+    // Verify sidebar has individuals link
+    let ind_sidebar_link = page.locator(".sidebar-link[href='#individuals']").await;
+    let ind_sidebar_count = ind_sidebar_link
+        .count()
+        .await
+        .expect("Failed to count individuals sidebar link");
+    assert!(
+        ind_sidebar_count > 0,
+        "[{}] Individuals navigation link should exist in sidebar",
+        browser_name
+    );
+
     // 7. Test sidebar navigation links exist and are clickable
     let classes_link = page.locator(".sidebar-link[href='#classes']").await;
     let link_count = classes_link.count().await.expect("Failed to count links");
@@ -439,16 +520,16 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         browser_name
     );
 
-    // Overview should no longer be active
-    let overview_active = page
+    // Metadata should no longer be active
+    let metadata_active = page
         .evaluate_value(
-            "document.querySelector('.sidebar-link[href=\"#overview\"]')?.classList.contains('active') ?? false",
+            "document.querySelector('.sidebar-link[href=\"#metadata\"]')?.classList.contains('active') ?? false",
         )
         .await
         .unwrap_or_default();
     assert!(
-        !overview_active.contains("true"),
-        "[{}] Overview sidebar link should not be active when viewing #classes",
+        !metadata_active.contains("true"),
+        "[{}] Metadata sidebar link should not be active when viewing #classes",
         browser_name
     );
 

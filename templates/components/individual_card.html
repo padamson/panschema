@@ -1,0 +1,51 @@
+<article class="entity-card individual-card" id="ind-{{ id }}">
+    <header class="entity-header">
+        <div class="entity-badge individual-badge">Individual</div>
+        <h3 class="entity-title">{{ label }}</h3>
+        <button class="copy-btn" data-copy="{{ iri }}" title="Copy IRI">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+        </button>
+    </header>
+
+    <div class="entity-iri">
+        <code class="mono">{{ iri }}</code>
+    </div>
+{%- if let Some(desc) = description %}
+
+    <p class="entity-description">{{ desc }}</p>
+{%- endif %}
+
+    <div class="entity-details">
+{%- if !types.is_empty() %}
+        <div class="detail-row">
+            <dt>Type</dt>
+            <dd>
+{%- for t in types %}
+                <a href="#class-{{ t.id }}" class="entity-ref class-ref">{{ t.label }}</a>{%- if !loop.last %},{% endif %}
+{%- endfor %}
+            </dd>
+        </div>
+{%- endif %}
+{%- for pv in property_values %}
+        <div class="detail-row">
+            <dt>
+{%- if let Some(pr) = pv.property_ref.as_ref() %}
+                <a href="#prop-{{ pr.id }}" class="entity-ref prop-ref">{{ pv.property_label }}</a>
+{%- else %}
+                {{ pv.property_label }}
+{%- endif %}
+            </dt>
+            <dd>{{ pv.value }}</dd>
+        </div>
+{%- endfor %}
+    </div>
+</article>
+<style>
+    .individual-badge {
+        background-color: color-mix(in srgb, var(--color-individual) 15%, transparent);
+        color: var(--color-individual);
+    }
+</style>

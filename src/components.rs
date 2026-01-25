@@ -52,6 +52,28 @@ impl Namespace {
     }
 }
 
+/// A property value specification for individual card previews.
+#[derive(Debug, Clone)]
+pub struct PropertyValueSpec {
+    pub property_label: String,
+    pub property_ref: Option<EntityRef>,
+    pub value: String,
+}
+
+impl PropertyValueSpec {
+    pub fn new(
+        label: impl Into<String>,
+        property_ref: Option<EntityRef>,
+        value: impl Into<String>,
+    ) -> Self {
+        Self {
+            property_label: label.into(),
+            property_ref,
+            value: value.into(),
+        }
+    }
+}
+
 /// Range specification for a property (either a class ref or datatype string).
 #[derive(Debug, Clone)]
 pub struct RangeSpec {
@@ -84,6 +106,7 @@ pub struct SampleData {
     pub comment: Option<String>,
     pub classes: Vec<EntityRef>,
     pub properties: Vec<EntityRef>,
+    pub individuals: Vec<EntityRef>,
     pub namespaces: Vec<Namespace>,
 }
 
@@ -103,6 +126,10 @@ impl Default for SampleData {
                 EntityRef::new("name", "name"),
                 EntityRef::new("member-of", "memberOf"),
                 EntityRef::new("participates-in", "participatesIn"),
+            ],
+            individuals: vec![
+                EntityRef::new("john-doe", "John Doe"),
+                EntityRef::new("acme-corp", "Acme Corp"),
             ],
             namespaces: vec![
                 Namespace::new("ex", "https://example.org/ontology/example#"),
@@ -125,6 +152,7 @@ impl SampleData {
             comment: None,
             classes: vec![],
             properties: vec![],
+            individuals: vec![],
             namespaces: vec![Namespace::new("", "https://example.org/minimal#")],
         }
     }
@@ -166,6 +194,7 @@ pub struct SidebarComponent<'a> {
     pub active_section: &'a str,
     pub classes: &'a [EntityRef],
     pub properties: &'a [EntityRef],
+    pub individuals: &'a [EntityRef],
     pub namespaces: &'a [Namespace],
 }
 
@@ -213,6 +242,18 @@ pub struct PropertyCardComponent<'a> {
     pub characteristics: &'a [String],
 }
 
+/// Individual card component template.
+#[derive(Template)]
+#[template(path = "components/individual_card.html")]
+pub struct IndividualCardComponent<'a> {
+    pub id: &'a str,
+    pub label: &'a str,
+    pub iri: &'a str,
+    pub description: Option<&'a str>,
+    pub types: &'a [EntityRef],
+    pub property_values: &'a [PropertyValueSpec],
+}
+
 /// Sample class data for styleguide previews.
 pub struct SampleClass<'a> {
     pub id: &'a str,
@@ -236,6 +277,16 @@ pub struct SampleProperty<'a> {
     pub characteristics: &'a [String],
 }
 
+/// Sample individual data for styleguide previews.
+pub struct SampleIndividual<'a> {
+    pub id: &'a str,
+    pub label: &'a str,
+    pub iri: &'a str,
+    pub description: Option<&'a str>,
+    pub types: &'a [EntityRef],
+    pub property_values: &'a [PropertyValueSpec],
+}
+
 /// Style guide page template.
 #[derive(Template)]
 #[template(path = "styleguide.html")]
@@ -246,11 +297,13 @@ pub struct StyleGuideTemplate<'a> {
     pub comment: Option<&'a str>,
     pub classes: &'a [EntityRef],
     pub properties: &'a [EntityRef],
+    pub individuals: &'a [EntityRef],
     pub namespaces: &'a [Namespace],
     // Sample data for component previews
     pub sample_class: SampleClass<'a>,
     pub sample_property: SampleProperty<'a>,
     pub sample_data_property: SampleProperty<'a>,
+    pub sample_individual: SampleIndividual<'a>,
 }
 
 /// Renders individual components for testing and preview.
@@ -294,12 +347,14 @@ impl ComponentRenderer {
         active_section: &str,
         classes: &[EntityRef],
         properties: &[EntityRef],
+        individuals: &[EntityRef],
         namespaces: &[Namespace],
     ) -> anyhow::Result<String> {
         let template = SidebarComponent {
             active_section,
             classes,
             properties,
+            individuals,
             namespaces,
         };
         Ok(template.render()?)
@@ -375,6 +430,27 @@ impl ComponentRenderer {
         Ok(template.render()?)
     }
 
+    /// Render an individual card component.
+    #[allow(clippy::too_many_arguments)]
+    pub fn individual_card(
+        id: &str,
+        label: &str,
+        iri: &str,
+        description: Option<&str>,
+        types: &[EntityRef],
+        property_values: &[PropertyValueSpec],
+    ) -> anyhow::Result<String> {
+        let template = IndividualCardComponent {
+            id,
+            label,
+            iri,
+            description,
+            types,
+            property_values,
+        };
+        Ok(template.render()?)
+    }
+
     /// Render the complete style guide page.
     pub fn styleguide(data: &SampleData) -> anyhow::Result<String> {
         // Create sample data for component previews
@@ -425,6 +501,25 @@ impl ComponentRenderer {
             characteristics: &empty_characteristics,
         };
 
+        let ind_types = vec![EntityRef::new("person", "Person")];
+        let ind_property_values = vec![
+            PropertyValueSpec::new("name", Some(EntityRef::new("name", "name")), "John Doe"),
+            PropertyValueSpec::new(
+                "memberOf",
+                Some(EntityRef::new("member-of", "memberOf")),
+                "Acme Corp",
+            ),
+        ];
+
+        let sample_individual = SampleIndividual {
+            id: "john-doe",
+            label: "John Doe",
+            iri: "https://example.org/ontology#JohnDoe",
+            description: Some("A sample individual representing a person."),
+            types: &ind_types,
+            property_values: &ind_property_values,
+        };
+
         let template = StyleGuideTemplate {
             title: &data.title,
             iri: &data.iri,
@@ -432,10 +527,12 @@ impl ComponentRenderer {
             comment: data.comment.as_deref(),
             classes: &data.classes,
             properties: &data.properties,
+            individuals: &data.individuals,
             namespaces: &data.namespaces,
             sample_class,
             sample_property,
             sample_data_property,
+            sample_individual,
         };
         Ok(template.render()?)
     }
@@ -566,19 +663,26 @@ mod tests {
                 EntityRef::new("name", "name"),
                 EntityRef::new("member-of", "memberOf"),
             ];
+            let individuals = vec![EntityRef::new("john-doe", "John Doe")];
             let namespaces = vec![
                 Namespace::new("ex", "https://example.org/ontology#"),
                 Namespace::new("rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#"),
             ];
-            let html =
-                ComponentRenderer::sidebar("overview", &classes, &properties, &namespaces).unwrap();
+            let html = ComponentRenderer::sidebar(
+                "metadata",
+                &classes,
+                &properties,
+                &individuals,
+                &namespaces,
+            )
+            .unwrap();
             insta::assert_snapshot!(html);
         }
 
         #[test]
         fn snapshot_sidebar_empty() {
             let namespaces = vec![Namespace::new("ex", "https://example.org/ontology#")];
-            let html = ComponentRenderer::sidebar("overview", &[], &[], &namespaces).unwrap();
+            let html = ComponentRenderer::sidebar("metadata", &[], &[], &[], &namespaces).unwrap();
             insta::assert_snapshot!(html);
         }
 
@@ -694,6 +798,43 @@ mod tests {
                 None,
                 None,
                 None,
+                &[],
+            )
+            .unwrap();
+            insta::assert_snapshot!(html);
+        }
+
+        #[test]
+        fn snapshot_individual_card_full() {
+            let types = vec![EntityRef::new("person", "Person")];
+            let property_values = vec![
+                PropertyValueSpec::new("name", Some(EntityRef::new("name", "name")), "John Doe"),
+                PropertyValueSpec::new(
+                    "memberOf",
+                    Some(EntityRef::new("member-of", "memberOf")),
+                    "Acme Corp",
+                ),
+            ];
+            let html = ComponentRenderer::individual_card(
+                "john-doe",
+                "John Doe",
+                "https://example.org/ontology#JohnDoe",
+                Some("A sample individual representing a person."),
+                &types,
+                &property_values,
+            )
+            .unwrap();
+            insta::assert_snapshot!(html);
+        }
+
+        #[test]
+        fn snapshot_individual_card_minimal() {
+            let html = ComponentRenderer::individual_card(
+                "thing-1",
+                "Thing 1",
+                "https://example.org/ontology#Thing1",
+                None,
+                &[],
                 &[],
             )
             .unwrap();
