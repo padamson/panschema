@@ -3,7 +3,12 @@
 //! These tests verify the generated documentation renders correctly in a real browser.
 //!
 //! ## Setup
-//! Install Playwright browsers: `npx playwright install`
+//! Install Playwright browsers matching the version bundled with playwright-rs:
+//! ```bash
+//! npx playwright@1.56.1 install
+//! ```
+//!
+//! The required version is exposed as [`playwright_rs::PLAYWRIGHT_VERSION`].
 //!
 //! ## Running
 //! - Default (chromium): `cargo nextest run e2e`
@@ -132,8 +137,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
 
     // 5. Verify metadata card shows IRI and version
-    let body = page.locator("body").await;
-    let page_content = body.inner_html().await.expect("Failed to get page content");
+    let page_content = page.content().await.expect("Failed to get page content");
     assert!(
         page_content.contains("http://example.org/panschema/reference"),
         "[{}] Page should display ontology IRI",
@@ -465,16 +469,12 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         .await
         .expect("Failed to click classes link");
 
-    // Wait for URL hash to update by checking via JavaScript
-    // (playwright-rs page.url() may not reflect hash changes immediately)
+    // Wait for URL hash to update (page.url() now reflects hash changes in 0.8.3)
     let mut url_updated = false;
     for _ in 0..20 {
         // Poll for up to 2 seconds
-        let current_hash = page
-            .evaluate_value("window.location.hash")
-            .await
-            .unwrap_or_default();
-        if current_hash.contains("#classes") {
+        let current_url = page.url();
+        if current_url.contains("#classes") {
             url_updated = true;
             break;
         }
@@ -533,15 +533,74 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         browser_name
     );
 
-    // 8. Verify mobile menu toggle element exists (CSS hides it on desktop)
+    // 8. Responsive viewport tests using set_viewport_size()
+    // First verify desktop behavior: sidebar visible, mobile toggle hidden
+    page.set_viewport_size(playwright_rs::Viewport {
+        width: 1280,
+        height: 720,
+    })
+    .await
+    .expect("Failed to set desktop viewport");
+
     let mobile_toggle = page.locator(".mobile-menu-toggle").await;
-    let toggle_count = mobile_toggle
-        .count()
+    let toggle_visible_desktop = mobile_toggle
+        .is_visible()
         .await
-        .expect("Failed to count mobile toggles");
+        .expect("Failed to check toggle visibility");
     assert!(
-        toggle_count > 0,
-        "[{}] Mobile menu toggle element should exist in DOM",
+        !toggle_visible_desktop,
+        "[{}] Mobile menu toggle should be hidden on desktop viewport",
+        browser_name
+    );
+
+    let sidebar = page.locator(".sidebar").await;
+    let sidebar_visible_desktop = sidebar
+        .is_visible()
+        .await
+        .expect("Failed to check sidebar visibility");
+    assert!(
+        sidebar_visible_desktop,
+        "[{}] Sidebar should be visible on desktop viewport",
+        browser_name
+    );
+
+    // 8b. Resize to mobile viewport and verify responsive behavior
+    page.set_viewport_size(playwright_rs::Viewport {
+        width: 375,
+        height: 667,
+    })
+    .await
+    .expect("Failed to set mobile viewport");
+
+    // Give CSS time to respond to viewport change
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let toggle_visible_mobile = mobile_toggle
+        .is_visible()
+        .await
+        .expect("Failed to check toggle visibility on mobile");
+    assert!(
+        toggle_visible_mobile,
+        "[{}] Mobile menu toggle should be visible on mobile viewport",
+        browser_name
+    );
+
+    // 8c. Test mobile menu toggle functionality
+    mobile_toggle
+        .click(None)
+        .await
+        .expect("Failed to click mobile menu toggle");
+
+    // Wait for sidebar to become visible after toggle click
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let sidebar_visible_after_toggle = sidebar
+        .is_visible()
+        .await
+        .expect("Failed to check sidebar visibility after toggle");
+    assert!(
+        sidebar_visible_after_toggle,
+        "[{}] Sidebar should be visible after clicking mobile menu toggle",
         browser_name
     );
 

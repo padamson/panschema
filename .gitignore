@@ -1,7 +1,6 @@
 /target/
 /output/
 **/*.rs.bk
-Cargo.lock
 .DS_Store
 typos.toml
 .env
