@@ -20,22 +20,30 @@ struct Cli {
     #[arg(short, long, global = true)]
     input: Option<PathBuf>,
 
-    /// Output directory for generated documentation
+    /// Output path (file for RDF formats, directory for HTML)
     #[arg(short, long, global = true, default_value = "output")]
     output: PathBuf,
+
+    /// Output format: html, ttl, jsonld, rdfxml, ntriples
+    #[arg(short, long, global = true, default_value = "html")]
+    format: String,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Generate documentation (default behavior)
+    /// Generate documentation or convert to other formats
     Generate {
-        /// Input ontology file (.ttl)
+        /// Input ontology file (.ttl, .yaml, .yml)
         #[arg(short, long)]
         input: PathBuf,
 
-        /// Output directory for generated documentation
+        /// Output path (file for RDF formats, directory for HTML)
         #[arg(short, long, default_value = "output")]
         output: PathBuf,
+
+        /// Output format: html, ttl, jsonld, rdfxml, ntriples
+        #[arg(short, long, default_value = "html")]
+        format: String,
     },
     /// Start development server with hot reload
     Serve {
@@ -68,7 +76,7 @@ enum Commands {
     },
 }
 
-fn generate(input: &Path, output: &Path) -> anyhow::Result<()> {
+fn generate(input: &Path, output: &Path, format: &str) -> anyhow::Result<()> {
     let registry = FormatRegistry::with_defaults();
 
     let reader = registry
@@ -77,15 +85,24 @@ fn generate(input: &Path, output: &Path) -> anyhow::Result<()> {
     let schema = reader.read(input).map_err(|e| anyhow::anyhow!("{}", e))?;
 
     let writer = registry
-        .writer_for_format("html")
-        .ok_or_else(|| anyhow::anyhow!("HTML writer not found"))?;
+        .writer_for_format(format)
+        .ok_or_else(|| anyhow::anyhow!("Unsupported output format: {}", format))?;
     writer
         .write(&schema, output)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     let title = schema.title.as_deref().unwrap_or(&schema.name);
+    let format_desc = match format.to_lowercase().as_str() {
+        "html" => "documentation",
+        "ttl" => "Turtle",
+        "jsonld" => "JSON-LD",
+        "rdfxml" => "RDF/XML",
+        "ntriples" => "N-Triples",
+        _ => format,
+    };
     println!(
-        "Generated documentation for '{}' in {}",
+        "Generated {} for '{}' at {}",
+        format_desc,
         title,
         output.display()
     );
@@ -112,8 +129,12 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Commands::Generate { input, output }) => {
-            generate(&input, &output)?;
+        Some(Commands::Generate {
+            input,
+            output,
+            format,
+        }) => {
+            generate(&input, &output, &format)?;
         }
         Some(Commands::Serve {
             input,
@@ -137,7 +158,7 @@ async fn main() -> anyhow::Result<()> {
         None => {
             // Default behavior: generate if input provided
             if let Some(input) = cli.input {
-                generate(&input, &cli.output)?;
+                generate(&input, &cli.output, &cli.format)?;
             } else {
                 println!("panschema: no input specified. Use --help for usage.");
             }
@@ -155,6 +176,7 @@ mod tests {
     fn cli_parses_with_defaults() {
         let cli = Cli::try_parse_from(["panschema"]).unwrap();
         assert_eq!(cli.output, PathBuf::from("output"));
+        assert_eq!(cli.format, "html");
         assert!(cli.input.is_none());
         assert!(cli.command.is_none());
     }
@@ -171,9 +193,41 @@ mod tests {
         ])
         .unwrap();
         match cli.command {
-            Some(Commands::Generate { input, output }) => {
+            Some(Commands::Generate {
+                input,
+                output,
+                format,
+            }) => {
                 assert_eq!(input, PathBuf::from("test.ttl"));
                 assert_eq!(output, PathBuf::from("docs"));
+                assert_eq!(format, "html");
+            }
+            _ => panic!("Expected Generate command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_generate_with_format() {
+        let cli = Cli::try_parse_from([
+            "panschema",
+            "generate",
+            "--input",
+            "test.ttl",
+            "--output",
+            "output.jsonld",
+            "--format",
+            "jsonld",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Generate {
+                input,
+                output,
+                format,
+            }) => {
+                assert_eq!(input, PathBuf::from("test.ttl"));
+                assert_eq!(output, PathBuf::from("output.jsonld"));
+                assert_eq!(format, "jsonld");
             }
             _ => panic!("Expected Generate command"),
         }

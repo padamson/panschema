@@ -18,6 +18,7 @@ use crate::html_writer::HtmlWriter;
 use crate::linkml::SchemaDefinition;
 use crate::owl_reader::OwlReader;
 use crate::owl_writer::OwlWriter;
+use crate::rdf_serializers::{JsonLdWriter, NTriplesWriter, RdfXmlWriter};
 use crate::yaml_reader::YamlReader;
 
 /// Errors that can occur during reading or writing
@@ -106,13 +107,17 @@ impl FormatRegistry {
     ///
     /// Currently registers:
     /// - Readers: `OwlReader` (ttl, turtle), `YamlReader` (yaml, yml)
-    /// - Writers: `HtmlWriter` (html), `OwlWriter` (ttl)
+    /// - Writers: `HtmlWriter` (html), `OwlWriter` (ttl), `JsonLdWriter` (jsonld),
+    ///   `RdfXmlWriter` (rdfxml), `NTriplesWriter` (ntriples)
     pub fn with_defaults() -> Self {
         let mut registry = Self::new();
         registry.register_reader(Box::new(OwlReader::new()));
         registry.register_reader(Box::new(YamlReader::new()));
         registry.register_writer(Box::new(HtmlWriter::new()));
         registry.register_writer(Box::new(OwlWriter::new()));
+        registry.register_writer(Box::new(JsonLdWriter::new()));
+        registry.register_writer(Box::new(RdfXmlWriter::new()));
+        registry.register_writer(Box::new(NTriplesWriter::new()));
         registry
     }
 
@@ -342,5 +347,29 @@ mod tests {
         // Should find writer for ttl format
         assert!(registry.writer_for_format("ttl").is_some());
         assert!(registry.writer_for_format("TTL").is_some()); // case insensitive
+    }
+
+    #[test]
+    fn with_defaults_registers_jsonld_writer() {
+        let registry = FormatRegistry::with_defaults();
+
+        assert!(registry.writer_for_format("jsonld").is_some());
+        assert!(registry.writer_for_format("JSONLD").is_some()); // case insensitive
+    }
+
+    #[test]
+    fn with_defaults_registers_rdfxml_writer() {
+        let registry = FormatRegistry::with_defaults();
+
+        assert!(registry.writer_for_format("rdfxml").is_some());
+        assert!(registry.writer_for_format("RDFXML").is_some()); // case insensitive
+    }
+
+    #[test]
+    fn with_defaults_registers_ntriples_writer() {
+        let registry = FormatRegistry::with_defaults();
+
+        assert!(registry.writer_for_format("ntriples").is_some());
+        assert!(registry.writer_for_format("NTRIPLES").is_some()); // case insensitive
     }
 }

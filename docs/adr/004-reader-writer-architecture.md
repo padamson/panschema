@@ -1,7 +1,7 @@
 # ADR-004: Reader/Writer Architecture
 
 ## Status
-Proposed
+Accepted
 
 ## Context
 
@@ -50,7 +50,12 @@ Format detection uses file extension, with optional explicit override via CLI fl
 | Component | Type | Description |
 |-----------|------|-------------|
 | `OwlReader` | Reader | Parse OWL/TTL into IR (refactored from existing parser) |
+| `YamlReader` | Reader | Parse LinkML YAML directly into IR |
 | `HtmlWriter` | Writer | Generate documentation (refactored from existing renderer) |
+| `OwlWriter` | Writer | Generate OWL/Turtle using sophia |
+| `JsonLdWriter` | Writer | Generate JSON-LD using sophia |
+| `RdfXmlWriter` | Writer | Generate RDF/XML using sophia |
+| `NTriplesWriter` | Writer | Generate N-Triples using sophia |
 
 ### Source Metadata Preservation
 
@@ -83,6 +88,40 @@ The documentation generator follows these principles:
    - "LinkML Details" for LinkML-sourced schemas (slot_usage, rules)
 
 4. **Consistent visual identity**: Same CSS, layout, and navigation for all schemas
+
+### Writer Implementation Patterns
+
+#### RDF Writers
+
+Writers producing RDF formats (Turtle, JSON-LD, RDF/XML, N-Triples) share a common implementation pattern using the [sophia](https://crates.io/crates/sophia) RDF library:
+
+```
+SchemaDefinition (LinkML IR)
+        │
+        ▼
+  build_rdf_graph()
+        │
+        ▼
+  sophia::FastGraph (transient)
+        │
+        ├──► TurtleSerializer ──► .ttl
+        ├──► JsonLdSerializer ──► .jsonld
+        ├──► RdfXmlSerializer ──► .rdf
+        └──► NtSerializer ────► .nt
+```
+
+This approach provides:
+
+1. **Semantic consistency**: Same triples across all RDF formats
+2. **Correctness**: sophia handles RDF edge cases (escaping, blank nodes, datatypes)
+3. **Single mapping**: One `build_rdf_graph()` function maps LinkML IR to RDF triples
+4. **Maintainability**: Adding new RDF formats requires only a new serializer call
+
+The sophia graph is **transient** — built on-demand for serialization, then discarded. The LinkML IR remains the canonical representation; the sophia graph is purely a serialization adapter.
+
+#### Non-RDF Writers
+
+Writers for non-RDF formats (HTML, YAML, JSON Schema) work directly with the LinkML IR without an intermediate representation.
 
 ### Adding New Formats
 
