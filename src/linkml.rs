@@ -22,6 +22,41 @@ pub struct Prefix {
     pub prefix_reference: String,
 }
 
+/// A contributor to the schema (author, editor, etc.)
+///
+/// Used to capture Dublin Core-style contributor metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Contributor {
+    /// The contributor's name
+    pub name: String,
+    /// ORCID identifier URL (e.g., "https://orcid.org/0000-0002-1825-0097")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orcid: Option<String>,
+    /// Role in the project (e.g., "author", "editor", "contributor")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+}
+
+impl Contributor {
+    /// Create a new contributor with the given name
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            orcid: None,
+            role: None,
+        }
+    }
+
+    /// Create a contributor with name and role
+    pub fn with_role(name: impl Into<String>, role: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            orcid: None,
+            role: Some(role.into()),
+        }
+    }
+}
+
 /// Root container for a LinkML schema
 ///
 /// Corresponds to LinkML SchemaDefinition.
@@ -45,6 +80,18 @@ pub struct SchemaDefinition {
     /// License for the schema
     #[serde(skip_serializing_if = "Option::is_none")]
     pub license: Option<String>,
+    /// Contributors to the schema (authors, editors, etc.)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contributors: Vec<Contributor>,
+    /// Creation date (ISO 8601 format, e.g., "2025-01-15")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created: Option<String>,
+    /// Last modification date (ISO 8601 format)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modified: Option<String>,
+    /// Imported schemas/ontologies (URIs)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub imports: Vec<String>,
     /// Prefix mappings for CURIE expansion
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub prefixes: BTreeMap<String, String>,
@@ -81,6 +128,10 @@ impl SchemaDefinition {
             description: None,
             version: None,
             license: None,
+            contributors: Vec::new(),
+            created: None,
+            modified: None,
+            imports: Vec::new(),
             prefixes: BTreeMap::new(),
             default_prefix: None,
             default_range: None,
@@ -400,6 +451,135 @@ description: A test schema
             schema.classes.get("Dog").unwrap().is_a,
             Some("Animal".to_string())
         );
+    }
+
+    // ========== Contributor Tests ==========
+
+    #[test]
+    fn contributor_new_creates_minimal_contributor() {
+        let contributor = Contributor::new("Jane Doe");
+        assert_eq!(contributor.name, "Jane Doe");
+        assert!(contributor.orcid.is_none());
+        assert!(contributor.role.is_none());
+    }
+
+    #[test]
+    fn contributor_with_role_sets_name_and_role() {
+        let contributor = Contributor::with_role("John Smith", "author");
+        assert_eq!(contributor.name, "John Smith");
+        assert_eq!(contributor.role, Some("author".to_string()));
+        assert!(contributor.orcid.is_none());
+    }
+
+    #[test]
+    fn contributor_with_all_fields() {
+        let mut contributor = Contributor::new("Jane Doe");
+        contributor.orcid = Some("https://orcid.org/0000-0002-1825-0097".to_string());
+        contributor.role = Some("editor".to_string());
+
+        assert_eq!(contributor.name, "Jane Doe");
+        assert_eq!(
+            contributor.orcid,
+            Some("https://orcid.org/0000-0002-1825-0097".to_string())
+        );
+        assert_eq!(contributor.role, Some("editor".to_string()));
+    }
+
+    #[test]
+    fn contributor_serializes_to_yaml() {
+        let mut contributor = Contributor::new("Jane Doe");
+        contributor.role = Some("author".to_string());
+
+        let yaml = serde_yaml::to_string(&contributor).unwrap();
+        assert!(yaml.contains("name: Jane Doe"));
+        assert!(yaml.contains("role: author"));
+        // orcid should be omitted when None
+        assert!(!yaml.contains("orcid"));
+    }
+
+    // ========== SchemaDefinition Metadata Tests ==========
+
+    #[test]
+    fn schema_definition_new_initializes_metadata_fields() {
+        let schema = SchemaDefinition::new("test");
+        assert!(schema.contributors.is_empty());
+        assert!(schema.created.is_none());
+        assert!(schema.modified.is_none());
+        assert!(schema.imports.is_empty());
+    }
+
+    #[test]
+    fn schema_definition_with_contributors() {
+        let mut schema = SchemaDefinition::new("test");
+        schema
+            .contributors
+            .push(Contributor::with_role("Alice", "author"));
+        schema
+            .contributors
+            .push(Contributor::with_role("Bob", "contributor"));
+
+        assert_eq!(schema.contributors.len(), 2);
+        assert_eq!(schema.contributors[0].name, "Alice");
+        assert_eq!(schema.contributors[1].name, "Bob");
+    }
+
+    #[test]
+    fn schema_definition_with_dates() {
+        let mut schema = SchemaDefinition::new("test");
+        schema.created = Some("2025-01-15".to_string());
+        schema.modified = Some("2026-01-29".to_string());
+
+        assert_eq!(schema.created, Some("2025-01-15".to_string()));
+        assert_eq!(schema.modified, Some("2026-01-29".to_string()));
+    }
+
+    #[test]
+    fn schema_definition_with_imports() {
+        let mut schema = SchemaDefinition::new("test");
+        schema
+            .imports
+            .push("http://purl.obolibrary.org/obo/bfo.owl".to_string());
+        schema.imports.push("http://purl.org/dc/terms/".to_string());
+
+        assert_eq!(schema.imports.len(), 2);
+        assert!(
+            schema
+                .imports
+                .contains(&"http://purl.obolibrary.org/obo/bfo.owl".to_string())
+        );
+    }
+
+    #[test]
+    fn schema_definition_metadata_serializes_to_yaml() {
+        let mut schema = SchemaDefinition::new("example");
+        schema.created = Some("2025-01-15".to_string());
+        schema
+            .contributors
+            .push(Contributor::with_role("Jane Doe", "author"));
+
+        let yaml = serde_yaml::to_string(&schema).unwrap();
+        assert!(yaml.contains("created: '2025-01-15'") || yaml.contains("created: 2025-01-15"));
+        assert!(yaml.contains("name: Jane Doe"));
+    }
+
+    #[test]
+    fn schema_definition_metadata_deserializes_from_yaml() {
+        let yaml = r#"
+name: test_schema
+created: "2025-01-15"
+modified: "2026-01-29"
+contributors:
+  - name: Jane Doe
+    role: author
+imports:
+  - http://purl.obolibrary.org/obo/bfo.owl
+"#;
+        let schema: SchemaDefinition = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(schema.created, Some("2025-01-15".to_string()));
+        assert_eq!(schema.modified, Some("2026-01-29".to_string()));
+        assert_eq!(schema.contributors.len(), 1);
+        assert_eq!(schema.contributors[0].name, "Jane Doe");
+        assert_eq!(schema.imports.len(), 1);
     }
 
     // ========== ClassDefinition Tests ==========

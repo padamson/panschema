@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `Contributor` struct for Dublin Core-style contributor metadata (name, ORCID, role)
+- `SchemaDefinition` metadata fields: `contributors`, `created`, `modified`, `imports`
+
 ## [0.2.0] - 2026-01-25
 
 Project renamed from **rontodoc** to **panschema** to reflect broader schema support.
