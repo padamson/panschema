@@ -1,0 +1,77 @@
+name: sample_schema
+id: https://example.org/sample
+title: Sample LinkML Schema
+description: A sample schema for testing the YAML reader
+version: "1.0.0"
+license: https://creativecommons.org/licenses/by/4.0/
+created: "2025-01-15"
+modified: "2026-01-29"
+
+prefixes:
+  linkml: https://w3id.org/linkml/
+  ex: https://example.org/
+
+default_range: string
+
+classes:
+  Person:
+    name: Person
+    description: A human being
+    attributes:
+      name:
+        name: name
+        description: The person's full name
+        range: string
+        required: true
+      age:
+        name: age
+        description: Age in years
+        range: integer
+      email:
+        name: email
+        description: Email address
+        range: string
+        pattern: "^[\\w.-]+@[\\w.-]+\\.\\w+$"
+
+  Organization:
+    name: Organization
+    description: A group of people with a common purpose
+    attributes:
+      name:
+        name: name
+        description: Organization name
+        range: string
+        required: true
+      members:
+        name: members
+        description: People in this organization
+        range: Person
+        multivalued: true
+
+slots:
+  identifier:
+    name: identifier
+    description: A unique identifier
+    identifier: true
+    range: string
+
+enums:
+  StatusEnum:
+    name: StatusEnum
+    description: Possible status values
+    permissible_values:
+      active:
+        text: active
+        description: Currently active
+      inactive:
+        text: inactive
+        description: No longer active
+      pending:
+        text: pending
+        description: Awaiting activation
+
+types:
+  age_type:
+    name: age_type
+    description: A non-negative integer representing age
+    typeof_: integer

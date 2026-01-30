@@ -41,3 +41,49 @@ fn generates_documentation_from_reference_ontology() {
     // Cleanup
     let _ = fs::remove_dir_all(output_dir);
 }
+
+#[test]
+fn generates_documentation_from_linkml_yaml() {
+    let output_dir = std::env::temp_dir().join("panschema_yaml_integration_test");
+    let _ = fs::remove_dir_all(&output_dir);
+
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "--input",
+            "tests/fixtures/sample_schema.yaml",
+            "--output",
+            output_dir.to_str().unwrap(),
+        ])
+        .status()
+        .expect("Failed to execute panschema");
+
+    assert!(status.success(), "panschema exited with error");
+
+    let index_path = output_dir.join("index.html");
+    assert!(index_path.exists(), "index.html was not generated");
+
+    let html = fs::read_to_string(&index_path).expect("Failed to read index.html");
+
+    // Verify key content from YAML schema
+    assert!(
+        html.contains("Sample LinkML Schema"),
+        "Missing schema title"
+    );
+    assert!(
+        html.contains("https://example.org/sample"),
+        "Missing schema IRI"
+    );
+    assert!(html.contains("1.0.0"), "Missing version");
+    assert!(
+        html.contains("A sample schema for testing"),
+        "Missing description"
+    );
+
+    // Verify classes are rendered
+    assert!(html.contains("Person"), "Missing Person class");
+    assert!(html.contains("Organization"), "Missing Organization class");
+    assert!(html.contains("A human being"), "Missing Person description");
+
+    // Cleanup
+    let _ = fs::remove_dir_all(output_dir);
+}

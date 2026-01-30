@@ -10,6 +10,7 @@ mod linkml;
 mod owl_model;
 mod owl_reader;
 mod server;
+mod yaml_reader;
 
 use io::FormatRegistry;
 

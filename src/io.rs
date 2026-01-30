@@ -17,6 +17,7 @@ use thiserror::Error;
 use crate::html_writer::HtmlWriter;
 use crate::linkml::SchemaDefinition;
 use crate::owl_reader::OwlReader;
+use crate::yaml_reader::YamlReader;
 
 /// Errors that can occur during reading or writing
 #[derive(Error, Debug)]
@@ -103,11 +104,12 @@ impl FormatRegistry {
     /// Create a registry with all default readers and writers registered
     ///
     /// Currently registers:
-    /// - Readers: `OwlReader` (ttl, turtle)
+    /// - Readers: `OwlReader` (ttl, turtle), `YamlReader` (yaml, yml)
     /// - Writers: `HtmlWriter` (html)
     pub fn with_defaults() -> Self {
         let mut registry = Self::new();
         registry.register_reader(Box::new(OwlReader::new()));
+        registry.register_reader(Box::new(YamlReader::new()));
         registry.register_writer(Box::new(HtmlWriter::new()));
         registry
     }
@@ -287,9 +289,18 @@ mod tests {
         // Should find reader for .ttl files
         assert!(registry.reader_for_extension("ttl").is_some());
         assert!(registry.reader_for_extension("turtle").is_some());
+    }
+
+    #[test]
+    fn with_defaults_registers_yaml_reader() {
+        let registry = FormatRegistry::with_defaults();
+
+        // Should find reader for .yaml files
+        assert!(registry.reader_for_extension("yaml").is_some());
+        assert!(registry.reader_for_extension("yml").is_some());
 
         // Should not find reader for unsupported formats
-        assert!(registry.reader_for_extension("yaml").is_none());
+        assert!(registry.reader_for_extension("json").is_none());
     }
 
     #[test]

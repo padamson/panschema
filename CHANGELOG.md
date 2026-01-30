@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Contributor` struct for Dublin Core-style contributor metadata (name, ORCID, role)
 - `SchemaDefinition` metadata fields: `contributors`, `created`, `modified`, `imports`
 - `FormatRegistry::with_defaults()` for dynamic reader/writer dispatch
+- `YamlReader` for native LinkML YAML schemas (yaml, yml)
 
 ### Changed
 - `main.rs` and `server.rs` now use `FormatRegistry` instead of hardcoded readers/writers
