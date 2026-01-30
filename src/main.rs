@@ -11,9 +11,7 @@ mod owl_model;
 mod owl_reader;
 mod server;
 
-use html_writer::HtmlWriter;
-use io::Writer;
-use owl_reader::OwlReader;
+use io::FormatRegistry;
 
 /// A universal CLI for schema conversion, documentation, validation, and comparison.
 #[derive(Parser)]
@@ -76,12 +74,16 @@ enum Commands {
 }
 
 fn generate(input: &Path, output: &Path) -> anyhow::Result<()> {
-    use io::Reader;
+    let registry = FormatRegistry::with_defaults();
 
-    let reader = OwlReader::new();
+    let reader = registry
+        .reader_for_path(input)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
     let schema = reader.read(input).map_err(|e| anyhow::anyhow!("{}", e))?;
 
-    let writer = HtmlWriter::new();
+    let writer = registry
+        .writer_for_format("html")
+        .ok_or_else(|| anyhow::anyhow!("HTML writer not found"))?;
     writer
         .write(&schema, output)
         .map_err(|e| anyhow::anyhow!("{}", e))?;

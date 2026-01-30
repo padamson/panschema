@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `Contributor` struct for Dublin Core-style contributor metadata (name, ORCID, role)
 - `SchemaDefinition` metadata fields: `contributors`, `created`, `modified`, `imports`
+- `FormatRegistry::with_defaults()` for dynamic reader/writer dispatch
+
+### Changed
+- `main.rs` and `server.rs` now use `FormatRegistry` instead of hardcoded readers/writers
 
 ## [0.2.0] - 2026-01-25
 

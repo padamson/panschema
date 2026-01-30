@@ -14,7 +14,9 @@ use std::path::Path;
 
 use thiserror::Error;
 
+use crate::html_writer::HtmlWriter;
 use crate::linkml::SchemaDefinition;
+use crate::owl_reader::OwlReader;
 
 /// Errors that can occur during reading or writing
 #[derive(Error, Debug)]
@@ -96,6 +98,18 @@ impl FormatRegistry {
             readers: Vec::new(),
             writers: Vec::new(),
         }
+    }
+
+    /// Create a registry with all default readers and writers registered
+    ///
+    /// Currently registers:
+    /// - Readers: `OwlReader` (ttl, turtle)
+    /// - Writers: `HtmlWriter` (html)
+    pub fn with_defaults() -> Self {
+        let mut registry = Self::new();
+        registry.register_reader(Box::new(OwlReader::new()));
+        registry.register_writer(Box::new(HtmlWriter::new()));
+        registry
     }
 
     /// Register a reader
@@ -264,5 +278,47 @@ mod tests {
         let schema = SchemaDefinition::new("test");
         let result = writer.write(&schema, Path::new("output"));
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn with_defaults_registers_owl_reader() {
+        let registry = FormatRegistry::with_defaults();
+
+        // Should find reader for .ttl files
+        assert!(registry.reader_for_extension("ttl").is_some());
+        assert!(registry.reader_for_extension("turtle").is_some());
+
+        // Should not find reader for unsupported formats
+        assert!(registry.reader_for_extension("yaml").is_none());
+    }
+
+    #[test]
+    fn with_defaults_registers_html_writer() {
+        let registry = FormatRegistry::with_defaults();
+
+        // Should find writer for html format
+        assert!(registry.writer_for_format("html").is_some());
+        assert!(registry.writer_for_format("HTML").is_some()); // case insensitive
+
+        // Should not find writer for unsupported formats
+        assert!(registry.writer_for_format("markdown").is_none());
+    }
+
+    #[test]
+    fn with_defaults_reader_can_read_ttl_file() {
+        let registry = FormatRegistry::with_defaults();
+        let path = PathBuf::from("tests/fixtures/reference.ttl");
+
+        let reader = registry
+            .reader_for_path(&path)
+            .expect("Should find TTL reader");
+        let schema = reader.read(&path).expect("Should parse TTL file");
+
+        // The schema name comes from the ontology, title has the full label
+        assert_eq!(schema.name, "reference");
+        assert_eq!(
+            schema.title,
+            Some("panschema Reference Ontology".to_string())
+        );
     }
 }
