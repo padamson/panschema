@@ -1513,6 +1513,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sophia",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tower-http 0.5.2",

@@ -87,3 +87,50 @@ fn generates_documentation_from_linkml_yaml() {
     // Cleanup
     let _ = fs::remove_dir_all(output_dir);
 }
+
+#[test]
+fn owl_roundtrip_preserves_schema() {
+    use panschema::io::FormatRegistry;
+    use std::path::PathBuf;
+
+    let input_path = PathBuf::from("tests/fixtures/reference.ttl");
+    let output_dir = std::env::temp_dir().join("panschema_owl_roundtrip_test");
+    let _ = fs::remove_dir_all(&output_dir);
+    fs::create_dir_all(&output_dir).expect("Failed to create output dir");
+
+    let output_path = output_dir.join("roundtrip.ttl");
+
+    let registry = FormatRegistry::with_defaults();
+
+    // Read the reference ontology
+    let reader = registry
+        .reader_for_path(&input_path)
+        .expect("Should find TTL reader");
+    let schema = reader.read(&input_path).expect("Should parse TTL file");
+
+    // Write to TTL
+    let writer = registry
+        .writer_for_format("ttl")
+        .expect("Should find TTL writer");
+    writer
+        .write(&schema, &output_path)
+        .expect("Should write TTL file");
+
+    // Verify the output file exists and is parseable
+    assert!(output_path.exists(), "Output TTL file should exist");
+
+    // Read back the written file
+    let schema2 = reader
+        .read(&output_path)
+        .expect("Should parse written TTL file");
+
+    // Verify key data is preserved
+    assert_eq!(schema.name, schema2.name);
+    assert_eq!(schema.title, schema2.title);
+    assert_eq!(schema.version, schema2.version);
+    assert_eq!(schema.classes.len(), schema2.classes.len());
+    assert_eq!(schema.slots.len(), schema2.slots.len());
+
+    // Cleanup
+    let _ = fs::remove_dir_all(output_dir);
+}

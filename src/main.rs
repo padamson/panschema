@@ -4,15 +4,9 @@ use clap::{Parser, Subcommand};
 
 #[cfg(feature = "dev")]
 mod components;
-mod html_writer;
-mod io;
-mod linkml;
-mod owl_model;
-mod owl_reader;
 mod server;
-mod yaml_reader;
 
-use io::FormatRegistry;
+use panschema::io::FormatRegistry;
 
 /// A universal CLI for schema conversion, documentation, validation, and comparison.
 #[derive(Parser)]

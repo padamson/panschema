@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 use tower_http::services::ServeDir;
 use tower_livereload::LiveReloadLayer;
 
-use crate::io::FormatRegistry;
+use panschema::io::FormatRegistry;
 
 /// Regenerate documentation from input ontology
 fn regenerate(input: &Path, output: &Path) -> anyhow::Result<()> {

@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SchemaDefinition` metadata fields: `contributors`, `created`, `modified`, `imports`
 - `FormatRegistry::with_defaults()` for dynamic reader/writer dispatch
 - `YamlReader` for native LinkML YAML schemas (yaml, yml)
+- `OwlWriter` for writing LinkML IR to OWL/Turtle format (ttl)
+- Library crate (`lib.rs`) exposing public API for integration testing
 
 ### Changed
 - `main.rs` and `server.rs` now use `FormatRegistry` instead of hardcoded readers/writers

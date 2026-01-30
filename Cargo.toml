@@ -50,6 +50,7 @@ insta = "1"
 
 # E2E browser testing
 playwright-rs = "0.8"
+tempfile = "3.24.0"
 
 [profile.release]
 lto = true

@@ -17,6 +17,7 @@ use thiserror::Error;
 use crate::html_writer::HtmlWriter;
 use crate::linkml::SchemaDefinition;
 use crate::owl_reader::OwlReader;
+use crate::owl_writer::OwlWriter;
 use crate::yaml_reader::YamlReader;
 
 /// Errors that can occur during reading or writing
@@ -105,12 +106,13 @@ impl FormatRegistry {
     ///
     /// Currently registers:
     /// - Readers: `OwlReader` (ttl, turtle), `YamlReader` (yaml, yml)
-    /// - Writers: `HtmlWriter` (html)
+    /// - Writers: `HtmlWriter` (html), `OwlWriter` (ttl)
     pub fn with_defaults() -> Self {
         let mut registry = Self::new();
         registry.register_reader(Box::new(OwlReader::new()));
         registry.register_reader(Box::new(YamlReader::new()));
         registry.register_writer(Box::new(HtmlWriter::new()));
+        registry.register_writer(Box::new(OwlWriter::new()));
         registry
     }
 
@@ -331,5 +333,14 @@ mod tests {
             schema.title,
             Some("panschema Reference Ontology".to_string())
         );
+    }
+
+    #[test]
+    fn with_defaults_registers_owl_writer() {
+        let registry = FormatRegistry::with_defaults();
+
+        // Should find writer for ttl format
+        assert!(registry.writer_for_format("ttl").is_some());
+        assert!(registry.writer_for_format("TTL").is_some()); // case insensitive
     }
 }
