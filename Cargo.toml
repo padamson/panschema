@@ -38,7 +38,7 @@ axum = "0.7"
 tokio = { version = "1", features = ["full"] }
 notify = "6"
 tower-http = { version = "0.6", features = ["fs"] }
-tower-livereload = "0.9"
+tower-livereload = "0.10"
 
 [features]
 # Enable development tools (styleguide command, component preview)
