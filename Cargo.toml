@@ -18,7 +18,7 @@ clap = { version = "4", features = ["derive"] }
 sophia = { version = "0.9", features = ["jsonld", "xml"] }
 
 # Templating
-askama = "0.12"
+askama = "0.14"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
