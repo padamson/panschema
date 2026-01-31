@@ -11,3 +11,6 @@ pub mod owl_reader;
 pub mod owl_writer;
 pub mod rdf_serializers;
 pub mod yaml_reader;
+
+#[cfg(feature = "gpu")]
+pub mod gpu;

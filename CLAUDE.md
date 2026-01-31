@@ -104,3 +104,10 @@ Pre-commit hooks enforce these automatically.
 - [docs/adr/003-linkml-as-internal-representation.md](docs/adr/003-linkml-as-internal-representation.md) - IR architecture
 - [docs/adr/004-reader-writer-architecture.md](docs/adr/004-reader-writer-architecture.md) - Reader/Writer design
 - [docs/features/03-reader-writer-architecture.md](docs/features/03-reader-writer-architecture.md) - Feature spec
+
+## Optional Features
+
+- **`gpu`**: GPU-accelerated force simulation for graph visualization (requires wgpu)
+  - Build: `cargo build --features gpu`
+  - Test: `cargo test --features gpu --lib`
+  - See: [docs/features/04-schema-force-graph-visualization.md](docs/features/04-schema-force-graph-visualization.md)

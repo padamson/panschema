@@ -40,9 +40,16 @@ notify = "8"
 tower-http = { version = "0.6", features = ["fs"] }
 tower-livereload = "0.10"
 
+# GPU force simulation (optional)
+wgpu = { version = "24", optional = true }
+bytemuck = { version = "1", features = ["derive"], optional = true }
+pollster = { version = "0.4", optional = true }
+
 [features]
 # Enable development tools (styleguide command, component preview)
 dev = []
+# GPU-accelerated force simulation for graph visualization
+gpu = ["dep:wgpu", "dep:bytemuck", "dep:pollster"]
 
 [dev-dependencies]
 # Snapshot testing
