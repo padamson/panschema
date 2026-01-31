@@ -56,6 +56,16 @@ panschema serve --input examples/university/schema.yaml
 # Opens browser at http://localhost:3000
 ```
 
+### Generate Graph JSON (for visualization)
+
+```bash
+# Development:
+cargo run -- generate --input examples/university/schema.yaml --output examples/university/output/graph.json --format graph-json
+
+# Installed:
+panschema generate --input examples/university/schema.yaml --output examples/university/output/graph.json --format graph-json
+```
+
 ## Expected Output
 
 After running the commands, `examples/university/output/` will contain:
@@ -64,22 +74,20 @@ After running the commands, `examples/university/output/` will contain:
 |------|-------------|
 | `docs.html` | Interactive HTML documentation with class browser |
 | `schema.ttl` | OWL ontology in Turtle format |
+| `graph.json` | Graph topology JSON for visualization |
 
 ## GPU Visualization (Future)
 
-When Slices 3-4 are complete, additional commands will be available:
+When Slice 4 is complete, additional commands will be available:
 
 ```bash
-# Generate graph JSON (Slice 3)
-cargo run --features gpu -- generate --input examples/university/schema.yaml --output examples/university/output/graph.json --format graph-json
-
 # Generate HTML with embedded 3D visualization (Slice 4)
 cargo run --features gpu -- generate --input examples/university/schema.yaml --output examples/university/output/viz.html --format html --graph
 ```
 
 The visualization will show:
-- **Nodes**: Classes as blue spheres, Slots as green, Enums as orange
-- **Edges**: Inheritance (is_a), References (range), Mixins
+- **Nodes**: Classes as blue spheres, Slots as green, Enums as purple, Types as orange
+- **Edges**: Inheritance (is_a), Mixins, Domain/Range, Inverse
 - **Interaction**: Orbit camera, zoom, pan, click to select
 
 ## Feature Status
@@ -88,8 +96,8 @@ The visualization will show:
 |---------|--------|-------|
 | HTML Documentation | ✅ Available | - |
 | OWL/Turtle Output | ✅ Available | - |
+| Graph JSON Output | ✅ Available | 3 |
 | GPU Force Simulation | ✅ Complete | 1 |
 | 3D Renderer | ✅ Complete | 2 |
-| GraphWriter | 🔲 Not Started | 3 |
 | HTML+WASM Integration | 🔲 Not Started | 4 |
 | Interactive Controls | 🔲 Not Started | 5 |

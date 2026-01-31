@@ -14,6 +14,7 @@ use std::path::Path;
 
 use thiserror::Error;
 
+use crate::graph_writer::GraphWriter;
 use crate::html_writer::HtmlWriter;
 use crate::linkml::SchemaDefinition;
 use crate::owl_reader::OwlReader;
@@ -108,7 +109,7 @@ impl FormatRegistry {
     /// Currently registers:
     /// - Readers: `OwlReader` (ttl, turtle), `YamlReader` (yaml, yml)
     /// - Writers: `HtmlWriter` (html), `OwlWriter` (ttl), `JsonLdWriter` (jsonld),
-    ///   `RdfXmlWriter` (rdfxml), `NTriplesWriter` (ntriples)
+    ///   `RdfXmlWriter` (rdfxml), `NTriplesWriter` (ntriples), `GraphWriter` (graph-json)
     pub fn with_defaults() -> Self {
         let mut registry = Self::new();
         registry.register_reader(Box::new(OwlReader::new()));
@@ -118,6 +119,7 @@ impl FormatRegistry {
         registry.register_writer(Box::new(JsonLdWriter::new()));
         registry.register_writer(Box::new(RdfXmlWriter::new()));
         registry.register_writer(Box::new(NTriplesWriter::new()));
+        registry.register_writer(Box::new(GraphWriter::new()));
         registry
     }
 
@@ -371,5 +373,13 @@ mod tests {
 
         assert!(registry.writer_for_format("ntriples").is_some());
         assert!(registry.writer_for_format("NTRIPLES").is_some()); // case insensitive
+    }
+
+    #[test]
+    fn with_defaults_registers_graph_writer() {
+        let registry = FormatRegistry::with_defaults();
+
+        assert!(registry.writer_for_format("graph-json").is_some());
+        assert!(registry.writer_for_format("GRAPH-JSON").is_some()); // case insensitive
     }
 }

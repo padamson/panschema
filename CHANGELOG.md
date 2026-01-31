@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - WGSL compute shaders: link force, many-body force, center force, velocity integration
   - WGSL render shaders with Blinn-Phong lighting
   - Icosphere mesh generation for smooth node spheres
+- `GraphWriter` for exporting schema as graph JSON (`graph-json` format)
 - University schema example in `examples/university/`
 
 ### Changed

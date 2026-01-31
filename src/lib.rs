@@ -3,6 +3,7 @@
 //! This crate provides readers and writers for various schema formats, with LinkML as the
 //! internal representation.
 
+pub mod graph_writer;
 pub mod html_writer;
 pub mod io;
 pub mod linkml;

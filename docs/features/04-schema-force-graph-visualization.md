@@ -38,7 +38,7 @@ All visualization code lives in `src/gpu/` with a `gpu` feature flag.
 |-----------|------------|--------|
 | GPU Force Simulation | High | ✅ Complete (brute-force O(n²)) |
 | 3D Graph Renderer | Medium | ✅ Complete |
-| GraphWriter (JSON output) | Low | Not Started |
+| GraphWriter (JSON output) | Low | ✅ Complete |
 | WebGPU Browser Target | Medium | Not Started |
 
 ---
@@ -186,92 +186,35 @@ cargo test --features gpu --lib
 
 ### Slice 3: GraphWriter (Schema → Graph JSON)
 
-**Status:** Not Started
+**Status:** ✅ Complete
 
 **Location:** `src/graph_writer.rs`
 
 **User Value:** panschema can export schema structure as graph JSON for visualization.
 
-**Architecture:** Follows the Reader/Writer pattern established in panschema:
-
-```
-TTL → OwlReader → SchemaDefinition → GraphWriter → graph.json
-                                          ↓
-                              HtmlWriter embeds in HTML (Slice 4)
-```
-
 **Acceptance Criteria:**
-- [ ] `GraphWriter` implements `Writer` trait
-- [ ] Outputs JSON format consumable by `GpuRenderer`
-- [ ] Node types: Class, Slot, Enum, Type (with distinct colors)
-- [ ] Edge types: SubclassOf, Mixin, Domain, Range, Inverse
-- [ ] Metadata: labels, descriptions, URIs
-- [ ] Options to include/exclude slots, enums, types
-- [ ] Registered in `FormatRegistry` like `HtmlWriter`
+- [x] `GraphWriter` implements `Writer` trait
+- [x] Outputs JSON format with graph topology (nodes and edges)
+- [x] Node types: Class, Slot, Enum, Type (with distinct colors)
+- [x] Edge types: SubclassOf, Mixin, Domain, Range, Inverse, TypeOf
+- [x] Metadata: labels, descriptions, URIs
+- [x] Options to include/exclude slots, enums, types
+- [x] Registered in `FormatRegistry`
 
 #### Implementation
 
-**New file: `src/graph_writer.rs`**
+| File | Purpose |
+|------|---------|
+| `src/graph_writer.rs` | GraphWriter, GraphData, GraphNode, GraphEdge, GraphOptions |
+| `src/io.rs` | Register GraphWriter in FormatRegistry |
+| `src/lib.rs` | Export graph_writer module |
 
-```rust
-/// GraphWriter implements the Writer trait for graph JSON output
-pub struct GraphWriter {
-    options: GraphOptions,
-}
-
-impl Writer for GraphWriter {
-    fn write(&self, schema: &SchemaDefinition, output: &Path) -> IoResult<()> {
-        let graph = self.schema_to_graph(schema);
-        let json = serde_json::to_string_pretty(&graph)?;
-        std::fs::write(output, json)?;
-        Ok(())
-    }
-
-    fn format_id(&self) -> &str {
-        "graph-json"
-    }
-}
-
-/// Options for graph generation
-#[derive(Debug, Clone, Default)]
-pub struct GraphOptions {
-    pub include_slots: bool,
-    pub include_enums: bool,
-    pub include_types: bool,
-}
-
-/// JSON-serializable graph format (matches GpuRenderer input)
-#[derive(Debug, Serialize, Deserialize)]
-pub struct GraphData {
-    pub nodes: Vec<GraphNode>,
-    pub edges: Vec<GraphEdge>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct GraphNode {
-    pub id: String,
-    pub label: String,
-    pub node_type: String,  // "class", "slot", "enum", "type"
-    pub color: [f32; 4],
-    pub description: Option<String>,
-    pub uri: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct GraphEdge {
-    pub source: String,
-    pub target: String,
-    pub edge_type: String,  // "subclass_of", "mixin", "domain", "range", "inverse"
-}
+**Commands:**
+```bash
+cargo build
+cargo test --lib graph_writer
+cargo run -- generate --input schema.yaml --output graph.json --format graph-json
 ```
-
-**TDD Test Plan:**
-1. `test_empty_schema_produces_empty_graph`
-2. `test_single_class_produces_single_node`
-3. `test_class_hierarchy_produces_subclass_edges`
-4. `test_slot_with_domain_range`
-5. `test_reference_ontology_graph` - Full test with reference.ttl
-6. `test_graph_writer_registered` - Verify in FormatRegistry
 
 ---
 
@@ -360,7 +303,7 @@ For browsers without WebGPU:
 |-------|----------|------------|--------|
 | Slice 1: GPU Force Simulation | Must Have | None | ✅ Complete |
 | Slice 2: 3D Graph Renderer | Must Have | Slice 1 | ✅ Complete |
-| Slice 3: GraphWriter | Must Have | None | Not Started |
+| Slice 3: GraphWriter | Must Have | None | ✅ Complete |
 | Slice 4: WebGPU HTML Integration | Must Have | Slices 1, 2, 3 | Not Started |
 | Slice 5: Interaction and Polish | Should Have | Slice 4 | Not Started |
 | Slice 6: Barnes-Hut Optimization | Nice to Have | Slice 1 | Not Started |
@@ -446,3 +389,16 @@ The feature is complete when ALL of the following are true:
 - 53 GPU tests, all passing
 
 **Next:** Slice 3 (GraphWriter)
+
+### 2026-01-31: Slice 3 Complete (GraphWriter)
+
+- Implemented `GraphWriter` following Reader/Writer pattern
+- Outputs graph topology JSON (nodes with IDs/types/colors, edges with source/target)
+- No positions in JSON - computed at runtime by force simulation (Slice 4)
+- Node types: Class (blue), Slot (green), Enum (purple), Type (orange)
+- Edge types: SubclassOf, Mixin, Domain, Range, Inverse, TypeOf
+- `GraphOptions` for filtering (include/exclude slots, enums, types)
+- Registered in `FormatRegistry` with format ID `graph-json`
+- 17 unit tests, all passing
+
+**Next:** Slice 4 (WebGPU HTML Integration)
