@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `YamlReader` for native LinkML YAML schemas (yaml, yml)
 - `OwlWriter` for writing LinkML IR to OWL/Turtle format (ttl)
 - Library crate (`lib.rs`) exposing public API for integration testing
+- **GPU Force Graph Visualization** (optional `gpu` feature):
+  - `GpuSimulation` for GPU-accelerated force-directed graph layout
+  - `GpuRenderer` for 3D rendering with instanced spheres (nodes) and lines (edges)
+  - `Camera3D` with orbit, zoom, and pan controls
+  - WGSL compute shaders: link force, many-body force, center force, velocity integration
+  - WGSL render shaders with Blinn-Phong lighting
+  - Icosphere mesh generation for smooth node spheres
+- University schema example in `examples/university/`
 
 ### Changed
 - `main.rs` and `server.rs` now use `FormatRegistry` instead of hardcoded readers/writers

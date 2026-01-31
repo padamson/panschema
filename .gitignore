@@ -1,5 +1,6 @@
 /target/
 /output/
+examples/**/output/
 **/*.rs.bk
 .DS_Store
 typos.toml

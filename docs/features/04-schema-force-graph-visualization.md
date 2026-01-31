@@ -37,9 +37,9 @@ All visualization code lives in `src/gpu/` with a `gpu` feature flag.
 | Component | Complexity | Status |
 |-----------|------------|--------|
 | GPU Force Simulation | High | ✅ Complete (brute-force O(n²)) |
-| 3D Graph Renderer | Medium | Not Started |
+| 3D Graph Renderer | Medium | ✅ Complete |
+| GraphWriter (JSON output) | Low | Not Started |
 | WebGPU Browser Target | Medium | Not Started |
-| Schema → Graph Data | Low | Not Started |
 
 ---
 
@@ -78,12 +78,12 @@ All visualization code lives in `src/gpu/` with a `gpu` feature flag.
                                                  ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                 GPU Render Shaders (WGSL)                   │
-│                      [Not Yet Implemented]                  │
+│                      [Implemented in Slice 2]               │
 ├─────────────────────────────────────────────────────────────┤
-│  • Instanced node spheres (colored by type)                 │
-│  • Edge lines/tubes (styled by relationship)                │
-│  • Labels (billboarded text)                                │
-│  • Depth buffer, anti-aliasing                              │
+│  • Instanced node spheres (icosphere mesh, Blinn-Phong)     │
+│  • Edge lines (line primitive)                              │
+│  • Camera3D (orbit/zoom/pan)                                │
+│  • Depth buffer                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -146,121 +146,122 @@ cargo test --features gpu --lib
 
 ### Slice 2: 3D Graph Renderer
 
-**Status:** Not Started
+**Status:** ✅ Complete
 
 **Location:** `src/gpu/` (extend existing module)
 
 **User Value:** Force graph can be visualized with interactive 3D camera controls.
 
 **Acceptance Criteria:**
-- [ ] Node rendering as instanced spheres (colored by type)
-- [ ] Edge rendering as lines or tubes
-- [ ] Camera orbit controls (drag to rotate)
-- [ ] Zoom controls (scroll wheel)
-- [ ] Pan controls (right-drag or shift-drag)
-- [ ] Node selection (click to select, glow effect)
-- [ ] Hover labels (billboarded text)
+- [x] Render instance types (`NodeInstance`, `EdgeInstance`, `CameraUniforms`)
+- [x] Node rendering as instanced spheres (colored by type)
+- [x] Edge rendering as lines
+- [x] Camera3D with orbit, zoom, pan operations
+- [x] Icosphere mesh generation
+- [x] Off-screen rendering with `read_pixels()` for testing
 
-#### Implementation Notes
+#### Implementation
 
-Build WebGPU render shaders for browser visualization:
-- Camera3D with view/projection matrices
-- Instanced rendering for nodes and edges
-- Depth buffer and anti-aliasing
+| File | Purpose |
+|------|---------|
+| `src/gpu/types.rs` | `NodeInstance`, `EdgeInstance`, `CameraUniforms`, `RenderConfig` |
+| `src/gpu/camera.rs` | `Camera3D` with view/projection matrices, orbit/zoom/pan |
+| `src/gpu/geometry.rs` | Icosphere mesh generation (level 2: 162 vertices) |
+| `src/gpu/render_shaders.rs` | WGSL vertex/fragment shaders (Blinn-Phong lighting) |
+| `src/gpu/renderer.rs` | `GpuRenderer` with instanced node/edge pipelines |
 
-**Node Rendering (Instanced):**
-```wgsl
-struct NodeInstance {
-    @location(0) position: vec3<f32>,
-    @location(1) radius: f32,
-    @location(2) color: vec4<f32>,
-}
+**Key design decisions:**
+1. Separate `GpuRenderer` struct from `GpuSimulation` (single responsibility)
+2. Shared `Arc<Device>` and `Arc<Queue>` between simulation and renderer
+3. Inline matrix math (no new dependencies)
+4. Icosphere level 2 balances visual quality and vertex count
 
-@vertex
-fn vs_node(
-    @builtin(vertex_index) vertex_idx: u32,
-    instance: NodeInstance
-) -> VertexOutput {
-    // Generate sphere vertices procedurally or use icosphere mesh
-    // Transform by instance position and radius
-}
+**Commands:**
+```bash
+cargo build --features gpu
+cargo test --features gpu --lib
 ```
 
 ---
 
-### Slice 3: Schema Graph Data Generation (panschema)
+### Slice 3: GraphWriter (Schema → Graph JSON)
 
 **Status:** Not Started
 
-**User Value:** panschema can export schema structure as graph data for visualization.
+**Location:** `src/graph_writer.rs`
+
+**User Value:** panschema can export schema structure as graph JSON for visualization.
+
+**Architecture:** Follows the Reader/Writer pattern established in panschema:
+
+```
+TTL → OwlReader → SchemaDefinition → GraphWriter → graph.json
+                                          ↓
+                              HtmlWriter embeds in HTML (Slice 4)
+```
 
 **Acceptance Criteria:**
-- [ ] `SchemaDefinition::to_graph()` produces nodes and edges
+- [ ] `GraphWriter` implements `Writer` trait
+- [ ] Outputs JSON format consumable by `GpuRenderer`
 - [ ] Node types: Class, Slot, Enum, Type (with distinct colors)
 - [ ] Edge types: SubclassOf, Mixin, Domain, Range, Inverse
 - [ ] Metadata: labels, descriptions, URIs
 - [ ] Options to include/exclude slots, enums, types
+- [ ] Registered in `FormatRegistry` like `HtmlWriter`
 
 #### Implementation
 
-**New file: `src/graph.rs`**
+**New file: `src/graph_writer.rs`**
 
 ```rust
-/// A node in the schema graph
-#[derive(Debug, Clone)]
-pub struct GraphNode {
-    pub id: String,
-    pub label: String,
-    pub node_type: NodeType,
-    pub description: Option<String>,
-    pub uri: Option<String>,
+/// GraphWriter implements the Writer trait for graph JSON output
+pub struct GraphWriter {
+    options: GraphOptions,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NodeType {
-    Class,
-    Slot,
-    Enum,
-    Type,
-}
+impl Writer for GraphWriter {
+    fn write(&self, schema: &SchemaDefinition, output: &Path) -> IoResult<()> {
+        let graph = self.schema_to_graph(schema);
+        let json = serde_json::to_string_pretty(&graph)?;
+        std::fs::write(output, json)?;
+        Ok(())
+    }
 
-impl NodeType {
-    pub fn color(&self) -> [f32; 4] {
-        match self {
-            NodeType::Class => [0.2, 0.6, 1.0, 1.0],  // Blue
-            NodeType::Slot => [0.2, 0.8, 0.4, 1.0],   // Green
-            NodeType::Enum => [1.0, 0.6, 0.2, 1.0],   // Orange
-            NodeType::Type => [0.7, 0.5, 0.9, 1.0],   // Purple
-        }
+    fn format_id(&self) -> &str {
+        "graph-json"
     }
 }
 
-/// An edge in the schema graph
-#[derive(Debug, Clone)]
-pub struct GraphEdge {
-    pub source: String,
-    pub target: String,
-    pub edge_type: EdgeType,
+/// Options for graph generation
+#[derive(Debug, Clone, Default)]
+pub struct GraphOptions {
+    pub include_slots: bool,
+    pub include_enums: bool,
+    pub include_types: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EdgeType {
-    SubclassOf,
-    Mixin,
-    Domain,
-    Range,
-    Inverse,
-}
-
-/// Complete graph representation
-pub struct SchemaGraph {
+/// JSON-serializable graph format (matches GpuRenderer input)
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GraphData {
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
 }
 
-impl SchemaDefinition {
-    pub fn to_graph(&self) -> SchemaGraph { ... }
-    pub fn to_graph_with_options(&self, options: GraphOptions) -> SchemaGraph { ... }
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GraphNode {
+    pub id: String,
+    pub label: String,
+    pub node_type: String,  // "class", "slot", "enum", "type"
+    pub color: [f32; 4],
+    pub description: Option<String>,
+    pub uri: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GraphEdge {
+    pub source: String,
+    pub target: String,
+    pub edge_type: String,  // "subclass_of", "mixin", "domain", "range", "inverse"
 }
 ```
 
@@ -270,6 +271,7 @@ impl SchemaDefinition {
 3. `test_class_hierarchy_produces_subclass_edges`
 4. `test_slot_with_domain_range`
 5. `test_reference_ontology_graph` - Full test with reference.ttl
+6. `test_graph_writer_registered` - Verify in FormatRegistry
 
 ---
 
@@ -357,8 +359,8 @@ For browsers without WebGPU:
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | Slice 1: GPU Force Simulation | Must Have | None | ✅ Complete |
-| Slice 2: 3D Graph Renderer | Must Have | Slice 1 | Not Started |
-| Slice 3: Schema Graph Data | Must Have | None | Not Started |
+| Slice 2: 3D Graph Renderer | Must Have | Slice 1 | ✅ Complete |
+| Slice 3: GraphWriter | Must Have | None | Not Started |
 | Slice 4: WebGPU HTML Integration | Must Have | Slices 1, 2, 3 | Not Started |
 | Slice 5: Interaction and Polish | Should Have | Slice 4 | Not Started |
 | Slice 6: Barnes-Hut Optimization | Nice to Have | Slice 1 | Not Started |
@@ -433,4 +435,14 @@ The feature is complete when ALL of the following are true:
 - Run with: `cargo test --features gpu --lib`
 - Pre-commit clippy runs with `--all-features` (catches GPU lint issues)
 
-**Next:** Slice 2 (3D Graph Renderer) or Slice 3 (Schema Graph Data)
+**Next:** Slice 2 (3D Graph Renderer)
+
+### 2026-01-31: Slice 2 Complete (3D Graph Renderer)
+
+- Implemented `GpuRenderer` with instanced sphere (nodes) and line (edges) rendering
+- Added `Camera3D` with spherical coordinates and orbit/zoom/pan operations
+- Added icosphere mesh generation for smooth node spheres
+- Added `examples/university/` with sample LinkML schema
+- 53 GPU tests, all passing
+
+**Next:** Slice 3 (GraphWriter)

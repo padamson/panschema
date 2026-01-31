@@ -15,13 +15,16 @@
 
 Think of it as **pandoc for data modeling** — a single tool that speaks all schema languages.
 
-## Current Features (v0.2.0)
+## Current Features
 
-- **OWL/Turtle input** → HTML documentation
+- **Multi-format input/output** via Reader/Writer architecture
 - **LinkML IR** as canonical internal representation
 - **Fast**: Generate complete documentation in milliseconds
 - **CI-native**: Single binary, no JVM or complex dependencies
 - **Hot reload**: Development server with live preview
+- **GPU visualization** (optional `gpu` feature): 3D force-directed graph for schema exploration
+
+See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
 ## Installation
 
@@ -53,7 +56,7 @@ Open http://localhost:3000 to view the documentation.
 | Format | Status | Extension |
 |--------|--------|-----------|
 | OWL/Turtle | Full support | `.ttl` |
-| LinkML YAML | Coming soon | `.yaml` |
+| LinkML YAML | Full support | `.yaml`, `.yml` |
 | JSON Schema | Planned | `.json` |
 | SHACL | Planned | `.ttl` |
 
@@ -61,6 +64,7 @@ Open http://localhost:3000 to view the documentation.
 | Format | Status |
 |--------|--------|
 | HTML Documentation | Full support |
+| OWL/Turtle | Full support |
 | LinkML YAML | Planned |
 | Markdown | Planned |
 | JSON Schema | Planned |
@@ -78,6 +82,22 @@ This design enables:
 - Adding new input formats by implementing the `Reader` trait
 - Adding new output formats by implementing the `Writer` trait
 - Format-agnostic documentation and conversion
+
+## GPU Visualization (Optional)
+
+panschema includes an optional GPU-accelerated 3D force graph visualization for exploring schema relationships:
+
+```bash
+# Build with GPU feature
+cargo build --features gpu
+
+# Run tests
+cargo test --features gpu --lib
+```
+
+**Status:** Force simulation and 3D renderer complete. Browser integration in progress.
+
+See [examples/university/](examples/university/) for a sample schema and [docs/features/04-schema-force-graph-visualization.md](docs/features/04-schema-force-graph-visualization.md) for the full feature plan.
 
 ## Why panschema?
 
