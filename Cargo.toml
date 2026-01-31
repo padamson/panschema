@@ -15,7 +15,7 @@ categories = ["command-line-utilities", "development-tools::build-utils"]
 clap = { version = "4", features = ["derive"] }
 
 # RDF/OWL parsing and serialization
-sophia = { version = "0.8", features = ["jsonld", "xml"] }
+sophia = { version = "0.9", features = ["jsonld", "xml"] }
 
 # Templating
 askama = "0.12"
