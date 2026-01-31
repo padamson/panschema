@@ -62,7 +62,7 @@ jobs:
           ${{ runner.os }}-${{ matrix.target }}-cargo-release-
 
     - name: Build Release
-      run: cargo build --release --target ${{ matrix.target }}
+      run: cargo build -p panschema --release --target ${{ matrix.target }}
 
     - name: Strip binary (Linux/macOS)
       if: matrix.os != 'windows-latest'
@@ -143,6 +143,6 @@ jobs:
         toolchain: stable
 
     - name: Publish to crates.io
-      run: cargo publish
+      run: cargo publish -p panschema
       env:
         CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

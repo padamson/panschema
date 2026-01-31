@@ -1,64 +1,13 @@
-[package]
-name = "panschema"
-version = "0.2.0"
-edition = "2024"
-rust-version = "1.85"
-authors = ["Paul Adamson"]
-description = "A universal CLI for schema conversion, documentation, validation, and comparison"
-license = "Apache-2.0"
-repository = "https://github.com/padamson/panschema"
-keywords = ["ontology", "owl", "rdf", "linkml", "documentation"]
-categories = ["command-line-utilities", "development-tools::build-utils"]
+[workspace]
+members = ["panschema", "panschema-viz"]
+resolver = "2"
 
-[dependencies]
-# CLI
-clap = { version = "4", features = ["derive"] }
-
-# RDF/OWL parsing and serialization
-sophia = { version = "0.9", features = ["jsonld", "xml"] }
-
-# Templating
-askama = "0.14"
-
-# Serialization
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-serde_yaml = "0.9"
-
-# Error handling
-thiserror = "2"
-anyhow = "1"
-
-# Logging
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# Dev server
-axum = "0.8"
-tokio = { version = "1", features = ["full"] }
-notify = "8"
-tower-http = { version = "0.6", features = ["fs"] }
-tower-livereload = "0.10"
-
-# GPU force simulation (optional)
-wgpu = { version = "24", optional = true }
-bytemuck = { version = "1", features = ["derive"], optional = true }
-pollster = { version = "0.4", optional = true }
-
-[features]
-# Enable development tools (styleguide command, component preview)
-dev = []
-# GPU-accelerated force simulation for graph visualization
-gpu = ["dep:wgpu", "dep:bytemuck", "dep:pollster"]
-
-[dev-dependencies]
-# Snapshot testing
-insta = "1"
-
-# E2E browser testing
-playwright-rs = "0.8"
-tempfile = "3.24.0"
-
+# Shared profile settings
 [profile.release]
 lto = true
 strip = true
+
+# WASM-optimized profile (applied to all release builds)
+# For panschema-viz, wasm-pack uses --release which picks this up
+[profile.release.package.panschema-viz]
+opt-level = "s"  # Optimize for size
