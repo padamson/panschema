@@ -87,7 +87,7 @@ jobs:
         7z a ../../../panschema-${{ github.ref_name }}-${{ matrix.target }}.zip panschema.exe
 
     - name: Upload artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: panschema-${{ matrix.target }}
         path: panschema-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}
