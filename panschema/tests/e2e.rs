@@ -850,51 +850,58 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         canvas_height
     );
 
-    // 24. Verify 3D mode indicator and 2D fallback message elements exist
-    // Note: WebGPU is typically not available in headless test environments,
-    // and WASM may not load in some CI environments, resulting in static fallback.
-    // We verify the elements exist in the DOM.
-    let mode_indicator = page.locator("#graph-mode").await;
-    let mode_indicator_count = mode_indicator
+    // 24. Verify 2D/3D mode toggle elements exist
+    // The mode toggle has 2D and 3D buttons; 3D may be disabled if WebGPU unavailable
+    let mode_toggle = page.locator("#graph-mode-toggle").await;
+    let mode_toggle_count = mode_toggle
         .count()
         .await
-        .expect("Failed to count 3D mode indicator");
+        .expect("Failed to count mode toggle");
     assert!(
-        mode_indicator_count > 0,
-        "[{}] 3D mode indicator element should exist",
+        mode_toggle_count > 0,
+        "[{}] Mode toggle element should exist",
         browser_name
     );
 
-    let fallback_msg = page.locator("#graph-fallback-msg").await;
-    let fallback_msg_count = fallback_msg
+    let mode_2d_btn = page.locator("#graph-mode-2d").await;
+    let mode_2d_count = mode_2d_btn
         .count()
         .await
-        .expect("Failed to count 2D fallback message");
+        .expect("Failed to count 2D mode button");
     assert!(
-        fallback_msg_count > 0,
-        "[{}] 2D fallback message element should exist",
+        mode_2d_count > 0,
+        "[{}] 2D mode button should exist",
         browser_name
     );
 
-    // Check which mode is active (for logging purposes)
-    let mode_visible = mode_indicator
-        .is_visible()
+    let mode_3d_btn = page.locator("#graph-mode-3d").await;
+    let mode_3d_count = mode_3d_btn
+        .count()
         .await
-        .expect("Failed to check 3D mode visibility");
-    let fallback_visible = fallback_msg
-        .is_visible()
-        .await
-        .expect("Failed to check fallback message visibility");
+        .expect("Failed to count 3D mode button");
+    assert!(
+        mode_3d_count > 0,
+        "[{}] 3D mode button should exist",
+        browser_name
+    );
 
-    // Log which mode is active for debugging
-    // Note: In headless testing or without WASM, static fallback may be used
-    // which doesn't show either badge
-    if mode_visible {
-        println!("[{}] 3D WebGPU mode is active", browser_name);
-    } else if fallback_visible {
-        println!("[{}] 2D Canvas fallback mode is active", browser_name);
+    // Check 2D button is active (default mode)
+    let mode_2d_classes = mode_2d_btn
+        .get_attribute("class")
+        .await
+        .expect("Failed to get 2D button class")
+        .unwrap_or_default();
+    println!("[{}] 2D button classes: {}", browser_name, mode_2d_classes);
+
+    // Check if 3D button is disabled (WebGPU typically not available in headless)
+    let mode_3d_disabled = mode_3d_btn
+        .get_attribute("disabled")
+        .await
+        .expect("Failed to check 3D button disabled state");
+    if mode_3d_disabled.is_some() {
+        println!("[{}] 3D mode disabled (WebGPU not available)", browser_name);
     } else {
-        println!("[{}] Static fallback mode (WASM not loaded)", browser_name);
+        println!("[{}] 3D mode available", browser_name);
     }
 
     // 25. Test sidebar navigation to Schema Graph section

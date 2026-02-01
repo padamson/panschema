@@ -2,7 +2,6 @@
 //!
 //! Renders nodes as circles and edges as lines in 3D space using WebGPU.
 
-use wasm_bindgen::JsCast;
 use web_sys::HtmlCanvasElement;
 use wgpu::util::DeviceExt;
 
@@ -531,6 +530,24 @@ impl WebGpuRenderer {
         }
 
         self.camera.fit_to_bounds(&bounds, padding);
+    }
+
+    /// Get canvas width (used internally by project_to_screen)
+    #[allow(dead_code)]
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    /// Get canvas height (used internally by project_to_screen)
+    #[allow(dead_code)]
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// Project a 3D world position to screen coordinates
+    pub fn project_to_screen(&self, world_pos: [f32; 3]) -> (f32, f32, bool) {
+        self.camera
+            .project_to_screen(world_pos, self.width as f32, self.height as f32)
     }
 }
 

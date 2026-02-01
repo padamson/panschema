@@ -30,6 +30,9 @@
         {# Canvas for rendering #}
         <canvas id="graph-canvas" style="display: none;"></canvas>
 
+        {# Label overlay for 3D mode (HTML labels positioned over canvas) #}
+        <div id="graph-labels-overlay" class="graph-labels-overlay" style="display: none;"></div>
+
         {# Controls overlay #}
         <div class="graph-controls">
             <button id="graph-reset" class="graph-btn" title="Reset view">
@@ -37,18 +40,24 @@
             </button>
             <button id="graph-zoom-in" class="graph-btn" title="Zoom in">+</button>
             <button id="graph-zoom-out" class="graph-btn" title="Zoom out">−</button>
+            <span class="graph-controls-separator"></span>
+            <button id="graph-labels-all" class="graph-btn graph-toggle active" title="Toggle all labels (L)">
+                Labels
+            </button>
+            <button id="graph-labels-nodes" class="graph-btn graph-toggle active" title="Toggle node labels (N)">
+                Nodes
+            </button>
+            <button id="graph-labels-edges" class="graph-btn graph-toggle active" title="Toggle edge labels (E)">
+                Edges
+            </button>
             <span class="graph-help" id="graph-help-2d">Drag to pan • Scroll to zoom</span>
             <span class="graph-help" id="graph-help-3d" style="display: none;">Drag to orbit • Shift+drag to pan • Scroll to zoom</span>
         </div>
 
-        {# 3D mode indicator #}
-        <div class="graph-mode" id="graph-mode" style="display: none;">
-            <span>3D</span>
-        </div>
-
-        {# 2D fallback message #}
-        <div class="graph-fallback-msg" id="graph-fallback-msg" style="display: none;">
-            <span>2D mode • For 3D: Chrome 113+, Firefox 121+, Safari 18+</span>
+        {# Mode toggle (2D/3D) #}
+        <div class="graph-mode-toggle" id="graph-mode-toggle">
+            <button id="graph-mode-2d" class="graph-mode-btn active" title="2D Canvas mode">2D</button>
+            <button id="graph-mode-3d" class="graph-mode-btn" title="3D WebGPU mode (requires WebGPU support)" disabled>3D</button>
         </div>
 
         {# Info overlay #}
@@ -60,22 +69,22 @@
 
 <style>
 .graph-section {
-    margin: var(--spacing-lg) 0;
+    margin: var(--spacing-lg, 24px) 0;
 }
 
 .graph-section .section-header {
     display: flex;
     align-items: center;
-    gap: var(--spacing-md);
-    margin-bottom: var(--spacing-md);
+    gap: var(--spacing-md, 12px);
+    margin-bottom: var(--spacing-md, 12px);
 }
 
 .graph-badge {
-    font-size: var(--font-size-sm);
-    color: var(--color-text-muted);
-    background: var(--color-bg-secondary);
+    font-size: var(--font-size-sm, 13px);
+    color: var(--color-text-muted, #9ca3af);
+    background: var(--color-bg-secondary, #2d2d44);
     padding: 2px 8px;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-sm, 4px);
 }
 
 .graph-container {
@@ -83,9 +92,9 @@
     width: 100%;
     height: 500px;
     background-color: var(--color-bg-tertiary, #1a1a2e);
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-lg, 8px);
     overflow: hidden;
-    border: 1px solid var(--color-border);
+    border: 1px solid var(--color-border, #374151);
 }
 
 #graph-canvas {
@@ -107,15 +116,15 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: var(--spacing-sm);
-    color: var(--color-text-muted);
+    gap: var(--spacing-sm, 8px);
+    color: var(--color-text-muted, #9ca3af);
 }
 
 .spinner {
     width: 32px;
     height: 32px;
-    border: 3px solid var(--color-border);
-    border-top-color: var(--color-primary);
+    border: 3px solid var(--color-border, #374151);
+    border-top-color: var(--color-primary, #3b82f6);
     border-radius: 50%;
     animation: spin 1s linear infinite;
 }
@@ -133,10 +142,10 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: var(--spacing-sm);
+    gap: var(--spacing-sm, 8px);
     color: var(--color-error, #e74c3c);
     text-align: center;
-    padding: var(--spacing-lg);
+    padding: var(--spacing-lg, 24px);
 }
 
 .error-icon {
@@ -146,75 +155,165 @@
 /* Controls */
 .graph-controls {
     position: absolute;
-    bottom: var(--spacing-md);
-    left: var(--spacing-md);
+    bottom: var(--spacing-md, 12px);
+    left: var(--spacing-md, 12px);
     display: flex;
     align-items: center;
-    gap: var(--spacing-sm);
+    gap: var(--spacing-sm, 8px);
     z-index: 10;
 }
 
 .graph-btn {
-    background: var(--color-bg-secondary);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm);
+    background: var(--color-bg-secondary, #2d2d44);
+    border: 1px solid var(--color-border, #374151);
+    border-radius: var(--radius-sm, 4px);
     padding: 4px 10px;
-    color: var(--color-text);
+    color: var(--color-text, #e5e7eb);
     cursor: pointer;
-    font-size: var(--font-size-sm);
+    font-size: var(--font-size-sm, 13px);
     transition: background 0.2s, border-color 0.2s;
 }
 
 .graph-btn:hover {
-    background: var(--color-bg-tertiary);
-    border-color: var(--color-primary);
+    background: var(--color-bg-tertiary, #1a1a2e);
+    border-color: var(--color-primary, #3b82f6);
+}
+
+/* Toggle button states */
+.graph-toggle {
+    font-size: var(--font-size-xs, 11px);
+    padding: 4px 8px;
+}
+
+.graph-toggle.active {
+    background: var(--color-primary, #3b82f6);
+    border-color: var(--color-primary, #3b82f6);
+    color: white;
+}
+
+.graph-toggle:not(.active) {
+    opacity: 0.6;
+}
+
+.graph-controls-separator {
+    width: 1px;
+    height: 20px;
+    background: var(--color-border, #374151);
+    margin: 0 var(--spacing-xs, 4px);
 }
 
 .graph-help {
-    font-size: var(--font-size-xs);
-    color: var(--color-text-muted);
-    margin-left: var(--spacing-sm);
+    font-size: var(--font-size-xs, 11px);
+    color: var(--color-text-muted, #9ca3af);
+    margin-left: var(--spacing-sm, 8px);
 }
 
 /* Info overlay */
 .graph-info {
     position: absolute;
-    top: var(--spacing-md);
-    right: var(--spacing-md);
-    background: var(--color-bg-secondary);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm);
-    padding: var(--spacing-xs) var(--spacing-sm);
-    font-size: var(--font-size-sm);
-    color: var(--color-text);
+    top: var(--spacing-md, 12px);
+    right: var(--spacing-md, 12px);
+    background: var(--color-bg-secondary, #2d2d44);
+    border: 1px solid var(--color-border, #374151);
+    border-radius: var(--radius-sm, 4px);
+    padding: var(--spacing-xs, 4px) var(--spacing-sm, 8px);
+    font-size: var(--font-size-sm, 13px);
+    color: var(--color-text, #e5e7eb);
     z-index: 10;
 }
 
-/* 3D mode indicator */
-.graph-mode {
+/* Mode toggle (2D/3D) */
+.graph-mode-toggle {
     position: absolute;
     top: var(--spacing-md, 12px);
     left: var(--spacing-md, 12px);
-    background: var(--color-primary, #3b82f6);
-    border-radius: var(--radius-sm, 4px);
-    padding: 2px 8px;
-    font-size: var(--font-size-xs, 11px);
-    font-weight: 600;
-    color: white;
+    display: flex;
+    gap: 0;
     z-index: 10;
 }
 
-/* 2D fallback message */
-.graph-fallback-msg {
-    position: absolute;
-    top: var(--spacing-md);
-    left: var(--spacing-md);
-    background: var(--color-bg-secondary);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm);
+.graph-mode-btn {
+    background: var(--color-bg-secondary, #2d2d44);
+    border: 1px solid var(--color-border, #374151);
     padding: 4px 10px;
-    font-size: var(--font-size-xs);
-    color: var(--color-text-muted);
+    font-size: var(--font-size-xs, 11px);
+    font-weight: 600;
+    color: var(--color-text-muted, #9ca3af);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.graph-mode-btn:first-child {
+    border-radius: var(--radius-sm, 4px) 0 0 var(--radius-sm, 4px);
+    border-right: none;
+}
+
+.graph-mode-btn:last-child {
+    border-radius: 0 var(--radius-sm, 4px) var(--radius-sm, 4px) 0;
+}
+
+.graph-mode-btn.active {
+    background: var(--color-primary, #3b82f6);
+    border-color: var(--color-primary, #3b82f6);
+    color: white;
+}
+
+.graph-mode-btn:not(.active):not(:disabled):hover {
+    background: var(--color-bg-tertiary, #1a1a2e);
+    border-color: var(--color-primary, #3b82f6);
+}
+
+.graph-mode-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* 3D Labels overlay */
+.graph-labels-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    overflow: hidden;
+    z-index: 5;
+}
+
+.graph-label-3d {
+    position: absolute;
+    font-size: 11px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    white-space: nowrap;
+    pointer-events: none;
+    transform: translate(-50%, -100%);
+    padding: 2px 6px;
+    border-radius: 3px;
+    transition: opacity 0.15s ease;
+}
+
+.graph-label-3d.node-label {
+    color: rgba(255, 255, 255, 0.95);
+    background: rgba(26, 26, 46, 0.85);
+    margin-top: -8px;
+}
+
+.graph-label-3d.edge-label {
+    color: rgba(180, 180, 200, 0.9);
+    background: rgba(26, 26, 46, 0.75);
+    font-size: 10px;
+    transform: translate(-50%, -50%);
+}
+
+.graph-label-3d.hidden {
+    opacity: 0;
+}
+
+/* Hovered label overrides hidden state */
+.graph-label-3d.hovered {
+    opacity: 1 !important;
+    background: rgba(59, 130, 246, 0.9);
+    color: white;
     z-index: 10;
 }
 
@@ -239,7 +338,7 @@
         return;
     }
 
-    const canvas = document.getElementById('graph-canvas');
+    let canvas = document.getElementById('graph-canvas');
     const loading = document.getElementById('graph-loading');
     const error = document.getElementById('graph-error');
     const nodeCount = document.getElementById('graph-node-count');
@@ -254,6 +353,241 @@
     let tickCount = 0;
     let hasFittedBounds = false;
     let is3D = false;
+    let wasmModule = null;
+    let hasWebGPU = false;
+
+    // Label button elements (initialize immediately)
+    const labelsAllBtn = document.getElementById('graph-labels-all');
+    const labelsNodesBtn = document.getElementById('graph-labels-nodes');
+    const labelsEdgesBtn = document.getElementById('graph-labels-edges');
+
+    // 3D label overlay management
+    const labelsOverlay = document.getElementById('graph-labels-overlay');
+    let nodeLabelElements = [];
+    let edgeLabelElements = [];
+
+    // Hover tracking
+    let hoveredNodeIndex = -1;
+    let hoveredEdgeIndex = -1;
+    let lastProjectedNodes = [];
+    let lastProjectedEdges = [];
+    const HOVER_RADIUS = 30; // pixels threshold for hover detection
+
+    // LocalStorage key for label preferences
+    const LABEL_PREFS_KEY = 'panschema-label-prefs';
+
+    // Save label preferences to localStorage
+    function saveLabelPrefs() {
+        if (!viz) return;
+        try {
+            const prefs = {
+                all: viz.labels_enabled(),
+                nodes: viz.node_labels_enabled(),
+                edges: viz.edge_labels_enabled()
+            };
+            localStorage.setItem(LABEL_PREFS_KEY, JSON.stringify(prefs));
+        } catch (e) {
+            // localStorage may not be available
+        }
+    }
+
+    // Load label preferences from localStorage
+    function loadLabelPrefs() {
+        try {
+            const stored = localStorage.getItem(LABEL_PREFS_KEY);
+            if (stored) {
+                return JSON.parse(stored);
+            }
+        } catch (e) {
+            // localStorage may not be available
+        }
+        return null;
+    }
+
+    // Apply saved label preferences to visualization
+    function applyLabelPrefs() {
+        if (!viz) return;
+        const prefs = loadLabelPrefs();
+        if (prefs) {
+            try {
+                viz.set_labels(prefs.all);
+                viz.set_node_labels(prefs.nodes);
+                viz.set_edge_labels(prefs.edges);
+            } catch (e) {
+                // Methods may not be available
+            }
+        }
+    }
+
+    function updateLabelButtonStates() {
+        if (!viz || !labelsAllBtn) return;
+
+        // Try to call the label methods - if they exist and work, enable the buttons
+        try {
+            // Both 2D and 3D visualizations should have these methods
+            const labelsOn = viz.labels_enabled();
+            const nodesOn = viz.node_labels_enabled();
+            const edgesOn = viz.edge_labels_enabled();
+
+            labelsAllBtn.classList.toggle('active', labelsOn);
+            labelsNodesBtn.classList.toggle('active', nodesOn);
+            labelsEdgesBtn.classList.toggle('active', edgesOn);
+            // Enable buttons
+            labelsAllBtn.disabled = false;
+            labelsNodesBtn.disabled = false;
+            labelsEdgesBtn.disabled = false;
+        } catch (e) {
+            // Methods not available - disable buttons
+            console.warn('Label methods not available:', e);
+            labelsAllBtn.classList.remove('active');
+            labelsNodesBtn.classList.remove('active');
+            labelsEdgesBtn.classList.remove('active');
+            labelsAllBtn.disabled = true;
+            labelsNodesBtn.disabled = true;
+            labelsEdgesBtn.disabled = true;
+        }
+    }
+
+    // Create label elements for 3D mode
+    function create3DLabels() {
+        // Clear existing labels
+        nodeLabelElements = [];
+        edgeLabelElements = [];
+        labelsOverlay.innerHTML = '';
+
+        if (!viz || !is3D) return;
+
+        // Create node labels
+        const nodeCount = viz.node_count();
+        for (let i = 0; i < nodeCount; i++) {
+            const label = document.createElement('div');
+            label.className = 'graph-label-3d node-label';
+            labelsOverlay.appendChild(label);
+            nodeLabelElements.push(label);
+        }
+
+        // Create edge labels
+        const edgeCount = viz.edge_count();
+        for (let i = 0; i < edgeCount; i++) {
+            const label = document.createElement('div');
+            label.className = 'graph-label-3d edge-label';
+            labelsOverlay.appendChild(label);
+            edgeLabelElements.push(label);
+        }
+    }
+
+    // Update 3D label positions and visibility
+    function update3DLabels() {
+        if (!viz || !is3D) return;
+
+        // Get label visibility state
+        let showNodes = true;
+        let showEdges = true;
+        try {
+            showNodes = viz.show_node_labels();
+            showEdges = viz.show_edge_labels();
+        } catch (e) {
+            // Use defaults if methods unavailable
+        }
+
+        // Canvas uses pixel dimensions (scaled by devicePixelRatio)
+        // but HTML overlay uses CSS pixels, so we need to convert
+        const dpr = window.devicePixelRatio || 1;
+
+        // Update node labels
+        try {
+            const nodesJson = viz.get_projected_nodes();
+            const nodes = JSON.parse(nodesJson);
+            // Store for hover detection
+            lastProjectedNodes = nodes.map(n => ({ x: n.x / dpr, y: n.y / dpr, visible: n.visible }));
+
+            nodes.forEach((node, i) => {
+                if (i < nodeLabelElements.length) {
+                    const el = nodeLabelElements[i];
+                    el.textContent = node.label;
+                    el.style.left = `${node.x / dpr}px`;
+                    el.style.top = `${node.y / dpr}px`;
+                    const isHovered = (i === hoveredNodeIndex);
+                    el.classList.toggle('hidden', !showNodes && !isHovered || !node.visible);
+                    el.classList.toggle('hovered', isHovered);
+                }
+            });
+        } catch (e) {
+            console.warn('Failed to update node labels:', e);
+        }
+
+        // Update edge labels
+        try {
+            const edgesJson = viz.get_projected_edges();
+            const edges = JSON.parse(edgesJson);
+            // Store for hover detection
+            lastProjectedEdges = edges.map(e => ({ x: e.x / dpr, y: e.y / dpr, visible: e.visible }));
+
+            edges.forEach((edge, i) => {
+                if (i < edgeLabelElements.length) {
+                    const el = edgeLabelElements[i];
+                    el.textContent = edge.label;
+                    el.style.left = `${edge.x / dpr}px`;
+                    el.style.top = `${edge.y / dpr}px`;
+                    const isHovered = (i === hoveredEdgeIndex);
+                    el.classList.toggle('hidden', !showEdges && !isHovered || !edge.visible);
+                    el.classList.toggle('hovered', isHovered);
+                }
+            });
+        } catch (e) {
+            console.warn('Failed to update edge labels:', e);
+        }
+    }
+
+    // Show/hide the labels overlay based on mode
+    function updateLabelsOverlay() {
+        if (is3D) {
+            labelsOverlay.style.display = 'block';
+            create3DLabels();
+        } else {
+            labelsOverlay.style.display = 'none';
+            labelsOverlay.innerHTML = '';
+            nodeLabelElements = [];
+            edgeLabelElements = [];
+        }
+    }
+
+    // Find closest node/edge to mouse position for hover detection
+    function updateHoverState(mouseX, mouseY) {
+        let closestNodeDist = Infinity;
+        let closestNodeIdx = -1;
+        let closestEdgeDist = Infinity;
+        let closestEdgeIdx = -1;
+
+        // Check nodes
+        lastProjectedNodes.forEach((node, i) => {
+            if (!node.visible) return;
+            const dx = node.x - mouseX;
+            const dy = node.y - mouseY;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < closestNodeDist && dist < HOVER_RADIUS) {
+                closestNodeDist = dist;
+                closestNodeIdx = i;
+            }
+        });
+
+        // Check edges (only if no node is close enough)
+        if (closestNodeIdx === -1) {
+            lastProjectedEdges.forEach((edge, i) => {
+                if (!edge.visible) return;
+                const dx = edge.x - mouseX;
+                const dy = edge.y - mouseY;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist < closestEdgeDist && dist < HOVER_RADIUS) {
+                    closestEdgeDist = dist;
+                    closestEdgeIdx = i;
+                }
+            });
+        }
+
+        hoveredNodeIndex = closestNodeIdx;
+        hoveredEdgeIndex = closestEdgeIdx;
+    }
 
     // Convert edge_type to human-readable label
     function formatEdgeType(edgeType) {
@@ -433,9 +767,25 @@
 
     async function init() {
         try {
-            // Try to load WASM module
-            const module = await import('./panschema_viz.js');
-            await module.default();
+            // Try to load WASM module (with cache buster)
+            const cacheBuster = Date.now();
+            wasmModule = await import(`./panschema_viz.js?v=${cacheBuster}`);
+            await wasmModule.default();
+
+            // Check WebGPU support
+            if (typeof wasmModule.check_webgpu_support === 'function') {
+                hasWebGPU = await wasmModule.check_webgpu_support();
+            }
+
+            // Enable 3D button if WebGPU is available and create_visualization_3d exists
+            const mode3dBtn = document.getElementById('graph-mode-3d');
+            const can3D = hasWebGPU && typeof wasmModule.create_visualization_3d === 'function';
+            if (can3D) {
+                mode3dBtn.disabled = false;
+                mode3dBtn.title = '3D WebGPU mode';
+            } else {
+                mode3dBtn.title = hasWebGPU ? '3D not available in this build' : 'WebGPU not supported in this browser';
+            }
 
             // Show canvas first so we can measure its dimensions
             loading.style.display = 'none';
@@ -449,42 +799,17 @@
             canvas.width = rect.width * window.devicePixelRatio;
             canvas.height = rect.height * window.devicePixelRatio;
 
-            // Try 3D visualization first (if available and WebGPU supported)
-            let created3D = false;
-            if (typeof module.create_visualization_3d === 'function') {
-                try {
-                    const hasWebGPU = await module.check_webgpu_support();
-                    if (hasWebGPU) {
-                        viz = await module.create_visualization_3d(canvas, JSON.stringify(graphData));
-                        is3D = true;
-                        created3D = true;
-                        console.log('Using WebGPU 3D visualization');
-                    }
-                } catch (e3d) {
-                    console.warn('WebGPU 3D visualization failed, falling back to 2D:', e3d.message);
-                }
-            }
+            // Create 3D visualization by default when WebGPU is available, else 2D
+            await createVisualization(can3D);
 
-            // Fall back to 2D visualization
-            if (!created3D) {
-                viz = new module.Visualization(canvas, JSON.stringify(graphData));
-                is3D = false;
-                console.log('Using 2D Canvas visualization');
-            }
-
-            // Update UI based on mode
+            // Update UI
             nodeCount.textContent = `${viz.node_count()} nodes, ${viz.edge_count()} edges`;
-
-            // Use is_3d() method if available for reliable detection
-            if (typeof viz.is_3d === 'function') {
-                is3D = viz.is_3d();
-            }
-            console.log('Visualization mode:', is3D ? '3D WebGPU' : '2D Canvas');
             updateModeUI();
 
             // Start render loop
             startRenderLoop();
             setupInteraction();
+            setupModeToggle();
         } catch (e) {
             console.warn('WASM visualization not available, using static fallback:', e.message);
             // Fall back to static graph display
@@ -492,24 +817,107 @@
         }
     }
 
+    async function createVisualization(use3D) {
+        // Stop current animation if running
+        if (animationId) {
+            cancelAnimationFrame(animationId);
+            animationId = null;
+        }
+
+        // Reset state
+        tickCount = 0;
+        hasFittedBounds = false;
+
+        // When switching modes, we need a fresh canvas because:
+        // - 2D context can't be reused for WebGPU
+        // - WebGPU surface can't be reused for 2D context
+        const container = canvas.parentElement;
+        const oldCanvas = canvas;
+        const newCanvas = document.createElement('canvas');
+        newCanvas.id = 'graph-canvas';
+        newCanvas.style.cssText = oldCanvas.style.cssText;
+        newCanvas.style.display = 'block';
+        container.replaceChild(newCanvas, oldCanvas);
+        canvas = newCanvas;
+
+        // Set canvas dimensions
+        const rect = canvas.getBoundingClientRect();
+        canvas.width = rect.width * window.devicePixelRatio;
+        canvas.height = rect.height * window.devicePixelRatio;
+
+        if (use3D && hasWebGPU && typeof wasmModule.create_visualization_3d === 'function') {
+            try {
+                viz = await wasmModule.create_visualization_3d(canvas, JSON.stringify(graphData));
+                is3D = true;
+            } catch (e3d) {
+                // e3d may be a JsValue string, not an Error object
+                const errMsg = typeof e3d === 'string' ? e3d : (e3d.message || e3d.toString());
+                console.warn('WebGPU 3D failed, falling back to 2D:', errMsg);
+                viz = new wasmModule.Visualization(canvas, JSON.stringify(graphData));
+                is3D = false;
+            }
+        } else {
+            viz = new wasmModule.Visualization(canvas, JSON.stringify(graphData));
+            is3D = false;
+        }
+
+        // Update node count display
+        if (nodeCount) {
+            nodeCount.textContent = `${viz.node_count()} nodes, ${viz.edge_count()} edges`;
+        }
+
+        // Apply saved label preferences
+        applyLabelPrefs();
+
+        // Update label button states
+        updateLabelButtonStates();
+
+        // Set up labels overlay for 3D mode
+        updateLabelsOverlay();
+
+        // Re-attach canvas event listeners
+        setupCanvasInteraction();
+
+        // Restart render loop if it was running
+        if (!animationId) {
+            startRenderLoop();
+        }
+    }
+
     function updateModeUI() {
         const help2d = document.getElementById('graph-help-2d');
         const help3d = document.getElementById('graph-help-3d');
-        const modeIndicator = document.getElementById('graph-mode');
-        const fallbackMsg = document.getElementById('graph-fallback-msg');
+        const mode2dBtn = document.getElementById('graph-mode-2d');
+        const mode3dBtn = document.getElementById('graph-mode-3d');
 
         if (is3D) {
             help2d.style.display = 'none';
             help3d.style.display = 'inline';
-            modeIndicator.style.display = 'block';
-            fallbackMsg.style.display = 'none';
+            mode2dBtn.classList.remove('active');
+            mode3dBtn.classList.add('active');
         } else {
             help2d.style.display = 'inline';
             help3d.style.display = 'none';
-            modeIndicator.style.display = 'none';
-            // Show fallback message for WASM 2D mode (not static fallback)
-            fallbackMsg.style.display = 'block';
+            mode2dBtn.classList.add('active');
+            mode3dBtn.classList.remove('active');
         }
+    }
+
+    function setupModeToggle() {
+        const mode2dBtn = document.getElementById('graph-mode-2d');
+        const mode3dBtn = document.getElementById('graph-mode-3d');
+
+        mode2dBtn.addEventListener('click', async () => {
+            if (!is3D) return; // Already in 2D mode
+            await createVisualization(false);
+            updateModeUI();
+        });
+
+        mode3dBtn.addEventListener('click', async () => {
+            if (is3D || mode3dBtn.disabled) return; // Already in 3D or not available
+            await createVisualization(true);
+            updateModeUI();
+        });
     }
 
     function startRenderLoop() {
@@ -527,23 +935,23 @@
                 }
 
                 viz.render();
+
+                // Update 3D labels overlay (positions track camera movement)
+                if (is3D) {
+                    update3DLabels();
+                }
             }
             animationId = requestAnimationFrame(frame);
         }
         frame();
     }
 
-    function setupInteraction() {
-        let isShiftDown = false;
+    // Track shift key state (shared across canvas instances)
+    let isShiftDown = false;
+    let lastTouchDist = 0;
 
-        // Track shift key state
-        window.addEventListener('keydown', (e) => {
-            if (e.key === 'Shift') isShiftDown = true;
-        });
-        window.addEventListener('keyup', (e) => {
-            if (e.key === 'Shift') isShiftDown = false;
-        });
-
+    // Canvas-specific event listeners (need to be re-attached when canvas is replaced)
+    function setupCanvasInteraction() {
         // Mouse drag for panning (2D) or orbit (3D)
         canvas.addEventListener('mousedown', (e) => {
             isDragging = true;
@@ -551,31 +959,33 @@
             lastY = e.clientY;
         });
 
-        window.addEventListener('mousemove', (e) => {
-            if (isDragging && viz) {
-                const dx = e.clientX - lastX;
-                const dy = e.clientY - lastY;
+        // Hover detection for labels
+        canvas.addEventListener('mousemove', (e) => {
+            if (!isDragging && viz) {
+                const rect = canvas.getBoundingClientRect();
+                const mouseX = e.clientX - rect.left;
+                const mouseY = e.clientY - rect.top;
 
                 if (is3D) {
-                    // 3D mode: shift+drag to pan, drag to orbit
-                    if (isShiftDown) {
-                        viz.pan(-dx, dy);
-                    } else {
-                        viz.orbit_horizontal(dx * 0.01);
-                        viz.orbit_vertical(dy * 0.01);
-                    }
+                    // 3D mode: use JavaScript hover detection
+                    updateHoverState(mouseX, mouseY);
                 } else {
-                    // 2D mode: drag to pan
-                    viz.pan(dx, dy);
+                    // 2D mode: use WASM hover detection (needs scaled coordinates)
+                    const dpr = window.devicePixelRatio || 1;
+                    if (typeof viz.update_hover === 'function') {
+                        viz.update_hover(mouseX * dpr, mouseY * dpr);
+                    }
                 }
-
-                lastX = e.clientX;
-                lastY = e.clientY;
             }
         });
 
-        window.addEventListener('mouseup', () => {
-            isDragging = false;
+        // Clear hover when mouse leaves canvas
+        canvas.addEventListener('mouseleave', () => {
+            hoveredNodeIndex = -1;
+            hoveredEdgeIndex = -1;
+            if (viz && !is3D && typeof viz.clear_hover === 'function') {
+                viz.clear_hover();
+            }
         });
 
         // Scroll for zoom
@@ -588,7 +998,6 @@
         });
 
         // Touch support
-        let lastTouchDist = 0;
         canvas.addEventListener('touchstart', (e) => {
             if (e.touches.length === 1) {
                 isDragging = true;
@@ -638,6 +1047,45 @@
             isDragging = false;
             lastTouchDist = 0;
         });
+    }
+
+    // One-time setup for window events and button handlers
+    function setupInteraction() {
+        // Track shift key state
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'Shift') isShiftDown = true;
+        });
+        window.addEventListener('keyup', (e) => {
+            if (e.key === 'Shift') isShiftDown = false;
+        });
+
+        // Mouse move/up handlers on window (so drag works outside canvas)
+        window.addEventListener('mousemove', (e) => {
+            if (isDragging && viz) {
+                const dx = e.clientX - lastX;
+                const dy = e.clientY - lastY;
+
+                if (is3D) {
+                    // 3D mode: shift+drag to pan, drag to orbit
+                    if (isShiftDown) {
+                        viz.pan(-dx, dy);
+                    } else {
+                        viz.orbit_horizontal(dx * 0.01);
+                        viz.orbit_vertical(dy * 0.01);
+                    }
+                } else {
+                    // 2D mode: drag to pan
+                    viz.pan(dx, dy);
+                }
+
+                lastX = e.clientX;
+                lastY = e.clientY;
+            }
+        });
+
+        window.addEventListener('mouseup', () => {
+            isDragging = false;
+        });
 
         // Button controls
         resetBtn.addEventListener('click', () => {
@@ -652,14 +1100,68 @@
             if (viz) viz.zoom(0.8);
         });
 
+        // Label toggle button event listeners
+        labelsAllBtn.addEventListener('click', () => {
+            if (viz) {
+                viz.toggle_labels();
+                updateLabelButtonStates();
+                saveLabelPrefs();
+            }
+        });
+
+        labelsNodesBtn.addEventListener('click', () => {
+            if (viz) {
+                viz.toggle_node_labels();
+                updateLabelButtonStates();
+                saveLabelPrefs();
+            }
+        });
+
+        labelsEdgesBtn.addEventListener('click', () => {
+            if (viz) {
+                viz.toggle_edge_labels();
+                updateLabelButtonStates();
+                saveLabelPrefs();
+            }
+        });
+
+        // Keyboard shortcuts for labels
+        window.addEventListener('keydown', (e) => {
+            // Only handle if not in an input field
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+            if (e.key === 'l' || e.key === 'L') {
+                if (viz) {
+                    viz.toggle_labels();
+                    updateLabelButtonStates();
+                    saveLabelPrefs();
+                }
+            } else if (e.key === 'n' || e.key === 'N') {
+                if (viz) {
+                    viz.toggle_node_labels();
+                    updateLabelButtonStates();
+                    saveLabelPrefs();
+                }
+            } else if (e.key === 'e' || e.key === 'E') {
+                if (viz) {
+                    viz.toggle_edge_labels();
+                    updateLabelButtonStates();
+                    saveLabelPrefs();
+                }
+            }
+        });
+
         // Handle resize
         window.addEventListener('resize', () => {
-            if (viz) {
+            if (viz && canvas) {
                 canvas.width = canvas.offsetWidth * window.devicePixelRatio;
                 canvas.height = canvas.offsetHeight * window.devicePixelRatio;
                 viz.resize(canvas.width, canvas.height);
             }
         });
+
+        // Initial canvas interaction setup
+        setupCanvasInteraction();
     }
 
     // Initialize when DOM is ready
