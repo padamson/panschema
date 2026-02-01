@@ -2,6 +2,9 @@
     <h2 class="sidebar-title">Navigation</h2>
     <ul class="sidebar-nav">
         <li><a href="#metadata" class="sidebar-link{% if active_section == "metadata" %} active{% endif %}">Metadata</a></li>
+{%- if graph_json.is_some() %}
+        <li><a href="#graph-visualization" class="sidebar-link{% if active_section == "graph-visualization" %} active{% endif %}">Schema Graph <span class="badge">{{ graph_node_count }} / {{ graph_edge_count }}</span></a></li>
+{%- endif %}
         <li><a href="#namespaces" class="sidebar-link{% if active_section == "namespaces" %} active{% endif %}">Namespaces <span class="badge">{{ namespaces.len() }}</span></a></li>
 {%- if !classes.is_empty() %}
         <li><a href="#classes" class="sidebar-link{% if active_section == "classes" %} active{% endif %}">Classes <span class="badge">{{ classes.len() }}</span></a></li>

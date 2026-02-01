@@ -604,6 +604,321 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         browser_name
     );
 
+    // === GRAPH VISUALIZATION TESTS ===
+
+    // 9. Verify graph visualization section exists
+    let graph_section = page.locator("#graph-visualization").await;
+    let graph_section_count = graph_section
+        .count()
+        .await
+        .expect("Failed to count graph section");
+    assert!(
+        graph_section_count > 0,
+        "[{}] Graph visualization section should exist",
+        browser_name
+    );
+
+    // 10. Verify canvas is present and visible
+    let canvas = page.locator("#graph-canvas").await;
+    let canvas_count = canvas.count().await.expect("Failed to count canvas");
+    assert!(
+        canvas_count > 0,
+        "[{}] Graph canvas should exist",
+        browser_name
+    );
+
+    // Wait for canvas to be displayed (static fallback should show it)
+    let mut canvas_visible = false;
+    for _ in 0..20 {
+        let visible = canvas
+            .is_visible()
+            .await
+            .expect("Failed to check canvas visibility");
+        if visible {
+            canvas_visible = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        canvas_visible,
+        "[{}] Graph canvas should become visible",
+        browser_name
+    );
+
+    // 11. Verify node count badge shows correct count
+    let node_count_badge = page.locator("#graph-node-count").await;
+    let badge_text = node_count_badge
+        .inner_text()
+        .await
+        .expect("Failed to get node count badge text");
+    // Reference ontology should have nodes and edges (format: "X nodes, Y edges")
+    assert!(
+        badge_text.contains("nodes") && badge_text.contains("edges"),
+        "[{}] Node count badge should show nodes and edges count, got: {}",
+        browser_name,
+        badge_text
+    );
+
+    // 12. Verify graph controls are present
+    let reset_btn = page.locator("#graph-reset").await;
+    let reset_count = reset_btn
+        .count()
+        .await
+        .expect("Failed to count reset button");
+    assert!(
+        reset_count > 0,
+        "[{}] Graph reset button should exist",
+        browser_name
+    );
+
+    let zoom_in = page.locator("#graph-zoom-in").await;
+    let zoom_in_count = zoom_in
+        .count()
+        .await
+        .expect("Failed to count zoom-in button");
+    assert!(
+        zoom_in_count > 0,
+        "[{}] Zoom in button should exist",
+        browser_name
+    );
+
+    let zoom_out = page.locator("#graph-zoom-out").await;
+    let zoom_out_count = zoom_out
+        .count()
+        .await
+        .expect("Failed to count zoom-out button");
+    assert!(
+        zoom_out_count > 0,
+        "[{}] Zoom out button should exist",
+        browser_name
+    );
+
+    // 13. Verify loading indicator is hidden after initialization
+    let loading = page.locator("#graph-loading").await;
+    let loading_visible = loading
+        .is_visible()
+        .await
+        .expect("Failed to check loading visibility");
+    assert!(
+        !loading_visible,
+        "[{}] Loading indicator should be hidden after graph initializes",
+        browser_name
+    );
+
+    // 14. Verify graph data contains node labels
+    let has_node_labels = page
+        .evaluate_value(
+            "window.__PANSCHEMA_GRAPH_DATA__.nodes.every(n => n.label && n.label.length > 0)",
+        )
+        .await
+        .expect("Failed to check node labels");
+    assert!(
+        has_node_labels.contains("true"),
+        "[{}] All nodes should have labels",
+        browser_name
+    );
+
+    // 15. Verify graph data contains edge types (used for edge labels)
+    let has_edge_types = page
+        .evaluate_value(
+            "window.__PANSCHEMA_GRAPH_DATA__.edges.every(e => e.edge_type && e.edge_type.length > 0)",
+        )
+        .await
+        .expect("Failed to check edge types");
+    assert!(
+        has_edge_types.contains("true"),
+        "[{}] All edges should have edge_type for labeling",
+        browser_name
+    );
+
+    // 16. Verify specific node labels exist (Animal, Dog, Person are in reference ontology)
+    let has_animal_label = page
+        .evaluate_value("window.__PANSCHEMA_GRAPH_DATA__.nodes.some(n => n.label === 'Animal')")
+        .await
+        .expect("Failed to check Animal label");
+    assert!(
+        has_animal_label.contains("true"),
+        "[{}] Should have node with label 'Animal'",
+        browser_name
+    );
+
+    // 17. Verify edge labels - subclass_of edges exist
+    let has_subclass_edges = page
+        .evaluate_value(
+            "window.__PANSCHEMA_GRAPH_DATA__.edges.some(e => e.edge_type === 'subclass_of')",
+        )
+        .await
+        .expect("Failed to check subclass edges");
+    assert!(
+        has_subclass_edges.contains("true"),
+        "[{}] Should have subclass_of edges",
+        browser_name
+    );
+
+    // 18. Verify Schema Graph is in sidebar navigation
+    let graph_sidebar_link = page
+        .locator(".sidebar-link[href='#graph-visualization']")
+        .await;
+    let graph_sidebar_count = graph_sidebar_link
+        .count()
+        .await
+        .expect("Failed to count graph sidebar link");
+    assert!(
+        graph_sidebar_count > 0,
+        "[{}] Schema Graph navigation link should exist in sidebar",
+        browser_name
+    );
+
+    // 19. Reset to desktop viewport for interaction tests
+    page.set_viewport_size(playwright_rs::Viewport {
+        width: 1280,
+        height: 720,
+    })
+    .await
+    .expect("Failed to set desktop viewport for graph tests");
+
+    // Give time for viewport change
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Scroll to graph section to ensure buttons are visible
+    page.evaluate::<(), ()>(
+        "document.getElementById('graph-visualization').scrollIntoView()",
+        None,
+    )
+    .await
+    .expect("Failed to scroll to graph section");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // 20. Test zoom button interaction - click zoom in and verify no errors
+    let zoom_in_btn = page.locator("#graph-zoom-in").await;
+    zoom_in_btn
+        .click(None)
+        .await
+        .expect("Failed to click zoom in button");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Verify no error overlay appeared after zoom
+    let error_overlay = page.locator("#graph-error").await;
+    let error_visible = error_overlay
+        .is_visible()
+        .await
+        .expect("Failed to check error visibility");
+    assert!(
+        !error_visible,
+        "[{}] Error overlay should not appear after zoom interaction",
+        browser_name
+    );
+
+    // 21. Test zoom out button
+    let zoom_out_btn = page.locator("#graph-zoom-out").await;
+    zoom_out_btn
+        .click(None)
+        .await
+        .expect("Failed to click zoom out button");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // 22. Test reset button
+    let reset_button = page.locator("#graph-reset").await;
+    reset_button
+        .click(None)
+        .await
+        .expect("Failed to click reset button");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // 23. Verify canvas has non-zero dimensions (was actually rendered)
+    let canvas_width = page
+        .evaluate_value("document.getElementById('graph-canvas').width")
+        .await
+        .expect("Failed to get canvas width");
+    let canvas_height = page
+        .evaluate_value("document.getElementById('graph-canvas').height")
+        .await
+        .expect("Failed to get canvas height");
+
+    // Canvas dimensions should be positive (not 0)
+    assert!(
+        !canvas_width.contains("\"0\""),
+        "[{}] Canvas should have non-zero width, got: {}",
+        browser_name,
+        canvas_width
+    );
+    assert!(
+        !canvas_height.contains("\"0\""),
+        "[{}] Canvas should have non-zero height, got: {}",
+        browser_name,
+        canvas_height
+    );
+
+    // 24. Verify 3D mode indicator and 2D fallback message elements exist
+    // Note: WebGPU is typically not available in headless test environments,
+    // and WASM may not load in some CI environments, resulting in static fallback.
+    // We verify the elements exist in the DOM.
+    let mode_indicator = page.locator("#graph-mode").await;
+    let mode_indicator_count = mode_indicator
+        .count()
+        .await
+        .expect("Failed to count 3D mode indicator");
+    assert!(
+        mode_indicator_count > 0,
+        "[{}] 3D mode indicator element should exist",
+        browser_name
+    );
+
+    let fallback_msg = page.locator("#graph-fallback-msg").await;
+    let fallback_msg_count = fallback_msg
+        .count()
+        .await
+        .expect("Failed to count 2D fallback message");
+    assert!(
+        fallback_msg_count > 0,
+        "[{}] 2D fallback message element should exist",
+        browser_name
+    );
+
+    // Check which mode is active (for logging purposes)
+    let mode_visible = mode_indicator
+        .is_visible()
+        .await
+        .expect("Failed to check 3D mode visibility");
+    let fallback_visible = fallback_msg
+        .is_visible()
+        .await
+        .expect("Failed to check fallback message visibility");
+
+    // Log which mode is active for debugging
+    // Note: In headless testing or without WASM, static fallback may be used
+    // which doesn't show either badge
+    if mode_visible {
+        println!("[{}] 3D WebGPU mode is active", browser_name);
+    } else if fallback_visible {
+        println!("[{}] 2D Canvas fallback mode is active", browser_name);
+    } else {
+        println!("[{}] Static fallback mode (WASM not loaded)", browser_name);
+    }
+
+    // 25. Test sidebar navigation to Schema Graph section
+    graph_sidebar_link
+        .click(None)
+        .await
+        .expect("Failed to click Schema Graph sidebar link");
+
+    // Wait for URL hash to update
+    let mut graph_url_updated = false;
+    for _ in 0..20 {
+        let current_url = page.url();
+        if current_url.contains("#graph-visualization") {
+            graph_url_updated = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        graph_url_updated,
+        "[{}] URL hash should be #graph-visualization after clicking sidebar link",
+        browser_name
+    );
+
     // Cleanup
     browser.close().await.expect("Failed to close browser");
 

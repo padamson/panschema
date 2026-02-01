@@ -7,6 +7,14 @@
 
 {% block main_content %}
 {% include "components/metadata_card.html" %}
+
+{# Graph Visualization - only if graph_json is provided #}
+{% if let Some(json) = graph_json %}
+<script>
+    window.__PANSCHEMA_GRAPH_DATA__ = {{ json|safe }};
+</script>
+{% include "components/graph_viz.html" %}
+{% endif %}
 <section id="namespaces">
     {%- let id = "namespaces" %}
     {%- let title = "Namespaces" %}

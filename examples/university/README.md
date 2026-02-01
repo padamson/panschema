@@ -72,23 +72,38 @@ After running the commands, `examples/university/output/` will contain:
 
 | File | Description |
 |------|-------------|
-| `docs.html` | Interactive HTML documentation with class browser |
-| `schema.ttl` | OWL ontology in Turtle format |
-| `graph.json` | Graph topology JSON for visualization |
+| `index.html` | Interactive HTML documentation with graph visualization |
+| `panschema_viz.js` | WASM visualization JavaScript bindings |
+| `panschema_viz_bg.wasm` | WASM binary for force simulation |
+| `graph.json` | Graph topology JSON (optional standalone format) |
 
-## GPU Visualization (Future)
+## Graph Visualization
 
-When Slice 4 is complete, additional commands will be available:
+The generated HTML includes an animated force-directed graph visualization:
 
 ```bash
-# Generate HTML with embedded 3D visualization (Slice 4)
-cargo run --features gpu -- generate --input examples/university/schema.yaml --output examples/university/output/viz.html --format html --graph
+# Generate HTML with visualization (default)
+cargo run -- generate --input examples/university/schema.yaml --output examples/university/output
+
+# Test in browser
+open examples/university/output/index.html  # macOS
+xdg-open examples/university/output/index.html  # Linux
 ```
 
-The visualization will show:
-- **Nodes**: Classes as blue spheres, Slots as green, Enums as purple, Types as orange
-- **Edges**: Inheritance (is_a), Mixins, Domain/Range, Inverse
-- **Interaction**: Orbit camera, zoom, pan, click to select
+### Visualization Options
+
+```bash
+# Disable graph visualization
+cargo run -- generate --input examples/university/schema.yaml --output examples/university/output --no-graph
+
+# Force 2D Canvas mode
+cargo run -- generate --input examples/university/schema.yaml --output examples/university/output --viz-mode 2d
+```
+
+The visualization shows:
+- **Nodes**: Classes (blue), Slots (green), Enums (purple), Types (orange)
+- **Edges**: Labeled relationships (subclassOf, domain, range, etc.)
+- **Interaction**: Drag to pan, scroll to zoom, touch-enabled
 
 ## Feature Status
 
@@ -99,5 +114,6 @@ The visualization will show:
 | Graph JSON Output | ✅ Available | 3 |
 | GPU Force Simulation | ✅ Complete | 1 |
 | 3D Renderer | ✅ Complete | 2 |
-| HTML+WASM Integration | 🔲 Not Started | 4 |
-| Interactive Controls | 🔲 Not Started | 5 |
+| 2D Canvas WASM | ✅ Complete | 4 |
+| WebGPU 3D WASM | 🔲 Not Started | 4 |
+| Interactive Controls | ✅ Complete | 4 |

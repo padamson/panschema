@@ -199,6 +199,12 @@ pub struct SidebarComponent<'a> {
     pub properties: &'a [EntityRef],
     pub individuals: &'a [EntityRef],
     pub namespaces: &'a [Namespace],
+    /// Graph data JSON for visualization (None = no graph link in sidebar)
+    pub graph_json: Option<&'a str>,
+    /// Number of nodes in the graph (for sidebar badge)
+    pub graph_node_count: usize,
+    /// Number of edges in the graph (for sidebar badge)
+    pub graph_edge_count: usize,
 }
 
 /// Namespace table component template.
@@ -302,6 +308,12 @@ pub struct StyleGuideTemplate<'a> {
     pub properties: &'a [EntityRef],
     pub individuals: &'a [EntityRef],
     pub namespaces: &'a [Namespace],
+    /// Graph data JSON (None = no graph link in sidebar)
+    pub graph_json: Option<&'a str>,
+    /// Number of nodes in the graph (for sidebar badge)
+    pub graph_node_count: usize,
+    /// Number of edges in the graph (for sidebar badge)
+    pub graph_edge_count: usize,
     // Sample data for component previews
     pub sample_class: SampleClass<'a>,
     pub sample_property: SampleProperty<'a>,
@@ -359,6 +371,9 @@ impl ComponentRenderer {
             properties,
             individuals,
             namespaces,
+            graph_json: None, // No graph in component preview
+            graph_node_count: 0,
+            graph_edge_count: 0,
         };
         Ok(template.render()?)
     }
@@ -532,6 +547,9 @@ impl ComponentRenderer {
             properties: &data.properties,
             individuals: &data.individuals,
             namespaces: &data.namespaces,
+            graph_json: None, // No graph in styleguide
+            graph_node_count: 0,
+            graph_edge_count: 0,
             sample_class,
             sample_property,
             sample_data_property,

@@ -1,0 +1,672 @@
+{# Graph Visualization Component
+
+   Renders an interactive force-directed graph visualization.
+   Uses WebGPU when available, falls back to 2D Canvas.
+
+   Context Variables:
+   - graph_json: JSON string containing graph data (nodes, edges)
+   - show_controls: boolean, whether to show zoom/pan controls (default: true)
+#}
+
+<section id="graph-visualization" class="graph-section">
+    <div class="section-header">
+        <h2>Schema Graph</h2>
+        <span class="graph-badge" id="graph-node-count"></span>
+    </div>
+
+    <div class="graph-container">
+        {# Loading state #}
+        <div id="graph-loading" class="graph-loading">
+            <div class="spinner"></div>
+            <span>Initializing visualization...</span>
+        </div>
+
+        {# Error state #}
+        <div id="graph-error" class="graph-error" style="display: none;">
+            <span class="error-icon">⚠️</span>
+            <span class="error-message"></span>
+        </div>
+
+        {# Canvas for rendering #}
+        <canvas id="graph-canvas" style="display: none;"></canvas>
+
+        {# Controls overlay #}
+        <div class="graph-controls">
+            <button id="graph-reset" class="graph-btn" title="Reset view">
+                <span>↺</span> Reset
+            </button>
+            <button id="graph-zoom-in" class="graph-btn" title="Zoom in">+</button>
+            <button id="graph-zoom-out" class="graph-btn" title="Zoom out">−</button>
+            <span class="graph-help" id="graph-help-2d">Drag to pan • Scroll to zoom</span>
+            <span class="graph-help" id="graph-help-3d" style="display: none;">Drag to orbit • Shift+drag to pan • Scroll to zoom</span>
+        </div>
+
+        {# 3D mode indicator #}
+        <div class="graph-mode" id="graph-mode" style="display: none;">
+            <span>3D</span>
+        </div>
+
+        {# 2D fallback message #}
+        <div class="graph-fallback-msg" id="graph-fallback-msg" style="display: none;">
+            <span>2D mode • For 3D: Chrome 113+, Firefox 121+, Safari 18+</span>
+        </div>
+
+        {# Info overlay #}
+        <div class="graph-info" id="graph-info" style="display: none;">
+            <span id="graph-info-label"></span>
+        </div>
+    </div>
+</section>
+
+<style>
+.graph-section {
+    margin: var(--spacing-lg) 0;
+}
+
+.graph-section .section-header {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    margin-bottom: var(--spacing-md);
+}
+
+.graph-badge {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+    background: var(--color-bg-secondary);
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+}
+
+.graph-container {
+    position: relative;
+    width: 100%;
+    height: 500px;
+    background-color: var(--color-bg-tertiary, #1a1a2e);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    border: 1px solid var(--color-border);
+}
+
+#graph-canvas {
+    width: 100%;
+    height: 100%;
+    cursor: grab;
+}
+
+#graph-canvas:active {
+    cursor: grabbing;
+}
+
+/* Loading state */
+.graph-loading {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--spacing-sm);
+    color: var(--color-text-muted);
+}
+
+.spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid var(--color-border);
+    border-top-color: var(--color-primary);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Error state */
+.graph-error {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--spacing-sm);
+    color: var(--color-error, #e74c3c);
+    text-align: center;
+    padding: var(--spacing-lg);
+}
+
+.error-icon {
+    font-size: 2rem;
+}
+
+/* Controls */
+.graph-controls {
+    position: absolute;
+    bottom: var(--spacing-md);
+    left: var(--spacing-md);
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    z-index: 10;
+}
+
+.graph-btn {
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 4px 10px;
+    color: var(--color-text);
+    cursor: pointer;
+    font-size: var(--font-size-sm);
+    transition: background 0.2s, border-color 0.2s;
+}
+
+.graph-btn:hover {
+    background: var(--color-bg-tertiary);
+    border-color: var(--color-primary);
+}
+
+.graph-help {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    margin-left: var(--spacing-sm);
+}
+
+/* Info overlay */
+.graph-info {
+    position: absolute;
+    top: var(--spacing-md);
+    right: var(--spacing-md);
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: var(--spacing-xs) var(--spacing-sm);
+    font-size: var(--font-size-sm);
+    color: var(--color-text);
+    z-index: 10;
+}
+
+/* 3D mode indicator */
+.graph-mode {
+    position: absolute;
+    top: var(--spacing-md, 12px);
+    left: var(--spacing-md, 12px);
+    background: var(--color-primary, #3b82f6);
+    border-radius: var(--radius-sm, 4px);
+    padding: 2px 8px;
+    font-size: var(--font-size-xs, 11px);
+    font-weight: 600;
+    color: white;
+    z-index: 10;
+}
+
+/* 2D fallback message */
+.graph-fallback-msg {
+    position: absolute;
+    top: var(--spacing-md);
+    left: var(--spacing-md);
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 4px 10px;
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    z-index: 10;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .graph-container {
+        height: 400px;
+    }
+
+    .graph-help {
+        display: none;
+    }
+}
+</style>
+
+<script type="module">
+// Graph visualization initialization
+(function() {
+    const graphData = window.__PANSCHEMA_GRAPH_DATA__;
+    if (!graphData) {
+        console.warn('No graph data found');
+        return;
+    }
+
+    const canvas = document.getElementById('graph-canvas');
+    const loading = document.getElementById('graph-loading');
+    const error = document.getElementById('graph-error');
+    const nodeCount = document.getElementById('graph-node-count');
+    const resetBtn = document.getElementById('graph-reset');
+    const zoomInBtn = document.getElementById('graph-zoom-in');
+    const zoomOutBtn = document.getElementById('graph-zoom-out');
+
+    let viz = null;
+    let animationId = null;
+    let isDragging = false;
+    let lastX = 0, lastY = 0;
+    let tickCount = 0;
+    let hasFittedBounds = false;
+    let is3D = false;
+
+    // Convert edge_type to human-readable label
+    function formatEdgeType(edgeType) {
+        const labels = {
+            'subclass_of': 'subclassOf',
+            'mixin': 'mixin',
+            'domain': 'domain',
+            'range': 'range',
+            'inverse': 'inverseOf',
+            'type_of': 'typeOf'
+        };
+        return labels[edgeType] || edgeType;
+    }
+
+    // Show static graph info when WASM is not available
+    function showStaticFallback() {
+        loading.style.display = 'none';
+        nodeCount.textContent = `${graphData.nodes.length} nodes, ${graphData.edges.length} edges`;
+
+        // Show canvas first so we can get dimensions
+        canvas.style.display = 'block';
+
+        // Show a simple static representation
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+            // Get dimensions after canvas is visible
+            const rect = canvas.getBoundingClientRect();
+            canvas.width = rect.width * window.devicePixelRatio;
+            canvas.height = rect.height * window.devicePixelRatio;
+
+            // Draw a simple static layout
+            drawStaticGraph(ctx, canvas.width, canvas.height, graphData);
+        }
+    }
+
+    // Simple static graph drawing (no animation, just layout)
+    function drawStaticGraph(ctx, width, height, data) {
+        ctx.fillStyle = '#1a1a2e';
+        ctx.fillRect(0, 0, width, height);
+
+        const nodes = data.nodes;
+        const edges = data.edges;
+        const n = nodes.length;
+        if (n === 0) return;
+
+        // Simple circular layout
+        const centerX = width / 2;
+        const centerY = height / 2;
+        const radius = Math.min(width, height) * 0.35;
+
+        // Build node positions
+        const positions = {};
+        nodes.forEach((node, i) => {
+            const angle = (2 * Math.PI * i) / n;
+            positions[node.id] = {
+                x: centerX + radius * Math.cos(angle),
+                y: centerY + radius * Math.sin(angle),
+                color: node.color
+            };
+        });
+
+        // Draw edges with arrows
+        ctx.strokeStyle = 'rgba(100, 100, 120, 0.6)';
+        ctx.fillStyle = 'rgba(100, 100, 120, 0.6)';
+        ctx.lineWidth = 1.5 * window.devicePixelRatio;
+        const arrowSize = 8 * window.devicePixelRatio;
+        const nodeRadius = 8 * window.devicePixelRatio;
+
+        // Store edge midpoints for label drawing
+        const edgeMidpoints = [];
+
+        edges.forEach(edge => {
+            const src = positions[edge.source];
+            const tgt = positions[edge.target];
+            if (src && tgt) {
+                // Calculate direction
+                const dx = tgt.x - src.x;
+                const dy = tgt.y - src.y;
+                const len = Math.sqrt(dx * dx + dy * dy);
+                if (len === 0) return;
+
+                const ux = dx / len;
+                const uy = dy / len;
+
+                // Shorten line to stop at node edges
+                const startX = src.x + ux * nodeRadius;
+                const startY = src.y + uy * nodeRadius;
+                const endX = tgt.x - ux * nodeRadius;
+                const endY = tgt.y - uy * nodeRadius;
+
+                // Draw line
+                ctx.beginPath();
+                ctx.moveTo(startX, startY);
+                ctx.lineTo(endX, endY);
+                ctx.stroke();
+
+                // Draw arrowhead at target
+                const arrowX = endX - ux * arrowSize;
+                const arrowY = endY - uy * arrowSize;
+                ctx.beginPath();
+                ctx.moveTo(endX, endY);
+                ctx.lineTo(arrowX - uy * arrowSize * 0.5, arrowY + ux * arrowSize * 0.5);
+                ctx.lineTo(arrowX + uy * arrowSize * 0.5, arrowY - ux * arrowSize * 0.5);
+                ctx.closePath();
+                ctx.fill();
+
+                // Store midpoint for label
+                const midX = (startX + endX) / 2;
+                const midY = (startY + endY) / 2;
+                const label = edge.label || formatEdgeType(edge.edge_type);
+                edgeMidpoints.push({ x: midX, y: midY, label, angle: Math.atan2(dy, dx) });
+            }
+        });
+
+        // Draw edge labels
+        const edgeFontSize = 10 * window.devicePixelRatio;
+        ctx.font = `${edgeFontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        edgeMidpoints.forEach(({ x, y, label, angle }) => {
+            // Measure text for background
+            const metrics = ctx.measureText(label);
+            const padding = 3 * window.devicePixelRatio;
+            const bgWidth = metrics.width + padding * 2;
+            const bgHeight = edgeFontSize + padding * 2;
+
+            // Draw background
+            ctx.fillStyle = 'rgba(26, 26, 46, 0.85)';
+            ctx.fillRect(x - bgWidth / 2, y - bgHeight / 2, bgWidth, bgHeight);
+
+            // Draw label text
+            ctx.fillStyle = 'rgba(180, 180, 200, 0.9)';
+            ctx.fillText(label, x, y);
+        });
+
+        // Draw nodes
+        nodes.forEach(node => {
+            const pos = positions[node.id];
+            const [r, g, b, a] = node.color;
+
+            ctx.beginPath();
+            ctx.arc(pos.x, pos.y, nodeRadius, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(${r*255}, ${g*255}, ${b*255}, ${a})`;
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+            ctx.stroke();
+        });
+
+        // Draw node labels
+        const fontSize = 12 * window.devicePixelRatio;
+        ctx.font = `${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+        ctx.textBaseline = 'middle';
+
+        nodes.forEach((node, i) => {
+            const pos = positions[node.id];
+            const angle = (2 * Math.PI * i) / n;
+
+            // Position label outside the node, radiating outward
+            const labelOffset = nodeRadius + 8 * window.devicePixelRatio;
+            const labelX = pos.x + labelOffset * Math.cos(angle);
+            const labelY = pos.y + labelOffset * Math.sin(angle);
+
+            // Align text based on position around the circle
+            if (Math.cos(angle) > 0.3) {
+                ctx.textAlign = 'left';
+            } else if (Math.cos(angle) < -0.3) {
+                ctx.textAlign = 'right';
+            } else {
+                ctx.textAlign = 'center';
+            }
+
+            ctx.fillText(node.label, labelX, labelY);
+        });
+    }
+
+    async function init() {
+        try {
+            // Try to load WASM module
+            const module = await import('./panschema_viz.js');
+            await module.default();
+
+            // Show canvas first so we can measure its dimensions
+            loading.style.display = 'none';
+            canvas.style.display = 'block';
+
+            // Wait for layout to complete before measuring
+            await new Promise(resolve => requestAnimationFrame(resolve));
+
+            // Set canvas dimensions based on container
+            const rect = canvas.getBoundingClientRect();
+            canvas.width = rect.width * window.devicePixelRatio;
+            canvas.height = rect.height * window.devicePixelRatio;
+
+            // Try 3D visualization first (if available and WebGPU supported)
+            let created3D = false;
+            if (typeof module.create_visualization_3d === 'function') {
+                try {
+                    const hasWebGPU = await module.check_webgpu_support();
+                    if (hasWebGPU) {
+                        viz = await module.create_visualization_3d(canvas, JSON.stringify(graphData));
+                        is3D = true;
+                        created3D = true;
+                        console.log('Using WebGPU 3D visualization');
+                    }
+                } catch (e3d) {
+                    console.warn('WebGPU 3D visualization failed, falling back to 2D:', e3d.message);
+                }
+            }
+
+            // Fall back to 2D visualization
+            if (!created3D) {
+                viz = new module.Visualization(canvas, JSON.stringify(graphData));
+                is3D = false;
+                console.log('Using 2D Canvas visualization');
+            }
+
+            // Update UI based on mode
+            nodeCount.textContent = `${viz.node_count()} nodes, ${viz.edge_count()} edges`;
+
+            // Use is_3d() method if available for reliable detection
+            if (typeof viz.is_3d === 'function') {
+                is3D = viz.is_3d();
+            }
+            console.log('Visualization mode:', is3D ? '3D WebGPU' : '2D Canvas');
+            updateModeUI();
+
+            // Start render loop
+            startRenderLoop();
+            setupInteraction();
+        } catch (e) {
+            console.warn('WASM visualization not available, using static fallback:', e.message);
+            // Fall back to static graph display
+            showStaticFallback();
+        }
+    }
+
+    function updateModeUI() {
+        const help2d = document.getElementById('graph-help-2d');
+        const help3d = document.getElementById('graph-help-3d');
+        const modeIndicator = document.getElementById('graph-mode');
+        const fallbackMsg = document.getElementById('graph-fallback-msg');
+
+        if (is3D) {
+            help2d.style.display = 'none';
+            help3d.style.display = 'inline';
+            modeIndicator.style.display = 'block';
+            fallbackMsg.style.display = 'none';
+        } else {
+            help2d.style.display = 'inline';
+            help3d.style.display = 'none';
+            modeIndicator.style.display = 'none';
+            // Show fallback message for WASM 2D mode (not static fallback)
+            fallbackMsg.style.display = 'block';
+        }
+    }
+
+    function startRenderLoop() {
+        function frame() {
+            if (viz) {
+                viz.tick();
+                viz.update_animation();
+                tickCount++;
+
+                // Fit to bounds after simulation has partially settled (50 ticks)
+                // This gives the force layout time to spread out nodes
+                if (!hasFittedBounds && tickCount >= 50) {
+                    viz.fit_to_bounds(40); // 40px padding
+                    hasFittedBounds = true;
+                }
+
+                viz.render();
+            }
+            animationId = requestAnimationFrame(frame);
+        }
+        frame();
+    }
+
+    function setupInteraction() {
+        let isShiftDown = false;
+
+        // Track shift key state
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'Shift') isShiftDown = true;
+        });
+        window.addEventListener('keyup', (e) => {
+            if (e.key === 'Shift') isShiftDown = false;
+        });
+
+        // Mouse drag for panning (2D) or orbit (3D)
+        canvas.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            lastX = e.clientX;
+            lastY = e.clientY;
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (isDragging && viz) {
+                const dx = e.clientX - lastX;
+                const dy = e.clientY - lastY;
+
+                if (is3D) {
+                    // 3D mode: shift+drag to pan, drag to orbit
+                    if (isShiftDown) {
+                        viz.pan(-dx, dy);
+                    } else {
+                        viz.orbit_horizontal(dx * 0.01);
+                        viz.orbit_vertical(dy * 0.01);
+                    }
+                } else {
+                    // 2D mode: drag to pan
+                    viz.pan(dx, dy);
+                }
+
+                lastX = e.clientX;
+                lastY = e.clientY;
+            }
+        });
+
+        window.addEventListener('mouseup', () => {
+            isDragging = false;
+        });
+
+        // Scroll for zoom
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            if (viz) {
+                const factor = e.deltaY > 0 ? 0.9 : 1.1;
+                viz.zoom(factor);
+            }
+        });
+
+        // Touch support
+        let lastTouchDist = 0;
+        canvas.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 1) {
+                isDragging = true;
+                lastX = e.touches[0].clientX;
+                lastY = e.touches[0].clientY;
+            } else if (e.touches.length === 2) {
+                lastTouchDist = Math.hypot(
+                    e.touches[1].clientX - e.touches[0].clientX,
+                    e.touches[1].clientY - e.touches[0].clientY
+                );
+            }
+        });
+
+        canvas.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            if (viz) {
+                if (e.touches.length === 1 && isDragging) {
+                    const dx = e.touches[0].clientX - lastX;
+                    const dy = e.touches[0].clientY - lastY;
+
+                    if (is3D) {
+                        // 3D mode: single finger orbits
+                        viz.orbit_horizontal(dx * 0.01);
+                        viz.orbit_vertical(dy * 0.01);
+                    } else {
+                        // 2D mode: single finger pans
+                        viz.pan(dx, dy);
+                    }
+
+                    lastX = e.touches[0].clientX;
+                    lastY = e.touches[0].clientY;
+                } else if (e.touches.length === 2) {
+                    const dist = Math.hypot(
+                        e.touches[1].clientX - e.touches[0].clientX,
+                        e.touches[1].clientY - e.touches[0].clientY
+                    );
+                    if (lastTouchDist > 0) {
+                        const factor = dist / lastTouchDist;
+                        viz.zoom(factor);
+                    }
+                    lastTouchDist = dist;
+                }
+            }
+        });
+
+        canvas.addEventListener('touchend', () => {
+            isDragging = false;
+            lastTouchDist = 0;
+        });
+
+        // Button controls
+        resetBtn.addEventListener('click', () => {
+            if (viz) viz.fit_to_bounds(40);
+        });
+
+        zoomInBtn.addEventListener('click', () => {
+            if (viz) viz.zoom(1.2);
+        });
+
+        zoomOutBtn.addEventListener('click', () => {
+            if (viz) viz.zoom(0.8);
+        });
+
+        // Handle resize
+        window.addEventListener('resize', () => {
+            if (viz) {
+                canvas.width = canvas.offsetWidth * window.devicePixelRatio;
+                canvas.height = canvas.offsetHeight * window.devicePixelRatio;
+                viz.resize(canvas.width, canvas.height);
+            }
+        });
+    }
+
+    // Initialize when DOM is ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+})();
+</script>

@@ -39,7 +39,9 @@ All visualization code lives in `src/gpu/` with a `gpu` feature flag.
 | GPU Force Simulation | High | ✅ Complete (brute-force O(n²)) |
 | 3D Graph Renderer | Medium | ✅ Complete |
 | GraphWriter (JSON output) | Low | ✅ Complete |
-| WebGPU Browser Target | Medium | Not Started |
+| WebGPU Browser Target | Medium | ✅ Complete |
+| Text/Label Rendering | Medium | Not Started |
+| Node Selection & Dragging | Medium | Not Started |
 
 ---
 
@@ -220,18 +222,18 @@ cargo run -- generate --input schema.yaml --output graph.json --format graph-jso
 
 ### Slice 4: WebGPU HTML Integration (panschema)
 
-**Status:** Not Started
+**Status:** ✅ Complete
 
 **User Value:** Users can view and interact with their schema as a 3D force graph in generated HTML documentation.
 
 **Acceptance Criteria:**
-- [ ] HTML output includes embedded WASM + WebGPU visualization
-- [ ] Visualization initializes with schema data (embedded JSON)
-- [ ] Works offline (no external dependencies)
-- [ ] Loading indicator during WASM initialization
-- [ ] CPU fallback simulation for browsers without WebGPU
-- [ ] 2D Canvas rendering fallback when WebGPU unavailable
-- [ ] Browser support message for non-WebGPU browsers
+- [x] HTML output includes embedded WASM + WebGPU visualization
+- [x] Visualization initializes with schema data (embedded JSON)
+- [x] Works offline (no external dependencies)
+- [x] Loading indicator during WASM initialization
+- [x] CPU fallback simulation for browsers without WebGPU
+- [x] 2D Canvas rendering fallback when WebGPU unavailable
+- [x] Browser support message for non-WebGPU browsers
 
 #### Build Pipeline
 
@@ -259,23 +261,208 @@ For browsers without WebGPU:
 
 ---
 
-### Slice 5: Interaction and Polish
+### Slice 5: Node and Edge Labels
 
 **Status:** Not Started
 
-**User Value:** Users can filter, search, and focus on specific parts of the schema.
+**User Value:** Users can see labels on nodes and edges to understand what each element represents, with flexible controls to manage visual clutter.
 
 **Acceptance Criteria:**
-- [ ] Filter by node type (show only classes, only properties, etc.)
-- [ ] Search by label (highlights matching nodes)
-- [ ] Click node to "focus" - center camera, dim unconnected nodes
-- [ ] Show/hide edge types independently
-- [ ] Details panel on selection (label, description, connections)
-- [ ] Keyboard shortcuts (r = reset camera, f = focus selected, etc.)
+
+#### Text Rendering
+- [ ] SDF (Signed Distance Field) font atlas for crisp text at any zoom level
+- [ ] Pre-generated font atlas embedded in WASM (ASCII + common Unicode)
+- [ ] Billboard text rendering (always faces camera)
+- [ ] Node labels positioned above/beside nodes
+- [ ] Edge labels positioned at edge midpoint
+- [ ] Label visibility based on distance (fade out when too small to read)
+- [ ] Configurable font size and color per node/edge type
+
+#### Label Toggle Controls
+- [ ] Global toggle: All labels on/off (keyboard shortcut: `L`)
+- [ ] Node labels toggle: Show/hide all node labels (keyboard shortcut: `N`)
+- [ ] Edge labels toggle: Show/hide all edge labels (keyboard shortcut: `E`)
+- [ ] Click-to-toggle: Click node/edge to show/hide its individual label
+- [ ] Hover reveal: Show label on hover even when labels are globally off
+- [ ] UI controls panel with toggle buttons for each mode
+- [ ] Persist label preferences in localStorage
+
+#### Implementation Approach
+
+**SDF Font Atlas:**
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Build Time (Rust)                        │
+├─────────────────────────────────────────────────────────────┤
+│  TTF Font ──▶ SDF Generator ──▶ font_atlas.png + metrics.json│
+│              (fontdue crate)     (embedded in WASM)          │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Runtime (WebGPU)                         │
+├─────────────────────────────────────────────────────────────┤
+│  Text String ──▶ Glyph Quads ──▶ SDF Fragment Shader        │
+│                  (instanced)      (smooth edges at any scale)│
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Label State Machine:**
+```rust
+enum LabelVisibility {
+    /// Controlled by global/category toggles
+    Auto,
+    /// Always show (user clicked to pin)
+    AlwaysShow,
+    /// Always hide (user clicked to hide)
+    AlwaysHide,
+}
+
+struct LabelState {
+    global_labels: bool,      // Master toggle
+    node_labels: bool,        // Node category toggle
+    edge_labels: bool,        // Edge category toggle
+    node_overrides: HashMap<NodeId, LabelVisibility>,
+    edge_overrides: HashMap<EdgeId, LabelVisibility>,
+}
+```
+
+**Files:**
+| File | Purpose |
+|------|---------|
+| `panschema-viz/src/text.rs` | SDF text rendering, glyph layout |
+| `panschema-viz/src/font_atlas.rs` | Font atlas loading, glyph metrics |
+| `panschema-viz/src/labels.rs` | Label state management, toggle logic |
+| `panschema-viz/assets/font_atlas.png` | Pre-generated SDF atlas |
+| `panschema-viz/assets/font_metrics.json` | Glyph positions and sizes |
+
+**UI Controls (HTML):**
+```html
+<div class="label-controls">
+    <button id="toggle-all-labels" title="Toggle all labels (L)">🏷️</button>
+    <button id="toggle-node-labels" title="Toggle node labels (N)">⚪</button>
+    <button id="toggle-edge-labels" title="Toggle edge labels (E)">➡️</button>
+</div>
+```
 
 ---
 
-### Slice 6: Barnes-Hut Optimization
+### Slice 6: Interaction and Polish
+
+**Status:** Not Started
+
+**User Value:** Users can filter, search, focus on specific parts of the schema, and manually position nodes.
+
+**Acceptance Criteria:**
+
+#### Node Selection and Dragging
+- [ ] Hit testing: click detection on nodes (ray-cast in 3D, point-in-circle in 2D)
+- [ ] Click node to select (visual highlight, show info panel)
+- [ ] Drag node to reposition while simulation continues
+- [ ] Node becomes "fixed" during drag (velocity zeroed)
+- [ ] Release to let node rejoin simulation (or option to keep fixed)
+- [ ] Double-click to toggle fixed/unfixed state
+- [ ] Visual feedback: cursor change, highlight on hover/select
+- [ ] Touch support for mobile (tap to select, drag to move)
+
+#### Focus and Filtering
+- [ ] Click node to "focus" - center camera, dim unconnected nodes
+- [ ] Filter by node type (show only classes, only properties, etc.)
+- [ ] Search by label (highlights matching nodes)
+- [ ] Show/hide edge types independently
+
+#### UI and Details
+- [ ] Details panel on selection (label, description, connections)
+- [ ] Keyboard shortcuts:
+  - `R` = reset camera
+  - `F` = focus selected node
+  - `Escape` = deselect
+  - `Delete` = unfix selected node (let it rejoin simulation)
+- [ ] Selection persists across simulation ticks
+
+#### Implementation Approach
+
+**Hit Testing (3D):**
+```rust
+/// Ray-cast from camera through mouse position to find intersecting node
+fn pick_node_3d(mouse_x: f32, mouse_y: f32, camera: &Camera3D, nodes: &[SimNode3D]) -> Option<usize> {
+    let ray = camera.screen_to_ray(mouse_x, mouse_y);
+
+    let mut closest: Option<(usize, f32)> = None;
+    for (i, node) in nodes.iter().enumerate() {
+        if let Some(t) = ray_sphere_intersect(&ray, node.position(), node.radius) {
+            if closest.is_none() || t < closest.unwrap().1 {
+                closest = Some((i, t));
+            }
+        }
+    }
+    closest.map(|(i, _)| i)
+}
+```
+
+**Hit Testing (2D):**
+```rust
+/// Point-in-circle test for 2D canvas
+fn pick_node_2d(mouse_x: f32, mouse_y: f32, camera: &Camera, nodes: &[SimNode]) -> Option<usize> {
+    let world_pos = camera.screen_to_world(mouse_x, mouse_y);
+
+    for (i, node) in nodes.iter().enumerate().rev() { // Back-to-front for z-order
+        let dx = world_pos.x - node.x;
+        let dy = world_pos.y - node.y;
+        if dx * dx + dy * dy <= node.radius * node.radius {
+            return Some(i);
+        }
+    }
+    None
+}
+```
+
+**Drag State Machine:**
+```rust
+enum DragState {
+    None,
+    Hovering(usize),           // Mouse over node
+    Dragging { node: usize, offset: Vec3 }, // Actively dragging
+}
+
+struct InteractionState {
+    drag: DragState,
+    selected: Option<usize>,   // Currently selected node
+    fixed_nodes: HashSet<usize>, // Nodes pinned by user
+}
+```
+
+**Node Fixing During Drag:**
+```rust
+// In simulation tick:
+for (i, node) in nodes.iter_mut().enumerate() {
+    if interaction.is_dragging(i) {
+        // Follow mouse, zero velocity
+        node.x = drag_world_pos.x;
+        node.y = drag_world_pos.y;
+        node.z = drag_world_pos.z; // 3D only
+        node.vx = 0.0;
+        node.vy = 0.0;
+        node.vz = 0.0;
+    } else if interaction.is_fixed(i) {
+        // User pinned this node
+        node.vx = 0.0;
+        node.vy = 0.0;
+        node.vz = 0.0;
+    }
+}
+```
+
+**Files:**
+| File | Purpose |
+|------|---------|
+| `panschema-viz/src/interaction.rs` | Hit testing, drag state, selection |
+| `panschema-viz/src/lib.rs` | Wire up mouse events to interaction |
+| `panschema/templates/components/graph_viz.html` | Mouse event handlers, cursor styles |
+
+---
+
+### Slice 7: Barnes-Hut Optimization
 
 **Status:** Not Started
 
@@ -304,9 +491,10 @@ For browsers without WebGPU:
 | Slice 1: GPU Force Simulation | Must Have | None | ✅ Complete |
 | Slice 2: 3D Graph Renderer | Must Have | Slice 1 | ✅ Complete |
 | Slice 3: GraphWriter | Must Have | None | ✅ Complete |
-| Slice 4: WebGPU HTML Integration | Must Have | Slices 1, 2, 3 | Not Started |
-| Slice 5: Interaction and Polish | Should Have | Slice 4 | Not Started |
-| Slice 6: Barnes-Hut Optimization | Nice to Have | Slice 1 | Not Started |
+| Slice 4: WebGPU HTML Integration | Must Have | Slices 1, 2, 3 | ✅ Complete |
+| Slice 5: Node and Edge Labels | Should Have | Slice 4 | Not Started |
+| Slice 6: Interaction and Dragging | Should Have | Slice 4 | Not Started |
+| Slice 7: Barnes-Hut Optimization | Nice to Have | Slice 1 | Not Started |
 
 ---
 
@@ -339,6 +527,12 @@ The feature is complete when ALL of the following are true:
 4. **WASM bundle size:** wgpu + wasm can be large. Target < 1MB gzipped. May need aggressive dead code elimination.
 
 5. **Browser support timeline:** WebGPU is new. Track adoption and ensure fallback path works well.
+
+6. **Text rendering approach:** SDF font atlas provides best quality but adds complexity. Alternatives:
+   - SDF atlas (chosen): Best quality at any zoom, requires build-time font processing
+   - HTML overlay: Simpler but requires JS ↔ WASM position sync each frame
+   - Bitmap atlas: Simpler than SDF but blurry when zoomed
+   - Canvas 2D text → texture: Runtime font rendering but expensive per-frame updates
 
 ---
 
@@ -402,3 +596,49 @@ The feature is complete when ALL of the following are true:
 - 17 unit tests, all passing
 
 **Next:** Slice 4 (WebGPU HTML Integration)
+
+### 2026-01-31: Slice 4 Complete (WebGPU HTML Integration)
+
+**Architecture:**
+- Created `panschema-viz` workspace crate for WASM bindings
+- Separate from main `panschema` crate to isolate WASM-specific dependencies
+- Feature-gated WebGPU support: `#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]`
+
+**Completed:**
+- `panschema-viz/` crate with WASM bindings (wasm-bindgen, wasm-pack)
+- 2D CPU fallback: `CpuSimulation` + `Canvas2DRenderer`
+- 3D WebGPU: `Simulation3D` + `WebGpuRenderer` (when webgpu feature enabled)
+- Camera systems: `Camera` (2D pan/zoom) and `Camera3D` (orbit/zoom/pan)
+- Graph JSON embedded in HTML output via `include_str!`
+- WASM bundle embedded in HTML (offline-capable)
+- Automatic fallback: WebGPU → 2D Canvas → static graph
+- Loading spinner during WASM initialization
+- Browser support message when falling back to 2D
+- Sidebar "Schema Graph" link with node/edge count badge
+- Smooth fit-to-bounds animation after simulation settles
+
+**Files:**
+| File | Purpose |
+|------|---------|
+| `panschema-viz/src/lib.rs` | WASM entry points, Visualization/Visualization3D |
+| `panschema-viz/src/simulation.rs` | CPU 2D force simulation |
+| `panschema-viz/src/simulation3d.rs` | CPU 3D force simulation (Fibonacci sphere) |
+| `panschema-viz/src/canvas2d.rs` | 2D Canvas renderer with labels |
+| `panschema-viz/src/webgpu.rs` | WebGPU 3D renderer (billboard nodes, lines) |
+| `panschema-viz/src/camera.rs` | 2D camera with smooth animations |
+| `panschema-viz/src/camera3d.rs` | 3D orbit camera with smooth animations |
+| `panschema/templates/components/graph_viz.html` | Graph visualization component |
+| `panschema/templates/components/sidebar.html` | Sidebar with graph link |
+
+**Key Design Decisions:**
+1. Billboard quads for 3D nodes (simpler than spheres, GPU-efficient)
+2. Fibonacci sphere for initial 3D node distribution (even spacing)
+3. Separate `is_3d()` method for reliable mode detection
+4. 50-tick delay before fit-to-bounds (let simulation spread nodes)
+
+**Test Coverage:**
+- 187 tests passing (nextest)
+- 195 tests passing with GPU feature
+- 29 panschema-viz tests (camera, simulation)
+
+**Next:** Slice 5 (Node and Edge Labels)

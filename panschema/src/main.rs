@@ -1,12 +1,26 @@
 use std::path::{Path, PathBuf};
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[cfg(feature = "dev")]
 mod components;
 mod server;
 
 use panschema::io::FormatRegistry;
+
+/// Visualization mode for HTML output
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub enum VizMode {
+    /// Auto-detect: try WebGPU, fall back to 2D Canvas
+    #[default]
+    Auto,
+    /// Force 2D Canvas rendering (CPU simulation)
+    #[value(name = "2d")]
+    Canvas2D,
+    /// Force 3D WebGPU rendering (GPU simulation)
+    #[value(name = "3d")]
+    WebGPU3D,
+}
 
 /// A universal CLI for schema conversion, documentation, validation, and comparison.
 #[derive(Parser)]
@@ -41,9 +55,17 @@ enum Commands {
         #[arg(short, long, default_value = "output")]
         output: PathBuf,
 
-        /// Output format: html, ttl, jsonld, rdfxml, ntriples
+        /// Output format: html, ttl, jsonld, rdfxml, ntriples, graph-json
         #[arg(short, long, default_value = "html")]
         format: String,
+
+        /// Disable interactive graph visualization (HTML output only)
+        #[arg(long = "no-graph")]
+        no_graph: bool,
+
+        /// Visualization mode: auto, 2d, 3d (requires --graph)
+        #[arg(long, value_enum, default_value = "auto")]
+        viz_mode: VizMode,
     },
     /// Start development server with hot reload
     Serve {
@@ -76,7 +98,7 @@ enum Commands {
     },
 }
 
-fn generate(input: &Path, output: &Path, format: &str) -> anyhow::Result<()> {
+fn generate(input: &Path, output: &Path, format: &str, include_graph: bool) -> anyhow::Result<()> {
     let registry = FormatRegistry::with_defaults();
 
     let reader = registry
@@ -84,12 +106,22 @@ fn generate(input: &Path, output: &Path, format: &str) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("{}", e))?;
     let schema = reader.read(input).map_err(|e| anyhow::anyhow!("{}", e))?;
 
-    let writer = registry
-        .writer_for_format(format)
-        .ok_or_else(|| anyhow::anyhow!("Unsupported output format: {}", format))?;
-    writer
-        .write(&schema, output)
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    // For HTML format, use HtmlWriter with custom options
+    if format.eq_ignore_ascii_case("html") {
+        use panschema::html_writer::HtmlWriter;
+        use panschema::io::Writer;
+        let writer = HtmlWriter::with_options(include_graph);
+        writer
+            .write(&schema, output)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+    } else {
+        let writer = registry
+            .writer_for_format(format)
+            .ok_or_else(|| anyhow::anyhow!("Unsupported output format: {}", format))?;
+        writer
+            .write(&schema, output)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+    }
 
     let title = schema.title.as_deref().unwrap_or(&schema.name);
     let format_desc = match format.to_lowercase().as_str() {
@@ -133,8 +165,19 @@ async fn main() -> anyhow::Result<()> {
             input,
             output,
             format,
+            no_graph,
+            viz_mode,
         }) => {
-            generate(&input, &output, &format)?;
+            // Log the viz options when graph is enabled
+            if format.to_lowercase() == "html" && !no_graph {
+                let mode_str = match viz_mode {
+                    VizMode::Auto => "auto (2D fallback, 3D when available)",
+                    VizMode::Canvas2D => "2D Canvas (CPU)",
+                    VizMode::WebGPU3D => "3D WebGPU (GPU)",
+                };
+                eprintln!("Graph visualization: {}", mode_str);
+            }
+            generate(&input, &output, &format, !no_graph)?;
         }
         Some(Commands::Serve {
             input,
@@ -156,9 +199,9 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         None => {
-            // Default behavior: generate if input provided
+            // Default behavior: generate if input provided (with graph enabled by default)
             if let Some(input) = cli.input {
-                generate(&input, &cli.output, &cli.format)?;
+                generate(&input, &cli.output, &cli.format, true)?;
             } else {
                 println!("panschema: no input specified. Use --help for usage.");
             }
@@ -197,10 +240,14 @@ mod tests {
                 input,
                 output,
                 format,
+                no_graph,
+                viz_mode,
             }) => {
                 assert_eq!(input, PathBuf::from("test.ttl"));
                 assert_eq!(output, PathBuf::from("docs"));
                 assert_eq!(format, "html");
+                assert!(!no_graph); // default false (graph enabled)
+                assert!(matches!(viz_mode, VizMode::Auto)); // default auto
             }
             _ => panic!("Expected Generate command"),
         }
@@ -224,10 +271,59 @@ mod tests {
                 input,
                 output,
                 format,
+                ..
             }) => {
                 assert_eq!(input, PathBuf::from("test.ttl"));
                 assert_eq!(output, PathBuf::from("output.jsonld"));
                 assert_eq!(format, "jsonld");
+            }
+            _ => panic!("Expected Generate command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_generate_with_viz_mode() {
+        let cli = Cli::try_parse_from([
+            "panschema",
+            "generate",
+            "--input",
+            "test.ttl",
+            "--viz-mode",
+            "2d",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Generate { viz_mode, .. }) => {
+                assert!(matches!(viz_mode, VizMode::Canvas2D));
+            }
+            _ => panic!("Expected Generate command"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "panschema",
+            "generate",
+            "--input",
+            "test.ttl",
+            "--viz-mode",
+            "3d",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Generate { viz_mode, .. }) => {
+                assert!(matches!(viz_mode, VizMode::WebGPU3D));
+            }
+            _ => panic!("Expected Generate command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_generate_no_graph() {
+        let cli =
+            Cli::try_parse_from(["panschema", "generate", "--input", "test.ttl", "--no-graph"])
+                .unwrap();
+        match cli.command {
+            Some(Commands::Generate { no_graph, .. }) => {
+                assert!(no_graph);
             }
             _ => panic!("Expected Generate command"),
         }

@@ -38,6 +38,34 @@ fn generates_documentation_from_reference_ontology() {
         "Missing description"
     );
 
+    // Verify graph visualization is included
+    assert!(
+        html.contains("__PANSCHEMA_GRAPH_DATA__"),
+        "Missing graph data JSON"
+    );
+    assert!(
+        html.contains("graph-visualization"),
+        "Missing graph visualization section"
+    );
+    assert!(
+        html.contains("graph-canvas"),
+        "Missing graph canvas element"
+    );
+
+    // Verify graph data contains expected nodes
+    assert!(
+        html.contains("class:Animal"),
+        "Missing Animal class in graph data"
+    );
+    assert!(
+        html.contains("class:Dog"),
+        "Missing Dog class in graph data"
+    );
+    assert!(
+        html.contains("subclass_of"),
+        "Missing subclass_of edges in graph data"
+    );
+
     // Cleanup
     let _ = fs::remove_dir_all(output_dir);
 }
@@ -130,6 +158,94 @@ fn owl_roundtrip_preserves_schema() {
     assert_eq!(schema.version, schema2.version);
     assert_eq!(schema.classes.len(), schema2.classes.len());
     assert_eq!(schema.slots.len(), schema2.slots.len());
+
+    // Cleanup
+    let _ = fs::remove_dir_all(output_dir);
+}
+
+#[test]
+fn no_graph_flag_disables_graph_visualization() {
+    let output_dir = std::env::temp_dir().join("panschema_no_graph_test");
+    let _ = fs::remove_dir_all(&output_dir);
+
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--input",
+            "tests/fixtures/reference.ttl",
+            "--output",
+            output_dir.to_str().unwrap(),
+            "--no-graph",
+        ])
+        .status()
+        .expect("Failed to execute panschema");
+
+    assert!(status.success(), "panschema exited with error");
+
+    let index_path = output_dir.join("index.html");
+    assert!(index_path.exists(), "index.html was not generated");
+
+    let html = fs::read_to_string(&index_path).expect("Failed to read index.html");
+
+    // Verify graph visualization is NOT included
+    assert!(
+        !html.contains("__PANSCHEMA_GRAPH_DATA__"),
+        "Graph data should not be present with --no-graph"
+    );
+    assert!(
+        !html.contains("graph-visualization"),
+        "Graph visualization section should not be present with --no-graph"
+    );
+
+    // Cleanup
+    let _ = fs::remove_dir_all(output_dir);
+}
+
+#[test]
+fn viz_mode_flag_is_recognized() {
+    let output_dir = std::env::temp_dir().join("panschema_viz_mode_test");
+    let _ = fs::remove_dir_all(&output_dir);
+
+    // Test --viz-mode 2d
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--input",
+            "tests/fixtures/reference.ttl",
+            "--output",
+            output_dir.to_str().unwrap(),
+            "--viz-mode",
+            "2d",
+        ])
+        .status()
+        .expect("Failed to execute panschema");
+
+    assert!(
+        status.success(),
+        "panschema with --viz-mode 2d exited with error"
+    );
+
+    // Cleanup
+    let _ = fs::remove_dir_all(&output_dir);
+
+    // Test --viz-mode 3d
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--input",
+            "tests/fixtures/reference.ttl",
+            "--output",
+            output_dir.to_str().unwrap(),
+            "--viz-mode",
+            "3d",
+        ])
+        .status()
+        .expect("Failed to execute panschema");
+
+    assert!(
+        status.success(),
+        "panschema with --viz-mode 3d exited with error"
+    );
 
     // Cleanup
     let _ = fs::remove_dir_all(output_dir);

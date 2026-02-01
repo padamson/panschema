@@ -23,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Icosphere mesh generation for smooth node spheres
 - `GraphWriter` for exporting schema as graph JSON (`graph-json` format)
 - University schema example in `examples/university/`
+- **Interactive Schema Graph Visualization** in HTML output:
+  - WebGPU 3D visualization with orbit/zoom/pan controls (Chrome 113+, Firefox 121+, Safari 18+)
+  - 2D Canvas fallback for browsers without WebGPU
+  - Static graph fallback when WASM unavailable
+  - Embedded WASM bundle for offline capability
+  - Smooth fit-to-bounds animation after simulation settles
+  - Sidebar "Schema Graph" link with node/edge count badge
+  - Browser support message when using 2D fallback
 
 ### Changed
 - `main.rs` and `server.rs` now use `FormatRegistry` instead of hardcoded readers/writers

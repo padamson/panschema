@@ -83,9 +83,34 @@ This design enables:
 - Adding new output formats by implementing the `Writer` trait
 - Format-agnostic documentation and conversion
 
-## GPU Visualization (Optional)
+## Graph Visualization
 
-panschema includes an optional GPU-accelerated 3D force graph visualization for exploring schema relationships:
+panschema includes an interactive force-directed graph visualization for exploring schema relationships directly in the browser.
+
+### Browser Visualization (2D Canvas)
+
+The generated HTML documentation includes an animated graph visualization:
+
+```bash
+# Generate documentation with graph (default)
+panschema generate --input schema.yaml --output docs/
+
+# Disable graph visualization
+panschema generate --input schema.yaml --output docs/ --no-graph
+
+# Force specific visualization mode
+panschema generate --input schema.yaml --output docs/ --viz-mode 2d
+```
+
+The visualization features:
+- **Animated force layout**: Nodes organize themselves based on connections
+- **Pan and zoom**: Mouse drag to pan, scroll wheel to zoom
+- **Labels**: Node and edge labels with automatic positioning
+- **Touch support**: Works on mobile devices
+
+### GPU Visualization (Native - Optional)
+
+For native GPU-accelerated visualization during development:
 
 ```bash
 # Build with GPU feature
@@ -94,8 +119,6 @@ cargo build --features gpu
 # Run tests
 cargo test --features gpu --lib
 ```
-
-**Status:** Force simulation and 3D renderer complete. Browser integration in progress.
 
 See [examples/university/](examples/university/) for a sample schema and [docs/features/04-schema-force-graph-visualization.md](docs/features/04-schema-force-graph-visualization.md) for the full feature plan.
 
@@ -124,6 +147,23 @@ npx playwright@1.56.1 install
 cargo build
 cargo nextest run --features dev
 ```
+
+### Building WASM Visualization
+
+The browser visualization is built with wasm-pack. The WASM files are embedded in the panschema binary.
+
+```bash
+# Install wasm-pack (one time)
+cargo install wasm-pack
+
+# Build WASM (from repository root)
+cd panschema-viz && wasm-pack build --target web
+
+# Rebuild panschema to embed updated WASM
+cargo build
+```
+
+After building, generated HTML will include the animated graph visualization automatically.
 
 ### Manual Verification
 

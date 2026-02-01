@@ -2166,13 +2166,15 @@ dependencies = [
 name = "panschema-viz"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "console_error_panic_hook",
  "js-sys",
- "panschema",
+ "serde",
  "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "wgpu",
 ]
 
 [[package]]

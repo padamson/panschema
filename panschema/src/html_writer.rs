@@ -7,6 +7,7 @@ use std::path::Path;
 
 use askama::Template;
 
+use crate::graph_writer::GraphWriter;
 use crate::io::{IoError, IoResult, Writer};
 use crate::linkml::SchemaDefinition;
 
@@ -91,15 +92,40 @@ struct IndexTemplate<'a> {
     namespaces: &'a [Namespace],
     /// Empty slice for class cards that don't have properties yet
     empty_properties: &'a [EntityRef],
+    /// Graph data JSON for visualization (None = no graph)
+    graph_json: Option<&'a str>,
+    /// Number of nodes in the graph (for sidebar badge)
+    graph_node_count: usize,
+    /// Number of edges in the graph (for sidebar badge)
+    graph_edge_count: usize,
 }
 
 /// Writer for HTML documentation output
-pub struct HtmlWriter;
+pub struct HtmlWriter {
+    /// Whether to include graph visualization (default: true)
+    pub include_graph: bool,
+}
+
+/// Embedded WASM visualization files (from panschema-viz build)
+mod wasm_files {
+    /// JavaScript bindings for WASM visualization
+    pub const VIZ_JS: &str = include_str!("../../panschema-viz/pkg/panschema_viz.js");
+
+    /// Compiled WASM binary
+    pub const VIZ_WASM: &[u8] = include_bytes!("../../panschema-viz/pkg/panschema_viz_bg.wasm");
+}
 
 impl HtmlWriter {
-    /// Create a new HTML writer
+    /// Create a new HTML writer with default options (graph enabled)
     pub fn new() -> Self {
-        Self
+        Self {
+            include_graph: true,
+        }
+    }
+
+    /// Create a new HTML writer with custom options
+    pub fn with_options(include_graph: bool) -> Self {
+        Self { include_graph }
     }
 
     /// Build template data from SchemaDefinition
@@ -443,6 +469,18 @@ impl Writer for HtmlWriter {
 
         let data = Self::build_template_data(schema);
 
+        // Generate graph JSON for visualization (only if enabled)
+        let (graph_json_string, graph_node_count, graph_edge_count) = if self.include_graph {
+            let graph_data = GraphWriter::new().schema_to_graph(schema);
+            let node_count = graph_data.nodes.len();
+            let edge_count = graph_data.edges.len();
+            let json =
+                serde_json::to_string(&graph_data).map_err(|e| IoError::Write(e.to_string()))?;
+            (Some(json), node_count, edge_count)
+        } else {
+            (None, 0, 0)
+        };
+
         let template = IndexTemplate {
             title: &data.title,
             iri: &data.iri,
@@ -457,6 +495,9 @@ impl Writer for HtmlWriter {
             individual_data: &data.individual_data,
             namespaces: &data.namespaces,
             empty_properties: &[],
+            graph_json: graph_json_string.as_deref(),
+            graph_node_count,
+            graph_edge_count,
         };
 
         let html = template
@@ -465,6 +506,13 @@ impl Writer for HtmlWriter {
 
         let output_path = output.join("index.html");
         fs::write(&output_path, html).map_err(IoError::Io)?;
+
+        // Copy WASM visualization files if graph is enabled
+        if self.include_graph {
+            fs::write(output.join("panschema_viz.js"), wasm_files::VIZ_JS).map_err(IoError::Io)?;
+            fs::write(output.join("panschema_viz_bg.wasm"), wasm_files::VIZ_WASM)
+                .map_err(IoError::Io)?;
+        }
 
         Ok(())
     }
@@ -607,6 +655,84 @@ mod tests {
         assert!(html.contains("class-Dog"));
         assert!(html.contains("prop-hasOwner"));
         assert!(html.contains("ind-fido"));
+
+        // Cleanup
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn html_writer_includes_schema_graph_sidebar_with_counts() {
+        let reader = OwlReader::new();
+        let schema = reader.read(&reference_ontology_path()).unwrap();
+
+        let writer = HtmlWriter::new();
+        let temp_dir = std::env::temp_dir().join("panschema_sidebar_graph_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        writer.write(&schema, &temp_dir).expect("Write failed");
+
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("Failed to read");
+
+        // Verify Schema Graph link is in sidebar
+        assert!(
+            html.contains("href=\"#graph-visualization\""),
+            "Sidebar should contain Schema Graph link"
+        );
+        assert!(
+            html.contains("Schema Graph"),
+            "Sidebar should contain 'Schema Graph' text"
+        );
+
+        // Verify the badge contains node/edge counts (format: "X / Y")
+        // Reference ontology has 5 classes + 4 properties + 1 individual = nodes
+        // and corresponding edges for subclass relationships, domain/range, etc.
+        assert!(
+            html.contains("<span class=\"badge\">"),
+            "Sidebar should contain badge with counts"
+        );
+
+        // Schema Graph link should appear between Metadata and Namespaces
+        let metadata_pos = html
+            .find("href=\"#metadata\"")
+            .expect("Metadata link not found");
+        let graph_pos = html
+            .find("href=\"#graph-visualization\"")
+            .expect("Graph link not found");
+        let namespaces_pos = html
+            .find("href=\"#namespaces\"")
+            .expect("Namespaces link not found");
+
+        assert!(
+            metadata_pos < graph_pos,
+            "Schema Graph should appear after Metadata"
+        );
+        assert!(
+            graph_pos < namespaces_pos,
+            "Schema Graph should appear before Namespaces"
+        );
+
+        // Cleanup
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn html_writer_without_graph_excludes_sidebar_link() {
+        let reader = OwlReader::new();
+        let schema = reader.read(&reference_ontology_path()).unwrap();
+
+        let writer = HtmlWriter::with_options(false); // No graph
+        let temp_dir = std::env::temp_dir().join("panschema_sidebar_no_graph_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        writer.write(&schema, &temp_dir).expect("Write failed");
+
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("Failed to read");
+
+        // Schema Graph link should NOT be present when graph is disabled
+        assert!(
+            !html.contains("href=\"#graph-visualization\""),
+            "Sidebar should not contain Schema Graph link when graph is disabled"
+        );
 
         // Cleanup
         let _ = fs::remove_dir_all(temp_dir);
