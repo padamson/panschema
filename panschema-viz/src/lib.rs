@@ -11,6 +11,7 @@
 pub mod camera;
 mod canvas2d;
 mod graph_types;
+mod labels;
 mod simulation;
 
 #[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
@@ -33,6 +34,7 @@ use wasm_bindgen::prelude::*;
 use web_sys::HtmlCanvasElement;
 
 use canvas2d::Canvas2DRenderer;
+use labels::LabelOptions;
 use simulation::CpuSimulation;
 
 /// Initialize WASM panic hook for better error messages
@@ -65,6 +67,9 @@ pub async fn check_webgpu_support() -> bool {
 pub struct Visualization {
     simulation: CpuSimulation,
     renderer: Canvas2DRenderer,
+    labels: LabelOptions,
+    hovered_node: Option<usize>,
+    hovered_edge: Option<usize>,
 }
 
 #[wasm_bindgen]
@@ -86,6 +91,9 @@ impl Visualization {
         Ok(Visualization {
             simulation,
             renderer,
+            labels: LabelOptions::new(),
+            hovered_node: None,
+            hovered_edge: None,
         })
     }
 
@@ -101,7 +109,12 @@ impl Visualization {
 
     /// Render the current state
     pub fn render(&self) {
-        self.renderer.render(&self.simulation);
+        self.renderer.render(
+            &self.simulation,
+            &self.labels,
+            self.hovered_node,
+            self.hovered_edge,
+        );
     }
 
     /// Check if simulation is still running
@@ -158,6 +171,112 @@ impl Visualization {
     pub fn is_3d(&self) -> bool {
         false
     }
+
+    // ========================================================================
+    // Label visibility controls
+    // ========================================================================
+
+    /// Toggle all labels on/off
+    pub fn toggle_labels(&mut self) {
+        self.labels.toggle_all();
+    }
+
+    /// Toggle node labels on/off
+    pub fn toggle_node_labels(&mut self) {
+        self.labels.toggle_node_labels();
+    }
+
+    /// Toggle edge labels on/off
+    pub fn toggle_edge_labels(&mut self) {
+        self.labels.toggle_edge_labels();
+    }
+
+    /// Set all labels visibility
+    pub fn set_labels(&mut self, visible: bool) {
+        self.labels.set_all(visible);
+    }
+
+    /// Set node labels visibility
+    pub fn set_node_labels(&mut self, visible: bool) {
+        self.labels.set_node_labels(visible);
+    }
+
+    /// Set edge labels visibility
+    pub fn set_edge_labels(&mut self, visible: bool) {
+        self.labels.set_edge_labels(visible);
+    }
+
+    /// Check if node labels are visible
+    pub fn show_node_labels(&self) -> bool {
+        self.labels.show_node_labels()
+    }
+
+    /// Check if edge labels are visible
+    pub fn show_edge_labels(&self) -> bool {
+        self.labels.show_edge_labels()
+    }
+
+    /// Check if all labels are enabled (master toggle)
+    pub fn labels_enabled(&self) -> bool {
+        self.labels.all_labels
+    }
+
+    /// Check if node labels toggle is on
+    pub fn node_labels_enabled(&self) -> bool {
+        self.labels.node_labels
+    }
+
+    /// Check if edge labels toggle is on
+    pub fn edge_labels_enabled(&self) -> bool {
+        self.labels.edge_labels
+    }
+
+    // ========================================================================
+    // Hover detection
+    // ========================================================================
+
+    /// Update hover state based on canvas coordinates
+    /// Returns true if hover state changed
+    pub fn update_hover(&mut self, canvas_x: f32, canvas_y: f32) -> bool {
+        let old_node = self.hovered_node;
+        let old_edge = self.hovered_edge;
+
+        // Check for hovered node first
+        self.hovered_node = self
+            .renderer
+            .node_at(canvas_x, canvas_y, &self.simulation.nodes);
+
+        // Only check edges if no node is hovered
+        if self.hovered_node.is_none() {
+            self.hovered_edge = self.renderer.edge_at(
+                canvas_x,
+                canvas_y,
+                &self.simulation.edges,
+                &self.simulation.nodes,
+                30.0, // threshold in pixels
+            );
+        } else {
+            self.hovered_edge = None;
+        }
+
+        old_node != self.hovered_node || old_edge != self.hovered_edge
+    }
+
+    /// Clear hover state
+    pub fn clear_hover(&mut self) {
+        self.hovered_node = None;
+        self.hovered_edge = None;
+    }
+
+    /// Get the currently hovered node index (-1 if none)
+    pub fn hovered_node_index(&self) -> i32 {
+        self.hovered_node.map(|i| i as i32).unwrap_or(-1)
+    }
+
+    /// Get the currently hovered edge index (-1 if none)
+    pub fn hovered_edge_index(&self) -> i32 {
+        self.hovered_edge.map(|i| i as i32).unwrap_or(-1)
+    }
 }
 
 /// Create a 2D visualization (convenience function)
@@ -184,6 +303,7 @@ use webgpu::WebGpuRenderer;
 pub struct Visualization3D {
     simulation: Simulation3D,
     renderer: WebGpuRenderer,
+    labels: LabelOptions,
 }
 
 #[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
@@ -268,6 +388,120 @@ impl Visualization3D {
     pub fn is_3d(&self) -> bool {
         true
     }
+
+    // ========================================================================
+    // Label support for 3D mode (HTML overlay labels)
+    // ========================================================================
+
+    /// Get projected node positions for HTML label overlay
+    /// Returns JSON: [{ "id": "...", "label": "...", "x": f32, "y": f32, "visible": bool }, ...]
+    pub fn get_projected_nodes(&self) -> String {
+        let projected: Vec<serde_json::Value> = self
+            .simulation
+            .nodes
+            .iter()
+            .map(|node| {
+                let (x, y, visible) = self.renderer.project_to_screen([node.x, node.y, node.z]);
+                serde_json::json!({
+                    "id": node.id,
+                    "label": node.label,
+                    "x": x,
+                    "y": y,
+                    "visible": visible
+                })
+            })
+            .collect();
+
+        serde_json::to_string(&projected).unwrap_or_else(|_| "[]".to_string())
+    }
+
+    /// Get projected edge midpoints for HTML label overlay
+    /// Returns JSON: [{ "label": "...", "x": f32, "y": f32, "visible": bool }, ...]
+    pub fn get_projected_edges(&self) -> String {
+        let projected: Vec<serde_json::Value> = self
+            .simulation
+            .edges
+            .iter()
+            .map(|edge| {
+                let source = &self.simulation.nodes[edge.source];
+                let target = &self.simulation.nodes[edge.target];
+
+                // Calculate midpoint in 3D space
+                let mid_x = (source.x + target.x) / 2.0;
+                let mid_y = (source.y + target.y) / 2.0;
+                let mid_z = (source.z + target.z) / 2.0;
+
+                let (x, y, visible) = self.renderer.project_to_screen([mid_x, mid_y, mid_z]);
+
+                serde_json::json!({
+                    "label": edge.label,
+                    "x": x,
+                    "y": y,
+                    "visible": visible
+                })
+            })
+            .collect();
+
+        serde_json::to_string(&projected).unwrap_or_else(|_| "[]".to_string())
+    }
+
+    // Label visibility state (mirroring 2D API for consistency)
+    // These control what JavaScript should display
+
+    /// Toggle all labels on/off
+    pub fn toggle_labels(&mut self) {
+        self.labels.toggle_all();
+    }
+
+    /// Toggle node labels on/off
+    pub fn toggle_node_labels(&mut self) {
+        self.labels.toggle_node_labels();
+    }
+
+    /// Toggle edge labels on/off
+    pub fn toggle_edge_labels(&mut self) {
+        self.labels.toggle_edge_labels();
+    }
+
+    /// Set all labels visibility
+    pub fn set_labels(&mut self, visible: bool) {
+        self.labels.set_all(visible);
+    }
+
+    /// Set node labels visibility
+    pub fn set_node_labels(&mut self, visible: bool) {
+        self.labels.set_node_labels(visible);
+    }
+
+    /// Set edge labels visibility
+    pub fn set_edge_labels(&mut self, visible: bool) {
+        self.labels.set_edge_labels(visible);
+    }
+
+    /// Check if node labels are visible
+    pub fn show_node_labels(&self) -> bool {
+        self.labels.show_node_labels()
+    }
+
+    /// Check if edge labels are visible
+    pub fn show_edge_labels(&self) -> bool {
+        self.labels.show_edge_labels()
+    }
+
+    /// Check if all labels are enabled (master toggle)
+    pub fn labels_enabled(&self) -> bool {
+        self.labels.all_labels
+    }
+
+    /// Check if node labels toggle is on
+    pub fn node_labels_enabled(&self) -> bool {
+        self.labels.node_labels
+    }
+
+    /// Check if edge labels toggle is on
+    pub fn edge_labels_enabled(&self) -> bool {
+        self.labels.edge_labels
+    }
 }
 
 /// Create a 3D WebGPU visualization (async, only with webgpu feature)
@@ -292,6 +526,7 @@ pub async fn create_visualization_3d(
     Ok(Visualization3D {
         simulation,
         renderer,
+        labels: LabelOptions::new(),
     })
 }
 

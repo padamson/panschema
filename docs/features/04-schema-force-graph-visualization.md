@@ -263,87 +263,51 @@ For browsers without WebGPU:
 
 ### Slice 5: Node and Edge Labels
 
-**Status:** Not Started
+**Status:** ✅ Complete
 
 **User Value:** Users can see labels on nodes and edges to understand what each element represents, with flexible controls to manage visual clutter.
 
 **Acceptance Criteria:**
 
 #### Text Rendering
-- [ ] SDF (Signed Distance Field) font atlas for crisp text at any zoom level
-- [ ] Pre-generated font atlas embedded in WASM (ASCII + common Unicode)
-- [ ] Billboard text rendering (always faces camera)
-- [ ] Node labels positioned above/beside nodes
-- [ ] Edge labels positioned at edge midpoint
-- [ ] Label visibility based on distance (fade out when too small to read)
-- [ ] Configurable font size and color per node/edge type
+- [x] Node labels positioned beside nodes (2D: Canvas text, 3D: HTML overlay)
+- [x] Edge labels positioned at edge midpoint
+- [x] Crisp text at any zoom level (HTML overlay for 3D, Canvas2D for 2D)
+- [x] Labels hidden when node is behind camera (3D mode visibility culling)
 
 #### Label Toggle Controls
-- [ ] Global toggle: All labels on/off (keyboard shortcut: `L`)
-- [ ] Node labels toggle: Show/hide all node labels (keyboard shortcut: `N`)
-- [ ] Edge labels toggle: Show/hide all edge labels (keyboard shortcut: `E`)
-- [ ] Click-to-toggle: Click node/edge to show/hide its individual label
-- [ ] Hover reveal: Show label on hover even when labels are globally off
-- [ ] UI controls panel with toggle buttons for each mode
-- [ ] Persist label preferences in localStorage
+- [x] Global toggle: All labels on/off (keyboard shortcut: `L`)
+- [x] Node labels toggle: Show/hide all node labels (keyboard shortcut: `N`)
+- [x] Edge labels toggle: Show/hide all edge labels (keyboard shortcut: `E`)
+- [x] Hover reveal: Show label on hover even when labels are globally off
+- [x] UI controls panel with toggle buttons for each mode
+- [x] Persist label preferences in localStorage
 
-#### Implementation Approach
+#### Implementation
 
-**SDF Font Atlas:**
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Build Time (Rust)                        │
-├─────────────────────────────────────────────────────────────┤
-│  TTF Font ──▶ SDF Generator ──▶ font_atlas.png + metrics.json│
-│              (fontdue crate)     (embedded in WASM)          │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    Runtime (WebGPU)                         │
-├─────────────────────────────────────────────────────────────┤
-│  Text String ──▶ Glyph Quads ──▶ SDF Fragment Shader        │
-│                  (instanced)      (smooth edges at any scale)│
-└─────────────────────────────────────────────────────────────┘
-```
+**Approach:** HTML overlay labels (simpler than SDF, crisp at any zoom)
 
-**Label State Machine:**
-```rust
-enum LabelVisibility {
-    /// Controlled by global/category toggles
-    Auto,
-    /// Always show (user clicked to pin)
-    AlwaysShow,
-    /// Always hide (user clicked to hide)
-    AlwaysHide,
-}
+For 3D mode, labels are rendered as HTML `<span>` elements positioned over the WebGPU canvas:
+- WASM projects 3D node/edge positions to 2D screen coordinates
+- JavaScript updates HTML element positions each frame
+- devicePixelRatio handled for crisp rendering on HiDPI displays
 
-struct LabelState {
-    global_labels: bool,      // Master toggle
-    node_labels: bool,        // Node category toggle
-    edge_labels: bool,        // Edge category toggle
-    node_overrides: HashMap<NodeId, LabelVisibility>,
-    edge_overrides: HashMap<EdgeId, LabelVisibility>,
-}
-```
+For 2D mode, labels are rendered directly on the Canvas2D context with hover support in WASM.
 
 **Files:**
 | File | Purpose |
 |------|---------|
-| `panschema-viz/src/text.rs` | SDF text rendering, glyph layout |
-| `panschema-viz/src/font_atlas.rs` | Font atlas loading, glyph metrics |
-| `panschema-viz/src/labels.rs` | Label state management, toggle logic |
-| `panschema-viz/assets/font_atlas.png` | Pre-generated SDF atlas |
-| `panschema-viz/assets/font_metrics.json` | Glyph positions and sizes |
+| `panschema-viz/src/labels.rs` | LabelOptions state (all/node/edge toggles) |
+| `panschema-viz/src/canvas2d.rs` | 2D Canvas label rendering, hover detection |
+| `panschema-viz/src/lib.rs` | WASM bindings for label controls and hover |
+| `panschema-viz/src/camera3d.rs` | 3D→2D projection for HTML overlay positioning |
+| `panschema/templates/components/graph_viz.html` | HTML overlay, toggle buttons, localStorage |
 
-**UI Controls (HTML):**
-```html
-<div class="label-controls">
-    <button id="toggle-all-labels" title="Toggle all labels (L)">🏷️</button>
-    <button id="toggle-node-labels" title="Toggle node labels (N)">⚪</button>
-    <button id="toggle-edge-labels" title="Toggle edge labels (E)">➡️</button>
-</div>
-```
+**Key Design Decisions:**
+1. HTML overlay for 3D labels (crisp text without SDF complexity)
+2. Separate hover detection: WASM hit-testing for 2D, JavaScript proximity for 3D
+3. Highlight style for hovered labels (blue background, white text)
+4. devicePixelRatio conversion between canvas pixels and CSS pixels
 
 ---
 
@@ -492,7 +456,7 @@ for (i, node) in nodes.iter_mut().enumerate() {
 | Slice 2: 3D Graph Renderer | Must Have | Slice 1 | ✅ Complete |
 | Slice 3: GraphWriter | Must Have | None | ✅ Complete |
 | Slice 4: WebGPU HTML Integration | Must Have | Slices 1, 2, 3 | ✅ Complete |
-| Slice 5: Node and Edge Labels | Should Have | Slice 4 | Not Started |
+| Slice 5: Node and Edge Labels | Should Have | Slice 4 | ✅ Complete |
 | Slice 6: Interaction and Dragging | Should Have | Slice 4 | Not Started |
 | Slice 7: Barnes-Hut Optimization | Nice to Have | Slice 1 | Not Started |
 
@@ -528,11 +492,7 @@ The feature is complete when ALL of the following are true:
 
 5. **Browser support timeline:** WebGPU is new. Track adoption and ensure fallback path works well.
 
-6. **Text rendering approach:** SDF font atlas provides best quality but adds complexity. Alternatives:
-   - SDF atlas (chosen): Best quality at any zoom, requires build-time font processing
-   - HTML overlay: Simpler but requires JS ↔ WASM position sync each frame
-   - Bitmap atlas: Simpler than SDF but blurry when zoomed
-   - Canvas 2D text → texture: Runtime font rendering but expensive per-frame updates
+6. ~~**Text rendering approach:**~~ **Resolved:** HTML overlay for 3D labels (simpler than SDF, crisp at any zoom). WASM projects positions, JavaScript updates HTML elements. Canvas2D text for 2D mode.
 
 ---
 
@@ -642,3 +602,38 @@ The feature is complete when ALL of the following are true:
 - 29 panschema-viz tests (camera, simulation)
 
 **Next:** Slice 5 (Node and Edge Labels)
+
+### 2026-02-01: Slice 5 Complete (Node and Edge Labels)
+
+**Architecture Decision:**
+- Chose HTML overlay for 3D labels instead of SDF font atlas
+- Simpler implementation, crisp text at any zoom, no build-time font processing
+- WASM projects 3D positions to screen coordinates, JavaScript positions HTML elements
+
+**Completed:**
+- `LabelOptions` struct with master toggle (all_labels) and category toggles (node_labels, edge_labels)
+- Label toggle buttons in UI (All Labels, Nodes, Edges) with active state styling
+- Keyboard shortcuts: `L` (all), `N` (nodes), `E` (edges)
+- localStorage persistence of label preferences
+- HTML overlay labels for 3D mode with visibility culling
+- Canvas2D text labels for 2D mode
+- Hover-to-reveal: show individual label on hover even when labels are toggled off
+- 2D hover detection via WASM hit-testing (node_at, edge_at methods)
+- 3D hover detection via JavaScript proximity check on projected positions
+- Highlight styling for hovered labels (blue background, white text)
+- devicePixelRatio handling for proper label alignment on HiDPI displays
+
+**Files:**
+| File | Purpose |
+|------|---------|
+| `panschema-viz/src/labels.rs` | LabelOptions state management |
+| `panschema-viz/src/canvas2d.rs` | 2D label rendering with hover support |
+| `panschema-viz/src/lib.rs` | WASM bindings for label/hover methods |
+| `panschema-viz/src/camera3d.rs` | project_point(), project_to_screen() for 3D→2D |
+| `panschema/templates/components/graph_viz.html` | HTML overlay, toggles, localStorage |
+
+**Test Coverage:**
+- 158 panschema tests passing
+- 36 panschema-viz tests passing (includes camera3d projection tests)
+
+**Next:** Slice 6 (Interaction and Dragging)

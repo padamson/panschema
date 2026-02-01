@@ -31,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Smooth fit-to-bounds animation after simulation settles
   - Sidebar "Schema Graph" link with node/edge count badge
   - Browser support message when using 2D fallback
+  - **Label controls**: Toggle all labels, node labels, or edge labels independently
+  - **Hover-to-reveal**: Show individual label on hover even when labels are toggled off
+  - **Persistent preferences**: Label visibility settings saved to localStorage
+  - **3D HTML overlay labels**: Projected node/edge labels via HTML overlay for crisp text
 
 ### Changed
 - `main.rs` and `server.rs` now use `FormatRegistry` instead of hardcoded readers/writers

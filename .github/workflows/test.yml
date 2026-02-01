@@ -31,7 +31,11 @@ jobs:
       uses: dtolnay/rust-toolchain@master
       with:
         toolchain: ${{ matrix.rust }}
+        targets: wasm32-unknown-unknown
         components: rustfmt, clippy
+
+    - name: Install wasm-pack
+      uses: taiki-e/install-action@wasm-pack
 
     - name: Cache Cargo
       uses: actions/cache@v5
@@ -46,6 +50,17 @@ jobs:
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: |
           ${{ runner.os }}-cargo-
+
+    - name: Cache WASM build
+      uses: actions/cache@v5
+      id: wasm-cache
+      with:
+        path: panschema-viz/pkg/
+        key: wasm-${{ runner.os }}-${{ hashFiles('panschema-viz/src/**', 'panschema-viz/Cargo.toml') }}
+
+    - name: Build WASM package
+      if: steps.wasm-cache.outputs.cache-hit != 'true'
+      run: wasm-pack build panschema-viz --target web --features webgpu
 
     - name: Install cargo-nextest
       uses: taiki-e/install-action@nextest

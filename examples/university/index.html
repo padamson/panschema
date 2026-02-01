@@ -1,0 +1,3746 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>University Domain Schema</title>
+    <style>
+        :root {
+            /* Colors - Light mode */
+            --color-primary: #2563eb;
+            --color-primary-hover: #1d4ed8;
+            --color-accent: #8b5cf6;
+
+            --color-text: #1f2937;
+            --color-text-muted: #6b7280;
+            --color-text-inverse: #ffffff;
+
+            --color-bg: #ffffff;
+            --color-bg-secondary: #f9fafb;
+            --color-bg-tertiary: #f3f4f6;
+
+            --color-border: #e5e7eb;
+            --color-border-strong: #d1d5db;
+
+            /* Semantic colors for ontology elements */
+            --color-class: #3b82f6;
+            --color-property: #10b981;
+            --color-individual: #f59e0b;
+            --color-datatype: #8b5cf6;
+
+            /* Typography */
+            --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            --font-mono: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace;
+
+            --text-xs: 0.75rem;
+            --text-sm: 0.875rem;
+            --text-base: 1rem;
+            --text-lg: 1.125rem;
+            --text-xl: 1.25rem;
+            --text-2xl: 1.5rem;
+            --text-3xl: 2rem;
+
+            /* Spacing */
+            --space-1: 0.25rem;
+            --space-2: 0.5rem;
+            --space-3: 0.75rem;
+            --space-4: 1rem;
+            --space-6: 1.5rem;
+            --space-8: 2rem;
+            --space-12: 3rem;
+
+            /* Layout */
+            --sidebar-width: 260px;
+            --content-max-width: 900px;
+            --header-height: 60px;
+
+            /* Shadows */
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+            --shadow-md: 0 4px 6px rgba(0,0,0,0.07);
+            --shadow-lg: 0 10px 15px rgba(0,0,0,0.1);
+
+            /* Borders */
+            --radius-sm: 0.25rem;
+            --radius-md: 0.5rem;
+            --radius-lg: 0.75rem;
+
+            /* Transitions */
+            --transition-fast: 150ms ease;
+            --transition-base: 200ms ease;
+        }
+
+        /* Dark mode */
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --color-text: #f9fafb;
+                --color-text-muted: #9ca3af;
+                --color-text-inverse: #111827;
+
+                --color-bg: #111827;
+                --color-bg-secondary: #1f2937;
+                --color-bg-tertiary: #374151;
+
+                --color-border: #374151;
+                --color-border-strong: #4b5563;
+            }
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-padding-top: var(--header-height);
+        }
+
+        body {
+            font-family: var(--font-sans);
+            color: var(--color-text);
+            background-color: var(--color-bg);
+            margin: 0;
+            padding: 0;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 var(--space-4);
+        }
+
+        a {
+            color: var(--color-primary);
+            text-decoration: none;
+            transition: color var(--transition-fast);
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        code, .mono {
+            font-family: var(--font-mono);
+            font-size: var(--text-sm);
+        }
+
+        /* Utility classes */
+        .visually-hidden {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            border: 0;
+        }
+    </style>
+
+<style>
+    .layout {
+        display: flex;
+        min-height: calc(100vh - var(--header-height));
+    }
+
+    .sidebar {
+        position: fixed;
+        top: var(--header-height);
+        left: 0;
+        width: var(--sidebar-width);
+        height: calc(100vh - var(--header-height));
+        padding: var(--space-6) var(--space-4);
+        background-color: var(--color-bg-secondary);
+        border-right: 1px solid var(--color-border);
+        overflow-y: auto;
+        z-index: 10;
+    }
+
+    .sidebar-section {
+        margin-bottom: var(--space-6);
+    }
+
+    .sidebar-title {
+        font-size: var(--text-xs);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--color-text-muted);
+        margin: 0 0 var(--space-2) 0;
+        padding: 0 var(--space-2);
+    }
+
+    .sidebar-nav {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+    }
+
+    .sidebar-nav li {
+        margin: 0;
+    }
+
+    .sidebar-link {
+        display: flex;
+        align-items: center;
+        gap: var(--space-2);
+        padding: var(--space-2);
+        font-size: var(--text-sm);
+        color: var(--color-text);
+        border-radius: var(--radius-md);
+        transition: background-color var(--transition-fast), color var(--transition-fast);
+    }
+
+    .sidebar-link:hover {
+        background-color: var(--color-bg-tertiary);
+        text-decoration: none;
+    }
+
+    .sidebar-link.active {
+        background-color: var(--color-primary);
+        color: var(--color-text-inverse);
+    }
+
+    .sidebar-link .badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 1.25rem;
+        height: 1.25rem;
+        padding: 0 var(--space-1);
+        font-size: var(--text-xs);
+        font-weight: 500;
+        border-radius: 9999px;
+        background-color: var(--color-bg-tertiary);
+        color: var(--color-text-muted);
+    }
+
+    .sidebar-link.active .badge {
+        background-color: rgba(255,255,255,0.2);
+        color: var(--color-text-inverse);
+    }
+
+    .content-area {
+        flex: 1;
+        min-width: 0;
+        padding: var(--space-8);
+        max-width: var(--content-max-width);
+        margin-left: var(--sidebar-width);
+    }
+
+    /* Mobile menu toggle */
+    .mobile-menu-toggle {
+        display: none;
+        position: fixed;
+        bottom: var(--space-6);
+        right: var(--space-6);
+        width: 48px;
+        height: 48px;
+        border: none;
+        border-radius: 50%;
+        background-color: var(--color-primary);
+        color: var(--color-text-inverse);
+        box-shadow: var(--shadow-lg);
+        cursor: pointer;
+        z-index: 100;
+    }
+
+    .mobile-menu-toggle svg {
+        width: 24px;
+        height: 24px;
+    }
+
+    /* Mobile styles */
+    @media (max-width: 768px) {
+        .sidebar {
+            position: fixed;
+            left: 0;
+            top: 0;
+            height: 100vh;
+            z-index: 50;
+            transform: translateX(-100%);
+            transition: transform var(--transition-base);
+        }
+
+        .sidebar.open {
+            transform: translateX(0);
+        }
+
+        .sidebar-backdrop {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background-color: rgba(0,0,0,0.5);
+            z-index: 40;
+        }
+
+        .sidebar-backdrop.open {
+            display: block;
+        }
+
+        .content-area {
+            padding: var(--space-4);
+            margin-left: 0;
+        }
+
+        .mobile-menu-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+    }
+</style>
+
+<style>
+    .placeholder-text {
+        color: var(--color-text-muted);
+        font-style: italic;
+        padding: var(--space-4);
+        background-color: var(--color-bg-secondary);
+        border-radius: var(--radius-md);
+        text-align: center;
+    }
+
+    .entity-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--space-2);
+    }
+
+    .entity-link {
+        display: inline-flex;
+        align-items: center;
+        padding: var(--space-2) var(--space-3);
+        background-color: var(--color-bg-secondary);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-md);
+        font-size: var(--text-sm);
+        transition: all var(--transition-fast);
+    }
+
+    .entity-link:hover {
+        text-decoration: none;
+        border-color: var(--color-primary);
+        box-shadow: var(--shadow-sm);
+    }
+
+    .class-link {
+        color: var(--color-class);
+    }
+
+    .class-link:hover {
+        background-color: color-mix(in srgb, var(--color-class) 10%, transparent);
+    }
+
+    .prop-link {
+        color: var(--color-property);
+    }
+
+    .prop-link:hover {
+        background-color: color-mix(in srgb, var(--color-property) 10%, transparent);
+    }
+
+    .class-cards {
+        margin-top: var(--space-6);
+    }
+
+    .individual-link {
+        color: var(--color-individual);
+    }
+
+    .individual-link:hover {
+        background-color: color-mix(in srgb, var(--color-individual) 10%, transparent);
+    }
+
+    .property-cards {
+        margin-top: var(--space-6);
+    }
+
+    .individual-cards {
+        margin-top: var(--space-6);
+    }
+</style>
+
+
+</head>
+<body>
+    <header class="site-header">
+    <div class="container">
+        <a href="/" class="site-title">University Domain Schema</a>
+    </div>
+</header>
+<style>
+    .site-header {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: var(--header-height);
+        background-color: var(--color-bg-secondary);
+        border-bottom: 1px solid var(--color-border);
+        padding: 1rem 0;
+        z-index: 20;
+        display: flex;
+        align-items: center;
+    }
+
+    /* Offset body content for fixed header */
+    body {
+        padding-top: var(--header-height);
+    }
+
+    .site-title {
+        font-size: 1.25rem;
+        font-weight: 600;
+        color: var(--color-text);
+    }
+
+    .site-title:hover {
+        text-decoration: none;
+        color: var(--color-primary);
+    }
+</style>
+
+
+<div class="layout">
+    <div class="sidebar-backdrop" onclick="toggleSidebar()"></div>
+
+    <aside class="sidebar">
+
+<nav class="sidebar-section">
+    <h2 class="sidebar-title">Navigation</h2>
+    <ul class="sidebar-nav">
+        <li><a href="#metadata" class="sidebar-link active">Metadata</a></li>
+        <li><a href="#graph-visualization" class="sidebar-link">Schema Graph <span class="badge">12 / 7</span></a></li>
+        <li><a href="#namespaces" class="sidebar-link">Namespaces <span class="badge">5</span></a></li>
+        <li><a href="#classes" class="sidebar-link">Classes <span class="badge">8</span></a></li>
+        <li><a href="#properties" class="sidebar-link">Properties <span class="badge">1</span></a></li>
+    </ul>
+</nav>
+<style>
+    .sidebar-section {
+        margin-bottom: var(--space-6);
+    }
+
+    .sidebar-title {
+        display: flex;
+        align-items: center;
+        gap: var(--space-2);
+        font-size: var(--text-xs);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--color-text-muted);
+        margin: 0 0 var(--space-2) 0;
+        padding: 0 var(--space-2);
+    }
+
+    .sidebar-title .badge {
+        font-size: var(--text-xs);
+        font-weight: 500;
+        background-color: var(--color-bg-tertiary);
+        color: var(--color-text-muted);
+        padding: 0 var(--space-2);
+        border-radius: 9999px;
+        text-transform: none;
+        letter-spacing: normal;
+    }
+
+    .sidebar-nav {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+    }
+
+    .sidebar-nav li {
+        margin: 0;
+    }
+
+    .sidebar-link {
+        display: block;
+        padding: var(--space-2);
+        font-size: var(--text-sm);
+        color: var(--color-text);
+        border-radius: var(--radius-md);
+        transition: background-color var(--transition-fast), color var(--transition-fast);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .sidebar-link:hover {
+        background-color: var(--color-bg-tertiary);
+        text-decoration: none;
+    }
+
+    .sidebar-link.active {
+        background-color: var(--color-primary);
+        color: var(--color-text-inverse);
+    }
+</style>
+
+    </aside>
+
+    <main class="content-area">
+
+<section class="metadata-card" id="metadata">
+    <h2 class="metadata-heading">Metadata</h2>
+    <dl class="metadata-list">
+        <div class="metadata-item">
+            <dt>IRI</dt>
+            <dd class="mono">https://example.org/university</dd>
+        </div>
+        <div class="metadata-item">
+            <dt>Version</dt>
+            <dd>1.0.0</dd>
+        </div>
+        <div class="metadata-item">
+            <dt>Description</dt>
+            <dd>A schema for modeling university entities including people,
+courses, and departments. Demonstrates class hierarchies and
+relationships suitable for force graph visualization.
+</dd>
+        </div>
+    </dl>
+</section>
+<style>
+    .metadata-card {
+        background-color: var(--color-bg-secondary);
+        border: 1px solid var(--color-border);
+        border-radius: 0.5rem;
+        padding: 1.5rem;
+        margin: 1.5rem 0;
+    }
+
+    .metadata-heading {
+        margin: 0 0 1rem 0;
+        font-size: 1.125rem;
+        color: var(--color-text);
+    }
+
+    .metadata-list {
+        margin: 0;
+        display: grid;
+        gap: 1rem;
+    }
+
+    .metadata-item {
+        display: grid;
+        grid-template-columns: 120px 1fr;
+        gap: 0.5rem;
+    }
+
+    .metadata-item dt {
+        font-weight: 600;
+        color: var(--color-text-muted);
+        font-size: 0.875rem;
+    }
+
+    .metadata-item dd {
+        margin: 0;
+        word-break: break-word;
+    }
+
+    @media (max-width: 480px) {
+        .metadata-item {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+
+
+
+<script>
+    window.__PANSCHEMA_GRAPH_DATA__ = {"schema_name":"university_schema","schema_title":"University Domain Schema","nodes":[{"id":"class:Course","label":"Course","node_type":"class","color":[0.29,0.565,0.851,1.0],"description":"An academic course"},{"id":"class:Department","label":"Department","node_type":"class","color":[0.29,0.565,0.851,1.0],"description":"An academic department"},{"id":"class:Faculty","label":"Faculty","node_type":"class","color":[0.29,0.565,0.851,1.0],"description":"A person who teaches courses"},{"id":"class:NamedEntity","label":"NamedEntity","node_type":"class","color":[0.29,0.565,0.851,0.7],"description":"Base class for entities with a name","is_abstract":true},{"id":"class:Person","label":"Person","node_type":"class","color":[0.29,0.565,0.851,1.0],"description":"A person affiliated with the university"},{"id":"class:ResearchGroup","label":"ResearchGroup","node_type":"class","color":[0.29,0.565,0.851,1.0],"description":"A group conducting research"},{"id":"class:Staff","label":"Staff","node_type":"class","color":[0.29,0.565,0.851,1.0],"description":"Non-teaching personnel"},{"id":"class:Student","label":"Student","node_type":"class","color":[0.29,0.565,0.851,1.0],"description":"A person enrolled in courses"},{"id":"slot:identifier","label":"identifier","node_type":"slot","color":[0.314,0.784,0.471,1.0],"description":"A unique identifier for any entity"},{"id":"enum:RankEnum","label":"RankEnum","node_type":"enum","color":[0.608,0.349,0.714,1.0],"description":"Academic faculty ranks"},{"id":"enum:YearEnum","label":"YearEnum","node_type":"enum","color":[0.608,0.349,0.714,1.0],"description":"Academic year levels"},{"id":"type:email_type","label":"email_type","node_type":"type","color":[0.902,0.494,0.133,1.0],"description":"An email address"}],"edges":[{"source":"class:Course","target":"class:NamedEntity","edge_type":"subclass_of"},{"source":"class:Department","target":"class:NamedEntity","edge_type":"subclass_of"},{"source":"class:Faculty","target":"class:Person","edge_type":"subclass_of"},{"source":"class:Person","target":"class:NamedEntity","edge_type":"subclass_of"},{"source":"class:ResearchGroup","target":"class:NamedEntity","edge_type":"subclass_of"},{"source":"class:Staff","target":"class:Person","edge_type":"subclass_of"},{"source":"class:Student","target":"class:Person","edge_type":"subclass_of"}],"format_version":"1.0"};
+</script>
+
+
+<section id="graph-visualization" class="graph-section">
+    <div class="section-header">
+        <h2>Schema Graph</h2>
+        <span class="graph-badge" id="graph-node-count"></span>
+    </div>
+
+    <div class="graph-container">
+
+        <div id="graph-loading" class="graph-loading">
+            <div class="spinner"></div>
+            <span>Initializing visualization...</span>
+        </div>
+
+
+        <div id="graph-error" class="graph-error" style="display: none;">
+            <span class="error-icon">⚠️</span>
+            <span class="error-message"></span>
+        </div>
+
+
+        <canvas id="graph-canvas" style="display: none;"></canvas>
+
+
+        <div id="graph-labels-overlay" class="graph-labels-overlay" style="display: none;"></div>
+
+
+        <div class="graph-controls">
+            <button id="graph-reset" class="graph-btn" title="Reset view">
+                <span>↺</span> Reset
+            </button>
+            <button id="graph-zoom-in" class="graph-btn" title="Zoom in">+</button>
+            <button id="graph-zoom-out" class="graph-btn" title="Zoom out">−</button>
+            <span class="graph-controls-separator"></span>
+            <button id="graph-labels-all" class="graph-btn graph-toggle active" title="Toggle all labels (L)">
+                Labels
+            </button>
+            <button id="graph-labels-nodes" class="graph-btn graph-toggle active" title="Toggle node labels (N)">
+                Nodes
+            </button>
+            <button id="graph-labels-edges" class="graph-btn graph-toggle active" title="Toggle edge labels (E)">
+                Edges
+            </button>
+            <span class="graph-help" id="graph-help-2d">Drag to pan • Scroll to zoom</span>
+            <span class="graph-help" id="graph-help-3d" style="display: none;">Drag to orbit • Shift+drag to pan • Scroll to zoom</span>
+        </div>
+
+
+        <div class="graph-mode-toggle" id="graph-mode-toggle">
+            <button id="graph-mode-2d" class="graph-mode-btn active" title="2D Canvas mode">2D</button>
+            <button id="graph-mode-3d" class="graph-mode-btn" title="3D WebGPU mode (requires WebGPU support)" disabled>3D</button>
+        </div>
+
+
+        <div class="graph-info" id="graph-info" style="display: none;">
+            <span id="graph-info-label"></span>
+        </div>
+    </div>
+</section>
+
+<style>
+.graph-section {
+    margin: var(--spacing-lg, 24px) 0;
+}
+
+.graph-section .section-header {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md, 12px);
+    margin-bottom: var(--spacing-md, 12px);
+}
+
+.graph-badge {
+    font-size: var(--font-size-sm, 13px);
+    color: var(--color-text-muted, #9ca3af);
+    background: var(--color-bg-secondary, #2d2d44);
+    padding: 2px 8px;
+    border-radius: var(--radius-sm, 4px);
+}
+
+.graph-container {
+    position: relative;
+    width: 100%;
+    height: 500px;
+    background-color: var(--color-bg-tertiary, #1a1a2e);
+    border-radius: var(--radius-lg, 8px);
+    overflow: hidden;
+    border: 1px solid var(--color-border, #374151);
+}
+
+#graph-canvas {
+    width: 100%;
+    height: 100%;
+    cursor: grab;
+}
+
+#graph-canvas:active {
+    cursor: grabbing;
+}
+
+/* Loading state */
+.graph-loading {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--spacing-sm, 8px);
+    color: var(--color-text-muted, #9ca3af);
+}
+
+.spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid var(--color-border, #374151);
+    border-top-color: var(--color-primary, #3b82f6);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Error state */
+.graph-error {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--spacing-sm, 8px);
+    color: var(--color-error, #e74c3c);
+    text-align: center;
+    padding: var(--spacing-lg, 24px);
+}
+
+.error-icon {
+    font-size: 2rem;
+}
+
+/* Controls */
+.graph-controls {
+    position: absolute;
+    bottom: var(--spacing-md, 12px);
+    left: var(--spacing-md, 12px);
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm, 8px);
+    z-index: 10;
+}
+
+.graph-btn {
+    background: var(--color-bg-secondary, #2d2d44);
+    border: 1px solid var(--color-border, #374151);
+    border-radius: var(--radius-sm, 4px);
+    padding: 4px 10px;
+    color: var(--color-text, #e5e7eb);
+    cursor: pointer;
+    font-size: var(--font-size-sm, 13px);
+    transition: background 0.2s, border-color 0.2s;
+}
+
+.graph-btn:hover {
+    background: var(--color-bg-tertiary, #1a1a2e);
+    border-color: var(--color-primary, #3b82f6);
+}
+
+/* Toggle button states */
+.graph-toggle {
+    font-size: var(--font-size-xs, 11px);
+    padding: 4px 8px;
+}
+
+.graph-toggle.active {
+    background: var(--color-primary, #3b82f6);
+    border-color: var(--color-primary, #3b82f6);
+    color: white;
+}
+
+.graph-toggle:not(.active) {
+    opacity: 0.6;
+}
+
+.graph-controls-separator {
+    width: 1px;
+    height: 20px;
+    background: var(--color-border, #374151);
+    margin: 0 var(--spacing-xs, 4px);
+}
+
+.graph-help {
+    font-size: var(--font-size-xs, 11px);
+    color: var(--color-text-muted, #9ca3af);
+    margin-left: var(--spacing-sm, 8px);
+}
+
+/* Info overlay */
+.graph-info {
+    position: absolute;
+    top: var(--spacing-md, 12px);
+    right: var(--spacing-md, 12px);
+    background: var(--color-bg-secondary, #2d2d44);
+    border: 1px solid var(--color-border, #374151);
+    border-radius: var(--radius-sm, 4px);
+    padding: var(--spacing-xs, 4px) var(--spacing-sm, 8px);
+    font-size: var(--font-size-sm, 13px);
+    color: var(--color-text, #e5e7eb);
+    z-index: 10;
+}
+
+/* Mode toggle (2D/3D) */
+.graph-mode-toggle {
+    position: absolute;
+    top: var(--spacing-md, 12px);
+    left: var(--spacing-md, 12px);
+    display: flex;
+    gap: 0;
+    z-index: 10;
+}
+
+.graph-mode-btn {
+    background: var(--color-bg-secondary, #2d2d44);
+    border: 1px solid var(--color-border, #374151);
+    padding: 4px 10px;
+    font-size: var(--font-size-xs, 11px);
+    font-weight: 600;
+    color: var(--color-text-muted, #9ca3af);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.graph-mode-btn:first-child {
+    border-radius: var(--radius-sm, 4px) 0 0 var(--radius-sm, 4px);
+    border-right: none;
+}
+
+.graph-mode-btn:last-child {
+    border-radius: 0 var(--radius-sm, 4px) var(--radius-sm, 4px) 0;
+}
+
+.graph-mode-btn.active {
+    background: var(--color-primary, #3b82f6);
+    border-color: var(--color-primary, #3b82f6);
+    color: white;
+}
+
+.graph-mode-btn:not(.active):not(:disabled):hover {
+    background: var(--color-bg-tertiary, #1a1a2e);
+    border-color: var(--color-primary, #3b82f6);
+}
+
+.graph-mode-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* 3D Labels overlay */
+.graph-labels-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    overflow: hidden;
+    z-index: 5;
+}
+
+.graph-label-3d {
+    position: absolute;
+    font-size: 11px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    white-space: nowrap;
+    pointer-events: none;
+    transform: translate(-50%, -100%);
+    padding: 2px 6px;
+    border-radius: 3px;
+    transition: opacity 0.15s ease;
+}
+
+.graph-label-3d.node-label {
+    color: rgba(255, 255, 255, 0.95);
+    background: rgba(26, 26, 46, 0.85);
+    margin-top: -8px;
+}
+
+.graph-label-3d.edge-label {
+    color: rgba(180, 180, 200, 0.9);
+    background: rgba(26, 26, 46, 0.75);
+    font-size: 10px;
+    transform: translate(-50%, -50%);
+}
+
+.graph-label-3d.hidden {
+    opacity: 0;
+}
+
+/* Hovered label overrides hidden state */
+.graph-label-3d.hovered {
+    opacity: 1 !important;
+    background: rgba(59, 130, 246, 0.9);
+    color: white;
+    z-index: 10;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .graph-container {
+        height: 400px;
+    }
+
+    .graph-help {
+        display: none;
+    }
+}
+</style>
+
+<script type="module">
+// Graph visualization initialization
+(function() {
+    const graphData = window.__PANSCHEMA_GRAPH_DATA__;
+    if (!graphData) {
+        console.warn('No graph data found');
+        return;
+    }
+
+    let canvas = document.getElementById('graph-canvas');
+    const loading = document.getElementById('graph-loading');
+    const error = document.getElementById('graph-error');
+    const nodeCount = document.getElementById('graph-node-count');
+    const resetBtn = document.getElementById('graph-reset');
+    const zoomInBtn = document.getElementById('graph-zoom-in');
+    const zoomOutBtn = document.getElementById('graph-zoom-out');
+
+    let viz = null;
+    let animationId = null;
+    let isDragging = false;
+    let lastX = 0, lastY = 0;
+    let tickCount = 0;
+    let hasFittedBounds = false;
+    let is3D = false;
+    let wasmModule = null;
+    let hasWebGPU = false;
+
+    // Label button elements (initialize immediately)
+    const labelsAllBtn = document.getElementById('graph-labels-all');
+    const labelsNodesBtn = document.getElementById('graph-labels-nodes');
+    const labelsEdgesBtn = document.getElementById('graph-labels-edges');
+
+    // 3D label overlay management
+    const labelsOverlay = document.getElementById('graph-labels-overlay');
+    let nodeLabelElements = [];
+    let edgeLabelElements = [];
+
+    // Hover tracking
+    let hoveredNodeIndex = -1;
+    let hoveredEdgeIndex = -1;
+    let lastProjectedNodes = [];
+    let lastProjectedEdges = [];
+    const HOVER_RADIUS = 30; // pixels threshold for hover detection
+
+    // LocalStorage key for label preferences
+    const LABEL_PREFS_KEY = 'panschema-label-prefs';
+
+    // Save label preferences to localStorage
+    function saveLabelPrefs() {
+        if (!viz) return;
+        try {
+            const prefs = {
+                all: viz.labels_enabled(),
+                nodes: viz.node_labels_enabled(),
+                edges: viz.edge_labels_enabled()
+            };
+            localStorage.setItem(LABEL_PREFS_KEY, JSON.stringify(prefs));
+        } catch (e) {
+            // localStorage may not be available
+        }
+    }
+
+    // Load label preferences from localStorage
+    function loadLabelPrefs() {
+        try {
+            const stored = localStorage.getItem(LABEL_PREFS_KEY);
+            if (stored) {
+                return JSON.parse(stored);
+            }
+        } catch (e) {
+            // localStorage may not be available
+        }
+        return null;
+    }
+
+    // Apply saved label preferences to visualization
+    function applyLabelPrefs() {
+        if (!viz) return;
+        const prefs = loadLabelPrefs();
+        if (prefs) {
+            try {
+                viz.set_labels(prefs.all);
+                viz.set_node_labels(prefs.nodes);
+                viz.set_edge_labels(prefs.edges);
+            } catch (e) {
+                // Methods may not be available
+            }
+        }
+    }
+
+    function updateLabelButtonStates() {
+        if (!viz || !labelsAllBtn) return;
+
+        // Try to call the label methods - if they exist and work, enable the buttons
+        try {
+            // Both 2D and 3D visualizations should have these methods
+            const labelsOn = viz.labels_enabled();
+            const nodesOn = viz.node_labels_enabled();
+            const edgesOn = viz.edge_labels_enabled();
+
+            labelsAllBtn.classList.toggle('active', labelsOn);
+            labelsNodesBtn.classList.toggle('active', nodesOn);
+            labelsEdgesBtn.classList.toggle('active', edgesOn);
+            // Enable buttons
+            labelsAllBtn.disabled = false;
+            labelsNodesBtn.disabled = false;
+            labelsEdgesBtn.disabled = false;
+        } catch (e) {
+            // Methods not available - disable buttons
+            console.warn('Label methods not available:', e);
+            labelsAllBtn.classList.remove('active');
+            labelsNodesBtn.classList.remove('active');
+            labelsEdgesBtn.classList.remove('active');
+            labelsAllBtn.disabled = true;
+            labelsNodesBtn.disabled = true;
+            labelsEdgesBtn.disabled = true;
+        }
+    }
+
+    // Create label elements for 3D mode
+    function create3DLabels() {
+        // Clear existing labels
+        nodeLabelElements = [];
+        edgeLabelElements = [];
+        labelsOverlay.innerHTML = '';
+
+        if (!viz || !is3D) return;
+
+        // Create node labels
+        const nodeCount = viz.node_count();
+        for (let i = 0; i < nodeCount; i++) {
+            const label = document.createElement('div');
+            label.className = 'graph-label-3d node-label';
+            labelsOverlay.appendChild(label);
+            nodeLabelElements.push(label);
+        }
+
+        // Create edge labels
+        const edgeCount = viz.edge_count();
+        for (let i = 0; i < edgeCount; i++) {
+            const label = document.createElement('div');
+            label.className = 'graph-label-3d edge-label';
+            labelsOverlay.appendChild(label);
+            edgeLabelElements.push(label);
+        }
+    }
+
+    // Update 3D label positions and visibility
+    function update3DLabels() {
+        if (!viz || !is3D) return;
+
+        // Get label visibility state
+        let showNodes = true;
+        let showEdges = true;
+        try {
+            showNodes = viz.show_node_labels();
+            showEdges = viz.show_edge_labels();
+        } catch (e) {
+            // Use defaults if methods unavailable
+        }
+
+        // Canvas uses pixel dimensions (scaled by devicePixelRatio)
+        // but HTML overlay uses CSS pixels, so we need to convert
+        const dpr = window.devicePixelRatio || 1;
+
+        // Update node labels
+        try {
+            const nodesJson = viz.get_projected_nodes();
+            const nodes = JSON.parse(nodesJson);
+            // Store for hover detection
+            lastProjectedNodes = nodes.map(n => ({ x: n.x / dpr, y: n.y / dpr, visible: n.visible }));
+
+            nodes.forEach((node, i) => {
+                if (i < nodeLabelElements.length) {
+                    const el = nodeLabelElements[i];
+                    el.textContent = node.label;
+                    el.style.left = `${node.x / dpr}px`;
+                    el.style.top = `${node.y / dpr}px`;
+                    const isHovered = (i === hoveredNodeIndex);
+                    el.classList.toggle('hidden', !showNodes && !isHovered || !node.visible);
+                    el.classList.toggle('hovered', isHovered);
+                }
+            });
+        } catch (e) {
+            console.warn('Failed to update node labels:', e);
+        }
+
+        // Update edge labels
+        try {
+            const edgesJson = viz.get_projected_edges();
+            const edges = JSON.parse(edgesJson);
+            // Store for hover detection
+            lastProjectedEdges = edges.map(e => ({ x: e.x / dpr, y: e.y / dpr, visible: e.visible }));
+
+            edges.forEach((edge, i) => {
+                if (i < edgeLabelElements.length) {
+                    const el = edgeLabelElements[i];
+                    el.textContent = edge.label;
+                    el.style.left = `${edge.x / dpr}px`;
+                    el.style.top = `${edge.y / dpr}px`;
+                    const isHovered = (i === hoveredEdgeIndex);
+                    el.classList.toggle('hidden', !showEdges && !isHovered || !edge.visible);
+                    el.classList.toggle('hovered', isHovered);
+                }
+            });
+        } catch (e) {
+            console.warn('Failed to update edge labels:', e);
+        }
+    }
+
+    // Show/hide the labels overlay based on mode
+    function updateLabelsOverlay() {
+        if (is3D) {
+            labelsOverlay.style.display = 'block';
+            create3DLabels();
+        } else {
+            labelsOverlay.style.display = 'none';
+            labelsOverlay.innerHTML = '';
+            nodeLabelElements = [];
+            edgeLabelElements = [];
+        }
+    }
+
+    // Find closest node/edge to mouse position for hover detection
+    function updateHoverState(mouseX, mouseY) {
+        let closestNodeDist = Infinity;
+        let closestNodeIdx = -1;
+        let closestEdgeDist = Infinity;
+        let closestEdgeIdx = -1;
+
+        // Check nodes
+        lastProjectedNodes.forEach((node, i) => {
+            if (!node.visible) return;
+            const dx = node.x - mouseX;
+            const dy = node.y - mouseY;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < closestNodeDist && dist < HOVER_RADIUS) {
+                closestNodeDist = dist;
+                closestNodeIdx = i;
+            }
+        });
+
+        // Check edges (only if no node is close enough)
+        if (closestNodeIdx === -1) {
+            lastProjectedEdges.forEach((edge, i) => {
+                if (!edge.visible) return;
+                const dx = edge.x - mouseX;
+                const dy = edge.y - mouseY;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist < closestEdgeDist && dist < HOVER_RADIUS) {
+                    closestEdgeDist = dist;
+                    closestEdgeIdx = i;
+                }
+            });
+        }
+
+        hoveredNodeIndex = closestNodeIdx;
+        hoveredEdgeIndex = closestEdgeIdx;
+    }
+
+    // Convert edge_type to human-readable label
+    function formatEdgeType(edgeType) {
+        const labels = {
+            'subclass_of': 'subclassOf',
+            'mixin': 'mixin',
+            'domain': 'domain',
+            'range': 'range',
+            'inverse': 'inverseOf',
+            'type_of': 'typeOf'
+        };
+        return labels[edgeType] || edgeType;
+    }
+
+    // Show static graph info when WASM is not available
+    function showStaticFallback() {
+        loading.style.display = 'none';
+        nodeCount.textContent = `${graphData.nodes.length} nodes, ${graphData.edges.length} edges`;
+
+        // Show canvas first so we can get dimensions
+        canvas.style.display = 'block';
+
+        // Show a simple static representation
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+            // Get dimensions after canvas is visible
+            const rect = canvas.getBoundingClientRect();
+            canvas.width = rect.width * window.devicePixelRatio;
+            canvas.height = rect.height * window.devicePixelRatio;
+
+            // Draw a simple static layout
+            drawStaticGraph(ctx, canvas.width, canvas.height, graphData);
+        }
+    }
+
+    // Simple static graph drawing (no animation, just layout)
+    function drawStaticGraph(ctx, width, height, data) {
+        ctx.fillStyle = '#1a1a2e';
+        ctx.fillRect(0, 0, width, height);
+
+        const nodes = data.nodes;
+        const edges = data.edges;
+        const n = nodes.length;
+        if (n === 0) return;
+
+        // Simple circular layout
+        const centerX = width / 2;
+        const centerY = height / 2;
+        const radius = Math.min(width, height) * 0.35;
+
+        // Build node positions
+        const positions = {};
+        nodes.forEach((node, i) => {
+            const angle = (2 * Math.PI * i) / n;
+            positions[node.id] = {
+                x: centerX + radius * Math.cos(angle),
+                y: centerY + radius * Math.sin(angle),
+                color: node.color
+            };
+        });
+
+        // Draw edges with arrows
+        ctx.strokeStyle = 'rgba(100, 100, 120, 0.6)';
+        ctx.fillStyle = 'rgba(100, 100, 120, 0.6)';
+        ctx.lineWidth = 1.5 * window.devicePixelRatio;
+        const arrowSize = 8 * window.devicePixelRatio;
+        const nodeRadius = 8 * window.devicePixelRatio;
+
+        // Store edge midpoints for label drawing
+        const edgeMidpoints = [];
+
+        edges.forEach(edge => {
+            const src = positions[edge.source];
+            const tgt = positions[edge.target];
+            if (src && tgt) {
+                // Calculate direction
+                const dx = tgt.x - src.x;
+                const dy = tgt.y - src.y;
+                const len = Math.sqrt(dx * dx + dy * dy);
+                if (len === 0) return;
+
+                const ux = dx / len;
+                const uy = dy / len;
+
+                // Shorten line to stop at node edges
+                const startX = src.x + ux * nodeRadius;
+                const startY = src.y + uy * nodeRadius;
+                const endX = tgt.x - ux * nodeRadius;
+                const endY = tgt.y - uy * nodeRadius;
+
+                // Draw line
+                ctx.beginPath();
+                ctx.moveTo(startX, startY);
+                ctx.lineTo(endX, endY);
+                ctx.stroke();
+
+                // Draw arrowhead at target
+                const arrowX = endX - ux * arrowSize;
+                const arrowY = endY - uy * arrowSize;
+                ctx.beginPath();
+                ctx.moveTo(endX, endY);
+                ctx.lineTo(arrowX - uy * arrowSize * 0.5, arrowY + ux * arrowSize * 0.5);
+                ctx.lineTo(arrowX + uy * arrowSize * 0.5, arrowY - ux * arrowSize * 0.5);
+                ctx.closePath();
+                ctx.fill();
+
+                // Store midpoint for label
+                const midX = (startX + endX) / 2;
+                const midY = (startY + endY) / 2;
+                const label = edge.label || formatEdgeType(edge.edge_type);
+                edgeMidpoints.push({ x: midX, y: midY, label, angle: Math.atan2(dy, dx) });
+            }
+        });
+
+        // Draw edge labels
+        const edgeFontSize = 10 * window.devicePixelRatio;
+        ctx.font = `${edgeFontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        edgeMidpoints.forEach(({ x, y, label, angle }) => {
+            // Measure text for background
+            const metrics = ctx.measureText(label);
+            const padding = 3 * window.devicePixelRatio;
+            const bgWidth = metrics.width + padding * 2;
+            const bgHeight = edgeFontSize + padding * 2;
+
+            // Draw background
+            ctx.fillStyle = 'rgba(26, 26, 46, 0.85)';
+            ctx.fillRect(x - bgWidth / 2, y - bgHeight / 2, bgWidth, bgHeight);
+
+            // Draw label text
+            ctx.fillStyle = 'rgba(180, 180, 200, 0.9)';
+            ctx.fillText(label, x, y);
+        });
+
+        // Draw nodes
+        nodes.forEach(node => {
+            const pos = positions[node.id];
+            const [r, g, b, a] = node.color;
+
+            ctx.beginPath();
+            ctx.arc(pos.x, pos.y, nodeRadius, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(${r*255}, ${g*255}, ${b*255}, ${a})`;
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+            ctx.stroke();
+        });
+
+        // Draw node labels
+        const fontSize = 12 * window.devicePixelRatio;
+        ctx.font = `${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+        ctx.textBaseline = 'middle';
+
+        nodes.forEach((node, i) => {
+            const pos = positions[node.id];
+            const angle = (2 * Math.PI * i) / n;
+
+            // Position label outside the node, radiating outward
+            const labelOffset = nodeRadius + 8 * window.devicePixelRatio;
+            const labelX = pos.x + labelOffset * Math.cos(angle);
+            const labelY = pos.y + labelOffset * Math.sin(angle);
+
+            // Align text based on position around the circle
+            if (Math.cos(angle) > 0.3) {
+                ctx.textAlign = 'left';
+            } else if (Math.cos(angle) < -0.3) {
+                ctx.textAlign = 'right';
+            } else {
+                ctx.textAlign = 'center';
+            }
+
+            ctx.fillText(node.label, labelX, labelY);
+        });
+    }
+
+    async function init() {
+        try {
+            // Try to load WASM module (with cache buster)
+            const cacheBuster = Date.now();
+            wasmModule = await import(`./panschema_viz.js?v=${cacheBuster}`);
+            await wasmModule.default();
+
+            // Check WebGPU support
+            if (typeof wasmModule.check_webgpu_support === 'function') {
+                hasWebGPU = await wasmModule.check_webgpu_support();
+            }
+
+            // Enable 3D button if WebGPU is available and create_visualization_3d exists
+            const mode3dBtn = document.getElementById('graph-mode-3d');
+            const can3D = hasWebGPU && typeof wasmModule.create_visualization_3d === 'function';
+            if (can3D) {
+                mode3dBtn.disabled = false;
+                mode3dBtn.title = '3D WebGPU mode';
+            } else {
+                mode3dBtn.title = hasWebGPU ? '3D not available in this build' : 'WebGPU not supported in this browser';
+            }
+
+            // Show canvas first so we can measure its dimensions
+            loading.style.display = 'none';
+            canvas.style.display = 'block';
+
+            // Wait for layout to complete before measuring
+            await new Promise(resolve => requestAnimationFrame(resolve));
+
+            // Set canvas dimensions based on container
+            const rect = canvas.getBoundingClientRect();
+            canvas.width = rect.width * window.devicePixelRatio;
+            canvas.height = rect.height * window.devicePixelRatio;
+
+            // Create 3D visualization by default when WebGPU is available, else 2D
+            await createVisualization(can3D);
+
+            // Update UI
+            nodeCount.textContent = `${viz.node_count()} nodes, ${viz.edge_count()} edges`;
+            updateModeUI();
+
+            // Start render loop
+            startRenderLoop();
+            setupInteraction();
+            setupModeToggle();
+        } catch (e) {
+            console.warn('WASM visualization not available, using static fallback:', e.message);
+            // Fall back to static graph display
+            showStaticFallback();
+        }
+    }
+
+    async function createVisualization(use3D) {
+        // Stop current animation if running
+        if (animationId) {
+            cancelAnimationFrame(animationId);
+            animationId = null;
+        }
+
+        // Reset state
+        tickCount = 0;
+        hasFittedBounds = false;
+
+        // When switching modes, we need a fresh canvas because:
+        // - 2D context can't be reused for WebGPU
+        // - WebGPU surface can't be reused for 2D context
+        const container = canvas.parentElement;
+        const oldCanvas = canvas;
+        const newCanvas = document.createElement('canvas');
+        newCanvas.id = 'graph-canvas';
+        newCanvas.style.cssText = oldCanvas.style.cssText;
+        newCanvas.style.display = 'block';
+        container.replaceChild(newCanvas, oldCanvas);
+        canvas = newCanvas;
+
+        // Set canvas dimensions
+        const rect = canvas.getBoundingClientRect();
+        canvas.width = rect.width * window.devicePixelRatio;
+        canvas.height = rect.height * window.devicePixelRatio;
+
+        if (use3D && hasWebGPU && typeof wasmModule.create_visualization_3d === 'function') {
+            try {
+                viz = await wasmModule.create_visualization_3d(canvas, JSON.stringify(graphData));
+                is3D = true;
+            } catch (e3d) {
+                // e3d may be a JsValue string, not an Error object
+                const errMsg = typeof e3d === 'string' ? e3d : (e3d.message || e3d.toString());
+                console.warn('WebGPU 3D failed, falling back to 2D:', errMsg);
+                viz = new wasmModule.Visualization(canvas, JSON.stringify(graphData));
+                is3D = false;
+            }
+        } else {
+            viz = new wasmModule.Visualization(canvas, JSON.stringify(graphData));
+            is3D = false;
+        }
+
+        // Update node count display
+        if (nodeCount) {
+            nodeCount.textContent = `${viz.node_count()} nodes, ${viz.edge_count()} edges`;
+        }
+
+        // Apply saved label preferences
+        applyLabelPrefs();
+
+        // Update label button states
+        updateLabelButtonStates();
+
+        // Set up labels overlay for 3D mode
+        updateLabelsOverlay();
+
+        // Re-attach canvas event listeners
+        setupCanvasInteraction();
+
+        // Restart render loop if it was running
+        if (!animationId) {
+            startRenderLoop();
+        }
+    }
+
+    function updateModeUI() {
+        const help2d = document.getElementById('graph-help-2d');
+        const help3d = document.getElementById('graph-help-3d');
+        const mode2dBtn = document.getElementById('graph-mode-2d');
+        const mode3dBtn = document.getElementById('graph-mode-3d');
+
+        if (is3D) {
+            help2d.style.display = 'none';
+            help3d.style.display = 'inline';
+            mode2dBtn.classList.remove('active');
+            mode3dBtn.classList.add('active');
+        } else {
+            help2d.style.display = 'inline';
+            help3d.style.display = 'none';
+            mode2dBtn.classList.add('active');
+            mode3dBtn.classList.remove('active');
+        }
+    }
+
+    function setupModeToggle() {
+        const mode2dBtn = document.getElementById('graph-mode-2d');
+        const mode3dBtn = document.getElementById('graph-mode-3d');
+
+        mode2dBtn.addEventListener('click', async () => {
+            if (!is3D) return; // Already in 2D mode
+            await createVisualization(false);
+            updateModeUI();
+        });
+
+        mode3dBtn.addEventListener('click', async () => {
+            if (is3D || mode3dBtn.disabled) return; // Already in 3D or not available
+            await createVisualization(true);
+            updateModeUI();
+        });
+    }
+
+    function startRenderLoop() {
+        function frame() {
+            if (viz) {
+                viz.tick();
+                viz.update_animation();
+                tickCount++;
+
+                // Fit to bounds after simulation has partially settled (50 ticks)
+                // This gives the force layout time to spread out nodes
+                if (!hasFittedBounds && tickCount >= 50) {
+                    viz.fit_to_bounds(40); // 40px padding
+                    hasFittedBounds = true;
+                }
+
+                viz.render();
+
+                // Update 3D labels overlay (positions track camera movement)
+                if (is3D) {
+                    update3DLabels();
+                }
+            }
+            animationId = requestAnimationFrame(frame);
+        }
+        frame();
+    }
+
+    // Track shift key state (shared across canvas instances)
+    let isShiftDown = false;
+    let lastTouchDist = 0;
+
+    // Canvas-specific event listeners (need to be re-attached when canvas is replaced)
+    function setupCanvasInteraction() {
+        // Mouse drag for panning (2D) or orbit (3D)
+        canvas.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            lastX = e.clientX;
+            lastY = e.clientY;
+        });
+
+        // Hover detection for labels
+        canvas.addEventListener('mousemove', (e) => {
+            if (!isDragging && viz) {
+                const rect = canvas.getBoundingClientRect();
+                const mouseX = e.clientX - rect.left;
+                const mouseY = e.clientY - rect.top;
+
+                if (is3D) {
+                    // 3D mode: use JavaScript hover detection
+                    updateHoverState(mouseX, mouseY);
+                } else {
+                    // 2D mode: use WASM hover detection (needs scaled coordinates)
+                    const dpr = window.devicePixelRatio || 1;
+                    if (typeof viz.update_hover === 'function') {
+                        viz.update_hover(mouseX * dpr, mouseY * dpr);
+                    }
+                }
+            }
+        });
+
+        // Clear hover when mouse leaves canvas
+        canvas.addEventListener('mouseleave', () => {
+            hoveredNodeIndex = -1;
+            hoveredEdgeIndex = -1;
+            if (viz && !is3D && typeof viz.clear_hover === 'function') {
+                viz.clear_hover();
+            }
+        });
+
+        // Scroll for zoom
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            if (viz) {
+                const factor = e.deltaY > 0 ? 0.9 : 1.1;
+                viz.zoom(factor);
+            }
+        });
+
+        // Touch support
+        canvas.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 1) {
+                isDragging = true;
+                lastX = e.touches[0].clientX;
+                lastY = e.touches[0].clientY;
+            } else if (e.touches.length === 2) {
+                lastTouchDist = Math.hypot(
+                    e.touches[1].clientX - e.touches[0].clientX,
+                    e.touches[1].clientY - e.touches[0].clientY
+                );
+            }
+        });
+
+        canvas.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            if (viz) {
+                if (e.touches.length === 1 && isDragging) {
+                    const dx = e.touches[0].clientX - lastX;
+                    const dy = e.touches[0].clientY - lastY;
+
+                    if (is3D) {
+                        // 3D mode: single finger orbits
+                        viz.orbit_horizontal(dx * 0.01);
+                        viz.orbit_vertical(dy * 0.01);
+                    } else {
+                        // 2D mode: single finger pans
+                        viz.pan(dx, dy);
+                    }
+
+                    lastX = e.touches[0].clientX;
+                    lastY = e.touches[0].clientY;
+                } else if (e.touches.length === 2) {
+                    const dist = Math.hypot(
+                        e.touches[1].clientX - e.touches[0].clientX,
+                        e.touches[1].clientY - e.touches[0].clientY
+                    );
+                    if (lastTouchDist > 0) {
+                        const factor = dist / lastTouchDist;
+                        viz.zoom(factor);
+                    }
+                    lastTouchDist = dist;
+                }
+            }
+        });
+
+        canvas.addEventListener('touchend', () => {
+            isDragging = false;
+            lastTouchDist = 0;
+        });
+    }
+
+    // One-time setup for window events and button handlers
+    function setupInteraction() {
+        // Track shift key state
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'Shift') isShiftDown = true;
+        });
+        window.addEventListener('keyup', (e) => {
+            if (e.key === 'Shift') isShiftDown = false;
+        });
+
+        // Mouse move/up handlers on window (so drag works outside canvas)
+        window.addEventListener('mousemove', (e) => {
+            if (isDragging && viz) {
+                const dx = e.clientX - lastX;
+                const dy = e.clientY - lastY;
+
+                if (is3D) {
+                    // 3D mode: shift+drag to pan, drag to orbit
+                    if (isShiftDown) {
+                        viz.pan(-dx, dy);
+                    } else {
+                        viz.orbit_horizontal(dx * 0.01);
+                        viz.orbit_vertical(dy * 0.01);
+                    }
+                } else {
+                    // 2D mode: drag to pan
+                    viz.pan(dx, dy);
+                }
+
+                lastX = e.clientX;
+                lastY = e.clientY;
+            }
+        });
+
+        window.addEventListener('mouseup', () => {
+            isDragging = false;
+        });
+
+        // Button controls
+        resetBtn.addEventListener('click', () => {
+            if (viz) viz.fit_to_bounds(40);
+        });
+
+        zoomInBtn.addEventListener('click', () => {
+            if (viz) viz.zoom(1.2);
+        });
+
+        zoomOutBtn.addEventListener('click', () => {
+            if (viz) viz.zoom(0.8);
+        });
+
+        // Label toggle button event listeners
+        labelsAllBtn.addEventListener('click', () => {
+            if (viz) {
+                viz.toggle_labels();
+                updateLabelButtonStates();
+                saveLabelPrefs();
+            }
+        });
+
+        labelsNodesBtn.addEventListener('click', () => {
+            if (viz) {
+                viz.toggle_node_labels();
+                updateLabelButtonStates();
+                saveLabelPrefs();
+            }
+        });
+
+        labelsEdgesBtn.addEventListener('click', () => {
+            if (viz) {
+                viz.toggle_edge_labels();
+                updateLabelButtonStates();
+                saveLabelPrefs();
+            }
+        });
+
+        // Keyboard shortcuts for labels
+        window.addEventListener('keydown', (e) => {
+            // Only handle if not in an input field
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+            if (e.key === 'l' || e.key === 'L') {
+                if (viz) {
+                    viz.toggle_labels();
+                    updateLabelButtonStates();
+                    saveLabelPrefs();
+                }
+            } else if (e.key === 'n' || e.key === 'N') {
+                if (viz) {
+                    viz.toggle_node_labels();
+                    updateLabelButtonStates();
+                    saveLabelPrefs();
+                }
+            } else if (e.key === 'e' || e.key === 'E') {
+                if (viz) {
+                    viz.toggle_edge_labels();
+                    updateLabelButtonStates();
+                    saveLabelPrefs();
+                }
+            }
+        });
+
+        // Handle resize
+        window.addEventListener('resize', () => {
+            if (viz && canvas) {
+                canvas.width = canvas.offsetWidth * window.devicePixelRatio;
+                canvas.height = canvas.offsetHeight * window.devicePixelRatio;
+                viz.resize(canvas.width, canvas.height);
+            }
+        });
+
+        // Initial canvas interaction setup
+        setupCanvasInteraction();
+    }
+
+    // Initialize when DOM is ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+})();
+</script>
+
+<section id="namespaces">
+    <div class="section-header">
+    <h2 class="section-title">
+        Namespaces
+        <span class="section-count">5</span>
+    </h2>
+    <p class="section-description">Namespace prefixes used in this ontology.</p>
+</div>
+<style>
+    .section-header {
+        margin-bottom: var(--space-6);
+        padding-top: var(--space-8);
+    }
+
+    .section-header:first-child {
+        padding-top: 0;
+    }
+
+    .section-title {
+        display: flex;
+        align-items: center;
+        gap: var(--space-3);
+        font-size: var(--text-2xl);
+        font-weight: 600;
+        color: var(--color-text);
+        margin: 0 0 var(--space-2) 0;
+    }
+
+    .section-count {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 1.75rem;
+        height: 1.75rem;
+        padding: 0 var(--space-2);
+        font-size: var(--text-sm);
+        font-weight: 500;
+        color: var(--color-text-muted);
+        background-color: var(--color-bg-secondary);
+        border-radius: 9999px;
+    }
+
+    .section-description {
+        margin: 0;
+        font-size: var(--text-base);
+        color: var(--color-text-muted);
+        max-width: 65ch;
+    }
+</style>
+    <div class="namespace-table">
+    <div class="table-container">
+        <table class="ns-table">
+            <thead>
+                <tr>
+                    <th>Prefix</th>
+                    <th>Namespace IRI</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td class="ns-prefix"><code></code></td>
+                    <td class="ns-iri">
+                        <code class="mono">https://example.org/university</code>
+                        <button class="copy-btn" data-copy="https://example.org/university" title="Copy IRI">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                            </svg>
+                        </button>
+                    </td>
+                </tr>
+                <tr>
+                    <td class="ns-prefix"><code>owl</code></td>
+                    <td class="ns-iri">
+                        <code class="mono">http://www.w3.org/2002/07/owl#</code>
+                        <button class="copy-btn" data-copy="http://www.w3.org/2002/07/owl#" title="Copy IRI">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                            </svg>
+                        </button>
+                    </td>
+                </tr>
+                <tr>
+                    <td class="ns-prefix"><code>rdf</code></td>
+                    <td class="ns-iri">
+                        <code class="mono">http://www.w3.org/1999/02/22-rdf-syntax-ns#</code>
+                        <button class="copy-btn" data-copy="http://www.w3.org/1999/02/22-rdf-syntax-ns#" title="Copy IRI">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                            </svg>
+                        </button>
+                    </td>
+                </tr>
+                <tr>
+                    <td class="ns-prefix"><code>rdfs</code></td>
+                    <td class="ns-iri">
+                        <code class="mono">http://www.w3.org/2000/01/rdf-schema#</code>
+                        <button class="copy-btn" data-copy="http://www.w3.org/2000/01/rdf-schema#" title="Copy IRI">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                            </svg>
+                        </button>
+                    </td>
+                </tr>
+                <tr>
+                    <td class="ns-prefix"><code>xsd</code></td>
+                    <td class="ns-iri">
+                        <code class="mono">http://www.w3.org/2001/XMLSchema#</code>
+                        <button class="copy-btn" data-copy="http://www.w3.org/2001/XMLSchema#" title="Copy IRI">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                            </svg>
+                        </button>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+<style>
+    .table-container {
+        overflow-x: auto;
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-md);
+    }
+
+    .ns-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: var(--text-sm);
+    }
+
+    .ns-table th,
+    .ns-table td {
+        padding: var(--space-3) var(--space-4);
+        text-align: left;
+    }
+
+    .ns-table th {
+        background-color: var(--color-bg-secondary);
+        font-weight: 600;
+        color: var(--color-text-muted);
+        font-size: var(--text-xs);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        border-bottom: 1px solid var(--color-border);
+    }
+
+    .ns-table tbody tr {
+        border-bottom: 1px solid var(--color-border);
+    }
+
+    .ns-table tbody tr:last-child {
+        border-bottom: none;
+    }
+
+    .ns-table tbody tr:hover {
+        background-color: var(--color-bg-secondary);
+    }
+
+    .ns-prefix code {
+        background-color: var(--color-bg-tertiary);
+        padding: var(--space-1) var(--space-2);
+        border-radius: var(--radius-sm);
+        font-weight: 500;
+        color: var(--color-primary);
+    }
+
+    .ns-iri {
+        display: flex;
+        align-items: center;
+        gap: var(--space-2);
+    }
+
+    .ns-iri code {
+        color: var(--color-text-muted);
+        word-break: break-all;
+    }
+
+    .copy-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: var(--space-1);
+        background: none;
+        border: none;
+        color: var(--color-text-muted);
+        cursor: pointer;
+        border-radius: var(--radius-sm);
+        opacity: 0;
+        transition: opacity var(--transition-fast), color var(--transition-fast);
+    }
+
+    .ns-table tbody tr:hover .copy-btn {
+        opacity: 1;
+    }
+
+    .copy-btn:hover {
+        color: var(--color-primary);
+        background-color: var(--color-bg-tertiary);
+    }
+
+    .copy-btn.copied {
+        color: var(--color-property);
+    }
+
+    @media (max-width: 640px) {
+        .ns-table th,
+        .ns-table td {
+            padding: var(--space-2) var(--space-3);
+        }
+
+        .copy-btn {
+            opacity: 1;
+        }
+    }
+</style>
+<script>
+    document.querySelectorAll('.copy-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const text = btn.dataset.copy;
+            await navigator.clipboard.writeText(text);
+            btn.classList.add('copied');
+            setTimeout(() => btn.classList.remove('copied'), 1500);
+        });
+    });
+</script>
+</section>
+
+<section id="classes">
+    <div class="section-header">
+    <h2 class="section-title">
+        Classes
+        <span class="section-count">8</span>
+    </h2>
+    <p class="section-description">Classes defined in this ontology.</p>
+</div>
+<style>
+    .section-header {
+        margin-bottom: var(--space-6);
+        padding-top: var(--space-8);
+    }
+
+    .section-header:first-child {
+        padding-top: 0;
+    }
+
+    .section-title {
+        display: flex;
+        align-items: center;
+        gap: var(--space-3);
+        font-size: var(--text-2xl);
+        font-weight: 600;
+        color: var(--color-text);
+        margin: 0 0 var(--space-2) 0;
+    }
+
+    .section-count {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 1.75rem;
+        height: 1.75rem;
+        padding: 0 var(--space-2);
+        font-size: var(--text-sm);
+        font-weight: 500;
+        color: var(--color-text-muted);
+        background-color: var(--color-bg-secondary);
+        border-radius: 9999px;
+    }
+
+    .section-description {
+        margin: 0;
+        font-size: var(--text-base);
+        color: var(--color-text-muted);
+        max-width: 65ch;
+    }
+</style>
+    <div class="entity-list">
+        <a href="#class-Course" class="entity-link class-link">Course</a>
+        <a href="#class-Department" class="entity-link class-link">Department</a>
+        <a href="#class-Faculty" class="entity-link class-link">Faculty</a>
+        <a href="#class-NamedEntity" class="entity-link class-link">NamedEntity</a>
+        <a href="#class-Person" class="entity-link class-link">Person</a>
+        <a href="#class-ResearchGroup" class="entity-link class-link">ResearchGroup</a>
+        <a href="#class-Staff" class="entity-link class-link">Staff</a>
+        <a href="#class-Student" class="entity-link class-link">Student</a>
+    </div>
+    <div class="class-cards">
+        <article class="entity-card class-card" id="class-Course">
+    <header class="entity-header">
+        <div class="entity-badge class-badge">Class</div>
+        <h3 class="entity-title">Course</h3>
+        <button class="copy-btn" data-copy="Course" title="Copy IRI">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+        </button>
+    </header>
+
+    <div class="entity-iri">
+        <code class="mono">Course</code>
+    </div>
+
+    <p class="entity-description">An academic course</p>
+
+    <div class="entity-details">
+        <div class="detail-row">
+            <dt>Subclass of</dt>
+            <dd><a href="#class-NamedEntity" class="entity-ref class-ref">NamedEntity</a></dd>
+        </div>
+    </div>
+</article>
+<style>
+    .entity-card {
+        background-color: var(--color-bg);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-lg);
+        padding: var(--space-6);
+        margin-bottom: var(--space-6);
+        transition: box-shadow var(--transition-fast);
+    }
+
+    .entity-card:hover {
+        box-shadow: var(--shadow-md);
+    }
+
+    .entity-card:target {
+        box-shadow: 0 0 0 2px var(--color-primary);
+    }
+
+    .entity-header {
+        display: flex;
+        align-items: center;
+        gap: var(--space-3);
+        margin-bottom: var(--space-2);
+    }
+
+    .entity-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: var(--space-1) var(--space-2);
+        font-size: var(--text-xs);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        border-radius: var(--radius-sm);
+    }
+
+    .class-badge {
+        background-color: color-mix(in srgb, var(--color-class) 15%, transparent);
+        color: var(--color-class);
+    }
+
+    .entity-title {
+        flex: 1;
+        margin: 0;
+        font-size: var(--text-lg);
+        font-weight: 600;
+        color: var(--color-text);
+    }
+
+    .entity-header .copy-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: var(--space-2);
+        background: none;
+        border: none;
+        color: var(--color-text-muted);
+        cursor: pointer;
+        border-radius: var(--radius-sm);
+        opacity: 0;
+        transition: opacity var(--transition-fast), color var(--transition-fast);
+    }
+
+    .entity-card:hover .copy-btn {
+        opacity: 1;
+    }
+
+    .entity-header .copy-btn:hover {
+        color: var(--color-primary);
+        background-color: var(--color-bg-tertiary);
+    }
+
+    .entity-header .copy-btn.copied {
+        color: var(--color-property);
+    }
+
+    .entity-iri {
+        margin-bottom: var(--space-4);
+    }
+
+    .entity-iri code {
+        color: var(--color-text-muted);
+        font-size: var(--text-sm);
+        word-break: break-all;
+    }
+
+    .entity-description {
+        margin: 0 0 var(--space-4) 0;
+        color: var(--color-text);
+        line-height: 1.7;
+    }
+
+    .entity-details {
+        display: grid;
+        gap: var(--space-3);
+        padding-top: var(--space-4);
+        border-top: 1px solid var(--color-border);
+    }
+
+    .detail-row {
+        display: grid;
+        grid-template-columns: 120px 1fr;
+        gap: var(--space-3);
+        font-size: var(--text-sm);
+    }
+
+    .detail-row dt {
+        font-weight: 500;
+        color: var(--color-text-muted);
+    }
+
+    .detail-row dd {
+        margin: 0;
+    }
+
+    .entity-ref {
+        display: inline-flex;
+        align-items: center;
+        padding: var(--space-1) var(--space-2);
+        background-color: var(--color-bg-secondary);
+        border-radius: var(--radius-sm);
+        font-size: var(--text-sm);
+        transition: background-color var(--transition-fast);
+    }
+
+    .entity-ref:hover {
+        text-decoration: none;
+    }
+
+    .class-ref {
+        color: var(--color-class);
+    }
+
+    .class-ref:hover {
+        background-color: color-mix(in srgb, var(--color-class) 10%, transparent);
+    }
+
+    .prop-ref {
+        color: var(--color-property);
+    }
+
+    .prop-ref:hover {
+        background-color: color-mix(in srgb, var(--color-property) 10%, transparent);
+    }
+
+    @media (max-width: 640px) {
+        .entity-card {
+            padding: var(--space-4);
+        }
+
+        .detail-row {
+            grid-template-columns: 1fr;
+            gap: var(--space-1);
+        }
+
+        .entity-header .copy-btn {
+            opacity: 1;
+        }
+    }
+</style>
+        <article class="entity-card class-card" id="class-Department">
+    <header class="entity-header">
+        <div class="entity-badge class-badge">Class</div>
+        <h3 class="entity-title">Department</h3>
+        <button class="copy-btn" data-copy="Department" title="Copy IRI">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+        </button>
+    </header>
+
+    <div class="entity-iri">
+        <code class="mono">Department</code>
+    </div>
+
+    <p class="entity-description">An academic department</p>
+
+    <div class="entity-details">
+        <div class="detail-row">
+            <dt>Subclass of</dt>
+            <dd><a href="#class-NamedEntity" class="entity-ref class-ref">NamedEntity</a></dd>
+        </div>
+    </div>
+</article>
+<style>
+    .entity-card {
+        background-color: var(--color-bg);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-lg);
+        padding: var(--space-6);
+        margin-bottom: var(--space-6);
+        transition: box-shadow var(--transition-fast);
+    }
+
+    .entity-card:hover {
+        box-shadow: var(--shadow-md);
+    }
+
+    .entity-card:target {
+        box-shadow: 0 0 0 2px var(--color-primary);
+    }
+
+    .entity-header {
+        display: flex;
+        align-items: center;
+        gap: var(--space-3);
+        margin-bottom: var(--space-2);
+    }
+
+    .entity-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: var(--space-1) var(--space-2);
+        font-size: var(--text-xs);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        border-radius: var(--radius-sm);
+    }
+
+    .class-badge {
+        background-color: color-mix(in srgb, var(--color-class) 15%, transparent);
+        color: var(--color-class);
+    }
+
+    .entity-title {
+        flex: 1;
+        margin: 0;
+        font-size: var(--text-lg);
+        font-weight: 600;
+        color: var(--color-text);
+    }
+
+    .entity-header .copy-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: var(--space-2);
+        background: none;
+        border: none;
+        color: var(--color-text-muted);
+        cursor: pointer;
+        border-radius: var(--radius-sm);
+        opacity: 0;
+        transition: opacity var(--transition-fast), color var(--transition-fast);
+    }
+
+    .entity-card:hover .copy-btn {
+        opacity: 1;
+    }
+
+    .entity-header .copy-btn:hover {
+        color: var(--color-primary);
+        background-color: var(--color-bg-tertiary);
+    }
+
+    .entity-header .copy-btn.copied {
+        color: var(--color-property);
+    }
+
+    .entity-iri {
+        margin-bottom: var(--space-4);
+    }
+
+    .entity-iri code {
+        color: var(--color-text-muted);
+        font-size: var(--text-sm);
+        word-break: break-all;
+    }
+
+    .entity-description {
+        margin: 0 0 var(--space-4) 0;
+        color: var(--color-text);
+        line-height: 1.7;
+    }
+
+    .entity-details {
+        display: grid;
+        gap: var(--space-3);
+        padding-top: var(--space-4);
+        border-top: 1px solid var(--color-border);
+    }
+
+    .detail-row {
+        display: grid;
+        grid-template-columns: 120px 1fr;
+        gap: var(--space-3);
+        font-size: var(--text-sm);
+    }
+
+    .detail-row dt {
+        font-weight: 500;
+        color: var(--color-text-muted);
+    }
+
+    .detail-row dd {
+        margin: 0;
+    }
+
+    .entity-ref {
+        display: inline-flex;
+        align-items: center;
+        padding: var(--space-1) var(--space-2);
+        background-color: var(--color-bg-secondary);
+        border-radius: var(--radius-sm);
+        font-size: var(--text-sm);
+        transition: background-color var(--transition-fast);
+    }
+
+    .entity-ref:hover {
+        text-decoration: none;
+    }
+
+    .class-ref {
+        color: var(--color-class);
+    }
+
+    .class-ref:hover {
+        background-color: color-mix(in srgb, var(--color-class) 10%, transparent);
+    }
+
+    .prop-ref {
+        color: var(--color-property);
+    }
+
+    .prop-ref:hover {
+        background-color: color-mix(in srgb, var(--color-property) 10%, transparent);
+    }
+
+    @media (max-width: 640px) {
+        .entity-card {
+            padding: var(--space-4);
+        }
+
+        .detail-row {
+            grid-template-columns: 1fr;
+            gap: var(--space-1);
+        }
+
+        .entity-header .copy-btn {
+            opacity: 1;
+        }
+    }
+</style>
+        <article class="entity-card class-card" id="class-Faculty">
+    <header class="entity-header">
+        <div class="entity-badge class-badge">Class</div>
+        <h3 class="entity-title">Faculty</h3>
+        <button class="copy-btn" data-copy="Faculty" title="Copy IRI">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+        </button>
+    </header>
+
+    <div class="entity-iri">
+        <code class="mono">Faculty</code>
+    </div>
+
+    <p class="entity-description">A person who teaches courses</p>
+
+    <div class="entity-details">
+        <div class="detail-row">
+            <dt>Subclass of</dt>
+            <dd><a href="#class-Person" class="entity-ref class-ref">Person</a></dd>
+        </div>
+    </div>
+</article>
+<style>
+    .entity-card {
+        background-color: var(--color-bg);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-lg);
+        padding: var(--space-6);
+        margin-bottom: var(--space-6);
+        transition: box-shadow var(--transition-fast);
+    }
+
+    .entity-card:hover {
+        box-shadow: var(--shadow-md);
+    }
+
+    .entity-card:target {
+        box-shadow: 0 0 0 2px var(--color-primary);
+    }
+
+    .entity-header {
+        display: flex;
+        align-items: center;
+        gap: var(--space-3);
+        margin-bottom: var(--space-2);
+    }
+
+    .entity-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: var(--space-1) var(--space-2);
+        font-size: var(--text-xs);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        border-radius: var(--radius-sm);
+    }
+
+    .class-badge {
+        background-color: color-mix(in srgb, var(--color-class) 15%, transparent);
+        color: var(--color-class);
+    }
+
+    .entity-title {
+        flex: 1;
+        margin: 0;
+        font-size: var(--text-lg);
+        font-weight: 600;
+        color: var(--color-text);
+    }
+
+    .entity-header .copy-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: var(--space-2);
+        background: none;
+        border: none;
+        color: var(--color-text-muted);
+        cursor: pointer;
+        border-radius: var(--radius-sm);
+        opacity: 0;
+        transition: opacity var(--transition-fast), color var(--transition-fast);
+    }
+
+    .entity-card:hover .copy-btn {
+        opacity: 1;
+    }
+
+    .entity-header .copy-btn:hover {
+        color: var(--color-primary);
+        background-color: var(--color-bg-tertiary);
+    }
+
+    .entity-header .copy-btn.copied {
+        color: var(--color-property);
+    }
+
+    .entity-iri {
+        margin-bottom: var(--space-4);
+    }
+
+    .entity-iri code {
+        color: var(--color-text-muted);
+        font-size: var(--text-sm);
+        word-break: break-all;
+    }
+
+    .entity-description {
+        margin: 0 0 var(--space-4) 0;
+        color: var(--color-text);
+        line-height: 1.7;
+    }
+
+    .entity-details {
+        display: grid;
+        gap: var(--space-3);
+        padding-top: var(--space-4);
+        border-top: 1px solid var(--color-border);
+    }
+
+    .detail-row {
+        display: grid;
+        grid-template-columns: 120px 1fr;
+        gap: var(--space-3);
+        font-size: var(--text-sm);
+    }
+
+    .detail-row dt {
+        font-weight: 500;
+        color: var(--color-text-muted);
+    }
+
+    .detail-row dd {
+        margin: 0;
+    }
+
+    .entity-ref {
+        display: inline-flex;
+        align-items: center;
+        padding: var(--space-1) var(--space-2);
+        background-color: var(--color-bg-secondary);
+        border-radius: var(--radius-sm);
+        font-size: var(--text-sm);
+        transition: background-color var(--transition-fast);
+    }
+
+    .entity-ref:hover {
+        text-decoration: none;
+    }
+
+    .class-ref {
+        color: var(--color-class);
+    }
+
+    .class-ref:hover {
+        background-color: color-mix(in srgb, var(--color-class) 10%, transparent);
+    }
+
+    .prop-ref {
+        color: var(--color-property);
+    }
+
+    .prop-ref:hover {
+        background-color: color-mix(in srgb, var(--color-property) 10%, transparent);
+    }
+
+    @media (max-width: 640px) {
+        .entity-card {
+            padding: var(--space-4);
+        }
+
+        .detail-row {
+            grid-template-columns: 1fr;
+            gap: var(--space-1);
+        }
+
+        .entity-header .copy-btn {
+            opacity: 1;
+        }
+    }
+</style>
+        <article class="entity-card class-card" id="class-NamedEntity">
+    <header class="entity-header">
+        <div class="entity-badge class-badge">Class</div>
+        <h3 class="entity-title">NamedEntity</h3>
+        <button class="copy-btn" data-copy="NamedEntity" title="Copy IRI">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+        </button>
+    </header>
+
+    <div class="entity-iri">
+        <code class="mono">NamedEntity</code>
+    </div>
+
+    <p class="entity-description">Base class for entities with a name</p>
+
+    <div class="entity-details">
+        <div class="detail-row">
+            <dt>Superclass of</dt>
+            <dd>
+                <a href="#class-Course" class="entity-ref class-ref">Course</a>,
+                <a href="#class-Department" class="entity-ref class-ref">Department</a>,
+                <a href="#class-Person" class="entity-ref class-ref">Person</a>,
+                <a href="#class-ResearchGroup" class="entity-ref class-ref">ResearchGroup</a>
+            </dd>
+        </div>
+    </div>
+</article>
+<style>
+    .entity-card {
+        background-color: var(--color-bg);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-lg);
+        padding: var(--space-6);
+        margin-bottom: var(--space-6);
+        transition: box-shadow var(--transition-fast);
+    }
+
+    .entity-card:hover {
+        box-shadow: var(--shadow-md);
+    }
+
+    .entity-card:target {
+        box-shadow: 0 0 0 2px var(--color-primary);
+    }
+
+    .entity-header {
+        display: flex;
+        align-items: center;
+        gap: var(--space-3);
+        margin-bottom: var(--space-2);
+    }
+
+    .entity-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: var(--space-1) var(--space-2);
+        font-size: var(--text-xs);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        border-radius: var(--radius-sm);
+    }
+
+    .class-badge {
+        background-color: color-mix(in srgb, var(--color-class) 15%, transparent);
+        color: var(--color-class);
+    }
+
+    .entity-title {
+        flex: 1;
+        margin: 0;
+        font-size: var(--text-lg);
+        font-weight: 600;
+        color: var(--color-text);
+    }
+
+    .entity-header .copy-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: var(--space-2);
+        background: none;
+        border: none;
+        color: var(--color-text-muted);
+        cursor: pointer;
+        border-radius: var(--radius-sm);
+        opacity: 0;
+        transition: opacity var(--transition-fast), color var(--transition-fast);
+    }
+
+    .entity-card:hover .copy-btn {
+        opacity: 1;
+    }
+
+    .entity-header .copy-btn:hover {
+        color: var(--color-primary);
+        background-color: var(--color-bg-tertiary);
+    }
+
+    .entity-header .copy-btn.copied {
+        color: var(--color-property);
+    }
+
+    .entity-iri {
+        margin-bottom: var(--space-4);
+    }
+
+    .entity-iri code {
+        color: var(--color-text-muted);
+        font-size: var(--text-sm);
+        word-break: break-all;
+    }
+
+    .entity-description {
+        margin: 0 0 var(--space-4) 0;
+        color: var(--color-text);
+        line-height: 1.7;
+    }
+
+    .entity-details {
+        display: grid;
+        gap: var(--space-3);
+        padding-top: var(--space-4);
+        border-top: 1px solid var(--color-border);
+    }
+
+    .detail-row {
+        display: grid;
+        grid-template-columns: 120px 1fr;
+        gap: var(--space-3);
+        font-size: var(--text-sm);
+    }
+
+    .detail-row dt {
+        font-weight: 500;
+        color: var(--color-text-muted);
+    }
+
+    .detail-row dd {
+        margin: 0;
+    }
+
+    .entity-ref {
+        display: inline-flex;
+        align-items: center;
+        padding: var(--space-1) var(--space-2);
+        background-color: var(--color-bg-secondary);
+        border-radius: var(--radius-sm);
+        font-size: var(--text-sm);
+        transition: background-color var(--transition-fast);
+    }
+
+    .entity-ref:hover {
+        text-decoration: none;
+    }
+
+    .class-ref {
+        color: var(--color-class);
+    }
+
+    .class-ref:hover {
+        background-color: color-mix(in srgb, var(--color-class) 10%, transparent);
+    }
+
+    .prop-ref {
+        color: var(--color-property);
+    }
+
+    .prop-ref:hover {
+        background-color: color-mix(in srgb, var(--color-property) 10%, transparent);
+    }
+
+    @media (max-width: 640px) {
+        .entity-card {
+            padding: var(--space-4);
+        }
+
+        .detail-row {
+            grid-template-columns: 1fr;
+            gap: var(--space-1);
+        }
+
+        .entity-header .copy-btn {
+            opacity: 1;
+        }
+    }
+</style>
+        <article class="entity-card class-card" id="class-Person">
+    <header class="entity-header">
+        <div class="entity-badge class-badge">Class</div>
+        <h3 class="entity-title">Person</h3>
+        <button class="copy-btn" data-copy="Person" title="Copy IRI">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+        </button>
+    </header>
+
+    <div class="entity-iri">
+        <code class="mono">Person</code>
+    </div>
+
+    <p class="entity-description">A person affiliated with the university</p>
+
+    <div class="entity-details">
+        <div class="detail-row">
+            <dt>Subclass of</dt>
+            <dd><a href="#class-NamedEntity" class="entity-ref class-ref">NamedEntity</a></dd>
+        </div>
+        <div class="detail-row">
+            <dt>Superclass of</dt>
+            <dd>
+                <a href="#class-Faculty" class="entity-ref class-ref">Faculty</a>,
+                <a href="#class-Staff" class="entity-ref class-ref">Staff</a>,
+                <a href="#class-Student" class="entity-ref class-ref">Student</a>
+            </dd>
+        </div>
+    </div>
+</article>
+<style>
+    .entity-card {
+        background-color: var(--color-bg);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-lg);
+        padding: var(--space-6);
+        margin-bottom: var(--space-6);
+        transition: box-shadow var(--transition-fast);
+    }
+
+    .entity-card:hover {
+        box-shadow: var(--shadow-md);
+    }
+
+    .entity-card:target {
+        box-shadow: 0 0 0 2px var(--color-primary);
+    }
+
+    .entity-header {
+        display: flex;
+        align-items: center;
+        gap: var(--space-3);
+        margin-bottom: var(--space-2);
+    }
+
+    .entity-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: var(--space-1) var(--space-2);
+        font-size: var(--text-xs);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        border-radius: var(--radius-sm);
+    }
+
+    .class-badge {
+        background-color: color-mix(in srgb, var(--color-class) 15%, transparent);
+        color: var(--color-class);
+    }
+
+    .entity-title {
+        flex: 1;
+        margin: 0;
+        font-size: var(--text-lg);
+        font-weight: 600;
+        color: var(--color-text);
+    }
+
+    .entity-header .copy-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: var(--space-2);
+        background: none;
+        border: none;
+        color: var(--color-text-muted);
+        cursor: pointer;
+        border-radius: var(--radius-sm);
+        opacity: 0;
+        transition: opacity var(--transition-fast), color var(--transition-fast);
+    }
+
+    .entity-card:hover .copy-btn {
+        opacity: 1;
+    }
+
+    .entity-header .copy-btn:hover {
+        color: var(--color-primary);
+        background-color: var(--color-bg-tertiary);
+    }
+
+    .entity-header .copy-btn.copied {
+        color: var(--color-property);
+    }
+
+    .entity-iri {
+        margin-bottom: var(--space-4);
+    }
+
+    .entity-iri code {
+        color: var(--color-text-muted);
+        font-size: var(--text-sm);
+        word-break: break-all;
+    }
+
+    .entity-description {
+        margin: 0 0 var(--space-4) 0;
+        color: var(--color-text);
+        line-height: 1.7;
+    }
+
+    .entity-details {
+        display: grid;
+        gap: var(--space-3);
+        padding-top: var(--space-4);
+        border-top: 1px solid var(--color-border);
+    }
+
+    .detail-row {
+        display: grid;
+        grid-template-columns: 120px 1fr;
+        gap: var(--space-3);
+        font-size: var(--text-sm);
+    }
+
+    .detail-row dt {
+        font-weight: 500;
+        color: var(--color-text-muted);
+    }
+
+    .detail-row dd {
+        margin: 0;
+    }
+
+    .entity-ref {
+        display: inline-flex;
+        align-items: center;
+        padding: var(--space-1) var(--space-2);
+        background-color: var(--color-bg-secondary);
+        border-radius: var(--radius-sm);
+        font-size: var(--text-sm);
+        transition: background-color var(--transition-fast);
+    }
+
+    .entity-ref:hover {
+        text-decoration: none;
+    }
+
+    .class-ref {
+        color: var(--color-class);
+    }
+
+    .class-ref:hover {
+        background-color: color-mix(in srgb, var(--color-class) 10%, transparent);
+    }
+
+    .prop-ref {
+        color: var(--color-property);
+    }
+
+    .prop-ref:hover {
+        background-color: color-mix(in srgb, var(--color-property) 10%, transparent);
+    }
+
+    @media (max-width: 640px) {
+        .entity-card {
+            padding: var(--space-4);
+        }
+
+        .detail-row {
+            grid-template-columns: 1fr;
+            gap: var(--space-1);
+        }
+
+        .entity-header .copy-btn {
+            opacity: 1;
+        }
+    }
+</style>
+        <article class="entity-card class-card" id="class-ResearchGroup">
+    <header class="entity-header">
+        <div class="entity-badge class-badge">Class</div>
+        <h3 class="entity-title">ResearchGroup</h3>
+        <button class="copy-btn" data-copy="ResearchGroup" title="Copy IRI">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+        </button>
+    </header>
+
+    <div class="entity-iri">
+        <code class="mono">ResearchGroup</code>
+    </div>
+
+    <p class="entity-description">A group conducting research</p>
+
+    <div class="entity-details">
+        <div class="detail-row">
+            <dt>Subclass of</dt>
+            <dd><a href="#class-NamedEntity" class="entity-ref class-ref">NamedEntity</a></dd>
+        </div>
+    </div>
+</article>
+<style>
+    .entity-card {
+        background-color: var(--color-bg);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-lg);
+        padding: var(--space-6);
+        margin-bottom: var(--space-6);
+        transition: box-shadow var(--transition-fast);
+    }
+
+    .entity-card:hover {
+        box-shadow: var(--shadow-md);
+    }
+
+    .entity-card:target {
+        box-shadow: 0 0 0 2px var(--color-primary);
+    }
+
+    .entity-header {
+        display: flex;
+        align-items: center;
+        gap: var(--space-3);
+        margin-bottom: var(--space-2);
+    }
+
+    .entity-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: var(--space-1) var(--space-2);
+        font-size: var(--text-xs);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        border-radius: var(--radius-sm);
+    }
+
+    .class-badge {
+        background-color: color-mix(in srgb, var(--color-class) 15%, transparent);
+        color: var(--color-class);
+    }
+
+    .entity-title {
+        flex: 1;
+        margin: 0;
+        font-size: var(--text-lg);
+        font-weight: 600;
+        color: var(--color-text);
+    }
+
+    .entity-header .copy-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: var(--space-2);
+        background: none;
+        border: none;
+        color: var(--color-text-muted);
+        cursor: pointer;
+        border-radius: var(--radius-sm);
+        opacity: 0;
+        transition: opacity var(--transition-fast), color var(--transition-fast);
+    }
+
+    .entity-card:hover .copy-btn {
+        opacity: 1;
+    }
+
+    .entity-header .copy-btn:hover {
+        color: var(--color-primary);
+        background-color: var(--color-bg-tertiary);
+    }
+
+    .entity-header .copy-btn.copied {
+        color: var(--color-property);
+    }
+
+    .entity-iri {
+        margin-bottom: var(--space-4);
+    }
+
+    .entity-iri code {
+        color: var(--color-text-muted);
+        font-size: var(--text-sm);
+        word-break: break-all;
+    }
+
+    .entity-description {
+        margin: 0 0 var(--space-4) 0;
+        color: var(--color-text);
+        line-height: 1.7;
+    }
+
+    .entity-details {
+        display: grid;
+        gap: var(--space-3);
+        padding-top: var(--space-4);
+        border-top: 1px solid var(--color-border);
+    }
+
+    .detail-row {
+        display: grid;
+        grid-template-columns: 120px 1fr;
+        gap: var(--space-3);
+        font-size: var(--text-sm);
+    }
+
+    .detail-row dt {
+        font-weight: 500;
+        color: var(--color-text-muted);
+    }
+
+    .detail-row dd {
+        margin: 0;
+    }
+
+    .entity-ref {
+        display: inline-flex;
+        align-items: center;
+        padding: var(--space-1) var(--space-2);
+        background-color: var(--color-bg-secondary);
+        border-radius: var(--radius-sm);
+        font-size: var(--text-sm);
+        transition: background-color var(--transition-fast);
+    }
+
+    .entity-ref:hover {
+        text-decoration: none;
+    }
+
+    .class-ref {
+        color: var(--color-class);
+    }
+
+    .class-ref:hover {
+        background-color: color-mix(in srgb, var(--color-class) 10%, transparent);
+    }
+
+    .prop-ref {
+        color: var(--color-property);
+    }
+
+    .prop-ref:hover {
+        background-color: color-mix(in srgb, var(--color-property) 10%, transparent);
+    }
+
+    @media (max-width: 640px) {
+        .entity-card {
+            padding: var(--space-4);
+        }
+
+        .detail-row {
+            grid-template-columns: 1fr;
+            gap: var(--space-1);
+        }
+
+        .entity-header .copy-btn {
+            opacity: 1;
+        }
+    }
+</style>
+        <article class="entity-card class-card" id="class-Staff">
+    <header class="entity-header">
+        <div class="entity-badge class-badge">Class</div>
+        <h3 class="entity-title">Staff</h3>
+        <button class="copy-btn" data-copy="Staff" title="Copy IRI">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+        </button>
+    </header>
+
+    <div class="entity-iri">
+        <code class="mono">Staff</code>
+    </div>
+
+    <p class="entity-description">Non-teaching personnel</p>
+
+    <div class="entity-details">
+        <div class="detail-row">
+            <dt>Subclass of</dt>
+            <dd><a href="#class-Person" class="entity-ref class-ref">Person</a></dd>
+        </div>
+    </div>
+</article>
+<style>
+    .entity-card {
+        background-color: var(--color-bg);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-lg);
+        padding: var(--space-6);
+        margin-bottom: var(--space-6);
+        transition: box-shadow var(--transition-fast);
+    }
+
+    .entity-card:hover {
+        box-shadow: var(--shadow-md);
+    }
+
+    .entity-card:target {
+        box-shadow: 0 0 0 2px var(--color-primary);
+    }
+
+    .entity-header {
+        display: flex;
+        align-items: center;
+        gap: var(--space-3);
+        margin-bottom: var(--space-2);
+    }
+
+    .entity-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: var(--space-1) var(--space-2);
+        font-size: var(--text-xs);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        border-radius: var(--radius-sm);
+    }
+
+    .class-badge {
+        background-color: color-mix(in srgb, var(--color-class) 15%, transparent);
+        color: var(--color-class);
+    }
+
+    .entity-title {
+        flex: 1;
+        margin: 0;
+        font-size: var(--text-lg);
+        font-weight: 600;
+        color: var(--color-text);
+    }
+
+    .entity-header .copy-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: var(--space-2);
+        background: none;
+        border: none;
+        color: var(--color-text-muted);
+        cursor: pointer;
+        border-radius: var(--radius-sm);
+        opacity: 0;
+        transition: opacity var(--transition-fast), color var(--transition-fast);
+    }
+
+    .entity-card:hover .copy-btn {
+        opacity: 1;
+    }
+
+    .entity-header .copy-btn:hover {
+        color: var(--color-primary);
+        background-color: var(--color-bg-tertiary);
+    }
+
+    .entity-header .copy-btn.copied {
+        color: var(--color-property);
+    }
+
+    .entity-iri {
+        margin-bottom: var(--space-4);
+    }
+
+    .entity-iri code {
+        color: var(--color-text-muted);
+        font-size: var(--text-sm);
+        word-break: break-all;
+    }
+
+    .entity-description {
+        margin: 0 0 var(--space-4) 0;
+        color: var(--color-text);
+        line-height: 1.7;
+    }
+
+    .entity-details {
+        display: grid;
+        gap: var(--space-3);
+        padding-top: var(--space-4);
+        border-top: 1px solid var(--color-border);
+    }
+
+    .detail-row {
+        display: grid;
+        grid-template-columns: 120px 1fr;
+        gap: var(--space-3);
+        font-size: var(--text-sm);
+    }
+
+    .detail-row dt {
+        font-weight: 500;
+        color: var(--color-text-muted);
+    }
+
+    .detail-row dd {
+        margin: 0;
+    }
+
+    .entity-ref {
+        display: inline-flex;
+        align-items: center;
+        padding: var(--space-1) var(--space-2);
+        background-color: var(--color-bg-secondary);
+        border-radius: var(--radius-sm);
+        font-size: var(--text-sm);
+        transition: background-color var(--transition-fast);
+    }
+
+    .entity-ref:hover {
+        text-decoration: none;
+    }
+
+    .class-ref {
+        color: var(--color-class);
+    }
+
+    .class-ref:hover {
+        background-color: color-mix(in srgb, var(--color-class) 10%, transparent);
+    }
+
+    .prop-ref {
+        color: var(--color-property);
+    }
+
+    .prop-ref:hover {
+        background-color: color-mix(in srgb, var(--color-property) 10%, transparent);
+    }
+
+    @media (max-width: 640px) {
+        .entity-card {
+            padding: var(--space-4);
+        }
+
+        .detail-row {
+            grid-template-columns: 1fr;
+            gap: var(--space-1);
+        }
+
+        .entity-header .copy-btn {
+            opacity: 1;
+        }
+    }
+</style>
+        <article class="entity-card class-card" id="class-Student">
+    <header class="entity-header">
+        <div class="entity-badge class-badge">Class</div>
+        <h3 class="entity-title">Student</h3>
+        <button class="copy-btn" data-copy="Student" title="Copy IRI">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+        </button>
+    </header>
+
+    <div class="entity-iri">
+        <code class="mono">Student</code>
+    </div>
+
+    <p class="entity-description">A person enrolled in courses</p>
+
+    <div class="entity-details">
+        <div class="detail-row">
+            <dt>Subclass of</dt>
+            <dd><a href="#class-Person" class="entity-ref class-ref">Person</a></dd>
+        </div>
+    </div>
+</article>
+<style>
+    .entity-card {
+        background-color: var(--color-bg);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-lg);
+        padding: var(--space-6);
+        margin-bottom: var(--space-6);
+        transition: box-shadow var(--transition-fast);
+    }
+
+    .entity-card:hover {
+        box-shadow: var(--shadow-md);
+    }
+
+    .entity-card:target {
+        box-shadow: 0 0 0 2px var(--color-primary);
+    }
+
+    .entity-header {
+        display: flex;
+        align-items: center;
+        gap: var(--space-3);
+        margin-bottom: var(--space-2);
+    }
+
+    .entity-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: var(--space-1) var(--space-2);
+        font-size: var(--text-xs);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        border-radius: var(--radius-sm);
+    }
+
+    .class-badge {
+        background-color: color-mix(in srgb, var(--color-class) 15%, transparent);
+        color: var(--color-class);
+    }
+
+    .entity-title {
+        flex: 1;
+        margin: 0;
+        font-size: var(--text-lg);
+        font-weight: 600;
+        color: var(--color-text);
+    }
+
+    .entity-header .copy-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: var(--space-2);
+        background: none;
+        border: none;
+        color: var(--color-text-muted);
+        cursor: pointer;
+        border-radius: var(--radius-sm);
+        opacity: 0;
+        transition: opacity var(--transition-fast), color var(--transition-fast);
+    }
+
+    .entity-card:hover .copy-btn {
+        opacity: 1;
+    }
+
+    .entity-header .copy-btn:hover {
+        color: var(--color-primary);
+        background-color: var(--color-bg-tertiary);
+    }
+
+    .entity-header .copy-btn.copied {
+        color: var(--color-property);
+    }
+
+    .entity-iri {
+        margin-bottom: var(--space-4);
+    }
+
+    .entity-iri code {
+        color: var(--color-text-muted);
+        font-size: var(--text-sm);
+        word-break: break-all;
+    }
+
+    .entity-description {
+        margin: 0 0 var(--space-4) 0;
+        color: var(--color-text);
+        line-height: 1.7;
+    }
+
+    .entity-details {
+        display: grid;
+        gap: var(--space-3);
+        padding-top: var(--space-4);
+        border-top: 1px solid var(--color-border);
+    }
+
+    .detail-row {
+        display: grid;
+        grid-template-columns: 120px 1fr;
+        gap: var(--space-3);
+        font-size: var(--text-sm);
+    }
+
+    .detail-row dt {
+        font-weight: 500;
+        color: var(--color-text-muted);
+    }
+
+    .detail-row dd {
+        margin: 0;
+    }
+
+    .entity-ref {
+        display: inline-flex;
+        align-items: center;
+        padding: var(--space-1) var(--space-2);
+        background-color: var(--color-bg-secondary);
+        border-radius: var(--radius-sm);
+        font-size: var(--text-sm);
+        transition: background-color var(--transition-fast);
+    }
+
+    .entity-ref:hover {
+        text-decoration: none;
+    }
+
+    .class-ref {
+        color: var(--color-class);
+    }
+
+    .class-ref:hover {
+        background-color: color-mix(in srgb, var(--color-class) 10%, transparent);
+    }
+
+    .prop-ref {
+        color: var(--color-property);
+    }
+
+    .prop-ref:hover {
+        background-color: color-mix(in srgb, var(--color-property) 10%, transparent);
+    }
+
+    @media (max-width: 640px) {
+        .entity-card {
+            padding: var(--space-4);
+        }
+
+        .detail-row {
+            grid-template-columns: 1fr;
+            gap: var(--space-1);
+        }
+
+        .entity-header .copy-btn {
+            opacity: 1;
+        }
+    }
+</style>
+    </div>
+</section>
+
+<section id="properties">
+    <div class="section-header">
+    <h2 class="section-title">
+        Properties
+        <span class="section-count">1</span>
+    </h2>
+    <p class="section-description">Properties defined in this ontology.</p>
+</div>
+<style>
+    .section-header {
+        margin-bottom: var(--space-6);
+        padding-top: var(--space-8);
+    }
+
+    .section-header:first-child {
+        padding-top: 0;
+    }
+
+    .section-title {
+        display: flex;
+        align-items: center;
+        gap: var(--space-3);
+        font-size: var(--text-2xl);
+        font-weight: 600;
+        color: var(--color-text);
+        margin: 0 0 var(--space-2) 0;
+    }
+
+    .section-count {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 1.75rem;
+        height: 1.75rem;
+        padding: 0 var(--space-2);
+        font-size: var(--text-sm);
+        font-weight: 500;
+        color: var(--color-text-muted);
+        background-color: var(--color-bg-secondary);
+        border-radius: 9999px;
+    }
+
+    .section-description {
+        margin: 0;
+        font-size: var(--text-base);
+        color: var(--color-text-muted);
+        max-width: 65ch;
+    }
+</style>
+    <div class="entity-list">
+        <a href="#prop-identifier" class="entity-link prop-link">identifier</a>
+    </div>
+    <div class="property-cards">
+        <article class="entity-card property-card" id="prop-identifier">
+    <header class="entity-header">
+        <div class="entity-badge property-badge">Property</div>
+        <h3 class="entity-title">identifier</h3>
+        <button class="copy-btn" data-copy="identifier" title="Copy IRI">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+        </button>
+    </header>
+
+    <div class="entity-iri">
+        <code class="mono">identifier</code>
+    </div>
+
+    <p class="entity-description">A unique identifier for any entity</p>
+
+    <div class="entity-details">
+        <div class="detail-row">
+            <dt>Range</dt>
+            <dd>
+                <span class="entity-ref datatype-ref">string</span>
+            </dd>
+        </div>
+    </div>
+</article>
+<style>
+    .property-badge {
+        background-color: color-mix(in srgb, var(--color-property) 15%, transparent);
+        color: var(--color-property);
+    }
+
+    .datatype-ref {
+        color: var(--color-datatype);
+    }
+
+    .datatype-ref:hover {
+        background-color: color-mix(in srgb, var(--color-datatype) 10%, transparent);
+    }
+
+    .characteristics {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--space-2);
+    }
+
+    .characteristic-badge {
+        display: inline-flex;
+        padding: var(--space-1) var(--space-2);
+        font-size: var(--text-xs);
+        font-weight: 500;
+        color: var(--color-text-muted);
+        background-color: var(--color-bg-tertiary);
+        border-radius: var(--radius-sm);
+    }
+</style>
+    </div>
+</section>
+
+<section id="individuals">
+    <div class="section-header">
+    <h2 class="section-title">
+        Individuals
+        <span class="section-count">0</span>
+    </h2>
+    <p class="section-description">Named individuals defined in this ontology.</p>
+</div>
+<style>
+    .section-header {
+        margin-bottom: var(--space-6);
+        padding-top: var(--space-8);
+    }
+
+    .section-header:first-child {
+        padding-top: 0;
+    }
+
+    .section-title {
+        display: flex;
+        align-items: center;
+        gap: var(--space-3);
+        font-size: var(--text-2xl);
+        font-weight: 600;
+        color: var(--color-text);
+        margin: 0 0 var(--space-2) 0;
+    }
+
+    .section-count {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 1.75rem;
+        height: 1.75rem;
+        padding: 0 var(--space-2);
+        font-size: var(--text-sm);
+        font-weight: 500;
+        color: var(--color-text-muted);
+        background-color: var(--color-bg-secondary);
+        border-radius: 9999px;
+    }
+
+    .section-description {
+        margin: 0;
+        font-size: var(--text-base);
+        color: var(--color-text-muted);
+        max-width: 65ch;
+    }
+</style>
+    <p class="placeholder-text">No individuals defined in this ontology.</p>
+</section>
+
+    </main>
+
+    <button class="mobile-menu-toggle" onclick="toggleSidebar()" aria-label="Toggle navigation">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+        </svg>
+    </button>
+</div>
+
+<script>
+    function toggleSidebar() {
+        document.querySelector('.sidebar').classList.toggle('open');
+        document.querySelector('.sidebar-backdrop').classList.toggle('open');
+    }
+
+    // Close sidebar when clicking a link on mobile
+    document.querySelectorAll('.sidebar-link').forEach(link => {
+        link.addEventListener('click', () => {
+            if (window.innerWidth <= 768) {
+                toggleSidebar();
+            }
+        });
+    });
+
+    // Scroll spy: highlight sidebar link for the visible section
+    (function() {
+        const sections = document.querySelectorAll('section[id], .metadata-card[id]');
+        const sidebarLinks = document.querySelectorAll('.sidebar-link');
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    const id = entry.target.id;
+                    sidebarLinks.forEach(link => {
+                        link.classList.toggle('active', link.getAttribute('href') === '#' + id);
+                    });
+                }
+            });
+        }, {
+            rootMargin: '-80px 0px -75% 0px'
+        });
+
+        sections.forEach(section => observer.observe(section));
+    })();
+</script>
+
+
+    <footer class="site-footer">
+    <div class="container">
+        <p class="footer-text">
+            Generated by <a href="https://github.com/padamson/panschema">panschema</a>
+        </p>
+    </div>
+</footer>
+<style>
+    .site-footer {
+        margin-top: 3rem;
+        padding: 2rem 0;
+        border-top: 1px solid var(--color-border);
+        background-color: var(--color-bg-secondary);
+    }
+
+    .footer-text {
+        margin: 0;
+        font-size: 0.875rem;
+        color: var(--color-text-muted);
+        text-align: center;
+    }
+</style>
+</body>
+</html>
