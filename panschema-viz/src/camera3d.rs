@@ -85,9 +85,9 @@ impl Camera3D {
         self.is_animating = true;
     }
 
-    /// Zoom in/out by changing distance
+    /// Zoom the view by factor (1.1 = zoom in 10%, 0.9 = zoom out 10%)
     pub fn zoom(&mut self, factor: f32) {
-        self.target_distance = (self.target_distance * factor).clamp(50.0, 1000.0);
+        self.target_distance = (self.target_distance / factor).clamp(50.0, 1000.0);
         self.is_animating = true;
     }
 
@@ -251,6 +251,74 @@ impl Camera3D {
 
         (screen_x, screen_y, visible)
     }
+
+    /// Convert screen coordinates to a ray in world space.
+    /// Returns (ray_origin, ray_direction) for picking.
+    pub fn screen_to_ray(&self, screen_x: f32, screen_y: f32, width: f32, height: f32) -> Ray3D {
+        // Convert screen coordinates to NDC [-1, 1]
+        let ndc_x = (screen_x / width) * 2.0 - 1.0;
+        let ndc_y = 1.0 - (screen_y / height) * 2.0; // y is flipped
+
+        // Get inverse view-projection matrix
+        let vp = self.view_projection_matrix();
+        let inv_vp = mat4_inverse(vp);
+
+        // Unproject near and far points
+        let near_ndc = [ndc_x, ndc_y, -1.0, 1.0];
+        let far_ndc = [ndc_x, ndc_y, 1.0, 1.0];
+
+        let near_world = mat4_transform_point(inv_vp, near_ndc);
+        let far_world = mat4_transform_point(inv_vp, far_ndc);
+
+        // Ray direction from near to far
+        let direction = normalize(sub(far_world, near_world));
+
+        Ray3D {
+            origin: near_world,
+            direction,
+        }
+    }
+}
+
+/// A ray in 3D space for picking
+#[derive(Debug, Clone, Copy)]
+pub struct Ray3D {
+    /// Ray origin
+    pub origin: [f32; 3],
+    /// Normalized ray direction
+    pub direction: [f32; 3],
+}
+
+impl Ray3D {
+    /// Test intersection with a sphere, returning distance if hit
+    pub fn intersect_sphere(&self, center: [f32; 3], radius: f32) -> Option<f32> {
+        // Vector from ray origin to sphere center
+        let oc = sub(self.origin, center);
+
+        // Quadratic coefficients: at² + bt + c = 0
+        let a = dot(self.direction, self.direction);
+        let b = 2.0 * dot(oc, self.direction);
+        let c = dot(oc, oc) - radius * radius;
+
+        let discriminant = b * b - 4.0 * a * c;
+
+        if discriminant < 0.0 {
+            return None; // No intersection
+        }
+
+        // Find nearest positive intersection
+        let sqrt_d = discriminant.sqrt();
+        let t1 = (-b - sqrt_d) / (2.0 * a);
+        let t2 = (-b + sqrt_d) / (2.0 * a);
+
+        if t1 > 0.0 {
+            Some(t1)
+        } else if t2 > 0.0 {
+            Some(t2)
+        } else {
+            None // Both intersections behind ray origin
+        }
+    }
 }
 
 /// 3D bounding box
@@ -402,6 +470,120 @@ fn mat4_multiply(a: [f32; 16], b: [f32; 16]) -> [f32; 16] {
     result
 }
 
+/// Compute inverse of a 4x4 matrix (column-major)
+fn mat4_inverse(m: [f32; 16]) -> [f32; 16] {
+    let mut inv = [0.0f32; 16];
+
+    inv[0] = m[5] * m[10] * m[15] - m[5] * m[11] * m[14] - m[9] * m[6] * m[15]
+        + m[9] * m[7] * m[14]
+        + m[13] * m[6] * m[11]
+        - m[13] * m[7] * m[10];
+
+    inv[4] = -m[4] * m[10] * m[15] + m[4] * m[11] * m[14] + m[8] * m[6] * m[15]
+        - m[8] * m[7] * m[14]
+        - m[12] * m[6] * m[11]
+        + m[12] * m[7] * m[10];
+
+    inv[8] = m[4] * m[9] * m[15] - m[4] * m[11] * m[13] - m[8] * m[5] * m[15]
+        + m[8] * m[7] * m[13]
+        + m[12] * m[5] * m[11]
+        - m[12] * m[7] * m[9];
+
+    inv[12] = -m[4] * m[9] * m[14] + m[4] * m[10] * m[13] + m[8] * m[5] * m[14]
+        - m[8] * m[6] * m[13]
+        - m[12] * m[5] * m[10]
+        + m[12] * m[6] * m[9];
+
+    inv[1] = -m[1] * m[10] * m[15] + m[1] * m[11] * m[14] + m[9] * m[2] * m[15]
+        - m[9] * m[3] * m[14]
+        - m[13] * m[2] * m[11]
+        + m[13] * m[3] * m[10];
+
+    inv[5] = m[0] * m[10] * m[15] - m[0] * m[11] * m[14] - m[8] * m[2] * m[15]
+        + m[8] * m[3] * m[14]
+        + m[12] * m[2] * m[11]
+        - m[12] * m[3] * m[10];
+
+    inv[9] = -m[0] * m[9] * m[15] + m[0] * m[11] * m[13] + m[8] * m[1] * m[15]
+        - m[8] * m[3] * m[13]
+        - m[12] * m[1] * m[11]
+        + m[12] * m[3] * m[9];
+
+    inv[13] = m[0] * m[9] * m[14] - m[0] * m[10] * m[13] - m[8] * m[1] * m[14]
+        + m[8] * m[2] * m[13]
+        + m[12] * m[1] * m[10]
+        - m[12] * m[2] * m[9];
+
+    inv[2] = m[1] * m[6] * m[15] - m[1] * m[7] * m[14] - m[5] * m[2] * m[15]
+        + m[5] * m[3] * m[14]
+        + m[13] * m[2] * m[7]
+        - m[13] * m[3] * m[6];
+
+    inv[6] = -m[0] * m[6] * m[15] + m[0] * m[7] * m[14] + m[4] * m[2] * m[15]
+        - m[4] * m[3] * m[14]
+        - m[12] * m[2] * m[7]
+        + m[12] * m[3] * m[6];
+
+    inv[10] = m[0] * m[5] * m[15] - m[0] * m[7] * m[13] - m[4] * m[1] * m[15]
+        + m[4] * m[3] * m[13]
+        + m[12] * m[1] * m[7]
+        - m[12] * m[3] * m[5];
+
+    inv[14] = -m[0] * m[5] * m[14] + m[0] * m[6] * m[13] + m[4] * m[1] * m[14]
+        - m[4] * m[2] * m[13]
+        - m[12] * m[1] * m[6]
+        + m[12] * m[2] * m[5];
+
+    inv[3] = -m[1] * m[6] * m[11] + m[1] * m[7] * m[10] + m[5] * m[2] * m[11]
+        - m[5] * m[3] * m[10]
+        - m[9] * m[2] * m[7]
+        + m[9] * m[3] * m[6];
+
+    inv[7] = m[0] * m[6] * m[11] - m[0] * m[7] * m[10] - m[4] * m[2] * m[11]
+        + m[4] * m[3] * m[10]
+        + m[8] * m[2] * m[7]
+        - m[8] * m[3] * m[6];
+
+    inv[11] = -m[0] * m[5] * m[11] + m[0] * m[7] * m[9] + m[4] * m[1] * m[11]
+        - m[4] * m[3] * m[9]
+        - m[8] * m[1] * m[7]
+        + m[8] * m[3] * m[5];
+
+    inv[15] = m[0] * m[5] * m[10] - m[0] * m[6] * m[9] - m[4] * m[1] * m[10]
+        + m[4] * m[2] * m[9]
+        + m[8] * m[1] * m[6]
+        - m[8] * m[2] * m[5];
+
+    let det = m[0] * inv[0] + m[1] * inv[4] + m[2] * inv[8] + m[3] * inv[12];
+
+    if det.abs() < 1e-10 {
+        return [
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ];
+    }
+
+    let inv_det = 1.0 / det;
+    for val in &mut inv {
+        *val *= inv_det;
+    }
+
+    inv
+}
+
+/// Transform a 4D point by a 4x4 matrix and perform perspective divide
+fn mat4_transform_point(m: [f32; 16], p: [f32; 4]) -> [f32; 3] {
+    let x = m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12] * p[3];
+    let y = m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13] * p[3];
+    let z = m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14] * p[3];
+    let w = m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15] * p[3];
+
+    if w.abs() < 1e-10 {
+        return [x, y, z];
+    }
+
+    [x / w, y / w, z / w]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -433,10 +615,10 @@ mod tests {
     #[test]
     fn camera_zoom_clamps() {
         let mut cam = Camera3D::new(1.0);
-        cam.zoom(0.01); // Zoom way in
-        assert!(cam.target_distance >= 50.0);
-        cam.zoom(100.0); // Zoom way out
+        cam.zoom(0.01); // Zoom way out (small factor → larger distance)
         assert!(cam.target_distance <= 1000.0);
+        cam.zoom(100.0); // Zoom way in (large factor → smaller distance)
+        assert!(cam.target_distance >= 50.0);
     }
 
     #[test]
@@ -583,6 +765,123 @@ mod tests {
         assert!(
             x_right != x_left,
             "Left and right should project to different x coordinates"
+        );
+    }
+
+    #[test]
+    fn screen_to_ray_at_center() {
+        let cam = Camera3D::new(1.0);
+
+        // Ray from center of screen should point roughly toward target
+        let ray = cam.screen_to_ray(400.0, 300.0, 800.0, 600.0);
+
+        // Direction should be normalized
+        let len =
+            (ray.direction[0].powi(2) + ray.direction[1].powi(2) + ray.direction[2].powi(2)).sqrt();
+        assert!(
+            (len - 1.0).abs() < 0.01,
+            "Ray direction should be normalized"
+        );
+    }
+
+    #[test]
+    fn screen_to_ray_origin_near_camera() {
+        let cam = Camera3D::new(1.0);
+
+        let ray = cam.screen_to_ray(400.0, 300.0, 800.0, 600.0);
+
+        // Ray origin should be near camera position (on near plane)
+        let dist_to_cam = ((ray.origin[0] - cam.position[0]).powi(2)
+            + (ray.origin[1] - cam.position[1]).powi(2)
+            + (ray.origin[2] - cam.position[2]).powi(2))
+        .sqrt();
+
+        assert!(
+            dist_to_cam < 50.0,
+            "Ray origin should be near camera position"
+        );
+    }
+
+    #[test]
+    fn ray_sphere_intersect_hit() {
+        use super::Ray3D;
+
+        let ray = Ray3D {
+            origin: [0.0, 0.0, 10.0],
+            direction: [0.0, 0.0, -1.0], // Looking toward origin
+        };
+
+        // Sphere at origin with radius 5
+        let hit = ray.intersect_sphere([0.0, 0.0, 0.0], 5.0);
+
+        assert!(hit.is_some(), "Ray should hit sphere");
+        let t = hit.unwrap();
+        assert!(t > 0.0, "Intersection should be in front of ray");
+        assert!((t - 5.0).abs() < 0.01, "Should hit at distance 5");
+    }
+
+    #[test]
+    fn ray_sphere_intersect_miss() {
+        use super::Ray3D;
+
+        let ray = Ray3D {
+            origin: [0.0, 0.0, 10.0],
+            direction: [1.0, 0.0, 0.0], // Looking sideways
+        };
+
+        // Sphere at origin with radius 5
+        let hit = ray.intersect_sphere([0.0, 0.0, 0.0], 5.0);
+
+        assert!(hit.is_none(), "Ray should miss sphere");
+    }
+
+    #[test]
+    fn ray_sphere_intersect_behind_camera() {
+        use super::Ray3D;
+
+        let ray = Ray3D {
+            origin: [0.0, 0.0, 10.0],
+            direction: [0.0, 0.0, 1.0], // Looking away from origin
+        };
+
+        // Sphere at origin with radius 5
+        let hit = ray.intersect_sphere([0.0, 0.0, 0.0], 5.0);
+
+        assert!(hit.is_none(), "Sphere behind ray should not intersect");
+    }
+
+    #[test]
+    fn pick_node_3d_finds_closest() {
+        let cam = Camera3D::new(1.0);
+
+        // Create two nodes at different depths along ray from center
+        let center_ray = cam.screen_to_ray(400.0, 300.0, 800.0, 600.0);
+
+        // Near node (closer to camera along ray)
+        let near_pos = [
+            center_ray.origin[0] + center_ray.direction[0] * 100.0,
+            center_ray.origin[1] + center_ray.direction[1] * 100.0,
+            center_ray.origin[2] + center_ray.direction[2] * 100.0,
+        ];
+
+        // Far node (farther along ray)
+        let far_pos = [
+            center_ray.origin[0] + center_ray.direction[0] * 200.0,
+            center_ray.origin[1] + center_ray.direction[1] * 200.0,
+            center_ray.origin[2] + center_ray.direction[2] * 200.0,
+        ];
+
+        let radius = 20.0;
+
+        // Ray should hit both, but near should have smaller t
+        let near_hit = center_ray.intersect_sphere(near_pos, radius);
+        let far_hit = center_ray.intersect_sphere(far_pos, radius);
+
+        assert!(near_hit.is_some(), "Should hit near node");
+        assert!(far_hit.is_some(), "Should hit far node");
+        assert!(
+            near_hit.unwrap() < far_hit.unwrap(),
+            "Near node should be hit first"
         );
     }
 }

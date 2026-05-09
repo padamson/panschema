@@ -13,6 +13,7 @@ categories = ["command-line-utilities", "development-tools::build-utils"]
 [dependencies]
 # CLI
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 
 # RDF/OWL parsing and serialization
 sophia = { version = "0.9", features = ["jsonld", "xml"] }

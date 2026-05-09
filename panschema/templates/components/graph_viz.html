@@ -64,6 +64,36 @@
         <div class="graph-info" id="graph-info" style="display: none;">
             <span id="graph-info-label"></span>
         </div>
+
+        {# Details panel (shown when a node is selected) #}
+        <div class="graph-details-panel" id="graph-details-panel" style="display: none;">
+            <div class="graph-details-header">
+                <span class="graph-details-title" id="graph-details-title">Node Details</span>
+                <button class="graph-details-close" id="graph-details-close" title="Close (Escape)">×</button>
+            </div>
+            <div class="graph-details-content" id="graph-details-content">
+                <div class="graph-detail-row">
+                    <span class="graph-detail-label">Label:</span>
+                    <span class="graph-detail-value" id="graph-detail-label"></span>
+                </div>
+                <div class="graph-detail-row">
+                    <span class="graph-detail-label">Type:</span>
+                    <span class="graph-detail-value" id="graph-detail-type"></span>
+                </div>
+                <div class="graph-detail-row">
+                    <span class="graph-detail-label">ID:</span>
+                    <span class="graph-detail-value graph-detail-id" id="graph-detail-id"></span>
+                </div>
+                <div class="graph-detail-row" id="graph-detail-fixed-row">
+                    <span class="graph-detail-label">Fixed:</span>
+                    <span class="graph-detail-value" id="graph-detail-fixed"></span>
+                </div>
+                <div class="graph-detail-row" id="graph-detail-connections-row">
+                    <span class="graph-detail-label">Connections:</span>
+                    <span class="graph-detail-value" id="graph-detail-connections"></span>
+                </div>
+            </div>
+        </div>
     </div>
 </section>
 
@@ -317,6 +347,82 @@
     z-index: 10;
 }
 
+/* Details panel */
+.graph-details-panel {
+    position: absolute;
+    top: var(--spacing-md, 12px);
+    right: var(--spacing-md, 12px);
+    width: 280px;
+    max-width: calc(100% - 24px);
+    background: var(--color-bg-secondary, #2d2d44);
+    border: 1px solid var(--color-border, #374151);
+    border-radius: var(--radius-md, 6px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    z-index: 20;
+    overflow: hidden;
+}
+
+.graph-details-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--spacing-sm, 8px) var(--spacing-md, 12px);
+    background: var(--color-bg-tertiary, #1a1a2e);
+    border-bottom: 1px solid var(--color-border, #374151);
+}
+
+.graph-details-title {
+    font-size: var(--font-size-sm, 13px);
+    font-weight: 600;
+    color: var(--color-text, #e5e7eb);
+}
+
+.graph-details-close {
+    background: none;
+    border: none;
+    color: var(--color-text-muted, #9ca3af);
+    font-size: 18px;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+    transition: color 0.2s;
+}
+
+.graph-details-close:hover {
+    color: var(--color-text, #e5e7eb);
+}
+
+.graph-details-content {
+    padding: var(--spacing-sm, 8px) var(--spacing-md, 12px);
+}
+
+.graph-detail-row {
+    display: flex;
+    margin-bottom: var(--spacing-xs, 4px);
+    font-size: var(--font-size-sm, 13px);
+}
+
+.graph-detail-row:last-child {
+    margin-bottom: 0;
+}
+
+.graph-detail-label {
+    color: var(--color-text-muted, #9ca3af);
+    min-width: 90px;
+    flex-shrink: 0;
+}
+
+.graph-detail-value {
+    color: var(--color-text, #e5e7eb);
+    word-break: break-word;
+}
+
+.graph-detail-id {
+    font-family: var(--font-mono, monospace);
+    font-size: var(--font-size-xs, 11px);
+    color: var(--color-text-muted, #9ca3af);
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     .graph-container {
@@ -373,8 +479,80 @@
     let lastProjectedEdges = [];
     const HOVER_RADIUS = 30; // pixels threshold for hover detection
 
+    // Selection tracking
+    let selectedNodeIndex = -1;
+    let dragMoved = false; // Track if mouse moved during drag (to distinguish click from drag)
+
+    // Node dragging state
+    let draggingNodeIndex = -1;
+
+    // Details panel elements
+    const detailsPanel = document.getElementById('graph-details-panel');
+    const detailsClose = document.getElementById('graph-details-close');
+    const detailLabel = document.getElementById('graph-detail-label');
+    const detailType = document.getElementById('graph-detail-type');
+    const detailId = document.getElementById('graph-detail-id');
+    const detailFixed = document.getElementById('graph-detail-fixed');
+    const detailConnections = document.getElementById('graph-detail-connections');
+
     // LocalStorage key for label preferences
     const LABEL_PREFS_KEY = 'panschema-label-prefs';
+
+    // Show the details panel with node information
+    function showDetailsPanel(nodeIndex) {
+        if (!viz || nodeIndex < 0) {
+            hideDetailsPanel();
+            return;
+        }
+
+        try {
+            const detailsJson = viz.get_node_details(nodeIndex);
+            const details = JSON.parse(detailsJson);
+
+            if (!details.id) {
+                hideDetailsPanel();
+                return;
+            }
+
+            detailLabel.textContent = details.label || 'Unknown';
+            detailType.textContent = details.type || 'Unknown';
+            detailId.textContent = details.id;
+            detailFixed.textContent = details.isFixed ? 'Yes (pinned)' : 'No';
+
+            // Format connections list
+            if (details.connections && details.connections.length > 0) {
+                detailConnections.textContent = details.connections.length + ' nodes';
+                detailConnections.title = details.connections.join(', ');
+            } else {
+                detailConnections.textContent = 'None';
+                detailConnections.title = '';
+            }
+
+            detailsPanel.style.display = 'block';
+        } catch (e) {
+            console.warn('Failed to get node details:', e);
+            hideDetailsPanel();
+        }
+    }
+
+    // Hide the details panel
+    function hideDetailsPanel() {
+        detailsPanel.style.display = 'none';
+    }
+
+    // Deselect current node and hide details
+    function deselectNode() {
+        if (viz) {
+            if (typeof viz.deselect === 'function') {
+                viz.deselect();
+            }
+            if (typeof viz.clear_focus === 'function') {
+                viz.clear_focus();
+            }
+        }
+        selectedNodeIndex = -1;
+        hideDetailsPanel();
+    }
 
     // Save label preferences to localStorage
     function saveLabelPrefs() {
@@ -952,14 +1130,61 @@
 
     // Canvas-specific event listeners (need to be re-attached when canvas is replaced)
     function setupCanvasInteraction() {
-        // Mouse drag for panning (2D) or orbit (3D)
+        // Mouse drag for panning (2D) or orbit (3D), or node dragging
         canvas.addEventListener('mousedown', (e) => {
             isDragging = true;
+            dragMoved = false; // Reset drag movement tracker
             lastX = e.clientX;
             lastY = e.clientY;
+
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+            const dpr = window.devicePixelRatio || 1;
+
+            // Check if we're clicking on a node
+            if (viz && typeof viz.start_drag_at === 'function') {
+                if (is3D) {
+                    // 3D mode uses screen coords with width/height
+                    draggingNodeIndex = viz.start_drag_at(mouseX * dpr, mouseY * dpr, canvas.width, canvas.height);
+                } else {
+                    // 2D mode uses canvas coords
+                    draggingNodeIndex = viz.start_drag_at(mouseX * dpr, mouseY * dpr);
+                }
+                if (draggingNodeIndex >= 0) {
+                    canvas.style.cursor = 'grabbing';
+                }
+            }
         });
 
-        // Hover detection for labels
+        // Click to select (only if not dragging a node or camera)
+        canvas.addEventListener('click', (e) => {
+            if (dragMoved || !viz) return; // Ignore if we were dragging
+
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+            const dpr = window.devicePixelRatio || 1;
+
+            if (!is3D && typeof viz.select_at === 'function') {
+                selectedNodeIndex = viz.select_at(mouseX * dpr, mouseY * dpr);
+                if (selectedNodeIndex >= 0) {
+                    showDetailsPanel(selectedNodeIndex);
+                } else {
+                    hideDetailsPanel();
+                }
+            } else if (is3D && typeof viz.select_at === 'function') {
+                // 3D selection uses screen coordinates
+                selectedNodeIndex = viz.select_at(mouseX * dpr, mouseY * dpr, canvas.width, canvas.height);
+                if (selectedNodeIndex >= 0) {
+                    showDetailsPanel(selectedNodeIndex);
+                } else {
+                    hideDetailsPanel();
+                }
+            }
+        });
+
+        // Hover detection for labels and cursor changes
         canvas.addEventListener('mousemove', (e) => {
             if (!isDragging && viz) {
                 const rect = canvas.getBoundingClientRect();
@@ -973,7 +1198,10 @@
                     // 2D mode: use WASM hover detection (needs scaled coordinates)
                     const dpr = window.devicePixelRatio || 1;
                     if (typeof viz.update_hover === 'function') {
-                        viz.update_hover(mouseX * dpr, mouseY * dpr);
+                        const changed = viz.update_hover(mouseX * dpr, mouseY * dpr);
+                        // Update cursor based on hover state
+                        const nodeIdx = viz.hovered_node_index ? viz.hovered_node_index() : -1;
+                        canvas.style.cursor = nodeIdx >= 0 ? 'grab' : 'default';
                     }
                 }
             }
@@ -1065,7 +1293,25 @@
                 const dx = e.clientX - lastX;
                 const dy = e.clientY - lastY;
 
-                if (is3D) {
+                // Mark that actual movement occurred (to distinguish drag from click)
+                if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+                    dragMoved = true;
+                }
+
+                // If dragging a node, update its position
+                if (draggingNodeIndex >= 0 && typeof viz.drag_to === 'function') {
+                    const rect = canvas.getBoundingClientRect();
+                    const mouseX = e.clientX - rect.left;
+                    const mouseY = e.clientY - rect.top;
+                    const dpr = window.devicePixelRatio || 1;
+                    if (is3D) {
+                        // 3D drag uses screen coords with width/height
+                        viz.drag_to(mouseX * dpr, mouseY * dpr, canvas.width, canvas.height);
+                    } else {
+                        // 2D drag uses canvas coords
+                        viz.drag_to(mouseX * dpr, mouseY * dpr);
+                    }
+                } else if (is3D) {
                     // 3D mode: shift+drag to pan, drag to orbit
                     if (isShiftDown) {
                         viz.pan(-dx, dy);
@@ -1074,7 +1320,7 @@
                         viz.orbit_vertical(dy * 0.01);
                     }
                 } else {
-                    // 2D mode: drag to pan
+                    // 2D mode: drag to pan (only if not dragging a node)
                     viz.pan(dx, dy);
                 }
 
@@ -1083,7 +1329,26 @@
             }
         });
 
-        window.addEventListener('mouseup', () => {
+        window.addEventListener('mouseup', (e) => {
+            // End node drag if we were dragging one
+            if (draggingNodeIndex >= 0 && viz && typeof viz.end_drag === 'function') {
+                if (e.shiftKey && !dragMoved) {
+                    // Shift+click (no movement): toggle pin
+                    if (typeof viz.toggle_fixed === 'function') {
+                        viz.toggle_fixed(draggingNodeIndex);
+                    }
+                    viz.end_drag(false);
+                    // Refresh details panel if this node is selected
+                    if (selectedNodeIndex === draggingNodeIndex) {
+                        showDetailsPanel(selectedNodeIndex);
+                    }
+                } else {
+                    // Shift+drag-release pins at new position; plain release rejoins sim
+                    viz.end_drag(e.shiftKey && dragMoved);
+                }
+                draggingNodeIndex = -1;
+                canvas.style.cursor = 'grab';
+            }
             isDragging = false;
         });
 
@@ -1125,11 +1390,57 @@
             }
         });
 
-        // Keyboard shortcuts for labels
+        // Details panel close button
+        detailsClose.addEventListener('click', () => {
+            deselectNode();
+        });
+
+        // Keyboard shortcuts
         window.addEventListener('keydown', (e) => {
             // Only handle if not in an input field
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
+            // Escape to deselect/close details
+            if (e.key === 'Escape') {
+                deselectNode();
+                return;
+            }
+
+            // R to reset view
+            if (e.key === 'r' || e.key === 'R') {
+                if (viz) {
+                    viz.fit_to_bounds(40);
+                }
+                return;
+            }
+
+            // F to focus on selected node (dims unconnected nodes)
+            if (e.key === 'f' || e.key === 'F') {
+                if (viz && selectedNodeIndex >= 0 && typeof viz.focus_node === 'function') {
+                    // Toggle focus mode
+                    const currentFocus = viz.focused_node_index ? viz.focused_node_index() : -1;
+                    if (currentFocus === selectedNodeIndex) {
+                        // Already focused on this node, clear focus
+                        viz.clear_focus();
+                    } else {
+                        // Focus on selected node
+                        viz.focus_node(selectedNodeIndex);
+                    }
+                }
+                return;
+            }
+
+            // Delete/Backspace to unfix selected node
+            if (e.key === 'Delete' || e.key === 'Backspace') {
+                if (viz && selectedNodeIndex >= 0 && typeof viz.unfix_node === 'function') {
+                    viz.unfix_node(selectedNodeIndex);
+                    // Update details panel if showing
+                    showDetailsPanel(selectedNodeIndex);
+                }
+                return;
+            }
+
+            // Label toggles
             if (e.key === 'l' || e.key === 'L') {
                 if (viz) {
                     viz.toggle_labels();

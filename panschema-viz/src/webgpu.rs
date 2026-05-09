@@ -549,6 +549,75 @@ impl WebGpuRenderer {
         self.camera
             .project_to_screen(world_pos, self.width as f32, self.height as f32)
     }
+
+    /// Convert screen coordinates to a ray in world space for picking
+    pub fn screen_to_ray(
+        &self,
+        screen_x: f32,
+        screen_y: f32,
+        width: f32,
+        height: f32,
+    ) -> crate::camera3d::Ray3D {
+        self.camera.screen_to_ray(screen_x, screen_y, width, height)
+    }
+
+    /// Unproject screen coordinates to a plane containing a reference point.
+    /// Used for dragging: the new position stays on a plane perpendicular to the camera.
+    pub fn unproject_to_plane(
+        &self,
+        screen_x: f32,
+        screen_y: f32,
+        width: f32,
+        height: f32,
+        reference_point: [f32; 3],
+    ) -> [f32; 3] {
+        // Get a ray from the screen coordinates
+        let ray = self.camera.screen_to_ray(screen_x, screen_y, width, height);
+
+        // Plane normal is the camera's forward direction
+        let forward = [
+            self.camera.target[0] - self.camera.position[0],
+            self.camera.target[1] - self.camera.position[1],
+            self.camera.target[2] - self.camera.position[2],
+        ];
+
+        // Normalize forward
+        let len = (forward[0].powi(2) + forward[1].powi(2) + forward[2].powi(2)).sqrt();
+        let normal = if len > 0.0 {
+            [forward[0] / len, forward[1] / len, forward[2] / len]
+        } else {
+            [0.0, 0.0, 1.0]
+        };
+
+        // Ray-plane intersection: t = dot(plane_point - ray_origin, normal) / dot(ray_direction, normal)
+        let denom = normal[0] * ray.direction[0]
+            + normal[1] * ray.direction[1]
+            + normal[2] * ray.direction[2];
+
+        if denom.abs() < 1e-6 {
+            // Ray is parallel to plane, return reference point
+            return reference_point;
+        }
+
+        let diff = [
+            reference_point[0] - ray.origin[0],
+            reference_point[1] - ray.origin[1],
+            reference_point[2] - ray.origin[2],
+        ];
+
+        let t = (normal[0] * diff[0] + normal[1] * diff[1] + normal[2] * diff[2]) / denom;
+
+        if t < 0.0 {
+            // Intersection is behind camera, return reference point
+            return reference_point;
+        }
+
+        [
+            ray.origin[0] + ray.direction[0] * t,
+            ray.origin[1] + ray.direction[1] * t,
+            ray.origin[2] + ray.direction[2] * t,
+        ]
+    }
 }
 
 // WGSL Shaders

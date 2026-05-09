@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap_complete::Shell;
 
 #[cfg(feature = "dev")]
 mod components;
@@ -69,7 +70,7 @@ enum Commands {
     },
     /// Start development server with hot reload
     Serve {
-        /// Input ontology file (.ttl)
+        /// Input ontology file (.ttl, .yaml, .yml)
         #[arg(short, long)]
         input: PathBuf,
 
@@ -80,6 +81,12 @@ enum Commands {
         /// Port to run the server on
         #[arg(short, long, default_value = "3000")]
         port: u16,
+    },
+    /// Generate shell completion script (source the output, e.g. `panschema completions zsh > ~/.zfunc/_panschema`)
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: Shell,
     },
     /// Generate style guide showing all UI components (dev feature only)
     #[cfg(feature = "dev")]
@@ -185,6 +192,10 @@ async fn main() -> anyhow::Result<()> {
             port,
         }) => {
             server::serve(&input, &output, port).await?;
+        }
+        Some(Commands::Completions { shell }) => {
+            let mut cmd = Cli::command();
+            clap_complete::generate(shell, &mut cmd, "panschema", &mut std::io::stdout());
         }
         #[cfg(feature = "dev")]
         Some(Commands::Styleguide {

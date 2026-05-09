@@ -52,7 +52,7 @@ impl SimNode3D {
             vy: 0.0,
             vz: 0.0,
             color: node.color,
-            radius: 12.0,
+            radius: 6.0,
         }
     }
 }
@@ -99,19 +99,25 @@ pub struct SimulationConfig3D {
     pub alpha_min: f32,
     /// Alpha decay rate
     pub alpha_decay: f32,
+    /// Extra gap added to (r1 + r2) when resolving overlap
+    pub collide_padding: f32,
+    /// Fraction of overlap resolved per tick (0..1); lower values are smoother
+    pub collide_strength: f32,
 }
 
 impl Default for SimulationConfig3D {
     fn default() -> Self {
         Self {
-            charge: -50.0, // Stronger repulsion for 3D
+            charge: -300.0, // Stronger repulsion for 3D (1/dist² falls off fast)
             link_distance: 60.0,
             link_strength: 1.0,
-            center_strength: 0.08,
+            center_strength: 0.03,
             velocity_decay: 0.6,
             alpha: 1.0,
             alpha_min: 0.001,
             alpha_decay: 1.0 - 0.001_f32.powf(1.0 / 300.0),
+            collide_padding: 2.0,
+            collide_strength: 0.7,
         }
     }
 }
@@ -178,6 +184,11 @@ impl Simulation3D {
         self.config.alpha > self.config.alpha_min
     }
 
+    /// Reheat the simulation to restart physics (e.g., when dragging starts)
+    pub fn reheat(&mut self, alpha: f32) {
+        self.config.alpha = alpha.clamp(self.config.alpha_min, 1.0);
+    }
+
     /// Run one simulation tick
     pub fn tick(&mut self) {
         if !self.is_running() {
@@ -208,8 +219,11 @@ impl Simulation3D {
             node.z += node.vz * self.config.alpha;
         }
 
+        // Resolve overlap via position correction
+        self.apply_collide_force(&std::collections::HashSet::new());
+
         // Decay alpha
-        self.config.alpha += (self.config.alpha_decay - 1.0) * self.config.alpha;
+        self.config.alpha *= 1.0 - self.config.alpha_decay;
     }
 
     /// Apply repulsion between all node pairs
@@ -286,6 +300,111 @@ impl Simulation3D {
                 break;
             }
             self.tick();
+        }
+    }
+
+    /// Run one simulation tick with fixed nodes that won't move
+    pub fn tick_with_fixed(&mut self, fixed_nodes: &std::collections::HashSet<usize>) {
+        if !self.is_running() {
+            return;
+        }
+
+        let n = self.nodes.len();
+        if n == 0 {
+            return;
+        }
+
+        // Apply many-body force (repulsion between all nodes)
+        self.apply_many_body_force();
+
+        // Apply link force (springs between connected nodes)
+        self.apply_link_force();
+
+        // Apply center force (gravity toward origin)
+        self.apply_center_force();
+
+        // Apply velocity and decay, respecting fixed nodes
+        for (i, node) in self.nodes.iter_mut().enumerate() {
+            if fixed_nodes.contains(&i) {
+                // Fixed nodes don't move and have zero velocity
+                node.vx = 0.0;
+                node.vy = 0.0;
+                node.vz = 0.0;
+            } else {
+                node.vx *= self.config.velocity_decay;
+                node.vy *= self.config.velocity_decay;
+                node.vz *= self.config.velocity_decay;
+                node.x += node.vx * self.config.alpha;
+                node.y += node.vy * self.config.alpha;
+                node.z += node.vz * self.config.alpha;
+            }
+        }
+
+        // Resolve overlap via position correction (post-integration)
+        self.apply_collide_force(fixed_nodes);
+
+        // Decay alpha
+        self.config.alpha *= 1.0 - self.config.alpha_decay;
+    }
+
+    /// Resolve node overlap via direct position correction.
+    /// Any pair within (r1 + r2 + padding) is pushed apart by `strength` of the overlap.
+    /// Fixed nodes don't move; the other absorbs the full correction.
+    fn apply_collide_force(&mut self, fixed_nodes: &std::collections::HashSet<usize>) {
+        let n = self.nodes.len();
+        let padding = self.config.collide_padding;
+        let strength = self.config.collide_strength;
+
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let i_fixed = fixed_nodes.contains(&i);
+                let j_fixed = fixed_nodes.contains(&j);
+                if i_fixed && j_fixed {
+                    continue;
+                }
+
+                let dx = self.nodes[j].x - self.nodes[i].x;
+                let dy = self.nodes[j].y - self.nodes[i].y;
+                let dz = self.nodes[j].z - self.nodes[i].z;
+                let r_sum = self.nodes[i].radius + self.nodes[j].radius + padding;
+                let dist_sq = dx * dx + dy * dy + dz * dz;
+
+                if dist_sq >= r_sum * r_sum || dist_sq <= 0.0 {
+                    continue;
+                }
+
+                let dist = dist_sq.sqrt();
+                let overlap = (r_sum - dist) * strength;
+                let nx = dx / dist;
+                let ny = dy / dist;
+                let nz = dz / dist;
+
+                let (i_share, j_share) = match (i_fixed, j_fixed) {
+                    (true, false) => (0.0, 1.0),
+                    (false, true) => (1.0, 0.0),
+                    _ => (0.5, 0.5),
+                };
+
+                self.nodes[i].x -= nx * overlap * i_share;
+                self.nodes[i].y -= ny * overlap * i_share;
+                self.nodes[i].z -= nz * overlap * i_share;
+                self.nodes[j].x += nx * overlap * j_share;
+                self.nodes[j].y += ny * overlap * j_share;
+                self.nodes[j].z += nz * overlap * j_share;
+            }
+        }
+    }
+
+    /// Set a node's position directly (for dragging)
+    pub fn set_node_position(&mut self, index: usize, x: f32, y: f32, z: f32) {
+        if let Some(node) = self.nodes.get_mut(index) {
+            node.x = x;
+            node.y = y;
+            node.z = z;
+            // Reset velocity when manually positioning
+            node.vx = 0.0;
+            node.vy = 0.0;
+            node.vz = 0.0;
         }
     }
 }
@@ -462,5 +581,60 @@ mod tests {
                 "Fibonacci sphere should distribute evenly"
             );
         }
+    }
+
+    #[test]
+    fn collide_force_prevents_overlap_3d() {
+        let graph = GraphData {
+            schema_name: "overlap".to_string(),
+            schema_title: None,
+            format_version: "1.0".to_string(),
+            nodes: vec![
+                GraphNode {
+                    id: "a".to_string(),
+                    label: "A".to_string(),
+                    node_type: NodeType::Class,
+                    color: [1.0, 0.0, 0.0, 1.0],
+                    description: None,
+                    uri: None,
+                    is_abstract: false,
+                },
+                GraphNode {
+                    id: "b".to_string(),
+                    label: "B".to_string(),
+                    node_type: NodeType::Class,
+                    color: [0.0, 1.0, 0.0, 1.0],
+                    description: None,
+                    uri: None,
+                    is_abstract: false,
+                },
+            ],
+            edges: vec![],
+        };
+        let mut sim = Simulation3D::from_graph_data(&graph);
+
+        // Force overlap along the x-axis.
+        sim.nodes[0].x = 0.0;
+        sim.nodes[0].y = 0.0;
+        sim.nodes[0].z = 0.0;
+        sim.nodes[1].x = 1.0;
+        sim.nodes[1].y = 0.0;
+        sim.nodes[1].z = 0.0;
+
+        let r_sum = sim.nodes[0].radius + sim.nodes[1].radius;
+
+        for _ in 0..50 {
+            sim.tick();
+        }
+
+        let dx = sim.nodes[1].x - sim.nodes[0].x;
+        let dy = sim.nodes[1].y - sim.nodes[0].y;
+        let dz = sim.nodes[1].z - sim.nodes[0].z;
+        let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+
+        assert!(
+            dist >= r_sum,
+            "3D collide force should resolve overlap: dist={dist}, r_sum={r_sum}"
+        );
     }
 }
