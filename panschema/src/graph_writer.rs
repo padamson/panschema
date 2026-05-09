@@ -310,46 +310,44 @@ impl GraphWriter {
             });
 
             // Add domain edge (slot -> class)
-            if self.options.include_domain_edges {
-                if let Some(domain) = &slot_def.domain {
-                    if schema.classes.contains_key(domain) {
-                        graph.edges.push(GraphEdge {
-                            source: format!("slot:{}", name),
-                            target: format!("class:{}", domain),
-                            edge_type: EdgeType::Domain,
-                            label: Some("domain".to_string()),
-                        });
-                    }
-                }
+            if self.options.include_domain_edges
+                && let Some(domain) = &slot_def.domain
+                && schema.classes.contains_key(domain)
+            {
+                graph.edges.push(GraphEdge {
+                    source: format!("slot:{}", name),
+                    target: format!("class:{}", domain),
+                    edge_type: EdgeType::Domain,
+                    label: Some("domain".to_string()),
+                });
             }
 
             // Add range edge (slot -> class/enum/type)
-            if self.options.include_range_edges {
-                if let Some(range) = &slot_def.range {
-                    let target_id = self.resolve_range_target(schema, range);
-                    if let Some(target) = target_id {
-                        graph.edges.push(GraphEdge {
-                            source: format!("slot:{}", name),
-                            target,
-                            edge_type: EdgeType::Range,
-                            label: Some("range".to_string()),
-                        });
-                    }
+            if self.options.include_range_edges
+                && let Some(range) = &slot_def.range
+            {
+                let target_id = self.resolve_range_target(schema, range);
+                if let Some(target) = target_id {
+                    graph.edges.push(GraphEdge {
+                        source: format!("slot:{}", name),
+                        target,
+                        edge_type: EdgeType::Range,
+                        label: Some("range".to_string()),
+                    });
                 }
             }
 
             // Add inverse edge (slot <-> slot)
-            if self.options.include_inverse_edges {
-                if let Some(inverse) = &slot_def.inverse {
-                    if schema.slots.contains_key(inverse) {
-                        graph.edges.push(GraphEdge {
-                            source: format!("slot:{}", name),
-                            target: format!("slot:{}", inverse),
-                            edge_type: EdgeType::Inverse,
-                            label: Some("inverseOf".to_string()),
-                        });
-                    }
-                }
+            if self.options.include_inverse_edges
+                && let Some(inverse) = &slot_def.inverse
+                && schema.slots.contains_key(inverse)
+            {
+                graph.edges.push(GraphEdge {
+                    source: format!("slot:{}", name),
+                    target: format!("slot:{}", inverse),
+                    edge_type: EdgeType::Inverse,
+                    label: Some("inverseOf".to_string()),
+                });
             }
         }
     }
@@ -397,15 +395,15 @@ impl GraphWriter {
             });
 
             // Add typeof edge (type -> parent type)
-            if let Some(parent) = &type_def.typeof_ {
-                if schema.types.contains_key(parent) {
-                    graph.edges.push(GraphEdge {
-                        source: format!("type:{}", name),
-                        target: format!("type:{}", parent),
-                        edge_type: EdgeType::TypeOf,
-                        label: None,
-                    });
-                }
+            if let Some(parent) = &type_def.typeof_
+                && schema.types.contains_key(parent)
+            {
+                graph.edges.push(GraphEdge {
+                    source: format!("type:{}", name),
+                    target: format!("type:{}", parent),
+                    edge_type: EdgeType::TypeOf,
+                    label: None,
+                });
             }
         }
     }

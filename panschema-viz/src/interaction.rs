@@ -73,10 +73,10 @@ impl InteractionState {
     /// If `keep_fixed` is true, the node will remain fixed after release.
     #[allow(dead_code)] // Used in sub-slice 6.3
     pub fn end_drag(&mut self, keep_fixed: bool) {
-        if let DragState::Dragging { node, .. } = self.drag {
-            if keep_fixed {
-                self.fixed_nodes.insert(node);
-            }
+        if let DragState::Dragging { node, .. } = self.drag
+            && keep_fixed
+        {
+            self.fixed_nodes.insert(node);
         }
         self.drag = DragState::None;
     }

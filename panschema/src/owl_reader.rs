@@ -478,12 +478,12 @@ impl OwlReader {
             }
 
             // Store label in annotations if different from id
-            if let Some(ref label) = owl_class.label {
-                if label != &owl_class.id {
-                    class_def
-                        .annotations
-                        .insert("panschema:label".to_string(), label.clone());
-                }
+            if let Some(ref label) = owl_class.label
+                && label != &owl_class.id
+            {
+                class_def
+                    .annotations
+                    .insert("panschema:label".to_string(), label.clone());
             }
 
             schema.classes.insert(owl_class.id.clone(), class_def);
@@ -532,12 +532,12 @@ impl OwlReader {
             );
 
             // Store label in annotations if different from id
-            if let Some(ref label) = owl_prop.label {
-                if label != &owl_prop.id {
-                    slot_def
-                        .annotations
-                        .insert("panschema:label".to_string(), label.clone());
-                }
+            if let Some(ref label) = owl_prop.label
+                && label != &owl_prop.id
+            {
+                slot_def
+                    .annotations
+                    .insert("panschema:label".to_string(), label.clone());
             }
 
             schema.slots.insert(owl_prop.id.clone(), slot_def);

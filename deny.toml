@@ -1,0 +1,72 @@
+# cargo-deny configuration
+# Run: cargo deny check
+# Docs: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+all-features = false
+no-default-features = false
+
+[output]
+feature-depth = 1
+
+[advisories]
+ignore = [
+    # All advisories below are pulled in transitively via playwright-rs (dev-dep
+    # only, never shipped in the panschema binary). They affect the e2e test
+    # pipeline only. Re-evaluate when playwright-rs upstream releases a new
+    # version that bumps reqwest/rustls/aws-lc-rs.
+    "RUSTSEC-2026-0044", # aws-lc: X.509 Name Constraints bypass
+    "RUSTSEC-2026-0045", # aws-lc: AES-CCM tag verification timing side-channel
+    "RUSTSEC-2026-0046", # aws-lc: PKCS7_verify cert chain validation bypass
+    "RUSTSEC-2026-0047", # aws-lc: PKCS7_verify signature validation bypass
+    "RUSTSEC-2026-0048", # aws-lc: CRL distribution point scope check
+    "RUSTSEC-2026-0049", # aws-lc: CRL Distribution Point authority matching
+    "RUSTSEC-2026-0098", # aws-lc: name constraints for URI names accepted
+    "RUSTSEC-2026-0099", # aws-lc: name constraints accepted for wildcard certs
+    "RUSTSEC-2026-0104", # aws-lc: reachable panic in CRL parsing
+    "RUSTSEC-2026-0037", # quinn-proto: DoS in Quinn endpoints (via reqwest/playwright-rs)
+    "RUSTSEC-2024-0388", # derivative unmaintained (via wgpu/naga)
+    "RUSTSEC-2024-0370", # proc-macro-error unmaintained (via playwright-rs chain)
+    "RUSTSEC-2024-0436", # paste unmaintained (transitive)
+]
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CECILL-B",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "OpenSSL",
+    "BSL-1.0",
+    "CC0-1.0",
+    "MPL-2.0",
+]
+confidence-threshold = 0.8
+exceptions = []
+
+[licenses.private]
+ignore = false
+registries = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow = []
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

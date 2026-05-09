@@ -2,9 +2,10 @@
 name = "panschema-viz"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "WebGPU visualization for panschema schema graphs"
 license = "Apache-2.0"
+repository = "https://github.com/padamson/panschema"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

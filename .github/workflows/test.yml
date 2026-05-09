@@ -16,6 +16,20 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  msrv:
+    name: MSRV Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install MSRV toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.88"
+
+      - name: Check compilation on MSRV
+        run: cargo check -p panschema
+
   test:
     name: Test on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -118,3 +132,9 @@ jobs:
       run: cargo nextest run -p panschema --features dev
       env:
         BROWSER: all
+
+    - name: Run doc-tests
+      run: cargo test --doc -p panschema
+
+    - name: Generate documentation
+      run: cargo doc --no-deps -p panschema

@@ -48,6 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - `main.rs` and `server.rs` now use `FormatRegistry` instead of hardcoded readers/writers
 - Force simulation defaults retuned for sparser graphs (stronger repulsion, weaker centering); node radii reduced for less visual crowding
+- **MSRV bumped from 1.85 to 1.88** to enable let-chain syntax (`if let X = y && cond`) in source
 
 ### Fixed
 - 3D camera `zoom()` direction was inverted relative to the 2D camera and the documented contract; `factor > 1.0` now zooms in for both

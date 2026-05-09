@@ -2,7 +2,7 @@
 name = "panschema"
 version = "0.2.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 authors = ["Paul Adamson"]
 description = "A universal CLI for schema conversion, documentation, validation, and comparison"
 license = "Apache-2.0"

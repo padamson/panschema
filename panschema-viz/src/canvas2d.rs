@@ -275,10 +275,10 @@ impl Canvas2DRenderer {
 
         for (i, node) in nodes.iter().enumerate() {
             // Skip if filtering and this isn't the target
-            if let Some(idx) = only_index {
-                if i != idx {
-                    continue;
-                }
+            if let Some(idx) = only_index
+                && i != idx
+            {
+                continue;
             }
 
             let (cx, cy) = self.camera.world_to_canvas(node.x, node.y);
@@ -324,10 +324,10 @@ impl Canvas2DRenderer {
 
         for (i, edge) in edges.iter().enumerate() {
             // Skip if filtering and this isn't the target
-            if let Some(idx) = only_index {
-                if i != idx {
-                    continue;
-                }
+            if let Some(idx) = only_index
+                && i != idx
+            {
+                continue;
             }
 
             let source = &nodes[edge.source];
