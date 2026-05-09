@@ -27,8 +27,61 @@ jobs:
         with:
           toolchain: "1.88"
 
+      # panschema/src/html_writer.rs include_bytes! the wasm pkg artifacts at
+      # compile time. For type-checking only, empty placeholders are fine.
+      - name: Stub WASM artifacts
+        run: |
+          mkdir -p panschema-viz/pkg
+          touch panschema-viz/pkg/panschema_viz.js panschema-viz/pkg/panschema_viz_bg.wasm
+
       - name: Check compilation on MSRV
         run: cargo check -p panschema
+
+  lint:
+    name: Lint and Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-lint-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-lint-
+
+      # Empty placeholders are fine for type-check / clippy / cargo doc /
+      # doctests — they don't exercise the wasm bytes at runtime.
+      - name: Stub WASM artifacts
+        run: |
+          mkdir -p panschema-viz/pkg
+          touch panschema-viz/pkg/panschema_viz.js panschema-viz/pkg/panschema_viz_bg.wasm
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (release)
+        run: cargo clippy -p panschema --all-targets -- -D warnings
+
+      - name: Clippy (with dev feature)
+        run: cargo clippy -p panschema --all-targets --features dev -- -D warnings
+
+      - name: Run doc-tests
+        run: cargo test --doc -p panschema
+
+      - name: Generate documentation
+        run: cargo doc --no-deps -p panschema
 
   test:
     name: Test on ${{ matrix.os }}
@@ -46,7 +99,6 @@ jobs:
       with:
         toolchain: ${{ matrix.rust }}
         targets: wasm32-unknown-unknown
-        components: rustfmt, clippy
 
     - name: Install wasm-pack
       uses: taiki-e/install-action@wasm-pack
@@ -114,15 +166,6 @@ jobs:
           npx playwright@1.56.1 install-deps
         fi
 
-    - name: Check formatting
-      run: cargo fmt --all -- --check
-
-    - name: Clippy (release)
-      run: cargo clippy -p panschema --all-targets -- -D warnings
-
-    - name: Clippy (with dev feature)
-      run: cargo clippy -p panschema --all-targets --features dev -- -D warnings
-
     - name: Run tests (release)
       run: cargo nextest run -p panschema
       env:
@@ -132,9 +175,3 @@ jobs:
       run: cargo nextest run -p panschema --features dev
       env:
         BROWSER: all
-
-    - name: Run doc-tests
-      run: cargo test --doc -p panschema
-
-    - name: Generate documentation
-      run: cargo doc --no-deps -p panschema
