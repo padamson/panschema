@@ -155,7 +155,10 @@ impl SchemaDefinition {
 /// Reference: <https://linkml.io/linkml-model/latest/docs/ClassDefinition/>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClassDefinition {
-    /// The unique name of this class within the schema
+    /// The unique name of this class within the schema.
+    /// In dict-keyed contexts (e.g. YAML `classes:`) this is inferred
+    /// from the dict key by `YamlReader::backfill_names` if absent.
+    #[serde(default)]
     pub name: String,
     /// Human-readable description
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -215,7 +218,9 @@ impl ClassDefinition {
 /// Reference: <https://linkml.io/linkml-model/latest/docs/SlotDefinition/>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SlotDefinition {
-    /// The unique name of this slot within the schema
+    /// The unique name of this slot within the schema.
+    /// Inferred from the dict key by `YamlReader::backfill_names` if absent.
+    #[serde(default)]
     pub name: String,
     /// Human-readable description
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -287,7 +292,9 @@ impl SlotDefinition {
 /// Reference: <https://linkml.io/linkml-model/latest/docs/EnumDefinition/>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EnumDefinition {
-    /// The unique name of this enum within the schema
+    /// The unique name of this enum within the schema.
+    /// Inferred from the dict key by `YamlReader::backfill_names` if absent.
+    #[serde(default)]
     pub name: String,
     /// Human-readable description
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -315,7 +322,9 @@ impl EnumDefinition {
 /// A permissible value within an enumeration
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PermissibleValue {
-    /// The value text
+    /// The value text.
+    /// Inferred from the dict key by `YamlReader::backfill_names` if absent.
+    #[serde(default)]
     pub text: String,
     /// Human-readable description
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -342,7 +351,9 @@ impl PermissibleValue {
 /// Reference: <https://linkml.io/linkml-model/latest/docs/TypeDefinition/>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypeDefinition {
-    /// The unique name of this type within the schema
+    /// The unique name of this type within the schema.
+    /// Inferred from the dict key by `YamlReader::backfill_names` if absent.
+    #[serde(default)]
     pub name: String,
     /// Human-readable description
     #[serde(skip_serializing_if = "Option::is_none")]
