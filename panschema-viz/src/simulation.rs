@@ -4,6 +4,7 @@
 //! Uses the same physics as the GPU version but runs on CPU for compatibility.
 
 use crate::graph_types::{EdgeType, GraphData, GraphNode};
+use crate::sim_common;
 
 /// A node with position and velocity for simulation
 #[derive(Debug, Clone)]
@@ -22,6 +23,9 @@ pub struct SimNode {
     pub color: [f32; 4],
     /// Radius for rendering
     pub radius: f32,
+    /// Connected-component id, set at construction time. Used by the
+    /// many-body force to scale inter-component repulsion.
+    pub(crate) component: usize,
 }
 
 impl SimNode {
@@ -40,6 +44,7 @@ impl SimNode {
             vy: 0.0,
             color: node.color,
             radius: 4.0,
+            component: 0, // Filled in by from_graph_data after edges are known.
         }
     }
 }
@@ -76,8 +81,6 @@ pub struct SimulationConfig {
     pub link_distance: f32,
     /// Link strength
     pub link_strength: f32,
-    /// Center force strength
-    pub center_strength: f32,
     /// Velocity decay (friction)
     pub velocity_decay: f32,
     /// Current alpha (simulation temperature)
@@ -95,10 +98,9 @@ pub struct SimulationConfig {
 impl Default for SimulationConfig {
     fn default() -> Self {
         Self {
-            charge: -200.0,
+            charge: -60.0,
             link_distance: 50.0,
             link_strength: 1.0,
-            center_strength: 0.03,
             velocity_decay: 0.6,
             alpha: 1.0,
             alpha_min: 0.001,
@@ -158,6 +160,19 @@ impl CpuSimulation {
             })
             .collect();
 
+        // Compute connected components (undirected) so the many-body force can
+        // apply stronger repulsion between disconnected pieces.
+        let components =
+            sim_common::compute_components(nodes.len(), edges.iter().map(|e| (e.source, e.target)));
+        let mut nodes = nodes;
+        for (i, node) in nodes.iter_mut().enumerate() {
+            node.component = components[i];
+        }
+
+        // Components start in separate angular regions so they don't have to
+        // traverse through each other to find equilibrium.
+        layout_by_component_2d(&mut nodes, &components);
+
         Self {
             nodes,
             edges,
@@ -214,16 +229,25 @@ impl CpuSimulation {
         // Apply link force (springs between connected nodes)
         self.apply_link_force();
 
-        // Apply center force (gravity toward origin)
-        self.apply_center_force();
-
-        // Apply velocity and decay (skip fixed nodes)
+        // Velocity integration with a hard sphere clamp — bounds drift so
+        // fit_to_bounds always frames a sensible region.
+        const MAX_RADIUS: f32 = 200.0;
+        const MAX_RADIUS_SQ: f32 = MAX_RADIUS * MAX_RADIUS;
         for (i, node) in self.nodes.iter_mut().enumerate() {
             if !fixed_nodes.contains(&i) {
                 node.vx *= self.config.velocity_decay;
                 node.vy *= self.config.velocity_decay;
                 node.x += node.vx * self.config.alpha;
                 node.y += node.vy * self.config.alpha;
+                let dist_sq = node.x * node.x + node.y * node.y;
+                if dist_sq > MAX_RADIUS_SQ {
+                    let scale = MAX_RADIUS / dist_sq.sqrt();
+                    node.x *= scale;
+                    node.y *= scale;
+                    // Reflect velocity inward: kill any outward component
+                    node.vx = 0.0;
+                    node.vy = 0.0;
+                }
             } else {
                 // Fixed nodes keep zero velocity
                 node.vx = 0.0;
@@ -234,7 +258,11 @@ impl CpuSimulation {
         // Resolve overlap via position correction (post-integration so it sees final positions)
         self.apply_collide_force(fixed_nodes);
 
-        // Decay alpha: alpha *= (1 - alpha_decay) so it reaches alpha_min in ~300 ticks
+        // Skip recenter when nodes are pinned: pins anchor the frame of reference.
+        if fixed_nodes.is_empty() {
+            self.recenter_centroid();
+        }
+
         self.config.alpha *= 1.0 - self.config.alpha_decay;
     }
 
@@ -245,11 +273,16 @@ impl CpuSimulation {
         let n = self.nodes.len();
         let padding = self.config.collide_padding;
         let strength = self.config.collide_strength;
+        // Skip O(n²) HashSet lookups when nothing's pinned (the common case).
+        let any_fixed = !fixed_nodes.is_empty();
 
         for i in 0..n {
             for j in (i + 1)..n {
-                let i_fixed = fixed_nodes.contains(&i);
-                let j_fixed = fixed_nodes.contains(&j);
+                let (i_fixed, j_fixed) = if any_fixed {
+                    (fixed_nodes.contains(&i), fixed_nodes.contains(&j))
+                } else {
+                    (false, false)
+                };
                 if i_fixed && j_fixed {
                     continue;
                 }
@@ -282,8 +315,12 @@ impl CpuSimulation {
         }
     }
 
-    /// Apply repulsion between all node pairs
+    /// Apply repulsion between all node pairs. Inter-component repulsion is
+    /// scaled by `INTER_COMPONENT_SCALE` so disconnected pieces actively
+    /// push apart instead of stalling at symmetric stationary points inside
+    /// each other's neighborhoods.
     fn apply_many_body_force(&mut self) {
+        const INTER_COMPONENT_SCALE: f32 = 5.0;
         let n = self.nodes.len();
 
         for i in 0..n {
@@ -294,8 +331,12 @@ impl CpuSimulation {
                 let dist_sq = dx * dx + dy * dy;
                 let dist = dist_sq.sqrt().max(1.0);
 
-                // Coulomb's law: F = k * q1 * q2 / r^2
-                let force = self.config.charge / dist_sq;
+                let scale = if self.nodes[i].component == self.nodes[j].component {
+                    1.0
+                } else {
+                    INTER_COMPONENT_SCALE
+                };
+                let force = self.config.charge * scale / dist_sq;
 
                 let fx = force * dx / dist;
                 let fy = force * dy / dist;
@@ -332,11 +373,27 @@ impl CpuSimulation {
         }
     }
 
-    /// Apply centering force toward origin
-    fn apply_center_force(&mut self) {
+    /// Translate the whole layout so its centroid sits at origin. Mirrors
+    /// d3-force's `forceCenter` — components are free to settle wherever
+    /// inter-component repulsion takes them, while the overall layout stays
+    /// framed.
+    fn recenter_centroid(&mut self) {
+        let n = self.nodes.len();
+        if n == 0 {
+            return;
+        }
+        let mut sx = 0.0;
+        let mut sy = 0.0;
+        for node in &self.nodes {
+            sx += node.x;
+            sy += node.y;
+        }
+        let inv_n = 1.0 / n as f32;
+        let cx = sx * inv_n;
+        let cy = sy * inv_n;
         for node in &mut self.nodes {
-            node.vx -= node.x * self.config.center_strength;
-            node.vy -= node.y * self.config.center_strength;
+            node.x -= cx;
+            node.y -= cy;
         }
     }
 
@@ -347,6 +404,45 @@ impl CpuSimulation {
                 break;
             }
             self.tick();
+        }
+    }
+}
+
+/// Place each connected component in its own angular region so disconnected
+/// pieces don't start tangled. Single-component graphs keep their default
+/// circular layout from `SimNode::from_graph_node`.
+fn layout_by_component_2d(nodes: &mut [SimNode], components: &[usize]) {
+    use std::f32::consts::PI;
+    if nodes.is_empty() {
+        return;
+    }
+    let num_components = components.iter().max().copied().unwrap_or(0) + 1;
+    if num_components <= 1 {
+        return;
+    }
+
+    let mut by_component: Vec<Vec<usize>> = vec![Vec::new(); num_components];
+    for (i, &c) in components.iter().enumerate() {
+        by_component[c].push(i);
+    }
+
+    let arc_per_component = 2.0 * PI / num_components as f32;
+    let big_radius = 150.0;
+    let small_radius = 50.0;
+
+    for (component_id, members) in by_component.iter().enumerate() {
+        let component_angle = component_id as f32 * arc_per_component;
+        let cx = big_radius * component_angle.cos();
+        let cy = big_radius * component_angle.sin();
+        let m = members.len();
+        for (intra_idx, &node_idx) in members.iter().enumerate() {
+            let angle = if m <= 1 {
+                0.0
+            } else {
+                2.0 * PI * intra_idx as f32 / m as f32
+            };
+            nodes[node_idx].x = cx + small_radius * angle.cos();
+            nodes[node_idx].y = cy + small_radius * angle.sin();
         }
     }
 }
@@ -520,12 +616,16 @@ mod tests {
         let final_dy = sim.nodes[1].y - sim.nodes[0].y;
         let final_dist = (final_dx * final_dx + final_dy * final_dy).sqrt();
 
-        // Distance should remain significant (nodes don't collapse)
-        assert!(final_dist > 10.0, "Nodes should maintain separation");
-        // But center force should bring them closer than infinite repulsion would
+        // Collide force enforces r1 + r2 minimum independent of repulsion tuning.
+        let min_separation = sim.nodes[0].radius + sim.nodes[1].radius;
+        assert!(
+            final_dist >= min_separation,
+            "Nodes should not overlap: got dist={final_dist}, min={min_separation}"
+        );
+        // Position clamp + alpha decay keep them within bounded space.
         assert!(
             final_dist < initial_dist * 2.0,
-            "Center force should limit spread"
+            "Position clamp should limit spread"
         );
     }
 

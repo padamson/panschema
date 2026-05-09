@@ -53,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - 3D camera `zoom()` direction was inverted relative to the 2D camera and the documented contract; `factor > 1.0` now zooms in for both
 - `YamlReader` now infers metaobject names from their dict keys (idiomatic LinkML), so explicit `name:` and permissible-value `text:` fields are optional. Applies to classes, slots, enums, types, class attributes, class slot_usage, and permissible values. Schemas produced by `linkml-runtime` and the broader LinkML toolchain (`gen-owl`, `gen-shacl`, `gen-python`) now load without modification. Explicit names still work; an explicit name that disagrees with the dict key is now a clear parse error.
+- `GraphWriter` now emits range edges for inline class attributes (e.g., `Student.year` → `YearEnum`). Previously only top-level `slots:` produced domain/range edges, so most relationships in idiomatic LinkML schemas were silently dropped from the visualization. Inline attributes connect the owning class directly to the range target (no separate slot node), labeled with the attribute name.
 
 ## [0.2.0] - 2026-01-25
 

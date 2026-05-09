@@ -3,6 +3,7 @@
 //! Extends the 2D simulation with z-axis for 3D visualization.
 
 use crate::graph_types::{EdgeType, GraphData, GraphNode};
+use crate::sim_common;
 
 /// A node with 3D position and velocity for simulation
 #[derive(Debug, Clone)]
@@ -23,6 +24,9 @@ pub struct SimNode3D {
     pub color: [f32; 4],
     /// Radius for rendering
     pub radius: f32,
+    /// Connected-component id, set at construction time. Used by the
+    /// many-body force to scale inter-component repulsion.
+    pub(crate) component: usize,
 }
 
 impl SimNode3D {
@@ -53,6 +57,7 @@ impl SimNode3D {
             vz: 0.0,
             color: node.color,
             radius: 6.0,
+            component: 0, // Filled in by from_graph_data after edges are known.
         }
     }
 }
@@ -89,8 +94,6 @@ pub struct SimulationConfig3D {
     pub link_distance: f32,
     /// Link strength
     pub link_strength: f32,
-    /// Center force strength
-    pub center_strength: f32,
     /// Velocity decay (friction)
     pub velocity_decay: f32,
     /// Current alpha (simulation temperature)
@@ -108,10 +111,9 @@ pub struct SimulationConfig3D {
 impl Default for SimulationConfig3D {
     fn default() -> Self {
         Self {
-            charge: -300.0, // Stronger repulsion for 3D (1/dist² falls off fast)
+            charge: -100.0,
             link_distance: 60.0,
             link_strength: 1.0,
-            center_strength: 0.03,
             velocity_decay: 0.6,
             alpha: 1.0,
             alpha_min: 0.001,
@@ -171,6 +173,14 @@ impl Simulation3D {
             })
             .collect();
 
+        let components =
+            sim_common::compute_components(nodes.len(), edges.iter().map(|e| (e.source, e.target)));
+        let mut nodes = nodes;
+        for (i, node) in nodes.iter_mut().enumerate() {
+            node.component = components[i];
+        }
+        layout_by_component_3d(&mut nodes, &components);
+
         Self {
             nodes,
             edges,
@@ -191,43 +201,13 @@ impl Simulation3D {
 
     /// Run one simulation tick
     pub fn tick(&mut self) {
-        if !self.is_running() {
-            return;
-        }
-
-        let n = self.nodes.len();
-        if n == 0 {
-            return;
-        }
-
-        // Apply many-body force (repulsion between all nodes)
-        self.apply_many_body_force();
-
-        // Apply link force (springs between connected nodes)
-        self.apply_link_force();
-
-        // Apply center force (gravity toward origin)
-        self.apply_center_force();
-
-        // Apply velocity and decay
-        for node in &mut self.nodes {
-            node.vx *= self.config.velocity_decay;
-            node.vy *= self.config.velocity_decay;
-            node.vz *= self.config.velocity_decay;
-            node.x += node.vx * self.config.alpha;
-            node.y += node.vy * self.config.alpha;
-            node.z += node.vz * self.config.alpha;
-        }
-
-        // Resolve overlap via position correction
-        self.apply_collide_force(&std::collections::HashSet::new());
-
-        // Decay alpha
-        self.config.alpha *= 1.0 - self.config.alpha_decay;
+        self.tick_with_fixed(&std::collections::HashSet::new());
     }
 
-    /// Apply repulsion between all node pairs
+    /// Apply repulsion between all node pairs (3D version of the 2D
+    /// many-body force; see `simulation::apply_many_body_force`).
     fn apply_many_body_force(&mut self) {
+        const INTER_COMPONENT_SCALE: f32 = 5.0;
         let n = self.nodes.len();
 
         for i in 0..n {
@@ -239,8 +219,12 @@ impl Simulation3D {
                 let dist_sq = dx * dx + dy * dy + dz * dz;
                 let dist = dist_sq.sqrt().max(1.0);
 
-                // Coulomb's law: F = k * q1 * q2 / r^2
-                let force = self.config.charge / dist_sq;
+                let scale = if self.nodes[i].component == self.nodes[j].component {
+                    1.0
+                } else {
+                    INTER_COMPONENT_SCALE
+                };
+                let force = self.config.charge * scale / dist_sq;
 
                 let fx = force * dx / dist;
                 let fy = force * dy / dist;
@@ -284,12 +268,29 @@ impl Simulation3D {
         }
     }
 
-    /// Apply centering force toward origin
-    fn apply_center_force(&mut self) {
+    /// Translate the whole layout so its centroid sits at origin (3D version
+    /// of d3-force's `forceCenter`).
+    fn recenter_centroid(&mut self) {
+        let n = self.nodes.len();
+        if n == 0 {
+            return;
+        }
+        let mut sx = 0.0;
+        let mut sy = 0.0;
+        let mut sz = 0.0;
+        for node in &self.nodes {
+            sx += node.x;
+            sy += node.y;
+            sz += node.z;
+        }
+        let inv_n = 1.0 / n as f32;
+        let cx = sx * inv_n;
+        let cy = sy * inv_n;
+        let cz = sz * inv_n;
         for node in &mut self.nodes {
-            node.vx -= node.x * self.config.center_strength;
-            node.vy -= node.y * self.config.center_strength;
-            node.vz -= node.z * self.config.center_strength;
+            node.x -= cx;
+            node.y -= cy;
+            node.z -= cz;
         }
     }
 
@@ -320,13 +321,12 @@ impl Simulation3D {
         // Apply link force (springs between connected nodes)
         self.apply_link_force();
 
-        // Apply center force (gravity toward origin)
-        self.apply_center_force();
-
-        // Apply velocity and decay, respecting fixed nodes
+        // Velocity integration with a hard sphere clamp (3D version of the
+        // 2D bound; see `simulation::tick_with_fixed`).
+        const MAX_RADIUS: f32 = 250.0;
+        const MAX_RADIUS_SQ: f32 = MAX_RADIUS * MAX_RADIUS;
         for (i, node) in self.nodes.iter_mut().enumerate() {
             if fixed_nodes.contains(&i) {
-                // Fixed nodes don't move and have zero velocity
                 node.vx = 0.0;
                 node.vy = 0.0;
                 node.vz = 0.0;
@@ -337,13 +337,26 @@ impl Simulation3D {
                 node.x += node.vx * self.config.alpha;
                 node.y += node.vy * self.config.alpha;
                 node.z += node.vz * self.config.alpha;
+                let dist_sq = node.x * node.x + node.y * node.y + node.z * node.z;
+                if dist_sq > MAX_RADIUS_SQ {
+                    let scale = MAX_RADIUS / dist_sq.sqrt();
+                    node.x *= scale;
+                    node.y *= scale;
+                    node.z *= scale;
+                    node.vx = 0.0;
+                    node.vy = 0.0;
+                    node.vz = 0.0;
+                }
             }
         }
 
         // Resolve overlap via position correction (post-integration)
         self.apply_collide_force(fixed_nodes);
 
-        // Decay alpha
+        if fixed_nodes.is_empty() {
+            self.recenter_centroid();
+        }
+
         self.config.alpha *= 1.0 - self.config.alpha_decay;
     }
 
@@ -354,11 +367,16 @@ impl Simulation3D {
         let n = self.nodes.len();
         let padding = self.config.collide_padding;
         let strength = self.config.collide_strength;
+        // Skip O(n²) HashSet lookups when nothing's pinned (the common case).
+        let any_fixed = !fixed_nodes.is_empty();
 
         for i in 0..n {
             for j in (i + 1)..n {
-                let i_fixed = fixed_nodes.contains(&i);
-                let j_fixed = fixed_nodes.contains(&j);
+                let (i_fixed, j_fixed) = if any_fixed {
+                    (fixed_nodes.contains(&i), fixed_nodes.contains(&j))
+                } else {
+                    (false, false)
+                };
                 if i_fixed && j_fixed {
                     continue;
                 }
@@ -405,6 +423,56 @@ impl Simulation3D {
             node.vx = 0.0;
             node.vy = 0.0;
             node.vz = 0.0;
+        }
+    }
+}
+
+/// Place each connected component on its own Fibonacci-sphere anchor so
+/// disconnected pieces start in separate regions of 3D space. Single-component
+/// graphs keep the default Fibonacci-sphere layout.
+fn layout_by_component_3d(nodes: &mut [SimNode3D], components: &[usize]) {
+    use std::f32::consts::PI;
+    if nodes.is_empty() {
+        return;
+    }
+    let num_components = components.iter().max().copied().unwrap_or(0) + 1;
+    if num_components <= 1 {
+        return;
+    }
+
+    let mut by_component: Vec<Vec<usize>> = vec![Vec::new(); num_components];
+    for (i, &c) in components.iter().enumerate() {
+        by_component[c].push(i);
+    }
+
+    let big_radius = 150.0;
+    let small_radius = 50.0;
+    let golden_ratio = (1.0 + 5.0_f32.sqrt()) / 2.0;
+
+    for (component_id, members) in by_component.iter().enumerate() {
+        // Component anchor: Fibonacci point on the big sphere
+        let i_f = component_id as f32;
+        let n_f = num_components as f32;
+        let theta = 2.0 * PI * i_f / golden_ratio;
+        let phi = (1.0 - 2.0 * (i_f + 0.5) / n_f).acos();
+        let cx = big_radius * phi.sin() * theta.cos();
+        let cy = big_radius * phi.sin() * theta.sin();
+        let cz = big_radius * phi.cos();
+
+        // Spread members on a sub-sphere around the anchor
+        let m = members.len();
+        let m_f = m as f32;
+        for (intra_idx, &node_idx) in members.iter().enumerate() {
+            let ii = intra_idx as f32;
+            let inner_theta = 2.0 * PI * ii / golden_ratio;
+            let inner_phi = if m <= 1 {
+                0.0
+            } else {
+                (1.0 - 2.0 * (ii + 0.5) / m_f).acos()
+            };
+            nodes[node_idx].x = cx + small_radius * inner_phi.sin() * inner_theta.cos();
+            nodes[node_idx].y = cy + small_radius * inner_phi.sin() * inner_theta.sin();
+            nodes[node_idx].z = cz + small_radius * inner_phi.cos();
         }
     }
 }
@@ -546,6 +614,8 @@ mod tests {
 
     #[test]
     fn fibonacci_sphere_distributes_nodes() {
+        // Single connected component — multi-component graphs use a different
+        // per-component layout that doesn't keep all nodes equidistant.
         let graph = GraphData {
             schema_name: "multi".to_string(),
             schema_title: None,
@@ -561,7 +631,14 @@ mod tests {
                     is_abstract: false,
                 })
                 .collect(),
-            edges: vec![],
+            edges: (1..10)
+                .map(|i| GraphEdge {
+                    source: "node0".to_string(),
+                    target: format!("node{}", i),
+                    edge_type: EdgeType::SubclassOf,
+                    label: None,
+                })
+                .collect(),
         };
         let sim = Simulation3D::from_graph_data(&graph);
 

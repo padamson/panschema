@@ -458,6 +458,8 @@
     let lastX = 0, lastY = 0;
     let tickCount = 0;
     let hasFittedBounds = false;
+    // Tick counts at which to re-fit the camera while the simulation settles.
+    const REFIT_TICKS = [50, 100, 200, 300];
     let is3D = false;
     let wasmModule = null;
     let hasWebGPU = false;
@@ -945,10 +947,13 @@
 
     async function init() {
         try {
-            // Try to load WASM module (with cache buster)
+            // Cache-bust the wasm explicitly: wasm-bindgen's generated init
+            // resolves `panschema_viz_bg.wasm` relative to `import.meta.url`
+            // with no query string, so the JS cache-bust alone leaves a stale
+            // binary loaded.
             const cacheBuster = Date.now();
             wasmModule = await import(`./panschema_viz.js?v=${cacheBuster}`);
-            await wasmModule.default();
+            await wasmModule.default({ module_or_path: `./panschema_viz_bg.wasm?v=${cacheBuster}` });
 
             // Check WebGPU support
             if (typeof wasmModule.check_webgpu_support === 'function') {
@@ -1105,11 +1110,13 @@
                 viz.update_animation();
                 tickCount++;
 
-                // Fit to bounds after simulation has partially settled (50 ticks)
-                // This gives the force layout time to spread out nodes
-                if (!hasFittedBounds && tickCount >= 50) {
-                    viz.fit_to_bounds(40); // 40px padding
-                    hasFittedBounds = true;
+                // Track the layout as it settles — collide + repulsion are
+                // non-linear so it can drift past tick 50.
+                if (!hasFittedBounds && REFIT_TICKS.includes(tickCount)) {
+                    viz.fit_to_bounds(40);
+                    if (tickCount === REFIT_TICKS[REFIT_TICKS.length - 1]) {
+                        hasFittedBounds = true;
+                    }
                 }
 
                 viz.render();

@@ -13,6 +13,7 @@ mod canvas2d;
 mod graph_types;
 mod interaction;
 mod labels;
+mod sim_common;
 mod simulation;
 
 #[cfg(all(feature = "webgpu", target_arch = "wasm32"))]

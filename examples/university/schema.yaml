@@ -26,16 +26,15 @@ prefixes:
 default_range: string
 
 classes:
-  # Base class for all university entities
+  # Base class for all university entities.
+  # Imports the top-level `identifier` slot rather than defining `id` inline,
+  # so subclasses inherit it and the slot is referenced from somewhere.
   NamedEntity:
     description: Base class for entities with a name
     abstract: true
+    slots:
+      - identifier
     attributes:
-      id:
-        description: Unique identifier
-        identifier: true
-        range: string
-        required: true
       name:
         description: Human-readable name
         range: string
@@ -48,7 +47,7 @@ classes:
     attributes:
       email:
         description: Email address
-        range: string
+        range: email_type
       department:
         description: Primary department affiliation
         range: Department
@@ -138,10 +137,42 @@ classes:
         range: string
         multivalued: true
 
+  # ---------------------------------------------------------
+  # Demo: disconnected component
+  # ---------------------------------------------------------
+  # The two classes below have no relationship to the university entities
+  # above. They exist solely to demonstrate that panschema's graph
+  # visualization handles disconnected schema components correctly — a
+  # common shape in real ontologies (vocabulary stubs, metadata classes,
+  # planned-but-unwired extensions).
+  Color:
+    description: |
+      Demo only — a hex color label, intentionally disconnected from the
+      university domain to exercise the visualization's handling of
+      multi-component graphs.
+    attributes:
+      hex:
+        description: Hex code (e.g., "#FF0000")
+        range: string
+      palette:
+        description: The palette this color belongs to
+        range: Palette
+
+  Palette:
+    description: |
+      Demo only — a named collection of colors, paired with `Color` to
+      form a small disconnected cluster.
+    attributes:
+      colors:
+        description: Colors in this palette
+        range: Color
+        multivalued: true
+
 slots:
   identifier:
     description: A unique identifier for any entity
     identifier: true
+    domain: NamedEntity
     range: string
 
 enums:
