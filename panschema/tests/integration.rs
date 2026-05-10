@@ -452,3 +452,88 @@ fn all_rdf_formats_produce_equivalent_content() {
     // Cleanup
     let _ = fs::remove_dir_all(output_dir);
 }
+
+/// `panschema generate` (no --input) discovers a `panschema.toml`, walks
+/// `[schemas]`, and runs the HtmlWriter according to `[generate.<name>]`.
+#[test]
+fn manifest_driven_generate_runs_html_writer_for_path_source() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+
+    // Place the fixture schema at consumer/schema/sample.yaml.
+    let schema_dir = consumer.join("schema");
+    fs::create_dir_all(&schema_dir).expect("mkdir schema");
+    fs::copy(
+        "tests/fixtures/sample_schema.yaml",
+        schema_dir.join("sample.yaml"),
+    )
+    .expect("copy fixture");
+
+    // Write the manifest.
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+sample = { path = "./schema/sample.yaml" }
+
+[generate.sample]
+html = "docs/"
+"#,
+    )
+    .expect("write manifest");
+
+    // Run `panschema generate` from the consumer dir (no --input).
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("generate")
+        .current_dir(consumer)
+        .status()
+        .expect("Failed to execute panschema");
+    assert!(status.success(), "panschema exited with error");
+
+    // Output should land at consumer/docs/index.html (relative to the manifest).
+    let index = consumer.join("docs").join("index.html");
+    assert!(
+        index.exists(),
+        "expected manifest-driven generate to write {}",
+        index.display()
+    );
+
+    let html = fs::read_to_string(&index).expect("read index.html");
+    assert!(
+        html.contains("Sample LinkML Schema"),
+        "Missing schema title from manifest-generated HTML"
+    );
+}
+
+/// Manifest mode errors clearly when a `path:` schema doesn't exist.
+#[test]
+fn manifest_driven_generate_errors_on_missing_path() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+ghost = { path = "./does/not/exist.yaml" }
+
+[generate.ghost]
+html = "docs/"
+"#,
+    )
+    .expect("write manifest");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("generate")
+        .current_dir(consumer)
+        .output()
+        .expect("Failed to execute panschema");
+    assert!(
+        !output.status.success(),
+        "panschema should have failed on missing path"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("does not exist") || stderr.contains("ghost"),
+        "stderr should explain the missing path; got: {stderr}"
+    );
+}

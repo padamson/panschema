@@ -4,7 +4,7 @@
 
 **User Story:** As a developer building tools that consume LinkML schemas, I want to declare schema dependencies in a manifest, fetch them reproducibly with a lockfile, and run codegen against them — so my project can depend on a versioned schema the way a Rust crate depends on a library.
 
-**Related ADR (if applicable):** None yet — design rationale captured in `~/notes/cross-repo/panschema--schema-manager.md` (the cross-repo note that originated this work; will be retired when this milestone ships).
+**Related ADR (if applicable):** None
 
 **Approach:** Vertical Slicing with Outside-In TDD
 
@@ -29,7 +29,7 @@ Solving schema management positions panschema as *the* LinkML ecosystem tool, no
 
 This milestone unblocks downstream consumers — most directly **t2t**, whose Ch 2 Phase 3 forward depends on the schema-manager workflow being available. The original plan to use git submodules was rejected as creating a "tool maturation arc" in t2t's narrative; the book teaches `panschema add` / `fetch` / `generate` from Phase 3 forward.
 
-This is also the foundation for `scimantic-schema` to function as panschema's flagship LinkML dogfood. See `~/notes/cross-repo/scimantic-schema--spinout.md` for the wider feature roadmap that depends on this manager being in place (deterministic TTL, version-info round-trip, SHACL writer, Rust types writer, validation API).
+This is also the foundation for `scimantic-schema` to function as panschema's flagship LinkML dogfood, providing deterministic TTL, version-info round-trip, SHACL writer, Rust types writer, validation API.
 
 ---
 
@@ -68,8 +68,6 @@ Three artifacts define the workflow:
 **Commands:** `add`, `fetch`, `generate`, `verify`. Existing `panschema generate --input <file>` becomes a no-manifest shorthand.
 
 **Cache:** `~/.cache/panschema/<source-hash>/<version>/` — XDG-compliant, shared across projects (cargo-style), no auto-eviction in v0.3.
-
-Full design (manifest schema, lockfile schema, publish-spec, error semantics, edge cases) is captured in the originating cross-repo note linked above.
 
 ---
 
@@ -179,7 +177,6 @@ Each slice delivers end-to-end user value: a complete `manifest → fetch → ge
 - [ ] New section/guide in panschema's docs explaining the `panschema-publish.toml` standard so schema authors can publish their schemas
 - [ ] CHANGELOG entries for each slice rolled up under `[0.3.0]`
 - [ ] Release tag `v0.3.0` cuts after CI green
-- [ ] `~/notes/cross-repo/panschema--schema-manager.md` deleted (its own deletion criteria are met by this slice landing)
 
 ---
 
@@ -208,7 +205,6 @@ The feature is complete when ALL of the following are true:
 - [ ] No clippy warnings: `cargo clippy --all-targets --all-features -- -D warnings`
 - [ ] README.md updated
 - [ ] CHANGELOG.md updated under `[0.3.0]`
-- [ ] `~/notes/cross-repo/panschema--schema-manager.md` deleted (per its own deletion criteria)
 
 ---
 
@@ -218,20 +214,17 @@ This milestone ships when the schema-manager works end-to-end against an
 in-repo fixture schema. Several pieces of work in *other* repos need to
 land before the dogfood loop is fully closed and t2t can adopt the
 manager workflow. None of them are acceptance criteria for this milestone;
-each becomes its own cross-repo note when picked up.
+each will be handed off to another repo:
 
 - **`scimantic-schema` adopts `panschema-publish.toml`** at the repo root.
   Without this, `panschema fetch --source github:padamson/scimantic-schema`
-  errors as designed. Becomes a `scimantic-schema--*.md` note.
-- **`t2t` Ch 2 Phase 3 onwards** consumes the manager workflow per the
-  consumption plan in `~/notes/cross-repo/t2t--scimantic-schema-dogfooding.md`.
-  Tracked there.
+  errors as designed.
+- **`t2t` Ch 2 Phase 3 onwards** consumes the manager workflow.
 - **Writers referenced by `[generate.<name>]` blocks** — Rust types
   writer, deterministic TTL, SHACL, JSON Schema, etc. These land
   independently of the manager and don't block this milestone (slice 1
   uses HtmlWriter to prove the pipeline). Each is its own feature doc
-  when picked up; see `~/notes/cross-repo/scimantic-schema--spinout.md`
-  for the prioritized roadmap.
+  when picked up.
 
 ---
 
@@ -255,9 +248,6 @@ each becomes its own cross-repo note when picked up.
 
 ## References
 
-- `~/notes/cross-repo/panschema--schema-manager.md` — design source-of-truth (will be retired when this ships)
-- `~/notes/cross-repo/scimantic-schema--spinout.md` — flagship dogfood and parallel feature roadmap
-- `~/notes/cross-repo/t2t--scimantic-schema-dogfooding.md` — primary consumer's chapter-by-chapter consumption plan
 - [cargo's manifest format](https://doc.rust-lang.org/cargo/reference/manifest.html) — closest prior art for TOML-driven dependency declaration
 
 ---

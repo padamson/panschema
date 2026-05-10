@@ -46,11 +46,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Generate documentation or convert to other formats
+    /// Generate documentation or convert to other formats. With no `--input`,
+    /// discovers a `panschema.toml` (cargo-style walk up from CWD) and runs
+    /// codegen for each manifested schema.
     Generate {
-        /// Input ontology file (.ttl, .yaml, .yml)
+        /// Input ontology file (.ttl, .yaml, .yml). When omitted, uses the manifest.
         #[arg(short, long)]
-        input: PathBuf,
+        input: Option<PathBuf>,
 
         /// Output path (file for RDF formats, directory for HTML)
         #[arg(short, long, default_value = "output")]
@@ -148,6 +150,64 @@ fn generate(input: &Path, output: &Path, format: &str, include_graph: bool) -> a
     Ok(())
 }
 
+/// Discover a `panschema.toml` and run codegen for each schema declared in
+/// `[generate.<name>]`.
+fn generate_from_manifest() -> anyhow::Result<()> {
+    use panschema::manifest::{self, Manifest};
+
+    let cwd = std::env::current_dir()?;
+    let manifest_path = manifest::discover_manifest(&cwd).ok_or_else(|| {
+        anyhow::anyhow!(
+            "no `panschema.toml` found in `{}` or any ancestor directory. \
+             Pass `--input <file>` for a one-off generate, or create a manifest. \
+             See docs/features/05-schema-manager.md.",
+            cwd.display()
+        )
+    })?;
+    let manifest_dir = manifest_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("manifest path has no parent directory"))?;
+
+    eprintln!("Using manifest: {}", manifest_path.display());
+    let manifest = Manifest::from_path(&manifest_path)?;
+
+    if manifest.schemas.is_empty() {
+        eprintln!("Manifest has no `[schemas]` entries; nothing to do.");
+        return Ok(());
+    }
+
+    let mut produced_anything = false;
+    for (name, dep) in &manifest.schemas {
+        // Resolve the schema file path relative to the manifest dir.
+        let schema_path = manifest_dir.join(&dep.path);
+        if !schema_path.exists() {
+            anyhow::bail!(
+                "schema `{name}`: path `{}` (resolved to `{}`) does not exist",
+                dep.path.display(),
+                schema_path.display()
+            );
+        }
+
+        let Some(gen_cfg) = manifest.generate.get(name) else {
+            eprintln!("schema `{name}`: no [generate.{name}] block; skipping");
+            continue;
+        };
+
+        if let Some(html_out) = &gen_cfg.html {
+            let html_out = manifest_dir.join(html_out);
+            generate(&schema_path, &html_out, "html", true)?;
+            produced_anything = true;
+        }
+    }
+
+    if !produced_anything {
+        eprintln!(
+            "No outputs generated. Add an `[generate.<schema>]` block with at least one writer key (e.g. `html = \"docs/\"`)."
+        );
+    }
+    Ok(())
+}
+
 #[cfg(feature = "dev")]
 fn generate_styleguide(output: &Path) -> anyhow::Result<()> {
     use std::fs;
@@ -174,18 +234,20 @@ async fn main() -> anyhow::Result<()> {
             format,
             no_graph,
             viz_mode,
-        }) => {
-            // Log the viz options when graph is enabled
-            if format.to_lowercase() == "html" && !no_graph {
-                let mode_str = match viz_mode {
-                    VizMode::Auto => "auto (2D fallback, 3D when available)",
-                    VizMode::Canvas2D => "2D Canvas (CPU)",
-                    VizMode::WebGPU3D => "3D WebGPU (GPU)",
-                };
-                eprintln!("Graph visualization: {}", mode_str);
+        }) => match input {
+            Some(input) => {
+                if format.to_lowercase() == "html" && !no_graph {
+                    let mode_str = match viz_mode {
+                        VizMode::Auto => "auto (2D fallback, 3D when available)",
+                        VizMode::Canvas2D => "2D Canvas (CPU)",
+                        VizMode::WebGPU3D => "3D WebGPU (GPU)",
+                    };
+                    eprintln!("Graph visualization: {}", mode_str);
+                }
+                generate(&input, &output, &format, !no_graph)?;
             }
-            generate(&input, &output, &format, !no_graph)?;
-        }
+            None => generate_from_manifest()?,
+        },
         Some(Commands::Serve {
             input,
             output,
@@ -254,7 +316,7 @@ mod tests {
                 no_graph,
                 viz_mode,
             }) => {
-                assert_eq!(input, PathBuf::from("test.ttl"));
+                assert_eq!(input, Some(PathBuf::from("test.ttl")));
                 assert_eq!(output, PathBuf::from("docs"));
                 assert_eq!(format, "html");
                 assert!(!no_graph); // default false (graph enabled)
@@ -284,7 +346,7 @@ mod tests {
                 format,
                 ..
             }) => {
-                assert_eq!(input, PathBuf::from("test.ttl"));
+                assert_eq!(input, Some(PathBuf::from("test.ttl")));
                 assert_eq!(output, PathBuf::from("output.jsonld"));
                 assert_eq!(format, "jsonld");
             }
@@ -335,6 +397,20 @@ mod tests {
         match cli.command {
             Some(Commands::Generate { no_graph, .. }) => {
                 assert!(no_graph);
+            }
+            _ => panic!("Expected Generate command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_generate_with_no_input_for_manifest_mode() {
+        let cli = Cli::try_parse_from(["panschema", "generate"]).unwrap();
+        match cli.command {
+            Some(Commands::Generate { input, .. }) => {
+                assert!(
+                    input.is_none(),
+                    "input should be None to trigger manifest discovery"
+                );
             }
             _ => panic!("Expected Generate command"),
         }

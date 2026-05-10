@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Schema package manager** (work in progress toward v0.3.0; see [docs/features/05-schema-manager.md](docs/features/05-schema-manager.md)):
+  - `panschema-publish.toml` parser — the schema-side publishing standard
+  - `panschema.toml` parser — consumer-side dependency manifest
+  - Cargo-style manifest discovery (walk up from CWD)
+  - `panschema generate` with no `--input` discovers the manifest and runs HtmlWriter for each `[generate.<name>]` block
+  - Clear errors when a schema's `path:` target is missing
+  - `--input <file>` continues to work as a no-manifest shorthand
 - `Contributor` struct for Dublin Core-style contributor metadata (name, ORCID, role)
 - `SchemaDefinition` metadata fields: `contributors`, `created`, `modified`, `imports`
 - `FormatRegistry::with_defaults()` for dynamic reader/writer dispatch
