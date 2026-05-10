@@ -505,6 +505,361 @@ html = "docs/"
     );
 }
 
+/// `panschema fetch` writes a lockfile with one entry per manifested schema;
+/// `panschema verify` then succeeds against the unchanged on-disk content.
+#[test]
+fn fetch_writes_lockfile_and_verify_succeeds() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+
+    let schema_dir = consumer.join("schema");
+    fs::create_dir_all(&schema_dir).expect("mkdir");
+    fs::copy(
+        "tests/fixtures/sample_schema.yaml",
+        schema_dir.join("sample.yaml"),
+    )
+    .expect("copy fixture");
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+sample = { path = "./schema/sample.yaml" }
+"#,
+    )
+    .expect("write manifest");
+
+    // fetch: should produce a lockfile.
+    let fetch = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("fetch")
+        .current_dir(consumer)
+        .status()
+        .expect("run panschema fetch");
+    assert!(fetch.success(), "panschema fetch failed");
+
+    let lockfile_path = consumer.join("panschema.lock");
+    assert!(lockfile_path.exists(), "lockfile was not created");
+    let lockfile_text = fs::read_to_string(&lockfile_path).expect("read lockfile");
+    assert!(
+        lockfile_text.contains("sample"),
+        "lockfile missing schema name: {lockfile_text}"
+    );
+    assert!(
+        lockfile_text.contains("sha256:"),
+        "lockfile missing checksum prefix: {lockfile_text}"
+    );
+
+    // verify: should succeed because nothing changed.
+    let verify = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("verify")
+        .current_dir(consumer)
+        .status()
+        .expect("run panschema verify");
+    assert!(
+        verify.success(),
+        "panschema verify failed against the just-written lockfile"
+    );
+}
+
+/// `panschema verify` errors with a diff when the schema content changes
+/// after `panschema fetch`.
+#[test]
+fn verify_detects_schema_drift_after_fetch() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+
+    let schema_dir = consumer.join("schema");
+    fs::create_dir_all(&schema_dir).expect("mkdir");
+    let schema_file = schema_dir.join("sample.yaml");
+    fs::copy("tests/fixtures/sample_schema.yaml", &schema_file).expect("copy fixture");
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+sample = { path = "./schema/sample.yaml" }
+"#,
+    )
+    .expect("write manifest");
+
+    let fetch = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("fetch")
+        .current_dir(consumer)
+        .status()
+        .expect("run fetch");
+    assert!(fetch.success());
+
+    // Mutate the schema after fetch.
+    let mut content = fs::read_to_string(&schema_file).expect("read schema");
+    content.push_str("\n# drift\n");
+    fs::write(&schema_file, content).expect("rewrite schema");
+
+    let verify = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("verify")
+        .current_dir(consumer)
+        .output()
+        .expect("run verify");
+    assert!(
+        !verify.status.success(),
+        "verify should have failed on drifted content"
+    );
+    let stderr = String::from_utf8_lossy(&verify.stderr);
+    assert!(
+        stderr.contains("drift") || stderr.contains("sample"),
+        "stderr should explain the drift; got: {stderr}"
+    );
+}
+
+/// The manager flow (fetch/verify/generate) dispatches input files by
+/// extension to the same readers as `--input`. This proves a `.ttl`
+/// schema flows end-to-end through the manager, not just YAML.
+#[test]
+fn manifest_flow_handles_ttl_input() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+
+    let schema_dir = consumer.join("schema");
+    fs::create_dir_all(&schema_dir).expect("mkdir");
+    fs::copy(
+        "tests/fixtures/reference.ttl",
+        schema_dir.join("reference.ttl"),
+    )
+    .expect("copy fixture");
+
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+reference = { path = "./schema/reference.ttl" }
+
+[generate.reference]
+html = "docs/"
+"#,
+    )
+    .expect("write manifest");
+
+    // fetch + verify should succeed against a TTL source.
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_panschema"))
+            .arg("fetch")
+            .current_dir(consumer)
+            .status()
+            .expect("fetch")
+            .success(),
+        "fetch failed for TTL source"
+    );
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_panschema"))
+            .arg("verify")
+            .current_dir(consumer)
+            .status()
+            .expect("verify")
+            .success(),
+        "verify failed for TTL source"
+    );
+
+    // generate (no --input) should produce HTML from the TTL via OwlReader.
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_panschema"))
+            .arg("generate")
+            .current_dir(consumer)
+            .status()
+            .expect("generate")
+            .success(),
+        "generate failed for TTL source"
+    );
+
+    let html = fs::read_to_string(consumer.join("docs").join("index.html"))
+        .expect("read generated index.html");
+    assert!(
+        html.contains("panschema Reference Ontology"),
+        "TTL-sourced HTML missing reference ontology title"
+    );
+}
+
+/// `panschema fetch` writes one lockfile entry per manifest schema, and
+/// `panschema verify` validates all of them in one pass.
+#[test]
+fn fetch_and_verify_handle_multiple_schemas() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+
+    let schema_dir = consumer.join("schema");
+    fs::create_dir_all(&schema_dir).expect("mkdir");
+    fs::write(schema_dir.join("a.yaml"), "id: https://x/a\nname: a\n").expect("write a");
+    fs::write(schema_dir.join("b.yaml"), "id: https://x/b\nname: b\n").expect("write b");
+
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+a = { path = "./schema/a.yaml" }
+b = { path = "./schema/b.yaml" }
+"#,
+    )
+    .expect("write manifest");
+
+    let fetch = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("fetch")
+        .current_dir(consumer)
+        .status()
+        .expect("run fetch");
+    assert!(fetch.success(), "fetch failed");
+
+    let lockfile_text = fs::read_to_string(consumer.join("panschema.lock")).expect("read lock");
+    assert!(
+        lockfile_text.contains("name = \"a\""),
+        "missing entry a: {lockfile_text}"
+    );
+    assert!(
+        lockfile_text.contains("name = \"b\""),
+        "missing entry b: {lockfile_text}"
+    );
+
+    let verify = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("verify")
+        .current_dir(consumer)
+        .status()
+        .expect("run verify");
+    assert!(verify.success(), "verify failed against fresh lockfile");
+}
+
+/// Adding a schema to the manifest after `fetch` (without re-fetching) must
+/// be detected by `verify`.
+#[test]
+fn verify_detects_manifest_schema_missing_from_lockfile() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    let schema_dir = consumer.join("schema");
+    fs::create_dir_all(&schema_dir).expect("mkdir");
+    fs::write(schema_dir.join("a.yaml"), "id: https://x/a\nname: a\n").expect("write");
+
+    // Fetch with one schema.
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+a = { path = "./schema/a.yaml" }
+"#,
+    )
+    .expect("write manifest v1");
+    let fetch = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("fetch")
+        .current_dir(consumer)
+        .status()
+        .expect("fetch");
+    assert!(fetch.success());
+
+    // Add a second schema to the manifest WITHOUT refetching.
+    fs::write(schema_dir.join("b.yaml"), "id: https://x/b\nname: b\n").expect("write b");
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+a = { path = "./schema/a.yaml" }
+b = { path = "./schema/b.yaml" }
+"#,
+    )
+    .expect("rewrite manifest v2");
+
+    let verify = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("verify")
+        .current_dir(consumer)
+        .output()
+        .expect("verify");
+    assert!(
+        !verify.status.success(),
+        "verify should fail when manifest has schema not in lockfile"
+    );
+    let stderr = String::from_utf8_lossy(&verify.stderr);
+    assert!(
+        stderr.contains("`b`") && (stderr.contains("not in lockfile") || stderr.contains("fetch")),
+        "stderr should call out the missing schema and suggest fetch; got: {stderr}"
+    );
+}
+
+/// Removing a schema from the manifest after `fetch` (without re-fetching)
+/// leaves a stale lockfile entry; `verify` should call it out.
+#[test]
+fn verify_detects_stale_lockfile_entries() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    let schema_dir = consumer.join("schema");
+    fs::create_dir_all(&schema_dir).expect("mkdir");
+    fs::write(schema_dir.join("a.yaml"), "id: https://x/a\nname: a\n").expect("write a");
+    fs::write(schema_dir.join("b.yaml"), "id: https://x/b\nname: b\n").expect("write b");
+
+    // Fetch with two schemas.
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+a = { path = "./schema/a.yaml" }
+b = { path = "./schema/b.yaml" }
+"#,
+    )
+    .expect("write manifest v1");
+    let fetch = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("fetch")
+        .current_dir(consumer)
+        .status()
+        .expect("fetch");
+    assert!(fetch.success());
+
+    // Drop b from the manifest WITHOUT refetching.
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+a = { path = "./schema/a.yaml" }
+"#,
+    )
+    .expect("rewrite manifest v2");
+
+    let verify = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("verify")
+        .current_dir(consumer)
+        .output()
+        .expect("verify");
+    assert!(
+        !verify.status.success(),
+        "verify should fail with stale lockfile entry"
+    );
+    let stderr = String::from_utf8_lossy(&verify.stderr);
+    assert!(
+        stderr.contains("`b`") && stderr.contains("stale"),
+        "stderr should call out the stale schema; got: {stderr}"
+    );
+}
+
+/// `panschema verify` errors when no lockfile exists.
+#[test]
+fn verify_errors_when_no_lockfile() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+"#,
+    )
+    .expect("write manifest");
+
+    let verify = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("verify")
+        .current_dir(consumer)
+        .output()
+        .expect("run verify");
+    assert!(
+        !verify.status.success(),
+        "verify should fail without lockfile"
+    );
+    let stderr = String::from_utf8_lossy(&verify.stderr);
+    assert!(
+        stderr.contains("panschema.lock") || stderr.contains("fetch"),
+        "stderr should suggest fetch; got: {stderr}"
+    );
+}
+
 /// Manifest mode errors clearly when a `path:` schema doesn't exist.
 #[test]
 fn manifest_driven_generate_errors_on_missing_path() {

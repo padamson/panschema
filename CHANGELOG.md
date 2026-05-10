@@ -11,8 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Schema package manager** (work in progress toward v0.3.0; see [docs/features/05-schema-manager.md](docs/features/05-schema-manager.md)):
   - `panschema-publish.toml` parser — the schema-side publishing standard
   - `panschema.toml` parser — consumer-side dependency manifest
+  - `panschema.lock` lockfile with SHA-256 checksums for reproducible builds
   - Cargo-style manifest discovery (walk up from CWD)
   - `panschema generate` with no `--input` discovers the manifest and runs HtmlWriter for each `[generate.<name>]` block
+  - `panschema fetch` resolves all manifested schemas, computes checksums, and writes `panschema.lock`
+  - `panschema verify` re-checksums against the lockfile and errors with a clear diff on drift (catches "schema edited but generate not re-run")
   - Clear errors when a schema's `path:` target is missing
   - `--input <file>` continues to work as a no-manifest shorthand
 - `Contributor` struct for Dublin Core-style contributor metadata (name, ORCID, role)

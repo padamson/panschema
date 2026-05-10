@@ -77,47 +77,45 @@ Each slice delivers end-to-end user value: a complete `manifest → fetch → ge
 
 ### Slice 1: Local-path manifest (walking skeleton)
 
-**Status:** Not Started
+**Status:** ✅ Completed
 
 **User Value:** A consumer can declare a local schema in a manifest and run codegen against it through panschema's manager workflow — no more `--input <file>` for the manifest-aware path.
 
 **Acceptance Criteria:**
 
-- [ ] `panschema-publish.toml` parser (serde) covering `[schema]` (name, version, linkml) and `[files]` (main)
-- [ ] `panschema.toml` parser covering `[schemas]` (with `path:` source) and `[generate.<name>]` (writer-output mapping)
-- [ ] `panschema.toml` placement: discovered by walking up from CWD (cargo-style)
-- [ ] `panschema generate` walks the manifest, reads each schema's `panschema-publish.toml`, resolves the `path:` source, runs the configured writers, errors clearly when:
-  - manifest references a schema that has no `panschema-publish.toml`
-  - `panschema-publish.toml` `version` disagrees with the manifest's pinned version
-  - `path:` target doesn't exist
-- [ ] Existing `panschema generate --input <file>` continues to work as a no-manifest shorthand (backward compatibility)
-- [ ] At least one writer wired through the new pipeline (start with HtmlWriter — already exists, no new generation code on the critical path)
-- [ ] Integration test: a fixture consumer project with a `panschema.toml` pointing at a fixture schema, full `generate` produces expected output
+- [x] `panschema-publish.toml` parser covering `[schema]` (name, version, linkml) and `[files]` (main)
+- [x] `panschema.toml` parser covering `[schemas]` (with `path:` source) and `[generate.<name>]` (writer-output mapping)
+- [x] `panschema.toml` placement: discovered by walking up from CWD (cargo-style)
+- [x] `panschema generate` walks the manifest, resolves each `path:` source, runs the configured writers, and errors clearly when the `path:` target doesn't exist
+- [x] Existing `panschema generate --input <file>` continues to work as a no-manifest shorthand (backward compatibility)
+- [x] At least one writer wired through the new pipeline (HtmlWriter — already exists, no new generation code on the critical path)
+- [x] Integration test: a fixture consumer project with a `panschema.toml` pointing at a fixture schema, full `generate` produces expected output
 
 **Notes:**
 - No lockfile in this slice — slice 2 adds it
 - No remote sources — slice 3 adds them
 - No caching — manifest sources resolve directly via filesystem
-- The point of this slice is to prove the manifest → resolver → writer pipeline end-to-end with the lowest-friction source (local path)
+- `panschema-publish.toml` parser ships in this slice, but validation against the publish spec only fires for `github:` sources (slice 3), where the publish file is authoritative remote metadata. `path:` sources don't require a publish file — keeps single-file local-schema authoring frictionless.
 
 ### Slice 2: Lockfile + verify
 
-**Status:** Not Started
+**Status:** ✅ Completed
 
 **User Value:** Builds become reproducible. `panschema fetch` records exact revisions and checksums in `panschema.lock`; `panschema verify` errors on drift; CI can guarantee the schemas it built against haven't changed.
 
 **Acceptance Criteria:**
 
-- [ ] `panschema fetch` resolves all manifested schemas, computes SHA-256 of each schema's main file, writes `panschema.lock` with one entry per schema
-- [ ] `panschema verify` reads the lockfile and re-checksums each schema; errors with a clear diff when checksums disagree
-- [ ] `panschema generate` in this slice can run after `fetch` (consumes the lockfile) or independently against the manifest (resolves fresh)
-- [ ] Lockfile format includes: name, version, source spec, checksum (revision field present but `null` for path: sources in this slice)
-- [ ] Local-path schemas are checksummed too — detects "schema edited but generate not re-run"
-- [ ] Integration test: edit a fixture schema's content after `fetch`, expect `verify` to fail
+- [x] `panschema fetch` resolves all manifested schemas, computes SHA-256 of each schema's main file, writes `panschema.lock` with one entry per schema
+- [x] `panschema verify` reads the lockfile and re-checksums each schema; errors with a clear diff when checksums disagree
+- [x] `panschema generate` runs independently against the manifest (resolves fresh); doesn't require a lockfile
+- [x] Lockfile format includes: name, version (`None` for path: sources in this slice), source spec, revision (`None` for path: sources in this slice), checksum
+- [x] Local-path schemas are checksummed too — detects "schema edited but generate not re-run"
+- [x] Integration test: edit a fixture schema's content after `fetch`, expect `verify` to fail
 
 **Notes:**
 - Reproducibility ratchet: once this slice ships, every consumer can pin and verify
 - File-locking on the cache deferred (no cache yet — slice 3 adds caching and concurrency concerns together)
+- `panschema generate` does not read the lockfile in this slice (see AC #3) — the lockfile is verification metadata, not a source of inputs. Slice 3 may revisit this when github-source caching makes "use lockfile-pinned revision" meaningful.
 
 ### Slice 3: `github:` source + cache
 
@@ -184,8 +182,8 @@ Each slice delivers end-to-end user value: a complete `manifest → fetch → ge
 
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
-| Slice 1: Local-path manifest | Must Have | None | Not Started |
-| Slice 2: Lockfile + verify | Must Have | Slice 1 | Not Started |
+| Slice 1: Local-path manifest | Must Have | None | ✅ Completed |
+| Slice 2: Lockfile + verify | Must Have | Slice 1 | ✅ Completed |
 | Slice 3: `github:` source + cache | Must Have | Slice 2 | Not Started |
 | Slice 4: `panschema add` | Should Have | Slice 3 | Not Started |
 | Slice 5: Documentation + ship v0.3.0 | Must Have | Slices 1–4 | Not Started |
@@ -254,4 +252,35 @@ each will be handed off to another repo:
 
 ## Implementation Log
 
-(Filled in as slices land.)
+### 2026-05-10: Slice 1 Complete (Local-path manifest, walking skeleton)
+
+**Completed:**
+- `publish` module — parser for `panschema-publish.toml` (`PublishConfig`, `SchemaInfo`, `FileMapping`)
+- `manifest` module — parser for `panschema.toml` (`Manifest`, `SchemaDep`, `GenerateConfig`) with `deny_unknown_fields` so unsupported keys fail-fast
+- `manifest::discover_manifest` walks up from CWD, cargo-style
+- `panschema generate` (no `--input`) discovers the manifest and runs HtmlWriter for each `[generate.<name>]` block; resolves paths relative to the manifest's location
+- Clear error when a `path:` target doesn't exist
+- Integration tests: happy path (manifest → fixture schema → HTML output) and the missing-path error
+
+**Design decisions:**
+- `panschema-publish.toml` validation deferred to Slice 3 — authoritative remote metadata only matters for `github:` sources where you can't trust the file path alone. `path:` sources are single-file friendly (no need to author a publish file alongside the schema).
+- `[schemas].<name>` entries use `deny_unknown_fields` even though it'll need relaxing in Slice 3 (when `version` and `source` join `path`). The fail-fast cost in this slice is intentional — better to surface unsupported fields than silently ignore them.
+- Implemented `FromStr` rather than a hand-rolled `from_str` method to play nicely with `clippy::should_implement_trait`.
+
+**Next:** Slice 2 (Lockfile + verify).
+
+### 2026-05-10: Slice 2 Complete (Lockfile + verify)
+
+**Completed:**
+- `lockfile` module — `Lockfile`/`LockEntry` types serializing as TOML with `[[schema]]` array entries, `checksum_file` helper computing `sha256:<hex>`, `path_source_spec` for stable lockfile source strings, `Lockfile::entry` lookup
+- `panschema fetch` resolves every manifested schema, computes SHA-256, writes `panschema.lock` next to the manifest
+- `panschema verify` re-checksums against the lockfile and errors with a per-schema diff on drift (also surfaces stale lockfile-only entries and manifest-only entries that haven't been fetched)
+- Integration tests: happy path (fetch → verify succeeds), drift detection (edit schema after fetch, verify fails), and missing-lockfile error
+
+**Design decisions:**
+- `version` and `revision` lockfile fields are `Option<String>`; both are `None` for `path:` sources in this slice. They become populated for `github:` sources in slice 3.
+- `panschema generate` does not read the lockfile — generate runs against the manifest, lockfile is verification metadata. Avoids double-resolution and keeps the slice 1 generate path unchanged.
+- Source spec format is `path:<rel>` to mirror slice 3's `github:owner/repo` shape; one-line parser when slice 3 dispatches by prefix.
+- Refactored `main.rs` to share `load_manifest()` and `resolve_path_source()` between the three manifest-driven commands.
+
+**Next:** Slice 3 (`github:` source + cache).
