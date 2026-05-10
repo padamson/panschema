@@ -991,7 +991,7 @@ version = "6.0.0"
 criteria = "safe-to-run"
 
 [[exemptions.rand]]
-version = "0.9.2"
+version = "0.9.4"
 criteria = "safe-to-run"
 
 [[exemptions.rand_chacha]]
@@ -1079,7 +1079,7 @@ version = "1.14.0"
 criteria = "safe-to-run"
 
 [[exemptions.rustls-webpki]]
-version = "0.103.9"
+version = "0.103.13"
 criteria = "safe-to-run"
 
 [[exemptions.rustversion]]
