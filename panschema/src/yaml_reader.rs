@@ -2,11 +2,12 @@
 //!
 //! Reads native LinkML YAML schemas directly into the LinkML IR.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
 use crate::io::{IoError, IoResult, Reader};
-use crate::linkml::SchemaDefinition;
+use crate::linkml::{SchemaDefinition, SlotDefinition};
 
 /// Reader for native LinkML YAML schemas
 pub struct YamlReader;
@@ -27,13 +28,62 @@ impl Default for YamlReader {
 impl Reader for YamlReader {
     fn read(&self, input: &Path) -> IoResult<SchemaDefinition> {
         let content = fs::read_to_string(input)?;
-        let schema: SchemaDefinition =
+        let mut schema: SchemaDefinition =
             serde_yaml::from_str(&content).map_err(|e| IoError::Parse(e.to_string()))?;
+        backfill_names(&mut schema)?;
         Ok(schema)
     }
 
     fn supported_extensions(&self) -> &[&str] {
         &["yaml", "yml"]
+    }
+}
+
+/// Apply LinkML's "dict key is the canonical name" rule to all metaobjects.
+///
+/// For each `name` field in classes, slots, enums, types, and inline
+/// attributes/slot_usage inside classes:
+///
+/// - If `name` is empty, fill it from the dict key.
+/// - If `name` is non-empty and agrees with the key, leave it.
+/// - If `name` is non-empty and disagrees with the key, return a Parse error.
+fn backfill_names(schema: &mut SchemaDefinition) -> IoResult<()> {
+    for (key, class) in schema.classes.iter_mut() {
+        backfill_one("class", key, &mut class.name)?;
+        backfill_slot_map(&format!("class '{key}' attribute"), &mut class.attributes)?;
+        backfill_slot_map(&format!("class '{key}' slot_usage"), &mut class.slot_usage)?;
+    }
+    backfill_slot_map("slot", &mut schema.slots)?;
+    for (key, enum_def) in schema.enums.iter_mut() {
+        backfill_one("enum", key, &mut enum_def.name)?;
+        for (pv_key, pv) in enum_def.permissible_values.iter_mut() {
+            backfill_one(&format!("enum '{key}' value"), pv_key, &mut pv.text)?;
+        }
+    }
+    for (key, type_def) in schema.types.iter_mut() {
+        backfill_one("type", key, &mut type_def.name)?;
+    }
+    Ok(())
+}
+
+fn backfill_slot_map(kind: &str, slots: &mut BTreeMap<String, SlotDefinition>) -> IoResult<()> {
+    for (key, slot) in slots {
+        backfill_one(kind, key, &mut slot.name)?;
+    }
+    Ok(())
+}
+
+fn backfill_one(kind: &str, key: &str, name: &mut String) -> IoResult<()> {
+    if name.is_empty() {
+        *name = key.to_string();
+        Ok(())
+    } else if name == key {
+        Ok(())
+    } else {
+        Err(IoError::Parse(format!(
+            "{kind} '{key}': explicit `name: {name}` disagrees with dict key '{key}'. \
+             Either remove the explicit name (it's inferred from the key) or fix the mismatch."
+        )))
     }
 }
 
@@ -199,5 +249,214 @@ mod tests {
             Err(IoError::Io(_)) => {} // Expected
             _ => panic!("Expected Io error"),
         }
+    }
+
+    // -------------------------------------------------------------------
+    // Name inference from dict keys (idiomatic LinkML).
+    //
+    // LinkML treats dict-keyed sub-objects as having their `name` field
+    // implicitly set to the key. panschema must accept this — without it,
+    // schemas produced by `linkml-runtime`, `gen-owl`, etc. fail to load.
+    // -------------------------------------------------------------------
+
+    /// Test helper: write a YAML schema to a temp file and parse it.
+    fn parse_yaml(yaml: &str) -> IoResult<SchemaDefinition> {
+        use std::io::Write;
+        let mut tmp = tempfile::Builder::new()
+            .suffix(".yaml")
+            .tempfile()
+            .expect("Should create temp file");
+        tmp.write_all(yaml.as_bytes())
+            .expect("Should write yaml to temp file");
+        YamlReader::new().read(tmp.path())
+    }
+
+    // ---- Classes ----
+
+    #[test]
+    fn dict_keyed_class_without_name_inherits_key() {
+        let schema = parse_yaml(
+            r#"
+id: https://example.org/x
+name: x
+classes:
+  Entity:
+    description: A thing
+"#,
+        )
+        .expect("Should parse without explicit class name");
+
+        let entity = schema
+            .classes
+            .get("Entity")
+            .expect("Class 'Entity' should be present");
+        assert_eq!(entity.name, "Entity");
+    }
+
+    #[test]
+    fn dict_keyed_class_with_agreeing_name_succeeds() {
+        let schema = parse_yaml(
+            r#"
+id: https://example.org/x
+name: x
+classes:
+  Entity:
+    name: Entity
+    description: A thing
+"#,
+        )
+        .expect("Agreeing explicit name should succeed");
+        assert_eq!(schema.classes.get("Entity").unwrap().name, "Entity");
+    }
+
+    #[test]
+    fn dict_keyed_class_with_disagreeing_name_errors() {
+        let result = parse_yaml(
+            r#"
+id: https://example.org/x
+name: x
+classes:
+  Entity:
+    name: Person
+"#,
+        );
+        match result {
+            Err(IoError::Parse(msg)) => {
+                assert!(
+                    msg.contains("Entity") && msg.contains("Person"),
+                    "Error message should name both the dict key and the disagreeing name; got: {msg}"
+                );
+            }
+            other => panic!("Expected Parse error for disagreeing class name, got: {other:?}"),
+        }
+    }
+
+    // ---- Top-level slots ----
+
+    #[test]
+    fn dict_keyed_slot_without_name_inherits_key() {
+        let schema = parse_yaml(
+            r#"
+id: https://example.org/x
+name: x
+slots:
+  identifier:
+    range: string
+"#,
+        )
+        .expect("Should parse without explicit slot name");
+        assert_eq!(schema.slots.get("identifier").unwrap().name, "identifier");
+    }
+
+    #[test]
+    fn dict_keyed_slot_with_disagreeing_name_errors() {
+        let result = parse_yaml(
+            r#"
+id: https://example.org/x
+name: x
+slots:
+  identifier:
+    name: id
+"#,
+        );
+        assert!(matches!(result, Err(IoError::Parse(_))));
+    }
+
+    // ---- Class attributes (inline slots inside classes) ----
+
+    #[test]
+    fn dict_keyed_attribute_without_name_inherits_key() {
+        let schema = parse_yaml(
+            r#"
+id: https://example.org/x
+name: x
+classes:
+  Person:
+    attributes:
+      first_name:
+        range: string
+"#,
+        )
+        .expect("Should parse attribute without explicit name");
+        let person = schema.classes.get("Person").unwrap();
+        let attr = person
+            .attributes
+            .get("first_name")
+            .expect("Attribute 'first_name' should be present");
+        assert_eq!(attr.name, "first_name");
+    }
+
+    #[test]
+    fn dict_keyed_attribute_with_disagreeing_name_errors() {
+        let result = parse_yaml(
+            r#"
+id: https://example.org/x
+name: x
+classes:
+  Person:
+    attributes:
+      first_name:
+        name: surname
+"#,
+        );
+        assert!(matches!(result, Err(IoError::Parse(_))));
+    }
+
+    // ---- Enums ----
+
+    #[test]
+    fn dict_keyed_enum_without_name_inherits_key() {
+        let schema = parse_yaml(
+            r#"
+id: https://example.org/x
+name: x
+enums:
+  RankEnum:
+    permissible_values:
+      gold:
+        text: gold
+"#,
+        )
+        .expect("Should parse enum without explicit name");
+        assert_eq!(schema.enums.get("RankEnum").unwrap().name, "RankEnum");
+    }
+
+    // ---- Permissible values (text field inferred from dict key) ----
+
+    #[test]
+    fn dict_keyed_permissible_value_without_text_inherits_key() {
+        let schema = parse_yaml(
+            r#"
+id: https://example.org/x
+name: x
+enums:
+  Color:
+    permissible_values:
+      red:
+        description: The color red
+      blue: {}
+"#,
+        )
+        .expect("Should parse permissible values without explicit text");
+        let color = schema.enums.get("Color").unwrap();
+        assert_eq!(color.permissible_values.get("red").unwrap().text, "red");
+        assert_eq!(color.permissible_values.get("blue").unwrap().text, "blue");
+    }
+
+    // ---- Types ----
+
+    #[test]
+    fn dict_keyed_type_without_name_inherits_key() {
+        let schema = parse_yaml(
+            r#"
+id: https://example.org/x
+name: x
+types:
+  age_t:
+    typeof_: integer
+"#,
+        )
+        .expect("Should parse type without explicit name");
+        assert_eq!(schema.types.get("age_t").unwrap().name, "age_t");
     }
 }

@@ -1,7 +1,7 @@
 # Pre-commit hooks for panschema
-# Install: pip install pre-commit && pre-commit install
+# Install: cargo install prek && prek install
 # Setup: npx playwright@1.56.1 install (required for E2E tests, version must match playwright-rs)
-# Run manually: pre-commit run --all-files
+# Run manually: prek run --all-files
 
 fail_fast: true
 
@@ -13,16 +13,11 @@ repos:
       - id: check-yaml
       - id: check-toml
       - id: check-merge-conflict
+      - id: check-case-conflict
       - id: detect-private-key
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: mixed-line-ending
-
-  # Spell checking
-  - repo: https://github.com/crate-ci/typos
-    rev: v1.26.8
-    hooks:
-      - id: typos
 
   # Local Rust hooks
   - repo: local
@@ -56,3 +51,32 @@ repos:
         language: system
         types: [rust]
         pass_filenames: false
+
+      - id: cargo-doctest
+        name: cargo test --doc
+        description: Run documentation tests
+        entry: cargo test --doc --workspace
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-audit
+        name: cargo audit
+        description: Check dependencies for known vulnerabilities
+        # Ignored advisories mirror deny.toml — unmaintained-crate warnings only.
+        entry: >-
+          cargo audit
+          --ignore RUSTSEC-2024-0388
+          --ignore RUSTSEC-2024-0370
+          --ignore RUSTSEC-2024-0436
+        language: system
+        pass_filenames: false
+        files: (Cargo\.toml|Cargo\.lock)$
+
+      - id: cargo-deny
+        name: cargo deny
+        description: Check licenses, bans, and source restrictions
+        entry: cargo deny check
+        language: system
+        pass_filenames: false
+        files: (Cargo\.toml|Cargo\.lock|deny\.toml)$

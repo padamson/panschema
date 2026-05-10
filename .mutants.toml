@@ -1,0 +1,13 @@
+# cargo-mutants configuration
+# Run: cargo mutants
+# Docs: https://mutants.rs/
+
+# Use nextest for faster test execution
+test_tool = "nextest"
+
+# Run only unit tests (skip integration tests in tests/ and the e2e Playwright suite)
+additional_cargo_test_args = ["--lib"]
+
+# Mutate only the panschema crate's source.
+# panschema-viz is wasm-only and isn't testable on the host target.
+examine_globs = ["panschema/src/**/*.rs"]

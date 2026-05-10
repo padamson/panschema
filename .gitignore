@@ -1,6 +1,9 @@
 /target/
 /output/
 examples/**/output/
+examples/**/docs/
+examples/**/index.html
+examples/**/panschema_viz.*
 **/*.rs.bk
 .DS_Store
 typos.toml

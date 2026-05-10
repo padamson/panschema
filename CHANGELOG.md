@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Schema package manager** (work in progress toward v0.3.0; see [docs/features/05-schema-manager.md](docs/features/05-schema-manager.md)):
+  - `panschema-publish.toml` parser — the schema-side publishing standard
+  - `panschema.toml` parser — consumer-side dependency manifest
+  - `panschema.lock` lockfile with SHA-256 checksums for reproducible builds
+  - Cargo-style manifest discovery (walk up from CWD)
+  - `panschema generate` with no `--input` discovers the manifest and runs HtmlWriter for each `[generate.<name>]` block
+  - `panschema fetch` resolves all manifested schemas, computes checksums, and writes `panschema.lock`
+  - `panschema verify` re-checksums against the lockfile and errors with a clear diff on drift (catches "schema edited but generate not re-run")
+  - Clear errors when a schema's `path:` target is missing
+  - `--input <file>` continues to work as a no-manifest shorthand
 - `Contributor` struct for Dublin Core-style contributor metadata (name, ORCID, role)
 - `SchemaDefinition` metadata fields: `contributors`, `created`, `modified`, `imports`
 - `FormatRegistry::with_defaults()` for dynamic reader/writer dispatch
@@ -35,9 +45,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Hover-to-reveal**: Show individual label on hover even when labels are toggled off
   - **Persistent preferences**: Label visibility settings saved to localStorage
   - **3D HTML overlay labels**: Projected node/edge labels via HTML overlay for crisp text
+- **Interactive node manipulation** in graph visualization (Slice 6, in progress):
+  - Click to select a node; details panel shows label, type, IRI, fixed state, and connection count
+  - Drag to reposition any node while the simulation continues
+  - Shift+click to toggle pin (node holds its position); shift+drag-release pins at the new position
+  - Keyboard shortcuts: `R` reset view, `F` focus selected, `Esc` deselect, `Delete` unpin selected
+  - Cursor feedback (grab/grabbing) on hover and drag
+  - Hit testing via 3D ray-cast and 2D point-in-circle
+- Force simulation collide pass (geometric overlap resolution) prevents node overlap regardless of graph topology
+- `panschema completions <shell>` subcommand to generate shell completion scripts (bash, zsh, fish, powershell, elvish)
 
 ### Changed
 - `main.rs` and `server.rs` now use `FormatRegistry` instead of hardcoded readers/writers
+- Force simulation defaults retuned for sparser graphs (stronger repulsion, weaker centering); node radii reduced for less visual crowding
+- **MSRV bumped from 1.85 to 1.88** to enable let-chain syntax (`if let X = y && cond`) in source
+
+### Fixed
+- 3D camera `zoom()` direction was inverted relative to the 2D camera and the documented contract; `factor > 1.0` now zooms in for both
+- `YamlReader` now infers metaobject names from their dict keys (idiomatic LinkML), so explicit `name:` and permissible-value `text:` fields are optional. Applies to classes, slots, enums, types, class attributes, class slot_usage, and permissible values. Schemas produced by `linkml-runtime` and the broader LinkML toolchain (`gen-owl`, `gen-shacl`, `gen-python`) now load without modification. Explicit names still work; an explicit name that disagrees with the dict key is now a clear parse error.
+- `GraphWriter` now emits range edges for inline class attributes (e.g., `Student.year` → `YearEnum`). Previously only top-level `slots:` produced domain/range edges, so most relationships in idiomatic LinkML schemas were silently dropped from the visualization. Inline attributes connect the owning class directly to the range target (no separate slot node), labeled with the attribute name.
 
 ## [0.2.0] - 2026-01-25
 

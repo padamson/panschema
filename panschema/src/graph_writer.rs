@@ -239,7 +239,33 @@ impl GraphWriter {
             self.add_types(schema, &mut graph);
         }
 
+        // Must run after enum/type nodes exist so resolve_range_target can find them.
+        self.add_inline_attribute_edges(schema, &mut graph);
+
         graph
+    }
+
+    /// Walk inline class attributes and emit range edges from each owning
+    /// class to its attribute's range target (when that target is a class,
+    /// enum, or type — primitive ranges like `string` produce no edge).
+    fn add_inline_attribute_edges(&self, schema: &SchemaDefinition, graph: &mut GraphData) {
+        if !self.options.include_range_edges {
+            return;
+        }
+        for (class_name, class_def) in &schema.classes {
+            for (attr_name, attr_def) in &class_def.attributes {
+                if let Some(range) = &attr_def.range
+                    && let Some(target) = self.resolve_range_target(schema, range)
+                {
+                    graph.edges.push(GraphEdge {
+                        source: format!("class:{}", class_name),
+                        target,
+                        edge_type: EdgeType::Range,
+                        label: Some(attr_name.clone()),
+                    });
+                }
+            }
+        }
     }
 
     /// Add class nodes and their inheritance edges
@@ -310,46 +336,44 @@ impl GraphWriter {
             });
 
             // Add domain edge (slot -> class)
-            if self.options.include_domain_edges {
-                if let Some(domain) = &slot_def.domain {
-                    if schema.classes.contains_key(domain) {
-                        graph.edges.push(GraphEdge {
-                            source: format!("slot:{}", name),
-                            target: format!("class:{}", domain),
-                            edge_type: EdgeType::Domain,
-                            label: Some("domain".to_string()),
-                        });
-                    }
-                }
+            if self.options.include_domain_edges
+                && let Some(domain) = &slot_def.domain
+                && schema.classes.contains_key(domain)
+            {
+                graph.edges.push(GraphEdge {
+                    source: format!("slot:{}", name),
+                    target: format!("class:{}", domain),
+                    edge_type: EdgeType::Domain,
+                    label: Some("domain".to_string()),
+                });
             }
 
             // Add range edge (slot -> class/enum/type)
-            if self.options.include_range_edges {
-                if let Some(range) = &slot_def.range {
-                    let target_id = self.resolve_range_target(schema, range);
-                    if let Some(target) = target_id {
-                        graph.edges.push(GraphEdge {
-                            source: format!("slot:{}", name),
-                            target,
-                            edge_type: EdgeType::Range,
-                            label: Some("range".to_string()),
-                        });
-                    }
+            if self.options.include_range_edges
+                && let Some(range) = &slot_def.range
+            {
+                let target_id = self.resolve_range_target(schema, range);
+                if let Some(target) = target_id {
+                    graph.edges.push(GraphEdge {
+                        source: format!("slot:{}", name),
+                        target,
+                        edge_type: EdgeType::Range,
+                        label: Some("range".to_string()),
+                    });
                 }
             }
 
             // Add inverse edge (slot <-> slot)
-            if self.options.include_inverse_edges {
-                if let Some(inverse) = &slot_def.inverse {
-                    if schema.slots.contains_key(inverse) {
-                        graph.edges.push(GraphEdge {
-                            source: format!("slot:{}", name),
-                            target: format!("slot:{}", inverse),
-                            edge_type: EdgeType::Inverse,
-                            label: Some("inverseOf".to_string()),
-                        });
-                    }
-                }
+            if self.options.include_inverse_edges
+                && let Some(inverse) = &slot_def.inverse
+                && schema.slots.contains_key(inverse)
+            {
+                graph.edges.push(GraphEdge {
+                    source: format!("slot:{}", name),
+                    target: format!("slot:{}", inverse),
+                    edge_type: EdgeType::Inverse,
+                    label: Some("inverseOf".to_string()),
+                });
             }
         }
     }
@@ -397,15 +421,15 @@ impl GraphWriter {
             });
 
             // Add typeof edge (type -> parent type)
-            if let Some(parent) = &type_def.typeof_ {
-                if schema.types.contains_key(parent) {
-                    graph.edges.push(GraphEdge {
-                        source: format!("type:{}", name),
-                        target: format!("type:{}", parent),
-                        edge_type: EdgeType::TypeOf,
-                        label: None,
-                    });
-                }
+            if let Some(parent) = &type_def.typeof_
+                && schema.types.contains_key(parent)
+            {
+                graph.edges.push(GraphEdge {
+                    source: format!("type:{}", name),
+                    target: format!("type:{}", parent),
+                    edge_type: EdgeType::TypeOf,
+                    label: None,
+                });
             }
         }
     }
@@ -583,6 +607,80 @@ mod tests {
             .expect("Should have inverse edge");
         assert_eq!(inverse_edge.source, "slot:hasOwner");
         assert_eq!(inverse_edge.target, "slot:owns");
+    }
+
+    // ========== Inline Attribute Tests ==========
+
+    #[test]
+    fn inline_attribute_with_class_range_produces_edge_from_class() {
+        let mut schema = SchemaDefinition::new("inline");
+        schema
+            .classes
+            .insert("Department".to_string(), ClassDefinition::new("Department"));
+
+        let mut person = ClassDefinition::new("Person");
+        let mut dept_attr = SlotDefinition::new("department");
+        dept_attr.range = Some("Department".to_string());
+        person
+            .attributes
+            .insert("department".to_string(), dept_attr);
+        schema.classes.insert("Person".to_string(), person);
+
+        let writer = GraphWriter::new();
+        let graph = writer.schema_to_graph(&schema);
+
+        let attr_edge = graph
+            .edges
+            .iter()
+            .find(|e| e.source == "class:Person" && e.target == "class:Department")
+            .expect("Should have edge from Person to Department via inline 'department' attribute");
+        assert_eq!(attr_edge.edge_type, EdgeType::Range);
+        assert_eq!(attr_edge.label.as_deref(), Some("department"));
+    }
+
+    #[test]
+    fn inline_attribute_with_enum_range_produces_edge_to_enum() {
+        let mut schema = SchemaDefinition::new("inline_enum");
+        schema
+            .enums
+            .insert("YearEnum".to_string(), EnumDefinition::new("YearEnum"));
+
+        let mut student = ClassDefinition::new("Student");
+        let mut year_attr = SlotDefinition::new("year");
+        year_attr.range = Some("YearEnum".to_string());
+        student.attributes.insert("year".to_string(), year_attr);
+        schema.classes.insert("Student".to_string(), student);
+
+        let writer = GraphWriter::new();
+        let graph = writer.schema_to_graph(&schema);
+
+        let edge = graph
+            .edges
+            .iter()
+            .find(|e| e.source == "class:Student" && e.target == "enum:YearEnum")
+            .expect("Inline attribute with enum range should produce class→enum edge");
+        assert_eq!(edge.label.as_deref(), Some("year"));
+    }
+
+    #[test]
+    fn inline_attribute_with_primitive_range_produces_no_edge() {
+        let mut schema = SchemaDefinition::new("inline_primitive");
+        let mut person = ClassDefinition::new("Person");
+        let mut name_attr = SlotDefinition::new("name");
+        name_attr.range = Some("string".to_string());
+        person.attributes.insert("name".to_string(), name_attr);
+        schema.classes.insert("Person".to_string(), person);
+
+        let writer = GraphWriter::new();
+        let graph = writer.schema_to_graph(&schema);
+
+        // Only the Person node, no edges (string isn't a class/enum/type node)
+        assert_eq!(graph.nodes.len(), 1);
+        assert!(
+            graph.edges.is_empty(),
+            "Inline attribute with primitive range should produce no edge, got: {:?}",
+            graph.edges
+        );
     }
 
     // ========== Enum and Type Tests ==========

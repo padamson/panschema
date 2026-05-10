@@ -106,7 +106,11 @@ The visualization features:
 - **Animated force layout**: Nodes organize themselves based on connections
 - **Pan and zoom**: Mouse drag to pan, scroll wheel to zoom
 - **Labels**: Node and edge labels with automatic positioning
-- **Touch support**: Works on mobile devices
+- **Node selection**: Click a node to view its details (label, type, IRI, connections)
+- **Drag to reposition**: Drag any node; release to rejoin the simulation, or shift+release to pin in place
+- **Shift+click to toggle pin**: Pin/unpin nodes so they hold their position
+- **Keyboard shortcuts**: `R` reset view · `F` focus · `Esc` deselect · `Delete` unpin
+- **Touch support**: Pan, orbit, and pinch-zoom on mobile devices
 
 ### GPU Visualization (Native - Optional)
 

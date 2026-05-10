@@ -6,6 +6,8 @@
 use wasm_bindgen::JsCast;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
 
+use std::collections::HashSet;
+
 use crate::camera::{BoundingBox, Camera2D};
 use crate::labels::LabelOptions;
 use crate::simulation::{CpuSimulation, SimEdge, SimNode};
@@ -51,12 +53,18 @@ impl Canvas2DRenderer {
     }
 
     /// Render the simulation state
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &self,
         sim: &CpuSimulation,
         labels: &LabelOptions,
         hovered_node: Option<usize>,
         hovered_edge: Option<usize>,
+        selected_node: Option<usize>,
+        fixed_nodes: &HashSet<usize>,
+        focused_node: Option<usize>,
+        focused_connected: &HashSet<usize>,
+        hidden_nodes: &HashSet<usize>,
     ) {
         // Clear canvas
         self.ctx.set_fill_style_str("#1a1a2e");
@@ -68,10 +76,23 @@ impl Canvas2DRenderer {
         );
 
         // Draw edges first (behind nodes)
-        self.render_edges(&sim.edges, &sim.nodes);
+        self.render_edges(
+            &sim.edges,
+            &sim.nodes,
+            focused_node,
+            focused_connected,
+            hidden_nodes,
+        );
 
         // Draw nodes
-        self.render_nodes(&sim.nodes);
+        self.render_nodes(
+            &sim.nodes,
+            selected_node,
+            fixed_nodes,
+            focused_node,
+            focused_connected,
+            hidden_nodes,
+        );
 
         // Draw labels on top (if enabled or hovered)
         if labels.show_edge_labels() {
@@ -90,16 +111,42 @@ impl Canvas2DRenderer {
     }
 
     /// Render all edges
-    fn render_edges(&self, edges: &[SimEdge], nodes: &[SimNode]) {
-        self.ctx.set_stroke_style_str("rgba(100, 100, 120, 0.5)");
-        self.ctx.set_line_width(1.0);
-
+    fn render_edges(
+        &self,
+        edges: &[SimEdge],
+        nodes: &[SimNode],
+        focused_node: Option<usize>,
+        focused_connected: &HashSet<usize>,
+        hidden_nodes: &HashSet<usize>,
+    ) {
         for edge in edges {
+            // Skip edges connected to hidden nodes
+            if hidden_nodes.contains(&edge.source) || hidden_nodes.contains(&edge.target) {
+                continue;
+            }
+
             let source = &nodes[edge.source];
             let target = &nodes[edge.target];
 
             let (x1, y1) = self.camera.world_to_canvas(source.x, source.y);
             let (x2, y2) = self.camera.world_to_canvas(target.x, target.y);
+
+            // Determine if this edge should be dimmed (focus mode active but edge not connected to focused node)
+            let is_connected = if let Some(focused) = focused_node {
+                edge.source == focused
+                    || edge.target == focused
+                    || focused_connected.contains(&edge.source)
+                    || focused_connected.contains(&edge.target)
+            } else {
+                true // No focus, all edges visible
+            };
+
+            if is_connected {
+                self.ctx.set_stroke_style_str("rgba(100, 100, 120, 0.5)");
+            } else {
+                self.ctx.set_stroke_style_str("rgba(100, 100, 120, 0.15)");
+            }
+            self.ctx.set_line_width(1.0);
 
             self.ctx.begin_path();
             self.ctx.move_to(x1 as f64, y1 as f64);
@@ -109,18 +156,64 @@ impl Canvas2DRenderer {
     }
 
     /// Render all nodes
-    fn render_nodes(&self, nodes: &[SimNode]) {
-        for node in nodes {
+    #[allow(clippy::too_many_arguments)]
+    fn render_nodes(
+        &self,
+        nodes: &[SimNode],
+        selected_node: Option<usize>,
+        fixed_nodes: &HashSet<usize>,
+        focused_node: Option<usize>,
+        focused_connected: &HashSet<usize>,
+        hidden_nodes: &HashSet<usize>,
+    ) {
+        for (i, node) in nodes.iter().enumerate() {
+            // Skip hidden nodes
+            if hidden_nodes.contains(&i) {
+                continue;
+            }
+
             let (cx, cy) = self.camera.world_to_canvas(node.x, node.y);
             let radius = node.radius * self.camera.scale;
 
-            // Convert color to CSS
+            let is_selected = selected_node == Some(i);
+            let is_fixed = fixed_nodes.contains(&i);
+
+            // Check if this node should be dimmed (focus mode active but node not connected)
+            let is_focused_or_connected = if let Some(focused) = focused_node {
+                i == focused || focused_connected.contains(&i)
+            } else {
+                true // No focus, all nodes visible
+            };
+
+            // Draw selection highlight ring behind the node
+            if is_selected {
+                self.ctx.begin_path();
+                self.ctx
+                    .arc(
+                        cx as f64,
+                        cy as f64,
+                        (radius + 4.0) as f64,
+                        0.0,
+                        std::f64::consts::TAU,
+                    )
+                    .ok();
+                self.ctx.set_stroke_style_str("rgba(59, 130, 246, 1.0)"); // Blue selection ring
+                self.ctx.set_line_width(3.0);
+                self.ctx.stroke();
+            }
+
+            // Convert color to CSS, with reduced alpha if dimmed
+            let alpha = if is_focused_or_connected {
+                node.color[3]
+            } else {
+                node.color[3] * 0.25 // Dim unconnected nodes
+            };
             let color = format!(
                 "rgba({}, {}, {}, {})",
                 (node.color[0] * 255.0) as u8,
                 (node.color[1] * 255.0) as u8,
                 (node.color[2] * 255.0) as u8,
-                node.color[3]
+                alpha
             );
 
             self.ctx.begin_path();
@@ -136,10 +229,35 @@ impl Canvas2DRenderer {
             self.ctx.set_fill_style_str(&color);
             self.ctx.fill();
 
-            // Draw border
-            self.ctx.set_stroke_style_str("rgba(255, 255, 255, 0.3)");
-            self.ctx.set_line_width(1.0);
+            // Draw border - fixed nodes get a thicker orange border
+            if is_fixed {
+                self.ctx.set_stroke_style_str("rgba(251, 146, 60, 1.0)"); // Orange for fixed
+                self.ctx.set_line_width(3.0);
+            } else if is_selected {
+                self.ctx.set_stroke_style_str("rgba(59, 130, 246, 1.0)"); // Blue for selected
+                self.ctx.set_line_width(2.0);
+            } else {
+                self.ctx.set_stroke_style_str("rgba(255, 255, 255, 0.3)");
+                self.ctx.set_line_width(1.0);
+            }
             self.ctx.stroke();
+
+            // Draw pin indicator for fixed nodes
+            if is_fixed {
+                self.ctx.set_fill_style_str("rgba(251, 146, 60, 1.0)");
+                // Draw small dot at top of node
+                self.ctx.begin_path();
+                self.ctx
+                    .arc(
+                        cx as f64,
+                        (cy - radius - 3.0) as f64,
+                        3.0,
+                        0.0,
+                        std::f64::consts::TAU,
+                    )
+                    .ok();
+                self.ctx.fill();
+            }
         }
     }
 
@@ -157,10 +275,10 @@ impl Canvas2DRenderer {
 
         for (i, node) in nodes.iter().enumerate() {
             // Skip if filtering and this isn't the target
-            if let Some(idx) = only_index {
-                if i != idx {
-                    continue;
-                }
+            if let Some(idx) = only_index
+                && i != idx
+            {
+                continue;
             }
 
             let (cx, cy) = self.camera.world_to_canvas(node.x, node.y);
@@ -206,10 +324,10 @@ impl Canvas2DRenderer {
 
         for (i, edge) in edges.iter().enumerate() {
             // Skip if filtering and this isn't the target
-            if let Some(idx) = only_index {
-                if i != idx {
-                    continue;
-                }
+            if let Some(idx) = only_index
+                && i != idx
+            {
+                continue;
             }
 
             let source = &nodes[edge.source];
@@ -330,5 +448,10 @@ impl Canvas2DRenderer {
             }
         }
         None
+    }
+
+    /// Convert canvas coordinates to world coordinates (for dragging)
+    pub fn canvas_to_world(&self, canvas_x: f32, canvas_y: f32) -> (f32, f32) {
+        self.camera.canvas_to_world(canvas_x, canvas_y)
     }
 }

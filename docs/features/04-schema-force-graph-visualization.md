@@ -313,116 +313,36 @@ For 2D mode, labels are rendered directly on the Canvas2D context with hover sup
 
 ### Slice 6: Interaction and Polish
 
-**Status:** Not Started
+**Status:** In Progress
 
 **User Value:** Users can filter, search, focus on specific parts of the schema, and manually position nodes.
 
 **Acceptance Criteria:**
 
 #### Node Selection and Dragging
-- [ ] Hit testing: click detection on nodes (ray-cast in 3D, point-in-circle in 2D)
-- [ ] Click node to select (visual highlight, show info panel)
-- [ ] Drag node to reposition while simulation continues
-- [ ] Node becomes "fixed" during drag (velocity zeroed)
-- [ ] Release to let node rejoin simulation (or option to keep fixed)
-- [ ] Double-click to toggle fixed/unfixed state
-- [ ] Visual feedback: cursor change, highlight on hover/select
-- [ ] Touch support for mobile (tap to select, drag to move)
+- [x] Hit testing: click detection on nodes (ray-cast in 3D, point-in-circle in 2D)
+- [x] Click node to select (visual highlight, show info panel)
+- [x] Drag node to reposition while simulation continues
+- [x] Node becomes "fixed" during drag (velocity zeroed)
+- [x] Release to let node rejoin simulation (or option to keep fixed)
+- [x] Shift+click to toggle pin (desktop); long-press with haptic feedback (touch)
+- [x] Visual feedback: cursor change, highlight on hover/select
+- [ ] Touch support for mobile (tap to select, drag to move, long-press to pin)
 
 #### Focus and Filtering
-- [ ] Click node to "focus" - center camera, dim unconnected nodes
-- [ ] Filter by node type (show only classes, only properties, etc.)
+- [ ] Click node to "focus" - center camera, dim unconnected nodes _(dimming done; camera centering not implemented)_
+- [ ] Filter by node type (show only classes, only properties, etc.) _(backend exists, no UI controls)_
 - [ ] Search by label (highlights matching nodes)
 - [ ] Show/hide edge types independently
 
 #### UI and Details
-- [ ] Details panel on selection (label, description, connections)
-- [ ] Keyboard shortcuts:
+- [x] Details panel on selection (label, description, connections)
+- [x] Keyboard shortcuts:
   - `R` = reset camera
   - `F` = focus selected node
   - `Escape` = deselect
   - `Delete` = unfix selected node (let it rejoin simulation)
-- [ ] Selection persists across simulation ticks
-
-#### Implementation Approach
-
-**Hit Testing (3D):**
-```rust
-/// Ray-cast from camera through mouse position to find intersecting node
-fn pick_node_3d(mouse_x: f32, mouse_y: f32, camera: &Camera3D, nodes: &[SimNode3D]) -> Option<usize> {
-    let ray = camera.screen_to_ray(mouse_x, mouse_y);
-
-    let mut closest: Option<(usize, f32)> = None;
-    for (i, node) in nodes.iter().enumerate() {
-        if let Some(t) = ray_sphere_intersect(&ray, node.position(), node.radius) {
-            if closest.is_none() || t < closest.unwrap().1 {
-                closest = Some((i, t));
-            }
-        }
-    }
-    closest.map(|(i, _)| i)
-}
-```
-
-**Hit Testing (2D):**
-```rust
-/// Point-in-circle test for 2D canvas
-fn pick_node_2d(mouse_x: f32, mouse_y: f32, camera: &Camera, nodes: &[SimNode]) -> Option<usize> {
-    let world_pos = camera.screen_to_world(mouse_x, mouse_y);
-
-    for (i, node) in nodes.iter().enumerate().rev() { // Back-to-front for z-order
-        let dx = world_pos.x - node.x;
-        let dy = world_pos.y - node.y;
-        if dx * dx + dy * dy <= node.radius * node.radius {
-            return Some(i);
-        }
-    }
-    None
-}
-```
-
-**Drag State Machine:**
-```rust
-enum DragState {
-    None,
-    Hovering(usize),           // Mouse over node
-    Dragging { node: usize, offset: Vec3 }, // Actively dragging
-}
-
-struct InteractionState {
-    drag: DragState,
-    selected: Option<usize>,   // Currently selected node
-    fixed_nodes: HashSet<usize>, // Nodes pinned by user
-}
-```
-
-**Node Fixing During Drag:**
-```rust
-// In simulation tick:
-for (i, node) in nodes.iter_mut().enumerate() {
-    if interaction.is_dragging(i) {
-        // Follow mouse, zero velocity
-        node.x = drag_world_pos.x;
-        node.y = drag_world_pos.y;
-        node.z = drag_world_pos.z; // 3D only
-        node.vx = 0.0;
-        node.vy = 0.0;
-        node.vz = 0.0;
-    } else if interaction.is_fixed(i) {
-        // User pinned this node
-        node.vx = 0.0;
-        node.vy = 0.0;
-        node.vz = 0.0;
-    }
-}
-```
-
-**Files:**
-| File | Purpose |
-|------|---------|
-| `panschema-viz/src/interaction.rs` | Hit testing, drag state, selection |
-| `panschema-viz/src/lib.rs` | Wire up mouse events to interaction |
-| `panschema/templates/components/graph_viz.html` | Mouse event handlers, cursor styles |
+- [x] Selection persists across simulation ticks
 
 ---
 
@@ -457,7 +377,7 @@ for (i, node) in nodes.iter_mut().enumerate() {
 | Slice 3: GraphWriter | Must Have | None | ✅ Complete |
 | Slice 4: WebGPU HTML Integration | Must Have | Slices 1, 2, 3 | ✅ Complete |
 | Slice 5: Node and Edge Labels | Should Have | Slice 4 | ✅ Complete |
-| Slice 6: Interaction and Dragging | Should Have | Slice 4 | Not Started |
+| Slice 6: Interaction and Dragging | Should Have | Slice 4 | 🚧 In Progress |
 | Slice 7: Barnes-Hut Optimization | Nice to Have | Slice 1 | Not Started |
 
 ---

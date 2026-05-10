@@ -1,6 +1,10 @@
 # University Domain Schema
 # A sample LinkML schema demonstrating class hierarchies and relationships
 # for use with panschema graph visualization.
+#
+# Written in idiomatic LinkML: dict-keyed metaobjects (classes, slots, enums,
+# types, attributes, permissible values) carry their canonical name implicitly
+# via the dict key, so explicit `name:`/`text:` fields are omitted.
 
 name: university_schema
 id: https://example.org/university
@@ -22,192 +26,183 @@ prefixes:
 default_range: string
 
 classes:
-  # Base class for all university entities
+  # Base class for all university entities.
+  # Imports the top-level `identifier` slot rather than defining `id` inline,
+  # so subclasses inherit it and the slot is referenced from somewhere.
   NamedEntity:
-    name: NamedEntity
     description: Base class for entities with a name
     abstract: true
+    slots:
+      - identifier
     attributes:
-      id:
-        name: id
-        description: Unique identifier
-        identifier: true
-        range: string
-        required: true
       name:
-        name: name
         description: Human-readable name
         range: string
         required: true
 
   # Person hierarchy
   Person:
-    name: Person
     description: A person affiliated with the university
     is_a: NamedEntity
     attributes:
       email:
-        name: email
         description: Email address
-        range: string
+        range: email_type
       department:
-        name: department
         description: Primary department affiliation
         range: Department
 
   Student:
-    name: Student
     description: A person enrolled in courses
     is_a: Person
     attributes:
       enrolled_courses:
-        name: enrolled_courses
         description: Courses the student is taking
         range: Course
         multivalued: true
       year:
-        name: year
         description: Year of study
         range: YearEnum
 
   Faculty:
-    name: Faculty
     description: A person who teaches courses
     is_a: Person
     attributes:
       teaches:
-        name: teaches
         description: Courses taught by this faculty member
         range: Course
         multivalued: true
       rank:
-        name: rank
         description: Academic rank
         range: RankEnum
 
   Staff:
-    name: Staff
     description: Non-teaching personnel
     is_a: Person
     attributes:
       role:
-        name: role
         description: Staff role
         range: string
 
   # Academic units
   Department:
-    name: Department
     description: An academic department
     is_a: NamedEntity
     attributes:
       head:
-        name: head
         description: Department head
         range: Faculty
       faculty:
-        name: faculty
         description: Faculty members in this department
         range: Faculty
         multivalued: true
       courses:
-        name: courses
         description: Courses offered by this department
         range: Course
         multivalued: true
 
   Course:
-    name: Course
     description: An academic course
     is_a: NamedEntity
     attributes:
       code:
-        name: code
         description: Course code (e.g., CS101)
         range: string
         required: true
       credits:
-        name: credits
         description: Number of credit hours
         range: integer
       prerequisites:
-        name: prerequisites
         description: Courses required before taking this one
         range: Course
         multivalued: true
       instructor:
-        name: instructor
         description: Primary instructor
         range: Faculty
 
   # Research entities
   ResearchGroup:
-    name: ResearchGroup
     description: A group conducting research
     is_a: NamedEntity
     attributes:
       lead:
-        name: lead
         description: Research group leader
         range: Faculty
       members:
-        name: members
         description: Group members
         range: Person
         multivalued: true
       topics:
-        name: topics
         description: Research topics
         range: string
         multivalued: true
 
+  # ---------------------------------------------------------
+  # Demo: disconnected component
+  # ---------------------------------------------------------
+  # The two classes below have no relationship to the university entities
+  # above. They exist solely to demonstrate that panschema's graph
+  # visualization handles disconnected schema components correctly — a
+  # common shape in real ontologies (vocabulary stubs, metadata classes,
+  # planned-but-unwired extensions).
+  Color:
+    description: |
+      Demo only — a hex color label, intentionally disconnected from the
+      university domain to exercise the visualization's handling of
+      multi-component graphs.
+    attributes:
+      hex:
+        description: Hex code (e.g., "#FF0000")
+        range: string
+      palette:
+        description: The palette this color belongs to
+        range: Palette
+
+  Palette:
+    description: |
+      Demo only — a named collection of colors, paired with `Color` to
+      form a small disconnected cluster.
+    attributes:
+      colors:
+        description: Colors in this palette
+        range: Color
+        multivalued: true
+
 slots:
   identifier:
-    name: identifier
     description: A unique identifier for any entity
     identifier: true
+    domain: NamedEntity
     range: string
 
 enums:
   YearEnum:
-    name: YearEnum
     description: Academic year levels
     permissible_values:
       freshman:
-        text: freshman
         description: First year student
       sophomore:
-        text: sophomore
         description: Second year student
       junior:
-        text: junior
         description: Third year student
       senior:
-        text: senior
         description: Fourth year student
       graduate:
-        text: graduate
         description: Graduate student
 
   RankEnum:
-    name: RankEnum
     description: Academic faculty ranks
     permissible_values:
       assistant_professor:
-        text: assistant_professor
         description: Entry-level tenure-track
       associate_professor:
-        text: associate_professor
         description: Mid-level tenured
       professor:
-        text: professor
         description: Full professor
       emeritus:
-        text: emeritus
         description: Retired with honors
 
 types:
   email_type:
-    name: email_type
     description: An email address
     typeof_: string

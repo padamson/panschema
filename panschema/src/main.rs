@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap_complete::Shell;
 
 #[cfg(feature = "dev")]
 mod components;
@@ -45,11 +46,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Generate documentation or convert to other formats
+    /// Generate documentation or convert to other formats. With no `--input`,
+    /// discovers a `panschema.toml` (cargo-style walk up from CWD) and runs
+    /// codegen for each manifested schema.
     Generate {
-        /// Input ontology file (.ttl, .yaml, .yml)
+        /// Input ontology file (.ttl, .yaml, .yml). When omitted, uses the manifest.
         #[arg(short, long)]
-        input: PathBuf,
+        input: Option<PathBuf>,
 
         /// Output path (file for RDF formats, directory for HTML)
         #[arg(short, long, default_value = "output")]
@@ -67,9 +70,15 @@ enum Commands {
         #[arg(long, value_enum, default_value = "auto")]
         viz_mode: VizMode,
     },
+    /// Resolve every schema in the manifest, compute checksums, and write
+    /// `panschema.lock`. Run this when you add or update a schema dependency.
+    Fetch,
+    /// Verify that on-disk schemas match the checksums recorded in
+    /// `panschema.lock`. Errors on drift.
+    Verify,
     /// Start development server with hot reload
     Serve {
-        /// Input ontology file (.ttl)
+        /// Input ontology file (.ttl, .yaml, .yml)
         #[arg(short, long)]
         input: PathBuf,
 
@@ -80,6 +89,12 @@ enum Commands {
         /// Port to run the server on
         #[arg(short, long, default_value = "3000")]
         port: u16,
+    },
+    /// Generate shell completion script (source the output, e.g. `panschema completions zsh > ~/.zfunc/_panschema`)
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: Shell,
     },
     /// Generate style guide showing all UI components (dev feature only)
     #[cfg(feature = "dev")]
@@ -141,6 +156,167 @@ fn generate(input: &Path, output: &Path, format: &str, include_graph: bool) -> a
     Ok(())
 }
 
+/// Discover the manifest and load it. Returns the parsed manifest plus the
+/// directory it lives in (paths in the manifest are resolved relative to this).
+fn load_manifest() -> anyhow::Result<(panschema::manifest::Manifest, PathBuf)> {
+    use panschema::manifest::{Manifest, discover_manifest};
+
+    let cwd = std::env::current_dir()?;
+    let manifest_path = discover_manifest(&cwd).ok_or_else(|| {
+        anyhow::anyhow!(
+            "no `panschema.toml` found in `{}` or any ancestor directory. \
+             Create a manifest, or pass `--input <file>` for one-off generate. \
+             See docs/features/05-schema-manager.md.",
+            cwd.display()
+        )
+    })?;
+    let manifest_dir = manifest_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("manifest path has no parent directory"))?
+        .to_path_buf();
+    eprintln!("Using manifest: {}", manifest_path.display());
+    let manifest = Manifest::from_path(&manifest_path)?;
+    Ok((manifest, manifest_dir))
+}
+
+/// Resolve a schema's `path:` source to its absolute on-disk location,
+/// erroring if the target doesn't exist.
+fn resolve_path_source(
+    name: &str,
+    dep: &panschema::manifest::SchemaDep,
+    manifest_dir: &Path,
+) -> anyhow::Result<PathBuf> {
+    let resolved = manifest_dir.join(&dep.path);
+    if !resolved.exists() {
+        anyhow::bail!(
+            "schema `{name}`: path `{}` (resolved to `{}`) does not exist",
+            dep.path.display(),
+            resolved.display()
+        );
+    }
+    Ok(resolved)
+}
+
+/// `panschema generate` (no --input): walk the manifest and run configured writers.
+fn generate_from_manifest() -> anyhow::Result<()> {
+    let (manifest, manifest_dir) = load_manifest()?;
+
+    if manifest.schemas.is_empty() {
+        eprintln!("Manifest has no `[schemas]` entries; nothing to do.");
+        return Ok(());
+    }
+
+    let mut produced_anything = false;
+    for (name, dep) in &manifest.schemas {
+        let schema_path = resolve_path_source(name, dep, &manifest_dir)?;
+        let Some(gen_cfg) = manifest.generate.get(name) else {
+            eprintln!("schema `{name}`: no [generate.{name}] block; skipping");
+            continue;
+        };
+        if let Some(html_out) = &gen_cfg.html {
+            let html_out = manifest_dir.join(html_out);
+            generate(&schema_path, &html_out, "html", true)?;
+            produced_anything = true;
+        }
+    }
+
+    if !produced_anything {
+        eprintln!(
+            "No outputs generated. Add an `[generate.<schema>]` block with at least one writer key (e.g. `html = \"docs/\"`)."
+        );
+    }
+    Ok(())
+}
+
+/// `panschema fetch`: resolve every manifested schema, compute its checksum,
+/// and write `panschema.lock`.
+fn fetch_from_manifest() -> anyhow::Result<()> {
+    use panschema::lockfile::{
+        LOCKFILE_FILENAME, LockEntry, Lockfile, checksum_file, path_source_spec,
+    };
+
+    let (manifest, manifest_dir) = load_manifest()?;
+
+    let mut entries = Vec::with_capacity(manifest.schemas.len());
+    for (name, dep) in &manifest.schemas {
+        let schema_path = resolve_path_source(name, dep, &manifest_dir)?;
+        entries.push(LockEntry {
+            name: name.clone(),
+            version: None, // path: sources don't carry a version in this slice
+            source: path_source_spec(&dep.path),
+            revision: None,
+            checksum: checksum_file(&schema_path)?,
+        });
+    }
+
+    let lockfile = Lockfile { entries };
+    let lock_path = manifest_dir.join(LOCKFILE_FILENAME);
+    lockfile.write_to_path(&lock_path)?;
+    println!(
+        "Fetched {} schema(s); wrote {}",
+        lockfile.entries.len(),
+        lock_path.display()
+    );
+    Ok(())
+}
+
+/// `panschema verify`: re-checksum every manifested schema and compare with
+/// the lockfile. Errors with a clear diff on mismatch.
+fn verify_from_manifest() -> anyhow::Result<()> {
+    use panschema::lockfile::{LOCKFILE_FILENAME, Lockfile, checksum_file};
+
+    let (manifest, manifest_dir) = load_manifest()?;
+    let lock_path = manifest_dir.join(LOCKFILE_FILENAME);
+    if !lock_path.exists() {
+        anyhow::bail!(
+            "no `{}` next to the manifest. Run `panschema fetch` first.",
+            LOCKFILE_FILENAME
+        );
+    }
+    let lockfile = Lockfile::from_path(&lock_path)?;
+
+    let mut drift = Vec::new();
+    let mut missing_in_lock = Vec::new();
+    for (name, dep) in &manifest.schemas {
+        let schema_path = resolve_path_source(name, dep, &manifest_dir)?;
+        let observed = checksum_file(&schema_path)?;
+        match lockfile.entry(name) {
+            Some(entry) if entry.checksum == observed => {}
+            Some(entry) => drift.push((name.clone(), entry.checksum.clone(), observed)),
+            None => missing_in_lock.push(name.clone()),
+        }
+    }
+    let lockfile_only: Vec<_> = lockfile
+        .entries
+        .iter()
+        .filter(|e| !manifest.schemas.contains_key(&e.name))
+        .map(|e| e.name.clone())
+        .collect();
+
+    if drift.is_empty() && missing_in_lock.is_empty() && lockfile_only.is_empty() {
+        println!("Verified {} schema(s).", manifest.schemas.len());
+        return Ok(());
+    }
+
+    let mut msg = String::from("schema dependencies drifted from the lockfile:\n");
+    for (name, locked, observed) in &drift {
+        msg.push_str(&format!(
+            "  - `{name}`: lockfile has {locked}, on-disk is {observed}\n"
+        ));
+    }
+    for name in &missing_in_lock {
+        msg.push_str(&format!(
+            "  - `{name}`: in manifest but not in lockfile (run `panschema fetch`)\n"
+        ));
+    }
+    for name in &lockfile_only {
+        msg.push_str(&format!(
+            "  - `{name}`: in lockfile but not in manifest (stale; run `panschema fetch` to refresh)\n"
+        ));
+    }
+    anyhow::bail!("{msg}");
+}
+
 #[cfg(feature = "dev")]
 fn generate_styleguide(output: &Path) -> anyhow::Result<()> {
     use std::fs;
@@ -167,24 +343,32 @@ async fn main() -> anyhow::Result<()> {
             format,
             no_graph,
             viz_mode,
-        }) => {
-            // Log the viz options when graph is enabled
-            if format.to_lowercase() == "html" && !no_graph {
-                let mode_str = match viz_mode {
-                    VizMode::Auto => "auto (2D fallback, 3D when available)",
-                    VizMode::Canvas2D => "2D Canvas (CPU)",
-                    VizMode::WebGPU3D => "3D WebGPU (GPU)",
-                };
-                eprintln!("Graph visualization: {}", mode_str);
+        }) => match input {
+            Some(input) => {
+                if format.to_lowercase() == "html" && !no_graph {
+                    let mode_str = match viz_mode {
+                        VizMode::Auto => "auto (2D fallback, 3D when available)",
+                        VizMode::Canvas2D => "2D Canvas (CPU)",
+                        VizMode::WebGPU3D => "3D WebGPU (GPU)",
+                    };
+                    eprintln!("Graph visualization: {}", mode_str);
+                }
+                generate(&input, &output, &format, !no_graph)?;
             }
-            generate(&input, &output, &format, !no_graph)?;
-        }
+            None => generate_from_manifest()?,
+        },
+        Some(Commands::Fetch) => fetch_from_manifest()?,
+        Some(Commands::Verify) => verify_from_manifest()?,
         Some(Commands::Serve {
             input,
             output,
             port,
         }) => {
             server::serve(&input, &output, port).await?;
+        }
+        Some(Commands::Completions { shell }) => {
+            let mut cmd = Cli::command();
+            clap_complete::generate(shell, &mut cmd, "panschema", &mut std::io::stdout());
         }
         #[cfg(feature = "dev")]
         Some(Commands::Styleguide {
@@ -243,7 +427,7 @@ mod tests {
                 no_graph,
                 viz_mode,
             }) => {
-                assert_eq!(input, PathBuf::from("test.ttl"));
+                assert_eq!(input, Some(PathBuf::from("test.ttl")));
                 assert_eq!(output, PathBuf::from("docs"));
                 assert_eq!(format, "html");
                 assert!(!no_graph); // default false (graph enabled)
@@ -273,7 +457,7 @@ mod tests {
                 format,
                 ..
             }) => {
-                assert_eq!(input, PathBuf::from("test.ttl"));
+                assert_eq!(input, Some(PathBuf::from("test.ttl")));
                 assert_eq!(output, PathBuf::from("output.jsonld"));
                 assert_eq!(format, "jsonld");
             }
@@ -324,6 +508,20 @@ mod tests {
         match cli.command {
             Some(Commands::Generate { no_graph, .. }) => {
                 assert!(no_graph);
+            }
+            _ => panic!("Expected Generate command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_generate_with_no_input_for_manifest_mode() {
+        let cli = Cli::try_parse_from(["panschema", "generate"]).unwrap();
+        match cli.command {
+            Some(Commands::Generate { input, .. }) => {
+                assert!(
+                    input.is_none(),
+                    "input should be None to trigger manifest discovery"
+                );
             }
             _ => panic!("Expected Generate command"),
         }

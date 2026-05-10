@@ -41,11 +41,11 @@ pub async fn serve(input: &Path, output: &Path, port: u16) -> anyhow::Result<()>
     let tx_clone = tx.clone();
 
     let mut watcher = notify::recommended_watcher(move |res: Result<Event, _>| {
-        if let Ok(event) = res {
-            if event.kind.is_modify() || event.kind.is_create() {
-                // Notify the regeneration task
-                let _ = tx_clone.blocking_send(());
-            }
+        if let Ok(event) = res
+            && (event.kind.is_modify() || event.kind.is_create())
+        {
+            // Notify the regeneration task
+            let _ = tx_clone.blocking_send(());
         }
     })?;
 
@@ -80,10 +80,10 @@ pub async fn serve(input: &Path, output: &Path, port: u16) -> anyhow::Result<()>
 
     // Set up file watcher for output directory to trigger browser reload
     let mut output_watcher = notify::recommended_watcher(move |res: Result<Event, _>| {
-        if let Ok(event) = res {
-            if event.kind.is_modify() || event.kind.is_create() {
-                reloader.reload();
-            }
+        if let Ok(event) = res
+            && (event.kind.is_modify() || event.kind.is_create())
+        {
+            reloader.reload();
         }
     })?;
     output_watcher.watch(output, RecursiveMode::Recursive)?;
@@ -118,10 +118,10 @@ pub async fn serve_static(output: &Path, port: u16) -> anyhow::Result<()> {
 
     // Set up file watcher for output directory to trigger browser reload
     let mut output_watcher = notify::recommended_watcher(move |res: Result<Event, _>| {
-        if let Ok(event) = res {
-            if event.kind.is_modify() || event.kind.is_create() {
-                reloader.reload();
-            }
+        if let Ok(event) = res
+            && (event.kind.is_modify() || event.kind.is_create())
+        {
+            reloader.reload();
         }
     })?;
     output_watcher.watch(output, RecursiveMode::Recursive)?;

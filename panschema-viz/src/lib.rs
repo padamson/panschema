@@ -11,7 +11,9 @@
 pub mod camera;
 mod canvas2d;
 mod graph_types;
+mod interaction;
 mod labels;
+mod sim_common;
 mod simulation;
 
 #[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
@@ -30,6 +32,7 @@ pub mod camera3d;
 mod simulation3d;
 
 use graph_types::GraphData;
+use interaction::InteractionState;
 use wasm_bindgen::prelude::*;
 use web_sys::HtmlCanvasElement;
 
@@ -68,6 +71,7 @@ pub struct Visualization {
     simulation: CpuSimulation,
     renderer: Canvas2DRenderer,
     labels: LabelOptions,
+    interaction: InteractionState,
     hovered_node: Option<usize>,
     hovered_edge: Option<usize>,
 }
@@ -92,6 +96,7 @@ impl Visualization {
             simulation,
             renderer,
             labels: LabelOptions::new(),
+            interaction: InteractionState::new(),
             hovered_node: None,
             hovered_edge: None,
         })
@@ -99,7 +104,12 @@ impl Visualization {
 
     /// Run one simulation tick
     pub fn tick(&mut self) {
-        self.simulation.tick();
+        // Use fixed nodes from interaction state, plus dragging node
+        let mut fixed = self.interaction.fixed_nodes.clone();
+        if let Some(drag_node) = self.interaction.dragging_node() {
+            fixed.insert(drag_node);
+        }
+        self.simulation.tick_with_fixed(&fixed);
     }
 
     /// Update animation state (smooth transitions)
@@ -109,12 +119,53 @@ impl Visualization {
 
     /// Render the current state
     pub fn render(&self) {
+        // Compute connected nodes for focus mode
+        let focused_connected = self.get_focused_connected_set();
+
+        // Compute hidden node indices based on type filter
+        let hidden_nodes = self.get_hidden_node_set();
+
         self.renderer.render(
             &self.simulation,
             &self.labels,
             self.hovered_node,
             self.hovered_edge,
+            self.interaction.selected_node,
+            &self.interaction.fixed_nodes,
+            self.interaction.focused_node,
+            &focused_connected,
+            &hidden_nodes,
         );
+    }
+
+    /// Get set of node indices that should be hidden based on type filter
+    fn get_hidden_node_set(&self) -> std::collections::HashSet<usize> {
+        let mut hidden = std::collections::HashSet::new();
+        if self.interaction.hidden_types.is_empty() {
+            return hidden;
+        }
+        for (i, node) in self.simulation.nodes.iter().enumerate() {
+            let node_type = node_type_string(&node.color);
+            if self.interaction.hidden_types.contains(node_type) {
+                hidden.insert(i);
+            }
+        }
+        hidden
+    }
+
+    /// Get set of nodes connected to the focused node (if any)
+    fn get_focused_connected_set(&self) -> std::collections::HashSet<usize> {
+        let mut connected = std::collections::HashSet::new();
+        if let Some(focused) = self.interaction.focused_node {
+            for edge in &self.simulation.edges {
+                if edge.source == focused {
+                    connected.insert(edge.target);
+                } else if edge.target == focused {
+                    connected.insert(edge.source);
+                }
+            }
+        }
+        connected
     }
 
     /// Check if simulation is still running
@@ -277,6 +328,237 @@ impl Visualization {
     pub fn hovered_edge_index(&self) -> i32 {
         self.hovered_edge.map(|i| i as i32).unwrap_or(-1)
     }
+
+    // ========================================================================
+    // Selection and interaction
+    // ========================================================================
+
+    /// Select node at canvas coordinates, or deselect if clicking empty space.
+    /// Returns the selected node index (-1 if none).
+    pub fn select_at(&mut self, canvas_x: f32, canvas_y: f32) -> i32 {
+        // Check for node at position
+        let node_index = self
+            .renderer
+            .node_at(canvas_x, canvas_y, &self.simulation.nodes);
+
+        self.interaction.select_node(node_index);
+        self.selected_node_index()
+    }
+
+    /// Get the currently selected node index (-1 if none)
+    pub fn selected_node_index(&self) -> i32 {
+        self.interaction
+            .selected_node
+            .map(|i| i as i32)
+            .unwrap_or(-1)
+    }
+
+    /// Deselect the current node
+    pub fn deselect(&mut self) {
+        self.interaction.deselect();
+    }
+
+    /// Check if a node is currently fixed
+    pub fn is_node_fixed(&self, index: usize) -> bool {
+        self.interaction.is_fixed(index)
+    }
+
+    // ========================================================================
+    // Drag operations
+    // ========================================================================
+
+    /// Start dragging a node at canvas coordinates.
+    /// Returns the node index if a node was found (-1 if none).
+    pub fn start_drag_at(&mut self, canvas_x: f32, canvas_y: f32) -> i32 {
+        if let Some(index) = self
+            .renderer
+            .node_at(canvas_x, canvas_y, &self.simulation.nodes)
+        {
+            self.interaction.start_drag(index, canvas_x, canvas_y);
+            // Reheat simulation so physics runs while dragging
+            self.simulation.reheat(0.3);
+            index as i32
+        } else {
+            -1
+        }
+    }
+
+    /// Move the currently dragged node to new canvas coordinates.
+    pub fn drag_to(&mut self, canvas_x: f32, canvas_y: f32) {
+        if let Some(index) = self.interaction.dragging_node() {
+            let (world_x, world_y) = self.renderer.canvas_to_world(canvas_x, canvas_y);
+            self.simulation.set_node_position(index, world_x, world_y);
+        }
+    }
+
+    /// End the drag operation.
+    /// If `keep_fixed` is true, the node will remain fixed after release.
+    pub fn end_drag(&mut self, keep_fixed: bool) {
+        self.interaction.end_drag(keep_fixed);
+    }
+
+    /// Check if we're currently dragging a node
+    pub fn is_dragging(&self) -> bool {
+        self.interaction.dragging_node().is_some()
+    }
+
+    /// Get the index of the node being dragged (-1 if none)
+    pub fn dragging_node_index(&self) -> i32 {
+        self.interaction
+            .dragging_node()
+            .map(|i| i as i32)
+            .unwrap_or(-1)
+    }
+
+    /// Toggle the fixed state of a node at canvas coordinates.
+    /// Returns the node index if found (-1 if no node at position).
+    pub fn toggle_fixed_at(&mut self, canvas_x: f32, canvas_y: f32) -> i32 {
+        if let Some(index) = self
+            .renderer
+            .node_at(canvas_x, canvas_y, &self.simulation.nodes)
+        {
+            self.interaction.toggle_fixed(index);
+            index as i32
+        } else {
+            -1
+        }
+    }
+
+    /// Toggle the fixed state of a node by index (used by shift+click).
+    pub fn toggle_fixed(&mut self, index: usize) {
+        if index < self.simulation.nodes.len() {
+            self.interaction.toggle_fixed(index);
+        }
+    }
+
+    /// Unfix a node by index (let it move freely in simulation)
+    pub fn unfix_node(&mut self, index: usize) {
+        self.interaction.unfix_node(index);
+    }
+
+    /// Get details for a node as JSON.
+    /// Returns empty object if index is out of bounds.
+    pub fn get_node_details(&self, index: usize) -> String {
+        if index >= self.simulation.nodes.len() {
+            return "{}".to_string();
+        }
+
+        let node = &self.simulation.nodes[index];
+        let node_type = node_type_string(&node.color);
+        let is_fixed = self.interaction.is_fixed(index);
+
+        // Get connected nodes
+        let connected = self.get_connected_node_ids(index);
+
+        serde_json::json!({
+            "id": node.id,
+            "label": node.label,
+            "type": node_type,
+            "isFixed": is_fixed,
+            "connections": connected,
+            "x": node.x,
+            "y": node.y
+        })
+        .to_string()
+    }
+
+    /// Get IDs of nodes directly connected to the given node
+    fn get_connected_node_ids(&self, index: usize) -> Vec<String> {
+        let mut connected = Vec::new();
+        for edge in &self.simulation.edges {
+            if edge.source == index {
+                connected.push(self.simulation.nodes[edge.target].id.clone());
+            } else if edge.target == index {
+                connected.push(self.simulation.nodes[edge.source].id.clone());
+            }
+        }
+        connected.sort();
+        connected.dedup();
+        connected
+    }
+
+    // ========================================================================
+    // Focus mode
+    // ========================================================================
+
+    /// Set focus on a node (dims unconnected nodes).
+    pub fn focus_node(&mut self, index: usize) {
+        if index < self.simulation.nodes.len() {
+            self.interaction.focus_node(index);
+        }
+    }
+
+    /// Clear focus mode.
+    pub fn clear_focus(&mut self) {
+        self.interaction.clear_focus();
+    }
+
+    /// Get the focused node index (-1 if none).
+    pub fn focused_node_index(&self) -> i32 {
+        self.interaction
+            .focused_node()
+            .map(|i| i as i32)
+            .unwrap_or(-1)
+    }
+
+    /// Get indices of nodes connected to the given node as JSON.
+    pub fn get_connected_indices_json(&self, index: usize) -> String {
+        let mut connected = Vec::new();
+        for edge in &self.simulation.edges {
+            if edge.source == index {
+                connected.push(edge.target);
+            } else if edge.target == index {
+                connected.push(edge.source);
+            }
+        }
+        connected.sort();
+        connected.dedup();
+        serde_json::to_string(&connected).unwrap_or_else(|_| "[]".to_string())
+    }
+
+    // ========================================================================
+    // Type filtering
+    // ========================================================================
+
+    /// Toggle visibility of a node type (Class, Slot, Enum, Type).
+    pub fn toggle_type_filter(&mut self, node_type: &str) {
+        self.interaction.toggle_type(node_type);
+    }
+
+    /// Check if a node type is visible.
+    pub fn is_type_visible(&self, node_type: &str) -> bool {
+        self.interaction.is_type_visible(node_type)
+    }
+
+    /// Get the type of a node by index.
+    pub fn get_node_type(&self, index: usize) -> String {
+        if index >= self.simulation.nodes.len() {
+            return "Unknown".to_string();
+        }
+        node_type_string(&self.simulation.nodes[index].color).to_string()
+    }
+}
+
+/// Helper to determine node type from color
+fn node_type_string(color: &[f32; 4]) -> &'static str {
+    // Match colors defined in graph_types::colors
+    const BLUE_R: f32 = 0.290;
+    const GREEN_R: f32 = 0.314;
+    const PURPLE_R: f32 = 0.608;
+    const ORANGE_R: f32 = 0.902;
+
+    let r = color[0];
+    if (r - BLUE_R).abs() < 0.1 {
+        "Class"
+    } else if (r - GREEN_R).abs() < 0.1 {
+        "Slot"
+    } else if (r - PURPLE_R).abs() < 0.1 {
+        "Enum"
+    } else if (r - ORANGE_R).abs() < 0.1 {
+        "Type"
+    } else {
+        "Unknown"
+    }
 }
 
 /// Create a 2D visualization (convenience function)
@@ -304,6 +586,8 @@ pub struct Visualization3D {
     simulation: Simulation3D,
     renderer: WebGpuRenderer,
     labels: LabelOptions,
+    interaction: InteractionState,
+    hovered_node: Option<usize>,
 }
 
 #[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
@@ -311,7 +595,12 @@ pub struct Visualization3D {
 impl Visualization3D {
     /// Run one simulation tick
     pub fn tick(&mut self) {
-        self.simulation.tick();
+        // Use fixed nodes from interaction state, plus dragging node
+        let mut fixed = self.interaction.fixed_nodes.clone();
+        if let Some(drag_node) = self.interaction.dragging_node() {
+            fixed.insert(drag_node);
+        }
+        self.simulation.tick_with_fixed(&fixed);
     }
 
     /// Update animation state (smooth transitions)
@@ -502,6 +791,273 @@ impl Visualization3D {
     pub fn edge_labels_enabled(&self) -> bool {
         self.labels.edge_labels
     }
+
+    // ========================================================================
+    // Hover detection (3D)
+    // ========================================================================
+
+    /// Update hover state based on screen coordinates
+    /// Returns true if hover state changed
+    pub fn update_hover(&mut self, screen_x: f32, screen_y: f32, width: f32, height: f32) -> bool {
+        let old_hovered = self.hovered_node;
+
+        // Cast ray from screen coordinates
+        let ray = self
+            .renderer
+            .screen_to_ray(screen_x, screen_y, width, height);
+
+        // Find closest intersected node
+        self.hovered_node = self.pick_node_3d(&ray);
+
+        old_hovered != self.hovered_node
+    }
+
+    /// Clear hover state
+    pub fn clear_hover(&mut self) {
+        self.hovered_node = None;
+    }
+
+    /// Get the currently hovered node index (-1 if none)
+    pub fn hovered_node_index(&self) -> i32 {
+        self.hovered_node.map(|i| i as i32).unwrap_or(-1)
+    }
+
+    // ========================================================================
+    // Selection and interaction (3D)
+    // ========================================================================
+
+    /// Select node at screen coordinates, or deselect if clicking empty space.
+    /// Returns the selected node index (-1 if none).
+    pub fn select_at(&mut self, screen_x: f32, screen_y: f32, width: f32, height: f32) -> i32 {
+        let ray = self
+            .renderer
+            .screen_to_ray(screen_x, screen_y, width, height);
+        let node_index = self.pick_node_3d(&ray);
+        self.interaction.select_node(node_index);
+        self.selected_node_index()
+    }
+
+    /// Get the currently selected node index (-1 if none)
+    pub fn selected_node_index(&self) -> i32 {
+        self.interaction
+            .selected_node
+            .map(|i| i as i32)
+            .unwrap_or(-1)
+    }
+
+    /// Deselect the current node
+    pub fn deselect(&mut self) {
+        self.interaction.deselect();
+    }
+
+    /// Check if a node is currently fixed
+    pub fn is_node_fixed(&self, index: usize) -> bool {
+        self.interaction.is_fixed(index)
+    }
+
+    // ========================================================================
+    // Drag operations (3D)
+    // ========================================================================
+
+    /// Start dragging a node at screen coordinates.
+    /// Returns the node index if a node was found (-1 if none).
+    pub fn start_drag_at(&mut self, screen_x: f32, screen_y: f32, width: f32, height: f32) -> i32 {
+        let ray = self
+            .renderer
+            .screen_to_ray(screen_x, screen_y, width, height);
+        if let Some(index) = self.pick_node_3d(&ray) {
+            self.interaction.start_drag(index, screen_x, screen_y);
+            // Reheat simulation so physics runs while dragging
+            self.simulation.reheat(0.3);
+            index as i32
+        } else {
+            -1
+        }
+    }
+
+    /// Move the currently dragged node based on screen coordinates.
+    /// Projects the movement onto a plane perpendicular to the camera.
+    pub fn drag_to(&mut self, screen_x: f32, screen_y: f32, width: f32, height: f32) {
+        if let Some(index) = self.interaction.dragging_node() {
+            // Get the current node position
+            let node = &self.simulation.nodes[index];
+            let node_pos = [node.x, node.y, node.z];
+
+            // Project new screen position to the plane containing the node
+            let new_pos = self
+                .renderer
+                .unproject_to_plane(screen_x, screen_y, width, height, node_pos);
+
+            self.simulation
+                .set_node_position(index, new_pos[0], new_pos[1], new_pos[2]);
+        }
+    }
+
+    /// End the drag operation.
+    /// If `keep_fixed` is true, the node will remain fixed after release.
+    pub fn end_drag(&mut self, keep_fixed: bool) {
+        self.interaction.end_drag(keep_fixed);
+    }
+
+    /// Check if we're currently dragging a node
+    pub fn is_dragging(&self) -> bool {
+        self.interaction.dragging_node().is_some()
+    }
+
+    /// Get the index of the node being dragged (-1 if none)
+    pub fn dragging_node_index(&self) -> i32 {
+        self.interaction
+            .dragging_node()
+            .map(|i| i as i32)
+            .unwrap_or(-1)
+    }
+
+    /// Toggle the fixed state of a node at screen coordinates.
+    /// Returns the node index if found (-1 if no node at position).
+    pub fn toggle_fixed_at(
+        &mut self,
+        screen_x: f32,
+        screen_y: f32,
+        width: f32,
+        height: f32,
+    ) -> i32 {
+        let ray = self
+            .renderer
+            .screen_to_ray(screen_x, screen_y, width, height);
+        if let Some(index) = self.pick_node_3d(&ray) {
+            self.interaction.toggle_fixed(index);
+            index as i32
+        } else {
+            -1
+        }
+    }
+
+    /// Toggle the fixed state of a node by index (used by shift+click).
+    pub fn toggle_fixed(&mut self, index: usize) {
+        if index < self.simulation.nodes.len() {
+            self.interaction.toggle_fixed(index);
+        }
+    }
+
+    /// Unfix a node by index (let it move freely in simulation)
+    pub fn unfix_node(&mut self, index: usize) {
+        self.interaction.unfix_node(index);
+    }
+
+    // ========================================================================
+    // Node details
+    // ========================================================================
+
+    /// Get details for a node as JSON.
+    /// Returns empty object if index is out of bounds.
+    pub fn get_node_details(&self, index: usize) -> String {
+        if index >= self.simulation.nodes.len() {
+            return "{}".to_string();
+        }
+
+        let node = &self.simulation.nodes[index];
+        let node_type = node_type_string_3d(&node.color);
+        let is_fixed = self.interaction.is_fixed(index);
+
+        // Get connected nodes
+        let connected = self.get_connected_node_ids(index);
+
+        serde_json::json!({
+            "id": node.id,
+            "label": node.label,
+            "type": node_type,
+            "isFixed": is_fixed,
+            "connections": connected,
+            "x": node.x,
+            "y": node.y,
+            "z": node.z
+        })
+        .to_string()
+    }
+
+    // ========================================================================
+    // Focus mode
+    // ========================================================================
+
+    /// Set focus on a node (dims unconnected nodes).
+    pub fn focus_node(&mut self, index: usize) {
+        if index < self.simulation.nodes.len() {
+            self.interaction.focus_node(index);
+        }
+    }
+
+    /// Clear focus mode.
+    pub fn clear_focus(&mut self) {
+        self.interaction.clear_focus();
+    }
+
+    /// Get the focused node index (-1 if none).
+    pub fn focused_node_index(&self) -> i32 {
+        self.interaction
+            .focused_node()
+            .map(|i| i as i32)
+            .unwrap_or(-1)
+    }
+
+    // ========================================================================
+    // Internal helpers
+    // ========================================================================
+
+    /// Pick the closest node intersected by a ray
+    fn pick_node_3d(&self, ray: &camera3d::Ray3D) -> Option<usize> {
+        let mut closest: Option<(usize, f32)> = None;
+
+        for (i, node) in self.simulation.nodes.iter().enumerate() {
+            let center = [node.x, node.y, node.z];
+            if let Some(t) = ray.intersect_sphere(center, node.radius) {
+                match closest {
+                    None => closest = Some((i, t)),
+                    Some((_, closest_t)) if t < closest_t => closest = Some((i, t)),
+                    _ => {}
+                }
+            }
+        }
+
+        closest.map(|(i, _)| i)
+    }
+
+    /// Get IDs of nodes directly connected to the given node
+    fn get_connected_node_ids(&self, index: usize) -> Vec<String> {
+        let mut connected = Vec::new();
+        for edge in &self.simulation.edges {
+            if edge.source == index {
+                connected.push(self.simulation.nodes[edge.target].id.clone());
+            } else if edge.target == index {
+                connected.push(self.simulation.nodes[edge.source].id.clone());
+            }
+        }
+        connected.sort();
+        connected.dedup();
+        connected
+    }
+}
+
+/// Helper to determine node type from color (3D version)
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+fn node_type_string_3d(color: &[f32; 4]) -> &'static str {
+    // Match colors defined in graph_types::colors
+    const BLUE_R: f32 = 0.290;
+    const GREEN_R: f32 = 0.314;
+    const PURPLE_R: f32 = 0.608;
+    const ORANGE_R: f32 = 0.902;
+
+    let r = color[0];
+    if (r - BLUE_R).abs() < 0.1 {
+        "Class"
+    } else if (r - GREEN_R).abs() < 0.1 {
+        "Slot"
+    } else if (r - PURPLE_R).abs() < 0.1 {
+        "Enum"
+    } else if (r - ORANGE_R).abs() < 0.1 {
+        "Type"
+    } else {
+        "Unknown"
+    }
 }
 
 /// Create a 3D WebGPU visualization (async, only with webgpu feature)
@@ -527,6 +1083,8 @@ pub async fn create_visualization_3d(
         simulation,
         renderer,
         labels: LabelOptions::new(),
+        interaction: InteractionState::new(),
+        hovered_node: None,
     })
 }
 

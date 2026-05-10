@@ -1,0 +1,128 @@
+name: Security & Quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly Saturday 5am ET
+    - cron: '0 9 * * 6'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+
+      - name: Run cargo audit
+        # Ignored advisories mirror deny.toml — unmaintained-crate warnings only.
+        run: >-
+          cargo audit
+          --ignore RUSTSEC-2024-0388
+          --ignore RUSTSEC-2024-0370
+          --ignore RUSTSEC-2024-0436
+
+  deny:
+    name: License & Dependency Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny
+
+      - name: Run cargo deny
+        run: cargo deny check
+
+  supply-chain:
+    name: Supply Chain Review
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-vet
+        run: cargo install cargo-vet
+
+      - name: Run cargo vet
+        run: |
+          if [ -f supply-chain/audits.toml ]; then
+            cargo vet
+          else
+            echo "supply-chain/ not initialized; skipping. Run 'cargo vet init' to enable."
+          fi
+
+  semver-checks:
+    name: Semver Compatibility
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-semver-checks
+        run: cargo install cargo-semver-checks
+
+      - name: Check semver compatibility
+        run: cargo semver-checks check-release
+
+  mutation-testing:
+    name: Mutation Testing
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-mutants-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-mutants-
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants
+
+      - name: Run mutation testing (unit tests only, panschema crate)
+        run: cargo mutants
+
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutation-report
+          path: mutants.out/

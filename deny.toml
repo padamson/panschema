@@ -1,0 +1,65 @@
+# cargo-deny configuration
+# Run: cargo deny check
+# Docs: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+all-features = false
+no-default-features = false
+
+[output]
+feature-depth = 1
+
+[advisories]
+ignore = [
+    # Transitive unmaintained-crate warnings — not vulnerabilities. Cleared
+    # when upstream consumers (wgpu/naga, proc-macro libs) migrate off them.
+    "RUSTSEC-2024-0388", # derivative unmaintained (via wgpu/naga)
+    "RUSTSEC-2024-0370", # proc-macro-error unmaintained
+    "RUSTSEC-2024-0436", # paste unmaintained
+]
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CECILL-B",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "OpenSSL",
+    "BSL-1.0",
+    "CC0-1.0",
+    "MPL-2.0",
+]
+confidence-threshold = 0.8
+exceptions = []
+
+[licenses.private]
+ignore = false
+registries = []
+
+[bans]
+multiple-versions = "warn"
+# `wildcards = "deny"` is too strict for git deps — they declare no version and
+# `cargo-deny` treats that as a wildcard. `allow-wildcard-paths` covers the
+# specific case of git/path deps without inviting `version = "*"` in registry deps.
+wildcards = "deny"
+allow-wildcard-paths = true
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow = []
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# playwright-rs is dogfooded from its upstream repo (same maintainer as panschema).
+allow-git = ["https://github.com/padamson/playwright-rust"]
