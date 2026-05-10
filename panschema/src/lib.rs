@@ -3,6 +3,7 @@
 //! This crate provides readers and writers for various schema formats, with LinkML as the
 //! internal representation.
 
+pub mod cache;
 pub mod graph_writer;
 pub mod html_writer;
 pub mod io;
@@ -14,6 +15,7 @@ pub mod owl_reader;
 pub mod owl_writer;
 pub mod publish;
 pub mod rdf_serializers;
+pub mod source;
 pub mod yaml_reader;
 
 #[cfg(feature = "gpu")]

@@ -36,12 +36,26 @@ pub struct Manifest {
 }
 
 /// One entry under `[schemas]` — declares where a schema lives.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Two shapes are valid (semantic validation lives in
+/// [`crate::source::SchemaSource::from_dep`], not in serde):
+/// - `path:` source: `path = "./schema/x.yaml"`
+/// - `github:` source: `source = "github:owner/repo"` + `version = "0.1.3"`
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct SchemaDep {
-    /// Path to the schema file (or directory containing the publish spec).
-    /// Resolved relative to the manifest's location.
-    pub path: PathBuf,
+    /// Path to the schema file, resolved relative to the manifest's location.
+    /// Required for `path:` sources; absent for remote sources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathBuf>,
+    /// Source specifier (e.g. `"github:owner/repo"`).
+    /// Required for remote sources; absent for `path:` sources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// Version (tag for `github:` sources, modulo a leading `v`).
+    /// Required when `source` is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 /// One entry under `[generate.<name>]` — maps writer kinds to output paths.
@@ -103,8 +117,8 @@ my-local = { path = "./schema/my-schema.yaml" }
         let m = toml.parse::<Manifest>().expect("should parse");
         assert_eq!(m.schemas.len(), 1);
         assert_eq!(
-            m.schemas.get("my-local").unwrap().path,
-            PathBuf::from("./schema/my-schema.yaml")
+            m.schemas.get("my-local").unwrap().path.as_deref(),
+            Some(Path::new("./schema/my-schema.yaml"))
         );
         assert!(m.generate.is_empty());
     }
@@ -159,10 +173,26 @@ foo = "bar"
     fn errors_on_unknown_schema_field() {
         let toml = r#"
 [schemas]
-my-local = { path = "./x.yaml", version = "0.1.0" }
+my-local = { path = "./x.yaml", colour = "blue" }
 "#;
         let err = toml.parse::<Manifest>().expect_err("should reject");
         assert!(matches!(err, ManifestError::Parse(_)));
+    }
+
+    #[test]
+    fn parses_github_source_with_version() {
+        let toml = r#"
+[schemas]
+remote = { source = "github:padamson/scimantic-schema", version = "0.1.3" }
+"#;
+        let m = toml.parse::<Manifest>().expect("should parse");
+        let dep = m.schemas.get("remote").unwrap();
+        assert!(dep.path.is_none());
+        assert_eq!(
+            dep.source.as_deref(),
+            Some("github:padamson/scimantic-schema")
+        );
+        assert_eq!(dep.version.as_deref(), Some("0.1.3"));
     }
 
     #[test]
@@ -179,13 +209,21 @@ rust = "src/generated/x.rs"
     }
 
     #[test]
-    fn errors_on_missing_path_in_schema_dep() {
+    fn empty_schema_dep_parses_but_is_semantically_invalid() {
+        // Serde accepts the empty table now that all fields are optional.
+        // Semantic validation (must have either `path` or `source`+`version`)
+        // lives in the `source` module.
         let toml = r#"
 [schemas]
 x = {}
 "#;
-        let err = toml.parse::<Manifest>().expect_err("should reject");
-        assert!(matches!(err, ManifestError::Parse(_)));
+        let m = toml
+            .parse::<Manifest>()
+            .expect("should parse at serde layer");
+        let dep = m.schemas.get("x").unwrap();
+        assert!(dep.path.is_none());
+        assert!(dep.source.is_none());
+        assert!(dep.version.is_none());
     }
 
     #[test]

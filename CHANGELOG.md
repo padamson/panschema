@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `panschema verify` re-checksums against the lockfile and errors with a clear diff on drift (catches "schema edited but generate not re-run")
   - Clear errors when a schema's `path:` target is missing
   - `--input <file>` continues to work as a no-manifest shorthand
+  - `github:owner/repo` source protocol with shared cargo-style cache at `~/.cache/panschema/github/<owner>/<repo>/<version>/`
+  - Anonymous tarball fetch from `codeload.github.com` — no GitHub API rate limit
+  - Commit SHA recorded in `panschema.lock` for `github:` sources (read from the tarball's top-level directory name)
+  - `panschema-publish.toml` read from the tagged commit; declared `version` verified against the manifest at fetch time
+  - File locking on the cache (`fs2`) so concurrent fetches don't race
+  - Symlink hygiene: refuses to follow paths that escape the cache directory
+  - Re-fetch is a no-op when the cached version is already extracted (no network call)
+  - Pluggable `TarballSource` trait for future protocols (`gitlab:`, `https:`, etc.) and for tests
 - `Contributor` struct for Dublin Core-style contributor metadata (name, ORCID, role)
 - `SchemaDefinition` metadata fields: `contributors`, `created`, `modified`, `imports`
 - `FormatRegistry::with_defaults()` for dynamic reader/writer dispatch

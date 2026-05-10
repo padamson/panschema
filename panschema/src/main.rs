@@ -179,22 +179,37 @@ fn load_manifest() -> anyhow::Result<(panschema::manifest::Manifest, PathBuf)> {
     Ok((manifest, manifest_dir))
 }
 
-/// Resolve a schema's `path:` source to its absolute on-disk location,
-/// erroring if the target doesn't exist.
-fn resolve_path_source(
+/// Dispatch on a schema's source kind and resolve it.
+///
+/// `path:` sources resolve relative to the manifest directory; `github:`
+/// sources resolve through the local cache (populating it from
+/// `codeload.github.com` if absent).
+fn resolve_source(
     name: &str,
     dep: &panschema::manifest::SchemaDep,
     manifest_dir: &Path,
-) -> anyhow::Result<PathBuf> {
-    let resolved = manifest_dir.join(&dep.path);
-    if !resolved.exists() {
-        anyhow::bail!(
-            "schema `{name}`: path `{}` (resolved to `{}`) does not exist",
-            dep.path.display(),
-            resolved.display()
-        );
+) -> anyhow::Result<panschema::source::Resolved> {
+    use panschema::cache::cache_root;
+    use panschema::source::{CodeloadGithubSource, SchemaSource, resolve_github, resolve_path};
+
+    let source = SchemaSource::from_dep(name, dep)?;
+    match source {
+        SchemaSource::Path { path } => {
+            Ok(resolve_path(name, &path, manifest_dir).map_err(|e| anyhow::anyhow!("{e}"))?)
+        }
+        SchemaSource::Github {
+            owner,
+            repo,
+            version,
+        } => {
+            let cache = cache_root().map_err(|e| anyhow::anyhow!("{e}"))?;
+            let github = CodeloadGithubSource;
+            Ok(
+                resolve_github(name, &owner, &repo, &version, &cache, &github)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?,
+            )
+        }
     }
-    Ok(resolved)
 }
 
 /// `panschema generate` (no --input): walk the manifest and run configured writers.
@@ -208,7 +223,8 @@ fn generate_from_manifest() -> anyhow::Result<()> {
 
     let mut produced_anything = false;
     for (name, dep) in &manifest.schemas {
-        let schema_path = resolve_path_source(name, dep, &manifest_dir)?;
+        let panschema::source::Resolved { schema_path, .. } =
+            resolve_source(name, dep, &manifest_dir)?;
         let Some(gen_cfg) = manifest.generate.get(name) else {
             eprintln!("schema `{name}`: no [generate.{name}] block; skipping");
             continue;
@@ -231,20 +247,23 @@ fn generate_from_manifest() -> anyhow::Result<()> {
 /// `panschema fetch`: resolve every manifested schema, compute its checksum,
 /// and write `panschema.lock`.
 fn fetch_from_manifest() -> anyhow::Result<()> {
-    use panschema::lockfile::{
-        LOCKFILE_FILENAME, LockEntry, Lockfile, checksum_file, path_source_spec,
-    };
+    use panschema::lockfile::{LOCKFILE_FILENAME, LockEntry, Lockfile, checksum_file};
+    use panschema::source::SchemaSource;
 
     let (manifest, manifest_dir) = load_manifest()?;
 
     let mut entries = Vec::with_capacity(manifest.schemas.len());
     for (name, dep) in &manifest.schemas {
-        let schema_path = resolve_path_source(name, dep, &manifest_dir)?;
+        let panschema::source::Resolved {
+            schema_path,
+            revision,
+        } = resolve_source(name, dep, &manifest_dir)?;
+        let source = SchemaSource::from_dep(name, dep)?;
         entries.push(LockEntry {
             name: name.clone(),
-            version: None, // path: sources don't carry a version in this slice
-            source: path_source_spec(&dep.path),
-            revision: None,
+            version: dep.version.clone(),
+            source: source.source_spec(),
+            revision,
             checksum: checksum_file(&schema_path)?,
         });
     }
@@ -278,7 +297,8 @@ fn verify_from_manifest() -> anyhow::Result<()> {
     let mut drift = Vec::new();
     let mut missing_in_lock = Vec::new();
     for (name, dep) in &manifest.schemas {
-        let schema_path = resolve_path_source(name, dep, &manifest_dir)?;
+        let panschema::source::Resolved { schema_path, .. } =
+            resolve_source(name, dep, &manifest_dir)?;
         let observed = checksum_file(&schema_path)?;
         match lockfile.entry(name) {
             Some(entry) if entry.checksum == observed => {}

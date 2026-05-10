@@ -43,6 +43,13 @@ notify = "8"
 tower-http = { version = "0.6", features = ["fs"] }
 tower-livereload = "0.10"
 
+# Schema manager — github: source fetch + cache
+ureq = { version = "2", default-features = false, features = ["tls"] }
+flate2 = "1"
+tar = "0.4"
+directories = "5"
+fs2 = "0.4"
+
 # GPU force simulation (optional)
 wgpu = { version = "24", optional = true }
 bytemuck = { version = "1", features = ["derive"], optional = true }
@@ -53,6 +60,9 @@ pollster = { version = "0.4", optional = true }
 dev = []
 # GPU-accelerated force simulation for graph visualization
 gpu = ["dep:wgpu", "dep:bytemuck", "dep:pollster"]
+# Expose schema-manager test fixtures (e.g. tarball builder) to integration tests.
+# Not a runtime feature — kept off by default; integration tests opt in.
+test-fixtures = []
 
 [dev-dependencies]
 # Snapshot testing

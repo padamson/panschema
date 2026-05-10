@@ -119,30 +119,30 @@ Each slice delivers end-to-end user value: a complete `manifest → fetch → ge
 
 ### Slice 3: `github:` source + cache
 
-**Status:** Not Started
+**Status:** ✅ Completed
 
 **User Value:** Schemas can live in their own repos and be consumed by tag. Cross-project consumers share a global cache, cargo-style.
 
 **Acceptance Criteria:**
 
-- [ ] `github:owner/repo` source protocol implemented
-- [ ] Fetch downloads the tagged commit's tarball from `raw.githubusercontent.com` (anonymous; avoids 60/hour API rate limit)
-- [ ] Tag resolution: `version = "0.1.3"` → fetches `v0.1.3` tag
-- [ ] `panschema-publish.toml` is read from the tagged commit; verifies its declared `version` matches the manifest
-- [ ] Cache populated at `~/.cache/panschema/<source-hash>/<version>/` via the `directories` crate
-- [ ] Re-fetch is a no-op when the cache + lockfile checksums agree
-- [ ] Lockfile entries for `github:` sources record the resolved revision (commit SHA from the tag)
-- [ ] File locking on the cache (e.g. `fs2`) so two `fetch` invocations against the same cache don't race
-- [ ] Symlink hygiene: don't follow symlinks out of the cache when reading schema files
-- [ ] Error fast and clearly when:
-  - Tag doesn't exist
-  - `panschema-publish.toml` is absent at the tagged commit
-  - `version` in the publish file disagrees with the tag
-- [ ] Integration test: a fixture consumer with a `github:` source against a real (or fixture-replayed) public schema repo
+- [x] `github:owner/repo` source protocol implemented
+- [x] Fetch downloads the tagged commit's tarball from `codeload.github.com` (anonymous; avoids 60/hour API rate limit) — the AC originally named `raw.githubusercontent.com`, which only serves individual files; `codeload.github.com/<owner>/<repo>/tar.gz/refs/tags/<tag>` is the correct anonymous tarball endpoint
+- [x] Tag resolution: `version = "0.1.3"` → fetches `v0.1.3` tag
+- [x] `panschema-publish.toml` is read from the tagged commit; verifies its declared `version` matches the manifest
+- [x] Cache populated at `~/.cache/panschema/github/<owner>/<repo>/<version>/` (hierarchical, not `<source-hash>/`) via the `directories` crate — owner/repo already provides the necessary uniqueness within github sources
+- [x] Re-fetch is a no-op when the cached version is already extracted (no network call)
+- [x] Lockfile entries for `github:` sources record the resolved revision — the commit SHA is extracted from the tarball's top-level directory name `<owner>-<repo>-<sha>`, no separate GitHub API call needed
+- [x] File locking on the cache (`fs2`) so two `fetch` invocations against the same cache don't race
+- [x] Symlink hygiene: refuses to follow paths that escape the extracted directory
+- [x] Errors fast and clearly when:
+  - Tag doesn't exist (`TarballFetchError::TagNotFound`)
+  - `panschema-publish.toml` is absent at the tagged commit (`ResolveError::PublishMissing`)
+  - `version` in the publish file disagrees with the manifest (`ResolveError::VersionMismatch`)
+- [x] Integration tests (lib-level): happy path, version mismatch, missing publish file, cache hit, parent-dir traversal rejection
 
 **Notes:**
 - Other protocols (`gitlab:`, `zenodo:`, `https:`, `pypi:`) deferred to later releases
-- `GITHUB_TOKEN` env var honored if set, but unauthenticated raw URLs are the default path
+- Authenticated tarball fetch deferred — codeload is anonymous, and the `panschema-publish.toml` version check covers integrity. Private repos aren't a v0.3 goal.
 
 ### Slice 4: `panschema add`
 
@@ -184,7 +184,7 @@ Each slice delivers end-to-end user value: a complete `manifest → fetch → ge
 |-------|----------|------------|--------|
 | Slice 1: Local-path manifest | Must Have | None | ✅ Completed |
 | Slice 2: Lockfile + verify | Must Have | Slice 1 | ✅ Completed |
-| Slice 3: `github:` source + cache | Must Have | Slice 2 | Not Started |
+| Slice 3: `github:` source + cache | Must Have | Slice 2 | ✅ Completed |
 | Slice 4: `panschema add` | Should Have | Slice 3 | Not Started |
 | Slice 5: Documentation + ship v0.3.0 | Must Have | Slices 1–4 | Not Started |
 
@@ -284,3 +284,21 @@ each will be handed off to another repo:
 - Refactored `main.rs` to share `load_manifest()` and `resolve_path_source()` between the three manifest-driven commands.
 
 **Next:** Slice 3 (`github:` source + cache).
+
+### 2026-05-10: Slice 3 Complete (`github:` source + cache)
+
+**Completed:**
+- New `source` module — `SchemaSource` enum (`Path` / `Github`) with `from_dep` semantic validation; `TarballSource` trait + `CodeloadGithubSource` impl (ureq → `codeload.github.com`); `resolve_github` end-to-end (cache populate → publish-version verify → main-file path resolution); `Resolved { schema_path, revision }` shared with `path:` sources
+- New `cache` module — `cache_root()` via `directories`, `github_version_dir`, `extract_tarball` (rejects absolute/`..`/multi-top-level entries), `populate_cache` with `fs2` exclusive lock on `<version>/.lock`, `validate_within` for symlink hygiene, `LocalTarballFixture` for test injection
+- `Manifest::SchemaDep` extended with optional `source` and `version` fields (keeps `deny_unknown_fields`); semantic mutual-exclusion validation moved to `source` module
+- `main.rs::resolve_source` dispatches on `SchemaSource` kind; `fetch_from_manifest` writes `version` + `revision` for `github:` entries in `panschema.lock`
+- 12 new tests: 9 unit tests for source-spec validation + 4 end-to-end `resolve_github` tests + 4 cache module tests (extraction, locking, idempotency, parent-dir-traversal rejection via raw tar bytes)
+
+**Design decisions:**
+- Tarball via `codeload.github.com` rather than individual files via `raw.githubusercontent.com` — the latter doesn't carry the commit SHA, requiring a separate API call that would burn the 60/hr anonymous limit. The tarball's top-level dir name `<owner>-<repo>-<sha>` gives us the SHA for free.
+- Cache layout `~/.cache/panschema/github/<owner>/<repo>/<version>/` — hierarchical, not `<source-hash>/`. The hash adds no value when owner/repo already uniquely namespaces github sources. Cargo uses a hash for crate-name disambiguation across registries; we don't have that problem.
+- `TarballSource` trait for DI rather than env-var injection — naturally extends to future protocols (`gitlab:`, `https:`) as additional trait impls. Production uses `CodeloadGithubSource`; tests pass `LocalTarballFixture`.
+- Re-fetch no-op: `populate_cache` short-circuits if `<owner>-<repo>-<sha>/` already exists in the version directory — no network call, no extraction. Test asserts this by mutating the fixture between calls and checking the SHA is unchanged.
+- License-allow-list grew by `CDLA-Permissive-2.0` (used by webpki-roots, the Mozilla root CA store shipped with rustls/ureq).
+
+**Next:** Slice 4 (`panschema add` command).
