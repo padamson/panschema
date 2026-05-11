@@ -72,6 +72,6 @@ insta = "1"
 # the same maintainer) for active dogfood. Cargo.lock pins the resolved
 # commit; `cargo update -p playwright-rs` rolls forward.
 playwright-rs = { git = "https://github.com/padamson/playwright-rust" }
-tempfile = "3.24.0"
+tempfile = "3.27.0"
 
 # Profile settings are in workspace root Cargo.toml
