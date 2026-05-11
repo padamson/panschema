@@ -19,7 +19,7 @@ clap_complete = "4"
 sophia = { version = "0.9", features = ["jsonld", "xml"] }
 
 # Templating
-askama = "0.14"
+askama = "0.16"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
