@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Migrated `wgpu` 24 → 29 across `panschema-viz/webgpu.rs` and `panschema/gpu/{simulation,renderer}.rs`. Surface changes addressed: `InstanceDescriptor` no longer `Default`, `Instance::new` takes the descriptor by value, `DeviceDescriptor` requires `experimental_features` + `trace`, `Adapter::request_device` is single-arg, `PipelineLayoutDescriptor` swapped `push_constant_ranges` for `immediate_size` and now takes `&[Option<&BindGroupLayout>]`, `RenderPipelineDescriptor.multiview` → `multiview_mask`, `RenderPassColorAttachment` requires `depth_slice`, `RenderPassDescriptor` requires `multiview_mask`, `DepthStencilState.depth_write_enabled`/`depth_compare` now `Option<_>`, `wgpu::Maintain` → `wgpu::PollType`, `Surface::get_current_texture` returns `CurrentSurfaceTexture` enum instead of `Result`.
+
 ### Added
 - **Schema package manager** (work in progress toward v0.3.0; see [docs/features/05-schema-manager.md](docs/features/05-schema-manager.md)):
   - `panschema-publish.toml` parser — the schema-side publishing standard

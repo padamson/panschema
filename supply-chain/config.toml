@@ -67,10 +67,6 @@ criteria = "safe-to-deploy"
 version = "0.5.6"
 criteria = "safe-to-deploy"
 
-[[exemptions.block]]
-version = "0.1.6"
-criteria = "safe-to-deploy"
-
 [[exemptions.block-buffer]]
 version = "0.12.0"
 criteria = "safe-to-run"
@@ -179,6 +175,14 @@ criteria = "safe-to-run"
 version = "0.4.1"
 criteria = "safe-to-deploy"
 
+[[exemptions.dispatch2]]
+version = "0.3.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.dlib]]
+version = "0.5.3"
+criteria = "safe-to-deploy"
+
 [[exemptions.encode_unicode]]
 version = "1.0.0"
 criteria = "safe-to-run"
@@ -256,19 +260,11 @@ version = "0.14.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.glow]]
-version = "0.16.0"
+version = "0.17.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.glutin_wgl_sys]]
 version = "0.6.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.gpu-alloc]]
-version = "0.6.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.gpu-alloc-types]]
-version = "0.3.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.gpu-descriptor]]
@@ -277,6 +273,14 @@ criteria = "safe-to-deploy"
 
 [[exemptions.gpu-descriptor-types]]
 version = "0.2.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.half]]
+version = "2.7.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.hashbrown]]
+version = "0.16.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.hashbrown]]
@@ -479,6 +483,10 @@ criteria = "safe-to-deploy"
 version = "0.8.9"
 criteria = "safe-to-deploy"
 
+[[exemptions.libm]]
+version = "0.2.16"
+criteria = "safe-to-deploy"
+
 [[exemptions.libredox]]
 version = "0.1.16"
 criteria = "safe-to-deploy"
@@ -531,12 +539,16 @@ criteria = "safe-to-deploy"
 version = "0.8.1"
 criteria = "safe-to-run"
 
+[[exemptions.naga]]
+version = "29.0.3"
+criteria = "safe-to-deploy"
+
 [[exemptions.native-tls]]
 version = "0.2.18"
 criteria = "safe-to-run"
 
 [[exemptions.ndk-sys]]
-version = "0.5.0+25.2.9519653"
+version = "0.6.0+11769913"
 criteria = "safe-to-deploy"
 
 [[exemptions.notify]]
@@ -547,8 +559,8 @@ criteria = "safe-to-deploy"
 version = "2.1.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.objc]]
-version = "0.2.7"
+[[exemptions.objc2]]
+version = "0.6.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.once_cell]]
@@ -609,6 +621,14 @@ criteria = "safe-to-run"
 
 [[exemptions.pollster]]
 version = "0.4.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.portable-atomic]]
+version = "1.13.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.portable-atomic-util]]
+version = "0.2.7"
 criteria = "safe-to-deploy"
 
 [[exemptions.potential_utf]]
@@ -923,6 +943,10 @@ criteria = "safe-to-deploy"
 version = "0.2.121"
 criteria = "safe-to-deploy"
 
+[[exemptions.wayland-sys]]
+version = "0.31.11"
+criteria = "safe-to-deploy"
+
 [[exemptions.web-sys]]
 version = "0.3.98"
 criteria = "safe-to-deploy"
@@ -936,15 +960,35 @@ version = "1.0.7"
 criteria = "safe-to-deploy"
 
 [[exemptions.wgpu]]
-version = "24.0.5"
+version = "29.0.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.wgpu-core]]
-version = "24.0.5"
+version = "29.0.3"
+criteria = "safe-to-deploy"
+
+[[exemptions.wgpu-core-deps-apple]]
+version = "29.0.3"
+criteria = "safe-to-deploy"
+
+[[exemptions.wgpu-core-deps-emscripten]]
+version = "29.0.3"
+criteria = "safe-to-deploy"
+
+[[exemptions.wgpu-core-deps-windows-linux-android]]
+version = "29.0.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.wgpu-hal]]
-version = "24.0.4"
+version = "29.0.3"
+criteria = "safe-to-deploy"
+
+[[exemptions.wgpu-naga-bridge]]
+version = "29.0.3"
+criteria = "safe-to-deploy"
+
+[[exemptions.wgpu-types]]
+version = "29.0.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.winapi]]
@@ -957,6 +1001,22 @@ criteria = "safe-to-deploy"
 
 [[exemptions.winapi-x86_64-pc-windows-gnu]]
 version = "0.4.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows-collections]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows-future]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows-numerics]]
+version = "0.3.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows-threading]]
+version = "0.2.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.writeable]]

@@ -78,9 +78,9 @@ impl WebGpuRenderer {
         let height = canvas.height();
 
         // Create wgpu instance
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::BROWSER_WEBGPU,
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
 
         // Create surface from canvas
@@ -96,19 +96,18 @@ impl WebGpuRenderer {
                 force_fallback_adapter: false,
             })
             .await
-            .ok_or("Failed to find adapter")?;
+            .map_err(|e| format!("Failed to find adapter: {}", e))?;
 
         // Request device
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: Some("panschema-viz"),
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
-                    memory_hints: Default::default(),
-                },
-                None,
-            )
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("panschema-viz"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
+                experimental_features: wgpu::ExperimentalFeatures::default(),
+                memory_hints: Default::default(),
+                trace: wgpu::Trace::Off,
+            })
             .await
             .map_err(|e| format!("Failed to create device: {}", e))?;
 
@@ -179,8 +178,8 @@ impl WebGpuRenderer {
 
         let node_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Node Pipeline Layout"),
-            bind_group_layouts: &[&camera_bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&camera_bind_group_layout)],
+            immediate_size: 0,
         });
 
         let node_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -226,7 +225,7 @@ impl WebGpuRenderer {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -274,8 +273,8 @@ impl WebGpuRenderer {
 
         let edge_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Edge Pipeline Layout"),
-            bind_group_layouts: &[&camera_bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&camera_bind_group_layout)],
+            immediate_size: 0,
         });
 
         let edge_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -312,7 +311,7 @@ impl WebGpuRenderer {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -383,8 +382,9 @@ impl WebGpuRenderer {
 
         // Get surface texture
         let output = match self.surface.get_current_texture() {
-            Ok(t) => t,
-            Err(_) => {
+            wgpu::CurrentSurfaceTexture::Success(t)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
+            _ => {
                 self.surface.configure(&self.device, &self.config);
                 return;
             }
@@ -405,6 +405,7 @@ impl WebGpuRenderer {
                 label: Some("Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -419,6 +420,7 @@ impl WebGpuRenderer {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
 
             // Draw edges first (behind nodes)

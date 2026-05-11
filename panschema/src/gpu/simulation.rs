@@ -128,8 +128,8 @@ impl GpuSimulation {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Force Simulation Pipeline Layout"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
         });
 
         let link_force_pipeline =
@@ -272,9 +272,9 @@ impl GpuSimulation {
     }
 
     async fn create_device() -> (wgpu::Device, wgpu::Queue) {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
 
         let adapter = instance
@@ -287,15 +287,14 @@ impl GpuSimulation {
             .expect("Failed to find suitable GPU adapter");
 
         adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: Some("Force Simulation Device"),
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::default(),
-                    memory_hints: wgpu::MemoryHints::default(),
-                },
-                None, // trace path
-            )
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("Force Simulation Device"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default(),
+                experimental_features: wgpu::ExperimentalFeatures::default(),
+                memory_hints: wgpu::MemoryHints::default(),
+                trace: wgpu::Trace::Off,
+            })
             .await
             .expect("Failed to create device")
     }
@@ -421,7 +420,7 @@ impl GpuSimulation {
         buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
             tx.send(result).unwrap();
         });
-        let _ = self.device.poll(wgpu::Maintain::Wait);
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
         rx.recv().unwrap().expect("Failed to map buffer");
 
         let data = buffer_slice.get_mapped_range();
