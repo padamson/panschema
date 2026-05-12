@@ -1,5 +1,50 @@
 use std::fs;
+use std::path::Path;
 use std::process::Command;
+
+/// Write a `panschema-publish.toml` + main schema file into `pkg_dir`.
+/// Mirrors the v0.3 unified package shape (slice 1 retrofit): every
+/// path source is a directory containing a publish file + the main file.
+fn write_pkg(pkg_dir: &Path, name: &str, version: &str, main_filename: &str, schema_body: &str) {
+    fs::create_dir_all(pkg_dir).expect("mkdir pkg");
+    let publish = format!(
+        r#"[schema]
+name = "{name}"
+version = "{version}"
+linkml = "1.7.0"
+
+[files]
+main = "{main_filename}"
+"#
+    );
+    fs::write(pkg_dir.join("panschema-publish.toml"), publish).expect("write publish toml");
+    fs::write(pkg_dir.join(main_filename), schema_body).expect("write schema body");
+}
+
+/// Convenience: write a package whose main file is a copy of the static
+/// `sample_schema.yaml` fixture. Returns the absolute `pkg_dir` path.
+fn write_sample_pkg(parent: &Path, dirname: &str) -> std::path::PathBuf {
+    let pkg = parent.join(dirname);
+    fs::create_dir_all(&pkg).expect("mkdir pkg");
+    fs::copy(
+        "tests/fixtures/sample_schema.yaml",
+        pkg.join("sample_schema.yaml"),
+    )
+    .expect("copy sample schema");
+    fs::write(
+        pkg.join("panschema-publish.toml"),
+        r#"[schema]
+name = "sample_schema"
+version = "1.0.0"
+linkml = "1.7.0"
+
+[files]
+main = "sample_schema.yaml"
+"#,
+    )
+    .expect("write publish toml");
+    pkg
+}
 
 #[test]
 fn generates_documentation_from_reference_ontology() {
@@ -460,23 +505,17 @@ fn manifest_driven_generate_runs_html_writer_for_path_source() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let consumer = tmp.path();
 
-    // Place the fixture schema at consumer/schema/sample.yaml.
-    let schema_dir = consumer.join("schema");
-    fs::create_dir_all(&schema_dir).expect("mkdir schema");
-    fs::copy(
-        "tests/fixtures/sample_schema.yaml",
-        schema_dir.join("sample.yaml"),
-    )
-    .expect("copy fixture");
+    // Place a v0.3 package (publish.toml + schema) at consumer/sample-pkg/.
+    write_sample_pkg(consumer, "sample-pkg");
 
     // Write the manifest.
     fs::write(
         consumer.join("panschema.toml"),
         r#"
 [schemas]
-sample = { path = "./schema/sample.yaml" }
+sample_schema = { path = "./sample-pkg" }
 
-[generate.sample]
+[generate.sample_schema]
 html = "docs/"
 "#,
     )
@@ -512,18 +551,12 @@ fn fetch_writes_lockfile_and_verify_succeeds() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let consumer = tmp.path();
 
-    let schema_dir = consumer.join("schema");
-    fs::create_dir_all(&schema_dir).expect("mkdir");
-    fs::copy(
-        "tests/fixtures/sample_schema.yaml",
-        schema_dir.join("sample.yaml"),
-    )
-    .expect("copy fixture");
+    write_sample_pkg(consumer, "sample-pkg");
     fs::write(
         consumer.join("panschema.toml"),
         r#"
 [schemas]
-sample = { path = "./schema/sample.yaml" }
+sample_schema = { path = "./sample-pkg" }
 "#,
     )
     .expect("write manifest");
@@ -540,8 +573,12 @@ sample = { path = "./schema/sample.yaml" }
     assert!(lockfile_path.exists(), "lockfile was not created");
     let lockfile_text = fs::read_to_string(&lockfile_path).expect("read lockfile");
     assert!(
-        lockfile_text.contains("sample"),
+        lockfile_text.contains("sample_schema"),
         "lockfile missing schema name: {lockfile_text}"
+    );
+    assert!(
+        lockfile_text.contains(r#"version = "1.0.0""#),
+        "lockfile should now record the publish.toml version: {lockfile_text}"
     );
     assert!(
         lockfile_text.contains("sha256:"),
@@ -567,15 +604,13 @@ fn verify_detects_schema_drift_after_fetch() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let consumer = tmp.path();
 
-    let schema_dir = consumer.join("schema");
-    fs::create_dir_all(&schema_dir).expect("mkdir");
-    let schema_file = schema_dir.join("sample.yaml");
-    fs::copy("tests/fixtures/sample_schema.yaml", &schema_file).expect("copy fixture");
+    let pkg = write_sample_pkg(consumer, "sample-pkg");
+    let schema_file = pkg.join("sample_schema.yaml");
     fs::write(
         consumer.join("panschema.toml"),
         r#"
 [schemas]
-sample = { path = "./schema/sample.yaml" }
+sample_schema = { path = "./sample-pkg" }
 "#,
     )
     .expect("write manifest");
@@ -603,7 +638,7 @@ sample = { path = "./schema/sample.yaml" }
     );
     let stderr = String::from_utf8_lossy(&verify.stderr);
     assert!(
-        stderr.contains("drift") || stderr.contains("sample"),
+        stderr.contains("drift") || stderr.contains("sample_schema"),
         "stderr should explain the drift; got: {stderr}"
     );
 }
@@ -616,19 +651,28 @@ fn manifest_flow_handles_ttl_input() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let consumer = tmp.path();
 
-    let schema_dir = consumer.join("schema");
-    fs::create_dir_all(&schema_dir).expect("mkdir");
-    fs::copy(
-        "tests/fixtures/reference.ttl",
-        schema_dir.join("reference.ttl"),
+    // Package shape: dir with publish.toml + a .ttl main file.
+    let pkg = consumer.join("ref-pkg");
+    fs::create_dir_all(&pkg).expect("mkdir pkg");
+    fs::copy("tests/fixtures/reference.ttl", pkg.join("reference.ttl")).expect("copy fixture");
+    fs::write(
+        pkg.join("panschema-publish.toml"),
+        r#"[schema]
+name = "reference"
+version = "1.0.0"
+linkml = "1.7.0"
+
+[files]
+main = "reference.ttl"
+"#,
     )
-    .expect("copy fixture");
+    .expect("write publish toml");
 
     fs::write(
         consumer.join("panschema.toml"),
         r#"
 [schemas]
-reference = { path = "./schema/reference.ttl" }
+reference = { path = "./ref-pkg" }
 
 [generate.reference]
 html = "docs/"
@@ -682,17 +726,27 @@ fn fetch_and_verify_handle_multiple_schemas() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let consumer = tmp.path();
 
-    let schema_dir = consumer.join("schema");
-    fs::create_dir_all(&schema_dir).expect("mkdir");
-    fs::write(schema_dir.join("a.yaml"), "id: https://x/a\nname: a\n").expect("write a");
-    fs::write(schema_dir.join("b.yaml"), "id: https://x/b\nname: b\n").expect("write b");
+    write_pkg(
+        &consumer.join("a-pkg"),
+        "a",
+        "0.1.0",
+        "schema.yaml",
+        "id: https://x/a\nname: a\n",
+    );
+    write_pkg(
+        &consumer.join("b-pkg"),
+        "b",
+        "0.1.0",
+        "schema.yaml",
+        "id: https://x/b\nname: b\n",
+    );
 
     fs::write(
         consumer.join("panschema.toml"),
         r#"
 [schemas]
-a = { path = "./schema/a.yaml" }
-b = { path = "./schema/b.yaml" }
+a = { path = "./a-pkg" }
+b = { path = "./b-pkg" }
 "#,
     )
     .expect("write manifest");
@@ -728,16 +782,20 @@ b = { path = "./schema/b.yaml" }
 fn verify_detects_manifest_schema_missing_from_lockfile() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let consumer = tmp.path();
-    let schema_dir = consumer.join("schema");
-    fs::create_dir_all(&schema_dir).expect("mkdir");
-    fs::write(schema_dir.join("a.yaml"), "id: https://x/a\nname: a\n").expect("write");
+    write_pkg(
+        &consumer.join("a-pkg"),
+        "a",
+        "0.1.0",
+        "schema.yaml",
+        "id: https://x/a\nname: a\n",
+    );
 
     // Fetch with one schema.
     fs::write(
         consumer.join("panschema.toml"),
         r#"
 [schemas]
-a = { path = "./schema/a.yaml" }
+a = { path = "./a-pkg" }
 "#,
     )
     .expect("write manifest v1");
@@ -749,13 +807,19 @@ a = { path = "./schema/a.yaml" }
     assert!(fetch.success());
 
     // Add a second schema to the manifest WITHOUT refetching.
-    fs::write(schema_dir.join("b.yaml"), "id: https://x/b\nname: b\n").expect("write b");
+    write_pkg(
+        &consumer.join("b-pkg"),
+        "b",
+        "0.1.0",
+        "schema.yaml",
+        "id: https://x/b\nname: b\n",
+    );
     fs::write(
         consumer.join("panschema.toml"),
         r#"
 [schemas]
-a = { path = "./schema/a.yaml" }
-b = { path = "./schema/b.yaml" }
+a = { path = "./a-pkg" }
+b = { path = "./b-pkg" }
 "#,
     )
     .expect("rewrite manifest v2");
@@ -782,18 +846,28 @@ b = { path = "./schema/b.yaml" }
 fn verify_detects_stale_lockfile_entries() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let consumer = tmp.path();
-    let schema_dir = consumer.join("schema");
-    fs::create_dir_all(&schema_dir).expect("mkdir");
-    fs::write(schema_dir.join("a.yaml"), "id: https://x/a\nname: a\n").expect("write a");
-    fs::write(schema_dir.join("b.yaml"), "id: https://x/b\nname: b\n").expect("write b");
+    write_pkg(
+        &consumer.join("a-pkg"),
+        "a",
+        "0.1.0",
+        "schema.yaml",
+        "id: https://x/a\nname: a\n",
+    );
+    write_pkg(
+        &consumer.join("b-pkg"),
+        "b",
+        "0.1.0",
+        "schema.yaml",
+        "id: https://x/b\nname: b\n",
+    );
 
     // Fetch with two schemas.
     fs::write(
         consumer.join("panschema.toml"),
         r#"
 [schemas]
-a = { path = "./schema/a.yaml" }
-b = { path = "./schema/b.yaml" }
+a = { path = "./a-pkg" }
+b = { path = "./b-pkg" }
 "#,
     )
     .expect("write manifest v1");
@@ -809,7 +883,7 @@ b = { path = "./schema/b.yaml" }
         consumer.join("panschema.toml"),
         r#"
 [schemas]
-a = { path = "./schema/a.yaml" }
+a = { path = "./a-pkg" }
 "#,
     )
     .expect("rewrite manifest v2");
@@ -869,7 +943,7 @@ fn manifest_driven_generate_errors_on_missing_path() {
         consumer.join("panschema.toml"),
         r#"
 [schemas]
-ghost = { path = "./does/not/exist.yaml" }
+ghost = { path = "./does-not-exist" }
 
 [generate.ghost]
 html = "docs/"
@@ -890,5 +964,210 @@ html = "docs/"
     assert!(
         stderr.contains("does not exist") || stderr.contains("ghost"),
         "stderr should explain the missing path; got: {stderr}"
+    );
+}
+
+/// A path-source package without `panschema-publish.toml` should error
+/// at resolve time (not just at fetch time).
+#[test]
+fn manifest_path_source_errors_on_missing_publish_toml() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    let pkg = consumer.join("naked-pkg");
+    fs::create_dir_all(&pkg).expect("mkdir");
+    fs::write(pkg.join("schema.yaml"), "name: x\n").expect("write yaml");
+    // Note: no panschema-publish.toml.
+
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+x = { path = "./naked-pkg" }
+"#,
+    )
+    .expect("write manifest");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("fetch")
+        .current_dir(consumer)
+        .output()
+        .expect("panschema");
+    assert!(!output.status.success(), "expected failure");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("panschema-publish.toml"),
+        "stderr should mention the missing publish file: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------
+// Slice 4: `panschema add` CLI tests
+//
+// Path-source flow is exercised here via CLI subprocess; github-source
+// flow lives at the lib level in `panschema::source::tests` (needs
+// TarballSource trait injection, which CLI subprocesses can't do).
+// ---------------------------------------------------------------------
+
+/// `panschema add ./local-pkg` reads the package's publish.toml, writes
+/// an entry to `panschema.toml` under the declared name, adds a starter
+/// `[generate.<name>]` block, and runs fetch to produce the lockfile.
+#[test]
+fn add_path_source_updates_manifest_and_lockfile() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    write_sample_pkg(consumer, "sample-pkg");
+
+    fs::write(consumer.join("panschema.toml"), "[schemas]\n").expect("write manifest");
+
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("add")
+        .arg("./sample-pkg")
+        .current_dir(consumer)
+        .status()
+        .expect("Failed to execute panschema");
+    assert!(status.success(), "panschema add exited with error");
+
+    let manifest = fs::read_to_string(consumer.join("panschema.toml")).expect("read manifest");
+    assert!(
+        manifest.contains("sample_schema"),
+        "manifest should contain the publish.toml-declared name: {manifest}"
+    );
+    assert!(
+        manifest.contains("[generate.sample_schema]"),
+        "manifest should have a starter `[generate.sample_schema]` block: {manifest}"
+    );
+    assert!(
+        consumer.join("panschema.lock").exists(),
+        "fetch should have written panschema.lock"
+    );
+}
+
+/// `--name <alias>` overrides the publish.toml-declared name.
+#[test]
+fn add_with_name_alias_overrides_inferred_name() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    write_sample_pkg(consumer, "sample-pkg");
+    fs::write(consumer.join("panschema.toml"), "[schemas]\n").expect("write manifest");
+
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("add")
+        .arg("./sample-pkg")
+        .arg("--name")
+        .arg("my-alias")
+        .current_dir(consumer)
+        .status()
+        .expect("panschema");
+    assert!(status.success());
+
+    let manifest = fs::read_to_string(consumer.join("panschema.toml")).expect("read manifest");
+    assert!(
+        manifest.contains("my-alias"),
+        "manifest should use the --name alias: {manifest}"
+    );
+    assert!(
+        !manifest.contains("[schemas.sample_schema]"),
+        "alias should override the publish.toml name; got: {manifest}"
+    );
+}
+
+/// Running `panschema add` for a schema that's already present with the
+/// same shape is a no-op (no manifest rewrite, fetch still re-runs).
+#[test]
+fn add_is_idempotent_for_same_shape() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    write_sample_pkg(consumer, "sample-pkg");
+    fs::write(consumer.join("panschema.toml"), "[schemas]\n").expect("write manifest");
+
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_panschema"))
+            .args(args)
+            .current_dir(consumer)
+            .status()
+            .expect("panschema run")
+    };
+    assert!(run(&["add", "./sample-pkg"]).success());
+    let after_first = fs::read_to_string(consumer.join("panschema.toml")).unwrap();
+
+    assert!(run(&["add", "./sample-pkg"]).success());
+    let after_second = fs::read_to_string(consumer.join("panschema.toml")).unwrap();
+    assert_eq!(
+        after_first, after_second,
+        "second add of the same shape must not rewrite the manifest"
+    );
+}
+
+/// `panschema add github:a/b` (no `@version`) errors at the SchemaSpec
+/// parse boundary — before any side effect.
+#[test]
+fn add_errors_when_github_spec_has_no_version() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    fs::write(consumer.join("panschema.toml"), "[schemas]\n").expect("write manifest");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("add")
+        .arg("github:x/y")
+        .current_dir(consumer)
+        .output()
+        .expect("panschema run");
+    assert!(
+        !output.status.success(),
+        "add should reject github source without version"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("version"),
+        "stderr should explain the missing version: {stderr}"
+    );
+}
+
+/// Unknown source protocol fails fast.
+#[test]
+fn add_errors_on_unknown_source_protocol() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    fs::write(consumer.join("panschema.toml"), "[schemas]\n").expect("write manifest");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("add")
+        .arg("gitlab:foo/bar@0.1.0")
+        .current_dir(consumer)
+        .output()
+        .expect("panschema run");
+    assert!(!output.status.success(), "unknown protocol should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("protocol") || stderr.contains("gitlab"),
+        "stderr should call out the unknown protocol: {stderr}"
+    );
+}
+
+/// `panschema add --no-generate-config` skips the starter `[generate.<name>]` block.
+#[test]
+fn add_no_generate_config_skips_generate_block() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    write_sample_pkg(consumer, "sample-pkg");
+    fs::write(consumer.join("panschema.toml"), "[schemas]\n").expect("write manifest");
+
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("add")
+        .arg("./sample-pkg")
+        .arg("--no-generate-config")
+        .current_dir(consumer)
+        .status()
+        .expect("Failed to execute panschema");
+    assert!(status.success());
+
+    let manifest = fs::read_to_string(consumer.join("panschema.toml")).expect("read manifest");
+    assert!(
+        manifest.contains("sample_schema"),
+        "manifest should contain `sample_schema`"
+    );
+    assert!(
+        !manifest.contains("[generate.sample_schema]"),
+        "no-generate-config should suppress the starter block"
     );
 }

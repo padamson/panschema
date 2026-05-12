@@ -7,28 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-- Migrated `wgpu` 24 → 29 across `panschema-viz/webgpu.rs` and `panschema/gpu/{simulation,renderer}.rs`. Surface changes addressed: `InstanceDescriptor` no longer `Default`, `Instance::new` takes the descriptor by value, `DeviceDescriptor` requires `experimental_features` + `trace`, `Adapter::request_device` is single-arg, `PipelineLayoutDescriptor` swapped `push_constant_ranges` for `immediate_size` and now takes `&[Option<&BindGroupLayout>]`, `RenderPipelineDescriptor.multiview` → `multiview_mask`, `RenderPassColorAttachment` requires `depth_slice`, `RenderPassDescriptor` requires `multiview_mask`, `DepthStencilState.depth_write_enabled`/`depth_compare` now `Option<_>`, `wgpu::Maintain` → `wgpu::PollType`, `Surface::get_current_texture` returns `CurrentSurfaceTexture` enum instead of `Result`.
-
 ### Added
-- **Schema package manager** (work in progress toward v0.3.0; see [docs/features/05-schema-manager.md](docs/features/05-schema-manager.md)):
-  - `panschema-publish.toml` parser — the schema-side publishing standard
-  - `panschema.toml` parser — consumer-side dependency manifest
-  - `panschema.lock` lockfile with SHA-256 checksums for reproducible builds
-  - Cargo-style manifest discovery (walk up from CWD)
-  - `panschema generate` with no `--input` discovers the manifest and runs HtmlWriter for each `[generate.<name>]` block
-  - `panschema fetch` resolves all manifested schemas, computes checksums, and writes `panschema.lock`
-  - `panschema verify` re-checksums against the lockfile and errors with a clear diff on drift (catches "schema edited but generate not re-run")
-  - Clear errors when a schema's `path:` target is missing
-  - `--input <file>` continues to work as a no-manifest shorthand
-  - `github:owner/repo` source protocol with shared cargo-style cache at `~/.cache/panschema/github/<owner>/<repo>/<version>/`
-  - Anonymous tarball fetch from `codeload.github.com` — no GitHub API rate limit
-  - Commit SHA recorded in `panschema.lock` for `github:` sources (read from the tarball's top-level directory name)
-  - `panschema-publish.toml` read from the tagged commit; declared `version` verified against the manifest at fetch time
-  - File locking on the cache (`fs2`) so concurrent fetches don't race
-  - Symlink hygiene: refuses to follow paths that escape the cache directory
-  - Re-fetch is a no-op when the cached version is already extracted (no network call)
-  - Pluggable `TarballSource` trait for future protocols (`gitlab:`, `https:`, etc.) and for tests
+- **Schema package manager** (work in progress toward v0.3.0; see [docs/features/05-schema-manager.md](docs/features/05-schema-manager.md)). Cargo-style dependency management for LinkML schemas. Every schema dependency is a "package": a directory containing `panschema-publish.toml` plus the main schema file it references at `[files].main`.
+  - **Publishing standard**: `panschema-publish.toml` lives at the package root and declares the schema's authoritative name, version, LinkML target version, and main-file location. Schema authors publish through this file; consumers verify against it.
+  - **Manifest**: `panschema.toml` in the consumer project declares `[schemas.<name>]` dependencies and per-schema `[generate.<name>]` codegen config. Cargo-style discovery (walk up from CWD).
+  - **Lockfile**: `panschema.lock` records resolved version + commit SHA (for github sources) + SHA-256 checksum of each schema's main file. Committed alongside `panschema.toml`. Drift detection covers both checksum and version.
+  - **Source protocols** (v0.3): `path:` for local packages, `github:owner/repo` for tagged GitHub commits. Both go through the same package model. Other protocols (`gitlab:`, `zenodo:`, `https:`) deferred to later releases.
+  - **Github source**: anonymous tarball fetch from `codeload.github.com` (no API rate limit). Commit SHA recovered from the tarball's top-level directory name `<owner>-<repo>-<sha>`. Shared cargo-style cache at `~/.cache/panschema/github/<owner>/<repo>/<version>/` with `fs2` file locking. Pluggable `TarballSource` trait for future protocols and for tests. Symlink hygiene refuses paths that escape the extracted directory.
+  - **Commands**:
+    - `panschema add <spec>` — single positional spec, either `github:owner/repo@version` or a filesystem path to a package directory. Schema name is inferred from `panschema-publish.toml`; `--name <alias>` overrides. `--no-generate-config` suppresses the starter `[generate.<name>]` block. Always re-runs `fetch` afterward so cache + lockfile stay consistent. Idempotent on same-shape adds; conflicting version or source raises a clear error rather than overwriting.
+    - `panschema fetch` resolves all manifested schemas, populates the cache, and writes `panschema.lock`. Re-fetch is a no-op when the cached version is already extracted.
+    - `panschema verify` re-checksums against the lockfile and errors with a clear diff on drift (catches both "schema edited but generate not re-run" and "publish.toml version bumped").
+    - `panschema generate` (no `--input`) discovers the manifest and runs HtmlWriter for each `[generate.<name>]` block. `--input <file>` continues to work as a no-manifest shorthand for raw schema files.
+  - **CLI ergonomics**: `SchemaSpec` parser (clap `FromStr`) catches malformed input at parse time — invalid version, unknown protocol, empty spec — before any side effects. Manifest edits go through `toml_edit` so user comments, key order, and whitespace survive.
 - `Contributor` struct for Dublin Core-style contributor metadata (name, ORCID, role)
 - `SchemaDefinition` metadata fields: `contributors`, `created`, `modified`, `imports`
 - `FormatRegistry::with_defaults()` for dynamic reader/writer dispatch
@@ -67,6 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `panschema completions <shell>` subcommand to generate shell completion scripts (bash, zsh, fish, powershell, elvish)
 
 ### Changed
+- Migrated `wgpu` 24 → 29 across `panschema-viz/webgpu.rs` and `panschema/gpu/{simulation,renderer}.rs`. Surface changes addressed: `InstanceDescriptor` no longer `Default`, `Instance::new` takes the descriptor by value, `DeviceDescriptor` requires `experimental_features` + `trace`, `Adapter::request_device` is single-arg, `PipelineLayoutDescriptor` swapped `push_constant_ranges` for `immediate_size` and now takes `&[Option<&BindGroupLayout>]`, `RenderPipelineDescriptor.multiview` → `multiview_mask`, `RenderPassColorAttachment` requires `depth_slice`, `RenderPassDescriptor` requires `multiview_mask`, `DepthStencilState.depth_write_enabled`/`depth_compare` now `Option<_>`, `wgpu::Maintain` → `wgpu::PollType`, `Surface::get_current_texture` returns `CurrentSurfaceTexture` enum instead of `Result`.
 - `main.rs` and `server.rs` now use `FormatRegistry` instead of hardcoded readers/writers
 - Force simulation defaults retuned for sparser graphs (stronger repulsion, weaker centering); node radii reduced for less visual crowding
 - **MSRV bumped from 1.85 to 1.88** to enable let-chain syntax (`if let X = y && cond`) in source

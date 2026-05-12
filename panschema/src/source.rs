@@ -13,11 +13,17 @@ use std::path::{Path, PathBuf};
 use crate::manifest::SchemaDep;
 
 /// Validated source spec for one entry under `[schemas]`.
+///
+/// Both variants point at a "package" (directory containing
+/// `panschema-publish.toml`); the variant just says how the package is
+/// located.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SchemaSource {
-    /// `path: "./relative/to/manifest.yaml"`.
+    /// `path = "./local-pkg"` — a directory on disk, relative to the
+    /// manifest.
     Path { path: PathBuf },
-    /// `source = "github:owner/repo"` + `version = "0.1.3"`.
+    /// `source = "github:owner/repo"` + `version = "0.1.3"` — a tagged
+    /// GitHub commit, fetched as a tarball and cached.
     Github {
         owner: String,
         repo: String,
@@ -39,7 +45,8 @@ pub enum SourceError {
     #[error("schema `{0}`: `source` requires a `version` field")]
     SourceWithoutVersion(String),
     #[error(
-        "schema `{0}`: `version` is only valid with a `source`; for path sources, no version applies"
+        "schema `{0}`: `version` is only valid alongside `source`; path sources \
+         get their version from the package's `panschema-publish.toml` instead"
     )]
     VersionWithoutSource(String),
     #[error("schema `{name}`: unrecognized source protocol in `{spec}`")]
@@ -49,8 +56,8 @@ pub enum SourceError {
 }
 
 impl SchemaSource {
-    /// Stable lockfile/representation string — e.g. `"path:./x.yaml"` or
-    /// `"github:owner/repo"`. Mirrors the format already used by
+    /// Stable lockfile/representation string — e.g. `"path:./local-pkg"`
+    /// or `"github:owner/repo"`. Mirrors the format already used by
     /// [`crate::lockfile::path_source_spec`].
     pub fn source_spec(&self) -> String {
         match self {
@@ -157,12 +164,16 @@ pub enum TarballFetchError {
 /// anonymous limit and works for any public repo.
 pub struct CodeloadGithubSource;
 
-/// Resolved schema dependency: the on-disk path to the schema's main file
-/// plus, for remote sources, the commit SHA to record in the lockfile.
+/// Resolved schema dependency: the on-disk path to the schema's main
+/// file plus the version declared in `panschema-publish.toml` and (for
+/// remote sources) the commit SHA to record in the lockfile.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Resolved {
     /// Absolute path to the main schema file.
     pub schema_path: PathBuf,
+    /// Version declared in `panschema-publish.toml`. Always populated —
+    /// both source types are now "packages" with a publish file.
+    pub version: String,
     /// Commit SHA for `github:` sources. `None` for `path:` sources.
     pub revision: Option<String>,
 }
@@ -170,14 +181,20 @@ pub struct Resolved {
 /// Errors raised while resolving a [`SchemaSource`].
 #[derive(Debug, thiserror::Error)]
 pub enum ResolveError {
-    #[error("schema `{name}`: path `{}` (resolved to `{}`) does not exist", path.display(), resolved.display())]
+    #[error(
+        "schema `{name}`: package path `{}` (resolved to `{}`) does not exist",
+        path.display(), resolved.display()
+    )]
     PathMissing {
         name: String,
         path: PathBuf,
         resolved: PathBuf,
     },
-    #[error("schema `{name}`: `panschema-publish.toml` is missing at the tagged commit")]
-    PublishMissing { name: String },
+    #[error(
+        "schema `{name}`: `panschema-publish.toml` is missing in package `{}`",
+        pkg.display()
+    )]
+    PublishMissing { name: String, pkg: PathBuf },
     #[error(
         "schema `{name}`: manifest version `{want}` disagrees with `panschema-publish.toml` version `{got}`"
     )]
@@ -186,6 +203,11 @@ pub enum ResolveError {
         want: String,
         got: String,
     },
+    #[error(
+        "schema `{name}`: manifest key disagrees with `panschema-publish.toml` name `{declared}` \
+         (pass `--name {declared}` to use it, or `--name <alias>` to override)"
+    )]
+    NameMismatch { name: String, declared: String },
     #[error("schema `{name}`: {message}")]
     Other { name: String, message: String },
     #[error(transparent)]
@@ -194,12 +216,71 @@ pub enum ResolveError {
     Publish(#[from] crate::publish::PublishError),
 }
 
+/// Open a "package directory" (or the `panschema-publish.toml` inside one),
+/// parse the publish file, and return the canonical path to the package
+/// directory along with the parsed publish config.
+///
+/// Symlink hygiene: the package directory is canonicalized; the main
+/// schema file (derived later) is validated against this canonical base
+/// to refuse paths that escape the package.
+pub fn open_package(
+    name: &str,
+    pkg: &Path,
+) -> Result<(PathBuf, crate::publish::PublishConfig), ResolveError> {
+    if !pkg.exists() {
+        return Err(ResolveError::PathMissing {
+            name: name.to_string(),
+            path: pkg.to_path_buf(),
+            resolved: pkg.to_path_buf(),
+        });
+    }
+
+    // Allow callers to point at the publish file directly OR at the dir.
+    let pkg_dir = if pkg.is_file() {
+        pkg.parent()
+            .ok_or_else(|| ResolveError::Other {
+                name: name.to_string(),
+                message: format!("publish file `{}` has no parent directory", pkg.display()),
+            })?
+            .to_path_buf()
+    } else {
+        pkg.to_path_buf()
+    };
+
+    let publish_path = pkg_dir.join("panschema-publish.toml");
+    if !publish_path.exists() {
+        return Err(ResolveError::PublishMissing {
+            name: name.to_string(),
+            pkg: pkg_dir,
+        });
+    }
+    let publish = crate::publish::PublishConfig::from_path(&publish_path)?;
+
+    let canon_pkg = pkg_dir.canonicalize().map_err(|e| ResolveError::Other {
+        name: name.to_string(),
+        message: format!("canonicalize package dir `{}`: {e}", pkg_dir.display()),
+    })?;
+    Ok((canon_pkg, publish))
+}
+
+/// Resolve the main schema file inside a (canonical) package directory
+/// and verify it doesn't escape via symlinks.
+fn resolve_main_in_package(
+    canon_pkg: &Path,
+    publish: &crate::publish::PublishConfig,
+) -> Result<PathBuf, ResolveError> {
+    let main_path = canon_pkg.join(&publish.files.main);
+    crate::cache::validate_within(canon_pkg, &main_path)?;
+    Ok(main_path)
+}
+
 /// Resolve a `github:owner/repo@<version>` source against the local cache.
 ///
-/// Populates the cache (using the supplied [`TarballSource`]) if not already
-/// present, reads `panschema-publish.toml` from the tagged commit, validates
-/// the declared version matches `version`, canonicalizes the main schema
-/// path and verifies it doesn't escape the extracted directory.
+/// Populates the cache (using the supplied [`TarballSource`]) if not
+/// already present, reads `panschema-publish.toml` from the tagged
+/// commit, validates the declared version matches `version`, canonicalizes
+/// the main schema path and verifies it doesn't escape the extracted
+/// directory.
 pub fn resolve_github(
     name: &str,
     owner: &str,
@@ -208,21 +289,14 @@ pub fn resolve_github(
     cache_root: &Path,
     source: &dyn TarballSource,
 ) -> Result<Resolved, ResolveError> {
-    use crate::cache::{github_version_dir, populate_cache, validate_within};
-    use crate::publish::PublishConfig;
+    use crate::cache::{github_version_dir, populate_cache};
 
     let version_dir = github_version_dir(cache_root, owner, repo, version);
     let tag = format!("v{version}");
     let sha = populate_cache(source, owner, repo, &tag, &version_dir)?;
     let extracted_dir = version_dir.join(format!("{owner}-{repo}-{sha}"));
 
-    let publish_path = extracted_dir.join("panschema-publish.toml");
-    if !publish_path.exists() {
-        return Err(ResolveError::PublishMissing {
-            name: name.to_string(),
-        });
-    }
-    let publish = PublishConfig::from_path(&publish_path)?;
+    let (canon_pkg, publish) = open_package(name, &extracted_dir)?;
     if publish.schema.version != version {
         return Err(ResolveError::VersionMismatch {
             name: name.to_string(),
@@ -230,38 +304,32 @@ pub fn resolve_github(
             got: publish.schema.version,
         });
     }
-
-    let main_path = extracted_dir.join(&publish.files.main);
-    let canon_base = extracted_dir
-        .canonicalize()
-        .map_err(|e| ResolveError::Other {
-            name: name.to_string(),
-            message: format!("canonicalize cache dir: {e}"),
-        })?;
-    validate_within(&canon_base, &main_path)?;
+    let main_path = resolve_main_in_package(&canon_pkg, &publish)?;
 
     Ok(Resolved {
         schema_path: main_path,
+        version: publish.schema.version,
         revision: Some(sha),
     })
 }
 
 /// Resolve a `path:` source against the manifest directory.
+///
+/// `path` points at a package — either the directory containing
+/// `panschema-publish.toml`, or the publish file itself. Reads the
+/// publish file to learn the version and the main file's relative
+/// location.
 pub fn resolve_path(
     name: &str,
     path: &Path,
     manifest_dir: &Path,
 ) -> Result<Resolved, ResolveError> {
     let resolved = manifest_dir.join(path);
-    if !resolved.exists() {
-        return Err(ResolveError::PathMissing {
-            name: name.to_string(),
-            path: path.to_path_buf(),
-            resolved,
-        });
-    }
+    let (canon_pkg, publish) = open_package(name, &resolved)?;
+    let main_path = resolve_main_in_package(&canon_pkg, &publish)?;
     Ok(Resolved {
-        schema_path: resolved,
+        schema_path: main_path,
+        version: publish.schema.version,
         revision: None,
     })
 }

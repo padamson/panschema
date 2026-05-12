@@ -40,14 +40,17 @@ pub struct Lockfile {
 pub struct LockEntry {
     /// Schema name (matches the dict key in `panschema.toml` `[schemas]`).
     pub name: String,
-    /// Version, if known. For `path:` sources this comes from the schema's
-    /// `panschema-publish.toml` if present, else `None`.
+    /// Version declared in the schema's `panschema-publish.toml`. Fresh
+    /// fetches always populate this for both `path:` and `github:` sources;
+    /// the field is `Option<String>` to keep older lockfiles (pre-redesign)
+    /// readable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
-    /// Source spec — `path:<rel>` or `github:owner/repo` etc.
+    /// Source spec — `path:<rel>` for local packages, `github:owner/repo`
+    /// for tagged GitHub commits.
     pub source: String,
     /// Resolved revision (commit SHA for `github:` sources). `None` for
-    /// `path:` sources where there's no revision concept.
+    /// `path:` sources, which have no revision concept.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision: Option<String>,
     /// Content checksum of the schema's main file, e.g. `sha256:abc123…`.

@@ -92,10 +92,15 @@ Each slice delivers end-to-end user value: a complete `manifest → fetch → ge
 - [x] Integration test: a fixture consumer project with a `panschema.toml` pointing at a fixture schema, full `generate` produces expected output
 
 **Notes:**
-- No lockfile in this slice — slice 2 adds it
-- No remote sources — slice 3 adds them
-- No caching — manifest sources resolve directly via filesystem
-- `panschema-publish.toml` parser ships in this slice, but validation against the publish spec only fires for `github:` sources (slice 3), where the publish file is authoritative remote metadata. `path:` sources don't require a publish file — keeps single-file local-schema authoring frictionless.
+- No lockfile in this slice — slice 2 adds it.
+- No remote sources — slice 3 adds them.
+- No caching — local packages resolve directly via filesystem.
+- Every schema dependency — `path:` or `github:` — is a "package":
+  a directory containing `panschema-publish.toml` plus the main
+  schema file it references at `[files].main`. Name + version come
+  from the publish file. (This was finalized during slice 4; slice 1
+  initially shipped a "raw schema file" path source which was
+  retrofitted to the unified shape before v0.3 left development.)
 
 ### Slice 2: Lockfile + verify
 
@@ -108,14 +113,15 @@ Each slice delivers end-to-end user value: a complete `manifest → fetch → ge
 - [x] `panschema fetch` resolves all manifested schemas, computes SHA-256 of each schema's main file, writes `panschema.lock` with one entry per schema
 - [x] `panschema verify` reads the lockfile and re-checksums each schema; errors with a clear diff when checksums disagree
 - [x] `panschema generate` runs independently against the manifest (resolves fresh); doesn't require a lockfile
-- [x] Lockfile format includes: name, version (`None` for path: sources in this slice), source spec, revision (`None` for path: sources in this slice), checksum
+- [x] Lockfile format includes: name, version (from publish.toml — populated for both source types), source spec, revision (commit SHA for `github:` sources, `None` for `path:`), checksum
 - [x] Local-path schemas are checksummed too — detects "schema edited but generate not re-run"
 - [x] Integration test: edit a fixture schema's content after `fetch`, expect `verify` to fail
 
 **Notes:**
-- Reproducibility ratchet: once this slice ships, every consumer can pin and verify
-- File-locking on the cache deferred (no cache yet — slice 3 adds caching and concurrency concerns together)
-- `panschema generate` does not read the lockfile in this slice (see AC #3) — the lockfile is verification metadata, not a source of inputs. Slice 3 may revisit this when github-source caching makes "use lockfile-pinned revision" meaningful.
+- Reproducibility ratchet: once this slice ships, every consumer can pin and verify.
+- File-locking on the cache deferred (no cache yet — slice 3 adds caching and concurrency concerns together).
+- `panschema generate` does not read the lockfile (see AC #3) — the lockfile is verification metadata, not a source of inputs. Avoids double-resolution.
+- Drift detection covers both checksum (main file content) and version (publish.toml's `[schema].version`) — a maintainer who bumps the version without re-fetching will get a clear `verify` error.
 
 ### Slice 3: `github:` source + cache
 
@@ -146,21 +152,32 @@ Each slice delivers end-to-end user value: a complete `manifest → fetch → ge
 
 ### Slice 4: `panschema add`
 
-**Status:** Not Started
+**Status:** ✅ Completed
 
-**User Value:** UX shorthand for the manifest. `panschema add scimantic-schema@0.1.3 --source github:padamson/scimantic-schema` is one command instead of three (edit manifest, fetch, optionally edit generate config).
+**User Value:** UX shorthand for the manifest. A single command replaces "edit manifest" + "run fetch" + (optionally) "edit `[generate]` config":
+
+```
+panschema add github:padamson/scimantic-schema@0.1.3
+panschema add ./local-pkg
+panschema add ./local-pkg --name custom-alias
+```
+
+The schema name is read from `panschema-publish.toml` at the resolved location — no duplicate typing, no name/source mismatch.
 
 **Acceptance Criteria:**
 
-- [ ] `panschema add <name>@<version> --source <source>` appends a new entry to `[schemas]` in `panschema.toml`
-- [ ] Fetches the new schema (delegates to slice 2's `fetch`) and updates the lockfile
-- [ ] Optionally writes a starter `[generate.<name>]` block (configurable, e.g. `--no-generate-config`)
-- [ ] Idempotent: running `add` for a schema already in the manifest with the same version is a no-op; with a different version, errors with a clear message (use a separate `update` command — out of scope for v0.3)
-- [ ] Errors fast on invalid source spec, missing tag, etc.
-- [ ] CLI tests covering happy path + the error cases
+- [x] Single positional spec: `<protocol>:<args>@<version>` (remote) or a filesystem path to a package directory. Parsed by clap via `FromStr` on `SchemaSpec`, so malformed input errors at parse time.
+- [x] Schema name inferred from `panschema-publish.toml`; `--name <alias>` overrides for local renaming.
+- [x] Path-source `path` field stored as a directory, canonicalized then re-relativized to the manifest's location.
+- [x] Fetches the new schema and updates the lockfile (delegates to slice 2's `fetch`).
+- [x] Writes a starter `[generate.<name>]` block by default (suppressed with `--no-generate-config`).
+- [x] Idempotent: same shape is a no-op; different version → `AddError::VersionMismatch`; different source → `AddError::SourceMismatch`. A separate `update` command (out of scope for v0.3) handles the version-bump case.
+- [x] Errors fast on invalid spec (missing version for remote, unknown protocol, missing manifest, missing `panschema-publish.toml` at the target).
+- [x] CLI integration tests for happy path (path), `--name` alias, idempotency, missing-version error, unknown-protocol error, `--no-generate-config`.
+- [x] Manifest edits via `toml_edit` so comments and whitespace survive.
 
 **Notes:**
-- Largely a TOML editor backed by the slice 1–3 machinery; small surface area
+- Largely a TOML editor backed by the slice 1–3 machinery; small surface area.
 - A `panschema update` (version bump) is out of scope for v0.3
 
 ### Slice 5: Documentation, polish, ship v0.3.0
@@ -185,7 +202,7 @@ Each slice delivers end-to-end user value: a complete `manifest → fetch → ge
 | Slice 1: Local-path manifest | Must Have | None | ✅ Completed |
 | Slice 2: Lockfile + verify | Must Have | Slice 1 | ✅ Completed |
 | Slice 3: `github:` source + cache | Must Have | Slice 2 | ✅ Completed |
-| Slice 4: `panschema add` | Should Have | Slice 3 | Not Started |
+| Slice 4: `panschema add` | Should Have | Slice 3 | ✅ Completed |
 | Slice 5: Documentation + ship v0.3.0 | Must Have | Slices 1–4 | Not Started |
 
 ---
@@ -302,3 +319,94 @@ each will be handed off to another repo:
 - License-allow-list grew by `CDLA-Permissive-2.0` (used by webpki-roots, the Mozilla root CA store shipped with rustls/ureq).
 
 **Next:** Slice 4 (`panschema add` command).
+
+### 2026-05-11: Slice 4 Complete (`panschema add` + slice 1 unification)
+
+While wiring `panschema add`, we found that the original slice 1
+design (path sources are raw schema files; name comes from the
+manifest key) created an unprincipled split with slice 3 (github
+sources are full packages with `panschema-publish.toml`). The
+asymmetry showed up in the CLI: github needed
+`<name>@<version> --source <uri>`, path needed `<name> --path <file>`,
+and the name was typed twice in the github case. We collapsed the
+bifurcation while still pre-1.0 — every schema dependency is now a
+"package" anchored by `panschema-publish.toml`, regardless of where
+it lives.
+
+**Completed:**
+- **New types in `manifest`:**
+  - `SchemaSpec` enum (`Source { uri, version } | Path(PathBuf)`)
+    with a `FromStr` impl. Clap parses the positional CLI arg via
+    `FromStr`, so malformed input (missing version, unknown
+    protocol, empty spec) surfaces as a parse error before any
+    handler runs.
+  - `AddRequest` enum (`Path | Remote`) — validated post-CLI
+    request, both variants carrying the *final* manifest key
+    (inferred from publish.toml or supplied via `--name <alias>`).
+  - `insert_schema(manifest_path, &AddRequest, with_generate_block)`
+    — `toml_edit`-backed mutator that preserves comments and key
+    order; returns `AddOutcome::{Inserted, AlreadyPresent}` for
+    clean idempotency signalling.
+  - `AddError::{VersionMismatch, SourceMismatch}` — surface
+    conflicts loudly instead of overwriting.
+- **Shared package opener in `source`:**
+  - `open_package(name, pkg)` reads `panschema-publish.toml` from a
+    package directory (or accepts the file path directly),
+    canonicalizes for symlink hygiene, returns the parsed
+    `PublishConfig`. Both `resolve_path` and `resolve_github` use it.
+  - `Resolved.version` is always populated from publish.toml; both
+    source types now write it into `LockEntry.version`.
+- **CLI:**
+  - `panschema add <spec> [--name <alias>] [--no-generate-config]`
+    — positional spec, optional name override, optional
+    suppression of the starter `[generate.<name>]` block.
+  - Path-source input is canonicalized then re-relativized to the
+    manifest's directory before storing — robust against the user
+    typing the path from a different CWD than the manifest.
+- **Drift detection upgrade:** `verify` now catches publish.toml
+  version drift in addition to checksum drift (because version is
+  always recorded in the lockfile).
+- **Fixtures + tests:**
+  - `tests/fixtures/local-pkg/` (publish.toml + sample yaml) is the
+    new path-source fixture. Replaces direct references to
+    `sample_schema.yaml` throughout the integration suite.
+  - Lib-level: 7 new `SchemaSpec` parse tests + 6 `insert_schema`
+    tests in `manifest.rs`.
+  - CLI integration: path-source happy path, `--name` alias,
+    idempotency, missing-version error, unknown-protocol error,
+    `--no-generate-config`, missing-publish-toml error. Plus all
+    nine pre-existing path-source tests rewritten to the new
+    package shape.
+  - Manual smoke: `panschema add ./local-pkg` → manifest entry +
+    lockfile, `verify` succeeds, mutate schema file → `verify`
+    fails with a clean drift error.
+
+**Design decisions:**
+- **Source-spec-as-positional** rather than `<name>@<version> --source <uri>`.
+  Eliminates duplicate typing of the name; the name was always
+  redundant on the CLI side once we accepted `panschema-publish.toml`
+  as authoritative metadata.
+- **Path-target stored as the package directory** (cargo / npm
+  convention), not the publish-file path. CLI accepts either form
+  on input; we normalize on the way to the manifest.
+- **Single allow-list constant for protocols** (just `github:` today).
+  Unknown-protocol specs like `gitlab:foo/bar@0.1.0` error fast at
+  `SchemaSpec::from_str` — a typo in `github:` doesn't silently land
+  as a filesystem path.
+- **`--name <alias>` skips name verification** at resolve time —
+  power-user aliasing is cheap, and we trust the user who explicitly
+  chose to deviate from the declared name.
+- **`toml_edit` rather than serde round-trip** — preserves user
+  comments and whitespace. Adds one direct dep (already in our
+  transitive tree via the `toml` crate); small cost for a big
+  quality-of-life win on a user-facing config file.
+- **"Same shape is no-op, mismatch is error"** rather than "always
+  overwrite" — keeps `panschema add` safe to script in setup flows
+  without clobbering manually-customized entries.
+- **Lib-level `insert_schema()`** instead of inlining the toml_edit
+  dance in `main.rs` — unit-testable without spawning the CLI
+  binary, and reusable when `panschema update` lands.
+- **Always re-fetch after add** (no `--no-fetch` flag) — the cargo
+  `add`-then-`build` mental model. Idempotent `add` still re-verifies.
+
+**Next:** Slice 5 (documentation + ship v0.3.0).

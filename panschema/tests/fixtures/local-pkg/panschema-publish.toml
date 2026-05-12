@@ -1,0 +1,7 @@
+[schema]
+name = "sample_schema"
+version = "1.0.0"
+linkml = "1.7.0"
+
+[files]
+main = "sample_schema.yaml"

@@ -70,6 +70,34 @@ enum Commands {
         #[arg(long, value_enum, default_value = "auto")]
         viz_mode: VizMode,
     },
+    /// Add a schema dependency to `panschema.toml` and fetch it.
+    ///
+    /// Examples:
+    ///   panschema add github:padamson/scimantic-schema@0.1.3
+    ///   panschema add ./local-pkg
+    ///   panschema add ./local-pkg --name custom-alias
+    ///
+    /// The schema name is read from `panschema-publish.toml` at the
+    /// resolved location. Pass `--name` to install under a different
+    /// local key.
+    Add {
+        /// Source spec: `<protocol>:<args>@<version>` (e.g.
+        /// `github:owner/repo@0.1.3`) or a filesystem path to a package
+        /// directory containing `panschema-publish.toml`.
+        spec: panschema::manifest::SchemaSpec,
+
+        /// Install under a local alias instead of the name declared in
+        /// `panschema-publish.toml`. Useful when two schemas would
+        /// otherwise collide on name.
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Skip writing a starter `[generate.<name>]` block. By default,
+        /// an empty block is added so you can fill in writers (e.g.
+        /// `html = "docs/"`).
+        #[arg(long = "no-generate-config")]
+        no_generate_config: bool,
+    },
     /// Resolve every schema in the manifest, compute checksums, and write
     /// `panschema.lock`. Run this when you add or update a schema dependency.
     Fetch,
@@ -244,6 +272,184 @@ fn generate_from_manifest() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `panschema add <spec>`: read the package's `panschema-publish.toml`
+/// to learn the schema's name + version, insert an entry into
+/// `panschema.toml`, then run `fetch` to populate the cache and update
+/// the lockfile.
+///
+/// `name_override` (`--name <alias>`) installs the schema under a
+/// different local key than what `panschema-publish.toml` declares.
+fn add_schema(
+    spec: panschema::manifest::SchemaSpec,
+    name_override: Option<&str>,
+    with_generate_block: bool,
+) -> anyhow::Result<()> {
+    use panschema::manifest::{
+        AddOutcome, AddRequest, MANIFEST_FILENAME, SchemaSpec, discover_manifest, insert_schema,
+    };
+
+    // Find the manifest first — we'll need its directory for path
+    // relativization, and we want to fail fast if there isn't one.
+    let cwd = std::env::current_dir()?;
+    let manifest_path = discover_manifest(&cwd).ok_or_else(|| {
+        anyhow::anyhow!(
+            "no `{MANIFEST_FILENAME}` found in `{}` or any ancestor. \
+             Create one (a minimal `[schemas]` table is enough) and re-run.",
+            cwd.display()
+        )
+    })?;
+    let manifest_dir = manifest_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("manifest path has no parent directory"))?;
+
+    let request = match spec {
+        SchemaSpec::Path(pkg) => {
+            // Resolve the user's input from CWD (where they typed it),
+            // not from the manifest dir.
+            let resolved = if pkg.is_absolute() {
+                pkg.clone()
+            } else {
+                cwd.join(&pkg)
+            };
+            let (canon_pkg, publish) = panschema::source::open_package("(new)", &resolved)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+            let name = name_override
+                .map(str::to_string)
+                .unwrap_or_else(|| publish.schema.name.clone());
+
+            // Re-relativize the canonical package dir to the manifest's
+            // directory so the stored `path` is stable regardless of
+            // where the user typed it from.
+            let canon_manifest_dir = manifest_dir.canonicalize().map_err(|e| {
+                anyhow::anyhow!(
+                    "canonicalize manifest dir `{}`: {e}",
+                    manifest_dir.display()
+                )
+            })?;
+            let stored = relative_path(&canon_manifest_dir, &canon_pkg);
+
+            AddRequest::Path { name, path: stored }
+        }
+        SchemaSpec::Source { uri, version } => {
+            // Resolve through the cache so we can read publish.toml and
+            // discover the canonical name. resolve_github also verifies
+            // the version matches.
+            let source = parse_github_uri(&uri)?;
+            let cache = panschema::cache::cache_root().map_err(|e| anyhow::anyhow!("{e}"))?;
+            let github = panschema::source::CodeloadGithubSource;
+            let resolved = panschema::source::resolve_github(
+                name_override.unwrap_or("(new)"),
+                &source.owner,
+                &source.repo,
+                &version,
+                &cache,
+                &github,
+            )
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+            // Reach into the cached publish file to grab the canonical name.
+            // resolve_github already validated version + symlink hygiene.
+            let pkg_dir = resolved
+                .schema_path
+                .parent()
+                .expect("schema path has a parent (the package dir)");
+            let publish = panschema::publish::PublishConfig::from_path(
+                &pkg_dir.join("panschema-publish.toml"),
+            )?;
+            let name = name_override
+                .map(str::to_string)
+                .unwrap_or_else(|| publish.schema.name.clone());
+            AddRequest::Remote {
+                name,
+                source: uri,
+                version,
+            }
+        }
+    };
+
+    let outcome = insert_schema(&manifest_path, &request, with_generate_block)?;
+    match outcome {
+        AddOutcome::Inserted => {
+            println!("Added `{}` to {}", request.name(), manifest_path.display());
+        }
+        AddOutcome::AlreadyPresent => {
+            println!(
+                "`{}` is already present in {} with the same source; nothing changed.",
+                request.name(),
+                manifest_path.display()
+            );
+        }
+    }
+
+    // Always re-run fetch so the new schema lands in the cache + lockfile,
+    // and so an idempotent `add` still gives a freshly-verified state.
+    fetch_from_manifest()?;
+    Ok(())
+}
+
+struct GithubOwnerRepo {
+    owner: String,
+    repo: String,
+}
+
+/// Lightweight parser for `github:owner/repo` strings shared by `add`
+/// (which uses `SchemaSpec::Source { uri, .. }`) and `SchemaSource`
+/// (which has a richer parser of its own). Keeps `add` from depending
+/// on `SchemaSource::from_dep`'s `SchemaDep` plumbing.
+fn parse_github_uri(uri: &str) -> anyhow::Result<GithubOwnerRepo> {
+    let rest = uri
+        .strip_prefix("github:")
+        .ok_or_else(|| anyhow::anyhow!("expected `github:owner/repo`, got `{uri}`"))?;
+    let (owner, repo) = rest.split_once('/').ok_or_else(|| {
+        anyhow::anyhow!("malformed github URI `{uri}`: expected `github:owner/repo`")
+    })?;
+    if owner.is_empty() || repo.is_empty() || repo.contains('/') {
+        anyhow::bail!("malformed github URI `{uri}`: expected `github:owner/repo`");
+    }
+    Ok(GithubOwnerRepo {
+        owner: owner.to_string(),
+        repo: repo.to_string(),
+    })
+}
+
+/// Compute `target` relative to `base`, returning a relative `PathBuf`.
+/// Both arguments must be canonical absolute paths. Falls back to the
+/// absolute target if there's no shared ancestor (cross-volume etc.).
+fn relative_path(base: &Path, target: &Path) -> PathBuf {
+    use std::path::Component;
+
+    let base_components: Vec<_> = base.components().collect();
+    let target_components: Vec<_> = target.components().collect();
+
+    let common_prefix = base_components
+        .iter()
+        .zip(target_components.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+
+    // No shared ancestor? Just return the absolute target.
+    if common_prefix == 0
+        || !matches!(
+            base_components.first(),
+            Some(Component::RootDir) | Some(Component::Prefix(_))
+        )
+    {
+        return target.to_path_buf();
+    }
+
+    let mut rel = PathBuf::new();
+    for _ in base_components.iter().skip(common_prefix) {
+        rel.push("..");
+    }
+    for c in target_components.iter().skip(common_prefix) {
+        rel.push(c);
+    }
+    if rel.as_os_str().is_empty() {
+        rel.push(".");
+    }
+    rel
+}
+
 /// `panschema fetch`: resolve every manifested schema, compute its checksum,
 /// and write `panschema.lock`.
 fn fetch_from_manifest() -> anyhow::Result<()> {
@@ -256,12 +462,14 @@ fn fetch_from_manifest() -> anyhow::Result<()> {
     for (name, dep) in &manifest.schemas {
         let panschema::source::Resolved {
             schema_path,
+            version,
             revision,
         } = resolve_source(name, dep, &manifest_dir)?;
         let source = SchemaSource::from_dep(name, dep)?;
         entries.push(LockEntry {
             name: name.clone(),
-            version: dep.version.clone(),
+            // Always populated now — both source types read publish.toml.
+            version: Some(version),
             source: source.source_spec(),
             revision,
             checksum: checksum_file(&schema_path)?,
@@ -377,6 +585,11 @@ async fn main() -> anyhow::Result<()> {
             }
             None => generate_from_manifest()?,
         },
+        Some(Commands::Add {
+            spec,
+            name,
+            no_generate_config,
+        }) => add_schema(spec, name.as_deref(), !no_generate_config)?,
         Some(Commands::Fetch) => fetch_from_manifest()?,
         Some(Commands::Verify) => verify_from_manifest()?,
         Some(Commands::Serve {
