@@ -2231,6 +2231,7 @@ dependencies = [
  "notify",
  "playwright-rs",
  "pollster",
+ "semver",
  "serde",
  "serde_json",
  "serde_yaml",

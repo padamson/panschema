@@ -24,6 +24,20 @@ pub enum PublishError {
     Parse(#[from] toml::de::Error),
     #[error("`{}` already exists in `{}` (pass `--force` to overwrite)", PUBLISH_FILENAME, dir.display())]
     AlreadyExists { dir: PathBuf },
+    #[error("malformed publish spec (toml_edit): {0}")]
+    Edit(#[from] toml_edit::TomlError),
+    #[error("`[schema].version` is missing or not a string in the publish file")]
+    MissingVersionField,
+    #[error("`{value}` is not a valid semver version")]
+    InvalidVersion { value: String },
+}
+
+/// Which component of a semver version to bump.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BumpLevel {
+    Patch,
+    Minor,
+    Major,
 }
 
 /// Top-level structure of `panschema-publish.toml`.
@@ -105,6 +119,78 @@ main = "{main}"
 
     std::fs::write(&target, body)?;
     Ok(target)
+}
+
+/// Bump `[schema].version` in the publish file at `path` per `level` and
+/// write the result back. Preserves comments and key order via `toml_edit`.
+///
+/// Returns `(old, new)` version strings.
+pub fn bump_version(path: &Path, level: BumpLevel) -> Result<(String, String), PublishError> {
+    use semver::Version;
+    use toml_edit::DocumentMut;
+
+    let content = std::fs::read_to_string(path)?;
+    let mut doc: DocumentMut = content.parse()?;
+
+    let old_str = doc
+        .get("schema")
+        .and_then(|s| s.get("version"))
+        .and_then(|v| v.as_str())
+        .ok_or(PublishError::MissingVersionField)?
+        .to_string();
+
+    let mut v = Version::parse(&old_str).map_err(|_| PublishError::InvalidVersion {
+        value: old_str.clone(),
+    })?;
+
+    match level {
+        BumpLevel::Patch => v.patch += 1,
+        BumpLevel::Minor => {
+            v.minor += 1;
+            v.patch = 0;
+        }
+        BumpLevel::Major => {
+            v.major += 1;
+            v.minor = 0;
+            v.patch = 0;
+        }
+    }
+    // Drop any pre-release / build metadata on bump — we're cutting a stable release.
+    v.pre = semver::Prerelease::EMPTY;
+    v.build = semver::BuildMetadata::EMPTY;
+    let new_str = v.to_string();
+
+    doc["schema"]["version"] = toml_edit::value(new_str.as_str());
+    std::fs::write(path, doc.to_string())?;
+
+    Ok((old_str, new_str))
+}
+
+/// Set `[schema].version` to an exact value (parsed as semver). Returns
+/// the previous version string. Preserves comments + key order.
+pub fn set_version(path: &Path, new: &str) -> Result<String, PublishError> {
+    use semver::Version;
+    use toml_edit::DocumentMut;
+
+    // Validate up-front so we don't write garbage.
+    Version::parse(new).map_err(|_| PublishError::InvalidVersion {
+        value: new.to_string(),
+    })?;
+
+    let content = std::fs::read_to_string(path)?;
+    let mut doc: DocumentMut = content.parse()?;
+
+    let old_str = doc
+        .get("schema")
+        .and_then(|s| s.get("version"))
+        .and_then(|v| v.as_str())
+        .ok_or(PublishError::MissingVersionField)?
+        .to_string();
+
+    doc["schema"]["version"] = toml_edit::value(new);
+    std::fs::write(path, doc.to_string())?;
+
+    Ok(old_str)
 }
 
 #[cfg(test)]
@@ -265,6 +351,117 @@ main = "x.yaml"
         let cfg = PublishConfig::from_path(&tmp.path().join(PUBLISH_FILENAME)).unwrap();
         assert_eq!(cfg.schema.name, "second");
         assert_eq!(cfg.schema.version, "0.2.0");
+    }
+
+    // ----- bump_version / set_version -----
+
+    fn pkg_with_version(dir: &std::path::Path, version: &str) -> std::path::PathBuf {
+        init_publish_file(dir, "x", version, Path::new("schema.yaml"), "1.7.0", false).unwrap()
+    }
+
+    #[test]
+    fn bump_patch_increments_z() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = pkg_with_version(tmp.path(), "0.1.3");
+        let (old, new) = bump_version(&path, BumpLevel::Patch).unwrap();
+        assert_eq!(old, "0.1.3");
+        assert_eq!(new, "0.1.4");
+        let cfg = PublishConfig::from_path(&path).unwrap();
+        assert_eq!(cfg.schema.version, "0.1.4");
+    }
+
+    #[test]
+    fn bump_minor_increments_y_and_resets_z() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = pkg_with_version(tmp.path(), "0.1.3");
+        let (_, new) = bump_version(&path, BumpLevel::Minor).unwrap();
+        assert_eq!(new, "0.2.0");
+    }
+
+    #[test]
+    fn bump_major_from_pre_1_0_goes_to_1_0_0() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = pkg_with_version(tmp.path(), "0.5.7");
+        let (_, new) = bump_version(&path, BumpLevel::Major).unwrap();
+        assert_eq!(new, "1.0.0");
+    }
+
+    #[test]
+    fn bump_drops_pre_release_suffix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = pkg_with_version(tmp.path(), "0.2.0-rc1");
+        let (_, new) = bump_version(&path, BumpLevel::Patch).unwrap();
+        // 0.2.0-rc1 + patch → 0.2.1 (rc suffix dropped on bump).
+        assert_eq!(new, "0.2.1");
+    }
+
+    #[test]
+    fn bump_preserves_comments_and_other_keys() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(PUBLISH_FILENAME);
+        std::fs::write(
+            &path,
+            r#"# top-level comment
+[schema]
+name = "x"
+# version comment
+version = "0.1.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+"#,
+        )
+        .unwrap();
+        bump_version(&path, BumpLevel::Minor).unwrap();
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert!(after.contains("# top-level comment"));
+        assert!(after.contains("# version comment"));
+        assert!(after.contains(r#"version = "0.2.0""#));
+        assert!(after.contains(r#"name = "x""#));
+        assert!(after.contains(r#"linkml = "1.7.0""#));
+    }
+
+    #[test]
+    fn bump_errors_when_version_field_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(PUBLISH_FILENAME);
+        std::fs::write(
+            &path,
+            "[schema]\nname = \"x\"\nlinkml = \"1.7.0\"\n[files]\nmain = \"s.yaml\"\n",
+        )
+        .unwrap();
+        let err = bump_version(&path, BumpLevel::Patch).unwrap_err();
+        assert!(matches!(err, PublishError::MissingVersionField));
+    }
+
+    #[test]
+    fn bump_errors_on_non_semver_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = pkg_with_version(tmp.path(), "not-a-version");
+        let err = bump_version(&path, BumpLevel::Patch).unwrap_err();
+        assert!(matches!(err, PublishError::InvalidVersion { .. }));
+    }
+
+    #[test]
+    fn set_version_overrides_existing_value() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = pkg_with_version(tmp.path(), "0.1.0");
+        let old = set_version(&path, "1.2.3").unwrap();
+        assert_eq!(old, "0.1.0");
+        let cfg = PublishConfig::from_path(&path).unwrap();
+        assert_eq!(cfg.schema.version, "1.2.3");
+    }
+
+    #[test]
+    fn set_version_rejects_invalid_semver() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = pkg_with_version(tmp.path(), "0.1.0");
+        let err = set_version(&path, "not-semver").unwrap_err();
+        assert!(matches!(err, PublishError::InvalidVersion { .. }));
+        // File must be unchanged.
+        let cfg = PublishConfig::from_path(&path).unwrap();
+        assert_eq!(cfg.schema.version, "0.1.0");
     }
 
     #[test]

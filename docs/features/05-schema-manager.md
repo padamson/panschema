@@ -208,7 +208,7 @@ panschema init                                   # CWD basename + safe defaults
 
 ### Slice 4.6: `panschema release`
 
-**Status:** Not Started
+**Status:** ✅ Completed
 
 **User Value:** Producer-side counterpart to `cargo release` — one command to bump the schema's version in `panschema-publish.toml`, optionally commit + tag, optionally push. Schema authors stop hand-editing version strings and manually creating tags.
 
@@ -221,16 +221,16 @@ panschema release --level patch --dry-run        # show plan, do nothing
 
 **Acceptance Criteria:**
 
-- [ ] `--level patch|minor|major` does literal semver bumps; pre-1.0 versions follow the same rule (`0.1.3 --level major` → `1.0.0`).
-- [ ] `--version <x.y.z>` is an alternative to `--level` (mutually exclusive at the clap level); validates as semver before writing.
-- [ ] Bump-only mode (no `--git`) edits publish.toml and prints copy-pastable git commands for the user to complete the release manually.
-- [ ] `--git` runs `git add panschema-publish.toml && git commit -m 'release: v<ver>' && git tag v<ver>` after the bump.
-- [ ] `--git` safety checks: refuses if git working tree is dirty, if the tag already exists, or if not in a git repo.
-- [ ] `--push` (requires `--git`) additionally runs `git push --follow-tags`.
-- [ ] `--dry-run` prints the plan without writing or running any git commands.
-- [ ] Bump preserves comments and key order in publish.toml via `toml_edit`.
-- [ ] Clear errors when `panschema-publish.toml` is missing in CWD, when the current version isn't valid semver, or when the version field is absent.
-- [ ] Unit tests for `bump_version`/`set_version`; CLI integration tests for bump-only, dry-run, `--git` (with a temp git repo), dirty-tree refusal, tag-collision refusal.
+- [x] `--level patch|minor|major` does literal semver bumps; pre-1.0 versions follow the same rule (`0.1.3 --level major` → `1.0.0`).
+- [x] `--version <x.y.z>` is an alternative to `--level` (mutually exclusive at the clap level); validates as semver before writing.
+- [x] Bump-only mode (no `--git`) edits publish.toml and prints copy-pastable git commands for the user to complete the release manually.
+- [x] `--git` runs `git add panschema-publish.toml && git commit -m 'release: v<ver>' && git tag v<ver>` after the bump.
+- [x] `--git` safety checks: refuses if git working tree is dirty, if the tag already exists, or if not in a git repo.
+- [x] `--push` (requires `--git`) additionally runs `git push --follow-tags`.
+- [x] `--dry-run` prints the plan without writing or running any git commands.
+- [x] Bump preserves comments and key order in publish.toml via `toml_edit`.
+- [x] Clear errors when `panschema-publish.toml` is missing in CWD, when the current version isn't valid semver, or when the version field is absent.
+- [x] Unit tests for `bump_version`/`set_version`; CLI integration tests for bump-only, dry-run, `--git` (with a temp git repo), dirty-tree refusal, tag-collision refusal.
 
 **Notes:**
 - Discovery is CWD-only (no walk-up) — publish.toml lives at the package root by convention.
@@ -261,7 +261,7 @@ panschema release --level patch --dry-run        # show plan, do nothing
 | Slice 3: `github:` source + cache | Must Have | Slice 2 | ✅ Completed |
 | Slice 4: `panschema add` | Should Have | Slice 3 | ✅ Completed |
 | Slice 4.5: `panschema init` | Should Have | Slice 1 | ✅ Completed |
-| Slice 4.6: `panschema release` | Should Have | Slice 1 | Not Started |
+| Slice 4.6: `panschema release` | Should Have | Slice 1 | ✅ Completed |
 | Slice 5: Documentation + ship v0.3.0 | Must Have | Slices 1–4.6 | Not Started |
 
 ---
@@ -512,3 +512,66 @@ hand-writing the publish file.
   too). No special-case parsing.
 
 **Next:** Slice 4.6 (`panschema release`).
+
+### 2026-05-11: Slice 4.6 Complete (`panschema release`)
+
+Producer-side release-workflow command modeled on `cargo release`.
+Closes the producer/consumer symmetry — `init` scaffolds the
+publish file, `release` bumps it. Bump-only by default; opt in to
+git operations via `--git` and `--push`.
+
+**Completed:**
+- `publish::bump_version(path, level)` and `publish::set_version(path, new)`
+  use `toml_edit` to preserve comments + key order. Both validate the
+  current version as semver before touching the file; both also drop
+  pre-release/build metadata on a `--level` bump (we're cutting a
+  stable release).
+- New `PublishError::{MissingVersionField, InvalidVersion, Edit}` variants.
+- New `BumpLevel { Patch, Minor, Major }` enum in `publish`; mirrored
+  by a `ReleaseLevel` clap ValueEnum in `main.rs` to keep the CLI type
+  decoupled from the lib type.
+- `Release` clap subcommand with `--level` / `--version` (mutually
+  exclusive via `conflicts_with`), `--git`, `--push` (requires `git`),
+  `--dry-run`.
+- `release_schema` in `main.rs`:
+  - Reads publish.toml, computes the projected new version up-front,
+    runs safety checks BEFORE touching anything.
+  - `--git` safety: git is on PATH, in a git repo, working tree is
+    clean (porcelain status empty), target tag doesn't exist.
+  - `--dry-run`: prints the plan and exits without writing.
+  - Bump-only output: prints copy-pasteable `git commit -am … && git tag … && git push --follow-tags`.
+  - `--git` output: runs commit + tag, prints summary, suggests
+    `git push --follow-tags` if `--push` wasn't passed.
+- Git operations via `std::process::Command` shell-out — no new
+  library deps. Helper functions: `ensure_git_available`,
+  `ensure_working_tree_clean`, `ensure_tag_does_not_exist`, `run_git`.
+- 9 new unit tests (`bump_version` for patch/minor/major, pre-release
+  suffix drop, comment preservation, missing-version error,
+  non-semver error, `set_version` happy + invalid path) + 10 new
+  integration tests (bump-only, dry-run, `--version`, pre-1.0 major,
+  invalid semver, missing publish.toml, missing level/version,
+  `--git` happy path, dirty-tree refusal, tag-collision refusal).
+- Test count: 279 (up from 260).
+
+**Design decisions:**
+- **Literal semver pre-1.0 semantics:** `0.x.y --level major` →
+  `1.0.0`. Matches cargo-release's default. The informal "pre-1.0
+  minor-as-major" convention would surprise users who type
+  `--level major` and get a minor bump. Anyone who wants the informal
+  semantics can use `--version 0.(x+1).0` explicitly.
+- **Pre-release suffixes dropped on `--level` bump.** If the current
+  version is `0.2.0-rc1`, `--level patch` produces `0.2.1`, not
+  `0.2.1-rc1`. Use `--version 0.2.1-rc2` for arbitrary pre-release
+  workflows.
+- **Shell-out to `git` rather than embedding gitoxide.** Schema
+  authors all have `git` on PATH; the operations are short
+  (`status --porcelain`, `tag --list`, `add`, `commit`, `tag`,
+  `push --follow-tags`); zero new deps.
+- **Discovery is CWD-only** (no walk-up). The publish file lives at
+  the schema repo root by convention. Different from
+  `panschema.toml` (consumer manifest) which walks up.
+- **Bump-only output includes a `git push --follow-tags` line**
+  even though pushing isn't part of the bump-only flow — gives the
+  user the full happy-path recipe in one place.
+
+**Next:** Slice 5 (documentation + ship v0.3.0).

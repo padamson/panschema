@@ -1341,3 +1341,342 @@ fn init_warns_when_main_file_missing_but_still_writes() {
         "publish.toml should still be written"
     );
 }
+
+// ---------------------------------------------------------------------
+// Slice 4.6: `panschema release` CLI tests (producer-side version bump).
+// ---------------------------------------------------------------------
+
+/// Seed a temp dir with a minimal publish.toml at the given version.
+fn seed_publish(dir: &Path, version: &str) {
+    fs::write(
+        dir.join("panschema-publish.toml"),
+        format!(
+            "[schema]\nname = \"x\"\nversion = \"{version}\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"schema.yaml\"\n"
+        ),
+    )
+    .expect("write publish");
+}
+
+/// `release --level patch` bumps the version and prints the suggested
+/// git commands; doesn't touch git itself.
+#[test]
+fn release_bump_only_updates_publish_toml_and_prints_suggestions() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+    seed_publish(dir, "0.1.3");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("release")
+        .arg("--level")
+        .arg("patch")
+        .current_dir(dir)
+        .output()
+        .expect("panschema");
+    assert!(output.status.success(), "release should succeed");
+
+    let body = fs::read_to_string(dir.join("panschema-publish.toml")).unwrap();
+    assert!(body.contains(r#"version = "0.1.4""#));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("0.1.3 → 0.1.4"),
+        "stdout should report the bump: {stdout}"
+    );
+    assert!(
+        stdout.contains("git commit -am 'release: v0.1.4'"),
+        "stdout should suggest the git commands: {stdout}"
+    );
+}
+
+/// `--dry-run` prints the plan but doesn't change any files.
+#[test]
+fn release_dry_run_does_not_modify_files() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+    seed_publish(dir, "0.1.0");
+    let before = fs::read_to_string(dir.join("panschema-publish.toml")).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("release")
+        .arg("--level")
+        .arg("minor")
+        .arg("--dry-run")
+        .current_dir(dir)
+        .output()
+        .expect("panschema");
+    assert!(output.status.success());
+
+    let after = fs::read_to_string(dir.join("panschema-publish.toml")).unwrap();
+    assert_eq!(before, after, "dry-run must not modify the file");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Dry run") && stdout.contains("0.1.0 → 0.2.0"));
+}
+
+/// `--version <x.y.z>` sets an exact version.
+#[test]
+fn release_version_arg_sets_exact_version() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+    seed_publish(dir, "0.1.0");
+
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("release")
+        .arg("--version")
+        .arg("0.5.0-rc1")
+        .current_dir(dir)
+        .status()
+        .expect("panschema");
+    assert!(status.success());
+
+    let body = fs::read_to_string(dir.join("panschema-publish.toml")).unwrap();
+    assert!(
+        body.contains(r#"version = "0.5.0-rc1""#),
+        "version arg should land verbatim: {body}"
+    );
+}
+
+/// `--level major` from a 0.x.y version goes to 1.0.0 (literal semver,
+/// matching cargo-release default).
+#[test]
+fn release_level_major_from_pre_1_0_goes_to_1_0_0() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+    seed_publish(dir, "0.5.7");
+
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("release")
+        .arg("--level")
+        .arg("major")
+        .current_dir(dir)
+        .status()
+        .expect("panschema");
+    assert!(status.success());
+
+    let body = fs::read_to_string(dir.join("panschema-publish.toml")).unwrap();
+    assert!(body.contains(r#"version = "1.0.0""#));
+}
+
+/// `--version` with a non-semver value errors out and doesn't write.
+#[test]
+fn release_errors_on_invalid_semver_via_version_arg() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+    seed_publish(dir, "0.1.0");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("release")
+        .arg("--version")
+        .arg("not-a-semver")
+        .current_dir(dir)
+        .output()
+        .expect("panschema");
+    assert!(!output.status.success());
+
+    let body = fs::read_to_string(dir.join("panschema-publish.toml")).unwrap();
+    assert!(body.contains(r#"version = "0.1.0""#), "file unchanged");
+}
+
+/// `release` errors clearly when there's no publish.toml in CWD.
+#[test]
+fn release_errors_when_publish_toml_missing() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("release")
+        .arg("--level")
+        .arg("patch")
+        .current_dir(tmp.path())
+        .output()
+        .expect("panschema");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("panschema-publish.toml") || stderr.contains("panschema init"),
+        "stderr should explain the missing file: {stderr}"
+    );
+}
+
+/// `release` errors when neither `--level` nor `--version` is passed.
+#[test]
+fn release_errors_when_neither_level_nor_version_given() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    seed_publish(tmp.path(), "0.1.0");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("release")
+        .current_dir(tmp.path())
+        .output()
+        .expect("panschema");
+    assert!(!output.status.success());
+}
+
+/// `--git` in a clean git repo bumps + commits + tags.
+///
+/// Skipped automatically if `git` isn't on PATH.
+#[test]
+fn release_with_git_commits_and_tags() {
+    if Command::new("git").arg("--version").output().is_err() {
+        eprintln!("skipping: git not available");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+
+    // Init a git repo + first commit so the working tree is clean.
+    Command::new("git")
+        .arg("init")
+        .arg("-q")
+        .arg("-b")
+        .arg("main")
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.email", "test@example.com"])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "Test"])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    seed_publish(dir, "0.1.0");
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-qm", "initial"])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args(["release", "--level", "patch", "--git"])
+        .current_dir(dir)
+        .status()
+        .expect("panschema");
+    assert!(status.success(), "release --git should succeed");
+
+    // Tag should exist.
+    let tags = Command::new("git")
+        .arg("tag")
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    let tag_list = String::from_utf8_lossy(&tags.stdout);
+    assert!(
+        tag_list.contains("v0.1.1"),
+        "expected tag v0.1.1: {tag_list}"
+    );
+
+    // Latest commit message should reference the release.
+    let log = Command::new("git")
+        .args(["log", "-1", "--pretty=%s"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    let last_msg = String::from_utf8_lossy(&log.stdout);
+    assert!(
+        last_msg.contains("release: v0.1.1"),
+        "expected release commit; got: {last_msg}"
+    );
+}
+
+/// `--git` refuses when the working tree has uncommitted changes
+/// (beyond the bump itself).
+#[test]
+fn release_with_git_refuses_on_dirty_tree() {
+    if Command::new("git").arg("--version").output().is_err() {
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+
+    Command::new("git")
+        .args(["init", "-q", "-b", "main"])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.email", "test@example.com"])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "Test"])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    seed_publish(dir, "0.1.0");
+    // Untracked file = dirty tree.
+    fs::write(dir.join("STRAY.txt"), "uncommitted").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args(["release", "--level", "patch", "--git"])
+        .current_dir(dir)
+        .output()
+        .expect("panschema");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("not clean") || stderr.contains("dirty"),
+        "stderr should call out the dirty tree: {stderr}"
+    );
+}
+
+/// `--git` refuses when the target tag already exists.
+#[test]
+fn release_with_git_refuses_when_tag_already_exists() {
+    if Command::new("git").arg("--version").output().is_err() {
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+
+    Command::new("git")
+        .args(["init", "-q", "-b", "main"])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.email", "test@example.com"])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "Test"])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    seed_publish(dir, "0.1.0");
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-qm", "initial"])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    // Pre-create the tag we're about to try to make.
+    Command::new("git")
+        .args(["tag", "v0.1.1"])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args(["release", "--level", "patch", "--git"])
+        .current_dir(dir)
+        .output()
+        .expect("panschema");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("already exists"),
+        "stderr should call out the existing tag: {stderr}"
+    );
+}

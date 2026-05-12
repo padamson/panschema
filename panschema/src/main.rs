@@ -9,6 +9,24 @@ mod server;
 
 use panschema::io::FormatRegistry;
 
+/// `panschema release --level <X>` choices.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ReleaseLevel {
+    Patch,
+    Minor,
+    Major,
+}
+
+impl From<ReleaseLevel> for panschema::publish::BumpLevel {
+    fn from(r: ReleaseLevel) -> Self {
+        match r {
+            ReleaseLevel::Patch => panschema::publish::BumpLevel::Patch,
+            ReleaseLevel::Minor => panschema::publish::BumpLevel::Minor,
+            ReleaseLevel::Major => panschema::publish::BumpLevel::Major,
+        }
+    }
+}
+
 /// Visualization mode for HTML output
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
 pub enum VizMode {
@@ -132,6 +150,35 @@ enum Commands {
         /// `html = "docs/"`).
         #[arg(long = "no-generate-config")]
         no_generate_config: bool,
+    },
+    /// Cut a new release of the schema package in CWD.
+    ///
+    /// Producer-side counterpart to `cargo release`. By default, just bumps
+    /// `[schema].version` in `panschema-publish.toml` and prints the
+    /// suggested git commands. `--git` runs commit + tag; `--push` also
+    /// pushes.
+    Release {
+        /// Semver bump level (mutually exclusive with `--version`).
+        #[arg(long, value_enum)]
+        level: Option<ReleaseLevel>,
+
+        /// Set the version to an exact value (mutually exclusive with `--level`).
+        #[arg(long, conflicts_with = "level")]
+        version: Option<String>,
+
+        /// After bumping, stage publish.toml, commit `release: v<ver>`, and
+        /// tag `v<ver>`. Refuses on a dirty working tree or an existing tag.
+        #[arg(long)]
+        git: bool,
+
+        /// After committing + tagging, also `git push --follow-tags`.
+        /// Requires `--git`.
+        #[arg(long, requires = "git")]
+        push: bool,
+
+        /// Print the plan without writing files or running any git commands.
+        #[arg(long = "dry-run")]
+        dry_run: bool,
     },
     /// Resolve every schema in the manifest, compute checksums, and write
     /// `panschema.lock`. Run this when you add or update a schema dependency.
@@ -396,6 +443,196 @@ fn init_schema_package(
         }
     }
 
+    Ok(())
+}
+
+/// `panschema release`: bump the version in `panschema-publish.toml`,
+/// optionally commit + tag (with `--git`), optionally push (with `--push`).
+fn release_schema(
+    level: Option<ReleaseLevel>,
+    version: Option<&str>,
+    git: bool,
+    push: bool,
+    dry_run: bool,
+) -> anyhow::Result<()> {
+    use panschema::publish::{
+        BumpLevel, PUBLISH_FILENAME, PublishConfig, bump_version, set_version,
+    };
+
+    let cwd = std::env::current_dir()?;
+    let publish_path = cwd.join(PUBLISH_FILENAME);
+    if !publish_path.exists() {
+        anyhow::bail!(
+            "no `{PUBLISH_FILENAME}` in `{}`. Run `panschema init` first.",
+            cwd.display()
+        );
+    }
+
+    // Require exactly one of --level / --version.
+    let action: ReleaseAction = match (level, version) {
+        (Some(l), None) => ReleaseAction::Bump(BumpLevel::from(l)),
+        (None, Some(v)) => ReleaseAction::Set(v.to_string()),
+        (None, None) => {
+            anyhow::bail!("must pass either `--level <patch|minor|major>` or `--version <x.y.z>`");
+        }
+        (Some(_), Some(_)) => unreachable!("clap conflicts_with prevents this"),
+    };
+
+    // Compute what the new version *would* be (read-only) so dry-run + git
+    // safety checks can report it without writing.
+    let current_cfg = PublishConfig::from_path(&publish_path)?;
+    let projected_new = match &action {
+        ReleaseAction::Bump(level) => {
+            let mut v = semver::Version::parse(&current_cfg.schema.version).map_err(|_| {
+                anyhow::anyhow!(
+                    "`[schema].version` `{}` is not valid semver",
+                    current_cfg.schema.version
+                )
+            })?;
+            match level {
+                BumpLevel::Patch => v.patch += 1,
+                BumpLevel::Minor => {
+                    v.minor += 1;
+                    v.patch = 0;
+                }
+                BumpLevel::Major => {
+                    v.major += 1;
+                    v.minor = 0;
+                    v.patch = 0;
+                }
+            }
+            v.pre = semver::Prerelease::EMPTY;
+            v.build = semver::BuildMetadata::EMPTY;
+            v.to_string()
+        }
+        ReleaseAction::Set(s) => {
+            semver::Version::parse(s)
+                .map_err(|_| anyhow::anyhow!("`{s}` is not a valid semver version"))?;
+            s.clone()
+        }
+    };
+
+    let old_version = current_cfg.schema.version.clone();
+    let new_tag = format!("v{projected_new}");
+
+    if git {
+        ensure_git_available()?;
+        ensure_working_tree_clean(&cwd)?;
+        ensure_tag_does_not_exist(&cwd, &new_tag)?;
+    }
+
+    if dry_run {
+        println!("Dry run: would bump {old_version} → {projected_new}");
+        if git {
+            println!("Would run:");
+            println!("    git add {PUBLISH_FILENAME}");
+            println!("    git commit -m 'release: {new_tag}'");
+            println!("    git tag {new_tag}");
+            if push {
+                println!("    git push --follow-tags");
+            }
+        } else {
+            println!("(bump-only — no git operations would run)");
+        }
+        return Ok(());
+    }
+
+    // Apply the bump.
+    let (_old, new) = match action {
+        ReleaseAction::Bump(level) => bump_version(&publish_path, level)?,
+        ReleaseAction::Set(s) => (set_version(&publish_path, &s)?, s),
+    };
+    debug_assert_eq!(new, projected_new);
+    println!("Bumped {PUBLISH_FILENAME}: {old_version} → {new}");
+
+    if git {
+        run_git(&cwd, &["add", PUBLISH_FILENAME])?;
+        let msg = format!("release: {new_tag}");
+        run_git(&cwd, &["commit", "-m", &msg])?;
+        run_git(&cwd, &["tag", &new_tag])?;
+        println!("Committed and tagged {new_tag}.");
+        if push {
+            run_git(&cwd, &["push", "--follow-tags"])?;
+            println!("Pushed.");
+        } else {
+            println!("To publish the release:");
+            println!("    git push --follow-tags");
+        }
+    } else {
+        println!("Suggested next steps:");
+        println!("    git commit -am 'release: {new_tag}'");
+        println!("    git tag {new_tag}");
+        println!("    git push --follow-tags");
+    }
+
+    Ok(())
+}
+
+enum ReleaseAction {
+    Bump(panschema::publish::BumpLevel),
+    Set(String),
+}
+
+fn ensure_git_available() -> anyhow::Result<()> {
+    let out = std::process::Command::new("git")
+        .arg("--version")
+        .output()
+        .map_err(|e| anyhow::anyhow!("`git` is not on PATH (required for --git): {e}"))?;
+    if !out.status.success() {
+        anyhow::bail!("`git --version` failed; is git installed?");
+    }
+    Ok(())
+}
+
+fn ensure_working_tree_clean(cwd: &Path) -> anyhow::Result<()> {
+    // First check we're in a git repo.
+    let inside = std::process::Command::new("git")
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .current_dir(cwd)
+        .output()
+        .map_err(|e| anyhow::anyhow!("failed to run git: {e}"))?;
+    if !inside.status.success() {
+        anyhow::bail!(
+            "not inside a git repository (`{}` not under git control). \
+             Re-run without --git, or `git init` first.",
+            cwd.display()
+        );
+    }
+    let status = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(cwd)
+        .output()
+        .map_err(|e| anyhow::anyhow!("failed to run git status: {e}"))?;
+    if !status.stdout.is_empty() {
+        anyhow::bail!(
+            "git working tree is not clean. Commit or stash changes before `release --git`."
+        );
+    }
+    Ok(())
+}
+
+fn ensure_tag_does_not_exist(cwd: &Path, tag: &str) -> anyhow::Result<()> {
+    let out = std::process::Command::new("git")
+        .args(["tag", "--list", tag])
+        .current_dir(cwd)
+        .output()
+        .map_err(|e| anyhow::anyhow!("failed to run git tag --list: {e}"))?;
+    if !out.stdout.is_empty() {
+        anyhow::bail!("tag `{tag}` already exists. Pick a different version.");
+    }
+    Ok(())
+}
+
+fn run_git(cwd: &Path, args: &[&str]) -> anyhow::Result<()> {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .map_err(|e| anyhow::anyhow!("failed to run git {args:?}: {e}"))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        anyhow::bail!("git {args:?} failed: {stderr}");
+    }
     Ok(())
 }
 
@@ -732,6 +969,13 @@ async fn main() -> anyhow::Result<()> {
             name,
             no_generate_config,
         }) => add_schema(spec, name.as_deref(), !no_generate_config)?,
+        Some(Commands::Release {
+            level,
+            version,
+            git,
+            push,
+            dry_run,
+        }) => release_schema(level, version.as_deref(), git, push, dry_run)?,
         Some(Commands::Fetch) => fetch_from_manifest()?,
         Some(Commands::Verify) => verify_from_manifest()?,
         Some(Commands::Serve {
