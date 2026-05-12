@@ -1171,3 +1171,173 @@ fn add_no_generate_config_skips_generate_block() {
         "no-generate-config should suppress the starter block"
     );
 }
+
+// ---------------------------------------------------------------------
+// Slice 4.5: `panschema init` CLI tests (producer-side scaffolding).
+// ---------------------------------------------------------------------
+
+/// `panschema init --name X --version Y --main Z` writes a publish.toml
+/// with those exact values.
+#[test]
+fn init_creates_publish_toml_with_explicit_args() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("init")
+        .arg("--name")
+        .arg("my-schema")
+        .arg("--version")
+        .arg("0.3.1")
+        .arg("--main")
+        .arg("schema.yaml")
+        .current_dir(dir)
+        .status()
+        .expect("panschema");
+    assert!(status.success());
+
+    let body = fs::read_to_string(dir.join("panschema-publish.toml")).expect("read");
+    assert!(body.contains(r#"name = "my-schema""#));
+    assert!(body.contains(r#"version = "0.3.1""#));
+    assert!(body.contains(r#"main = "schema.yaml""#));
+}
+
+/// `panschema init --from <linkml.yaml>` extracts name + version from the
+/// LinkML file's metadata and pre-fills the publish.toml.
+#[test]
+fn init_from_existing_linkml_yaml_extracts_name_and_version() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+    fs::write(
+        dir.join("my-schema.yaml"),
+        "id: https://example.org/x\nname: \"derived-name\"\nversion: \"1.4.2\"\n",
+    )
+    .expect("write linkml");
+
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("init")
+        .arg("--from")
+        .arg("my-schema.yaml")
+        .current_dir(dir)
+        .status()
+        .expect("panschema");
+    assert!(status.success(), "init --from should succeed");
+
+    let body = fs::read_to_string(dir.join("panschema-publish.toml")).expect("read");
+    assert!(body.contains(r#"name = "derived-name""#));
+    assert!(body.contains(r#"version = "1.4.2""#));
+    // --from also defaults `main` to the passed file.
+    assert!(body.contains(r#"main = "my-schema.yaml""#));
+}
+
+/// `panschema init` with no args uses the CWD's basename + safe defaults.
+#[test]
+fn init_with_no_args_uses_dirname_default() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join("widget-schema");
+    fs::create_dir_all(&dir).expect("mkdir");
+
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("init")
+        .current_dir(&dir)
+        .status()
+        .expect("panschema");
+    assert!(status.success());
+
+    let body = fs::read_to_string(dir.join("panschema-publish.toml")).expect("read");
+    assert!(
+        body.contains(r#"name = "widget-schema""#),
+        "default name should be CWD basename; got: {body}"
+    );
+    assert!(body.contains(r#"version = "0.1.0""#));
+    assert!(body.contains(r#"main = "schema.yaml""#));
+    assert!(body.contains(r#"linkml = "1.7.0""#));
+}
+
+/// Re-running `panschema init` over an existing publish.toml refuses
+/// without `--force`.
+#[test]
+fn init_refuses_clobber_without_force() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+    fs::write(dir.join("panschema-publish.toml"), "# placeholder\n").expect("seed");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("init")
+        .arg("--name")
+        .arg("anything")
+        .current_dir(dir)
+        .output()
+        .expect("panschema");
+    assert!(
+        !output.status.success(),
+        "init should refuse to overwrite existing file"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("already exists") || stderr.contains("--force"),
+        "stderr should mention the clobber refusal: {stderr}"
+    );
+
+    // The seed file is intact.
+    assert_eq!(
+        fs::read_to_string(dir.join("panschema-publish.toml")).unwrap(),
+        "# placeholder\n"
+    );
+}
+
+/// `--force` allows overwriting an existing publish.toml.
+#[test]
+fn init_force_overwrites_existing() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+    fs::write(dir.join("panschema-publish.toml"), "# placeholder\n").expect("seed");
+
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("init")
+        .arg("--name")
+        .arg("real")
+        .arg("--version")
+        .arg("0.1.0")
+        .arg("--main")
+        .arg("schema.yaml")
+        .arg("--force")
+        .current_dir(dir)
+        .status()
+        .expect("panschema");
+    assert!(status.success());
+
+    let body = fs::read_to_string(dir.join("panschema-publish.toml")).expect("read");
+    assert!(body.contains(r#"name = "real""#));
+    assert!(!body.contains("placeholder"));
+}
+
+/// `init` warns when the configured main file doesn't exist yet but still
+/// writes the publish.toml (validation is informational).
+#[test]
+fn init_warns_when_main_file_missing_but_still_writes() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("init")
+        .arg("--name")
+        .arg("x")
+        .arg("--version")
+        .arg("0.1.0")
+        .arg("--main")
+        .arg("does-not-exist.yaml")
+        .current_dir(dir)
+        .output()
+        .expect("panschema");
+    assert!(output.status.success(), "init should still succeed");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("warning") && stderr.contains("does-not-exist.yaml"),
+        "should print a warning about the missing main file: {stderr}"
+    );
+    assert!(
+        dir.join("panschema-publish.toml").exists(),
+        "publish.toml should still be written"
+    );
+}

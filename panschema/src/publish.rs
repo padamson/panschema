@@ -12,6 +12,9 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
+/// Standard filename for the schema-side publishing standard.
+pub const PUBLISH_FILENAME: &str = "panschema-publish.toml";
+
 /// Parse error specific to `panschema-publish.toml`.
 #[derive(Debug, thiserror::Error)]
 pub enum PublishError {
@@ -19,6 +22,8 @@ pub enum PublishError {
     Io(#[from] std::io::Error),
     #[error("invalid publish spec: {0}")]
     Parse(#[from] toml::de::Error),
+    #[error("`{}` already exists in `{}` (pass `--force` to overwrite)", PUBLISH_FILENAME, dir.display())]
+    AlreadyExists { dir: PathBuf },
 }
 
 /// Top-level structure of `panschema-publish.toml`.
@@ -60,6 +65,46 @@ impl PublishConfig {
         let content = std::fs::read_to_string(path)?;
         content.parse()
     }
+}
+
+/// Create a `panschema-publish.toml` at `dir/panschema-publish.toml`.
+///
+/// Used by `panschema init`. Writes a hand-formatted TOML body (stable
+/// key order, light blank-line layout) rather than serializing
+/// [`PublishConfig`] — the round-trip would lose layout we care about
+/// for a user-facing config file. Refuses to overwrite an existing
+/// file unless `force` is `true`.
+///
+/// Returns the absolute path the file was written to.
+pub fn init_publish_file(
+    dir: &Path,
+    name: &str,
+    version: &str,
+    main: &Path,
+    linkml: &str,
+    force: bool,
+) -> Result<PathBuf, PublishError> {
+    let target = dir.join(PUBLISH_FILENAME);
+    if target.exists() && !force {
+        return Err(PublishError::AlreadyExists {
+            dir: dir.to_path_buf(),
+        });
+    }
+
+    let body = format!(
+        r#"[schema]
+name = "{name}"
+version = "{version}"
+linkml = "{linkml}"
+
+[files]
+main = "{main}"
+"#,
+        main = main.display()
+    );
+
+    std::fs::write(&target, body)?;
+    Ok(target)
 }
 
 #[cfg(test)]
@@ -144,5 +189,110 @@ main = "x.yaml"
         .expect("write");
         let cfg = PublishConfig::from_path(tmp.path()).expect("read");
         assert_eq!(cfg.schema.name, "x");
+    }
+
+    // ----- init_publish_file -----
+
+    #[test]
+    fn init_writes_a_round_trippable_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = init_publish_file(
+            tmp.path(),
+            "demo",
+            "0.1.0",
+            Path::new("schema.yaml"),
+            "1.7.0",
+            false,
+        )
+        .unwrap();
+        assert_eq!(path, tmp.path().join(PUBLISH_FILENAME));
+        let cfg = PublishConfig::from_path(&path).unwrap();
+        assert_eq!(cfg.schema.name, "demo");
+        assert_eq!(cfg.schema.version, "0.1.0");
+        assert_eq!(cfg.schema.linkml, "1.7.0");
+        assert_eq!(cfg.files.main, PathBuf::from("schema.yaml"));
+    }
+
+    #[test]
+    fn init_refuses_to_clobber_existing_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_publish_file(
+            tmp.path(),
+            "first",
+            "0.1.0",
+            Path::new("a.yaml"),
+            "1.7.0",
+            false,
+        )
+        .unwrap();
+        let err = init_publish_file(
+            tmp.path(),
+            "second",
+            "0.2.0",
+            Path::new("b.yaml"),
+            "1.7.0",
+            false,
+        )
+        .unwrap_err();
+        assert!(matches!(err, PublishError::AlreadyExists { .. }));
+
+        // First file's contents must be unchanged.
+        let cfg = PublishConfig::from_path(&tmp.path().join(PUBLISH_FILENAME)).unwrap();
+        assert_eq!(cfg.schema.name, "first");
+    }
+
+    #[test]
+    fn init_force_overwrites() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_publish_file(
+            tmp.path(),
+            "first",
+            "0.1.0",
+            Path::new("a.yaml"),
+            "1.7.0",
+            false,
+        )
+        .unwrap();
+        init_publish_file(
+            tmp.path(),
+            "second",
+            "0.2.0",
+            Path::new("b.yaml"),
+            "1.7.0",
+            true,
+        )
+        .unwrap();
+        let cfg = PublishConfig::from_path(&tmp.path().join(PUBLISH_FILENAME)).unwrap();
+        assert_eq!(cfg.schema.name, "second");
+        assert_eq!(cfg.schema.version, "0.2.0");
+    }
+
+    #[test]
+    fn init_writes_stable_key_order() {
+        // The key order is part of the user-facing layout — schema fields
+        // before files, name/version/linkml in that order. We exercise this
+        // by checking the line layout rather than the parsed form.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = init_publish_file(
+            tmp.path(),
+            "x",
+            "0.1.0",
+            Path::new("x.yaml"),
+            "1.7.0",
+            false,
+        )
+        .unwrap();
+        let body = std::fs::read_to_string(&path).unwrap();
+        let schema_pos = body.find("[schema]").unwrap();
+        let name_pos = body.find("name").unwrap();
+        let version_pos = body.find("version").unwrap();
+        let linkml_pos = body.find("linkml").unwrap();
+        let files_pos = body.find("[files]").unwrap();
+        assert!(
+            schema_pos < name_pos
+                && name_pos < version_pos
+                && version_pos < linkml_pos
+                && linkml_pos < files_pos
+        );
     }
 }

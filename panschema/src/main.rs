@@ -70,6 +70,41 @@ enum Commands {
         #[arg(long, value_enum, default_value = "auto")]
         viz_mode: VizMode,
     },
+    /// Scaffold `panschema-publish.toml` in the current directory.
+    ///
+    /// Producer-side counterpart to `panschema add`. Three input modes:
+    ///   panschema init --name X --version 0.1.0 --main schema.yaml
+    ///   panschema init --from path/to/schema.yaml   # pre-fill from a LinkML file
+    ///   panschema init                              # bare defaults
+    Init {
+        /// Schema package name (defaults to the CWD's basename or, with
+        /// `--from`, the name declared in the LinkML file).
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Initial version (defaults to `0.1.0` or, with `--from`, the
+        /// version declared in the LinkML file).
+        #[arg(long)]
+        version: Option<String>,
+
+        /// Path to the main schema file, relative to the publish file
+        /// (defaults to `schema.yaml` or, with `--from`, the path passed).
+        #[arg(long)]
+        main: Option<PathBuf>,
+
+        /// Target LinkML metamodel version (defaults to `1.7.0`).
+        #[arg(long, default_value = "1.7.0")]
+        linkml: String,
+
+        /// Pre-fill name/version (and `--main` default) from an existing
+        /// LinkML schema file at the given path.
+        #[arg(long)]
+        from: Option<PathBuf>,
+
+        /// Overwrite an existing `panschema-publish.toml`.
+        #[arg(long)]
+        force: bool,
+    },
     /// Add a schema dependency to `panschema.toml` and fetch it.
     ///
     /// Examples:
@@ -269,6 +304,98 @@ fn generate_from_manifest() -> anyhow::Result<()> {
             "No outputs generated. Add an `[generate.<schema>]` block with at least one writer key (e.g. `html = \"docs/\"`)."
         );
     }
+    Ok(())
+}
+
+/// `panschema init`: scaffold `panschema-publish.toml` in CWD.
+///
+/// Argument-resolution precedence (highest first):
+///   1. Explicit `--name` / `--version` / `--main` flags
+///   2. Values extracted from `--from <linkml-file>`
+///   3. Defaults: name = CWD basename, version = "0.1.0", main = "schema.yaml"
+///
+/// After writing, parses the file back and tries to read the main file
+/// via the format registry. Validation failures print a warning but
+/// don't undo the write — the user may be mid-edit.
+fn init_schema_package(
+    name: Option<&str>,
+    version: Option<&str>,
+    main: Option<&Path>,
+    linkml: &str,
+    from: Option<&Path>,
+    force: bool,
+) -> anyhow::Result<()> {
+    use panschema::io::FormatRegistry;
+    use panschema::publish::init_publish_file;
+
+    let cwd = std::env::current_dir()?;
+
+    // Extract defaults from `--from` if provided.
+    let (from_name, from_version) = match from {
+        Some(path) => {
+            let registry = FormatRegistry::with_defaults();
+            let reader = registry
+                .reader_for_path(path)
+                .map_err(|e| anyhow::anyhow!("--from `{}`: {e}", path.display()))?;
+            let schema = reader
+                .read(path)
+                .map_err(|e| anyhow::anyhow!("--from `{}`: {e}", path.display()))?;
+            (Some(schema.name), schema.version)
+        }
+        None => (None, None),
+    };
+
+    let resolved_name: String = name.map(str::to_string).or(from_name).unwrap_or_else(|| {
+        cwd.file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("schema")
+            .to_string()
+    });
+    let resolved_version: String = version
+        .map(str::to_string)
+        .or(from_version)
+        .unwrap_or_else(|| "0.1.0".to_string());
+    let resolved_main: PathBuf = main
+        .map(Path::to_path_buf)
+        .or_else(|| from.map(Path::to_path_buf))
+        .unwrap_or_else(|| PathBuf::from("schema.yaml"));
+
+    let path = init_publish_file(
+        &cwd,
+        &resolved_name,
+        &resolved_version,
+        &resolved_main,
+        linkml,
+        force,
+    )?;
+    println!(
+        "Wrote {} (name = \"{}\", version = \"{}\", main = \"{}\")",
+        path.display(),
+        resolved_name,
+        resolved_version,
+        resolved_main.display(),
+    );
+
+    // Post-write validation — informational only.
+    let main_full = cwd.join(&resolved_main);
+    if !main_full.exists() {
+        eprintln!(
+            "warning: `{}` does not exist yet. Create it before running \
+             `panschema fetch` or `panschema add`.",
+            main_full.display()
+        );
+    } else {
+        let registry = FormatRegistry::with_defaults();
+        if let Ok(reader) = registry.reader_for_path(&main_full)
+            && let Err(e) = reader.read(&main_full)
+        {
+            eprintln!(
+                "warning: `{}` exists but failed to parse as a schema: {e}",
+                main_full.display()
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -585,6 +712,21 @@ async fn main() -> anyhow::Result<()> {
             }
             None => generate_from_manifest()?,
         },
+        Some(Commands::Init {
+            name,
+            version,
+            main,
+            linkml,
+            from,
+            force,
+        }) => init_schema_package(
+            name.as_deref(),
+            version.as_deref(),
+            main.as_deref(),
+            &linkml,
+            from.as_deref(),
+            force,
+        )?,
         Some(Commands::Add {
             spec,
             name,
