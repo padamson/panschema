@@ -392,20 +392,40 @@ fn init_schema_package(
         None => (None, None),
     };
 
-    let resolved_name: String = name.map(str::to_string).or(from_name).unwrap_or_else(|| {
-        cwd.file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("schema")
-            .to_string()
-    });
-    let resolved_version: String = version
-        .map(str::to_string)
-        .or(from_version)
-        .unwrap_or_else(|| "0.1.0".to_string());
-    let resolved_main: PathBuf = main
-        .map(Path::to_path_buf)
-        .or_else(|| from.map(Path::to_path_buf))
-        .unwrap_or_else(|| PathBuf::from("schema.yaml"));
+    // Fix 4: track provenance so the user can see which fields were
+    // explicit vs derived from --from vs defaulted.
+    let (resolved_name, name_src) = match name {
+        Some(n) => (n.to_string(), "explicit"),
+        None => match from_name {
+            Some(n) => (n, "from --from"),
+            None => (
+                cwd.file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("schema")
+                    .to_string(),
+                "default (CWD basename)",
+            ),
+        },
+    };
+    let (resolved_version, version_src) = match version {
+        Some(v) => (v.to_string(), "explicit"),
+        None => match from_version {
+            Some(v) => (v, "from --from"),
+            None => ("0.1.0".to_string(), "default"),
+        },
+    };
+    let (resolved_main, main_src) = match main {
+        Some(m) => (m.to_path_buf(), "explicit"),
+        None => match from {
+            Some(p) => (p.to_path_buf(), "from --from"),
+            None => (PathBuf::from("schema.yaml"), "default"),
+        },
+    };
+    // The `--linkml` flag has a clap-level default of "1.7.0", so we can't
+    // tell whether the user passed it explicitly. Label it as "(default
+    // unless overridden)" — better to be slightly under-precise than to
+    // claim provenance we don't know.
+    let linkml_src = "default unless overridden via --linkml";
 
     let path = init_publish_file(
         &cwd,
@@ -415,13 +435,14 @@ fn init_schema_package(
         linkml,
         force,
     )?;
+    println!("Wrote {}", path.display());
+    println!("    name    = \"{resolved_name}\"  ({name_src})");
+    println!("    version = \"{resolved_version}\"  ({version_src})");
     println!(
-        "Wrote {} (name = \"{}\", version = \"{}\", main = \"{}\")",
-        path.display(),
-        resolved_name,
-        resolved_version,
-        resolved_main.display(),
+        "    main    = \"{}\"  ({main_src})",
+        resolved_main.display()
     );
+    println!("    linkml  = \"{linkml}\"  ({linkml_src})");
 
     // Post-write validation — informational only.
     let main_full = cwd.join(&resolved_main);
@@ -515,6 +536,24 @@ fn release_schema(
     let old_version = current_cfg.schema.version.clone();
     let new_tag = format!("v{projected_new}");
 
+    // Fix 1: refuse no-op bumps. `--version <V>` when publish.toml is
+    // already at V plans a `git commit` with nothing staged, which would
+    // fail at runtime. Catch it up-front with a clear message.
+    if old_version == projected_new {
+        anyhow::bail!(
+            "version is already `{old_version}`; nothing to bump. \
+             Either pass `--level patch|minor|major` to advance it, \
+             or tag the current commit manually:\n    \
+             git tag -a -m 'release v{old_version}' v{old_version} && git push --follow-tags"
+        );
+    }
+
+    // Fix 3: refuse if the LinkML main file has a version field that
+    // disagrees with publish.toml. The two are both versions of the
+    // same package; releasing while they drift produces a published
+    // schema with inconsistent self-description.
+    enforce_linkml_version_in_sync(&cwd, &current_cfg)?;
+
     if git {
         ensure_git_available()?;
         ensure_working_tree_clean(&cwd)?;
@@ -527,7 +566,7 @@ fn release_schema(
             println!("Would run:");
             println!("    git add {PUBLISH_FILENAME}");
             println!("    git commit -m 'release: {new_tag}'");
-            println!("    git tag {new_tag}");
+            println!("    git tag -a -m 'release {new_tag}' {new_tag}");
             if push {
                 println!("    git push --follow-tags");
             }
@@ -547,9 +586,13 @@ fn release_schema(
 
     if git {
         run_git(&cwd, &["add", PUBLISH_FILENAME])?;
-        let msg = format!("release: {new_tag}");
-        run_git(&cwd, &["commit", "-m", &msg])?;
-        run_git(&cwd, &["tag", &new_tag])?;
+        let commit_msg = format!("release: {new_tag}");
+        run_git(&cwd, &["commit", "-m", &commit_msg])?;
+        // Fix 2: annotated tag (-a -m) instead of lightweight. Annotated
+        // tags carry author/date/message and — crucially — are the only
+        // tag kind that `git push --follow-tags` will push.
+        let tag_msg = format!("release {new_tag}");
+        run_git(&cwd, &["tag", "-a", "-m", &tag_msg, &new_tag])?;
         println!("Committed and tagged {new_tag}.");
         if push {
             run_git(&cwd, &["push", "--follow-tags"])?;
@@ -561,10 +604,48 @@ fn release_schema(
     } else {
         println!("Suggested next steps:");
         println!("    git commit -am 'release: {new_tag}'");
-        println!("    git tag {new_tag}");
+        println!("    git tag -a -m 'release {new_tag}' {new_tag}");
         println!("    git push --follow-tags");
     }
 
+    Ok(())
+}
+
+/// Read the LinkML main file referenced by publish.toml and, if it
+/// declares a `version:` field, refuse to release while it disagrees
+/// with publish.toml's `[schema].version`. Files without a declared
+/// version skip the check.
+fn enforce_linkml_version_in_sync(
+    cwd: &Path,
+    publish: &panschema::publish::PublishConfig,
+) -> anyhow::Result<()> {
+    use panschema::io::FormatRegistry;
+
+    let main_path = cwd.join(&publish.files.main);
+    if !main_path.exists() {
+        // `init` is allowed to write publish.toml before the main file
+        // exists; the same lenience applies here. The user will notice
+        // soon enough when nothing parses.
+        return Ok(());
+    }
+    let registry = FormatRegistry::with_defaults();
+    let reader = registry
+        .reader_for_path(&main_path)
+        .map_err(|e| anyhow::anyhow!("schema main file `{}`: {e}", main_path.display()))?;
+    let schema = reader
+        .read(&main_path)
+        .map_err(|e| anyhow::anyhow!("schema main file `{}`: {e}", main_path.display()))?;
+    if let Some(linkml_version) = schema.version
+        && linkml_version != publish.schema.version
+    {
+        anyhow::bail!(
+            "version drift: `panschema-publish.toml` declares `{}` \
+             but `{}` declares `version: {linkml_version}`. \
+             Bring them into sync before releasing (the two must agree).",
+            publish.schema.version,
+            main_path.display()
+        );
+    }
     Ok(())
 }
 

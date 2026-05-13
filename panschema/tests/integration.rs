@@ -1680,3 +1680,222 @@ fn release_with_git_refuses_when_tag_already_exists() {
         "stderr should call out the existing tag: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------
+// Slice 4.7: dogfood-driven fixes to `init` + `release` (2026-05-13).
+// ---------------------------------------------------------------------
+
+/// Fix 1: `release --version <V>` when publish.toml is already at V
+/// errors out with a clear "nothing to bump" message and doesn't touch
+/// any files.
+#[test]
+fn release_errors_on_noop_bump() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+    seed_publish(dir, "0.1.0");
+    let before = fs::read_to_string(dir.join("panschema-publish.toml")).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args(["release", "--version", "0.1.0"])
+        .current_dir(dir)
+        .output()
+        .expect("panschema");
+    assert!(!output.status.success(), "no-op bump should error");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("already") && stderr.contains("0.1.0"),
+        "stderr should explain the no-op: {stderr}"
+    );
+    // File untouched.
+    let after = fs::read_to_string(dir.join("panschema-publish.toml")).unwrap();
+    assert_eq!(before, after);
+}
+
+/// Fix 2: tags created by `release --git` are annotated (the only kind
+/// `git push --follow-tags` will push).
+#[test]
+fn release_with_git_creates_annotated_tag() {
+    if Command::new("git").arg("--version").output().is_err() {
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+
+    Command::new("git")
+        .args(["init", "-q", "-b", "main"])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.email", "test@example.com"])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "Test"])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    seed_publish(dir, "0.1.0");
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-qm", "initial"])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args(["release", "--level", "patch", "--git"])
+        .current_dir(dir)
+        .status()
+        .expect("panschema");
+    assert!(status.success());
+
+    // An annotated tag has `tag` object-type; a lightweight tag points at
+    // a commit directly. `git cat-file -t v0.1.1` returns either "tag" or
+    // "commit".
+    let kind = Command::new("git")
+        .args(["cat-file", "-t", "v0.1.1"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    let kind_str = String::from_utf8_lossy(&kind.stdout);
+    assert_eq!(
+        kind_str.trim(),
+        "tag",
+        "expected an annotated tag (so `git push --follow-tags` works); got: {kind_str}"
+    );
+}
+
+/// Fix 3: refuse to release while the LinkML main file's `version:`
+/// field disagrees with publish.toml.
+#[test]
+fn release_errors_on_linkml_version_drift() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+    // publish.toml says 0.1.0...
+    seed_publish(dir, "0.1.0");
+    // ...but the LinkML main file says 0.9.0.
+    fs::write(
+        dir.join("schema.yaml"),
+        "id: https://example.org/x\nname: x\nversion: \"0.9.0\"\n",
+    )
+    .expect("write linkml");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args(["release", "--level", "patch"])
+        .current_dir(dir)
+        .output()
+        .expect("panschema");
+    assert!(!output.status.success(), "drift should refuse the release");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("drift") || (stderr.contains("0.1.0") && stderr.contains("0.9.0")),
+        "stderr should call out the version disagreement: {stderr}"
+    );
+}
+
+/// Fix 3 corollary: release proceeds when versions agree.
+#[test]
+fn release_succeeds_when_linkml_version_matches_publish_toml() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+    seed_publish(dir, "0.1.0");
+    fs::write(
+        dir.join("schema.yaml"),
+        "id: https://example.org/x\nname: x\nversion: \"0.1.0\"\n",
+    )
+    .unwrap();
+
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args(["release", "--level", "patch"])
+        .current_dir(dir)
+        .status()
+        .expect("panschema");
+    assert!(status.success(), "matching versions should release cleanly");
+}
+
+/// Fix 3 corollary: LinkML files without a declared version skip the
+/// drift check (no source of truth to compare).
+#[test]
+fn release_skips_drift_check_when_linkml_has_no_version() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+    seed_publish(dir, "0.1.0");
+    fs::write(
+        dir.join("schema.yaml"),
+        "id: https://example.org/x\nname: x\n",
+    )
+    .unwrap();
+
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args(["release", "--level", "patch"])
+        .current_dir(dir)
+        .status()
+        .expect("panschema");
+    assert!(status.success(), "no version field → no check → success");
+}
+
+/// Fix 4: `panschema init` prints provenance for each field so users
+/// can tell what was explicit vs derived from `--from` vs defaulted.
+#[test]
+fn init_output_shows_field_provenance() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args(["init", "--name", "explicit-name", "--version", "0.2.0"])
+        .current_dir(dir)
+        .output()
+        .expect("panschema");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("name") && stdout.contains("(explicit)"),
+        "stdout should label `name` as explicit: {stdout}"
+    );
+    assert!(
+        stdout.contains("version") && stdout.contains("(explicit)"),
+        "stdout should label `version` as explicit: {stdout}"
+    );
+    assert!(
+        stdout.contains("main") && stdout.contains("(default)"),
+        "stdout should label `main` as default: {stdout}"
+    );
+    assert!(
+        stdout.contains("linkml") && stdout.contains("default"),
+        "stdout should label `linkml` as default: {stdout}"
+    );
+}
+
+/// Fix 4 corollary: `--from` provenance is labeled distinctly.
+#[test]
+fn init_output_shows_from_provenance_when_from_used() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+    fs::write(
+        dir.join("schema.yaml"),
+        "id: https://example.org/x\nname: from-name\nversion: \"3.1.4\"\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args(["init", "--from", "schema.yaml"])
+        .current_dir(dir)
+        .output()
+        .expect("panschema");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("from-name") && stdout.contains("from --from"),
+        "stdout should label name as `from --from`: {stdout}"
+    );
+    assert!(
+        stdout.contains("3.1.4") && stdout.contains("from --from"),
+        "stdout should label version as `from --from`: {stdout}"
+    );
+}

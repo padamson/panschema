@@ -588,3 +588,59 @@ git operations via `--git` and `--push`.
   user the full happy-path recipe in one place.
 
 **Next:** Slice 5 (documentation + ship v0.3.0).
+
+### 2026-05-13: Dogfood-driven fixes to `init` + `release`
+
+scimantic-schema's producer-side v0.3.0 dogfood surfaced four
+issues with the slice 4.5 + 4.6 commands; all four addressed here
+before the t2t consumer-side dogfood (Phase B) starts.
+
+**Completed:**
+- **`release` refuses no-op bumps.** `panschema release --version
+  0.1.0` when publish.toml is already at `0.1.0` was planning a
+  `git commit` with nothing staged — the plan would fail at
+  runtime, and the dry-run didn't catch it. Now refuses up-front
+  with a clear message including the manual-tag fallback
+  (`git tag -a -m 'release v0.1.0' v0.1.0 && git push --follow-tags`).
+- **`release --git` produces annotated tags.** Previous behaviour
+  used `git tag <name>` (lightweight). `git push --follow-tags`
+  only pushes annotated tags, so `--push` would silently not push
+  the tag. Switched to `git tag -a -m 'release v<ver>' v<ver>`.
+- **`release` enforces LinkML/publish.toml version agreement.**
+  Reads `[files].main` via the format registry, compares
+  `SchemaDefinition.version` against `[schema].version`, refuses
+  on drift with a clear message naming both files. Files without
+  a declared LinkML `version:` skip the check. For v0.3 this is
+  enforcement-only; v0.4 may add automatic synchronization (rewrite
+  the LinkML `version:` field during bumps).
+- **`init` prints per-field provenance.** Output now reports
+  whether each field was explicit, derived from `--from`, or
+  defaulted. Removes the silent "where did `linkml = 1.7.0` come
+  from?" question that the dogfood note flagged.
+- 7 new integration tests (no-op bump, annotated-tag verification
+  via `git cat-file -t`, drift refusal, drift-clear happy path,
+  drift skip when LinkML lacks a version field, init provenance
+  for explicit + `--from` modes).
+- Test count: 286 (up from 279).
+
+**Design decisions:**
+- **No Y/n confirmations.** Considered adding interactive prompts
+  before `git tag` / `git push`; rejected. `--git` and `--push` are
+  already opt-in flags; `--dry-run` already shows the plan; adding
+  prompts breaks scripting + matches no cargo-ecosystem convention.
+- **Drift refusal, not automatic rewrite, for v0.3.** Auto-rewriting
+  the LinkML `version:` field cleanly (preserving comments) requires
+  more thought than we want to land in a follow-up fix during
+  Slice 5's dogfood. Refuse-on-drift unblocks the dogfood; rewrite
+  is v0.4 work.
+- **Annotated tag message format: `release v<ver>`.** Matches the
+  commit-message convention. No reason to deviate.
+
+These fixes close `panschema--release-command-gaps.md`. The
+scimantic-schema dogfood's "next real release" condition can now
+be satisfied — `panschema release --level patch --git --push`
+will work end-to-end against scimantic-schema's `v0.1.0` baseline
+without hitting any of the surfaced bugs.
+
+**Next:** Resume Phase B (t2t consumer-side dogfood) using the
+fixed binary.
