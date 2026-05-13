@@ -237,18 +237,31 @@ panschema release --level patch --dry-run        # show plan, do nothing
 - Commit message + tag format hardcoded for v0.3 (`release: v<ver>` and `v<ver>` respectively). Configurable later if a real need emerges.
 - Pre-release suffixes (`--level rc`/`alpha`/`beta`) are out of scope; use `--version` for arbitrary versions including pre-releases.
 
-### Slice 5: Documentation, polish, ship v0.3.0
+### Slice 5: Documentation, dogfood, ship v0.3.0
 
 **Status:** Not Started
 
-**User Value:** The workflow is documented and reachable. README + dedicated guide cover authoring `panschema-publish.toml`, declaring `panschema.toml`, and running the four commands.
+**User Value:** The workflow is documented and battle-tested before users see it. Producer + consumer guides ship to `main`; a dogfood pass through two real downstream repos surfaces friction before tagging.
 
-**Acceptance Criteria:**
+This slice deliberately splits into three phases following the project's release convention: README reflects the latest *released* version on crates.io; CHANGELOG documents the delta between `main` and the released README; tag-time rolls the delta in.
 
-- [ ] README updated with the manager workflow as the recommended path; `--input <file>` documented as a shorthand
-- [ ] New section/guide in panschema's docs explaining the `panschema-publish.toml` standard so schema authors can publish their schemas
-- [ ] CHANGELOG entries for each slice rolled up under `[0.3.0]`
-- [ ] Release tag `v0.3.0` cuts after CI green
+**Phase A — Pre-tag docs (lands on `main`, no README touch):**
+
+- [ ] `docs/guide-producer.md` — schema-author workflow: authoring `panschema-publish.toml`, using `panschema init`, cutting releases with `panschema release`.
+- [ ] `docs/guide-consumer.md` — consumer workflow: writing `panschema.toml`, `panschema add`, `panschema fetch`/`verify`/`generate`, lockfile semantics.
+- [ ] CHANGELOG keeps accumulating under `[Unreleased]` (no rollup yet).
+
+**Phase B — Dogfood (cross-repo, blocking on Phase A):**
+
+- [ ] **scimantic-schema** adopts `panschema-publish.toml` (via `panschema init --from`) and cuts a tagged release using `panschema release --level patch --git --push`.
+- [ ] **t2t** declares a `panschema.toml` with `source = "github:padamson/scimantic-schema"` + the tagged version. Runs `fetch`/`verify`/`generate` end-to-end against the real github source.
+- [ ] Any friction (error messages, performance, ergonomic surprises, missing safety checks) flows back to panschema as cross-repo notes or fixes on `main`. Loop until both downstreams are happy.
+
+**Phase C — Tag v0.3.0 (after Phase B clears):**
+
+- [ ] README rewritten to lead with the manager workflow as the recommended path; `--input <file>` documented as a shorthand.
+- [ ] CHANGELOG `[Unreleased]` → `[0.3.0] - <date>` heading change; existing entries roll in unchanged.
+- [ ] Release tag `v0.3.0` cuts after CI green.
 
 ---
 
