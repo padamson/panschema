@@ -93,6 +93,19 @@ pub fn extract_tarball<R: Read>(reader: R, target_dir: &Path) -> Result<String, 
         .map_err(|e| CacheError::Extract(e.to_string()))?
     {
         let mut entry = entry.map_err(|e| CacheError::Extract(e.to_string()))?;
+
+        // Skip pax extended-header pseudo-entries (`pax_global_header`,
+        // per-file `XHeader`). They carry metadata (extended attributes,
+        // long names, etc.) for the following real entries, not payload.
+        // GitHub's codeload tarballs include a `pax_global_header` at the
+        // start; the standard `tar -x` skips it, and so must we — otherwise
+        // it gets counted as a stray top-level entry and trips the
+        // "multiple top-level entries" guard.
+        match entry.header().entry_type() {
+            tar::EntryType::XGlobalHeader | tar::EntryType::XHeader => continue,
+            _ => {}
+        }
+
         let path = entry
             .path()
             .map_err(|e| CacheError::Extract(e.to_string()))?
@@ -355,6 +368,110 @@ mod tests {
 
         let err = validate_within(&base, &link).unwrap_err();
         assert!(matches!(err, CacheError::PathEscape(_)));
+    }
+
+    /// Build a tarball with a leading `pax_global_header` pseudo-entry
+    /// followed by a normal codeload-shaped payload. Mirrors what GitHub's
+    /// `codeload.github.com` actually serves.
+    fn write_tarball_with_pax_global_header(dest: &Path, top_dir: &str, files: &[(&str, &[u8])]) {
+        let file = File::create(dest).unwrap();
+        let gz = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        let mut builder = tar::Builder::new(gz);
+
+        // Pax global header: contains extended attributes that apply to
+        // all following entries. Real GitHub tarballs put one of these at
+        // the top with the commit SHA in the `comment` field. The
+        // *content* doesn't matter for our regression test — we just need
+        // an entry whose header type is `XGlobalHeader`.
+        let mut pax = tar::Header::new_ustar();
+        pax.set_size(0);
+        pax.set_entry_type(tar::EntryType::XGlobalHeader);
+        pax.set_path("pax_global_header").unwrap();
+        pax.set_cksum();
+        builder.append(&pax, &[][..]).unwrap();
+
+        for (rel, content) in files {
+            let mut header = tar::Header::new_gnu();
+            header.set_path(format!("{top_dir}/{rel}")).unwrap();
+            header.set_size(content.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append(&header, std::io::Cursor::new(content))
+                .unwrap();
+        }
+        builder.finish().unwrap();
+    }
+
+    /// Regression: GitHub's codeload tarballs begin with a
+    /// `pax_global_header` pseudo-entry. Before this fix, extraction
+    /// counted it as a top-level entry and tripped the "multiple
+    /// top-level entries" guard, blocking every `github:` source.
+    #[test]
+    fn extract_tarball_skips_pax_global_header() {
+        let tmp = TempDir::new().unwrap();
+        let tarball_path = tmp.path().join("github-style.tar.gz");
+        write_tarball_with_pax_global_header(
+            &tarball_path,
+            "fix-owner-fix-repo-abc123",
+            &[
+                ("panschema-publish.toml", b"# fixture"),
+                ("schema/example.yaml", b"name: example\n"),
+            ],
+        );
+
+        let target = tmp.path().join("extracted");
+        let reader = File::open(&tarball_path).unwrap();
+        let top = extract_tarball(reader, &target).unwrap();
+        assert_eq!(
+            top, "fix-owner-fix-repo-abc123",
+            "the pax_global_header pseudo-entry must NOT be counted as the top-level dir"
+        );
+        assert!(target.join(&top).join("panschema-publish.toml").exists());
+        assert!(target.join(&top).join("schema/example.yaml").exists());
+    }
+
+    /// The "multiple top-level entries" guard still fires for tarballs
+    /// with two *real* top-level directories (i.e. the guard works on
+    /// payload entries, not metadata pseudo-entries). Built using the
+    /// same `set_path/set_size/set_mode/set_cksum/append` pattern as
+    /// the working `write_fixture_tarball` helper.
+    #[test]
+    fn extract_tarball_still_rejects_two_real_top_level_dirs() {
+        let tmp = TempDir::new().unwrap();
+        let tarball_path = tmp.path().join("two-tops.tar.gz");
+        {
+            let file = File::create(&tarball_path).unwrap();
+            let gz = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+            let mut builder = tar::Builder::new(gz);
+            for path in ["dir-a/file.txt", "dir-b/file.txt"] {
+                let content: &[u8] = b"x";
+                let mut header = tar::Header::new_gnu();
+                header.set_path(path).unwrap();
+                header.set_size(content.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                builder
+                    .append(&header, std::io::Cursor::new(content))
+                    .unwrap();
+            }
+            builder.finish().unwrap();
+            // Builder is dropped here, which drops GzEncoder, which writes
+            // its trailing block.
+        }
+
+        let target = tmp.path().join("extracted");
+        let reader = File::open(&tarball_path).unwrap();
+        let err = extract_tarball(reader, &target).unwrap_err();
+        match err {
+            CacheError::Extract(msg) => {
+                assert!(
+                    msg.contains("multiple top-level"),
+                    "unexpected error message: {msg}"
+                );
+            }
+            other => panic!("expected Extract error, got {other:?}"),
+        }
     }
 
     #[test]
