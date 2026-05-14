@@ -15,7 +15,7 @@ panschema's consumer-side workflow uses three files:
 | File | What it does | You write it? |
 |---|---|---|
 | `panschema.toml` | Declares schema dependencies + per-schema codegen config | Yes (or via `panschema add`) |
-| `panschema.lock` | Records resolved versions + commit SHAs + content checksums | Written by `panschema fetch`, committed to git |
+| `panschema.lock` | Records resolved versions + content checksums | Written by `panschema fetch`, committed to git |
 | `panschema-publish.toml` | Lives in each *schema's* repo; declares its name/version/main file | Authored by the schema author, not you |
 
 Both `panschema.toml` and `panschema.lock` live at your project root
@@ -118,8 +118,9 @@ Resolves every entry under `[schemas]`:
 - `path:` sources: re-reads from disk.
 
 Then writes (or updates) `panschema.lock` with one entry per
-schema: name, version, source spec, commit SHA (for `github:`),
-SHA-256 checksum of the main file.
+schema: name, version, source spec, and a SHA-256 checksum of the
+main file. (A `revision` field is reserved for future
+commit-identifier provenance; currently always `None`.)
 
 Cache lives at `~/.cache/panschema/github/<owner>/<repo>/<version>/`
 on Linux (XDG cache dir), `~/Library/Caches/...` on macOS,

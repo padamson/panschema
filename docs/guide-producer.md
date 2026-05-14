@@ -164,11 +164,13 @@ repo, but only `panschema-publish.toml` and the file at
 the whole tarball, so symlinks etc. need to stay inside the
 package; panschema enforces this on the consumer side.
 
-The lockfile on the consumer records the commit SHA of the tag —
-which is recovered from the tarball's top-level directory name
-`<owner>-<repo>-<sha>`. No GitHub API call is made, so your
-schema's `fetch` doesn't count against the anonymous 60/hr rate
-limit.
+The lockfile on the consumer records the schema's `version` plus a
+SHA-256 content checksum of the main file. A `revision` (commit
+SHA) field exists but is left `None` for github sources — the
+`refs/tags/<tag>` codeload URL doesn't expose a commit SHA, and
+the content checksum already catches "the tag was moved" drift.
+No GitHub API call is made, so your schema's `fetch` doesn't
+count against the anonymous 60/hr rate limit.
 
 ## Recommended repo layout
 

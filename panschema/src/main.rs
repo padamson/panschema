@@ -738,8 +738,11 @@ fn add_schema(
     let cwd = std::env::current_dir()?;
     let manifest_path = discover_manifest(&cwd).ok_or_else(|| {
         anyhow::anyhow!(
-            "no `{MANIFEST_FILENAME}` found in `{}` or any ancestor. \
-             Create one (a minimal `[schemas]` table is enough) and re-run.",
+            "no `{MANIFEST_FILENAME}` found in `{}` or any ancestor.\n\
+             \n\
+             Run this to create one, then re-run `panschema add`:\n\
+             \n    \
+             echo '[schemas]' > {MANIFEST_FILENAME}",
             cwd.display()
         )
     })?;
