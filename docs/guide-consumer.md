@@ -40,10 +40,14 @@ This:
    reads the directory for `path:` sources).
 2. Reads `panschema-publish.toml` to learn the schema's name.
 3. Inserts a `[schemas.<name>]` entry into your `panschema.toml`.
-4. Adds a starter `[generate.<name>]` block (suppress with
-   `--no-generate-config`).
-5. Runs `panschema fetch` to populate the cache + update the
+4. Runs `panschema fetch` to populate the cache + update the
    lockfile.
+
+`add` does *not* write a `[generate.<name>]` block. If you want
+codegen output, add the writer keys yourself — see the
+`[generate.<name>]` section below. `panschema generate` prints a
+clear hint for any schema that has a `[schemas]` entry but no
+matching `[generate]` block.
 
 If you want to install the schema under a different local key:
 

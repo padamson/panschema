@@ -144,12 +144,6 @@ enum Commands {
         /// otherwise collide on name.
         #[arg(long)]
         name: Option<String>,
-
-        /// Skip writing a starter `[generate.<name>]` block. By default,
-        /// an empty block is added so you can fill in writers (e.g.
-        /// `html = "docs/"`).
-        #[arg(long = "no-generate-config")]
-        no_generate_config: bool,
     },
     /// Cut a new release of the schema package in CWD.
     ///
@@ -727,7 +721,6 @@ fn run_git(cwd: &Path, args: &[&str]) -> anyhow::Result<()> {
 fn add_schema(
     spec: panschema::manifest::SchemaSpec,
     name_override: Option<&str>,
-    with_generate_block: bool,
 ) -> anyhow::Result<()> {
     use panschema::manifest::{
         AddOutcome, AddRequest, MANIFEST_FILENAME, SchemaSpec, discover_manifest, insert_schema,
@@ -816,7 +809,7 @@ fn add_schema(
         }
     };
 
-    let outcome = insert_schema(&manifest_path, &request, with_generate_block)?;
+    let outcome = insert_schema(&manifest_path, &request)?;
     match outcome {
         AddOutcome::Inserted => {
             println!("Added `{}` to {}", request.name(), manifest_path.display());
@@ -1050,11 +1043,7 @@ async fn main() -> anyhow::Result<()> {
             from.as_deref(),
             force,
         )?,
-        Some(Commands::Add {
-            spec,
-            name,
-            no_generate_config,
-        }) => add_schema(spec, name.as_deref(), !no_generate_config)?,
+        Some(Commands::Add { spec, name }) => add_schema(spec, name.as_deref())?,
         Some(Commands::Release {
             level,
             version,

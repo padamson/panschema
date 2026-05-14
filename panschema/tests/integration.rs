@@ -1032,9 +1032,13 @@ fn add_path_source_updates_manifest_and_lockfile() {
         manifest.contains("sample_schema"),
         "manifest should contain the publish.toml-declared name: {manifest}"
     );
+    // `add` is "declare a dependency" only — `[generate.<name>]` is the
+    // user's to write when they want codegen. `generate` itself prints
+    // a helpful "no [generate.<name>] block; skipping" message for any
+    // schema without one.
     assert!(
-        manifest.contains("[generate.sample_schema]"),
-        "manifest should have a starter `[generate.sample_schema]` block: {manifest}"
+        !manifest.contains("[generate.sample_schema]"),
+        "add must not auto-write a starter `[generate.<name>]` block: {manifest}"
     );
     assert!(
         consumer.join("panschema.lock").exists(),
@@ -1141,34 +1145,6 @@ fn add_errors_on_unknown_source_protocol() {
     assert!(
         stderr.contains("protocol") || stderr.contains("gitlab"),
         "stderr should call out the unknown protocol: {stderr}"
-    );
-}
-
-/// `panschema add --no-generate-config` skips the starter `[generate.<name>]` block.
-#[test]
-fn add_no_generate_config_skips_generate_block() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let consumer = tmp.path();
-    write_sample_pkg(consumer, "sample-pkg");
-    fs::write(consumer.join("panschema.toml"), "[schemas]\n").expect("write manifest");
-
-    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .arg("add")
-        .arg("./sample-pkg")
-        .arg("--no-generate-config")
-        .current_dir(consumer)
-        .status()
-        .expect("Failed to execute panschema");
-    assert!(status.success());
-
-    let manifest = fs::read_to_string(consumer.join("panschema.toml")).expect("read manifest");
-    assert!(
-        manifest.contains("sample_schema"),
-        "manifest should contain `sample_schema`"
-    );
-    assert!(
-        !manifest.contains("[generate.sample_schema]"),
-        "no-generate-config should suppress the starter block"
     );
 }
 

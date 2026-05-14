@@ -236,14 +236,12 @@ pub enum AddError {
 /// touching the file. Conflicting version or source raises a structured
 /// error rather than silently overwriting.
 ///
-/// When `with_generate_block` is true, a sibling `[generate.<name>]`
-/// section is appended with no writer entries — the user fills in
-/// (e.g.) `html = "docs/"` afterwards.
-pub fn insert_schema(
-    manifest_path: &Path,
-    request: &AddRequest,
-    with_generate_block: bool,
-) -> Result<AddOutcome, AddError> {
+/// Only `[schemas]` is touched. `[generate.<name>]` is owned by the
+/// `generate` command — consumers opt in by writing their own writer
+/// keys (e.g. `html = "docs/"`) when they want codegen. `generate`
+/// itself prints a clear "no [generate.<name>] block; skipping" hint
+/// for any schema without one.
+pub fn insert_schema(manifest_path: &Path, request: &AddRequest) -> Result<AddOutcome, AddError> {
     use toml_edit::{DocumentMut, InlineTable, Item, Table, value};
 
     let name = request.name();
@@ -335,17 +333,6 @@ pub fn insert_schema(
         }
     }
     schemas.insert(name, value(entry));
-
-    // Optionally add a sibling `[generate.<name>]` block.
-    if with_generate_block {
-        if doc.get("generate").is_none() {
-            doc["generate"] = Item::Table(Table::new());
-            doc["generate"].as_table_mut().unwrap().set_implicit(true);
-        }
-        if doc["generate"].get(name).is_none() {
-            doc["generate"][name] = Item::Table(Table::new());
-        }
-    }
 
     std::fs::write(manifest_path, doc.to_string())?;
     Ok(AddOutcome::Inserted)
@@ -614,7 +601,7 @@ x = {}
     }
 
     #[test]
-    fn insert_schema_adds_github_entry_and_generate_block() {
+    fn insert_schema_adds_github_entry_without_generate_block() {
         let tmp = tempfile::tempdir().unwrap();
         let m = write_manifest(tmp.path(), "[schemas]\n");
         let outcome = insert_schema(
@@ -624,7 +611,6 @@ x = {}
                 "github:padamson/scimantic-schema",
                 "0.1.3",
             ),
-            true,
         )
         .unwrap();
         assert_eq!(outcome, AddOutcome::Inserted);
@@ -632,14 +618,18 @@ x = {}
         assert!(after.contains("scimantic-schema"));
         assert!(after.contains(r#"source = "github:padamson/scimantic-schema""#));
         assert!(after.contains(r#"version = "0.1.3""#));
-        assert!(after.contains("[generate.scimantic-schema]"));
+        // `[generate.<name>]` is owned by the user, not auto-written by add.
+        assert!(
+            !after.contains("[generate.scimantic-schema]"),
+            "add must not write a starter [generate.<name>] block: {after}"
+        );
     }
 
     #[test]
     fn insert_schema_adds_path_entry() {
         let tmp = tempfile::tempdir().unwrap();
         let m = write_manifest(tmp.path(), "[schemas]\n");
-        let outcome = insert_schema(&m, &path_req("local", "./schema/local"), false).unwrap();
+        let outcome = insert_schema(&m, &path_req("local", "./schema/local")).unwrap();
         assert_eq!(outcome, AddOutcome::Inserted);
         let after = std::fs::read_to_string(&m).unwrap();
         assert!(after.contains(r#"path = "./schema/local""#));
@@ -650,9 +640,9 @@ x = {}
     fn insert_schema_is_idempotent_for_same_shape() {
         let tmp = tempfile::tempdir().unwrap();
         let m = write_manifest(tmp.path(), "[schemas]\n");
-        insert_schema(&m, &remote_req("x", "github:a/b", "0.1.0"), false).unwrap();
+        insert_schema(&m, &remote_req("x", "github:a/b", "0.1.0")).unwrap();
         let before = std::fs::read_to_string(&m).unwrap();
-        let outcome = insert_schema(&m, &remote_req("x", "github:a/b", "0.1.0"), false).unwrap();
+        let outcome = insert_schema(&m, &remote_req("x", "github:a/b", "0.1.0")).unwrap();
         assert_eq!(outcome, AddOutcome::AlreadyPresent);
         let after = std::fs::read_to_string(&m).unwrap();
         assert_eq!(before, after, "idempotent call must not rewrite the file");
@@ -662,8 +652,8 @@ x = {}
     fn insert_schema_rejects_version_mismatch() {
         let tmp = tempfile::tempdir().unwrap();
         let m = write_manifest(tmp.path(), "[schemas]\n");
-        insert_schema(&m, &remote_req("x", "github:a/b", "0.1.0"), false).unwrap();
-        let err = insert_schema(&m, &remote_req("x", "github:a/b", "0.2.0"), false).unwrap_err();
+        insert_schema(&m, &remote_req("x", "github:a/b", "0.1.0")).unwrap();
+        let err = insert_schema(&m, &remote_req("x", "github:a/b", "0.2.0")).unwrap_err();
         assert!(matches!(err, AddError::VersionMismatch { .. }));
     }
 
@@ -671,8 +661,8 @@ x = {}
     fn insert_schema_rejects_source_mismatch() {
         let tmp = tempfile::tempdir().unwrap();
         let m = write_manifest(tmp.path(), "[schemas]\n");
-        insert_schema(&m, &remote_req("x", "github:a/b", "0.1.0"), false).unwrap();
-        let err = insert_schema(&m, &remote_req("x", "github:c/d", "0.1.0"), false).unwrap_err();
+        insert_schema(&m, &remote_req("x", "github:a/b", "0.1.0")).unwrap();
+        let err = insert_schema(&m, &remote_req("x", "github:c/d", "0.1.0")).unwrap_err();
         assert!(matches!(err, AddError::SourceMismatch { .. }));
     }
 
@@ -685,7 +675,7 @@ x = {}
 existing = { path = "./e" }
 "#;
         let m = write_manifest(tmp.path(), body);
-        insert_schema(&m, &path_req("newone", "./n"), false).unwrap();
+        insert_schema(&m, &path_req("newone", "./n")).unwrap();
         let after = std::fs::read_to_string(&m).unwrap();
         assert!(after.contains("# top-level comment"));
         assert!(after.contains("# already-there"));

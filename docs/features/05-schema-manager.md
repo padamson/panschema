@@ -170,10 +170,10 @@ The schema name is read from `panschema-publish.toml` at the resolved location �
 - [x] Schema name inferred from `panschema-publish.toml`; `--name <alias>` overrides for local renaming.
 - [x] Path-source `path` field stored as a directory, canonicalized then re-relativized to the manifest's location.
 - [x] Fetches the new schema and updates the lockfile (delegates to slice 2's `fetch`).
-- [x] Writes a starter `[generate.<name>]` block by default (suppressed with `--no-generate-config`).
+- [x] Does **not** write a `[generate.<name>]` block. `add` is "declare a dependency" only; `[generate.<name>]` is owned by the user. `panschema generate` prints a clear "no `[generate.<name>]` block; skipping" hint for any schema without one, so the absence is self-discoverable. (Earlier behavior auto-wrote an empty block via a `--no-generate-config` opt-out flag; that flag is gone — dogfood feedback from t2t flagged the empty block as dead weight for verify-only consumers.)
 - [x] Idempotent: same shape is a no-op; different version → `AddError::VersionMismatch`; different source → `AddError::SourceMismatch`. A separate `update` command (out of scope for v0.3) handles the version-bump case.
 - [x] Errors fast on invalid spec (missing version for remote, unknown protocol, missing manifest, missing `panschema-publish.toml` at the target).
-- [x] CLI integration tests for happy path (path), `--name` alias, idempotency, missing-version error, unknown-protocol error, `--no-generate-config`.
+- [x] CLI integration tests for happy path (path + github, including subdirectory `[files].main` layout), `--name` alias, idempotency, missing-version error, unknown-protocol error, missing-manifest error.
 - [x] Manifest edits via `toml_edit` so comments and whitespace survive.
 
 **Notes:**
@@ -429,9 +429,14 @@ it lives.
   - `Resolved.version` is always populated from publish.toml; both
     source types now write it into `LockEntry.version`.
 - **CLI:**
-  - `panschema add <spec> [--name <alias>] [--no-generate-config]`
-    — positional spec, optional name override, optional
-    suppression of the starter `[generate.<name>]` block.
+  - `panschema add <spec> [--name <alias>]` — positional spec
+    plus an optional name override. `add` writes only the
+    `[schemas.<name>]` entry; `[generate.<name>]` is the user's
+    to add when they want codegen output. (Earlier shape included
+    a `--no-generate-config` flag that suppressed an auto-written
+    starter block; the auto-write itself was removed after
+    dogfood feedback flagged the empty block as dead weight for
+    verify-only consumers.)
   - Path-source input is canonicalized then re-relativized to the
     manifest's directory before storing — robust against the user
     typing the path from a different CWD than the manifest.
