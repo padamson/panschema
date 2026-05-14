@@ -164,17 +164,27 @@ pub enum TarballFetchError {
 /// anonymous limit and works for any public repo.
 pub struct CodeloadGithubSource;
 
-/// Resolved schema dependency: the on-disk path to the schema's main
-/// file plus the version declared in `panschema-publish.toml` and (for
-/// remote sources) the commit SHA to record in the lockfile.
+/// Resolved schema dependency: the canonical package directory, the
+/// on-disk path to the schema's main file, the version declared in
+/// `panschema-publish.toml`, and (for remote sources) a revision to
+/// record in the lockfile.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Resolved {
+    /// Canonical absolute path to the package directory (the directory
+    /// containing `panschema-publish.toml`). Callers that need to read
+    /// other files from the package — like `panschema-publish.toml`
+    /// itself — must use this rather than `schema_path.parent()`, which
+    /// is only the package root when `[files].main` lives at the root.
+    pub pkg_dir: PathBuf,
     /// Absolute path to the main schema file.
     pub schema_path: PathBuf,
     /// Version declared in `panschema-publish.toml`. Always populated —
     /// both source types are now "packages" with a publish file.
     pub version: String,
-    /// Commit SHA for `github:` sources. `None` for `path:` sources.
+    /// Reserved for future commit-identifier provenance. Currently
+    /// always `None`: `path:` sources have no commit; `github:` sources
+    /// use a tag URL that doesn't expose a commit SHA without an extra
+    /// API call we don't make.
     pub revision: Option<String>,
 }
 
@@ -307,6 +317,7 @@ pub fn resolve_github(
     let main_path = resolve_main_in_package(&canon_pkg, &publish)?;
 
     Ok(Resolved {
+        pkg_dir: canon_pkg,
         schema_path: main_path,
         version: publish.schema.version,
         revision: None,
@@ -328,6 +339,7 @@ pub fn resolve_path(
     let (canon_pkg, publish) = open_package(name, &resolved)?;
     let main_path = resolve_main_in_package(&canon_pkg, &publish)?;
     Ok(Resolved {
+        pkg_dir: canon_pkg,
         schema_path: main_path,
         version: publish.schema.version,
         revision: None,
@@ -548,6 +560,19 @@ main = "schema/example.yaml"
         assert!(resolved.revision.is_none());
         assert!(resolved.schema_path.ends_with("schema/example.yaml"));
         assert!(resolved.schema_path.exists());
+
+        // Regression: `pkg_dir` must point at the package *root*, not
+        // at the parent of the schema file. For a publish file with
+        // `main = "schema/example.yaml"`, `schema_path.parent()` would
+        // land inside `schema/`, and reading `panschema-publish.toml`
+        // from that wrong directory would fail with ENOENT — which is
+        // exactly what `panschema add` did before this field existed.
+        assert!(resolved.pkg_dir.ends_with("myrepo-0.1.0"));
+        assert_ne!(
+            resolved.pkg_dir.as_path(),
+            resolved.schema_path.parent().unwrap()
+        );
+        assert!(resolved.pkg_dir.join("panschema-publish.toml").exists());
     }
 
     #[test]

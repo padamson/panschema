@@ -797,12 +797,13 @@ fn add_schema(
             .map_err(|e| anyhow::anyhow!("{e}"))?;
             // Reach into the cached publish file to grab the canonical name.
             // resolve_github already validated version + symlink hygiene.
-            let pkg_dir = resolved
-                .schema_path
-                .parent()
-                .expect("schema path has a parent (the package dir)");
+            // Use `pkg_dir` (the package root) rather than
+            // `schema_path.parent()`, which only points at the package root
+            // for flat layouts (`[files].main = "schema.yaml"`) and lands
+            // inside a subdirectory for the recommended nested layout
+            // (`[files].main = "schema/<name>.yaml"`).
             let publish = panschema::publish::PublishConfig::from_path(
-                &pkg_dir.join("panschema-publish.toml"),
+                &resolved.pkg_dir.join("panschema-publish.toml"),
             )?;
             let name = name_override
                 .map(str::to_string)
@@ -912,6 +913,7 @@ fn fetch_from_manifest() -> anyhow::Result<()> {
             schema_path,
             version,
             revision,
+            ..
         } = resolve_source(name, dep, &manifest_dir)?;
         let source = SchemaSource::from_dep(name, dep)?;
         entries.push(LockEntry {

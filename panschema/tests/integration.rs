@@ -1172,6 +1172,107 @@ fn add_no_generate_config_skips_generate_block() {
     );
 }
 
+/// `panschema add` against a missing manifest must produce an error
+/// message that includes a literal copy-paste shell command to create
+/// the manifest. The exact wording matters: dogfooding feedback
+/// (`panschema--consumer-init-ux.md`) flagged the previous "Create one"
+/// hint as too vague for first-time consumers.
+#[test]
+fn add_missing_manifest_error_includes_literal_init_command() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    // Deliberately *no* panschema.toml here.
+
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("add")
+        .arg("github:foo/bar@1.0.0")
+        .current_dir(consumer)
+        .output()
+        .expect("panschema run");
+    assert!(
+        !output.status.success(),
+        "add should fail without a manifest"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("echo '[schemas]' > panschema.toml"),
+        "stderr should include the copy-paste init command; got: {stderr}"
+    );
+}
+
+/// `panschema add github:...` against a publish file whose
+/// `[files].main` lives in a subdirectory (`schema/<name>.yaml` — the
+/// layout `panschema init --from` produces and the producer guide
+/// recommends) must succeed.
+///
+/// Pre-populates the panschema cache with an already-extracted package
+/// and points the CLI at it via `PANSCHEMA_CACHE_ROOT`, so the test
+/// exercises the post-fetch read-publish-spec path without any network
+/// traffic. The regression: `add_schema` previously reached for the
+/// publish file via `schema_path.parent()`, which for a subdirectory
+/// `main` landed in `schema/` and produced ENOENT on read.
+#[test]
+fn add_github_source_succeeds_with_subdirectory_main_layout() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path().join("consumer");
+    fs::create_dir_all(&consumer).expect("mkdir consumer");
+    fs::write(consumer.join("panschema.toml"), "[schemas]\n").expect("write manifest");
+
+    // Pre-populate the cache so the github source short-circuits
+    // (no network fetch). Cache layout matches
+    // `~/.cache/panschema/github/<owner>/<repo>/<version>/<repo>-<version>/`.
+    let cache_root = tmp.path().join("cache");
+    let pkg_dir = cache_root
+        .join("github")
+        .join("test-owner")
+        .join("scimantic")
+        .join("0.1.0")
+        .join("scimantic-0.1.0");
+    fs::create_dir_all(pkg_dir.join("schema")).expect("mkdir cached schema/");
+    fs::write(
+        pkg_dir.join("panschema-publish.toml"),
+        r#"[schema]
+name = "scimantic"
+version = "0.1.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema/scimantic.yaml"
+"#,
+    )
+    .expect("write cached publish.toml");
+    fs::write(
+        pkg_dir.join("schema").join("scimantic.yaml"),
+        "id: https://example.org/scimantic\nname: scimantic\n",
+    )
+    .expect("write cached schema");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("add")
+        .arg("github:test-owner/scimantic@0.1.0")
+        .current_dir(&consumer)
+        .env("PANSCHEMA_CACHE_ROOT", &cache_root)
+        .output()
+        .expect("panschema run");
+    assert!(
+        output.status.success(),
+        "add should succeed for subdirectory-main layout; \
+         stdout: {} \nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let manifest = fs::read_to_string(consumer.join("panschema.toml")).expect("read manifest");
+    assert!(
+        manifest.contains("scimantic"),
+        "manifest should record the schema name from publish.toml: {manifest}"
+    );
+    assert!(
+        manifest.contains("github:test-owner/scimantic"),
+        "manifest should record the github source: {manifest}"
+    );
+}
+
 // ---------------------------------------------------------------------
 // Slice 4.5: `panschema init` CLI tests (producer-side scaffolding).
 // ---------------------------------------------------------------------
