@@ -74,8 +74,11 @@ pub fn validate_within(base: &Path, target: &Path) -> Result<(), CacheError> {
 }
 
 /// Extract a gzipped-tar reader into `target_dir` and return the top-level
-/// directory name (which is `<owner>-<repo>-<commit-sha>` for codeload.github.com
-/// tarballs).
+/// directory name. For `codeload.github.com/<owner>/<repo>/tar.gz/refs/tags/<tag>`
+/// URLs this is `<repo>-<tag-without-leading-v>`, e.g. `scimantic-schema-0.1.0`.
+/// For sha-based codeload URLs it's `<repo>-<full-sha>`. The legacy
+/// `legacy.tar.gz/<sha>` URL (deprecated) returns `<owner>-<repo>-<short-sha>`;
+/// we don't use that endpoint.
 ///
 /// Rejects entries with absolute paths or `..` components (the `tar` crate
 /// does this by default via `Archive::unpack`, but we double-check by
@@ -155,8 +158,14 @@ pub fn extract_tarball<R: Read>(reader: R, target_dir: &Path) -> Result<String, 
 
 /// Fetch and cache a `github:` source if not already present.
 ///
-/// Returns the commit SHA portion of the extracted top-level dir name,
-/// e.g. `"abc123def..."` from `<owner>-<repo>-abc123def...`.
+/// Returns the *full* top-level directory name (relative to `version_dir`),
+/// e.g. `"scimantic-schema-0.1.0"`. The caller can `version_dir.join(returned)`
+/// to get the absolute path; no manual reconstruction needed.
+///
+/// Validates that the top-level starts with `<repo>-`. The suffix after the
+/// hyphen is the version identifier — for `refs/tags/v<X>` URLs it's `<X>`,
+/// for `refs/heads/<branch>` it's the branch name, for sha-based URLs it's
+/// the full SHA. We don't need to interpret it; we just need it to exist.
 ///
 /// Takes an exclusive `fs2` lock on `<version_dir>/.lock` for the duration
 /// of the fetch+extract, so concurrent fetches of the same version block.
@@ -180,9 +189,9 @@ pub fn populate_cache(
     })?;
 
     // If a sibling top-level dir already exists (from a previous successful
-    // fetch), reuse it — extract the SHA from its name and we're done.
-    if let Some(existing_sha) = find_existing_extraction(version_dir, owner, repo)? {
-        return Ok(existing_sha);
+    // fetch), reuse it.
+    if let Some(existing_top_level) = find_existing_extraction(version_dir, repo)? {
+        return Ok(existing_top_level);
     }
 
     // Fetch tarball bytes via the source trait into an in-memory buffer.
@@ -202,37 +211,32 @@ pub fn populate_cache(
     fs::rename(&extracted, &final_dir)?;
     let _ = fs::remove_dir_all(&temp_dir);
 
-    // Validate prefix and extract SHA.
-    let expected_prefix = format!("{owner}-{repo}-");
-    let sha = top_level
-        .strip_prefix(&expected_prefix)
-        .ok_or_else(|| {
-            CacheError::Extract(format!(
-                "tarball top-level `{top_level}` doesn't start with `{expected_prefix}`"
-            ))
-        })?
-        .to_string();
-    if sha.is_empty() {
+    // Validate the top-level matches `<repo>-<id>`. The `<id>` part is the
+    // version-or-sha — we don't interpret it, just require it's non-empty.
+    let expected_prefix = format!("{repo}-");
+    let id = top_level.strip_prefix(&expected_prefix).ok_or_else(|| {
+        CacheError::Extract(format!(
+            "tarball top-level `{top_level}` doesn't start with `{expected_prefix}`"
+        ))
+    })?;
+    if id.is_empty() {
         return Err(CacheError::Extract(format!(
-            "tarball top-level `{top_level}` has no SHA suffix"
+            "tarball top-level `{top_level}` has no version/sha suffix after `{expected_prefix}`"
         )));
     }
 
-    Ok(sha)
+    Ok(top_level)
 }
 
-/// Look for a previously-extracted directory matching `<owner>-<repo>-<sha>`
-/// in `version_dir`. Returns the SHA if exactly one is found, `None` otherwise.
-fn find_existing_extraction(
-    version_dir: &Path,
-    owner: &str,
-    repo: &str,
-) -> Result<Option<String>, CacheError> {
+/// Look for a previously-extracted directory matching `<repo>-*` in
+/// `version_dir`. Returns the full directory name if exactly one is found,
+/// `None` otherwise.
+fn find_existing_extraction(version_dir: &Path, repo: &str) -> Result<Option<String>, CacheError> {
     if !version_dir.exists() {
         return Ok(None);
     }
-    let prefix = format!("{owner}-{repo}-");
-    let mut matches = Vec::new();
+    let prefix = format!("{repo}-");
+    let mut matches: Vec<String> = Vec::new();
     for entry in fs::read_dir(version_dir)? {
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
@@ -240,10 +244,10 @@ fn find_existing_extraction(
         }
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if let Some(sha) = name.strip_prefix(&prefix)
-            && !sha.is_empty()
+        if let Some(id_part) = name.strip_prefix(&prefix)
+            && !id_part.is_empty()
         {
-            matches.push(sha.to_string());
+            matches.push(name.into_owned());
         }
     }
     match matches.len() {
@@ -261,19 +265,19 @@ fn find_existing_extraction(
 ///
 /// `entries` is a slice of `(relative_path_within_archive, contents)` pairs.
 /// All entries are placed under a single top-level dir named
-/// `<owner>-<repo>-<sha>`.
+/// `<repo>-<version>`, matching what real codeload tarballs from
+/// `refs/tags/<tag>` and sha-based URLs produce.
 #[cfg(any(test, feature = "test-fixtures"))]
 pub fn write_fixture_tarball(
     dest: &Path,
-    owner: &str,
     repo: &str,
-    sha: &str,
+    version_id: &str,
     entries: &[(&str, &[u8])],
 ) -> Result<(), CacheError> {
     let file = File::create(dest)?;
     let gz = flate2::write::GzEncoder::new(file, flate2::Compression::default());
     let mut builder = tar::Builder::new(gz);
-    let top = format!("{owner}-{repo}-{sha}");
+    let top = format!("{repo}-{version_id}");
 
     for (rel, content) in entries {
         let path = format!("{top}/{rel}");
@@ -413,7 +417,7 @@ mod tests {
         let tarball_path = tmp.path().join("github-style.tar.gz");
         write_tarball_with_pax_global_header(
             &tarball_path,
-            "fix-owner-fix-repo-abc123",
+            "fix-repo-abc123",
             &[
                 ("panschema-publish.toml", b"# fixture"),
                 ("schema/example.yaml", b"name: example\n"),
@@ -424,7 +428,7 @@ mod tests {
         let reader = File::open(&tarball_path).unwrap();
         let top = extract_tarball(reader, &target).unwrap();
         assert_eq!(
-            top, "fix-owner-fix-repo-abc123",
+            top, "fix-repo-abc123",
             "the pax_global_header pseudo-entry must NOT be counted as the top-level dir"
         );
         assert!(target.join(&top).join("panschema-publish.toml").exists());
@@ -480,7 +484,6 @@ mod tests {
         let tarball_path = tmp.path().join("fixture.tar.gz");
         write_fixture_tarball(
             &tarball_path,
-            "fix-owner",
             "fix-repo",
             "abc123",
             &[
@@ -493,7 +496,7 @@ mod tests {
         let target = tmp.path().join("extracted");
         let reader = File::open(&tarball_path).unwrap();
         let top = extract_tarball(reader, &target).unwrap();
-        assert_eq!(top, "fix-owner-fix-repo-abc123");
+        assert_eq!(top, "fix-repo-abc123");
         assert!(target.join(&top).join("panschema-publish.toml").exists());
         assert!(
             target
@@ -568,12 +571,11 @@ mod tests {
     }
 
     #[test]
-    fn populate_cache_extracts_and_returns_sha() {
+    fn populate_cache_extracts_and_returns_top_level() {
         let tmp = TempDir::new().unwrap();
         let tarball = tmp.path().join("fixture.tar.gz");
         write_fixture_tarball(
             &tarball,
-            "owner",
             "repo",
             "deadbeef",
             &[("panschema-publish.toml", b"# fixture")],
@@ -584,9 +586,9 @@ mod tests {
             path: tarball.clone(),
         };
         let version_dir = tmp.path().join("cache").join("v1");
-        let sha = populate_cache(&source, "owner", "repo", "v1", &version_dir).unwrap();
-        assert_eq!(sha, "deadbeef");
-        assert!(version_dir.join("owner-repo-deadbeef").exists());
+        let top_level = populate_cache(&source, "owner", "repo", "v1", &version_dir).unwrap();
+        assert_eq!(top_level, "repo-deadbeef");
+        assert!(version_dir.join(&top_level).exists());
         assert!(version_dir.join(".lock").exists());
     }
 
@@ -596,7 +598,6 @@ mod tests {
         let tarball = tmp.path().join("fixture.tar.gz");
         write_fixture_tarball(
             &tarball,
-            "owner",
             "repo",
             "feedface",
             &[("panschema-publish.toml", b"# fixture")],
@@ -609,20 +610,19 @@ mod tests {
         let version_dir = tmp.path().join("cache").join("v1");
 
         // First populate.
-        let sha1 = populate_cache(&source, "owner", "repo", "v1", &version_dir).unwrap();
+        let top1 = populate_cache(&source, "owner", "repo", "v1", &version_dir).unwrap();
         // Mutate the fixture so the SECOND fetch would produce a different
         // top-level dir name — but since cache lookup short-circuits, the
         // mutation should have no effect.
         write_fixture_tarball(
             &tarball,
-            "owner",
             "repo",
             "different",
             &[("panschema-publish.toml", b"# fixture")],
         )
         .unwrap();
-        let sha2 = populate_cache(&source, "owner", "repo", "v1", &version_dir).unwrap();
-        assert_eq!(sha1, sha2);
-        assert_eq!(sha2, "feedface");
+        let top2 = populate_cache(&source, "owner", "repo", "v1", &version_dir).unwrap();
+        assert_eq!(top1, top2);
+        assert_eq!(top2, "repo-feedface");
     }
 }

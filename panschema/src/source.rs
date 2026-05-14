@@ -293,8 +293,8 @@ pub fn resolve_github(
 
     let version_dir = github_version_dir(cache_root, owner, repo, version);
     let tag = format!("v{version}");
-    let sha = populate_cache(source, owner, repo, &tag, &version_dir)?;
-    let extracted_dir = version_dir.join(format!("{owner}-{repo}-{sha}"));
+    let top_level = populate_cache(source, owner, repo, &tag, &version_dir)?;
+    let extracted_dir = version_dir.join(&top_level);
 
     let (canon_pkg, publish) = open_package(name, &extracted_dir)?;
     if publish.schema.version != version {
@@ -309,7 +309,7 @@ pub fn resolve_github(
     Ok(Resolved {
         schema_path: main_path,
         version: publish.schema.version,
-        revision: Some(sha),
+        revision: None,
     })
 }
 
@@ -486,21 +486,20 @@ mod tests {
     use tempfile::TempDir;
 
     /// Build a fixture tarball at `tarball_path` and return a fixture source
-    /// that serves it.
+    /// that serves it. The tarball's top-level directory is `<repo>-<version_id>`,
+    /// matching what real codeload `refs/tags/<tag>` and sha-based URLs produce.
     fn fixture_tarball(
         dir: &std::path::Path,
-        owner: &str,
         repo: &str,
-        sha: &str,
+        version_id: &str,
         publish_toml: &str,
         schema_yaml: &str,
     ) -> (PathBuf, LocalTarballFixture) {
         let tarball_path = dir.join("fixture.tar.gz");
         write_fixture_tarball(
             &tarball_path,
-            owner,
             repo,
-            sha,
+            version_id,
             &[
                 ("panschema-publish.toml", publish_toml.as_bytes()),
                 ("schema/example.yaml", schema_yaml.as_bytes()),
@@ -514,16 +513,15 @@ mod tests {
     }
 
     #[test]
-    fn resolve_github_happy_path_writes_to_cache_and_returns_sha() {
+    fn resolve_github_happy_path_writes_to_cache() {
         let tmp = TempDir::new().unwrap();
         let cache_root = tmp.path().join("cache");
         let fix_dir = tmp.path().join("fix");
         std::fs::create_dir_all(&fix_dir).unwrap();
         let (_t, src) = fixture_tarball(
             &fix_dir,
-            "ownerco",
             "myrepo",
-            "abc123",
+            "0.1.0",
             r#"
 [schema]
 name = "myrepo"
@@ -545,7 +543,9 @@ main = "schema/example.yaml"
             &src,
         )
         .unwrap();
-        assert_eq!(resolved.revision.as_deref(), Some("abc123"));
+        // `refs/tags/<tag>` URLs don't expose a commit SHA without an extra
+        // API call. We don't make that call, so revision is None.
+        assert!(resolved.revision.is_none());
         assert!(resolved.schema_path.ends_with("schema/example.yaml"));
         assert!(resolved.schema_path.exists());
     }
@@ -558,9 +558,8 @@ main = "schema/example.yaml"
         std::fs::create_dir_all(&fix_dir).unwrap();
         let (_t, src) = fixture_tarball(
             &fix_dir,
-            "ownerco",
             "myrepo",
-            "abc123",
+            "0.1.0",
             r#"
 [schema]
 name = "myrepo"
@@ -601,9 +600,8 @@ main = "schema/example.yaml"
         let tarball_path = fix_dir.join("fixture.tar.gz");
         write_fixture_tarball(
             &tarball_path,
-            "ownerco",
             "myrepo",
-            "abc123",
+            "0.1.0",
             &[("schema/example.yaml", b"name: example\n")],
         )
         .unwrap();
@@ -625,16 +623,15 @@ main = "schema/example.yaml"
     }
 
     #[test]
-    fn resolve_github_second_call_is_cache_hit_and_returns_same_sha() {
+    fn resolve_github_second_call_is_cache_hit() {
         let tmp = TempDir::new().unwrap();
         let cache_root = tmp.path().join("cache");
         let fix_dir = tmp.path().join("fix");
         std::fs::create_dir_all(&fix_dir).unwrap();
         let (tarball_path, src) = fixture_tarball(
             &fix_dir,
-            "ownerco",
             "myrepo",
-            "feedface",
+            "0.1.0",
             r#"
 [schema]
 name = "myrepo"
@@ -656,12 +653,14 @@ main = "schema/example.yaml"
             &src,
         )
         .unwrap();
+        let first_contents = std::fs::read_to_string(&first.schema_path).unwrap();
 
-        // Replace the fixture with a different SHA to prove the cache hit
-        // doesn't go back to the source.
+        // Replace the fixture with mutated contents (and a different version_id
+        // suffix so a re-fetch would land in a *different* cache directory).
+        // The cache hit should reuse the existing extracted dir and ignore the
+        // mutated tarball.
         write_fixture_tarball(
             &tarball_path,
-            "ownerco",
             "myrepo",
             "different",
             &[
@@ -691,7 +690,10 @@ main = "schema/example.yaml"
             &src,
         )
         .unwrap();
-        assert_eq!(first.revision, second.revision);
-        assert_eq!(first.revision.as_deref(), Some("feedface"));
+        assert_eq!(first.schema_path, second.schema_path);
+        let second_contents = std::fs::read_to_string(&second.schema_path).unwrap();
+        assert_eq!(first_contents, second_contents);
+        assert!(first.revision.is_none());
+        assert!(second.revision.is_none());
     }
 }
