@@ -20,6 +20,7 @@ use crate::linkml::SchemaDefinition;
 use crate::owl_reader::OwlReader;
 use crate::owl_writer::OwlWriter;
 use crate::rdf_serializers::{JsonLdWriter, NTriplesWriter, RdfXmlWriter};
+use crate::rust_writer::RustWriter;
 use crate::yaml_reader::YamlReader;
 
 /// Errors that can occur during reading or writing
@@ -109,7 +110,8 @@ impl FormatRegistry {
     /// Currently registers:
     /// - Readers: `OwlReader` (ttl, turtle), `YamlReader` (yaml, yml)
     /// - Writers: `HtmlWriter` (html), `OwlWriter` (ttl), `JsonLdWriter` (jsonld),
-    ///   `RdfXmlWriter` (rdfxml), `NTriplesWriter` (ntriples), `GraphWriter` (graph-json)
+    ///   `RdfXmlWriter` (rdfxml), `NTriplesWriter` (ntriples), `GraphWriter` (graph-json),
+    ///   `RustWriter` (rust)
     pub fn with_defaults() -> Self {
         let mut registry = Self::new();
         registry.register_reader(Box::new(OwlReader::new()));
@@ -120,6 +122,7 @@ impl FormatRegistry {
         registry.register_writer(Box::new(RdfXmlWriter::new()));
         registry.register_writer(Box::new(NTriplesWriter::new()));
         registry.register_writer(Box::new(GraphWriter::new()));
+        registry.register_writer(Box::new(RustWriter::new()));
         registry
     }
 

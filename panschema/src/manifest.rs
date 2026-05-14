@@ -63,12 +63,19 @@ pub struct SchemaDep {
 
 /// One entry under `[generate.<name>]` — maps writer kinds to output paths.
 /// Each field corresponds to a writer; absence means that writer isn't run.
+///
+/// To add a new writer key, add an `Option<PathBuf>` field here and a
+/// matching branch in `main.rs::generate_from_manifest`. The dispatch loop
+/// fans out across every populated field.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct GenerateConfig {
     /// HTML documentation output directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub html: Option<PathBuf>,
+    /// Rust module output file path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rust: Option<PathBuf>,
 }
 
 impl FromStr for Manifest {
@@ -394,6 +401,36 @@ html = "docs/"
     }
 
     #[test]
+    fn parses_generate_with_rust_writer_alone_and_alongside_html() {
+        // Rust-only.
+        let toml = r#"
+[schemas]
+foo = { path = "./foo-pkg" }
+
+[generate.foo]
+rust = "src/generated/foo.rs"
+"#;
+        let m = toml.parse::<Manifest>().expect("should parse rust-only");
+        let cfg = m.generate.get("foo").unwrap();
+        assert_eq!(cfg.html, None);
+        assert_eq!(cfg.rust, Some(PathBuf::from("src/generated/foo.rs")));
+
+        // Both writers.
+        let toml = r#"
+[schemas]
+foo = { path = "./foo-pkg" }
+
+[generate.foo]
+html = "docs/"
+rust = "src/generated/foo.rs"
+"#;
+        let m = toml.parse::<Manifest>().expect("should parse both");
+        let cfg = m.generate.get("foo").unwrap();
+        assert_eq!(cfg.html, Some(PathBuf::from("docs/")));
+        assert_eq!(cfg.rust, Some(PathBuf::from("src/generated/foo.rs")));
+    }
+
+    #[test]
     fn parses_multiple_schemas() {
         let toml = r#"
 [schemas]
@@ -451,12 +488,14 @@ remote = { source = "github:padamson/scimantic-schema", version = "0.1.3" }
 
     #[test]
     fn errors_on_unknown_writer_in_generate() {
+        // `shacl` is reserved for a future writer; not in GenerateConfig yet.
+        // `deny_unknown_fields` should reject it cleanly.
         let toml = r#"
 [schemas]
 x = { path = "./x-pkg" }
 
 [generate.x]
-rust = "src/generated/x.rs"
+shacl = "shapes/x.ttl"
 "#;
         let err = toml.parse::<Manifest>().expect_err("should reject");
         assert!(matches!(err, ManifestError::Parse(_)));

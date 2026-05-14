@@ -338,11 +338,16 @@ fn generate_from_manifest() -> anyhow::Result<()> {
             generate(&schema_path, &html_out, "html", true)?;
             produced_anything = true;
         }
+        if let Some(rust_out) = &gen_cfg.rust {
+            let rust_out = manifest_dir.join(rust_out);
+            generate(&schema_path, &rust_out, "rust", false)?;
+            produced_anything = true;
+        }
     }
 
     if !produced_anything {
         eprintln!(
-            "No outputs generated. Add an `[generate.<schema>]` block with at least one writer key (e.g. `html = \"docs/\"`)."
+            "No outputs generated. Add an `[generate.<schema>]` block with at least one writer key (e.g. `html = \"docs/\"` or `rust = \"src/generated.rs\"`)."
         );
     }
     Ok(())
