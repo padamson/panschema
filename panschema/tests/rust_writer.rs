@@ -2,17 +2,10 @@
 //! the scimantic-schema v0.1.0 LinkML schema — the real-world target
 //! the writer is built for.
 //!
-//! Each test is `#[ignore]`d by default because the fixture is fetched
-//! via `panschema add github:padamson/scimantic-schema@0.1.0` into a
-//! workspace-local cache (`CARGO_TARGET_TMPDIR/scimantic-fixture-cache/`).
-//! The first invocation in a fresh workspace requires network; warm
-//! runs short-circuit through the cache.
-//!
-//! Run them explicitly with:
-//!
-//! ```bash
-//! cargo nextest run -p panschema --test rust_writer -- --ignored
-//! ```
+//! The fixture is fetched via `panschema add github:padamson/scimantic-schema@0.1.0`
+//! into a workspace-local cache (`CARGO_TARGET_TMPDIR/scimantic-fixture-cache/`).
+//! The first invocation in a fresh workspace requires network access;
+//! warm runs short-circuit through the cache.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -83,7 +76,6 @@ fn extract_struct<'a>(body: &'a str, name: &str) -> &'a str {
 
 /// The full scimantic schema renders to syntactically valid Rust source.
 #[test]
-#[ignore = "requires network for cold scimantic cache"]
 fn scimantic_renders_as_syntactically_valid_rust() {
     let schema = read_scimantic();
     let body = RustWriter::new().render(&schema);
@@ -94,13 +86,12 @@ fn scimantic_renders_as_syntactically_valid_rust() {
 }
 
 /// A class declared with `is_a: Parent` produces a `pub trait Parent`
-/// with getter methods for the parent's direct slots, plus an `impl
-/// Parent for Child` block for every subclass. Verified against the
-/// `UncertaintyModel → Vagueness` chain because `UncertaintyModel` has
-/// non-empty direct slots — an empty `pub trait Entity` would not
-/// exercise the getter-method shape.
+/// with supertrait bounds following the LinkML inheritance chain, plus
+/// an `impl Parent for Child` block for every concrete descendant.
+/// Verified against the `UncertaintyModel → Vagueness` chain because
+/// `UncertaintyModel` has non-empty direct slots, exercising both the
+/// trait emission and the inheritance-flattening path.
 #[test]
-#[ignore = "requires network for cold scimantic cache; writer does not emit inheritance traits"]
 fn scimantic_classes_with_is_a_get_trait_impls() {
     let schema = read_scimantic();
     let body = RustWriter::new().render(&schema);
@@ -119,15 +110,18 @@ fn scimantic_classes_with_is_a_get_trait_impls() {
 /// refined definition. `Question.wasGeneratedBy` has its range narrowed
 /// from the parent slot's `Activity` to `QuestionFormation`, and the
 /// generated field reflects the refinement.
+///
+/// `QuestionFormation` is a leaf struct (no subclasses) so class-typed
+/// single-valued fields are wrapped in `Box` to keep struct layouts
+/// finite when classes transitively reference themselves.
 #[test]
-#[ignore = "requires network for cold scimantic cache; writer does not apply slot_usage overrides"]
 fn scimantic_slot_usage_overrides_apply_to_subclass_fields() {
     let schema = read_scimantic();
     let body = RustWriter::new().render(&schema);
     let question = extract_struct(&body, "Question");
     assert!(
-        question.contains("pub was_generated_by: Option<QuestionFormation>")
-            || question.contains("pub was_generated_by: QuestionFormation"),
+        question.contains("pub was_generated_by: Option<Box<QuestionFormation>>")
+            || question.contains("pub was_generated_by: Box<QuestionFormation>"),
         "expected `Question.was_generated_by` to use the refined range `QuestionFormation`; \
          got struct body:\n{question}"
     );
@@ -138,7 +132,6 @@ fn scimantic_slot_usage_overrides_apply_to_subclass_fields() {
 /// member type. scimantic uses this on `Question.wasDerivedFrom`
 /// (any of `Question | Annotation | Evidence`), among others.
 #[test]
-#[ignore = "requires network for cold scimantic cache; writer does not emit any_of unions"]
 fn scimantic_any_of_ranges_become_untagged_enums() {
     let schema = read_scimantic();
     let body = RustWriter::new().render(&schema);
@@ -153,7 +146,6 @@ fn scimantic_any_of_ranges_become_untagged_enums() {
 /// imports, derive bounds the generated code doesn't satisfy) that
 /// `syn::parse_file` cannot see.
 #[test]
-#[ignore = "requires network for cold scimantic cache; spawns `cargo build`"]
 fn scimantic_output_compiles_via_cargo_build() {
     let schema = read_scimantic();
     let body = RustWriter::new().render(&schema);

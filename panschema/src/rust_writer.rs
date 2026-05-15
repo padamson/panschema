@@ -10,6 +10,7 @@
 //! The consumer declares those in their own `Cargo.toml`; panschema
 //! itself doesn't take chrono.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use crate::io::{IoError, IoResult, Writer};
@@ -31,17 +32,49 @@ impl RustWriter {
     /// (no tempdir or filesystem state needed) and leaves the door open
     /// for snapshot-based testing.
     pub fn render(&self, schema: &SchemaDefinition) -> String {
+        let roles = compute_class_roles(schema);
+        let mut any_of_enums: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
         let mut out = String::new();
         render_header(&mut out, schema);
-        // Enums first so a class's `range: EnumName` always refers to a
-        // type that's already in scope when rustc reads top-to-bottom.
-        // BTreeMap iteration is sorted by key, so output is deterministic.
+
         for (name, def) in &schema.enums {
             render_enum(&mut out, name, def);
         }
+
+        // Marker traits for classes used as is_a parents or mixins. Order
+        // these before structs so `impl Trait for Struct` blocks resolve.
+        // Inside this loop, schema.classes is iterated alphabetically
+        // (BTreeMap); traits are emitted in deterministic order.
         for (name, def) in &schema.classes {
-            render_class(&mut out, name, def, schema);
+            if roles.get(name) == Some(&ClassRole::Trait) {
+                render_trait(&mut out, name, def, schema, &roles);
+            }
         }
+
+        // Structs for non-parent classes. Render collects any per-slot
+        // `any_of` union enums it needs; we emit those at the bottom of
+        // the module so they're co-located and don't interleave structs.
+        for (name, def) in &schema.classes {
+            if roles.get(name) == Some(&ClassRole::Struct) {
+                render_class(&mut out, name, def, schema, &roles, &mut any_of_enums);
+            }
+        }
+
+        // Closed Kind enums: `<TraitName>Kind` wraps all concrete
+        // descendants so slots ranging over a trait class get a
+        // type-erased-yet-typed value.
+        for name in schema.classes.keys() {
+            if roles.get(name) == Some(&ClassRole::Trait) {
+                render_kind_enum(&mut out, name, schema, &roles);
+            }
+        }
+
+        // Per-slot `any_of` union enums, alphabetical by enum name.
+        for (enum_name, members) in &any_of_enums {
+            render_any_of_enum(&mut out, enum_name, members);
+        }
+
         out
     }
 }
@@ -63,7 +96,188 @@ impl Writer for RustWriter {
 }
 
 // ---------------------------------------------------------------------------
-// Top-level renderers
+// Class roles
+// ---------------------------------------------------------------------------
+
+/// Classifies each class as either a marker `Trait` (named as the `is_a`
+/// parent of some other class OR used as a `mixin`) or a concrete
+/// `Struct` (leaf class — never inherited from, never mixed in).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClassRole {
+    Trait,
+    Struct,
+}
+
+fn compute_class_roles(schema: &SchemaDefinition) -> BTreeMap<String, ClassRole> {
+    let mut used_as_parent_or_mixin = BTreeSet::new();
+    for class in schema.classes.values() {
+        if let Some(parent) = &class.is_a {
+            used_as_parent_or_mixin.insert(parent.clone());
+        }
+        for mixin in &class.mixins {
+            used_as_parent_or_mixin.insert(mixin.clone());
+        }
+    }
+    schema
+        .classes
+        .keys()
+        .map(|name| {
+            let role = if used_as_parent_or_mixin.contains(name) {
+                ClassRole::Trait
+            } else {
+                ClassRole::Struct
+            };
+            (name.clone(), role)
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Slot resolution
+// ---------------------------------------------------------------------------
+
+/// Walk a class's `is_a` chain and `mixins`, then apply the class's own
+/// `attributes`, global `slots:` refs, and `slot_usage` overrides to
+/// produce the effective set of slots that show up as fields on the
+/// generated struct.
+///
+/// Precedence (lowest to highest):
+/// 1. `is_a` ancestor's slots (recursive)
+/// 2. Mixin slots (don't overwrite is_a-inherited slots with same name)
+/// 3. This class's inline `attributes`
+/// 4. This class's global `slots:` references (don't overwrite #1–3)
+/// 5. This class's `slot_usage` overrides (merge-overlay)
+fn resolve_slots(
+    class: &ClassDefinition,
+    schema: &SchemaDefinition,
+) -> BTreeMap<String, SlotDefinition> {
+    let mut slots: BTreeMap<String, SlotDefinition> = BTreeMap::new();
+
+    if let Some(parent_name) = &class.is_a
+        && let Some(parent) = schema.classes.get(parent_name)
+    {
+        for (name, def) in resolve_slots(parent, schema) {
+            slots.insert(name, def);
+        }
+    }
+
+    for mixin_name in &class.mixins {
+        if let Some(mixin) = schema.classes.get(mixin_name) {
+            for (name, def) in resolve_slots(mixin, schema) {
+                slots.entry(name).or_insert(def);
+            }
+        }
+    }
+
+    for (name, def) in &class.attributes {
+        slots.insert(name.clone(), def.clone());
+    }
+
+    for slot_name in &class.slots {
+        if let Some(def) = schema.slots.get(slot_name) {
+            slots
+                .entry(slot_name.clone())
+                .or_insert_with(|| def.clone());
+        }
+    }
+
+    for (name, override_def) in &class.slot_usage {
+        let target = slots
+            .entry(name.clone())
+            .or_insert_with(|| override_def.clone());
+        merge_slot_override(target, override_def);
+    }
+
+    slots
+}
+
+/// Merge a `slot_usage` override into an inherited/base slot definition.
+/// Only `Option` and `Vec` fields get overwritten when the override
+/// supplies a non-default value, so a `slot_usage` entry that just
+/// refines `range` doesn't accidentally reset `required` or `multivalued`
+/// on the inherited slot.
+///
+/// Bool fields are copied only when the override sets them to `true`.
+/// LinkML schemas in practice use `slot_usage` to tighten constraints
+/// (make optional → required, single → multivalued), not loosen them; the
+/// pre-Option<bool> IR can't distinguish "override sets false explicitly"
+/// from "override omits the field." This compromise covers the common
+/// case faithfully.
+fn merge_slot_override(target: &mut SlotDefinition, source: &SlotDefinition) {
+    if source.range.is_some() {
+        target.range = source.range.clone();
+    }
+    if source.description.is_some() {
+        target.description = source.description.clone();
+    }
+    if source.pattern.is_some() {
+        target.pattern = source.pattern.clone();
+    }
+    if source.minimum_cardinality.is_some() {
+        target.minimum_cardinality = source.minimum_cardinality;
+    }
+    if source.maximum_cardinality.is_some() {
+        target.maximum_cardinality = source.maximum_cardinality;
+    }
+    if !source.any_of.is_empty() {
+        target.any_of = source.any_of.clone();
+    }
+    if source.required {
+        target.required = true;
+    }
+    if source.multivalued {
+        target.multivalued = true;
+    }
+    if source.identifier {
+        target.identifier = true;
+    }
+}
+
+/// Walk this class's `is_a` chain bottom-up (excluding the class itself).
+/// Returns ancestors in inheritance order (immediate parent first, root
+/// last).
+fn is_a_ancestors(class: &ClassDefinition, schema: &SchemaDefinition) -> Vec<String> {
+    let mut chain = Vec::new();
+    let mut current = class.is_a.clone();
+    while let Some(name) = current {
+        chain.push(name.clone());
+        current = schema.classes.get(&name).and_then(|c| c.is_a.clone());
+    }
+    chain
+}
+
+/// True when `descendant` is a transitive `is_a` or mixin descendant of
+/// `ancestor`.
+fn is_descendant_of(
+    descendant: &ClassDefinition,
+    ancestor: &str,
+    schema: &SchemaDefinition,
+) -> bool {
+    if let Some(parent) = &descendant.is_a {
+        if parent == ancestor {
+            return true;
+        }
+        if let Some(parent_def) = schema.classes.get(parent)
+            && is_descendant_of(parent_def, ancestor, schema)
+        {
+            return true;
+        }
+    }
+    for mixin in &descendant.mixins {
+        if mixin == ancestor {
+            return true;
+        }
+        if let Some(mixin_def) = schema.classes.get(mixin)
+            && is_descendant_of(mixin_def, ancestor, schema)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+// ---------------------------------------------------------------------------
+// Renderers
 // ---------------------------------------------------------------------------
 
 fn render_header(out: &mut String, schema: &SchemaDefinition) {
@@ -84,7 +298,6 @@ fn render_enum(out: &mut String, name: &str, def: &EnumDefinition) {
         "#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]\n",
     );
     out.push_str(&format!("pub enum {name} {{\n"));
-    // BTreeMap iteration is sorted — variant order is deterministic.
     for (key, value) in &def.permissible_values {
         let text = if value.text.is_empty() {
             key
@@ -94,7 +307,6 @@ fn render_enum(out: &mut String, name: &str, def: &EnumDefinition) {
         render_doc_comment(out, "    ", value.description.as_deref());
         let variant_ident = variant_ident_for(text);
         if variant_ident == *text {
-            // Identifier already matches the wire value; rename is redundant.
             out.push_str(&format!("    {variant_ident},\n"));
         } else {
             out.push_str(&format!(
@@ -107,7 +319,50 @@ fn render_enum(out: &mut String, name: &str, def: &EnumDefinition) {
     out.push_str("}\n\n");
 }
 
-fn render_class(out: &mut String, name: &str, def: &ClassDefinition, schema: &SchemaDefinition) {
+/// Emit a marker trait for a class that's used as an `is_a` parent or
+/// mixin. Supertrait bounds combine the class's own `is_a` parent and
+/// any mixins that themselves resolve to traits in this schema.
+fn render_trait(
+    out: &mut String,
+    name: &str,
+    def: &ClassDefinition,
+    schema: &SchemaDefinition,
+    roles: &BTreeMap<String, ClassRole>,
+) {
+    render_doc_comment(out, "", def.description.as_deref());
+
+    let mut supertraits: Vec<String> = Vec::new();
+    if let Some(parent) = &def.is_a
+        && roles.get(parent) == Some(&ClassRole::Trait)
+    {
+        supertraits.push(parent.clone());
+    }
+    for mixin in &def.mixins {
+        if roles.get(mixin) == Some(&ClassRole::Trait)
+            && schema.classes.contains_key(mixin)
+            && !supertraits.contains(mixin)
+        {
+            supertraits.push(mixin.clone());
+        }
+    }
+    if supertraits.is_empty() {
+        out.push_str(&format!("pub trait {name} {{}}\n\n"));
+    } else {
+        out.push_str(&format!(
+            "pub trait {name}: {} {{}}\n\n",
+            supertraits.join(" + ")
+        ));
+    }
+}
+
+fn render_class(
+    out: &mut String,
+    name: &str,
+    def: &ClassDefinition,
+    schema: &SchemaDefinition,
+    roles: &BTreeMap<String, ClassRole>,
+    any_of_enums: &mut BTreeMap<String, Vec<String>>,
+) {
     render_doc_comment(out, "", def.description.as_deref());
     if def.r#abstract {
         out.push_str("///\n/// LinkML abstract class.\n");
@@ -115,23 +370,20 @@ fn render_class(out: &mut String, name: &str, def: &ClassDefinition, schema: &Sc
     out.push_str("#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]\n");
     out.push_str(&format!("pub struct {name} {{\n"));
 
-    for (slot_name, slot) in direct_slots(def, schema) {
-        let rust_field = snake_case(&slot_name);
-        let rust_type = rust_type_for(slot, schema);
+    let resolved = resolve_slots(def, schema);
+    for (slot_name, slot) in &resolved {
+        let rust_field = snake_case(slot_name);
+        let rust_type = field_type_for(name, slot_name, slot, schema, roles, any_of_enums);
         render_doc_comment(out, "    ", slot.description.as_deref());
 
         let mut serde_attrs: Vec<String> = Vec::new();
-        if rust_field != slot_name {
-            serde_attrs.push(format!("rename = \"{}\"", escape_str(&slot_name)));
+        if rust_field != *slot_name {
+            serde_attrs.push(format!("rename = \"{}\"", escape_str(slot_name)));
         }
-        // Optional (non-multivalued, non-required) slots skip serializing
-        // `None` so the LinkML wire format doesn't carry explicit nulls.
         if !slot.required && !slot.multivalued {
             serde_attrs.push("default".to_string());
             serde_attrs.push("skip_serializing_if = \"Option::is_none\"".to_string());
         } else if slot.multivalued {
-            // Empty `Vec` is the natural default for multivalued slots —
-            // a missing key in the wire format means "no values."
             serde_attrs.push("default".to_string());
             serde_attrs.push("skip_serializing_if = \"Vec::is_empty\"".to_string());
         }
@@ -142,73 +394,165 @@ fn render_class(out: &mut String, name: &str, def: &ClassDefinition, schema: &Sc
     }
 
     out.push_str("}\n\n");
-}
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Returns the slots defined *directly* on this class — its inline
-/// `attributes` plus any global `slots:` references resolved against the
-/// schema. Slots inherited via `is_a` or `mixins`, and `slot_usage`
-/// refinements, are not included here.
-///
-/// Returns a `Vec` of `(slot_name, &SlotDefinition)` sorted alphabetically
-/// by slot name. Sorting (rather than honouring `class.slots`'s array
-/// order) keeps the generated Rust output deterministic across runs and
-/// across LinkML files whose authors used different orderings for the
-/// same set of slots.
-fn direct_slots<'a>(
-    class: &'a ClassDefinition,
-    schema: &'a SchemaDefinition,
-) -> Vec<(String, &'a SlotDefinition)> {
-    let mut collected: Vec<(String, &SlotDefinition)> = Vec::new();
-    for (name, def) in &class.attributes {
-        collected.push((name.clone(), def));
-    }
-    // Global slots referenced by name. Unresolved refs are silently
-    // dropped; a future error path could surface them as a writer-level
-    // diagnostic.
-    for slot_name in &class.slots {
-        if let Some(def) = schema.slots.get(slot_name) {
-            collected.push((slot_name.clone(), def));
+    // `impl Trait for Struct` blocks for each is_a ancestor and mixin
+    // that resolves to a marker trait in this schema.
+    let mut impl_targets: Vec<String> = Vec::new();
+    for ancestor in is_a_ancestors(def, schema) {
+        if roles.get(&ancestor) == Some(&ClassRole::Trait) {
+            impl_targets.push(ancestor);
         }
     }
-    // De-dup by slot name (attributes win over a same-named global slot ref).
-    collected.sort_by(|a, b| a.0.cmp(&b.0));
-    collected.dedup_by(|a, b| a.0 == b.0);
-    collected
+    for mixin in &def.mixins {
+        if roles.get(mixin) == Some(&ClassRole::Trait) && !impl_targets.contains(mixin) {
+            impl_targets.push(mixin.clone());
+        }
+        // Walk the mixin's own is_a ancestors too — those traits are
+        // also satisfied by this class.
+        if let Some(mixin_def) = schema.classes.get(mixin) {
+            for ancestor in is_a_ancestors(mixin_def, schema) {
+                if roles.get(&ancestor) == Some(&ClassRole::Trait)
+                    && !impl_targets.contains(&ancestor)
+                {
+                    impl_targets.push(ancestor);
+                }
+            }
+        }
+    }
+    impl_targets.sort();
+    impl_targets.dedup();
+    for trait_name in &impl_targets {
+        out.push_str(&format!("impl {trait_name} for {name} {{}}\n"));
+    }
+    if !impl_targets.is_empty() {
+        out.push('\n');
+    }
 }
 
-/// Map a LinkML slot definition to its Rust field type. Applies
-/// required/multivalued framing: `Vec<T>` if multivalued, `Option<T>` if
-/// optional and single, bare `T` if required and single.
+fn render_kind_enum(
+    out: &mut String,
+    name: &str,
+    schema: &SchemaDefinition,
+    roles: &BTreeMap<String, ClassRole>,
+) {
+    let descendants: Vec<String> = schema
+        .classes
+        .iter()
+        .filter(|(other_name, def)| {
+            roles.get(*other_name) == Some(&ClassRole::Struct)
+                && is_descendant_of(def, name, schema)
+        })
+        .map(|(n, _)| n.clone())
+        .collect();
+
+    if descendants.is_empty() {
+        return;
+    }
+
+    out.push_str(&format!(
+        "/// Closed enum of concrete classes that implement `{name}`. Used as the\n\
+         /// field type when a slot's range is `{name}`.\n"
+    ));
+    out.push_str("#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]\n");
+    out.push_str("#[serde(untagged)]\n");
+    out.push_str(&format!("pub enum {name}Kind {{\n"));
+    for desc in &descendants {
+        out.push_str(&format!("    {desc}(Box<{desc}>),\n"));
+    }
+    out.push_str("}\n\n");
+}
+
+fn render_any_of_enum(out: &mut String, name: &str, members: &[String]) {
+    out.push_str("/// Polymorphic range union for the slot identified by this type name.\n");
+    out.push_str("#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]\n");
+    out.push_str("#[serde(untagged)]\n");
+    out.push_str(&format!("pub enum {name} {{\n"));
+    for member in members {
+        let variant = pascal_case(member);
+        out.push_str(&format!("    {variant}(Box<{member}>),\n"));
+    }
+    out.push_str("}\n\n");
+}
+
+// ---------------------------------------------------------------------------
+// Type mapping
+// ---------------------------------------------------------------------------
+
+/// Pick the Rust type for a class struct field. Combines range
+/// resolution (primitive vs class vs trait vs any_of) with
+/// required/multivalued framing, and wraps single-valued class-typed
+/// fields in `Box` to break potential type-size cycles (a class whose
+/// slot range references itself or any ancestor would otherwise have
+/// infinite layout).
 ///
-/// `schema` is unused at this layer today but is threaded through so the
-/// signature stays stable once polymorphic ranges and `slot_usage`
-/// resolution land.
-fn rust_type_for(slot: &SlotDefinition, _schema: &SchemaDefinition) -> String {
-    let base = base_type_for_range(slot.range.as_deref());
+/// `Box` is unnecessary for `Vec<T>` (Vec already provides heap
+/// indirection regardless of T), for enums (variants are sized after
+/// their own Boxing), for primitives, and for the `<Name>Kind` closed
+/// enums (those Box their variants internally).
+fn field_type_for(
+    class_name: &str,
+    slot_name: &str,
+    slot: &SlotDefinition,
+    schema: &SchemaDefinition,
+    roles: &BTreeMap<String, ClassRole>,
+    any_of_enums: &mut BTreeMap<String, Vec<String>>,
+) -> String {
+    if !slot.any_of.is_empty() {
+        let enum_name = format!("{class_name}{}", pascal_case(slot_name));
+        let members: Vec<String> = slot.any_of.iter().filter_map(|b| b.range.clone()).collect();
+        any_of_enums.insert(enum_name.clone(), members);
+        // any_of enums Box their variants internally → field stays sized.
+        return framed_sized(&enum_name, slot);
+    }
+
+    let Some(range) = &slot.range else {
+        return framed_sized("String", slot);
+    };
+
+    let needs_box = matches!(roles.get(range.as_str()), Some(ClassRole::Struct));
+    let base = type_for_range(range, schema, roles);
+
+    if needs_box {
+        framed_boxed(&base, slot)
+    } else {
+        framed_sized(&base, slot)
+    }
+}
+
+/// Framing for a type that's sized on its own (primitive, enum, Kind
+/// enum, any_of enum, or a struct used inside a `Vec`).
+fn framed_sized(base: &str, slot: &SlotDefinition) -> String {
     if slot.multivalued {
         format!("Vec<{base}>")
     } else if slot.required {
-        base
+        base.to_string()
     } else {
         format!("Option<{base}>")
     }
 }
 
-/// The unwrapped Rust type for a single LinkML range value (before
-/// applying `Vec` / `Option` framing).
-///
-/// LinkML's built-in type vocabulary maps to Rust primitives; everything
-/// else is treated as a reference to a class, enum, or imported type and
-/// emitted as a bare type name. Unknown ranges fall back to `String` —
-/// LinkML's `default_range` is conventionally `string` anyway.
-fn base_type_for_range(range: Option<&str>) -> String {
-    let Some(range) = range else {
-        return "String".to_string();
-    };
+/// Framing for a concrete struct that may transitively contain itself.
+/// `Vec<T>` is sized regardless of T's size; `Option<T>` and bare `T`
+/// must be `Box`ed to break layout cycles.
+fn framed_boxed(base: &str, slot: &SlotDefinition) -> String {
+    if slot.multivalued {
+        format!("Vec<{base}>")
+    } else if slot.required {
+        format!("Box<{base}>")
+    } else {
+        format!("Option<Box<{base}>>")
+    }
+}
+
+/// Map a LinkML range (primitive name, class name, enum name) to a Rust
+/// type. Range names that resolve to a trait class are rewritten to
+/// `<Name>Kind` so the field type is a sized closed enum of concrete
+/// descendants.
+fn type_for_range(
+    range: &str,
+    schema: &SchemaDefinition,
+    roles: &BTreeMap<String, ClassRole>,
+) -> String {
     match range {
         "string" | "str" | "uri" | "uriorcurie" | "curie" | "ncname" | "objectidentifier"
         | "nodeidentifier" => "String".to_string(),
@@ -218,9 +562,29 @@ fn base_type_for_range(range: Option<&str>) -> String {
         "datetime" => "chrono::DateTime<chrono::Utc>".to_string(),
         "date" => "chrono::NaiveDate".to_string(),
         "time" => "chrono::NaiveTime".to_string(),
-        other => other.to_string(),
+        other => {
+            if roles.get(other) == Some(&ClassRole::Trait) {
+                // Has subclasses or used as a mixin; field type uses the
+                // closed-enum wrapper of concrete descendants.
+                format!("{other}Kind")
+            } else if schema.classes.contains_key(other)
+                || schema.enums.contains_key(other)
+                || schema.types.contains_key(other)
+            {
+                other.to_string()
+            } else {
+                // Unresolved ref. Preserve verbatim — could be defined in
+                // an imported schema (a future writer pass would surface
+                // a warning).
+                other.to_string()
+            }
+        }
     }
 }
+
+// ---------------------------------------------------------------------------
+// String helpers
+// ---------------------------------------------------------------------------
 
 /// Convert a LinkML identifier (typically lowerCamelCase) to snake_case
 /// for use as a Rust field name. Lowercases existing characters and
@@ -250,10 +614,6 @@ pub fn snake_case(name: &str) -> String {
                 prev.is_some_and(|p| p.is_ascii_lowercase() || p.is_ascii_digit());
             let prev_is_upper = prev.is_some_and(|p| p.is_ascii_uppercase());
             let next_is_lower = next.is_some_and(|n| n.is_ascii_lowercase());
-            // Insert `_` before this char when transitioning from a
-            // lowercase/digit run *or* when this is the start of a new
-            // CamelCase word inside a run of uppercase letters
-            // (e.g. the `R` in `parseHTTPRequest`).
             let needs_underscore = i > 0
                 && !out.ends_with('_')
                 && (prev_is_lower_or_digit || (prev_is_upper && next_is_lower));
@@ -270,7 +630,30 @@ pub fn snake_case(name: &str) -> String {
     out
 }
 
-/// Emit a LinkML description as Rust doc comment lines. Each output line
+/// Convert an identifier (lowerCamelCase, snake_case, or already
+/// PascalCase) to PascalCase. Used to derive a Rust type name from a
+/// LinkML slot name (`wasDerivedFrom` → `WasDerivedFrom`).
+pub fn pascal_case(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut capitalize_next = true;
+    for c in name.chars() {
+        if c == '_' || c == '-' {
+            capitalize_next = true;
+            continue;
+        }
+        if capitalize_next {
+            for upper in c.to_uppercase() {
+                out.push(upper);
+            }
+            capitalize_next = false;
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Emit a LinkML description as Rust doc-comment lines. Each output line
 /// is `<indent>/// <text>\n`. Lines are wrapped at a soft 80-column
 /// boundary (76 chars of content + 4 chars of `/// ` prefix), breaking
 /// on word boundaries.
@@ -280,9 +663,6 @@ fn render_doc_comment(out: &mut String, indent: &str, description: Option<&str>)
         return;
     }
     const WIDTH: usize = 76;
-    // Pre-existing line breaks in the LinkML description are honored —
-    // each line is wrapped independently so the writer doesn't munge
-    // markdown paragraphs into one giant blob.
     for paragraph in text.split('\n') {
         if paragraph.is_empty() {
             out.push_str(indent);
@@ -321,10 +701,11 @@ fn escape_str(s: &str) -> String {
 }
 
 /// Sanitize a LinkML enum permissible-value text into a valid Rust
-/// identifier suitable for use as an enum variant. Strips characters that
-/// aren't `[A-Za-z0-9_]` and prepends `_` if the result starts with a
-/// digit. If the input is already a valid identifier, returns it
-/// unchanged so the serde `rename` attribute can be skipped.
+/// identifier suitable for use as an enum variant. Strips characters
+/// outside `[A-Za-z0-9_]`, replaces `-` and ` ` with `_`, and prepends
+/// `_` if the result starts with a digit. If the input is already a
+/// valid identifier, returns it unchanged so the serde `rename`
+/// attribute can be skipped.
 fn variant_ident_for(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
@@ -333,7 +714,6 @@ fn variant_ident_for(text: &str) -> String {
         } else if c == '-' || c == ' ' {
             out.push('_');
         }
-        // silently drop other characters
     }
     if out.is_empty() {
         out.push('_');
@@ -381,71 +761,256 @@ mod tests {
         assert_eq!(snake_case("foo2Bar"), "foo2_bar");
     }
 
-    // ----- rust_type_for ----------------------------------------------
+    // ----- pascal_case -------------------------------------------------
 
-    fn slot(range: Option<&str>, required: bool, multivalued: bool) -> SlotDefinition {
-        let mut s = SlotDefinition::new("test");
-        s.range = range.map(str::to_string);
-        s.required = required;
-        s.multivalued = multivalued;
+    #[test]
+    fn pascal_case_lower_camel_to_pascal() {
+        assert_eq!(pascal_case("wasDerivedFrom"), "WasDerivedFrom");
+    }
+
+    #[test]
+    fn pascal_case_snake_to_pascal() {
+        assert_eq!(pascal_case("some_snake_name"), "SomeSnakeName");
+    }
+
+    #[test]
+    fn pascal_case_already_pascal() {
+        assert_eq!(pascal_case("UncertaintyModel"), "UncertaintyModel");
+    }
+
+    #[test]
+    fn pascal_case_single_lowercase() {
+        assert_eq!(pascal_case("id"), "Id");
+    }
+
+    // ----- class roles -------------------------------------------------
+
+    #[test]
+    fn compute_class_roles_marks_is_a_parents_as_trait() {
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .classes
+            .insert("Parent".to_string(), ClassDefinition::new("Parent"));
+        let mut child = ClassDefinition::new("Child");
+        child.is_a = Some("Parent".to_string());
+        schema.classes.insert("Child".to_string(), child);
+
+        let roles = compute_class_roles(&schema);
+        assert_eq!(roles["Parent"], ClassRole::Trait);
+        assert_eq!(roles["Child"], ClassRole::Struct);
+    }
+
+    #[test]
+    fn compute_class_roles_marks_mixins_as_trait() {
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .classes
+            .insert("Tagged".to_string(), ClassDefinition::new("Tagged"));
+        let mut item = ClassDefinition::new("Item");
+        item.mixins.push("Tagged".to_string());
+        schema.classes.insert("Item".to_string(), item);
+
+        let roles = compute_class_roles(&schema);
+        assert_eq!(roles["Tagged"], ClassRole::Trait);
+        assert_eq!(roles["Item"], ClassRole::Struct);
+    }
+
+    #[test]
+    fn compute_class_roles_leaf_class_is_struct() {
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .classes
+            .insert("Loner".to_string(), ClassDefinition::new("Loner"));
+        let roles = compute_class_roles(&schema);
+        assert_eq!(roles["Loner"], ClassRole::Struct);
+    }
+
+    // ----- resolve_slots -----------------------------------------------
+
+    fn slot_with_range(name: &str, range: &str) -> SlotDefinition {
+        let mut s = SlotDefinition::new(name);
+        s.range = Some(range.to_string());
         s
     }
 
     #[test]
-    fn rust_type_required_string() {
-        let schema = SchemaDefinition::new("s");
+    fn resolve_slots_inherits_from_is_a_parent() {
+        let mut schema = SchemaDefinition::new("s");
+        let mut parent = ClassDefinition::new("Parent");
+        parent.attributes.insert(
+            "inherited".to_string(),
+            slot_with_range("inherited", "string"),
+        );
+        schema.classes.insert("Parent".to_string(), parent);
+
+        let mut child = ClassDefinition::new("Child");
+        child.is_a = Some("Parent".to_string());
+        child
+            .attributes
+            .insert("own".to_string(), slot_with_range("own", "integer"));
+        schema.classes.insert("Child".to_string(), child.clone());
+
+        let resolved = resolve_slots(&child, &schema);
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(resolved["inherited"].range.as_deref(), Some("string"));
+        assert_eq!(resolved["own"].range.as_deref(), Some("integer"));
+    }
+
+    #[test]
+    fn resolve_slots_flattens_mixin_slots() {
+        let mut schema = SchemaDefinition::new("s");
+        let mut mixin = ClassDefinition::new("Tagged");
+        mixin
+            .attributes
+            .insert("tag".to_string(), slot_with_range("tag", "string"));
+        schema.classes.insert("Tagged".to_string(), mixin);
+
+        let mut item = ClassDefinition::new("Item");
+        item.mixins.push("Tagged".to_string());
+        item.attributes
+            .insert("name".to_string(), slot_with_range("name", "string"));
+        schema.classes.insert("Item".to_string(), item.clone());
+
+        let resolved = resolve_slots(&item, &schema);
+        assert!(resolved.contains_key("tag"));
+        assert!(resolved.contains_key("name"));
+    }
+
+    #[test]
+    fn resolve_slots_applies_slot_usage_range_refinement() {
+        // Parent has a slot whose range is Activity. Child uses
+        // slot_usage to refine that to QuestionFormation. The resolved
+        // slot reflects the refinement.
+        let mut schema = SchemaDefinition::new("s");
+        let mut parent = ClassDefinition::new("Parent");
+        parent.attributes.insert(
+            "was_generated_by".to_string(),
+            slot_with_range("was_generated_by", "Activity"),
+        );
+        schema.classes.insert("Parent".to_string(), parent);
+
+        let mut child = ClassDefinition::new("Child");
+        child.is_a = Some("Parent".to_string());
+        child.slot_usage.insert(
+            "was_generated_by".to_string(),
+            slot_with_range("was_generated_by", "QuestionFormation"),
+        );
+        let resolved = resolve_slots(&child, &schema);
         assert_eq!(
-            rust_type_for(&slot(Some("string"), true, false), &schema),
-            "String"
+            resolved["was_generated_by"].range.as_deref(),
+            Some("QuestionFormation"),
+            "slot_usage should refine the inherited range"
         );
     }
 
     #[test]
-    fn rust_type_optional_integer() {
-        let schema = SchemaDefinition::new("s");
-        assert_eq!(
-            rust_type_for(&slot(Some("integer"), false, false), &schema),
-            "Option<i64>"
+    fn resolve_slots_slot_usage_preserves_unspecified_fields() {
+        // Parent has a multivalued slot. Child's slot_usage only refines
+        // the range; it doesn't touch `multivalued`. The resolved slot
+        // remains multivalued.
+        let mut schema = SchemaDefinition::new("s");
+        let mut parent = ClassDefinition::new("Parent");
+        let mut base = slot_with_range("tags", "string");
+        base.multivalued = true;
+        parent.attributes.insert("tags".to_string(), base);
+        schema.classes.insert("Parent".to_string(), parent);
+
+        let mut child = ClassDefinition::new("Child");
+        child.is_a = Some("Parent".to_string());
+        child
+            .slot_usage
+            .insert("tags".to_string(), slot_with_range("tags", "Label"));
+        let resolved = resolve_slots(&child, &schema);
+        assert!(
+            resolved["tags"].multivalued,
+            "slot_usage that doesn't mention multivalued must preserve it"
         );
+        assert_eq!(resolved["tags"].range.as_deref(), Some("Label"));
     }
 
     #[test]
-    fn rust_type_multivalued_boolean_overrides_required_framing() {
-        let schema = SchemaDefinition::new("s");
-        // Even when required, multivalued wins → Vec<T>. LinkML's
-        // required+multivalued semantics ("must have at least one")
-        // are enforced at runtime, not in the type system.
-        assert_eq!(
-            rust_type_for(&slot(Some("boolean"), true, true), &schema),
-            "Vec<bool>"
-        );
+    fn resolve_slots_any_of_propagates_through_slot_usage() {
+        let mut schema = SchemaDefinition::new("s");
+        let mut parent = ClassDefinition::new("Parent");
+        parent
+            .attributes
+            .insert("x".to_string(), slot_with_range("x", "Thing"));
+        schema.classes.insert("Parent".to_string(), parent);
+
+        let mut child = ClassDefinition::new("Child");
+        child.is_a = Some("Parent".to_string());
+        let mut refinement = SlotDefinition::new("x");
+        refinement.any_of = vec![slot_with_range("", "A"), slot_with_range("", "B")];
+        child.slot_usage.insert("x".to_string(), refinement);
+        let resolved = resolve_slots(&child, &schema);
+        let ranges: Vec<&str> = resolved["x"]
+            .any_of
+            .iter()
+            .filter_map(|b| b.range.as_deref())
+            .collect();
+        assert_eq!(ranges, vec!["A", "B"]);
     }
 
-    #[test]
-    fn rust_type_datetime_maps_to_chrono() {
-        let schema = SchemaDefinition::new("s");
-        assert_eq!(
-            rust_type_for(&slot(Some("datetime"), true, false), &schema),
-            "chrono::DateTime<chrono::Utc>"
-        );
-    }
+    // ----- is_descendant_of -------------------------------------------
 
     #[test]
-    fn rust_type_class_reference() {
+    fn descendant_traverses_is_a_chain() {
         let mut schema = SchemaDefinition::new("s");
         schema
             .classes
-            .insert("Question".to_string(), ClassDefinition::new("Question"));
-        assert_eq!(
-            rust_type_for(&slot(Some("Question"), false, false), &schema),
-            "Option<Question>"
-        );
+            .insert("Root".to_string(), ClassDefinition::new("Root"));
+        let mut mid = ClassDefinition::new("Mid");
+        mid.is_a = Some("Root".to_string());
+        schema.classes.insert("Mid".to_string(), mid);
+        let mut leaf = ClassDefinition::new("Leaf");
+        leaf.is_a = Some("Mid".to_string());
+        schema.classes.insert("Leaf".to_string(), leaf.clone());
+
+        assert!(is_descendant_of(&leaf, "Mid", &schema));
+        assert!(is_descendant_of(&leaf, "Root", &schema));
+        assert!(!is_descendant_of(&leaf, "Unrelated", &schema));
     }
 
     #[test]
-    fn rust_type_missing_range_defaults_to_string() {
+    fn descendant_includes_mixins() {
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .classes
+            .insert("M".to_string(), ClassDefinition::new("M"));
+        let mut leaf = ClassDefinition::new("Leaf");
+        leaf.mixins.push("M".to_string());
+        schema.classes.insert("Leaf".to_string(), leaf.clone());
+
+        assert!(is_descendant_of(&leaf, "M", &schema));
+    }
+
+    // ----- type_for_range ---------------------------------------------
+
+    #[test]
+    fn type_for_range_class_with_subclasses_uses_kind_suffix() {
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .classes
+            .insert("Activity".to_string(), ClassDefinition::new("Activity"));
+        let mut sub = ClassDefinition::new("QF");
+        sub.is_a = Some("Activity".to_string());
+        schema.classes.insert("QF".to_string(), sub);
+
+        let roles = compute_class_roles(&schema);
+        assert_eq!(type_for_range("Activity", &schema, &roles), "ActivityKind");
+        assert_eq!(type_for_range("QF", &schema, &roles), "QF");
+    }
+
+    #[test]
+    fn type_for_range_primitives() {
         let schema = SchemaDefinition::new("s");
-        assert_eq!(rust_type_for(&slot(None, true, false), &schema), "String");
+        let roles = BTreeMap::new();
+        assert_eq!(type_for_range("string", &schema, &roles), "String");
+        assert_eq!(type_for_range("integer", &schema, &roles), "i64");
+        assert_eq!(
+            type_for_range("datetime", &schema, &roles),
+            "chrono::DateTime<chrono::Utc>"
+        );
     }
 
     // ----- doc comments -----------------------------------------------
@@ -462,20 +1027,10 @@ mod tests {
         let mut out = String::new();
         let long = "This is a long description that should wrap at a soft eighty-column boundary because Rust idiom keeps doc comments readable.";
         render_doc_comment(&mut out, "", Some(long));
-        // Every line in the output begins with `/// ` (the doc-comment
-        // prefix). Asserting the per-line ≤ 80-char width keeps the
-        // generated output readable.
         for line in out.lines() {
             assert!(line.starts_with("/// "), "missing prefix: {line}");
             assert!(line.len() <= 80, "line too long ({}): {line}", line.len());
         }
-        // The full content round-trips.
-        let stripped = out
-            .lines()
-            .map(|l| l.trim_start_matches("/// "))
-            .collect::<Vec<_>>()
-            .join(" ");
-        assert_eq!(stripped, long);
     }
 
     #[test]
@@ -496,235 +1051,154 @@ mod tests {
 
     #[test]
     fn render_enum_emits_variants_in_sorted_order() {
-        let mut def = EnumDefinition::new("UncertaintyNature");
-        def.description = Some("The nature of an uncertainty.".to_string());
-        def.permissible_values.insert("Aleatory".to_string(), {
-            let mut pv = PermissibleValue::new("Aleatory");
-            pv.description = Some("Inherent randomness.".to_string());
-            pv
-        });
+        let mut def = EnumDefinition::new("Color");
+        def.permissible_values
+            .insert("Aleatory".to_string(), PermissibleValue::new("Aleatory"));
         def.permissible_values
             .insert("Epistemic".to_string(), PermissibleValue::new("Epistemic"));
 
         let mut out = String::new();
         render_enum(&mut out, "UncertaintyNature", &def);
 
-        assert!(out.contains("pub enum UncertaintyNature"));
-        // BTreeMap orders Aleatory < Epistemic alphabetically.
         let aleatory_pos = out.find("Aleatory").unwrap();
         let epistemic_pos = out.find("Epistemic").unwrap();
-        assert!(aleatory_pos < epistemic_pos, "variants not sorted: {out}");
-        // Aleatory has a description → emit a doc comment.
-        assert!(
-            out.contains("/// Inherent randomness."),
-            "missing variant doc: {out}"
-        );
-        // Variant text already matches the identifier → no rename needed.
-        assert!(
-            !out.contains(r#"rename = "Aleatory""#),
-            "redundant rename: {out}"
-        );
+        assert!(aleatory_pos < epistemic_pos);
     }
 
     #[test]
-    fn render_enum_adds_serde_rename_when_text_is_not_a_valid_ident() {
+    fn render_enum_adds_serde_rename_for_non_ident_values() {
         let mut def = EnumDefinition::new("Color");
         def.permissible_values
             .insert("off-white".to_string(), PermissibleValue::new("off-white"));
-
         let mut out = String::new();
         render_enum(&mut out, "Color", &def);
+        assert!(out.contains("off_white"));
+        assert!(out.contains(r#"rename = "off-white""#));
+    }
 
-        assert!(out.contains("off_white"), "ident not sanitized: {out}");
+    // ----- trait + struct + impl rendering ----------------------------
+
+    #[test]
+    fn render_trait_emits_supertrait_for_is_a_parent() {
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .classes
+            .insert("Entity".to_string(), ClassDefinition::new("Entity"));
+        let mut child = ClassDefinition::new("UncertaintyModel");
+        child.is_a = Some("Entity".to_string());
+        schema
+            .classes
+            .insert("UncertaintyModel".to_string(), child.clone());
+        let mut leaf = ClassDefinition::new("Vagueness");
+        leaf.is_a = Some("UncertaintyModel".to_string());
+        schema.classes.insert("Vagueness".to_string(), leaf);
+
+        let roles = compute_class_roles(&schema);
+        let mut out = String::new();
+        render_trait(&mut out, "UncertaintyModel", &child, &schema, &roles);
         assert!(
-            out.contains(r#"rename = "off-white""#),
-            "missing serde rename: {out}"
+            out.contains("pub trait UncertaintyModel: Entity {}"),
+            "expected `pub trait UncertaintyModel: Entity {{}}`, got: {out}"
         );
     }
 
-    // ----- class rendering --------------------------------------------
-
     #[test]
-    fn render_class_emits_struct_with_inline_attributes() {
-        let mut def = ClassDefinition::new("Question");
-        def.description = Some("A scientific question.".to_string());
-        let mut label = SlotDefinition::new("label");
-        label.range = Some("string".to_string());
-        label.required = true;
-        label.description = Some("Human-readable label.".to_string());
-        def.attributes.insert("label".to_string(), label);
-
-        let schema = SchemaDefinition::new("s");
-        let mut out = String::new();
-        render_class(&mut out, "Question", &def, &schema);
-
-        assert!(out.contains("pub struct Question"));
-        assert!(out.contains("/// A scientific question."));
-        assert!(out.contains("/// Human-readable label."));
-        assert!(out.contains("pub label: String,"));
-    }
-
-    #[test]
-    fn render_class_renames_camelcase_to_snake_case_with_serde_rename() {
-        let mut def = ClassDefinition::new("Entity");
-        let mut slot = SlotDefinition::new("wasGeneratedBy");
-        slot.range = Some("string".to_string());
-        def.attributes.insert("wasGeneratedBy".to_string(), slot);
-
-        let schema = SchemaDefinition::new("s");
-        let mut out = String::new();
-        render_class(&mut out, "Entity", &def, &schema);
-
-        assert!(out.contains("pub was_generated_by: Option<String>,"));
-        assert!(out.contains(r#"rename = "wasGeneratedBy""#));
-        assert!(out.contains(r#"skip_serializing_if = "Option::is_none""#));
-    }
-
-    #[test]
-    fn render_class_skips_serializing_empty_vecs() {
-        let mut def = ClassDefinition::new("Entity");
-        let mut slot = SlotDefinition::new("tags");
-        slot.range = Some("string".to_string());
-        slot.multivalued = true;
-        def.attributes.insert("tags".to_string(), slot);
-
-        let schema = SchemaDefinition::new("s");
-        let mut out = String::new();
-        render_class(&mut out, "Entity", &def, &schema);
-
-        assert!(out.contains("pub tags: Vec<String>,"));
-        assert!(out.contains(r#"skip_serializing_if = "Vec::is_empty""#));
-    }
-
-    #[test]
-    fn render_class_resolves_global_slot_reference() {
+    fn render_class_emits_impl_blocks_for_all_ancestors() {
         let mut schema = SchemaDefinition::new("s");
-        let mut global = SlotDefinition::new("name");
-        global.range = Some("string".to_string());
-        global.required = true;
-        schema.slots.insert("name".to_string(), global);
-
-        let mut def = ClassDefinition::new("Person");
-        def.slots.push("name".to_string());
-
-        let mut out = String::new();
-        render_class(&mut out, "Person", &def, &schema);
-        assert!(out.contains("pub name: String,"));
-    }
-
-    #[test]
-    fn render_class_marks_abstract_in_docs() {
-        let mut def = ClassDefinition::new("Entity");
-        def.r#abstract = true;
-        let schema = SchemaDefinition::new("s");
-        let mut out = String::new();
-        render_class(&mut out, "Entity", &def, &schema);
-        assert!(out.contains("LinkML abstract class"));
-    }
-
-    // ----- full-file rendering ----------------------------------------
-
-    /// Build a small fixture covering: one enum, one class with each
-    /// primitive range + required/optional/multivalued + camelCase rename.
-    fn fixture_schema() -> SchemaDefinition {
-        let mut schema = SchemaDefinition::new("demo");
-        schema.version = Some("0.1.0".to_string());
-
-        // Enum: Color with two variants.
-        let mut color = EnumDefinition::new("Color");
-        color.description = Some("Allowed colors.".to_string());
-        color.permissible_values.insert("Red".to_string(), {
-            let mut v = PermissibleValue::new("Red");
-            v.description = Some("The color red.".to_string());
-            v
-        });
-        color
-            .permissible_values
-            .insert("Blue".to_string(), PermissibleValue::new("Blue"));
-        schema.enums.insert("Color".to_string(), color);
-
-        // Class: Sample with one of each primitive + a class ref.
-        let mut sample = ClassDefinition::new("Sample");
-        sample.description = Some("A test class exercising every primitive range.".to_string());
-
-        let mut required_string = SlotDefinition::new("name");
-        required_string.range = Some("string".to_string());
-        required_string.required = true;
-        required_string.description = Some("The sample's name.".to_string());
-        sample
-            .attributes
-            .insert("name".to_string(), required_string);
-
-        let mut optional_int = SlotDefinition::new("count");
-        optional_int.range = Some("integer".to_string());
-        sample.attributes.insert("count".to_string(), optional_int);
-
-        let mut bool_slot = SlotDefinition::new("active");
-        bool_slot.range = Some("boolean".to_string());
-        bool_slot.required = true;
-        sample.attributes.insert("active".to_string(), bool_slot);
-
-        let mut float_slot = SlotDefinition::new("ratio");
-        float_slot.range = Some("float".to_string());
-        sample.attributes.insert("ratio".to_string(), float_slot);
-
-        let mut datetime_slot = SlotDefinition::new("createdAt");
-        datetime_slot.range = Some("datetime".to_string());
-        datetime_slot.required = true;
-        sample
-            .attributes
-            .insert("createdAt".to_string(), datetime_slot);
-
-        let mut multivalued_string = SlotDefinition::new("tags");
-        multivalued_string.range = Some("string".to_string());
-        multivalued_string.multivalued = true;
-        sample
-            .attributes
-            .insert("tags".to_string(), multivalued_string);
-
-        let mut color_ref = SlotDefinition::new("color");
-        color_ref.range = Some("Color".to_string());
-        sample.attributes.insert("color".to_string(), color_ref);
-
-        schema.classes.insert("Sample".to_string(), sample);
-
         schema
+            .classes
+            .insert("Entity".to_string(), ClassDefinition::new("Entity"));
+        let mut mid = ClassDefinition::new("UncertaintyModel");
+        mid.is_a = Some("Entity".to_string());
+        schema.classes.insert("UncertaintyModel".to_string(), mid);
+        let mut leaf = ClassDefinition::new("Vagueness");
+        leaf.is_a = Some("UncertaintyModel".to_string());
+        schema.classes.insert("Vagueness".to_string(), leaf.clone());
+
+        let roles = compute_class_roles(&schema);
+        let mut any_of_enums = BTreeMap::new();
+        let mut out = String::new();
+        render_class(
+            &mut out,
+            "Vagueness",
+            &leaf,
+            &schema,
+            &roles,
+            &mut any_of_enums,
+        );
+        assert!(out.contains("impl Entity for Vagueness {}"));
+        assert!(out.contains("impl UncertaintyModel for Vagueness {}"));
     }
 
     #[test]
-    fn fixture_renders_as_syntactically_valid_rust() {
-        let schema = fixture_schema();
-        let body = RustWriter::new().render(&schema);
-        // `syn::parse_file` confirms the writer emits well-formed Rust
-        // source. It does not check semantics — referenced types
-        // existing, imports resolving, derives being satisfiable —
-        // those are caught by an actual `cargo build` against a real
-        // schema in a downstream consumer.
-        syn::parse_file(&body)
-            .unwrap_or_else(|e| panic!("generated Rust failed to parse: {e}\n---\n{body}"));
+    fn render_kind_enum_lists_concrete_descendants() {
+        let mut schema = SchemaDefinition::new("s");
+        let mut parent = ClassDefinition::new("Animal");
+        parent.r#abstract = true;
+        schema.classes.insert("Animal".to_string(), parent);
+        for child in ["Cat", "Dog"] {
+            let mut c = ClassDefinition::new(child);
+            c.is_a = Some("Animal".to_string());
+            schema.classes.insert(child.to_string(), c);
+        }
+
+        let roles = compute_class_roles(&schema);
+        let mut out = String::new();
+        render_kind_enum(&mut out, "Animal", &schema, &roles);
+        assert!(out.contains("pub enum AnimalKind"));
+        assert!(out.contains("Cat(Box<Cat>)"));
+        assert!(out.contains("Dog(Box<Dog>)"));
+        assert!(out.contains("#[serde(untagged)]"));
     }
 
     #[test]
-    fn fixture_includes_all_expected_field_types() {
-        let schema = fixture_schema();
-        let body = RustWriter::new().render(&schema);
-        assert!(body.contains("pub name: String,"));
-        assert!(body.contains("pub count: Option<i64>,"));
-        assert!(body.contains("pub active: bool,"));
-        assert!(body.contains("pub ratio: Option<f64>,"));
-        assert!(body.contains("pub created_at: chrono::DateTime<chrono::Utc>,"));
-        assert!(body.contains("pub tags: Vec<String>,"));
-        assert!(body.contains("pub color: Option<Color>,"));
+    fn render_any_of_enum_wraps_members_in_box_with_serde_untagged() {
+        let mut out = String::new();
+        render_any_of_enum(
+            &mut out,
+            "QuestionWasDerivedFrom",
+            &["Question".to_string(), "Annotation".to_string()],
+        );
+        assert!(out.contains("#[serde(untagged)]"));
+        assert!(out.contains("pub enum QuestionWasDerivedFrom"));
+        assert!(out.contains("Question(Box<Question>)"));
+        assert!(out.contains("Annotation(Box<Annotation>)"));
     }
 
     #[test]
-    fn fixture_is_idempotent() {
-        // Two renders of the same SchemaDefinition must produce
-        // byte-identical output. Guards against accidental
-        // non-determinism (e.g. swapping a `BTreeMap` to a `HashMap`).
-        let schema = fixture_schema();
-        let writer = RustWriter::new();
-        assert_eq!(writer.render(&schema), writer.render(&schema));
+    fn render_class_emits_any_of_field_using_per_slot_enum_name() {
+        let mut def = ClassDefinition::new("Question");
+        let mut slot = SlotDefinition::new("wasDerivedFrom");
+        slot.range = Some("Question".to_string());
+        slot.any_of = vec![
+            slot_with_range("", "Question"),
+            slot_with_range("", "Annotation"),
+        ];
+        slot.multivalued = true;
+        def.attributes.insert("wasDerivedFrom".to_string(), slot);
+
+        let mut schema = SchemaDefinition::new("s");
+        schema.classes.insert("Question".to_string(), def.clone());
+        schema
+            .classes
+            .insert("Annotation".to_string(), ClassDefinition::new("Annotation"));
+
+        let roles = compute_class_roles(&schema);
+        let mut any_of_enums = BTreeMap::new();
+        let mut out = String::new();
+        render_class(
+            &mut out,
+            "Question",
+            &def,
+            &schema,
+            &roles,
+            &mut any_of_enums,
+        );
+        assert!(out.contains("pub was_derived_from: Vec<QuestionWasDerivedFrom>"));
+        assert_eq!(
+            any_of_enums.get("QuestionWasDerivedFrom"),
+            Some(&vec!["Question".to_string(), "Annotation".to_string()])
+        );
     }
 
     // ----- header + Writer trait surface ------------------------------
@@ -736,10 +1210,7 @@ mod tests {
 
         let out = RustWriter::new().render(&schema);
         let expected_version = env!("CARGO_PKG_VERSION");
-        assert!(
-            out.contains(&format!("// @generated by panschema v{expected_version}")),
-            "missing generated marker; got:\n{out}"
-        );
+        assert!(out.contains(&format!("// @generated by panschema v{expected_version}")));
         assert!(out.contains("// Schema: demo"));
         assert!(out.contains("// Schema version: 0.1.0"));
     }
@@ -748,7 +1219,7 @@ mod tests {
     fn omits_schema_version_line_when_unspecified() {
         let schema = SchemaDefinition::new("demo");
         let out = RustWriter::new().render(&schema);
-        assert!(!out.contains("// Schema version:"), "got: {out}");
+        assert!(!out.contains("// Schema version:"));
     }
 
     #[test]
@@ -766,5 +1237,70 @@ mod tests {
         assert!(target.exists());
         let body = std::fs::read_to_string(&target).unwrap();
         assert!(body.contains("@generated by panschema"));
+    }
+
+    // ----- full fixture rendering -------------------------------------
+
+    fn fixture_schema() -> SchemaDefinition {
+        let mut schema = SchemaDefinition::new("demo");
+        schema.version = Some("0.1.0".to_string());
+
+        let mut color = EnumDefinition::new("Color");
+        color
+            .permissible_values
+            .insert("Red".to_string(), PermissibleValue::new("Red"));
+        color
+            .permissible_values
+            .insert("Blue".to_string(), PermissibleValue::new("Blue"));
+        schema.enums.insert("Color".to_string(), color);
+
+        let mut sample = ClassDefinition::new("Sample");
+        let mut name = SlotDefinition::new("name");
+        name.range = Some("string".to_string());
+        name.required = true;
+        sample.attributes.insert("name".to_string(), name);
+
+        let mut tags = SlotDefinition::new("tags");
+        tags.range = Some("string".to_string());
+        tags.multivalued = true;
+        sample.attributes.insert("tags".to_string(), tags);
+
+        let mut color_ref = SlotDefinition::new("color");
+        color_ref.range = Some("Color".to_string());
+        sample.attributes.insert("color".to_string(), color_ref);
+
+        let mut when = SlotDefinition::new("createdAt");
+        when.range = Some("datetime".to_string());
+        when.required = true;
+        sample.attributes.insert("createdAt".to_string(), when);
+
+        schema.classes.insert("Sample".to_string(), sample);
+
+        schema
+    }
+
+    #[test]
+    fn fixture_renders_as_syntactically_valid_rust() {
+        let schema = fixture_schema();
+        let body = RustWriter::new().render(&schema);
+        syn::parse_file(&body)
+            .unwrap_or_else(|e| panic!("generated Rust failed to parse: {e}\n---\n{body}"));
+    }
+
+    #[test]
+    fn fixture_field_types_are_correct() {
+        let schema = fixture_schema();
+        let body = RustWriter::new().render(&schema);
+        assert!(body.contains("pub name: String,"));
+        assert!(body.contains("pub tags: Vec<String>,"));
+        assert!(body.contains("pub color: Option<Color>,"));
+        assert!(body.contains("pub created_at: chrono::DateTime<chrono::Utc>,"));
+    }
+
+    #[test]
+    fn fixture_is_idempotent() {
+        let schema = fixture_schema();
+        let writer = RustWriter::new();
+        assert_eq!(writer.render(&schema), writer.render(&schema));
     }
 }

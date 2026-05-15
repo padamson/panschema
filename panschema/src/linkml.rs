@@ -255,6 +255,13 @@ pub struct SlotDefinition {
     /// Inverse slot (for bidirectional relationships)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inverse: Option<String>,
+    /// Polymorphic range alternatives. A value of this slot matches any
+    /// one of the branches; each branch is itself a partial slot
+    /// definition that can override `range`, `required`, `multivalued`,
+    /// etc. Vec already provides heap indirection, so the recursive type
+    /// is fine.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub any_of: Vec<SlotDefinition>,
     /// Format-specific annotations
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub annotations: BTreeMap<String, String>,
@@ -276,6 +283,7 @@ impl SlotDefinition {
             identifier: false,
             slot_uri: None,
             inverse: None,
+            any_of: Vec::new(),
             annotations: BTreeMap::new(),
         }
     }

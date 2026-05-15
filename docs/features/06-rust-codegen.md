@@ -140,20 +140,24 @@ LinkML uses lowerCamelCase (`wasGeneratedBy`); Rust idiom is snake_case. Slot na
 
 ### Slice 6.3: Inheritance traits, mixin flattening, `slot_usage`, `any_of`
 
-**Status:** ⬜ Not Started
+**Status:** ✅ Completed
 
 **User Value:** Real LinkML constructs round-trip. A schema with class hierarchies, mixins, refined slot ranges, and polymorphic `any_of` slot ranges produces Rust that captures the structure faithfully.
 
 **Acceptance Criteria:**
-- [ ] `is_a` chain → supertrait-linked traits with getter methods per direct slot; concrete struct flattens all inherited slots; `impl Trait for Child` provided
-- [ ] Mixin flattening — slots merged into the consuming class's struct; no trait emitted for the mixin itself
-- [ ] `slot_usage` resolution: when a subclass refines a slot, the refined range/required/multivalued wins for that subclass's struct field. Walk `is_a` chain + mixins, collect slot definitions, apply `slot_usage` last-writer-wins per slot name.
-- [ ] `any_of` per-slot enum unions with `#[serde(untagged)]` and `Box<T>` variants to break recursive cycles
-- [ ] Focused unit test: `resolve_slots` for a hand-built `is_a` chain + `slot_usage` override returns the refined range, not the parent's
-- [ ] Extended fixture exercising each construct; snapshot + build-the-output tests still green
+- [x] `is_a` parents become **marker traits** with supertrait bounds for their own `is_a` chain and mixins; concrete classes flatten inherited slots and emit `impl Parent for Child {}` for each ancestor
+- [x] Mixins flatten slots into the consuming class's struct and also emit a marker trait + `impl` block, so consumers can write `T: Nanopublication` bounds
+- [x] `slot_usage` resolution applied per-class: walks `is_a` chain + mixins, collects slot definitions, applies `slot_usage` as a merge-overlay (only fields the override actually sets — preserves unmentioned inherited fields)
+- [x] `any_of` per-slot enum unions with `#[serde(untagged)]` and `Box<T>` variants
+- [x] Trait-only-class slot ranges (e.g. `hasUncertainty: UncertaintyModel`) map to a `<Name>Kind` closed enum that wraps all concrete descendants — keeps fields sized without trait objects
+- [x] Class-typed single-valued fields are wrapped in `Box` to break layout cycles (`Result.refines: Option<Box<Result>>`); `Vec<T>` already provides indirection so it stays bare
+- [x] 16 new unit tests cover `compute_class_roles`, `resolve_slots` (inheritance + mixin + slot_usage merge cases), `is_descendant_of`, `type_for_range`, `render_trait` (supertrait chain), `render_class` (impl block emission), `render_kind_enum`, `render_any_of_enum`, `pascal_case`
+- [x] Integration ladder is fully green: scimantic-schema v0.1.0 renders cleanly, `Question.was_generated_by` resolves to `Option<Box<QuestionFormation>>`, `impl UncertaintyModel for Vagueness {}` is emitted, untagged unions appear for `any_of` ranges, and the generated module compiles via `cargo build` against `serde` + `chrono`
 
 **Notes:**
-- Method-bearing (not marker) traits — picked over the marker-trait alternative so consumers can write trait-bounded functions that read parent-class slots generically.
+- **Marker traits over method-bearing traits.** Method-bearing trait getters would conflict with `slot_usage` type refinement: a subclass struct field narrowed via `slot_usage` can't satisfy a parent trait's method signature in Rust's type system (no covariant return types). Marker traits give `T: Entity` polymorphism, preserve type-level slot_usage refinement, and emit cleanly. Method-bearing traits returning `&dyn ParentTrait` are technically possible but cost ~2x generated code and need primitive/class dispatch — a future writer mode if a consumer needs polymorphic slot reads.
+- **Classes used as `is_a` parents or mixins skip struct emission.** They become trait-only. Subclasses flatten the parent's slots into their own structs. LinkML schemas that need to construct a "bare" parent value would need a future trait-suffix variant. For scimantic and most LinkML usage where parents are effectively abstract markers, this is the right shape.
+- **IR change.** `SlotDefinition` grew an `any_of: Vec<SlotDefinition>` field so the YAML reader can carry through polymorphic ranges to the writer. Recursive type works because `Vec` provides heap indirection.
 
 ---
 
@@ -193,7 +197,7 @@ LinkML uses lowerCamelCase (`wasGeneratedBy`); Rust idiom is snake_case. Slot na
 |-------|----------|------------|--------|
 | 6.1 | Must Have | None | ✅ Completed |
 | 6.2 | Must Have | 6.1 | ✅ Completed |
-| 6.3 | Must Have | 6.2 | ⬜ Not Started |
+| 6.3 | Must Have | 6.2 | ✅ Completed |
 | 6.4 | Must Have | 6.3 | ⬜ Not Started |
 | 6.5 | Nice to Have | 6.4 | ⬜ Not Started |
 
@@ -267,3 +271,20 @@ The two green tests over-deliver against the slice's stated scope. `scimantic_ou
 - Considered emitting `#[serde(rename_all = "camelCase")]` on the struct instead of per-field renames. Rejected: schemas could declare arbitrarily-shaped slot names (`WGS_84_coordinate`, single-letter, leading-digit) that don't fit a single rule. Per-field is more lines but always correct.
 - Considered using `prettyplease` to format the generated output. Rejected for v0.1: hand-formatted templates produce readable enough output, and we don't need to pull `prettyplease` (with its `syn` + `proc-macro2` chain) as a runtime dep just to make generated code prettier. Consumers can `rustfmt` if they want.
 - Considered checking a vendored copy of `scimantic-0.1.0.yaml` into `tests/fixtures/`. Rejected in favour of fetching via `panschema add` into a workspace-local cache. Dogfoods the consumer flow, stays current with the upstream tag, and avoids drift between vendored copy and the source repo.
+
+### Slice 6.3 — Inheritance, mixins, slot_usage, any_of
+
+**Completed:**
+- `SlotDefinition` IR grew an `any_of: Vec<SlotDefinition>` field (recursive type works because `Vec` provides heap indirection).
+- `rust_writer.rs` doubled in size: added `ClassRole` classification (Trait vs Struct), `compute_class_roles`, `resolve_slots` (inheritance + mixins + slot_usage), `is_a_ancestors`, `is_descendant_of`, `render_trait` (marker traits with supertrait chains), `render_kind_enum` (closed enum of concrete descendants), `render_any_of_enum`, `pascal_case`, `field_type_for` (combines range resolution with framing + Box for recursion), `framed_sized` / `framed_boxed`.
+- Classes used as `is_a` parents or mixins skip struct emission and become trait-only. Their concrete descendants flatten the inherited slots into their own structs and emit `impl Trait for Struct {}` blocks for each ancestor trait.
+- `slot_usage` is resolved per-class via merge-overlay: `Option`/`Vec` fields are overwritten only when the override actually sets them; bool fields are copied only when the override sets them to `true` (compromise documented in `merge_slot_override` — distinguishing "absent" from "explicit false" would need an IR refactor to `Option<bool>`).
+- `any_of` ranges emit a per-(class, slot) `pub enum <Class><PascalSlot>` with `#[serde(untagged)]` and `Box<Member>` variants. The slot field uses the enum as its (sized) type.
+- Trait-only-class slot ranges (e.g. `hasUncertainty: UncertaintyModel`) map to a `<Name>Kind` closed enum auto-generated from the schema's concrete descendants.
+- Class-typed single-valued fields get a `Box` wrapper to prevent layout cycles (`Result.refines: Option<Box<Result>>`). `Vec<T>` for class T stays bare since `Vec` already provides heap indirection.
+- 16 new unit tests + the integration ladder going fully green against scimantic v0.1.0 (including the `cargo build` compile check).
+
+**Design decisions captured here for the record:**
+- **Marker traits over method-bearing traits.** Method-bearing trait getters would conflict with `slot_usage` type refinement: a subclass field narrowed via `slot_usage` cannot satisfy a parent trait's method signature in Rust's type system (no covariant return types). Marker traits give `T: Entity`-style polymorphism, preserve type-level slot_usage refinement, and emit cleanly.
+- **Trait-only emission for `is_a` parents and mixins.** Avoids the `pub trait Foo` / `pub struct Foo` namespace collision. Trade-off: LinkML schemas that need to construct a "bare" parent instance would require a future suffix variant. Documented limitation.
+- **`<Name>Kind` closed enum** for slot ranges that reference a trait-only class. Keeps fields sized without requiring `Box<dyn Trait>` machinery and `typetag`. Open-world dispatch (a slot whose subclasses are not known at codegen time) would need a different writer mode.
