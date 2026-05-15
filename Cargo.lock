@@ -2237,6 +2237,7 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "sophia",
+ "syn 2.0.117",
  "tar",
  "tempfile",
  "thiserror 2.0.18",

@@ -70,6 +70,13 @@ test-fixtures = []
 # Snapshot testing
 insta = "1"
 
+# Syntactic validation of RustWriter output without paying the cost of a
+# full `cargo build`. Parses generated source as a Rust file — catches
+# syntax errors in the writer but ignores semantic issues (undefined
+# types, missing imports). End-to-end compile checks against real
+# downstream consumers cover the semantic class of errors.
+syn = { version = "2", features = ["full"] }
+
 # E2E browser testing — pulled from main of the upstream repo (authored by
 # the same maintainer) for active dogfood. Cargo.lock pins the resolved
 # commit; `cargo update -p playwright-rs` rolls forward.

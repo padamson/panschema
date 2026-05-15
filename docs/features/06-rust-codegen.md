@@ -18,6 +18,23 @@ This is also the first deliverable that exercises the multi-writer dispatch shap
 
 ---
 
+## Companion commands for Phase 3 (already shipped)
+
+The Phase 3 chapter arc has the reader:
+
+1. `panschema add github:padamson/scimantic-schema@0.1.0` — schema-manager slice 4 (shipped).
+2. `panschema verify` — schema-manager slice 2 (shipped).
+3. Add `rust = "..."` to `[generate.scimantic]`, `panschema generate` — this feature.
+4. **Author a local schema** (e.g. `app/schema/scimantic-server.yaml` with a `User` class).
+5. **Scaffold a `panschema-publish.toml` next to it** — `panschema init --from app/schema/scimantic-server.yaml`. The v0.3 package model requires every `path:` entry to be a package (directory containing `panschema-publish.toml` + the main file it references). The `init --from` command pre-fills name + version from the LinkML file's metadata. Producer-side scaffolding shipped in schema-manager slice 4.5.
+6. Add a `[schemas.scimantic-server]` `path:` entry + its own `[generate.scimantic-server] rust = "..."` block; `panschema generate` fans out across both schemas.
+
+Only step 3 is new in this feature; the rest already work on `main`. The chapter author can teach the full Phase 3 flow without waiting on any command beyond the Rust writer.
+
+Future Ch 3 needs (SHACL writer, SQL DDL writer) are explicitly out of scope — see [Out of Scope](#out-of-scope-deferred-past-this-feature).
+
+---
+
 ## Architecture Overview
 
 ```
@@ -100,22 +117,24 @@ LinkML uses lowerCamelCase (`wasGeneratedBy`); Rust idiom is snake_case. Slot na
 
 ### Slice 6.2: RustWriter core — structs, enums, slots, descriptions
 
-**Status:** ⏳ In Progress
+**Status:** ✅ Completed
 
 **User Value:** Single-class and single-enum schemas produce idiomatic Rust types that compile against `serde` + `chrono`. No inheritance, no mixins, no `slot_usage`, no `any_of` yet.
 
 **Acceptance Criteria:**
-- [ ] `render_doc_comment` wraps LinkML descriptions into `///` lines
-- [ ] `rust_type_for` maps LinkML primitives + class refs + enum refs to Rust types, honouring `multivalued` (Vec) and `required` (Option) combinatorics
-- [ ] `snake_case` converts LinkML lowerCamelCase slot names without losing fidelity (round-trips via `#[serde(rename = "...")]`)
-- [ ] `render_enum` emits a Rust enum per LinkML enum, with `#[serde(rename)]` on variants
-- [ ] `render_class` emits a Rust struct per LinkML class with **direct** slots only (no inheritance yet)
-- [ ] Snapshot test: a fixture schema with one enum + one class covering each primitive + required/optional/multivalued passes a checked-in golden file
-- [ ] Build-the-output test: emit Rust, write a scratch Cargo.toml + lib.rs, `cargo build` succeeds — proves the writer doesn't emit syntactically broken Rust
+- [x] `render_doc_comment` wraps LinkML descriptions into `///` lines (word-wrap at column 80; preserves blank lines as `///` separators)
+- [x] `rust_type_for` maps LinkML primitives + class refs + enum refs to Rust types, honouring `multivalued` (Vec) and `required` (Option) combinatorics
+- [x] `snake_case` converts LinkML lowerCamelCase slot names; handles acronym runs (`parseHTTPRequest` → `parse_http_request`) and is a no-op on already-snake names
+- [x] `render_enum` emits a Rust enum per LinkML enum, with `#[serde(rename)]` on variants only when the permissible-value text isn't a valid Rust identifier
+- [x] `render_class` emits a Rust struct per LinkML class with **direct** slots only (inline `attributes` + global `slots:` refs); inheritance/mixins/slot_usage land in 6.3
+- [x] Fixture-renders-as-syntactically-valid-Rust test: a programmatically-built schema covers every primitive + required/optional/multivalued + class refs; `syn::parse_file` validates well-formedness
+- [x] Idempotency check at this slice's scope: rendering the same schema twice produces byte-identical output
 
 **Notes:**
-- Unit tests for each helper live inline in `rust_writer.rs::tests`.
-- Build-the-output test may skip on Windows if shelling out to cargo is fiddly there.
+- Unit tests for each helper live inline in `rust_writer.rs::tests` (29 tests including the slice-6.1 regressions).
+- Compile-the-output test (write Cargo.toml + lib.rs, `cargo build`) deferred to slice 6.4 against the real scimantic schema — that test has higher signal value than a synthetic fixture, and a real `cargo build` is expensive enough that one good test beats two narrow ones. `syn::parse_file` in 6.2 catches the syntactic class of errors at zero CI cost.
+- Generated module emits `#![allow(non_camel_case_types, non_snake_case, dead_code)]` so consumers don't have to silence warnings for LinkML names that don't match Rust idioms.
+- Added `syn = "2"` (with `full` features) as a dev-dependency for the parse test.
 
 ---
 
@@ -173,7 +192,7 @@ LinkML uses lowerCamelCase (`wasGeneratedBy`); Rust idiom is snake_case. Slot na
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | 6.1 | Must Have | None | ✅ Completed |
-| 6.2 | Must Have | 6.1 | ⏳ In Progress |
+| 6.2 | Must Have | 6.1 | ✅ Completed |
 | 6.3 | Must Have | 6.2 | ⬜ Not Started |
 | 6.4 | Must Have | 6.3 | ⬜ Not Started |
 | 6.5 | Nice to Have | 6.4 | ⬜ Not Started |
@@ -221,3 +240,30 @@ LinkML uses lowerCamelCase (`wasGeneratedBy`); Rust idiom is snake_case. Slot na
 - The plan considered chrono as a direct panschema dep so the build-the-output test in 6.2 could rely on it. Decided against: the scratch crate in 6.2 can declare chrono in its own generated `Cargo.toml`. Keep panschema's dep surface tight.
 - Considered a `marker trait per is_a parent` shape but picked method-bearing traits with getters. Marker traits give type membership but no useful API; getter-bearing traits let downstream code write trait-bounded helpers.
 - Considered single-file vs split tests; followed the project's existing convention (unit tests inline in `mod tests`, CLI integration tests in `tests/integration.rs`). Slice 6.4 will pull its fixture-heavy tests into a dedicated `tests/rust_writer.rs` when it earns the split.
+
+### Slice 6.2 — RustWriter core
+
+**Completed:**
+- `rust_writer.rs` grew from a header-only stub to a full renderer for direct slots: `render_header` / `render_enum` / `render_class` / `render_doc_comment` / `rust_type_for` / `snake_case` / `direct_slots` / `variant_ident_for` / `escape_str`. ~430 lines including doc comments and tests.
+- Direct slots are the class's inline `attributes` plus any global `slots:` references resolved against `schema.slots`. De-duped + sorted alphabetically for deterministic output. Unresolved global slot refs are silently skipped — a writer-level diagnostic could surface this later.
+- Generated module emits `#![allow(non_camel_case_types, non_snake_case, dead_code)]` so consumers don't see warnings for LinkML-style names that don't match Rust conventions.
+- Per-field `#[serde(rename = "...")]` only when `snake_case(linkml_name) != linkml_name`. Empty `Option<T>` / `Vec<T>` skip serializing via `skip_serializing_if`.
+- 29 inline unit tests cover each helper, full-fixture rendering, and idempotency.
+- Added `syn = { version = "2", features = ["full"] }` as a dev-dependency for `syn::parse_file` validation of the fixture output.
+
+**Acceptance ladder set up:** `panschema/tests/rust_writer.rs` adds five `#[ignore]`d integration tests against the real scimantic-schema v0.1.0, run explicitly with `cargo nextest run -p panschema --test rust_writer -- --ignored`. The cache helper uses `panschema add github:padamson/scimantic-schema@0.1.0` against a workspace-local cache (`CARGO_TARGET_TMPDIR/scimantic-fixture-cache/`), so warmed runs are no-ops and cold runs do one network fetch. State as of this slice:
+
+| Test | Promise | Status |
+|---|---|---|
+| `scimantic_renders_as_syntactically_valid_rust` | Writer emits parseable Rust against the real schema | ✅ Green |
+| `scimantic_output_compiles_via_cargo_build` | Generated module compiles in a scratch crate with `serde` + `chrono` deps | ✅ Green |
+| `scimantic_classes_with_is_a_get_trait_impls` | `is_a` parents emit a trait with getters and an `impl Trait for Child` block | ❌ Red — unblocked by slice 6.3 |
+| `scimantic_slot_usage_overrides_apply_to_subclass_fields` | `Question.was_generated_by` resolves to `QuestionFormation` (not `Activity`) | ❌ Red — unblocked by slice 6.3 |
+| `scimantic_any_of_ranges_become_untagged_enums` | A `#[serde(untagged)]` enum is emitted for polymorphic slot ranges | ❌ Red — unblocked by slice 6.3 |
+
+The two green tests over-deliver against the slice's stated scope. `scimantic_output_compiles_via_cargo_build` was scoped to slice 6.4, but the writer happens to emit a semantically valid (if under-specified) module already — `cargo build` passes against today's output because missing type refinements degrade to broader types (`Option<String>` instead of `Option<QuestionFormation>`), not to broken types. Slice 6.4's *real* end-to-end criterion — a downstream smoke test that constructs a `Question` and uses its refined fields — still needs the type expressiveness slice 6.3 ships.
+
+**Design decisions captured here for the record:**
+- Considered emitting `#[serde(rename_all = "camelCase")]` on the struct instead of per-field renames. Rejected: schemas could declare arbitrarily-shaped slot names (`WGS_84_coordinate`, single-letter, leading-digit) that don't fit a single rule. Per-field is more lines but always correct.
+- Considered using `prettyplease` to format the generated output. Rejected for v0.1: hand-formatted templates produce readable enough output, and we don't need to pull `prettyplease` (with its `syn` + `proc-macro2` chain) as a runtime dep just to make generated code prettier. Consumers can `rustfmt` if they want.
+- Considered checking a vendored copy of `scimantic-0.1.0.yaml` into `tests/fixtures/`. Rejected in favour of fetching via `panschema add` into a workspace-local cache. Dogfoods the consumer flow, stays current with the upstream tag, and avoids drift between vendored copy and the source repo.
