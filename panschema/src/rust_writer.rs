@@ -151,19 +151,38 @@ fn resolve_slots(
     class: &ClassDefinition,
     schema: &SchemaDefinition,
 ) -> BTreeMap<String, SlotDefinition> {
+    let mut visited = BTreeSet::new();
+    resolve_slots_walk(class, schema, &mut visited)
+}
+
+/// Recursive worker for [`resolve_slots`]. `visited` holds the class
+/// names currently on the recursion stack so a circular `is_a` or
+/// `mixin` chain terminates (silently dropping the would-be-cyclic
+/// contribution) rather than overflowing.
+fn resolve_slots_walk(
+    class: &ClassDefinition,
+    schema: &SchemaDefinition,
+    visited: &mut BTreeSet<String>,
+) -> BTreeMap<String, SlotDefinition> {
     let mut slots: BTreeMap<String, SlotDefinition> = BTreeMap::new();
+
+    // Mark this class as in-progress. If insert returns false, we've
+    // already visited this class along the current path — stop.
+    if !visited.insert(class.name.clone()) {
+        return slots;
+    }
 
     if let Some(parent_name) = &class.is_a
         && let Some(parent) = schema.classes.get(parent_name)
     {
-        for (name, def) in resolve_slots(parent, schema) {
+        for (name, def) in resolve_slots_walk(parent, schema, visited) {
             slots.insert(name, def);
         }
     }
 
     for mixin_name in &class.mixins {
         if let Some(mixin) = schema.classes.get(mixin_name) {
-            for (name, def) in resolve_slots(mixin, schema) {
+            for (name, def) in resolve_slots_walk(mixin, schema, visited) {
                 slots.entry(name).or_insert(def);
             }
         }
@@ -188,6 +207,9 @@ fn resolve_slots(
         merge_slot_override(target, override_def);
     }
 
+    // Pop this class on the way out — sibling/cousin paths to it
+    // through different ancestors are NOT cycles.
+    visited.remove(&class.name);
     slots
 }
 
@@ -235,11 +257,17 @@ fn merge_slot_override(target: &mut SlotDefinition, source: &SlotDefinition) {
 
 /// Walk this class's `is_a` chain bottom-up (excluding the class itself).
 /// Returns ancestors in inheritance order (immediate parent first, root
-/// last).
+/// last). Terminates cleanly on a circular `is_a` chain rather than
+/// looping forever.
 fn is_a_ancestors(class: &ClassDefinition, schema: &SchemaDefinition) -> Vec<String> {
     let mut chain = Vec::new();
+    let mut seen = BTreeSet::new();
     let mut current = class.is_a.clone();
     while let Some(name) = current {
+        if !seen.insert(name.clone()) {
+            // Already on the chain — `is_a` cycle. Stop walking.
+            break;
+        }
         chain.push(name.clone());
         current = schema.classes.get(&name).and_then(|c| c.is_a.clone());
     }
@@ -253,27 +281,47 @@ fn is_descendant_of(
     ancestor: &str,
     schema: &SchemaDefinition,
 ) -> bool {
-    if let Some(parent) = &descendant.is_a {
-        if parent == ancestor {
-            return true;
-        }
-        if let Some(parent_def) = schema.classes.get(parent)
-            && is_descendant_of(parent_def, ancestor, schema)
-        {
-            return true;
-        }
+    let mut visited = BTreeSet::new();
+    is_descendant_of_walk(descendant, ancestor, schema, &mut visited)
+}
+
+/// Recursive worker for [`is_descendant_of`]. `visited` holds class
+/// names currently on the recursion stack so a circular `is_a` /
+/// `mixin` chain terminates rather than overflowing.
+fn is_descendant_of_walk(
+    descendant: &ClassDefinition,
+    ancestor: &str,
+    schema: &SchemaDefinition,
+    visited: &mut BTreeSet<String>,
+) -> bool {
+    if !visited.insert(descendant.name.clone()) {
+        return false;
     }
-    for mixin in &descendant.mixins {
-        if mixin == ancestor {
-            return true;
+    let found = (|| {
+        if let Some(parent) = &descendant.is_a {
+            if parent == ancestor {
+                return true;
+            }
+            if let Some(parent_def) = schema.classes.get(parent)
+                && is_descendant_of_walk(parent_def, ancestor, schema, visited)
+            {
+                return true;
+            }
         }
-        if let Some(mixin_def) = schema.classes.get(mixin)
-            && is_descendant_of(mixin_def, ancestor, schema)
-        {
-            return true;
+        for mixin in &descendant.mixins {
+            if mixin == ancestor {
+                return true;
+            }
+            if let Some(mixin_def) = schema.classes.get(mixin)
+                && is_descendant_of_walk(mixin_def, ancestor, schema, visited)
+            {
+                return true;
+            }
         }
-    }
-    false
+        false
+    })();
+    visited.remove(&descendant.name);
+    found
 }
 
 // ---------------------------------------------------------------------------
@@ -368,6 +416,24 @@ fn render_class(
     if def.r#abstract {
         out.push_str("///\n/// LinkML abstract class.\n");
     }
+
+    // Diagnostics for unresolved global slot references: any name in
+    // `class.slots` that isn't present in `schema.slots`. We emit a
+    // comment line per missing ref so the gap is visible in the
+    // generated output rather than silently dropped.
+    for slot_name in &def.slots {
+        if !schema.slots.contains_key(slot_name)
+            && !def.attributes.contains_key(slot_name)
+            && !def.slot_usage.contains_key(slot_name)
+        {
+            out.push_str(&format!(
+                "// WARNING: class `{name}` references slot `{slot_name}` which is\n\
+                 //          not defined in the schema's `slots:` table. Field\n\
+                 //          omitted from the generated struct.\n"
+            ));
+        }
+    }
+
     let resolved = resolve_slots(def, schema);
     let derives = compute_struct_derives(&resolved);
     out.push_str(&format!("#[derive({derives})]\n"));
@@ -448,6 +514,16 @@ fn render_kind_enum(
         .collect();
 
     if descendants.is_empty() {
+        // Trait class declared but no concrete descendant impls it.
+        // The `<Name>Kind` enum would have zero variants — emit a
+        // breadcrumb comment so a reader understands why a slot
+        // ranging over `<Name>` falls back to `String` (see
+        // `type_for_range`).
+        out.push_str(&format!(
+            "// NOTE: `{name}` has no concrete descendants in this schema;\n\
+             //       no `{name}Kind` enum is emitted. Slots ranging over\n\
+             //       `{name}` fall back to `String` at the field level.\n\n"
+        ));
         return;
     }
 
@@ -572,7 +648,16 @@ fn field_type_for(
 ) -> String {
     if !slot.any_of.is_empty() {
         let enum_name = format!("{class_name}{}", pascal_case(slot_name));
-        let members: Vec<String> = slot.any_of.iter().filter_map(|b| b.range.clone()).collect();
+        // LinkML spec: an `any_of` branch can omit its `range`, in
+        // which case it inherits the slot's outer `range`. Without the
+        // fallback those branches would be silently dropped from the
+        // generated enum.
+        let outer_range = slot.range.as_deref();
+        let members: Vec<String> = slot
+            .any_of
+            .iter()
+            .filter_map(|b| b.range.as_deref().or(outer_range).map(str::to_string))
+            .collect();
         any_of_enums.insert(enum_name.clone(), members);
         // any_of enums Box their variants internally → field stays sized.
         return framed_sized(&enum_name, slot);
@@ -617,6 +702,19 @@ fn framed_boxed(base: &str, slot: &SlotDefinition) -> String {
     }
 }
 
+/// Does this trait-role class have any concrete (Struct-role)
+/// descendants? Mirrors the filter `render_kind_enum` applies before
+/// deciding whether to emit a `<Name>Kind` union enum.
+fn has_concrete_descendants(
+    name: &str,
+    schema: &SchemaDefinition,
+    roles: &BTreeMap<String, ClassRole>,
+) -> bool {
+    schema.classes.iter().any(|(other_name, def)| {
+        roles.get(other_name) == Some(&ClassRole::Struct) && is_descendant_of(def, name, schema)
+    })
+}
+
 /// Map a LinkML range (primitive name, class name, enum name) to a Rust
 /// type. Range names that resolve to a trait class are rewritten to
 /// `<Name>Kind` so the field type is a sized closed enum of concrete
@@ -638,8 +736,16 @@ fn type_for_range(
         other => {
             if roles.get(other) == Some(&ClassRole::Trait) {
                 // Has subclasses or used as a mixin; field type uses the
-                // closed-enum wrapper of concrete descendants.
-                format!("{other}Kind")
+                // closed-enum wrapper of concrete descendants — unless
+                // there are no concrete descendants, in which case the
+                // Kind enum isn't emitted and the field falls back to
+                // `String` (URI/identifier). Mirrors the breadcrumb
+                // comment `render_kind_enum` emits.
+                if has_concrete_descendants(other, schema, roles) {
+                    format!("{other}Kind")
+                } else {
+                    "String".to_string()
+                }
             } else if schema.classes.contains_key(other)
                 || schema.enums.contains_key(other)
                 || schema.types.contains_key(other)
@@ -1055,6 +1161,78 @@ mod tests {
         schema.classes.insert("Leaf".to_string(), leaf.clone());
 
         assert!(is_descendant_of(&leaf, "M", &schema));
+    }
+
+    // ----- cycle detection (slice 6.6) --------------------------------
+
+    #[test]
+    fn circular_is_a_chain_does_not_overflow() {
+        // A schema with `A is_a B` AND `B is_a A` is malformed but
+        // shouldn't crash the writer. The visited-set guard breaks the
+        // cycle on the second encounter, returning what was resolved
+        // up to that point. The test passes as long as it returns at
+        // all (no stack overflow / no infinite recursion).
+        let mut schema = SchemaDefinition::new("s");
+        let mut a = ClassDefinition::new("A");
+        a.is_a = Some("B".to_string());
+        let mut b = ClassDefinition::new("B");
+        b.is_a = Some("A".to_string());
+        schema.classes.insert("A".to_string(), a.clone());
+        schema.classes.insert("B".to_string(), b);
+
+        // Both must terminate.
+        let _ = resolve_slots(&a, &schema);
+        let _ = is_descendant_of(&a, "B", &schema);
+        let _ = is_a_ancestors(&a, &schema);
+    }
+
+    #[test]
+    fn circular_mixin_chain_does_not_overflow() {
+        // Mixin cycle: A mixes in B, B mixes in A. Same termination
+        // guarantee as the is_a cycle test.
+        let mut schema = SchemaDefinition::new("s");
+        let mut a = ClassDefinition::new("A");
+        a.mixins.push("B".to_string());
+        let mut b = ClassDefinition::new("B");
+        b.mixins.push("A".to_string());
+        schema.classes.insert("A".to_string(), a.clone());
+        schema.classes.insert("B".to_string(), b);
+
+        let _ = resolve_slots(&a, &schema);
+        let _ = is_descendant_of(&a, "B", &schema);
+    }
+
+    #[test]
+    fn diamond_inheritance_is_not_treated_as_cycle() {
+        // A diamond inheritance pattern (A → B → D, A → C → D) is NOT
+        // a cycle even though D appears twice on the recursion stack
+        // across DIFFERENT paths. The visited-set guard must pop on
+        // exit so the second arrival at D succeeds.
+        let mut schema = SchemaDefinition::new("s");
+        let mut d = ClassDefinition::new("D");
+        d.attributes.insert("name".to_string(), {
+            let mut s = SlotDefinition::new("name");
+            s.range = Some("string".to_string());
+            s
+        });
+        schema.classes.insert("D".to_string(), d);
+        let mut b = ClassDefinition::new("B");
+        b.is_a = Some("D".to_string());
+        schema.classes.insert("B".to_string(), b);
+        let mut c = ClassDefinition::new("C");
+        c.is_a = Some("D".to_string());
+        schema.classes.insert("C".to_string(), c);
+        let mut a = ClassDefinition::new("A");
+        a.is_a = Some("B".to_string());
+        a.mixins.push("C".to_string());
+        schema.classes.insert("A".to_string(), a.clone());
+
+        let resolved = resolve_slots(&a, &schema);
+        assert!(
+            resolved.contains_key("name"),
+            "diamond ancestor slot should be inherited; got: {:?}",
+            resolved.keys().collect::<Vec<_>>()
+        );
     }
 
     // ----- type_for_range ---------------------------------------------
@@ -1695,6 +1873,187 @@ mod tests {
         assert!(out.contains("#[serde(untagged)]"));
         assert!(out.contains("#[non_exhaustive]"));
         assert!(out.contains("PartialEq"));
+    }
+
+    #[test]
+    fn any_of_branch_without_range_inherits_outer_range() {
+        // Per LinkML spec, an `any_of` branch can omit `range:` and
+        // inherit the slot's outer `range`. Catch silently-dropped
+        // branches: a branch with no range should still produce a
+        // variant in the generated enum, using the slot's outer range
+        // as the inherited type.
+        let mut def = ClassDefinition::new("Holder");
+        let mut slot = SlotDefinition::new("value");
+        slot.range = Some("Default".to_string());
+        slot.any_of = vec![
+            slot_with_range("", "Explicit"),
+            SlotDefinition::new(""), // no range — should fall back to "Default"
+        ];
+        def.attributes.insert("value".to_string(), slot);
+
+        let mut schema = SchemaDefinition::new("s");
+        schema.classes.insert("Holder".to_string(), def.clone());
+        schema
+            .classes
+            .insert("Explicit".to_string(), ClassDefinition::new("Explicit"));
+        schema
+            .classes
+            .insert("Default".to_string(), ClassDefinition::new("Default"));
+
+        let roles = compute_class_roles(&schema);
+        let mut any_of_enums = BTreeMap::new();
+        let mut out = String::new();
+        render_class(&mut out, "Holder", &def, &schema, &roles, &mut any_of_enums);
+
+        let members = any_of_enums
+            .get("HolderValue")
+            .expect("any_of enum recorded");
+        assert_eq!(
+            members,
+            &vec!["Explicit".to_string(), "Default".to_string()],
+            "branch without explicit range should inherit slot's outer range"
+        );
+    }
+
+    #[test]
+    fn trait_class_without_descendants_omits_kind_enum_and_falls_back_to_string() {
+        // A trait-role class with NO concrete (Struct-role) descendants
+        // is a degenerate case that normally can't be produced by
+        // `compute_class_roles` (a class becomes trait-role only when
+        // something inherits from it). It CAN arise after schema edits
+        // that remove a leaf, or in synthetic / partially-loaded
+        // schemas. The writer must:
+        //   1. Skip the `<Name>Kind` enum (zero variants → invalid Rust).
+        //   2. Emit a breadcrumb comment explaining the absence.
+        //   3. Have `type_for_range` fall back to `String` rather than
+        //      emit a reference to the non-existent `<Name>Kind` type.
+        //
+        // Test setup: construct a `roles` map directly with a Trait
+        // marker that has no actual descendants in the schema.
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .classes
+            .insert("Phantom".to_string(), ClassDefinition::new("Phantom"));
+
+        let mut roles = BTreeMap::new();
+        roles.insert("Phantom".to_string(), ClassRole::Trait);
+
+        // Kind enum: skipped, breadcrumb emitted.
+        let mut out = String::new();
+        render_kind_enum(&mut out, "Phantom", &schema, &roles);
+        assert!(
+            out.contains("no concrete descendants"),
+            "should emit breadcrumb explaining missing Kind enum; got: {out}"
+        );
+        assert!(
+            !out.contains("pub enum PhantomKind"),
+            "should NOT emit an empty PhantomKind enum; got: {out}"
+        );
+
+        // type_for_range: returns "String", not "PhantomKind".
+        assert_eq!(type_for_range("Phantom", &schema, &roles), "String");
+    }
+
+    #[test]
+    fn render_class_emits_warning_comment_for_unresolved_global_slot_ref() {
+        // A class that references a slot by name in its `slots:` array
+        // but the schema doesn't define that slot anywhere should emit
+        // a `// WARNING:` comment before the struct so the gap is
+        // visible. Silent drop is misleading.
+        let mut def = ClassDefinition::new("Lonely");
+        def.slots.push("absent_slot".to_string());
+
+        let schema = SchemaDefinition::new("s");
+        let roles = compute_class_roles(&schema);
+        let mut any_of_enums = BTreeMap::new();
+        let mut out = String::new();
+        render_class(&mut out, "Lonely", &def, &schema, &roles, &mut any_of_enums);
+        assert!(
+            out.contains("// WARNING") && out.contains("absent_slot"),
+            "expected a warning comment for the unresolved slot ref; got: {out}"
+        );
+    }
+
+    #[test]
+    fn render_class_skips_warning_when_slot_ref_is_resolved_by_inline_attribute() {
+        // The unresolved-slot warning must NOT fire when the same name
+        // appears in `attributes` (inline definition) or `slot_usage`
+        // (refinement). The schema-wide `slots:` table is only one of
+        // three resolution sources; emitting a warning for refs that
+        // resolve locally would be misleading.
+        let mut def = ClassDefinition::new("HasInline");
+        def.slots.push("inline_slot".to_string());
+        def.attributes.insert(
+            "inline_slot".to_string(),
+            SlotDefinition::new("inline_slot"),
+        );
+
+        let schema = SchemaDefinition::new("s");
+        let roles = compute_class_roles(&schema);
+        let mut any_of_enums = BTreeMap::new();
+        let mut out = String::new();
+        render_class(
+            &mut out,
+            "HasInline",
+            &def,
+            &schema,
+            &roles,
+            &mut any_of_enums,
+        );
+        assert!(
+            !out.contains("// WARNING"),
+            "inline-defined slot should suppress the unresolved-ref warning; got: {out}"
+        );
+
+        // Same check for slot_usage as the resolution source.
+        let mut def = ClassDefinition::new("HasUsage");
+        def.slots.push("refined_slot".to_string());
+        def.slot_usage.insert(
+            "refined_slot".to_string(),
+            SlotDefinition::new("refined_slot"),
+        );
+        let mut out = String::new();
+        render_class(
+            &mut out,
+            "HasUsage",
+            &def,
+            &schema,
+            &roles,
+            &mut any_of_enums,
+        );
+        assert!(
+            !out.contains("// WARNING"),
+            "slot_usage-refined slot should suppress the unresolved-ref warning; got: {out}"
+        );
+    }
+
+    #[test]
+    fn has_concrete_descendants_requires_both_struct_role_and_descendant_relation() {
+        // The check must be a conjunction: a Struct-role class that is
+        // NOT a descendant of `name` should not count, nor should a
+        // descendant class that isn't Struct-role. Replacing the `&&`
+        // with `||` would treat any Struct class anywhere in the schema
+        // as a descendant.
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .classes
+            .insert("Phantom".to_string(), ClassDefinition::new("Phantom"));
+        schema
+            .classes
+            .insert("Unrelated".to_string(), ClassDefinition::new("Unrelated"));
+
+        let mut roles = BTreeMap::new();
+        roles.insert("Phantom".to_string(), ClassRole::Trait);
+        roles.insert("Unrelated".to_string(), ClassRole::Struct);
+
+        assert!(
+            !has_concrete_descendants("Phantom", &schema, &roles),
+            "Unrelated is Struct-role but not a descendant of Phantom; \
+             has_concrete_descendants must return false"
+        );
+
+        // And the corresponding `type_for_range` fallback still applies.
+        assert_eq!(type_for_range("Phantom", &schema, &roles), "String");
     }
 
     #[test]
