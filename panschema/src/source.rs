@@ -430,6 +430,47 @@ mod tests {
     }
 
     #[test]
+    fn source_spec_format_round_trips_path() {
+        // Lockfile + manifest both treat `source_spec` as a key for
+        // matching; the exact format must round-trip through the
+        // lockfile parser's expectations (`path:<rel>`).
+        let src = SchemaSource::Path {
+            path: PathBuf::from("./local-pkg"),
+        };
+        assert_eq!(src.source_spec(), "path:./local-pkg");
+    }
+
+    #[test]
+    fn source_spec_format_round_trips_github() {
+        let src = SchemaSource::Github {
+            owner: "padamson".to_string(),
+            repo: "scimantic-schema".to_string(),
+            version: "0.1.0".to_string(),
+        };
+        assert_eq!(src.source_spec(), "github:padamson/scimantic-schema");
+    }
+
+    #[test]
+    fn tag_is_none_for_path_source() {
+        let src = SchemaSource::Path {
+            path: PathBuf::from("./x"),
+        };
+        assert_eq!(src.tag(), None);
+    }
+
+    #[test]
+    fn tag_prepends_v_for_github_source() {
+        // The codeload URL format requires `v<version>` as the tag,
+        // not the bare version string.
+        let src = SchemaSource::Github {
+            owner: "a".to_string(),
+            repo: "b".to_string(),
+            version: "0.1.3".to_string(),
+        };
+        assert_eq!(src.tag(), Some("v0.1.3".to_string()));
+    }
+
+    #[test]
     fn rejects_path_and_source_together() {
         let dep = SchemaDep {
             path: Some(PathBuf::from("./x.yaml")),

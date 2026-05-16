@@ -121,8 +121,15 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
+      # Prebuilt binary via taiki-e/install-action. `cargo install
+      # cargo-mutants` fails after a cache hit (cargo refuses to
+      # overwrite the existing `~/.cargo/bin/cargo-mutants` without
+      # --force); the action handles the already-installed case and is
+      # much faster than building from source.
       - name: Install cargo-mutants
-        run: cargo install cargo-mutants
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
 
       # panschema/src/html_writer.rs uses `include_str!` /
       # `include_bytes!` to embed the wasm pkg artifacts at compile
@@ -210,8 +217,15 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
+      # Prebuilt binary via taiki-e/install-action. `cargo install
+      # cargo-mutants` fails after a cache hit (cargo refuses to
+      # overwrite the existing `~/.cargo/bin/cargo-mutants` without
+      # --force); the action handles the already-installed case and is
+      # much faster than building from source.
       - name: Install cargo-mutants
-        run: cargo install cargo-mutants
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
 
       # Playwright browsers are needed because cargo-mutants builds and
       # runs all test binaries (including the e2e integration test) for

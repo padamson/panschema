@@ -960,6 +960,22 @@ mod tests {
         assert_eq!(OwlReader::map_xsd_to_linkml("float"), "float");
         assert_eq!(OwlReader::map_xsd_to_linkml("anyURI"), "uri");
         assert_eq!(OwlReader::map_xsd_to_linkml("customType"), "customType");
+
+        // Pin down every match arm so deleting any of them is caught.
+        // The fallback `_` arm would silently substitute the original
+        // XSD name (e.g. "dateTime" instead of "datetime"), which is
+        // observably wrong downstream.
+        assert_eq!(OwlReader::map_xsd_to_linkml("string"), "string");
+        assert_eq!(OwlReader::map_xsd_to_linkml("integer"), "integer");
+        assert_eq!(OwlReader::map_xsd_to_linkml("long"), "integer");
+        assert_eq!(OwlReader::map_xsd_to_linkml("short"), "integer");
+        assert_eq!(OwlReader::map_xsd_to_linkml("byte"), "integer");
+        assert_eq!(OwlReader::map_xsd_to_linkml("double"), "float");
+        assert_eq!(OwlReader::map_xsd_to_linkml("decimal"), "float");
+        assert_eq!(OwlReader::map_xsd_to_linkml("date"), "date");
+        // dateTime — capitalisation differs from LinkML's `datetime`.
+        assert_eq!(OwlReader::map_xsd_to_linkml("dateTime"), "datetime");
+        assert_eq!(OwlReader::map_xsd_to_linkml("time"), "time");
     }
 
     #[test]

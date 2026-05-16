@@ -834,6 +834,7 @@ fn add_schema(
     Ok(())
 }
 
+#[derive(Debug)]
 struct GithubOwnerRepo {
     owner: String,
     repo: String,
@@ -1271,5 +1272,102 @@ mod tests {
             }
             _ => panic!("Expected Styleguide command"),
         }
+    }
+
+    // ----- parse_github_uri --------------------------------------------
+
+    #[test]
+    fn parse_github_uri_accepts_well_formed_spec() {
+        let g = parse_github_uri("github:padamson/scimantic-schema").unwrap();
+        assert_eq!(g.owner, "padamson");
+        assert_eq!(g.repo, "scimantic-schema");
+    }
+
+    #[test]
+    fn parse_github_uri_rejects_empty_owner() {
+        let err = parse_github_uri("github:/repo").unwrap_err();
+        assert!(err.to_string().contains("malformed"));
+    }
+
+    #[test]
+    fn parse_github_uri_rejects_empty_repo() {
+        let err = parse_github_uri("github:owner/").unwrap_err();
+        assert!(err.to_string().contains("malformed"));
+    }
+
+    #[test]
+    fn parse_github_uri_rejects_repo_containing_slash() {
+        // `repo.contains('/')` rejects three-segment paths so the
+        // url builder doesn't silently produce a malformed URL.
+        let err = parse_github_uri("github:owner/sub/repo").unwrap_err();
+        assert!(err.to_string().contains("malformed"));
+    }
+
+    #[test]
+    fn parse_github_uri_rejects_missing_protocol_prefix() {
+        let err = parse_github_uri("gitlab:owner/repo").unwrap_err();
+        assert!(
+            err.to_string().contains("expected `github:owner/repo`"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_github_uri_rejects_missing_slash() {
+        let err = parse_github_uri("github:owner-only").unwrap_err();
+        assert!(err.to_string().contains("malformed"));
+    }
+
+    // ----- relative_path -----------------------------------------------
+
+    #[test]
+    fn relative_path_returns_absolute_target_when_no_shared_ancestor() {
+        // When the two paths share no common root, fall back to the
+        // absolute target rather than building a `../` walk that
+        // crosses volume / filesystem boundaries.
+        let base = Path::new("foo/bar"); // no RootDir prefix
+        let target = Path::new("baz/qux");
+        let rel = relative_path(base, target);
+        // Without a RootDir prefix, the function returns the target as-is.
+        assert_eq!(rel, target.to_path_buf());
+    }
+
+    #[test]
+    fn relative_path_walks_up_to_common_ancestor() {
+        let base = Path::new("/a/b/c");
+        let target = Path::new("/a/x/y");
+        let rel = relative_path(base, target);
+        // From /a/b/c to /a/x/y: up twice (to /a), then down into x/y.
+        assert_eq!(rel, PathBuf::from("../../x/y"));
+    }
+
+    #[test]
+    fn relative_path_emits_dot_when_paths_equal() {
+        // base == target: zero ../, zero descents → an empty PathBuf
+        // becomes "." so callers can `.join()` against it.
+        let base = Path::new("/a/b");
+        let target = Path::new("/a/b");
+        assert_eq!(relative_path(base, target), PathBuf::from("."));
+    }
+
+    #[test]
+    fn relative_path_target_under_base_is_pure_descent() {
+        // Sibling-of-self: target nested under base produces a
+        // forward-only path.
+        let base = Path::new("/a/b");
+        let target = Path::new("/a/b/c/d");
+        assert_eq!(relative_path(base, target), PathBuf::from("c/d"));
+    }
+
+    #[test]
+    fn relative_path_anchored_base_relative_target_returns_target_as_is() {
+        // Mixing an anchored base with a relative target produces
+        // `common_prefix == 0` even though the base IS anchored. The
+        // early-return must fire on the "no shared prefix" condition
+        // alone — otherwise we'd build a meaningless `../../../c/d`
+        // by walking up from every base component.
+        let base = Path::new("/a/b");
+        let target = Path::new("c/d");
+        assert_eq!(relative_path(base, target), PathBuf::from("c/d"));
     }
 }

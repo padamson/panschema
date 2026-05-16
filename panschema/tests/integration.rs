@@ -544,6 +544,92 @@ html = "docs/"
     );
 }
 
+/// `panschema generate` against a manifest that lists `[schemas]` but
+/// has NO `[generate.<name>]` blocks prints a "No outputs generated"
+/// hint and still exits cleanly. Catches the `!produced_anything`
+/// guard from flipping to `produced_anything` (which would print the
+/// hint only when outputs WERE generated — exact-opposite bug).
+#[test]
+fn manifest_driven_generate_prints_hint_when_no_generate_block() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+
+    write_sample_pkg(consumer, "sample-pkg");
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+sample_schema = { path = "./sample-pkg" }
+"#,
+    )
+    .expect("write manifest");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("generate")
+        .current_dir(consumer)
+        .output()
+        .expect("panschema");
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("No outputs generated"),
+        "stderr should suggest adding a generate block; got:\n{stderr}"
+    );
+}
+
+/// `panschema generate --input X --format html` (without `--no-graph`)
+/// prints a "Graph visualization:" line to stderr describing the viz
+/// mode. Catches the `format == "html" && !no_graph` predicate from
+/// being inverted or flipped to `||`.
+#[test]
+fn cli_generate_html_prints_graph_visualization_mode() {
+    let output_dir = std::env::temp_dir().join("panschema_viz_mode_test");
+    let _ = fs::remove_dir_all(&output_dir);
+    fs::create_dir_all(&output_dir).expect("mkdir");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--input",
+            "tests/fixtures/reference.ttl",
+            "--output",
+            output_dir.to_str().unwrap(),
+        ])
+        .output()
+        .expect("panschema");
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Graph visualization:"),
+        "html format without --no-graph should announce the viz mode; got:\n{stderr}"
+    );
+
+    // Inverse: with `--no-graph`, the announcement is suppressed.
+    let output_dir2 = std::env::temp_dir().join("panschema_viz_mode_test_2");
+    let _ = fs::remove_dir_all(&output_dir2);
+    fs::create_dir_all(&output_dir2).expect("mkdir");
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--input",
+            "tests/fixtures/reference.ttl",
+            "--output",
+            output_dir2.to_str().unwrap(),
+            "--no-graph",
+        ])
+        .output()
+        .expect("panschema");
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("Graph visualization:"),
+        "--no-graph should suppress the viz mode announcement; got:\n{stderr}"
+    );
+
+    let _ = fs::remove_dir_all(&output_dir);
+    let _ = fs::remove_dir_all(&output_dir2);
+}
+
 /// `panschema generate` fans out across every populated writer key in
 /// `[generate.<name>]` — running `html` and `rust` in one invocation.
 #[test]
@@ -1501,6 +1587,16 @@ fn init_warns_when_main_file_missing_but_still_writes() {
         stderr.contains("warning") && stderr.contains("does-not-exist.yaml"),
         "should print a warning about the missing main file: {stderr}"
     );
+    // The two `if`/`else` branches of post-write validation both print
+    // a "warning" but with different text: file-missing → "does not
+    // exist yet"; reader-parse-failure → wraps the IO/parse error.
+    // Asserting on the file-missing-specific phrase pins down WHICH
+    // branch fired — so inverting the `!main_full.exists()` predicate
+    // is caught even though both branches yield a "warning" stderr.
+    assert!(
+        stderr.contains("does not exist yet"),
+        "should take the file-missing branch, not the parse-error branch: {stderr}"
+    );
     assert!(
         dir.join("panschema-publish.toml").exists(),
         "publish.toml should still be written"
@@ -1843,6 +1939,19 @@ fn release_with_git_refuses_when_tag_already_exists() {
     assert!(
         stderr.contains("already exists"),
         "stderr should call out the existing tag: {stderr}"
+    );
+
+    // Critical: panschema's check runs BEFORE the publish.toml bump.
+    // git itself would error on `git tag v0.1.1` if the check were
+    // bypassed, with the same "already exists" message — but by then
+    // publish.toml would already be bumped to 0.1.1 and committed.
+    // Asserting the version is still 0.1.0 pins down WHICH layer
+    // caught the error.
+    let publish = fs::read_to_string(dir.join("panschema-publish.toml")).unwrap();
+    assert!(
+        publish.contains(r#"version = "0.1.0""#),
+        "publish.toml must still be at 0.1.0 — the tag-exists check \
+         should reject before the bump:\n{publish}"
     );
 }
 

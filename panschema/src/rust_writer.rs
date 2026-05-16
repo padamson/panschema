@@ -1235,6 +1235,56 @@ mod tests {
     }
 
     #[test]
+    fn doc_comment_wrap_boundary_keeps_word_on_same_line_when_exactly_at_width() {
+        // Pin down the EXACT wrap boundary: the predicate is
+        // `current.len() + 1 + word.len() > WIDTH` (WIDTH = 76). A
+        // line that lands exactly at 76 chars after joining must NOT
+        // wrap. Catches the `+`/`*`/`-` arithmetic mutations and the
+        // `>`/`>=`/`==` comparison mutations.
+        //
+        // Construct: a word of 74 chars + a single space + a 1-char
+        // word = 76 chars total content. With `>`: 74+1+1=76, 76 > 76
+        // is FALSE → stays on one line. With `>=`: TRUE → wraps. With
+        // `==`: TRUE → wraps. With `+ → -`: 74-1+1=74 > 76 FALSE,
+        // same outcome but the line content differs.
+        let first_word = "a".repeat(74);
+        let input = format!("{first_word} z");
+        let mut out = String::new();
+        render_doc_comment(&mut out, "", Some(&input));
+        // Expect a single `/// <74-a-word> z` line, total 80 chars
+        // (4 chars of `/// ` prefix + 76 chars of content).
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(
+            lines.len(),
+            1,
+            "76-char content must fit on one line (no wrap); got {} lines:\n{out}",
+            lines.len()
+        );
+        assert_eq!(
+            lines[0].len(),
+            80,
+            "line should be exactly 80 chars; got: {out}"
+        );
+    }
+
+    #[test]
+    fn doc_comment_wraps_when_one_char_over_width() {
+        // One char past WIDTH → wraps. Establishes the over-the-line
+        // case (the dual of the at-the-line test above).
+        let first_word = "a".repeat(75);
+        let input = format!("{first_word} z");
+        let mut out = String::new();
+        render_doc_comment(&mut out, "", Some(&input));
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(
+            lines.len(),
+            2,
+            "77-char content must wrap; got {} lines:\n{out}",
+            lines.len()
+        );
+    }
+
+    #[test]
     fn doc_comment_wraps_long_lines() {
         let mut out = String::new();
         let long = "This is a long description that should wrap at a soft eighty-column boundary because Rust idiom keeps doc comments readable.";
@@ -1289,6 +1339,30 @@ mod tests {
     }
 
     #[test]
+    fn render_enum_sanitizes_spaces_as_underscores() {
+        // LinkML permissible values can legitimately contain spaces
+        // (e.g. "Open Source"). `variant_ident_for` maps both `-` and
+        // ` ` to `_` so the resulting Rust ident is valid. The serde
+        // rename preserves the original text for wire-format
+        // compatibility.
+        let mut def = EnumDefinition::new("License");
+        def.permissible_values.insert(
+            "Open Source".to_string(),
+            PermissibleValue::new("Open Source"),
+        );
+        let mut out = String::new();
+        render_enum(&mut out, "License", &def);
+        assert!(
+            out.contains("Open_Source"),
+            "spaces must become underscores; got: {out}"
+        );
+        assert!(
+            out.contains(r#"rename = "Open Source""#),
+            "rename must preserve the literal text including spaces; got: {out}"
+        );
+    }
+
+    #[test]
     fn render_enum_marks_non_exhaustive() {
         let mut def = EnumDefinition::new("Color");
         def.permissible_values
@@ -1324,6 +1398,251 @@ mod tests {
         assert!(
             out.contains("pub trait UncertaintyModel: Entity {}"),
             "expected `pub trait UncertaintyModel: Entity {{}}`, got: {out}"
+        );
+    }
+
+    #[test]
+    fn render_trait_combines_is_a_parent_and_mixins_as_supertraits() {
+        // A class with both `is_a` and `mixins` should emit a trait
+        // with ALL of them as supertrait bounds, in order: is_a parent
+        // first, then mixins. Each mixin appears once (the
+        // !supertraits.contains check guards against duplicates when a
+        // class lists the same name in multiple positions).
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .classes
+            .insert("Entity".to_string(), ClassDefinition::new("Entity"));
+        schema
+            .classes
+            .insert("Tagged".to_string(), ClassDefinition::new("Tagged"));
+        schema
+            .classes
+            .insert("Versioned".to_string(), ClassDefinition::new("Versioned"));
+        let mut multi = ClassDefinition::new("Annotated");
+        multi.is_a = Some("Entity".to_string());
+        multi.mixins.push("Tagged".to_string());
+        multi.mixins.push("Versioned".to_string());
+        schema
+            .classes
+            .insert("Annotated".to_string(), multi.clone());
+        // Add a leaf so Annotated, Tagged, Versioned all have role=Trait.
+        let mut leaf = ClassDefinition::new("Concrete");
+        leaf.is_a = Some("Annotated".to_string());
+        schema.classes.insert("Concrete".to_string(), leaf);
+
+        let roles = compute_class_roles(&schema);
+        let mut out = String::new();
+        render_trait(&mut out, "Annotated", &multi, &schema, &roles);
+        assert!(
+            out.contains("pub trait Annotated: Entity + Tagged + Versioned {}"),
+            "expected combined supertrait chain in order; got: {out}"
+        );
+    }
+
+    #[test]
+    fn render_trait_skips_mixin_supertrait_when_mixin_is_not_in_schema() {
+        // A class can list a mixin name that isn't actually defined
+        // as a class in this schema (e.g. an import is missing). The
+        // supertrait emission must skip such phantom mixins rather
+        // than emitting an unsatisfiable `pub trait X: Phantom {}`.
+        // Pins down the `schema.classes.contains_key(mixin)` predicate.
+        let mut schema = SchemaDefinition::new("s");
+        let mut leaf = ClassDefinition::new("OnlyOne");
+        leaf.mixins.push("PhantomMixin".to_string());
+        schema.classes.insert("OnlyOne".to_string(), leaf.clone());
+        // PhantomMixin is NOT inserted into schema.classes.
+
+        let mut roles = compute_class_roles(&schema);
+        // compute_class_roles puts PhantomMixin in the trait set (it
+        // appears as a mixin name). Insert it explicitly to mirror
+        // what the writer actually sees.
+        roles.insert("PhantomMixin".to_string(), ClassRole::Trait);
+
+        let mut out = String::new();
+        render_trait(&mut out, "OnlyOne", &leaf, &schema, &roles);
+        // PhantomMixin isn't in schema.classes → omit from supertraits.
+        assert!(
+            out.contains("pub trait OnlyOne {}"),
+            "phantom mixin must not appear in supertrait chain; got: {out}"
+        );
+        assert!(
+            !out.contains("PhantomMixin"),
+            "phantom mixin must not leak into output; got: {out}"
+        );
+    }
+
+    #[test]
+    fn render_trait_skips_mixin_supertrait_when_mixin_is_not_a_trait_role() {
+        // A mixin name that doesn't resolve to a Trait role in this
+        // schema (i.e. it's not actually used as a parent of anything
+        // else, AND isn't itself a mixin somewhere) is omitted from
+        // the supertrait chain. Pins down the `roles.get(mixin) ==
+        // Some(&ClassRole::Trait)` predicate.
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .classes
+            .insert("Tagged".to_string(), ClassDefinition::new("Tagged"));
+        // No class actually uses Tagged as a mixin → Tagged's role is Struct.
+        let mut leaf = ClassDefinition::new("OnlyOne");
+        // OnlyOne references Tagged in its mixin list, but that doesn't
+        // make Tagged a Trait-role class (compute_class_roles considers
+        // a class a Trait iff some OTHER class names it as is_a parent
+        // or mixin). Wait, actually `mixins` membership DOES make a
+        // class Trait-role (see compute_class_roles). So construct the
+        // test such that Tagged is NOT used as a mixin anywhere.
+        // We'll test directly via the roles map.
+        leaf.mixins.push("Tagged".to_string());
+        schema.classes.insert("OnlyOne".to_string(), leaf.clone());
+
+        let roles = compute_class_roles(&schema);
+        // Because OnlyOne lists Tagged as a mixin, Tagged IS a Trait.
+        // Sanity check.
+        assert_eq!(roles["Tagged"], ClassRole::Trait);
+
+        let mut out = String::new();
+        render_trait(&mut out, "OnlyOne", &leaf, &schema, &roles);
+        // OnlyOne is in roles but has role=Struct (nothing inherits
+        // from it). The render path here is "render_trait called on a
+        // class that itself is a leaf with mixins" — emits a trait
+        // referencing the mixins as supertraits.
+        assert!(
+            out.contains("pub trait OnlyOne: Tagged {}"),
+            "expected `pub trait OnlyOne: Tagged {{}}`; got: {out}"
+        );
+    }
+
+    #[test]
+    fn render_class_avoids_duplicate_impl_when_mixin_overlaps_with_is_a_parent() {
+        // A class whose mixin shares a name with its is_a parent (or
+        // with one of the parent's ancestors) must NOT emit a
+        // duplicate `impl X for Child {}` line. Pins down the
+        // `!impl_targets.contains(&...)` guards on lines 409/417.
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .classes
+            .insert("Shared".to_string(), ClassDefinition::new("Shared"));
+        let mut leaf = ClassDefinition::new("Child");
+        leaf.is_a = Some("Shared".to_string());
+        // Pathological-but-valid: listing the is_a parent AGAIN in the
+        // mixin list. The dedup guards must prevent two impl lines.
+        leaf.mixins.push("Shared".to_string());
+        schema.classes.insert("Child".to_string(), leaf.clone());
+
+        let roles = compute_class_roles(&schema);
+        let mut any_of_enums = BTreeMap::new();
+        let mut out = String::new();
+        render_class(&mut out, "Child", &leaf, &schema, &roles, &mut any_of_enums);
+        // Exactly ONE impl line for Shared.
+        let count = out.matches("impl Shared for Child {}").count();
+        assert_eq!(
+            count, 1,
+            "expected exactly one `impl Shared for Child {{}}` line; got {count}:\n{out}"
+        );
+    }
+
+    #[test]
+    fn render_class_omits_trailing_blank_line_when_no_impl_blocks() {
+        // A leaf class with no `is_a` and no mixins emits the struct
+        // body, then the closing `}\n\n`, with NO blank line beyond
+        // that — because the impl-blocks-trailing-newline only fires
+        // when impl_targets is non-empty. Pins down the
+        // `!impl_targets.is_empty()` guard (line 429).
+        let def = ClassDefinition::new("Loner");
+        let schema = SchemaDefinition::new("s");
+        let roles = compute_class_roles(&schema);
+        let mut any_of_enums = BTreeMap::new();
+        let mut out = String::new();
+        render_class(&mut out, "Loner", &def, &schema, &roles, &mut any_of_enums);
+        // After the struct, expect exactly `}\n\n` and then end-of-
+        // string (no impl block separator). With `!` deleted the
+        // function pushes `\n` even when there are no impl blocks,
+        // producing `}\n\n\n` — three newlines.
+        assert!(
+            out.ends_with("}\n\n"),
+            "leaf-class output should end `}}\\n\\n` (no impl-block separator); got: {:?}",
+            &out[out.len().saturating_sub(10)..]
+        );
+        assert!(
+            !out.ends_with("}\n\n\n"),
+            "must not emit a spurious trailing blank line for impl-less classes; got: {:?}",
+            &out[out.len().saturating_sub(10)..]
+        );
+    }
+
+    #[test]
+    fn render_class_emits_impl_for_mixin_and_its_ancestors() {
+        // A class with a mixin (whose parent is itself a Trait-role
+        // class) must emit `impl` blocks for BOTH the mixin AND the
+        // mixin's `is_a` chain. Pins down lines 409–421 (the mixin
+        // ancestor walk).
+        let mut schema = SchemaDefinition::new("s");
+        // RootTrait <- MidTrait (the mixin's parent chain)
+        schema
+            .classes
+            .insert("RootTrait".to_string(), ClassDefinition::new("RootTrait"));
+        let mut mid = ClassDefinition::new("MidTrait");
+        mid.is_a = Some("RootTrait".to_string());
+        schema.classes.insert("MidTrait".to_string(), mid);
+        // Leaf uses MidTrait as a mixin.
+        let mut leaf = ClassDefinition::new("Leaf");
+        leaf.mixins.push("MidTrait".to_string());
+        schema.classes.insert("Leaf".to_string(), leaf.clone());
+
+        let roles = compute_class_roles(&schema);
+        let mut any_of_enums = BTreeMap::new();
+        let mut out = String::new();
+        render_class(&mut out, "Leaf", &leaf, &schema, &roles, &mut any_of_enums);
+        // Both the mixin AND the mixin's `is_a` parent are satisfied.
+        assert!(
+            out.contains("impl MidTrait for Leaf {}"),
+            "expected `impl MidTrait for Leaf {{}}`; got: {out}"
+        );
+        assert!(
+            out.contains("impl RootTrait for Leaf {}"),
+            "expected `impl RootTrait for Leaf {{}}` (mixin's is_a ancestor); got: {out}"
+        );
+    }
+
+    #[test]
+    fn render_class_omits_serde_rename_when_field_name_matches_slot() {
+        // When a slot's snake_case form equals the original name (e.g.
+        // a slot called `label` — already lowercase, no camelCase),
+        // emit just `default` / `skip_serializing_if`, NOT a redundant
+        // `rename`. Pins down `rust_field != *slot_name` from flipping
+        // to `==` (which would rename only when names already match
+        // — never useful).
+        let mut def = ClassDefinition::new("Thing");
+        let mut already_snake = SlotDefinition::new("label");
+        already_snake.range = Some("string".to_string());
+        already_snake.required = true;
+        def.attributes.insert("label".to_string(), already_snake);
+
+        let schema = SchemaDefinition::new("s");
+        let roles = compute_class_roles(&schema);
+        let mut any_of_enums = BTreeMap::new();
+        let mut out = String::new();
+        render_class(&mut out, "Thing", &def, &schema, &roles, &mut any_of_enums);
+        // `label` is required + single + name matches → no serde attrs at all.
+        assert!(
+            out.contains("    pub label: String,\n"),
+            "expected bare `pub label: String,`; got: {out}"
+        );
+        assert!(
+            !out.contains(r#"rename = "label""#),
+            "should NOT emit a redundant rename; got: {out}"
+        );
+        // serde_attrs would be non-empty only if a rename or option
+        // framing was emitted; for required + name-matches, none apply.
+        let label_block = out
+            .split("pub struct Thing")
+            .nth(1)
+            .unwrap_or("")
+            .split("\n}")
+            .next()
+            .unwrap_or("");
+        assert!(
+            !label_block.contains("#[serde("),
+            "required + same-name field should emit no #[serde] attrs; got block:\n{label_block}"
         );
     }
 

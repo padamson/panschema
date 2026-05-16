@@ -440,6 +440,35 @@ mod tests {
     }
 
     #[test]
+    fn is_false_serde_helper_skips_default_bools() {
+        // `is_false` powers `#[serde(skip_serializing_if = "is_false")]`
+        // on `required`, `multivalued`, `r#abstract`, etc. If it stops
+        // returning `true` for `false`, those fields leak into every
+        // serialized output as `field: false` — bloating manifests and
+        // breaking round-trip equality with hand-written LinkML.
+        let mut slot = SlotDefinition::new("name");
+        slot.range = Some("string".to_string());
+        // `required` defaults to false and stays false.
+        let yaml = serde_yaml::to_string(&slot).unwrap();
+        assert!(
+            !yaml.contains("required:"),
+            "default-false `required` should be skipped; got:\n{yaml}"
+        );
+        assert!(
+            !yaml.contains("multivalued:"),
+            "default-false `multivalued` should be skipped; got:\n{yaml}"
+        );
+
+        // Sanity-check the inverse: a true bool DOES serialize.
+        slot.required = true;
+        let yaml = serde_yaml::to_string(&slot).unwrap();
+        assert!(
+            yaml.contains("required: true"),
+            "true bools must serialize; got:\n{yaml}"
+        );
+    }
+
+    #[test]
     fn schema_definition_deserializes_from_yaml() {
         let yaml = r#"
 name: test_schema

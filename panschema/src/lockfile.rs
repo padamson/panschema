@@ -110,6 +110,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn path_source_spec_emits_exact_prefix_and_path() {
+        // The lockfile's `source` field for `path:` entries must round-trip
+        // byte-exactly so consumers can match against it (e.g. `verify`
+        // detecting that a manifest entry's path stayed the same).
+        let s = path_source_spec(Path::new("./schema/my.yaml"));
+        assert_eq!(s, "path:./schema/my.yaml");
+
+        // Non-trivial relative path components survive unchanged.
+        let s = path_source_spec(Path::new("../sibling/pkg"));
+        assert_eq!(s, "path:../sibling/pkg");
+
+        // An empty path produces the bare prefix — degenerate but defined.
+        let s = path_source_spec(Path::new(""));
+        assert_eq!(s, "path:");
+    }
+
+    #[test]
     fn empty_lockfile_round_trips() {
         let original = Lockfile::default();
         let s = original.to_toml_string().expect("serialize");

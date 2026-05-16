@@ -614,6 +614,19 @@ x = {}
         assert!(matches!(e, SpecError::UnknownProtocol(_)));
     }
 
+    #[test]
+    fn spec_parses_path_with_colon_after_separator_as_path() {
+        // A relative path can legitimately contain a `:` if it appears
+        // after the first path separator (e.g. a filename with a colon).
+        // The ambiguity check at line 167 only fires when the colon
+        // comes BEFORE the separator (suggesting a protocol prefix).
+        // This test pins down that boundary — the colon at position 5
+        // is after the `.` at position 0, so the spec is a Path, not
+        // an UnknownProtocol error.
+        let s: SchemaSpec = "./foo:bar".parse().unwrap();
+        assert_eq!(s, SchemaSpec::Path(PathBuf::from("./foo:bar")));
+    }
+
     // -----------------------------------------------------------------
     // insert_schema (Slice 4)
     // -----------------------------------------------------------------
@@ -703,6 +716,28 @@ x = {}
         insert_schema(&m, &remote_req("x", "github:a/b", "0.1.0")).unwrap();
         let err = insert_schema(&m, &remote_req("x", "github:c/d", "0.1.0")).unwrap_err();
         assert!(matches!(err, AddError::SourceMismatch { .. }));
+    }
+
+    #[test]
+    fn insert_schema_path_request_rejects_when_existing_has_source() {
+        // If an existing entry has the same `path` but ALSO a `source`
+        // field (e.g. a corrupt manifest the user hand-edited), a new
+        // Path-typed `add` of the same path must NOT be treated as
+        // "same shape" — it should raise a `SourceMismatch` rather than
+        // silently accept. The Path arm's same-shape check requires
+        // BOTH path-match AND `source.is_none()`.
+        let tmp = tempfile::tempdir().unwrap();
+        let m = write_manifest(
+            tmp.path(),
+            r#"[schemas]
+x = { path = "./local", source = "github:a/b", version = "0.1.0" }
+"#,
+        );
+        let err = insert_schema(&m, &path_req("x", "./local")).unwrap_err();
+        assert!(
+            matches!(err, AddError::SourceMismatch { .. }),
+            "expected SourceMismatch when existing entry has a stray source field; got {err:?}"
+        );
     }
 
     #[test]

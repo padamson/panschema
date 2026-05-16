@@ -580,4 +580,31 @@ mod tests {
         let writer = NTriplesWriter::new();
         assert_eq!(writer.format_id(), "ntriples");
     }
+
+    #[test]
+    fn xsd_mapping_uses_canonical_iris() {
+        // Pin down the exact XSD IRI for each LinkML primitive. The
+        // fallback arm produces `xsd:{linkml_type}` verbatim, so for
+        // types where capitalisation differs (`datetime` →
+        // `dateTime`, `uri` → `anyURI`), the dedicated match arm is
+        // load-bearing. Deleting any arm reverts to the verbatim
+        // form, which is observably wrong for RDF consumers.
+        let xsd = "http://www.w3.org/2001/XMLSchema#";
+        assert_eq!(map_linkml_to_xsd("string"), format!("{xsd}string"));
+        assert_eq!(map_linkml_to_xsd("integer"), format!("{xsd}integer"));
+        assert_eq!(map_linkml_to_xsd("float"), format!("{xsd}float"));
+        assert_eq!(map_linkml_to_xsd("double"), format!("{xsd}double"));
+        assert_eq!(map_linkml_to_xsd("boolean"), format!("{xsd}boolean"));
+        assert_eq!(map_linkml_to_xsd("date"), format!("{xsd}date"));
+        // dateTime — capital T is intentional, matches XSD canonical form.
+        assert_eq!(map_linkml_to_xsd("datetime"), format!("{xsd}dateTime"));
+        assert_eq!(map_linkml_to_xsd("time"), format!("{xsd}time"));
+        // anyURI — XSD's name for URI-typed literals.
+        assert_eq!(map_linkml_to_xsd("uri"), format!("{xsd}anyURI"));
+        // Fallback: unknown LinkML type passes through verbatim.
+        assert_eq!(
+            map_linkml_to_xsd("custom_type"),
+            format!("{xsd}custom_type")
+        );
+    }
 }
