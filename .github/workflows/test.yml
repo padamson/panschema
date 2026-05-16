@@ -139,7 +139,7 @@ jobs:
     - name: Get Playwright version
       id: playwright-version
       shell: bash
-      run: echo "version=1.59.1" >> $GITHUB_OUTPUT
+      run: echo "version=1.60.0" >> $GITHUB_OUTPUT
 
     - name: Cache Playwright browsers and driver
       uses: actions/cache@v5
@@ -156,14 +156,14 @@ jobs:
 
     - name: Install Playwright browsers
       if: steps.playwright-cache.outputs.cache-hit != 'true'
-      run: npx playwright@1.59.1 install --with-deps
+      run: npx playwright@1.60.0 install --with-deps
 
     - name: Install Playwright dependencies (cached)
       if: steps.playwright-cache.outputs.cache-hit == 'true'
       shell: bash
       run: |
         if [ "$RUNNER_OS" == "Linux" ]; then
-          npx playwright@1.59.1 install-deps
+          npx playwright@1.60.0 install-deps
         fi
 
     - name: Run tests (release)
