@@ -49,7 +49,7 @@ tower-livereload = "0.10"
 ureq = { version = "2", default-features = false, features = ["tls"] }
 flate2 = "1"
 tar = "0.4"
-directories = "5"
+directories = "6"
 fs2 = "0.4"
 
 # GPU force simulation (optional)
