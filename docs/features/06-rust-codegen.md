@@ -179,18 +179,102 @@ LinkML uses lowerCamelCase (`wasGeneratedBy`); Rust idiom is snake_case. Slot na
 
 ---
 
-### Slice 6.5 (optional): Error surfaces
+### Slice 6.5: Ergonomic derives + `#[non_exhaustive]`
+
+**Status:** ✅ Completed
+
+**User Value:** Generated types feel more idiomatic — consumers can `Foo::default()`, compare instances with `==`, and `match` on enums without locking future panschema-side schema growth out of the consumer.
+
+**Acceptance Criteria:**
+- [x] `PartialEq` derive on every concrete struct and on `<Name>Kind` / per-slot any_of enums
+- [x] `Default` derive on structs whose fields are all default-able under the conservative rules in `supports_default`: `Option<T>` / `Vec<T>` (always defaultable), required primitives that are `Default` (`String`, `i64`, `bool`, `f64`). Required `Box<T>` / `DateTime<Utc>` / class refs / enum refs / any_of-typed fields disqualify
+- [x] `#[non_exhaustive]` on every emitted enum (LinkML enums, `<Name>Kind` closed enums, per-slot any_of unions)
+- [x] Unit tests for `supports_default` across range/required/multivalued combinations, including the `range: None` fallback that defaults to `string` (regression for scimantic's global `label` slot)
+- [x] Unit tests for `compute_struct_derives` covering all-Default, no-Default, and the always-included base derives
+- [x] Integration smoke extended with `make_default_question` (asserts `Question::default()` compiles) and `questions_compare_equal` (asserts derived `PartialEq` works at the API level)
+
+**Notes:**
+- `Eq` + `Hash` deferred to slice 6.8 — those need a recursive trait-dependency analysis (f64 anywhere disqualifies; class fields need to know whether THAT struct derives them).
+- `#[non_exhaustive]` is enums-only. Putting it on structs would block struct-literal construction in downstream crates, which the slice 6.4 acceptance smoke explicitly tests.
+- The `range: None` fallback to `string` for `supports_default` matched the implicit LinkML `default_range` convention and fixed an early test failure (scimantic's global `label` slot has no explicit `range:` but resolves to `String`).
+
+---
+
+### Slice 6.6: Correctness hardening
 
 **Status:** ⬜ Not Started
 
-**User Value:** Clear errors when the writer can't handle a LinkML construct, rather than panicking or emitting broken Rust.
+**User Value:** Writer no longer stack-overflows or silently drops information on malformed/edge-case LinkML inputs.
 
 **Acceptance Criteria:**
-- [ ] `RustWriterError::UnsupportedConstruct { feature, location }` variant added
-- [ ] Fixture exercising a known-unsupported construct (e.g. a future LinkML feature) errors with a clear message
+- [ ] `is_descendant_of` and `resolve_slots` take a visited-set parameter; circular `is_a` chains terminate with a clear error rather than infinite recursion
+- [ ] Unresolved global slot references (`class.slots` entry not present in `schema.slots`) emit a diagnostic — either via a structured warning in the writer's return value or as a comment in the generated output
+- [ ] `any_of` branches missing an explicit `range` fall back to the slot's outer range (per LinkML spec) instead of being silently dropped
+- [ ] Trait classes with zero concrete descendants skip the `<Name>Kind` enum cleanly and emit a comment explaining why; any slot whose range references such a class becomes an unresolved-ref diagnostic rather than a compile error in the generated output
+- [ ] Unit tests for each: `circular_is_a_does_not_overflow`, `unresolved_global_slot_ref_emits_diagnostic`, `any_of_branch_without_range_inherits_outer_range`, `trait_class_without_descendants_omits_kind_enum`
+
+---
+
+### Slice 6.7: Idiomatic Rust polish
+
+**Status:** ⬜ Not Started
+
+**User Value:** Internal cleanup; no user-visible change. Makes the writer more composable and reduces allocation in hot paths.
+
+**Acceptance Criteria:**
+- [ ] Migrate the `out: &mut String` + `push_str` pattern to `impl std::fmt::Write` so helpers compose with `write!` / `writeln!` macros and the writer can target arbitrary write sinks
+- [ ] `snake_case` walks the `&str` directly via `char_indices()` instead of collecting `Vec<char>`
+- [ ] `escape_str` returns `Cow<'_, str>` so the common no-escape case is zero-allocation
+- [ ] Replace the seven-field copy-paste in `merge_slot_override` with a small `merge_opt!` macro
+- [ ] Doc-comment cleanups for the `WHAT/WHY` boundary nits identified in code review
+
+---
+
+### Slice 6.8: `Eq` + `Hash` derives (recursive trait analysis)
+
+**Status:** ⬜ Not Started
+
+**User Value:** Generated structs and enums can be used as `HashMap` keys, in `HashSet`s, and compared with `==` in `const` contexts. Common for schema-pinning consumers (cache keys, deduplication).
+
+**Acceptance Criteria:**
+- [ ] Two-pass writer: first pass computes per-type trait support (which structs/enums can derive `Eq`/`Hash`); second pass emits the derives. The dependency graph propagates: a struct derives `Eq` only when every field's type does
+- [ ] `f64` anywhere in a struct's resolved field set disqualifies `Eq` and `Hash`
+- [ ] `chrono::DateTime<Utc>`, `NaiveDate`, `NaiveTime` all support `Eq` + `Hash`
+- [ ] Class-typed and enum-typed fields propagate through their referent's trait support
+- [ ] Unit tests cover: f64-only struct, datetime-only struct, deeply-nested class chains, cycles broken by `Box<T>` (Box preserves the inner trait set)
 
 **Notes:**
-- Only ship this slice if the slice 6.4 dogfood surfaces a real unsupported construct in scimantic@0.1.0. Otherwise the slice is speculative; defer until a new LinkML feature lands.
+- This slice is the natural extension of 6.5. Doing them together is tempting; splitting keeps 6.5 small and verifiable on its own.
+
+---
+
+### Slice 6.9: Constructor methods
+
+**Status:** ⬜ Not Started
+
+**User Value:** Schema-evolution-stable construction. `Question::new("label")` survives the schema adding a new optional field; struct literal `Question { label, … }` breaks.
+
+**Acceptance Criteria:**
+- [ ] For each concrete struct, emit `impl <Name> { pub fn new(<required_fields…>) -> Self }`. Optional fields default to `None`; multivalued default to empty `Vec`
+- [ ] Generated `new` constructors are public
+- [ ] Skip emission when the struct has no required fields (constructor would be equivalent to `Default::default()`)
+- [ ] Test additions: scratch crate exercises `Question::new("label")` alongside the existing struct-literal smoke
+
+---
+
+### Slice 6.10 (optional): Error surfaces as structured types
+
+**Status:** ⬜ Not Started
+
+**User Value:** Diagnostic output is testable and composable rather than just printed to stderr or embedded in generated comments.
+
+**Acceptance Criteria:**
+- [ ] `RustWriter::render_with_diagnostics(schema) -> (String, Vec<RustWriterDiagnostic>)` companion API
+- [ ] `RustWriterDiagnostic` enum: `UnsupportedConstruct`, `UnresolvedSlotReference`, `OrphanTraitClass`, etc.
+- [ ] Fixture-driven tests for each diagnostic kind
+
+**Notes:**
+- Depends on 6.6 — that slice introduces the in-line diagnostic shape; this one promotes it to a structured return value. Defer until a concrete consumer needs it.
 
 ---
 
@@ -202,7 +286,12 @@ LinkML uses lowerCamelCase (`wasGeneratedBy`); Rust idiom is snake_case. Slot na
 | 6.2 | Must Have | 6.1 | ✅ Completed |
 | 6.3 | Must Have | 6.2 | ✅ Completed |
 | 6.4 | Must Have | 6.3 | ✅ Completed |
-| 6.5 | Nice to Have | 6.4 | ⬜ Not Started |
+| 6.5 | Should Have | 6.4 | ✅ Completed |
+| 6.6 | Should Have | 6.4 | ⬜ Not Started |
+| 6.7 | Nice to Have | 6.4 | ⬜ Not Started |
+| 6.8 | Nice to Have | 6.5 | ⬜ Not Started |
+| 6.9 | Should Have | 6.5 | ⬜ Not Started |
+| 6.10 | Nice to Have | 6.6 | ⬜ Not Started |
 
 ---
 
@@ -223,7 +312,12 @@ LinkML uses lowerCamelCase (`wasGeneratedBy`); Rust idiom is snake_case. Slot na
 
 - **Newtype wrappers for URIs** (`pub struct Uri(String)`). v0.1 uses `String`; revisit if/when meaningful.
 - **rustfmt post-processing of generated output.** Consumers can pipe it themselves.
-- **Trait method bodies derived from LinkML expressions or pattern constraints.** Traits are pure getters in v0.1.
+- **Method-bearing traits returning `&dyn ParentTrait`.** Slice 6.3 chose marker traits to keep slot_usage type refinement clean. Polymorphic slot reads via trait methods would need a separate writer mode plus primitive/class dispatch logic; defer until a concrete consumer asks for it.
+- **Builder pattern** (`FooBuilder` with chainable setters). Useful for many-field structs; slice 6.9's `new(required_fields…)` covers the common case. Add when a multi-field-struct ergonomics complaint surfaces.
+- **Validation derives** (`#[validate(pattern = "…", min = …)]`). LinkML's `pattern`, `minimum_value`, `maximum_value`, `unique_keys` constraints would map to a `validator::Validate`-style derive. Out of scope until a concrete validation use case lands.
+- **Cross-schema `imports:` resolution.** Per-schema modules + cross-module trait/struct references. Requires a "schema namespace" concept the codegen doesn't have today — moderate redesign, defer until needed.
+- **Open-world polymorphic dispatch** (`Box<dyn Trait>` + `typetag` for schemas whose subclass set is unknown at codegen time). The current `<Name>Kind` closed-enum approach is closed-world. Alternative writer mode rather than extension.
+- **Pre-release constraints in generated types** (`exactly_one_of`, `none_of`, `all_of` on slot ranges). The `any_of` machinery extends naturally; ship per-combinator once a real schema uses them.
 - **`shacl` / `sql` writers.** Land under the same `[generate.<name>]` fan-out when downstream needs them — small marginal work once 6.1 is in.
 - **Generic / parameterized LinkML constructs.** None used in scimantic@0.1.0; defer until a real schema needs them.
 
@@ -298,3 +392,14 @@ The two green tests over-deliver against the slice's stated scope. `scimantic_ou
 - The integration ladder un-ignored. Every `cargo nextest run` runs all six scimantic acceptance tests by default.
 - `scimantic_renders_idempotently` asserts byte-equality between two consecutive renders of the real schema.
 - `scimantic_output_compiles_via_cargo_build` reshaped into `scimantic_question_can_be_constructed_in_downstream_crate`: scratch crate now has `src/scimantic.rs` (generated module) plus `src/lib.rs` that builds a `Question` via struct literal. Caught a real field-shape regression on first run — `label` is `required: true` so its type is `String`, not `Option<String>`. That's the strict-API value the smoke adds over compile-only testing.
+
+### Slice 6.5 — Ergonomic derives + `#[non_exhaustive]`
+
+**Completed:**
+- New `supports_default(slot)` and `compute_struct_derives(slots)` helpers analyse a struct's resolved field set and choose between `[Debug, Clone, PartialEq, serde::*]` and `[Debug, Clone, PartialEq, Default, serde::*]`. `PartialEq` is always emitted; `Default` only when every field is conservatively default-able.
+- `render_enum` emits `#[non_exhaustive]` for every LinkML enum.
+- `render_kind_enum` and `render_any_of_enum` both gained `PartialEq` in the derive list and `#[non_exhaustive]` after `#[serde(untagged)]`.
+- Six new unit tests for `supports_default` (covering range/required/multivalued combos plus the `range: None` fallback) and four for `compute_struct_derives` (all-Default, no-Default, base-derives-always, empty-struct).
+- Integration smoke extended: `make_default_question()` exercises `Question::default()`; `questions_compare_equal()` exercises `==`.
+
+**Bug caught on first run:** `Question::default()` failed because `supports_default` returned `false` for scimantic's `label` slot — global definition omits `range:`, which the helper was treating as "not Default-able" instead of falling back to LinkML's implicit `default_range = string`. Fix: when `slot.range` is `None`, treat as `"string"` (matches the same fallback `type_for_range` uses). Validated by `supports_default_for_required_field_with_no_range` regression test.

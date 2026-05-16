@@ -248,4 +248,22 @@ pub fn make_a_question() -> scimantic::Question {
         motivates: vec![],
     }
 }
+
+/// Construct via `Default::default()`. Every field of `Question` is
+/// either `Option<T>`, `Vec<T>`, or a required primitive that's itself
+/// `Default` (`String`), so the writer's conservative Default analysis
+/// should derive `Default` on `Question`. If this fails to compile,
+/// the analysis incorrectly declined to derive `Default`.
+pub fn make_default_question() -> scimantic::Question {
+    scimantic::Question::default()
+}
+
+/// Two equal `Question` values compare equal under the derived
+/// `PartialEq`. Forces the writer to actually emit `PartialEq` on the
+/// struct, not just claim it in the doc comment.
+pub fn questions_compare_equal() -> bool {
+    let a = make_a_question();
+    let b = make_a_question();
+    a == b
+}
 "#;

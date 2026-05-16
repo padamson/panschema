@@ -297,6 +297,7 @@ fn render_enum(out: &mut String, name: &str, def: &EnumDefinition) {
     out.push_str(
         "#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]\n",
     );
+    out.push_str("#[non_exhaustive]\n");
     out.push_str(&format!("pub enum {name} {{\n"));
     for (key, value) in &def.permissible_values {
         let text = if value.text.is_empty() {
@@ -367,10 +368,11 @@ fn render_class(
     if def.r#abstract {
         out.push_str("///\n/// LinkML abstract class.\n");
     }
-    out.push_str("#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]\n");
+    let resolved = resolve_slots(def, schema);
+    let derives = compute_struct_derives(&resolved);
+    out.push_str(&format!("#[derive({derives})]\n"));
     out.push_str(&format!("pub struct {name} {{\n"));
 
-    let resolved = resolve_slots(def, schema);
     for (slot_name, slot) in &resolved {
         let rust_field = snake_case(slot_name);
         let rust_type = field_type_for(name, slot_name, slot, schema, roles, any_of_enums);
@@ -453,8 +455,9 @@ fn render_kind_enum(
         "/// Closed enum of concrete classes that implement `{name}`. Used as the\n\
          /// field type when a slot's range is `{name}`.\n"
     ));
-    out.push_str("#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]\n");
+    out.push_str("#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]\n");
     out.push_str("#[serde(untagged)]\n");
+    out.push_str("#[non_exhaustive]\n");
     out.push_str(&format!("pub enum {name}Kind {{\n"));
     for desc in &descendants {
         out.push_str(&format!("    {desc}(Box<{desc}>),\n"));
@@ -464,14 +467,84 @@ fn render_kind_enum(
 
 fn render_any_of_enum(out: &mut String, name: &str, members: &[String]) {
     out.push_str("/// Polymorphic range union for the slot identified by this type name.\n");
-    out.push_str("#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]\n");
+    out.push_str("#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]\n");
     out.push_str("#[serde(untagged)]\n");
+    out.push_str("#[non_exhaustive]\n");
     out.push_str(&format!("pub enum {name} {{\n"));
     for member in members {
         let variant = pascal_case(member);
         out.push_str(&format!("    {variant}(Box<{member}>),\n"));
     }
     out.push_str("}\n\n");
+}
+
+// ---------------------------------------------------------------------------
+// Derive selection
+// ---------------------------------------------------------------------------
+
+/// Compose the `#[derive(...)]` line for a generated struct based on
+/// which Rust traits its resolved field set supports.
+///
+/// `Debug, Clone, serde::Serialize, serde::Deserialize` are always
+/// emitted (every field type we produce supports them). `PartialEq` is
+/// always added — every emitted field type supports it. `Default` is
+/// added only when every field is default-able under the conservative
+/// rules in [`supports_default`].
+///
+/// `Eq` and `Hash` are intentionally skipped at this layer; deriving
+/// them safely requires recursive trait analysis across the schema
+/// (`f64` anywhere disqualifies; class fields need to know whether
+/// their referent struct also derives `Eq`/`Hash`). Future work.
+fn compute_struct_derives(slots: &BTreeMap<String, SlotDefinition>) -> String {
+    let mut derives = vec![
+        "Debug",
+        "Clone",
+        "PartialEq",
+        "serde::Serialize",
+        "serde::Deserialize",
+    ];
+    if slots.values().all(supports_default) {
+        // Insert before serde derives to keep the conventional
+        // [Debug, Clone, …, Default, serde::*] order.
+        derives.insert(3, "Default");
+    }
+    derives.join(", ")
+}
+
+/// Conservatively determines whether a slot's framed Rust type supports
+/// `Default`. The check looks at the framing first:
+///
+/// - `Vec<T>`: always defaults to `vec![]`, regardless of T
+/// - `Option<T>`: always defaults to `None`, regardless of T
+/// - Required + single: `Default` only when T itself implements
+///   `Default`. The known-Default-able set is the Default-deriving
+///   primitives we emit (`String`, `i64`, `bool`, `f64`). `chrono`
+///   datetime types, `Box<T>` for class T, class-typed bare refs, and
+///   any_of enum bare types are *not* `Default` under this rule.
+fn supports_default(slot: &SlotDefinition) -> bool {
+    if slot.multivalued || !slot.required {
+        return true;
+    }
+    // Required + single. `any_of` ranges resolve to a generated enum;
+    // those enums don't derive `Default`, so a required bare any_of
+    // field disqualifies the containing struct.
+    if !slot.any_of.is_empty() {
+        return false;
+    }
+    // `range: None` falls back to LinkML's implicit `default_range`,
+    // which is `string` by convention — the same fallback `type_for_range`
+    // applies. `String` implements `Default`.
+    let range = slot.range.as_deref().unwrap_or("string");
+    matches!(
+        range,
+        // String-like primitives — all `Default`.
+        "string" | "str" | "uri" | "uriorcurie" | "curie" | "ncname"
+        | "objectidentifier" | "nodeidentifier"
+        // Numeric and boolean primitives — all `Default`.
+        | "integer" | "int" | "boolean" | "bool" | "float" | "double" | "decimal" // `chrono::DateTime<Utc>`, `NaiveDate`, `NaiveTime` are not `Default`.
+                                                                                  // Class refs and enum refs are also not `Default` under the
+                                                                                  // conservative rule (would need recursive analysis).
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1013,6 +1086,145 @@ mod tests {
         );
     }
 
+    // ----- supports_default -------------------------------------------
+
+    fn slot_shape(range: Option<&str>, required: bool, multivalued: bool) -> SlotDefinition {
+        let mut s = SlotDefinition::new("test");
+        s.range = range.map(str::to_string);
+        s.required = required;
+        s.multivalued = multivalued;
+        s
+    }
+
+    #[test]
+    fn supports_default_for_optional_field_of_any_range() {
+        // `Option<T>` is `Default` regardless of T.
+        assert!(supports_default(&slot_shape(
+            Some("datetime"),
+            false,
+            false
+        )));
+        assert!(supports_default(&slot_shape(
+            Some("SomeClass"),
+            false,
+            false
+        )));
+    }
+
+    #[test]
+    fn supports_default_for_multivalued_field_of_any_range() {
+        // `Vec<T>` is `Default` regardless of T.
+        assert!(supports_default(&slot_shape(Some("datetime"), true, true)));
+        assert!(supports_default(&slot_shape(
+            Some("SomeClass"),
+            false,
+            true
+        )));
+    }
+
+    #[test]
+    fn supports_default_for_required_string_int_bool_float() {
+        for primitive in ["string", "integer", "boolean", "float"] {
+            assert!(
+                supports_default(&slot_shape(Some(primitive), true, false)),
+                "{primitive} should be Default-able when required+single"
+            );
+        }
+    }
+
+    #[test]
+    fn supports_default_for_required_field_with_no_range() {
+        // Per LinkML semantics, a slot with no `range:` falls back to
+        // the schema's `default_range`, which is conventionally
+        // `string`. `String` implements `Default`, so the field is
+        // Default-able. Regression: scimantic's global `label` slot
+        // has no `range:` but is `required: true`, and `Question.label`
+        // should be `String` (Default).
+        assert!(supports_default(&slot_shape(None, true, false)));
+    }
+
+    #[test]
+    fn supports_default_rejects_required_datetime() {
+        // chrono types don't implement Default; required+single datetime
+        // disqualifies the containing struct.
+        assert!(!supports_default(&slot_shape(
+            Some("datetime"),
+            true,
+            false
+        )));
+        assert!(!supports_default(&slot_shape(Some("date"), true, false)));
+        assert!(!supports_default(&slot_shape(Some("time"), true, false)));
+    }
+
+    #[test]
+    fn supports_default_rejects_required_class_ref() {
+        // Required bare class refs become Box<T>, which needs T: Default
+        // — recursive analysis we don't do at this layer.
+        assert!(!supports_default(&slot_shape(
+            Some("SomeClass"),
+            true,
+            false
+        )));
+    }
+
+    #[test]
+    fn supports_default_rejects_required_any_of() {
+        let mut s = slot_shape(None, true, false);
+        s.any_of = vec![slot_shape(Some("A"), false, false)];
+        assert!(!supports_default(&s));
+    }
+
+    // ----- compute_struct_derives -------------------------------------
+
+    fn slots_from(pairs: &[(&str, SlotDefinition)]) -> BTreeMap<String, SlotDefinition> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn derives_include_default_when_every_field_supports_it() {
+        let slots = slots_from(&[
+            ("optional", slot_shape(Some("string"), false, false)),
+            ("multi", slot_shape(Some("string"), true, true)),
+            ("required_string", slot_shape(Some("string"), true, false)),
+        ]);
+        let derives = compute_struct_derives(&slots);
+        assert!(derives.contains("Default"), "got: {derives}");
+        assert!(derives.contains("PartialEq"));
+    }
+
+    #[test]
+    fn derives_omit_default_when_a_field_is_required_datetime() {
+        let slots = slots_from(&[
+            ("created", slot_shape(Some("datetime"), true, false)),
+            ("label", slot_shape(Some("string"), true, false)),
+        ]);
+        let derives = compute_struct_derives(&slots);
+        assert!(!derives.contains("Default"), "got: {derives}");
+        // PartialEq stays — datetime supports it.
+        assert!(derives.contains("PartialEq"));
+    }
+
+    #[test]
+    fn derives_always_include_debug_clone_partialeq_serde() {
+        let slots = slots_from(&[("required_class", slot_shape(Some("SomeClass"), true, false))]);
+        let derives = compute_struct_derives(&slots);
+        assert!(derives.contains("Debug"));
+        assert!(derives.contains("Clone"));
+        assert!(derives.contains("PartialEq"));
+        assert!(derives.contains("serde::Serialize"));
+        assert!(derives.contains("serde::Deserialize"));
+    }
+
+    #[test]
+    fn derives_for_empty_struct_include_default() {
+        // No fields → everything supports Default vacuously.
+        let derives = compute_struct_derives(&BTreeMap::new());
+        assert!(derives.contains("Default"));
+    }
+
     // ----- doc comments -----------------------------------------------
 
     #[test]
@@ -1074,6 +1286,19 @@ mod tests {
         render_enum(&mut out, "Color", &def);
         assert!(out.contains("off_white"));
         assert!(out.contains(r#"rename = "off-white""#));
+    }
+
+    #[test]
+    fn render_enum_marks_non_exhaustive() {
+        let mut def = EnumDefinition::new("Color");
+        def.permissible_values
+            .insert("Red".to_string(), PermissibleValue::new("Red"));
+        let mut out = String::new();
+        render_enum(&mut out, "Color", &def);
+        assert!(
+            out.contains("#[non_exhaustive]"),
+            "LinkML enums must be #[non_exhaustive] so adding permissible values is non-breaking; got: {out}"
+        );
     }
 
     // ----- trait + struct + impl rendering ----------------------------
@@ -1149,6 +1374,8 @@ mod tests {
         assert!(out.contains("Cat(Box<Cat>)"));
         assert!(out.contains("Dog(Box<Dog>)"));
         assert!(out.contains("#[serde(untagged)]"));
+        assert!(out.contains("#[non_exhaustive]"));
+        assert!(out.contains("PartialEq"));
     }
 
     #[test]
@@ -1160,6 +1387,8 @@ mod tests {
             &["Question".to_string(), "Annotation".to_string()],
         );
         assert!(out.contains("#[serde(untagged)]"));
+        assert!(out.contains("#[non_exhaustive]"));
+        assert!(out.contains("PartialEq"));
         assert!(out.contains("pub enum QuestionWasDerivedFrom"));
         assert!(out.contains("Question(Box<Question>)"));
         assert!(out.contains("Annotation(Box<Annotation>)"));
