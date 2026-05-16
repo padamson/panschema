@@ -96,7 +96,7 @@ pub fn checksum_file(path: &Path) -> std::io::Result<String> {
     let bytes = std::fs::read(path)?;
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
-    Ok(format!("sha256:{:x}", hasher.finalize()))
+    Ok(format!("sha256:{}", hex::encode(hasher.finalize())))
 }
 
 /// Build a `path:` source spec from a manifest-relative path. The path is
