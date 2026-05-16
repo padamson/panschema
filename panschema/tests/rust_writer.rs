@@ -141,12 +141,21 @@ fn scimantic_any_of_ranges_become_untagged_enums() {
     );
 }
 
-/// scimantic v0.1.0 renders into Rust that compiles against `serde` +
-/// `chrono`. Catches semantic issues (undefined type references, missing
-/// imports, derive bounds the generated code doesn't satisfy) that
-/// `syn::parse_file` cannot see.
+/// The generated module compiles in a downstream consumer crate that
+/// depends on `serde` + `chrono`, and the generated public API is
+/// usable: a `Question` is constructible via struct literal with the
+/// expected fields. Catches three failure modes that `syn::parse_file`
+/// cannot see:
+///
+/// 1. Undefined type references and missing imports in the generated
+///    code (caught at `cargo build` time).
+/// 2. Derive bounds that the generated types don't satisfy (e.g. a
+///    field whose type isn't `Clone` when `#[derive(Clone)]` is asked).
+/// 3. Field-shape regressions on the public-facing struct API
+///    (extra/missing/renamed fields would fail the struct-literal
+///    construction).
 #[test]
-fn scimantic_output_compiles_via_cargo_build() {
+fn scimantic_question_can_be_constructed_in_downstream_crate() {
     let schema = read_scimantic();
     let body = RustWriter::new().render(&schema);
 
@@ -172,7 +181,28 @@ fn scimantic_output_compiles_via_cargo_build() {
     );
 }
 
-fn write_scratch_crate(root: &Path, lib_body: &str) {
+/// Re-running the writer over the same schema produces byte-identical
+/// output. Idempotency falls out for free from sorted `BTreeMap`
+/// iteration in `render()`, but it's worth asserting against a real
+/// schema in case a `HashMap` ever sneaks into the writer or the IR.
+#[test]
+fn scimantic_renders_idempotently() {
+    let schema = read_scimantic();
+    let writer = RustWriter::new();
+    let first = writer.render(&schema);
+    let second = writer.render(&schema);
+    assert_eq!(
+        first, second,
+        "writer output should be deterministic across runs"
+    );
+}
+
+/// Build a self-contained Cargo project around the generated module.
+/// `src/scimantic.rs` holds the generated code; `src/lib.rs` exercises
+/// the public API by constructing a `Question` value, ensuring the
+/// generated struct's fields and visibility round-trip through a
+/// downstream consumer.
+fn write_scratch_crate(root: &Path, generated_module_body: &str) {
     std::fs::write(
         root.join("Cargo.toml"),
         r#"[package]
@@ -188,5 +218,34 @@ chrono = { version = "0.4", features = ["serde"] }
     )
     .expect("write Cargo.toml");
     std::fs::create_dir_all(root.join("src")).expect("mkdir src/");
-    std::fs::write(root.join("src/lib.rs"), lib_body).expect("write lib.rs");
+    std::fs::write(root.join("src/scimantic.rs"), generated_module_body)
+        .expect("write scimantic.rs");
+    std::fs::write(root.join("src/lib.rs"), CONSUMER_SMOKE).expect("write lib.rs");
 }
+
+/// Consumer-side smoke that uses the generated types. Lives inside the
+/// test crate rather than the generated module so the writer's output
+/// stays purely schema-derived. If this fails to compile, the writer
+/// emitted a struct shape that no downstream consumer can actually use.
+const CONSUMER_SMOKE: &str = r#"
+#![allow(dead_code, unused_variables)]
+
+pub mod scimantic;
+
+/// Constructs a `Question` value via struct literal. Every reachable
+/// field must be named explicitly — extra fields would error
+/// "unknown field" and missing fields would error "missing struct
+/// field". The test asserts only that this function compiles; it
+/// isn't called.
+pub fn make_a_question() -> scimantic::Question {
+    scimantic::Question {
+        // `label` is `required: true` on the global slot, so it's
+        // emitted as bare `String`, not `Option<String>`.
+        label: "Why is the sky blue?".to_string(),
+        was_generated_by: None,
+        was_derived_from: vec![],
+        was_attributed_to: None,
+        motivates: vec![],
+    }
+}
+"#;

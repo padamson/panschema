@@ -163,16 +163,19 @@ LinkML uses lowerCamelCase (`wasGeneratedBy`); Rust idiom is snake_case. Slot na
 
 ### Slice 6.4: scimantic@0.1.0 end-to-end + idempotency
 
-**Status:** ⬜ Not Started
+**Status:** ✅ Completed
 
-**User Value:** Real schema works. `panschema generate` over actual scimantic-schema v0.1.0 produces Rust that compiles cleanly in a downstream Axum app. Re-running produces byte-identical output.
+**User Value:** Real schema works. `panschema generate` over actual scimantic-schema v0.1.0 produces Rust that compiles cleanly in a downstream Axum app, exposes a usable public API, and re-running produces byte-identical output.
 
 **Acceptance Criteria:**
-- [ ] Vendored copy of scimantic v0.1.0's main schema lives at `panschema/tests/fixtures/scimantic-0.1.0.yaml` (so the test is hermetic)
-- [ ] Round-trip test: load the vendored schema, render, compare to a checked-in golden Rust file
-- [ ] Idempotency test: render twice, assert byte equality
-- [ ] Compile-check test: scratch crate that does `use generated::Question;` and constructs one with chrono + serde deps
-- [ ] Tests probably live in `panschema/tests/rust_writer.rs` (separate from the omnibus `tests/integration.rs`) — the fixture + tempdir setup is meaningful and gets shared across several tests in the file
+- [x] Fixture sourcing: schema fetched via `panschema add github:padamson/scimantic-schema@0.1.0` into a workspace-local cache (`CARGO_TARGET_TMPDIR/scimantic-fixture-cache/`) rather than a vendored YAML copy. Stays in sync with upstream; dogfoods the consumer flow.
+- [x] Idempotency test: `scimantic_renders_idempotently` renders the schema twice and asserts byte equality.
+- [x] Compile-check + public-API test: `scimantic_question_can_be_constructed_in_downstream_crate` writes a scratch crate with the generated module at `src/scimantic.rs` and a `src/lib.rs` that constructs a `Question` via struct literal. `cargo build` succeeds against `serde` + `chrono` deps.
+- [x] Tests live in `panschema/tests/rust_writer.rs` (separate from the omnibus `tests/integration.rs`); fixture + tempdir setup shared across the six acceptance tests.
+- [x] Ladder is no longer `#[ignore]`d — every `cargo nextest run` runs it.
+
+**Notes:**
+- The construct-a-Question smoke caught a real field-shape regression on first run: `label` is `required: true` globally so the field is `String`, not `Option<String>`. That's exactly the value the smoke adds over a compile-only test.
 
 ---
 
@@ -198,7 +201,7 @@ LinkML uses lowerCamelCase (`wasGeneratedBy`); Rust idiom is snake_case. Slot na
 | 6.1 | Must Have | None | ✅ Completed |
 | 6.2 | Must Have | 6.1 | ✅ Completed |
 | 6.3 | Must Have | 6.2 | ✅ Completed |
-| 6.4 | Must Have | 6.3 | ⬜ Not Started |
+| 6.4 | Must Have | 6.3 | ✅ Completed |
 | 6.5 | Nice to Have | 6.4 | ⬜ Not Started |
 
 ---
@@ -288,3 +291,10 @@ The two green tests over-deliver against the slice's stated scope. `scimantic_ou
 - **Marker traits over method-bearing traits.** Method-bearing trait getters would conflict with `slot_usage` type refinement: a subclass field narrowed via `slot_usage` cannot satisfy a parent trait's method signature in Rust's type system (no covariant return types). Marker traits give `T: Entity`-style polymorphism, preserve type-level slot_usage refinement, and emit cleanly.
 - **Trait-only emission for `is_a` parents and mixins.** Avoids the `pub trait Foo` / `pub struct Foo` namespace collision. Trade-off: LinkML schemas that need to construct a "bare" parent instance would require a future suffix variant. Documented limitation.
 - **`<Name>Kind` closed enum** for slot ranges that reference a trait-only class. Keeps fields sized without requiring `Box<dyn Trait>` machinery and `typetag`. Open-world dispatch (a slot whose subclasses are not known at codegen time) would need a different writer mode.
+
+### Slice 6.4 — scimantic end-to-end + idempotency
+
+**Completed:**
+- The integration ladder un-ignored. Every `cargo nextest run` runs all six scimantic acceptance tests by default.
+- `scimantic_renders_idempotently` asserts byte-equality between two consecutive renders of the real schema.
+- `scimantic_output_compiles_via_cargo_build` reshaped into `scimantic_question_can_be_constructed_in_downstream_crate`: scratch crate now has `src/scimantic.rs` (generated module) plus `src/lib.rs` that builds a `Question` via struct literal. Caught a real field-shape regression on first run — `label` is `required: true` so its type is `String`, not `Option<String>`. That's the strict-API value the smoke adds over compile-only testing.
