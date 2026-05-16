@@ -89,12 +89,16 @@ jobs:
         run: cargo semver-checks check-release
 
   mutation-testing:
-    name: Mutation Testing
+    name: Mutation Testing (full)
     runs-on: ubuntu-latest
-    # Heavy job — only runs on the weekly schedule by default. Manual
-    # `workflow_dispatch` runs include it too so we can verify changes
-    # without waiting for Saturday.
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # Full-codebase mutation testing — only runs on manual
+    # `workflow_dispatch`. Per-push verification is handled by
+    # `mutation-testing-diff` below, which scopes to just the lines a
+    # push or PR touched. The full run grows linearly with codebase
+    # size (panschema is already 4800+ mutants, 13+ hours) and
+    # eventually exceeds CI's per-job timeout, so we keep it as a
+    # manual escape hatch rather than a scheduled cron.
+    if: github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v6
 
@@ -169,4 +173,99 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: mutation-report
+          path: mutants.out/
+
+  mutation-testing-diff:
+    name: Mutation Testing (diff)
+    runs-on: ubuntu-latest
+    # Fast per-push variant of the mutation-testing job: scope to the
+    # lines touched in this push or pull request via `cargo mutants
+    # --in-diff`. Typical runtime is seconds-to-minutes rather than the
+    # full-codebase job's tens of minutes.
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Need history beyond HEAD so `git diff` can reach the base
+          # commit (push: `before` SHA; PR: merge base of base ref).
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-mutants-diff-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-mutants-diff-
+            ${{ runner.os }}-cargo-mutants-
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants
+
+      # Playwright browsers are needed because cargo-mutants builds and
+      # runs all test binaries (including the e2e integration test) for
+      # the baseline. Mirrors the setup in test.yml.
+      - name: Setup Node.js (for Playwright)
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+
+      - name: Get Playwright version
+        id: playwright-version
+        shell: bash
+        run: echo "version=1.59.1" >> $GITHUB_OUTPUT
+
+      - name: Cache Playwright browsers and driver
+        uses: actions/cache@v5
+        id: playwright-cache
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/.cache/playwright-rust
+          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright@1.59.1 install --with-deps
+
+      - name: Install Playwright dependencies (cached)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright@1.59.1 install-deps
+
+      # Compute the right diff base for this trigger.
+      # - pull_request: merge base against the PR target branch
+      # - push: the `before` SHA of the push (the parent of `after`).
+      #   First push to a branch has `before = 000...0`; fall back to
+      #   HEAD~1 in that case.
+      - name: Compute diff base
+        id: base
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "ref=origin/${{ github.base_ref }}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
+            echo "ref=HEAD~1" >> $GITHUB_OUTPUT
+          else
+            echo "ref=${{ github.event.before }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run mutation testing on diff
+        run: ./scripts/mutants.sh ${{ steps.base.outputs.ref }}
+
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutation-report-diff
           path: mutants.out/

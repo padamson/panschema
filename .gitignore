@@ -8,3 +8,7 @@ examples/**/panschema_viz.*
 .DS_Store
 typos.toml
 .env
+
+# cargo-mutants output (local runs leave these; CI uploads as artifact)
+/mutants.out/
+/mutants.out.old/
