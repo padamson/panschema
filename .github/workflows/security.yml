@@ -91,7 +91,10 @@ jobs:
   mutation-testing:
     name: Mutation Testing
     runs-on: ubuntu-latest
-    if: github.event_name == 'schedule'
+    # Heavy job — only runs on the weekly schedule by default. Manual
+    # `workflow_dispatch` runs include it too so we can verify changes
+    # without waiting for Saturday.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v6
 
@@ -116,6 +119,17 @@ jobs:
 
       - name: Install cargo-mutants
         run: cargo install cargo-mutants
+
+      # panschema/src/html_writer.rs uses `include_str!` /
+      # `include_bytes!` to embed the wasm pkg artifacts at compile
+      # time. cargo-mutants copies the source tree to a tempdir; the
+      # real pkg/ build outputs don't exist there. Empty placeholders
+      # are fine — mutation testing doesn't exercise the wasm bytes at
+      # runtime.
+      - name: Stub WASM artifacts
+        run: |
+          mkdir -p panschema-viz/pkg
+          touch panschema-viz/pkg/panschema_viz.js panschema-viz/pkg/panschema_viz_bg.wasm
 
       - name: Run mutation testing (unit tests only, panschema crate)
         run: cargo mutants
