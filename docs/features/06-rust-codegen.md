@@ -249,15 +249,15 @@ LinkML uses lowerCamelCase (`wasGeneratedBy`); Rust idiom is snake_case. Slot na
 
 ### Slice 6.9: Constructor methods
 
-**Status:** ⬜ Not Started
+**Status:** ✅ Completed
 
 **User Value:** Schema-evolution-stable construction. `Question::new("label")` survives the schema adding a new optional field; struct literal `Question { label, … }` breaks.
 
 **Acceptance Criteria:**
-- [ ] For each concrete struct, emit `impl <Name> { pub fn new(<required_fields…>) -> Self }`. Optional fields default to `None`; multivalued default to empty `Vec`
-- [ ] Generated `new` constructors are public
-- [ ] Skip emission when the struct has no required fields (constructor would be equivalent to `Default::default()`)
-- [ ] Test additions: scratch crate exercises `Question::new("label")` alongside the existing struct-literal smoke
+- [x] For each concrete struct, emit `impl <Name> { pub fn new(<required_fields…>) -> Self }`. Optional fields default to `None`; multivalued default to empty `Vec`
+- [x] Generated `new` constructors are public
+- [x] Skip emission when the struct has no required fields (constructor would be equivalent to `Default::default()`)
+- [x] Test additions: scratch crate exercises `Question::new("label")` alongside the existing struct-literal smoke
 
 ---
 
@@ -438,3 +438,14 @@ The two green tests over-deliver against the slice's stated scope. `scimantic_ou
 - An unknown range (e.g. an imported schema not loaded into `schema.classes`/`schema.enums`/`schema.types`) is treated as not-Eq-Hash. Conservative since we can't see the referent's traits; matches the existing conservative treatment elsewhere (no `Default`, etc.).
 - The fixpoint terminates because every iteration is a monotonic flip from `true` to `false`. Bounded by `O(classes^2)` rounds in the worst case (each round can flip at least one class); in practice it settles in one or two passes.
 - Class-typed fields' framing (`Box<T>`, `Option<T>`, `Vec<T>`) is irrelevant to the Eq/Hash analysis: all three framings preserve their inner type's trait set. We pass the *range* into `type_supports_eq_hash`, not the framed type string.
+
+### Slice 6.9 — Constructor methods
+
+**Completed:**
+- New `render_constructor` emits `impl <Name> { pub fn new(<required_single_fields…>) -> Self }` for each concrete struct. Parameter list includes only slots that are `required && !multivalued`; the constructor body defaults each optional slot to `None` and each multivalued slot to `Vec::new()`. Skipped entirely when the struct has no required-single fields (since `Default::default()` already covers that case).
+- Parameter types match the field types verbatim — including `Box<T>` for required class-typed fields and `<Class><Slot>Value` enums for `any_of` ranges — so the constructor stays in lockstep with the struct's declared shape.
+- Tests added: three unit tests in `rust_writer.rs` (required-only param list, no-required skip, multivalued-required defaults to `Vec::new()` and stays out of the param list); the downstream scratch-crate `CONSUMER_SMOKE` now also exercises `Question::new("...")` and asserts the optional/multivalued defaults.
+
+**Design notes:**
+- We pass the field type unmodified rather than wrapping in `impl Into<T>` for ergonomics. Callers can still call `String::from`, `Box::new`, etc. at their call sites; doing the conversion in the constructor would require per-type analysis that 6.9 explicitly defers.
+- A struct whose only required slot is `multivalued` skips constructor emission. The intent of `new()` is "give me the minimum information needed to construct one"; for an all-Vec struct that's nothing, and `Default::default()` is already there.

@@ -266,4 +266,16 @@ pub fn questions_compare_equal() -> bool {
     let b = make_a_question();
     a == b
 }
+
+/// Construct a `Question` via the generated `new` constructor: pass
+/// only required fields, expect optional / multivalued ones to default.
+/// If the writer adds a new optional field to the schema, this call
+/// site continues to compile — the schema-evolution-stable contract
+/// the slice-6.9 constructor exists for.
+pub fn make_question_via_constructor() -> scimantic::Question {
+    let q = scimantic::Question::new("Why is the sky blue?".to_string());
+    assert!(q.was_generated_by.is_none());
+    assert!(q.was_derived_from.is_empty());
+    q
+}
 "#;

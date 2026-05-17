@@ -609,6 +609,8 @@ fn render_class<W: Write>(
 
     out.write_str("}\n\n")?;
 
+    render_constructor(out, name, &resolved, schema, roles, any_of_enums)?;
+
     let mut impl_targets: Vec<String> = Vec::new();
     for ancestor in is_a_ancestors(def, schema) {
         if roles.get(&ancestor) == Some(&ClassRole::Trait) {
@@ -642,6 +644,61 @@ fn render_class<W: Write>(
         out.write_char('\n')?;
     }
     Ok(())
+}
+
+/// Emit `impl <Name> { pub fn new(<required_fields…>) -> Self }` so
+/// downstream consumers can construct an instance without naming every
+/// optional field — surviving future schema additions of optional
+/// fields without breaking calling code. Skipped when the struct has
+/// no required fields, since `Default::default()` already covers that
+/// shape and an empty-arg `new()` would be redundant.
+fn render_constructor<W: Write>(
+    out: &mut W,
+    name: &str,
+    resolved: &BTreeMap<String, SlotDefinition>,
+    schema: &SchemaDefinition,
+    roles: &BTreeMap<String, ClassRole>,
+    any_of_enums: &mut BTreeMap<String, Vec<String>>,
+) -> fmt::Result {
+    let has_required = resolved
+        .values()
+        .any(|slot| slot.required && !slot.multivalued);
+    if !has_required {
+        return Ok(());
+    }
+
+    let params: Vec<(String, String)> = resolved
+        .iter()
+        .filter(|(_, slot)| slot.required && !slot.multivalued)
+        .map(|(slot_name, slot)| {
+            (
+                snake_case(slot_name),
+                field_type_for(name, slot_name, slot, schema, roles, any_of_enums),
+            )
+        })
+        .collect();
+    let param_list = params
+        .iter()
+        .map(|(field, ty)| format!("{field}: {ty}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    writeln!(out, "impl {name} {{")?;
+    writeln!(out, "    pub fn new({param_list}) -> Self {{")?;
+    writeln!(out, "        Self {{")?;
+    for (slot_name, slot) in resolved {
+        let field = snake_case(slot_name);
+        if slot.multivalued {
+            writeln!(out, "            {field}: Vec::new(),")?;
+        } else if slot.required {
+            writeln!(out, "            {field},")?;
+        } else {
+            writeln!(out, "            {field}: None,")?;
+        }
+    }
+    writeln!(out, "        }}")?;
+    writeln!(out, "    }}")?;
+    out.write_str("}\n\n")
 }
 
 fn render_kind_enum<W: Write>(
@@ -2567,6 +2624,137 @@ mod tests {
         assert!(
             !out.contains("Eq, Hash"),
             "unexpected Eq + Hash in derive line; got:\n{out}"
+        );
+    }
+
+    // ----- constructor methods ----------------------------------------
+
+    #[test]
+    fn render_class_emits_constructor_with_required_fields_only() {
+        // `Question` has one required field (`label`) plus two
+        // optional/multivalued ones. The generated constructor takes
+        // exactly one parameter and defaults the rest.
+        let mut def = ClassDefinition::new("Question");
+        let mut label = SlotDefinition::new("label");
+        label.range = Some("string".to_string());
+        label.required = true;
+        def.attributes.insert("label".to_string(), label);
+        let mut maybe = SlotDefinition::new("maybe");
+        maybe.range = Some("string".to_string());
+        def.attributes.insert("maybe".to_string(), maybe);
+        let mut many = SlotDefinition::new("many");
+        many.range = Some("string".to_string());
+        many.multivalued = true;
+        def.attributes.insert("many".to_string(), many);
+
+        let mut schema = SchemaDefinition::new("s");
+        schema.classes.insert("Question".to_string(), def.clone());
+        let roles = compute_class_roles(&schema);
+        let support = compute_eq_hash_support(&schema, &roles);
+        let mut any_of_enums = BTreeMap::new();
+        let mut out = String::new();
+        render_class(
+            &mut out,
+            "Question",
+            &def,
+            &schema,
+            &roles,
+            &support,
+            &mut any_of_enums,
+        )
+        .unwrap();
+        assert!(
+            out.contains("impl Question {"),
+            "expected an impl block; got:\n{out}"
+        );
+        assert!(
+            out.contains("pub fn new(label: String)"),
+            "expected constructor to take only the required field; got:\n{out}"
+        );
+        assert!(
+            out.contains("label,"),
+            "expected `label` to use parameter shorthand; got:\n{out}"
+        );
+        assert!(
+            out.contains("maybe: None,"),
+            "expected `maybe` to default to None; got:\n{out}"
+        );
+        assert!(
+            out.contains("many: Vec::new(),"),
+            "expected `many` to default to Vec::new(); got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn render_class_skips_constructor_when_no_required_fields() {
+        // `Default::default()` already covers an all-optional struct;
+        // a zero-arg `new()` would be noise. Skip emission entirely.
+        let mut def = ClassDefinition::new("Loose");
+        let mut maybe = SlotDefinition::new("maybe");
+        maybe.range = Some("string".to_string());
+        def.attributes.insert("maybe".to_string(), maybe);
+
+        let mut schema = SchemaDefinition::new("s");
+        schema.classes.insert("Loose".to_string(), def.clone());
+        let roles = compute_class_roles(&schema);
+        let support = compute_eq_hash_support(&schema, &roles);
+        let mut any_of_enums = BTreeMap::new();
+        let mut out = String::new();
+        render_class(
+            &mut out,
+            "Loose",
+            &def,
+            &schema,
+            &roles,
+            &support,
+            &mut any_of_enums,
+        )
+        .unwrap();
+        assert!(
+            !out.contains("impl Loose {"),
+            "no required fields → no constructor; got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn render_class_constructor_skips_multivalued_required_in_param_list() {
+        // A required + multivalued slot is `Vec<T>`. The constructor
+        // defaults it to `Vec::new()` rather than asking for a value,
+        // mirroring how Default-deriving structs treat `Vec`.
+        let mut def = ClassDefinition::new("Holder");
+        let mut items = SlotDefinition::new("items");
+        items.range = Some("string".to_string());
+        items.required = true;
+        items.multivalued = true;
+        def.attributes.insert("items".to_string(), items);
+        let mut name = SlotDefinition::new("name");
+        name.range = Some("string".to_string());
+        name.required = true;
+        def.attributes.insert("name".to_string(), name);
+
+        let mut schema = SchemaDefinition::new("s");
+        schema.classes.insert("Holder".to_string(), def.clone());
+        let roles = compute_class_roles(&schema);
+        let support = compute_eq_hash_support(&schema, &roles);
+        let mut any_of_enums = BTreeMap::new();
+        let mut out = String::new();
+        render_class(
+            &mut out,
+            "Holder",
+            &def,
+            &schema,
+            &roles,
+            &support,
+            &mut any_of_enums,
+        )
+        .unwrap();
+        assert!(
+            out.contains("pub fn new(name: String)"),
+            "multivalued field must not appear in param list; got:\n{out}"
+        );
+        assert!(
+            out.contains("items: Vec::new(),"),
+            "expected `items` to default to Vec::new(); got:\n{out}"
         );
     }
 
