@@ -1096,17 +1096,27 @@ pub async fn create_visualization_auto(
     canvas: HtmlCanvasElement,
     graph_json: &str,
 ) -> Result<JsValue, JsValue> {
-    // Try WebGPU first
-    if check_webgpu_support().await {
-        match create_visualization_3d(canvas.clone(), graph_json).await {
-            Ok(viz) => return Ok(JsValue::from(viz)),
-            Err(_) => {
-                // Fall through to 2D
-            }
-        }
+    if !check_webgpu_support().await {
+        web_sys::console::info_1(
+            &"panschema-viz: navigator.gpu unavailable; rendering 2D Canvas.".into(),
+        );
+        let viz = Visualization::new(canvas, graph_json)?;
+        return Ok(JsValue::from(viz));
     }
 
-    // Fall back to 2D
-    let viz = Visualization::new(canvas, graph_json)?;
-    Ok(JsValue::from(viz))
+    match create_visualization_3d(canvas.clone(), graph_json).await {
+        Ok(viz) => Ok(JsValue::from(viz)),
+        Err(err) => {
+            let cause = err.as_string().unwrap_or_else(|| format!("{:?}", err));
+            web_sys::console::warn_1(
+                &format!(
+                    "panschema-viz: navigator.gpu present but 3D init failed; \
+                     rendering 2D Canvas. Cause: {cause}"
+                )
+                .into(),
+            );
+            let viz = Visualization::new(canvas, graph_json)?;
+            Ok(JsValue::from(viz))
+        }
+    }
 }

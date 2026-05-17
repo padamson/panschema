@@ -9,5 +9,9 @@ test_tool = "nextest"
 additional_cargo_test_args = ["--lib"]
 
 # Mutate only the panschema crate's source.
-# panschema-viz is wasm-only and isn't testable on the host target.
+# panschema-viz is wasm-only and isn't testable on the host target —
+# the explicit exclude_globs is required because `--in-diff` doesn't
+# honor examine_globs alone (any diff line in panschema-viz/ would
+# otherwise surface a mutant that no native test can catch).
 examine_globs = ["panschema/src/**/*.rs"]
+exclude_globs = ["panschema-viz/**/*.rs"]

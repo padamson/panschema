@@ -64,4 +64,7 @@ if [[ ! -s "$DIFF" ]]; then
 fi
 
 echo "mutating changes in ${BASE}..HEAD ($(wc -l < "$DIFF") diff lines)"
-exec cargo mutants --in-diff "$DIFF" "$@"
+# panschema-viz is wasm-only; native test runs cannot catch mutations
+# there, so exclude it at the CLI level. (`.mutants.toml`'s examine_globs
+# and exclude_globs are ignored by `--in-diff`.)
+exec cargo mutants --in-diff "$DIFF" --exclude 'panschema-viz/**/*.rs' "$@"
