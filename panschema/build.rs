@@ -33,8 +33,19 @@ fn main() {
         std::process::exit(1);
     }
 
+    // `--features webgpu` is required: without it, `create_visualization_3d`
+    // is `#[cfg]`-gated out of the wasm exports, the JS UI sees no 3D entry
+    // point, and the 3D mode button is permanently disabled on the
+    // generated page. Mirrors the wasm-pack invocation in .github/workflows/test.yml.
     let status = Command::new("wasm-pack")
-        .args(["build", "--target", "web", "--release"])
+        .args([
+            "build",
+            "--target",
+            "web",
+            "--release",
+            "--features",
+            "webgpu",
+        ])
         .current_dir("../panschema-viz")
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())

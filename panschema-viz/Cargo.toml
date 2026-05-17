@@ -23,7 +23,8 @@ js-sys = "0.3"
 web-sys = { version = "0.3", features = [
     "Window", "Document", "Navigator",
     "HtmlCanvasElement", "CanvasRenderingContext2d",
-    "TextMetrics"
+    "TextMetrics",
+    "console",
 ] }
 console_error_panic_hook = "0.1"
 serde = { version = "1", features = ["derive"] }
