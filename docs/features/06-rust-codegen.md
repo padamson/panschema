@@ -216,16 +216,16 @@ LinkML uses lowerCamelCase (`wasGeneratedBy`); Rust idiom is snake_case. Slot na
 
 ### Slice 6.7: Idiomatic Rust polish
 
-**Status:** ⬜ Not Started
+**Status:** ✅ Completed
 
 **User Value:** Internal cleanup; no user-visible change. Makes the writer more composable and reduces allocation in hot paths.
 
 **Acceptance Criteria:**
-- [ ] Migrate the `out: &mut String` + `push_str` pattern to `impl std::fmt::Write` so helpers compose with `write!` / `writeln!` macros and the writer can target arbitrary write sinks
-- [ ] `snake_case` walks the `&str` directly via `char_indices()` instead of collecting `Vec<char>`
-- [ ] `escape_str` returns `Cow<'_, str>` so the common no-escape case is zero-allocation
-- [ ] Replace the seven-field copy-paste in `merge_slot_override` with a small `merge_opt!` macro
-- [ ] Doc-comment cleanups for the `WHAT/WHY` boundary nits identified in code review
+- [x] Migrate the `out: &mut String` + `push_str` pattern to `impl std::fmt::Write` so helpers compose with `write!` / `writeln!` macros and the writer can target arbitrary write sinks
+- [x] `snake_case` walks the `&str` directly via a peekable char iterator instead of collecting `Vec<char>`
+- [x] `escape_str` returns `Cow<'_, str>` so the common no-escape case is zero-allocation
+- [x] Replace the seven-field copy-paste in `merge_slot_override` with a small `merge_opt!` macro
+- [x] Doc-comment cleanups for the `WHAT/WHY` boundary nits identified in code review
 
 ---
 
@@ -415,3 +415,13 @@ The two green tests over-deliver against the slice's stated scope. `scimantic_ou
 **Design notes:**
 - Cycle handling: silently break the cycle rather than emit a structured error. The visited set guarantees termination; the slice-6.10 follow-up can promote the cycle into a `RustWriterDiagnostic` if a consumer needs to inspect it. For now, the test asserts non-overflow rather than a specific error message.
 - The "trait class with no concrete descendants" scenario can't normally arise from `compute_class_roles` (a class is only marked Trait if something inherits from it). The test constructs the role map directly to cover the degenerate path so we're robust against externally-mutated roles or partially-loaded schemas.
+
+### Slice 6.7 — Idiomatic Rust polish
+
+**Completed:**
+- All renderers (`render_header`, `render_enum`, `render_trait`, `render_class`, `render_kind_enum`, `render_any_of_enum`, `render_doc_comment`) are now generic over `W: std::fmt::Write` and return `fmt::Result`. `RustWriter::render_into(&mut sink, schema)` is the new public streaming entry point; `render(schema) -> String` keeps the existing shape and unwraps the infallible `String` write internally.
+- `snake_case` walks a peekable `Chars` iterator carrying the previous char in a local, eliminating the up-front `Vec<char>` allocation.
+- `escape_str` returns `Cow<'_, str>`. Well-formed LinkML identifiers (the common case) round-trip through `Cow::Borrowed` with zero allocation.
+- `merge_slot_override` uses two local `macro_rules!` (`merge_opt!` for cloneable fields, `merge_opt_copy!` for `Copy` fields) so each merged field is one line of intent instead of three.
+- Doc-comment trim: removed pure-WHAT block comments inside `render_into` and `render_class` where the next two lines say the same thing; the surviving comments document non-obvious WHY (e.g. emission-order constraints, the mixin-ancestor walk's reason for existing).
+- New test `render_into_streams_to_arbitrary_fmt_write_sink` exercises a non-`String` sink, locking in the trait generic bound.
