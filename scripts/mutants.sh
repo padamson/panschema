@@ -67,4 +67,8 @@ echo "mutating changes in ${BASE}..HEAD ($(wc -l < "$DIFF") diff lines)"
 # panschema-viz is wasm-only; native test runs cannot catch mutations
 # there, so exclude it at the CLI level. (`.mutants.toml`'s examine_globs
 # and exclude_globs are ignored by `--in-diff`.)
-exec cargo mutants --in-diff "$DIFF" --exclude 'panschema-viz/**/*.rs' "$@"
+#
+# `--jobs 4` parallelises mutant runs; on a 10-core laptop the per-push
+# diff job goes from minutes-serial to single-digit wall time. Users can
+# override by passing `--jobs N` as a trailing arg (later wins).
+exec cargo mutants --in-diff "$DIFF" --jobs 4 --exclude 'panschema-viz/**/*.rs' "$@"

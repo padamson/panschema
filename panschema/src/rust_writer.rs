@@ -169,7 +169,12 @@ fn compute_eq_hash_support(
     let mut support: BTreeMap<String, bool> =
         schema.classes.keys().map(|n| (n.clone(), true)).collect();
 
-    loop {
+    // Bounded round count: the fixpoint is monotonic (a class only ever
+    // flips from `true` to `false`), so it converges in at most N rounds
+    // where N = number of classes. The bound is also defense against
+    // accidental termination bugs — without it, an `if !changed`
+    // mutation can produce an infinite loop on a happy-path schema.
+    for _ in 0..=schema.classes.len() {
         let mut changed = false;
         for (name, class) in &schema.classes {
             if !support.get(name).copied().unwrap_or(true) {
