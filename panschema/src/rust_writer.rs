@@ -44,6 +44,7 @@ impl RustWriter {
     /// write directly to a file, buffer, or formatter.
     pub fn render_into<W: Write>(&self, out: &mut W, schema: &SchemaDefinition) -> fmt::Result {
         let roles = compute_class_roles(schema);
+        let eq_hash_support = compute_eq_hash_support(schema, &roles);
         let mut any_of_enums: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
         render_header(out, schema)?;
@@ -63,16 +64,27 @@ impl RustWriter {
         }
         for (name, def) in &schema.classes {
             if roles.get(name) == Some(&ClassRole::Struct) {
-                render_class(out, name, def, schema, &roles, &mut any_of_enums)?;
+                render_class(
+                    out,
+                    name,
+                    def,
+                    schema,
+                    &roles,
+                    &eq_hash_support,
+                    &mut any_of_enums,
+                )?;
             }
         }
         for name in schema.classes.keys() {
             if roles.get(name) == Some(&ClassRole::Trait) {
-                render_kind_enum(out, name, schema, &roles)?;
+                render_kind_enum(out, name, schema, &roles, &eq_hash_support)?;
             }
         }
         for (enum_name, members) in &any_of_enums {
-            render_any_of_enum(out, enum_name, members)?;
+            let eq_hash_ok = members
+                .iter()
+                .all(|m| type_supports_eq_hash(m, schema, &roles, &eq_hash_support));
+            render_any_of_enum(out, enum_name, members, eq_hash_ok)?;
         }
 
         Ok(())
@@ -130,6 +142,130 @@ fn compute_class_roles(schema: &SchemaDefinition) -> BTreeMap<String, ClassRole>
             (name.clone(), role)
         })
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Eq + Hash support analysis
+// ---------------------------------------------------------------------------
+
+/// Per-class boolean: does every emitted definition for this class
+/// derive `Eq` and `Hash`?
+///
+/// For a Struct-role class the bit means "the struct itself derives
+/// `Eq + Hash`," which requires every resolved-slot field type to do so.
+/// For a Trait-role class the bit means "the `<Name>Kind` closed enum
+/// derives `Eq + Hash`," which requires every concrete descendant struct
+/// to derive them.
+///
+/// Computed by monotonic fixpoint iteration: classes start at `true`
+/// and only flip to `false` on a disqualifying field (or a disqualified
+/// referent). Cycles broken by `Box<T>` are handled by construction —
+/// the analysis looks at the underlying class, not the framing, and
+/// `Box<T>: Eq + Hash` when `T: Eq + Hash`.
+fn compute_eq_hash_support(
+    schema: &SchemaDefinition,
+    roles: &BTreeMap<String, ClassRole>,
+) -> BTreeMap<String, bool> {
+    let mut support: BTreeMap<String, bool> =
+        schema.classes.keys().map(|n| (n.clone(), true)).collect();
+
+    loop {
+        let mut changed = false;
+        for (name, class) in &schema.classes {
+            if !support.get(name).copied().unwrap_or(true) {
+                continue;
+            }
+            let still_ok = match roles.get(name) {
+                Some(ClassRole::Trait) => trait_descendants_support(name, schema, roles, &support),
+                Some(ClassRole::Struct) => {
+                    let resolved = resolve_slots(class, schema);
+                    resolved
+                        .values()
+                        .all(|slot| field_supports_eq_hash(slot, schema, roles, &support))
+                }
+                None => true,
+            };
+            if !still_ok {
+                support.insert(name.clone(), false);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    support
+}
+
+/// True when every concrete descendant of `trait_name` currently
+/// supports `Eq + Hash`. Vacuously true for a trait with no descendants
+/// — `render_kind_enum` short-circuits emission in that case anyway.
+fn trait_descendants_support(
+    trait_name: &str,
+    schema: &SchemaDefinition,
+    roles: &BTreeMap<String, ClassRole>,
+    support: &BTreeMap<String, bool>,
+) -> bool {
+    schema.classes.iter().all(|(other_name, def)| {
+        if roles.get(other_name) == Some(&ClassRole::Struct)
+            && is_descendant_of(def, trait_name, schema)
+        {
+            support.get(other_name).copied().unwrap_or(true)
+        } else {
+            true
+        }
+    })
+}
+
+/// Does this slot's field type support `Eq + Hash`? Handles `any_of`
+/// unions (every branch must), bare ranges (look up the type), and the
+/// implicit `default_range = string` fallback.
+fn field_supports_eq_hash(
+    slot: &SlotDefinition,
+    schema: &SchemaDefinition,
+    roles: &BTreeMap<String, ClassRole>,
+    support: &BTreeMap<String, bool>,
+) -> bool {
+    if !slot.any_of.is_empty() {
+        let outer_range = slot.range.as_deref();
+        return slot.any_of.iter().all(|b| {
+            b.range
+                .as_deref()
+                .or(outer_range)
+                .is_some_and(|r| type_supports_eq_hash(r, schema, roles, support))
+        });
+    }
+    let range = slot.range.as_deref().unwrap_or("string");
+    type_supports_eq_hash(range, schema, roles, support)
+}
+
+/// Look up `Eq + Hash` support for a LinkML range name. Primitives are
+/// settled by the language (`f64` family doesn't, everything else we
+/// emit does); class refs and enum refs delegate to the per-class
+/// support map.
+fn type_supports_eq_hash(
+    range: &str,
+    schema: &SchemaDefinition,
+    roles: &BTreeMap<String, ClassRole>,
+    support: &BTreeMap<String, bool>,
+) -> bool {
+    match range {
+        "string" | "str" | "uri" | "uriorcurie" | "curie" | "ncname" | "objectidentifier"
+        | "nodeidentifier" | "integer" | "int" | "boolean" | "bool" | "datetime" | "date"
+        | "time" => true,
+        "float" | "double" | "decimal" => false,
+        other => {
+            if schema.classes.contains_key(other) {
+                let _ = roles;
+                support.get(other).copied().unwrap_or(true)
+            } else if schema.enums.contains_key(other) {
+                true
+            } else {
+                // Unknown ref (e.g. imported schema) — be conservative.
+                false
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -412,6 +548,7 @@ fn render_class<W: Write>(
     def: &ClassDefinition,
     schema: &SchemaDefinition,
     roles: &BTreeMap<String, ClassRole>,
+    eq_hash_support: &BTreeMap<String, bool>,
     any_of_enums: &mut BTreeMap<String, Vec<String>>,
 ) -> fmt::Result {
     render_doc_comment(out, "", def.description.as_deref())?;
@@ -438,7 +575,8 @@ fn render_class<W: Write>(
     }
 
     let resolved = resolve_slots(def, schema);
-    let derives = compute_struct_derives(&resolved);
+    let eq_hash_ok = eq_hash_support.get(name).copied().unwrap_or(false);
+    let derives = compute_struct_derives(&resolved, eq_hash_ok);
     writeln!(out, "#[derive({derives})]")?;
     writeln!(out, "pub struct {name} {{")?;
 
@@ -506,6 +644,7 @@ fn render_kind_enum<W: Write>(
     name: &str,
     schema: &SchemaDefinition,
     roles: &BTreeMap<String, ClassRole>,
+    eq_hash_support: &BTreeMap<String, bool>,
 ) -> fmt::Result {
     let descendants: Vec<String> = schema
         .classes
@@ -531,12 +670,13 @@ fn render_kind_enum<W: Write>(
         );
     }
 
+    let eq_hash_ok = eq_hash_support.get(name).copied().unwrap_or(false);
     write!(
         out,
         "/// Closed enum of concrete classes that implement `{name}`. Used as the\n\
          /// field type when a slot's range is `{name}`.\n"
     )?;
-    out.write_str("#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]\n")?;
+    writeln!(out, "#[derive({})]", enum_derive_line(eq_hash_ok))?;
     out.write_str("#[serde(untagged)]\n")?;
     out.write_str("#[non_exhaustive]\n")?;
     writeln!(out, "pub enum {name}Kind {{")?;
@@ -546,9 +686,14 @@ fn render_kind_enum<W: Write>(
     out.write_str("}\n\n")
 }
 
-fn render_any_of_enum<W: Write>(out: &mut W, name: &str, members: &[String]) -> fmt::Result {
+fn render_any_of_enum<W: Write>(
+    out: &mut W,
+    name: &str,
+    members: &[String],
+    eq_hash_ok: bool,
+) -> fmt::Result {
     out.write_str("/// Polymorphic range union for the slot identified by this type name.\n")?;
-    out.write_str("#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]\n")?;
+    writeln!(out, "#[derive({})]", enum_derive_line(eq_hash_ok))?;
     out.write_str("#[serde(untagged)]\n")?;
     out.write_str("#[non_exhaustive]\n")?;
     writeln!(out, "pub enum {name} {{")?;
@@ -557,6 +702,16 @@ fn render_any_of_enum<W: Write>(out: &mut W, name: &str, members: &[String]) -> 
         writeln!(out, "    {variant}(Box<{member}>),")?;
     }
     out.write_str("}\n\n")
+}
+
+/// Derive list for an emitted enum (`<Name>Kind` or `any_of` union).
+/// `Eq + Hash` toggle on; serde derives always present.
+fn enum_derive_line(eq_hash_ok: bool) -> &'static str {
+    if eq_hash_ok {
+        "Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize"
+    } else {
+        "Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize"
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -572,23 +727,20 @@ fn render_any_of_enum<W: Write>(out: &mut W, name: &str, members: &[String]) -> 
 /// added only when every field is default-able under the conservative
 /// rules in [`supports_default`].
 ///
-/// `Eq` and `Hash` are intentionally skipped at this layer; deriving
-/// them safely requires recursive trait analysis across the schema
-/// (`f64` anywhere disqualifies; class fields need to know whether
-/// their referent struct also derives `Eq`/`Hash`). Future work.
-fn compute_struct_derives(slots: &BTreeMap<String, SlotDefinition>) -> String {
-    let mut derives = vec![
-        "Debug",
-        "Clone",
-        "PartialEq",
-        "serde::Serialize",
-        "serde::Deserialize",
-    ];
-    if slots.values().all(supports_default) {
-        // Insert before serde derives to keep the conventional
-        // [Debug, Clone, …, Default, serde::*] order.
-        derives.insert(3, "Default");
+/// `Eq` + `Hash` are added when every resolved slot's field type
+/// supports them — see [`compute_eq_hash_support`] for the recursive
+/// per-class analysis the `eq_hash_ok` argument carries the result of.
+fn compute_struct_derives(slots: &BTreeMap<String, SlotDefinition>, eq_hash_ok: bool) -> String {
+    let mut derives = vec!["Debug", "Clone", "PartialEq"];
+    if eq_hash_ok {
+        derives.push("Eq");
+        derives.push("Hash");
     }
+    if slots.values().all(supports_default) {
+        derives.push("Default");
+    }
+    derives.push("serde::Serialize");
+    derives.push("serde::Deserialize");
     derives.join(", ")
 }
 
@@ -1383,7 +1535,7 @@ mod tests {
             ("multi", slot_shape(Some("string"), true, true)),
             ("required_string", slot_shape(Some("string"), true, false)),
         ]);
-        let derives = compute_struct_derives(&slots);
+        let derives = compute_struct_derives(&slots, false);
         assert!(derives.contains("Default"), "got: {derives}");
         assert!(derives.contains("PartialEq"));
     }
@@ -1394,7 +1546,7 @@ mod tests {
             ("created", slot_shape(Some("datetime"), true, false)),
             ("label", slot_shape(Some("string"), true, false)),
         ]);
-        let derives = compute_struct_derives(&slots);
+        let derives = compute_struct_derives(&slots, false);
         assert!(!derives.contains("Default"), "got: {derives}");
         // PartialEq stays — datetime supports it.
         assert!(derives.contains("PartialEq"));
@@ -1403,7 +1555,7 @@ mod tests {
     #[test]
     fn derives_always_include_debug_clone_partialeq_serde() {
         let slots = slots_from(&[("required_class", slot_shape(Some("SomeClass"), true, false))]);
-        let derives = compute_struct_derives(&slots);
+        let derives = compute_struct_derives(&slots, false);
         assert!(derives.contains("Debug"));
         assert!(derives.contains("Clone"));
         assert!(derives.contains("PartialEq"));
@@ -1414,7 +1566,7 @@ mod tests {
     #[test]
     fn derives_for_empty_struct_include_default() {
         // No fields → everything supports Default vacuously.
-        let derives = compute_struct_derives(&BTreeMap::new());
+        let derives = compute_struct_derives(&BTreeMap::new(), false);
         assert!(derives.contains("Default"));
     }
 
@@ -1724,7 +1876,16 @@ mod tests {
         let roles = compute_class_roles(&schema);
         let mut any_of_enums = BTreeMap::new();
         let mut out = String::new();
-        render_class(&mut out, "Child", &leaf, &schema, &roles, &mut any_of_enums).unwrap();
+        render_class(
+            &mut out,
+            "Child",
+            &leaf,
+            &schema,
+            &roles,
+            &BTreeMap::new(),
+            &mut any_of_enums,
+        )
+        .unwrap();
         // Exactly ONE impl line for Shared.
         let count = out.matches("impl Shared for Child {}").count();
         assert_eq!(
@@ -1745,7 +1906,16 @@ mod tests {
         let roles = compute_class_roles(&schema);
         let mut any_of_enums = BTreeMap::new();
         let mut out = String::new();
-        render_class(&mut out, "Loner", &def, &schema, &roles, &mut any_of_enums).unwrap();
+        render_class(
+            &mut out,
+            "Loner",
+            &def,
+            &schema,
+            &roles,
+            &BTreeMap::new(),
+            &mut any_of_enums,
+        )
+        .unwrap();
         // After the struct, expect exactly `}\n\n` and then end-of-
         // string (no impl block separator). With `!` deleted the
         // function pushes `\n` even when there are no impl blocks,
@@ -1784,7 +1954,16 @@ mod tests {
         let roles = compute_class_roles(&schema);
         let mut any_of_enums = BTreeMap::new();
         let mut out = String::new();
-        render_class(&mut out, "Leaf", &leaf, &schema, &roles, &mut any_of_enums).unwrap();
+        render_class(
+            &mut out,
+            "Leaf",
+            &leaf,
+            &schema,
+            &roles,
+            &BTreeMap::new(),
+            &mut any_of_enums,
+        )
+        .unwrap();
         // Both the mixin AND the mixin's `is_a` parent are satisfied.
         assert!(
             out.contains("impl MidTrait for Leaf {}"),
@@ -1814,7 +1993,16 @@ mod tests {
         let roles = compute_class_roles(&schema);
         let mut any_of_enums = BTreeMap::new();
         let mut out = String::new();
-        render_class(&mut out, "Thing", &def, &schema, &roles, &mut any_of_enums).unwrap();
+        render_class(
+            &mut out,
+            "Thing",
+            &def,
+            &schema,
+            &roles,
+            &BTreeMap::new(),
+            &mut any_of_enums,
+        )
+        .unwrap();
         // `label` is required + single + name matches → no serde attrs at all.
         assert!(
             out.contains("    pub label: String,\n"),
@@ -1861,6 +2049,7 @@ mod tests {
             &leaf,
             &schema,
             &roles,
+            &BTreeMap::new(),
             &mut any_of_enums,
         )
         .unwrap();
@@ -1882,7 +2071,7 @@ mod tests {
 
         let roles = compute_class_roles(&schema);
         let mut out = String::new();
-        render_kind_enum(&mut out, "Animal", &schema, &roles).unwrap();
+        render_kind_enum(&mut out, "Animal", &schema, &roles, &BTreeMap::new()).unwrap();
         assert!(out.contains("pub enum AnimalKind"));
         assert!(out.contains("Cat(Box<Cat>)"));
         assert!(out.contains("Dog(Box<Dog>)"));
@@ -1919,7 +2108,16 @@ mod tests {
         let roles = compute_class_roles(&schema);
         let mut any_of_enums = BTreeMap::new();
         let mut out = String::new();
-        render_class(&mut out, "Holder", &def, &schema, &roles, &mut any_of_enums).unwrap();
+        render_class(
+            &mut out,
+            "Holder",
+            &def,
+            &schema,
+            &roles,
+            &BTreeMap::new(),
+            &mut any_of_enums,
+        )
+        .unwrap();
 
         let members = any_of_enums
             .get("HolderValue")
@@ -1956,7 +2154,7 @@ mod tests {
 
         // Kind enum: skipped, breadcrumb emitted.
         let mut out = String::new();
-        render_kind_enum(&mut out, "Phantom", &schema, &roles).unwrap();
+        render_kind_enum(&mut out, "Phantom", &schema, &roles, &BTreeMap::new()).unwrap();
         assert!(
             out.contains("no concrete descendants"),
             "should emit breadcrumb explaining missing Kind enum; got: {out}"
@@ -1983,7 +2181,16 @@ mod tests {
         let roles = compute_class_roles(&schema);
         let mut any_of_enums = BTreeMap::new();
         let mut out = String::new();
-        render_class(&mut out, "Lonely", &def, &schema, &roles, &mut any_of_enums).unwrap();
+        render_class(
+            &mut out,
+            "Lonely",
+            &def,
+            &schema,
+            &roles,
+            &BTreeMap::new(),
+            &mut any_of_enums,
+        )
+        .unwrap();
         assert!(
             out.contains("// WARNING") && out.contains("absent_slot"),
             "expected a warning comment for the unresolved slot ref; got: {out}"
@@ -2014,6 +2221,7 @@ mod tests {
             &def,
             &schema,
             &roles,
+            &BTreeMap::new(),
             &mut any_of_enums,
         )
         .unwrap();
@@ -2036,6 +2244,7 @@ mod tests {
             &def,
             &schema,
             &roles,
+            &BTreeMap::new(),
             &mut any_of_enums,
         )
         .unwrap();
@@ -2081,6 +2290,7 @@ mod tests {
             &mut out,
             "QuestionWasDerivedFrom",
             &["Question".to_string(), "Annotation".to_string()],
+            true,
         )
         .unwrap();
         assert!(out.contains("#[serde(untagged)]"));
@@ -2118,6 +2328,7 @@ mod tests {
             &def,
             &schema,
             &roles,
+            &BTreeMap::new(),
             &mut any_of_enums,
         )
         .unwrap();
@@ -2125,6 +2336,232 @@ mod tests {
         assert_eq!(
             any_of_enums.get("QuestionWasDerivedFrom"),
             Some(&vec!["Question".to_string(), "Annotation".to_string()])
+        );
+    }
+
+    // ----- Eq + Hash support analysis ---------------------------------
+
+    /// Helper: build a one-class schema with a single attribute slot of
+    /// the given range, then return `compute_eq_hash_support`'s answer
+    /// for that class.
+    fn eq_hash_for_single_slot(class_name: &str, range: &str) -> bool {
+        let mut def = ClassDefinition::new(class_name);
+        let mut slot = SlotDefinition::new("field");
+        slot.range = Some(range.to_string());
+        slot.required = true;
+        def.attributes.insert("field".to_string(), slot);
+        let mut schema = SchemaDefinition::new("s");
+        schema.classes.insert(class_name.to_string(), def);
+        let roles = compute_class_roles(&schema);
+        compute_eq_hash_support(&schema, &roles)
+            .get(class_name)
+            .copied()
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn compute_eq_hash_support_excludes_f64_bearing_struct() {
+        // f64 doesn't implement Eq (NaN is unequal to itself), so any
+        // class with a float / double / decimal field in its resolved
+        // slot set must not derive Eq + Hash.
+        assert!(!eq_hash_for_single_slot("HasFloat", "float"));
+        assert!(!eq_hash_for_single_slot("HasDouble", "double"));
+        assert!(!eq_hash_for_single_slot("HasDecimal", "decimal"));
+    }
+
+    #[test]
+    fn compute_eq_hash_support_includes_datetime_struct() {
+        // chrono::DateTime<Utc>, NaiveDate, NaiveTime all implement
+        // both Eq and Hash, so a struct whose only field is a
+        // datetime / date / time must derive Eq + Hash.
+        assert!(eq_hash_for_single_slot("HasDateTime", "datetime"));
+        assert!(eq_hash_for_single_slot("HasDate", "date"));
+        assert!(eq_hash_for_single_slot("HasTime", "time"));
+    }
+
+    #[test]
+    fn compute_eq_hash_support_propagates_through_class_chain() {
+        // C → B (class ref) → A (f64 field). A is disqualified; B holds
+        // an A-typed field, so B is disqualified; C holds a B-typed
+        // field, so C is too. The chain must propagate to every
+        // referrer.
+        let mut schema = SchemaDefinition::new("s");
+        for (cls, range) in [("A", "float"), ("B", "A"), ("C", "B")] {
+            let mut def = ClassDefinition::new(cls);
+            let mut slot = SlotDefinition::new("field");
+            slot.range = Some(range.to_string());
+            slot.required = true;
+            def.attributes.insert("field".to_string(), slot);
+            schema.classes.insert(cls.to_string(), def);
+        }
+        let roles = compute_class_roles(&schema);
+        let support = compute_eq_hash_support(&schema, &roles);
+        assert_eq!(support.get("A"), Some(&false));
+        assert_eq!(support.get("B"), Some(&false));
+        assert_eq!(support.get("C"), Some(&false));
+    }
+
+    #[test]
+    fn compute_eq_hash_support_handles_recursive_class_via_box() {
+        // A class with a slot ranging over itself is layout-cycled via
+        // `Box<T>`. `Box<T>: Eq + Hash` iff `T: Eq + Hash`, so the
+        // self-recursive class derives Eq + Hash as long as every
+        // *other* field also does. The analyzer must not loop forever
+        // on the cycle.
+        let mut def = ClassDefinition::new("Node");
+        let mut name = SlotDefinition::new("name");
+        name.range = Some("string".to_string());
+        name.required = true;
+        def.attributes.insert("name".to_string(), name);
+        let mut parent = SlotDefinition::new("parent");
+        parent.range = Some("Node".to_string());
+        def.attributes.insert("parent".to_string(), parent);
+
+        let mut schema = SchemaDefinition::new("s");
+        schema.classes.insert("Node".to_string(), def);
+        let roles = compute_class_roles(&schema);
+        let support = compute_eq_hash_support(&schema, &roles);
+        assert_eq!(support.get("Node"), Some(&true));
+    }
+
+    #[test]
+    fn compute_eq_hash_support_keeps_trait_qualified_when_descendants_clean_and_ignores_unrelated_classes()
+     {
+        // `trait_descendants_support` must look ONLY at descendants of
+        // the trait. An f64-bearing class elsewhere in the schema that
+        // is not a descendant must not disqualify the trait. And a
+        // trait whose own descendants all qualify must stay `true`.
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .classes
+            .insert("Shape".to_string(), ClassDefinition::new("Shape"));
+
+        let mut square = ClassDefinition::new("Square");
+        square.is_a = Some("Shape".to_string());
+        let mut side = SlotDefinition::new("side");
+        side.range = Some("integer".to_string());
+        side.required = true;
+        square.attributes.insert("side".to_string(), side);
+        schema.classes.insert("Square".to_string(), square);
+
+        // Unrelated f64-bearing class. Not a descendant of Shape; must
+        // be invisible to the trait's analysis.
+        let mut unrelated = ClassDefinition::new("Unrelated");
+        let mut value = SlotDefinition::new("value");
+        value.range = Some("float".to_string());
+        value.required = true;
+        unrelated.attributes.insert("value".to_string(), value);
+        schema.classes.insert("Unrelated".to_string(), unrelated);
+
+        let roles = compute_class_roles(&schema);
+        let support = compute_eq_hash_support(&schema, &roles);
+        assert_eq!(support.get("Shape"), Some(&true));
+        assert_eq!(support.get("Square"), Some(&true));
+        assert_eq!(support.get("Unrelated"), Some(&false));
+    }
+
+    #[test]
+    fn compute_eq_hash_support_disqualifies_trait_when_any_descendant_does_not() {
+        // Trait `Shape` has two concrete descendants. `Square` is
+        // Eq-clean; `Circle` carries an f64 radius. The Trait's bit —
+        // which controls the `<Name>Kind` enum's derives — must be
+        // false because at least one variant doesn't support Eq + Hash.
+        let mut schema = SchemaDefinition::new("s");
+        let shape = ClassDefinition::new("Shape");
+        schema.classes.insert("Shape".to_string(), shape);
+
+        let mut square = ClassDefinition::new("Square");
+        square.is_a = Some("Shape".to_string());
+        let mut side = SlotDefinition::new("side");
+        side.range = Some("integer".to_string());
+        side.required = true;
+        square.attributes.insert("side".to_string(), side);
+        schema.classes.insert("Square".to_string(), square);
+
+        let mut circle = ClassDefinition::new("Circle");
+        circle.is_a = Some("Shape".to_string());
+        let mut radius = SlotDefinition::new("radius");
+        radius.range = Some("float".to_string());
+        radius.required = true;
+        circle.attributes.insert("radius".to_string(), radius);
+        schema.classes.insert("Circle".to_string(), circle);
+
+        let roles = compute_class_roles(&schema);
+        let support = compute_eq_hash_support(&schema, &roles);
+        assert_eq!(support.get("Shape"), Some(&false));
+        assert_eq!(support.get("Square"), Some(&true));
+        assert_eq!(support.get("Circle"), Some(&false));
+    }
+
+    #[test]
+    fn render_class_emits_eq_hash_derive_when_supported() {
+        // End-to-end: a struct whose every field supports Eq + Hash
+        // gets `Eq, Hash` in the `#[derive(...)]` line.
+        let mut def = ClassDefinition::new("Item");
+        let mut name = SlotDefinition::new("name");
+        name.range = Some("string".to_string());
+        name.required = true;
+        def.attributes.insert("name".to_string(), name);
+        let mut count = SlotDefinition::new("count");
+        count.range = Some("integer".to_string());
+        count.required = true;
+        def.attributes.insert("count".to_string(), count);
+
+        let mut schema = SchemaDefinition::new("s");
+        schema.classes.insert("Item".to_string(), def.clone());
+
+        let roles = compute_class_roles(&schema);
+        let support = compute_eq_hash_support(&schema, &roles);
+        let mut any_of_enums = BTreeMap::new();
+        let mut out = String::new();
+        render_class(
+            &mut out,
+            "Item",
+            &def,
+            &schema,
+            &roles,
+            &support,
+            &mut any_of_enums,
+        )
+        .unwrap();
+        assert!(
+            out.contains("Eq, Hash"),
+            "expected `Eq, Hash` in derive line; got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn render_class_omits_eq_hash_when_field_disqualifies() {
+        // Symmetric to the previous test: a struct with an f64 field
+        // must NOT include Eq or Hash in the derive line.
+        let mut def = ClassDefinition::new("Measure");
+        let mut value = SlotDefinition::new("value");
+        value.range = Some("float".to_string());
+        value.required = true;
+        def.attributes.insert("value".to_string(), value);
+
+        let mut schema = SchemaDefinition::new("s");
+        schema.classes.insert("Measure".to_string(), def.clone());
+
+        let roles = compute_class_roles(&schema);
+        let support = compute_eq_hash_support(&schema, &roles);
+        let mut any_of_enums = BTreeMap::new();
+        let mut out = String::new();
+        render_class(
+            &mut out,
+            "Measure",
+            &def,
+            &schema,
+            &roles,
+            &support,
+            &mut any_of_enums,
+        )
+        .unwrap();
+        // Match the comma-tagged token to avoid false positive on the
+        // word "Eq" inside e.g. "PartialEq".
+        assert!(
+            !out.contains("Eq, Hash"),
+            "unexpected Eq + Hash in derive line; got:\n{out}"
         );
     }
 

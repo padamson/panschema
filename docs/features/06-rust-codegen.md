@@ -231,16 +231,16 @@ LinkML uses lowerCamelCase (`wasGeneratedBy`); Rust idiom is snake_case. Slot na
 
 ### Slice 6.8: `Eq` + `Hash` derives (recursive trait analysis)
 
-**Status:** ⬜ Not Started
+**Status:** ✅ Completed
 
 **User Value:** Generated structs and enums can be used as `HashMap` keys, in `HashSet`s, and compared with `==` in `const` contexts. Common for schema-pinning consumers (cache keys, deduplication).
 
 **Acceptance Criteria:**
-- [ ] Two-pass writer: first pass computes per-type trait support (which structs/enums can derive `Eq`/`Hash`); second pass emits the derives. The dependency graph propagates: a struct derives `Eq` only when every field's type does
-- [ ] `f64` anywhere in a struct's resolved field set disqualifies `Eq` and `Hash`
-- [ ] `chrono::DateTime<Utc>`, `NaiveDate`, `NaiveTime` all support `Eq` + `Hash`
-- [ ] Class-typed and enum-typed fields propagate through their referent's trait support
-- [ ] Unit tests cover: f64-only struct, datetime-only struct, deeply-nested class chains, cycles broken by `Box<T>` (Box preserves the inner trait set)
+- [x] Two-pass writer: first pass computes per-type trait support (which structs/enums can derive `Eq`/`Hash`); second pass emits the derives. The dependency graph propagates: a struct derives `Eq` only when every field's type does
+- [x] `f64` anywhere in a struct's resolved field set disqualifies `Eq` and `Hash`
+- [x] `chrono::DateTime<Utc>`, `NaiveDate`, `NaiveTime` all support `Eq` + `Hash`
+- [x] Class-typed and enum-typed fields propagate through their referent's trait support
+- [x] Unit tests cover: f64-only struct, datetime-only struct, deeply-nested class chains, cycles broken by `Box<T>` (Box preserves the inner trait set)
 
 **Notes:**
 - This slice is the natural extension of 6.5. Doing them together is tempting; splitting keeps 6.5 small and verifiable on its own.
@@ -425,3 +425,16 @@ The two green tests over-deliver against the slice's stated scope. `scimantic_ou
 - `merge_slot_override` uses two local `macro_rules!` (`merge_opt!` for cloneable fields, `merge_opt_copy!` for `Copy` fields) so each merged field is one line of intent instead of three.
 - Doc-comment trim: removed pure-WHAT block comments inside `render_into` and `render_class` where the next two lines say the same thing; the surviving comments document non-obvious WHY (e.g. emission-order constraints, the mixin-ancestor walk's reason for existing).
 - New test `render_into_streams_to_arbitrary_fmt_write_sink` exercises a non-`String` sink, locking in the trait generic bound.
+
+### Slice 6.8 — Eq + Hash derives (recursive trait analysis)
+
+**Completed:**
+- New `compute_eq_hash_support` runs as a first pass over the schema, returning `BTreeMap<String, bool>` per class. Monotonic fixpoint iteration: every class starts at `true` and only flips to `false` on a disqualifying field (or a disqualified referent). For Struct-role classes the bit gates the struct's own `#[derive(...)]`; for Trait-role classes it gates the `<Name>Kind` enum's derives and is recomputed from the AND of concrete-descendant support.
+- `compute_struct_derives(slots, eq_hash_ok)` and the new `enum_derive_line(eq_hash_ok)` helper compose the derive list with optional `Eq, Hash` insertion. `render_class`, `render_kind_enum`, and `render_any_of_enum` all thread the support map through.
+- Per the AC: `f64` family disqualifies (`float` / `double` / `decimal`); chrono primitives (`datetime` / `date` / `time`) qualify; LinkML enums always qualify; class refs delegate to the per-class bit; recursive `Box<T>` cycles handled by construction since `Box<T>` derives `Eq + Hash` iff `T` does (no special framing logic — the analyzer looks at the base range, not the framing).
+- Seven new unit tests cover: f64 family disqualifies, datetime family qualifies, chain propagation (`C → B → A` with A holding `float`), self-recursive `Box<T>` class with no f64, trait disqualified when any concrete descendant carries f64, end-to-end render emits `Eq, Hash` on a qualifying struct, end-to-end render omits them on a disqualifying one.
+
+**Design notes:**
+- An unknown range (e.g. an imported schema not loaded into `schema.classes`/`schema.enums`/`schema.types`) is treated as not-Eq-Hash. Conservative since we can't see the referent's traits; matches the existing conservative treatment elsewhere (no `Default`, etc.).
+- The fixpoint terminates because every iteration is a monotonic flip from `true` to `false`. Bounded by `O(classes^2)` rounds in the worst case (each round can flip at least one class); in practice it settles in one or two passes.
+- Class-typed fields' framing (`Box<T>`, `Option<T>`, `Vec<T>`) is irrelevant to the Eq/Hash analysis: all three framings preserve their inner type's trait set. We pass the *range* into `type_supports_eq_hash`, not the framed type string.
