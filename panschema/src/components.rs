@@ -235,6 +235,7 @@ pub struct ClassCardComponent<'a> {
     pub superclass: Option<&'a EntityRef>,
     pub subclasses: &'a [EntityRef],
     pub properties: &'a [EntityRef],
+    pub mixins: &'a [EntityRef],
 }
 
 /// Property card component template.
@@ -272,6 +273,7 @@ pub struct SampleClass<'a> {
     pub superclass: Option<&'a EntityRef>,
     pub subclasses: &'a [EntityRef],
     pub properties: &'a [EntityRef],
+    pub mixins: &'a [EntityRef],
 }
 
 /// Sample property data for styleguide previews.
@@ -410,6 +412,7 @@ impl ComponentRenderer {
         superclass: Option<&EntityRef>,
         subclasses: &[EntityRef],
         properties: &[EntityRef],
+        mixins: &[EntityRef],
     ) -> anyhow::Result<String> {
         let template = ClassCardComponent {
             id,
@@ -419,6 +422,7 @@ impl ComponentRenderer {
             superclass,
             subclasses,
             properties,
+            mixins,
         };
         Ok(template.render()?)
     }
@@ -479,6 +483,10 @@ impl ComponentRenderer {
         ];
         let class_properties = vec![EntityRef::new("name", "name"), EntityRef::new("age", "age")];
 
+        let class_mixins = vec![
+            EntityRef::new("auditable", "Auditable"),
+            EntityRef::new("publishable", "Publishable"),
+        ];
         let sample_class = SampleClass {
             id: "person",
             label: "Person",
@@ -487,6 +495,7 @@ impl ComponentRenderer {
             superclass: Some(&superclass),
             subclasses: &subclasses,
             properties: &class_properties,
+            mixins: &class_mixins,
         };
 
         let domain = EntityRef::new("person", "Person");
@@ -753,6 +762,7 @@ mod tests {
                 Some(&superclass),
                 &subclasses,
                 &properties,
+                &[],
             )
             .unwrap();
             insta::assert_snapshot!(html);
@@ -768,9 +778,60 @@ mod tests {
                 None,
                 &[],
                 &[],
+                &[],
             )
             .unwrap();
             insta::assert_snapshot!(html);
+        }
+
+        #[test]
+        fn class_card_renders_mixes_in_section_with_anchor_links() {
+            let mixins = vec![
+                EntityRef::new("auditable", "Auditable"),
+                EntityRef::new("publishable", "Publishable"),
+            ];
+            let html = ComponentRenderer::class_card(
+                "document",
+                "Document",
+                "https://example.org/ontology#Document",
+                None,
+                None,
+                &[],
+                &[],
+                &mixins,
+            )
+            .unwrap();
+            assert!(
+                html.contains("Mixes in"),
+                "missing 'Mixes in' label; got:\n{html}"
+            );
+            assert!(
+                html.contains(r##"href="#class-auditable""##),
+                "missing anchor link to first mixin; got:\n{html}"
+            );
+            assert!(
+                html.contains(r##"href="#class-publishable""##),
+                "missing anchor link to second mixin; got:\n{html}"
+            );
+        }
+
+        #[test]
+        fn class_card_omits_mixes_in_section_when_no_mixins() {
+            let html = ComponentRenderer::class_card(
+                "leaf",
+                "Leaf",
+                "https://example.org/ontology#Leaf",
+                None,
+                None,
+                &[],
+                &[],
+                &[],
+            )
+            .unwrap();
+            assert!(
+                !html.contains("Mixes in"),
+                "unexpected 'Mixes in' label on class without mixins; got:\n{html}"
+            );
         }
 
         #[test]

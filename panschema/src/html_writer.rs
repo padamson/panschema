@@ -34,6 +34,7 @@ pub struct ClassData {
     pub description: Option<String>,
     pub superclass: Option<EntityRef>,
     pub subclasses: Vec<EntityRef>,
+    pub mixins: Vec<EntityRef>,
 }
 
 /// Range reference for property cards - either a class link or a datatype name.
@@ -214,6 +215,26 @@ impl HtmlWriter {
                 })
                 .collect();
 
+            // Unresolved mixins (from un-loaded imports or typos) are
+            // skipped: a broken `#class-X` anchor is worse than omission.
+            let mixins: Vec<EntityRef> = class_def
+                .mixins
+                .iter()
+                .filter_map(|mixin_id| {
+                    schema.classes.get(mixin_id).map(|mixin_def| {
+                        let mixin_label = mixin_def
+                            .annotations
+                            .get("panschema:label")
+                            .cloned()
+                            .unwrap_or_else(|| mixin_id.clone());
+                        EntityRef {
+                            id: mixin_id.clone(),
+                            label: mixin_label,
+                        }
+                    })
+                })
+                .collect();
+
             class_data_list.push(ClassData {
                 id: (*class_id).clone(),
                 label,
@@ -224,6 +245,7 @@ impl HtmlWriter {
                 description: class_def.description.clone(),
                 superclass,
                 subclasses,
+                mixins,
             });
         }
 
@@ -570,6 +592,48 @@ mod tests {
         assert_eq!(dog.label, "Dog");
         assert!(dog.superclass.is_some());
         assert_eq!(dog.superclass.as_ref().unwrap().id, "Mammal");
+    }
+
+    #[test]
+    fn html_writer_class_data_resolves_mixin_entity_refs() {
+        use crate::linkml::{ClassDefinition, SchemaDefinition};
+
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .classes
+            .insert("Auditable".to_string(), ClassDefinition::new("Auditable"));
+        schema.classes.insert(
+            "Publishable".to_string(),
+            ClassDefinition::new("Publishable"),
+        );
+        let mut doc = ClassDefinition::new("Document");
+        doc.mixins = vec!["Auditable".to_string(), "Publishable".to_string()];
+        schema.classes.insert("Document".to_string(), doc);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let document = data.class_data.iter().find(|c| c.id == "Document").unwrap();
+        let mixin_ids: Vec<&str> = document.mixins.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(mixin_ids, vec!["Auditable", "Publishable"]);
+    }
+
+    #[test]
+    fn html_writer_class_data_skips_unresolved_mixin_refs() {
+        // Anchor links to a missing class card would be broken; skip
+        // is the conservative choice over emitting a dead link.
+        use crate::linkml::{ClassDefinition, SchemaDefinition};
+
+        let mut schema = SchemaDefinition::new("s");
+        let mut doc = ClassDefinition::new("Document");
+        doc.mixins = vec!["Phantom".to_string()];
+        schema.classes.insert("Document".to_string(), doc);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let document = data.class_data.iter().find(|c| c.id == "Document").unwrap();
+        assert!(
+            document.mixins.is_empty(),
+            "expected unresolved mixin to be skipped; got: {:?}",
+            document.mixins
+        );
     }
 
     #[test]

@@ -25,6 +25,16 @@
             <dd><a href="#class-{{ parent.id }}" class="entity-ref class-ref">{{ parent.label }}</a></dd>
         </div>
 {%- endif %}
+{%- if !mixins.is_empty() %}
+        <div class="detail-row">
+            <dt>Mixes in</dt>
+            <dd>
+{%- for mixin in mixins %}
+                <a href="#class-{{ mixin.id }}" class="entity-ref class-ref">{{ mixin.label }}</a>{%- if !loop.last %},{% endif %}
+{%- endfor %}
+            </dd>
+        </div>
+{%- endif %}
 {%- if !subclasses.is_empty() %}
         <div class="detail-row">
             <dt>Superclass of</dt>

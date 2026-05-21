@@ -288,7 +288,7 @@ fn type_supports_eq_hash(
 /// 3. This class's inline `attributes`
 /// 4. This class's global `slots:` references (don't overwrite #1–3)
 /// 5. This class's `slot_usage` overrides (merge-overlay)
-fn resolve_slots(
+pub(crate) fn resolve_slots(
     class: &ClassDefinition,
     schema: &SchemaDefinition,
 ) -> BTreeMap<String, SlotDefinition> {
