@@ -6,8 +6,10 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
 
+use sophia::api::prefix::{Prefix, PrefixMapPair};
 use sophia::api::serializer::TripleSerializer;
-use sophia::turtle::serializer::turtle::TurtleSerializer;
+use sophia::iri::Iri;
+use sophia::turtle::serializer::turtle::{TurtleConfig, TurtleSerializer};
 
 use crate::io::{IoError, IoResult, Writer};
 use crate::linkml::SchemaDefinition;
@@ -36,7 +38,18 @@ impl Writer for OwlWriter {
         let file = File::create(output).map_err(IoError::Io)?;
         let writer = BufWriter::new(file);
 
-        let mut serializer = TurtleSerializer::new(writer);
+        // Wire the schema's `prefixes:` block into sophia's TurtleConfig so
+        // the serializer emits `@prefix foo: <https://...>` declarations and
+        // can fold absolute IRIs back into compact CURIE form. `with_pretty`
+        // is required for prefix-aware output (sophia ignores the prefix map
+        // in streaming mode). Prefixes that aren't valid sophia `Prefix`
+        // values are silently dropped — they can't be used in the output
+        // anyway.
+        let prefix_map = build_prefix_map(schema);
+        let config = TurtleConfig::new()
+            .with_pretty(true)
+            .with_own_prefix_map(prefix_map);
+        let mut serializer = TurtleSerializer::new_with_config(writer, config);
 
         serializer
             .serialize_graph(&graph)
@@ -48,6 +61,38 @@ impl Writer for OwlWriter {
     fn format_id(&self) -> &str {
         "ttl"
     }
+}
+
+/// Construct a sophia `PrefixMap` from the schema's `prefixes:` block.
+/// Each `(name, base)` pair becomes a `(Prefix, Iri)` entry; entries that
+/// fail sophia's prefix/IRI validation are skipped with a `tracing::warn!`.
+fn build_prefix_map(schema: &SchemaDefinition) -> Vec<PrefixMapPair> {
+    schema
+        .prefixes
+        .iter()
+        .filter_map(|(name, base)| {
+            let prefix = Prefix::new(name.clone().into_boxed_str())
+                .map_err(|e| {
+                    tracing::warn!(
+                        prefix = name,
+                        error = %e,
+                        "skipping invalid prefix declaration"
+                    );
+                })
+                .ok()?;
+            let iri = Iri::new(base.clone().into_boxed_str())
+                .map_err(|e| {
+                    tracing::warn!(
+                        prefix = name,
+                        base = base,
+                        error = %e,
+                        "skipping prefix with invalid base IRI"
+                    );
+                })
+                .ok()?;
+            Some((prefix, iri))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -456,6 +501,124 @@ mod tests {
         let dog = schema.classes.get("Dog").unwrap();
         let dog2 = schema2.classes.get("Dog").unwrap();
         assert_eq!(dog.is_a, dog2.is_a);
+    }
+
+    #[test]
+    fn ttl_output_declares_prefixes_from_schema_prefixes_block() {
+        // The schema's prefixes block must round-trip into TTL `PREFIX`
+        // declarations. Without these, sophia's pretty serializer
+        // can't compact absolute IRIs back into CURIE form and would
+        // emit verbose absolute IRIs everywhere.
+        let mut schema = create_test_schema();
+        schema.prefixes.insert(
+            "cco".to_string(),
+            "https://www.commoncoreontologies.org/".to_string(),
+        );
+        schema.prefixes.insert(
+            "obo".to_string(),
+            "http://purl.obolibrary.org/obo/".to_string(),
+        );
+        let mut act = ClassDefinition::new("Act");
+        act.class_uri = Some("cco:ont00000005".to_string());
+        schema.classes.insert("Act".to_string(), act);
+
+        let temp_dir = TempDir::new().expect("tempdir");
+        let output_path = temp_dir.path().join("out.ttl");
+        OwlWriter::new().write(&schema, &output_path).unwrap();
+        let content = fs::read_to_string(&output_path).unwrap();
+
+        assert!(
+            content.contains("cco:") && content.contains("https://www.commoncoreontologies.org/"),
+            "expected cco prefix declaration; got:\n{content}"
+        );
+        assert!(
+            content.contains("obo:") && content.contains("http://purl.obolibrary.org/obo/"),
+            "expected obo prefix declaration; got:\n{content}"
+        );
+    }
+
+    #[test]
+    fn ttl_output_uses_compact_curie_for_expanded_class_uri() {
+        // When a class_uri is a CURIE against a declared prefix, the
+        // TTL output should use the compact `cco:ont00000005` form,
+        // never the invalid `<cco:ont00000005>` form (CURIE wrapped in
+        // angle brackets, which would parse as an absolute IRI).
+        let mut schema = create_test_schema();
+        schema.prefixes.insert(
+            "cco".to_string(),
+            "https://www.commoncoreontologies.org/".to_string(),
+        );
+        let mut act = ClassDefinition::new("Act");
+        act.class_uri = Some("cco:ont00000005".to_string());
+        schema.classes.insert("Act".to_string(), act);
+
+        let temp_dir = TempDir::new().expect("tempdir");
+        let output_path = temp_dir.path().join("out.ttl");
+        OwlWriter::new().write(&schema, &output_path).unwrap();
+        let content = fs::read_to_string(&output_path).unwrap();
+
+        assert!(
+            !content.contains("<cco:ont00000005>"),
+            "invalid CURIE-in-brackets form leaked into TTL output:\n{content}"
+        );
+        assert!(
+            content.contains("cco:ont00000005"),
+            "expected compact CURIE form; got:\n{content}"
+        );
+    }
+
+    #[test]
+    fn ttl_output_emits_subclass_of_for_each_mixin() {
+        // Multiple-inheritance via LinkML mixins must surface as
+        // multiple rdfs:subClassOf relations in the OWL output.
+        let mut schema = create_test_schema();
+        for name in ["Parent", "MixinA"] {
+            let mut def = ClassDefinition::new(name);
+            def.class_uri = Some(format!("http://example.org/test#{name}"));
+            schema.classes.insert(name.to_string(), def);
+        }
+        let mut child = ClassDefinition::new("Child");
+        child.class_uri = Some("http://example.org/test#Child".to_string());
+        child.is_a = Some("Parent".to_string());
+        child.mixins = vec!["MixinA".to_string()];
+        schema.classes.insert("Child".to_string(), child);
+
+        let temp_dir = TempDir::new().expect("tempdir");
+        let output_path = temp_dir.path().join("out.ttl");
+        OwlWriter::new().write(&schema, &output_path).unwrap();
+        let content = fs::read_to_string(&output_path).unwrap();
+
+        // TTL's compact form folds multiple objects of the same
+        // predicate into one `subClassOf <a>, <b>.` chain, so the
+        // assertion is "both parent IRIs appear under Child's
+        // subClassOf relation," not a literal count of the predicate
+        // keyword. Strip whitespace + newlines so the assertion is
+        // robust to sophia's indentation.
+        let flat: String = content.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            flat.contains("Child> a <http://www.w3.org/2002/07/owl#Class>")
+                || flat.contains("test#Child>"),
+            "Child class not declared in TTL output:\n{content}"
+        );
+        let parent_iri = "<http://example.org/test#Parent>";
+        let mixin_iri = "<http://example.org/test#MixinA>";
+        assert!(
+            content.contains(parent_iri),
+            "expected is_a parent IRI {parent_iri} in TTL output:\n{content}"
+        );
+        assert!(
+            content.contains(mixin_iri),
+            "expected mixin IRI {mixin_iri} in TTL output:\n{content}"
+        );
+        // Both parents share the subClassOf predicate — confirm the
+        // mixin IRI follows the subClassOf keyword somewhere
+        // (compact form lists them with `,` separators).
+        let subclass_pos = content.find("subClassOf").expect("subClassOf keyword");
+        let after = &content[subclass_pos..];
+        assert!(
+            after.contains(parent_iri) && after.contains(mixin_iri),
+            "expected both is_a parent and mixin under subClassOf; got:\n{content}"
+        );
     }
 
     #[test]

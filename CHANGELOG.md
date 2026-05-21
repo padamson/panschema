@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **RDF serializers (TTL / JSON-LD / N-Triples / RDF/XML) now expand CURIE-shaped IRIs against the schema's `prefixes:` table** before emission. Previously a `class_uri: cco:ont00000005` produced `<cco:ont00000005>` — invalid as N-Triples (the spec requires absolute IRIs in `<...>`) and ambiguous in TTL/JSON-LD/RDF/XML (parsers read it as a relative IRI against the empty base). The TTL writer now also wires sophia's `TurtleConfig::with_prefix_map` so the schema's prefixes round-trip into `PREFIX` declarations at the top of the output. JSON-LD and RDF/XML emit fully-expanded absolute IRIs. Surfaced by the scimantic-schema v0.2.0 dogfood, where most class IRIs are BFO/CCO CURIEs.
+- **LinkML mixins now emit `rdfs:subClassOf` alongside the `is_a` parent in OWL output.** LinkML treats `mixins:` as multiple inheritance; the prior emitter only honored `is_a`, so a class declaring three mixins lost three subClassOf relations from its RDF representation.
+
 ### Added
 - **Schema package manager** (work in progress toward v0.3.0; see [docs/features/05-schema-manager.md](docs/features/05-schema-manager.md)). Cargo-style dependency management for LinkML schemas. Every schema dependency is a "package": a directory containing `panschema-publish.toml` plus the main schema file it references at `[files].main`.
   - **Publishing standard**: `panschema-publish.toml` lives at the package root and declares the schema's authoritative name, version, LinkML target version, and main-file location. Schema authors publish through this file; consumers verify against it.

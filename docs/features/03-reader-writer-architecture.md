@@ -175,6 +175,31 @@ All existing E2E tests must continue passing throughout the refactor.
 
 ---
 
+### Slice 7: RDF emitter correctness (v0.3.0 dogfood follow-up)
+
+**Status:** Not Started
+
+**User Value:** `panschema generate --format ttl|jsonld|ntriples|rdfxml` produces RDF that is actually valid against the spec for that format and faithfully reflects the LinkML schema's multiple-inheritance semantics. Downstream consumers (reasoners, triple stores, OWL editors) can ingest the output without manual post-processing.
+
+**Context:** Surfaced by the scimantic-schema v0.2.0 dogfood (BFO/CCO re-grounding, where most class IRIs are CURIEs against external prefixes). The pre-existing serializers emitted `<cco:ont00000005>` rather than the expanded absolute IRI, which is invalid N-Triples and produces wrong-IRI semantics in TTL / JSON-LD / RDF/XML. The same dogfood revealed that mixins were never emitted as `rdfs:subClassOf` even though LinkML treats mixins as multiple-inheritance.
+
+**Acceptance Criteria:**
+- [ ] All CURIE-shaped IRIs (`prefix:local`) in the schema — `class_uri`, `slot_uri`, slot ranges, etc. — are expanded against `schema.prefixes` before emission. The TTL output uses `<https://...>` form OR compact `prefix:local` paired with a `@prefix` declaration at the top, not the current `<prefix:local>` invalid form.
+- [ ] TTL output declares `@prefix` lines at the top for every prefix referenced in the body.
+- [ ] JSON-LD output includes a top-level `@context` mapping every prefix referenced in the body. `@id` values are either expanded absolute IRIs or compact forms resolvable against the context.
+- [ ] N-Triples output uses absolute IRIs everywhere (no compact forms; `<...>` always contains a fully-qualified URL).
+- [ ] RDF/XML output declares `xmlns:` for every prefix used and uses absolute IRIs in `rdf:about` / `rdf:resource`.
+- [ ] For every class with `mixins:`, the writer emits one `rdfs:subClassOf` triple per mixin in addition to the existing `is_a` triple. The mixin target IRI follows the same CURIE-expansion rules.
+- [ ] `panschema generate --format ntriples` against scimantic@0.2.0 (or any schema with non-`scimantic:` `class_uri` values) round-trips through a strict parser (e.g. `rdflib` / `rapper`) with zero relative IRIs.
+- [ ] Snapshot tests in `panschema/src/rdf_serializers.rs` extended against a fixture that exercises: a class with a CURIE `class_uri`, a class with mixins, and a slot with a CURIE `slot_uri`.
+
+**Notes:**
+- The expansion logic should live in a shared helper (e.g. `expand_curie(name: &str, schema: &SchemaDefinition) -> String`) so all four serializers reuse it. Unknown prefixes (declared in `prefixes:` but unresolved against any known namespace) get passed through unchanged with a `// WARNING` comment in test output mode; in normal runs they emit a `tracing::warn!` and pass through unchanged so the writer is robust to incomplete schemas.
+- `default_prefix:` is honored: a bare class name without a colon-CURIE in `class_uri` uses `<default_prefix><default_separator><name>`. This matches LinkML's `class_uri` resolution rules.
+- The mixin emission is a one-line addition next to the `is_a` emission; the bigger change is the CURIE expansion.
+
+---
+
 ## Slice Priority and Dependencies
 
 | Slice | Priority | Depends On | Status |
@@ -185,3 +210,4 @@ All existing E2E tests must continue passing throughout the refactor.
 | Slice 4: HtmlWriter | Must Have | Slice 3 | Completed |
 | Slice 5: CLI Rename | Must Have | Slice 4 | Completed |
 | Slice 6: Release | Must Have | Slice 5 | Completed |
+| Slice 7: RDF emitter correctness | Must Have (v0.3.0) | Slice 4 | Not Started |

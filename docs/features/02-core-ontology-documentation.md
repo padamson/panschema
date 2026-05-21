@@ -119,6 +119,28 @@ Building on Feature 01 (Foundational UI Stack), this feature adds actual ontolog
 
 ---
 
+### Slice 5: Class card content (v0.3.0 dogfood follow-up)
+
+**Status:** Not Started
+
+**User Value:** A reader of generated HTML can see every constraint the schema actually declares about a class — its direct slots, every `slot_usage` refinement (range, `any_of`, required narrowing), every mixin, and links to entities referenced via `[[Name]]` in descriptions — without falling back to the raw YAML.
+
+**Context:** Surfaced by the scimantic-schema v0.2.0 dogfood (see [docs/mutation-debt.md] sibling notes). The pre-existing class card showed only header + description + `Subclass of <is_a>`; everything else the schema declared was invisible to a reader of the generated documentation.
+
+**Acceptance Criteria:**
+- [ ] The class card lists every resolved slot (direct attributes + slots referenced via `slots:` + inherited slots from `is_a` and mixins), with each slot's range, required/optional, and multivalued framing visible.
+- [ ] `slot_usage` refinements are rendered alongside the inherited slot, with the narrowed range (`any_of: [A, B, C]`), narrowed `required: true`, or other overrides clearly distinguished from the inherited definition (e.g. "Refined here: required, range any of …").
+- [ ] The card lists each mixin under a "Mixes in" section, with anchor links to the mixin's class card.
+- [ ] `[[Name]]` markers in class / slot / enum descriptions are resolved to `<a href="#class-Name">Name</a>` (or `#enum-Name` / `#slot-Name`), matching LinkML's documentation cross-reference convention. Unresolved names fall back to literal text with a `// WARNING` comment in the generated HTML source (mirroring [`render_class`'s unresolved-slot pattern](../../panschema/src/rust_writer.rs)).
+- [ ] Snapshot test extended against the reference ontology + a multi-mixin / `any_of`-bearing test fixture; e2e test asserts at least one mixin link and one resolved `[[xref]]` are present in the rendered scimantic page.
+
+**Notes:**
+- The graph-json already carries the mixin edges (`edge_type: "mixin"`); this slice just surfaces them in the per-class HTML.
+- The `slot_usage` refinement rendering is the bulk of the work; class-card-as-template needs a section that distinguishes "inherited slot" from "refined slot at this class."
+- Defer SHACL output of the same constraints — that's gated on the SHACL writer existing at all (future slice). For now, HTML is the only writer that needs to surface these facts.
+
+---
+
 ## Slice Priority and Dependencies
 
 | Slice | Priority | Depends On | Status |
@@ -127,3 +149,4 @@ Building on Feature 01 (Foundational UI Stack), this feature adds actual ontolog
 | Slice 2: Properties | Must Have | Slice 1 | Completed |
 | Slice 3: Individuals | Should Have | Slice 2 | Completed |
 | Slice 4: Release | Must Have | Slice 1-3 | Completed |
+| Slice 5: Class card content | Should Have (v0.3.0) | Slice 1, Feature 03 | Not Started |

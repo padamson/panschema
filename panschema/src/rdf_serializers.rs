@@ -20,6 +20,34 @@ use crate::linkml::SchemaDefinition;
 const OWL_NS: &str = "http://www.w3.org/2002/07/owl#";
 const DCTERMS_NS: &str = "http://purl.org/dc/terms/";
 
+/// Expand a CURIE-shaped name (`prefix:local`) against `schema.prefixes`
+/// into an absolute IRI. Inputs that are already absolute URLs
+/// (`http://…` / `https://…` / any scheme followed by `//`) pass through
+/// unchanged. Bare names (no colon) are returned as-is — callers handle
+/// the `default_prefix` / `id` fallback. CURIE prefixes that don't appear
+/// in `schema.prefixes` are passed through with a `tracing::warn!` so the
+/// caller doesn't silently emit a relative IRI.
+fn expand_curie(name: &str, schema: &SchemaDefinition) -> String {
+    if name.contains("://") {
+        return name.to_string();
+    }
+    let Some((prefix, local)) = name.split_once(':') else {
+        return name.to_string();
+    };
+    match schema.prefixes.get(prefix) {
+        Some(base) => format!("{base}{local}"),
+        None => {
+            tracing::warn!(
+                prefix = prefix,
+                curie = name,
+                "CURIE prefix not declared in `schema.prefixes`; \
+                 emitting unexpanded IRI which may be invalid downstream"
+            );
+            name.to_string()
+        }
+    }
+}
+
 /// Build an RDF graph from a SchemaDefinition
 pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
     let mut graph = FastGraph::new();
@@ -127,7 +155,8 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
     for (name, class_def) in &schema.classes {
         let class_iri_str = class_def
             .class_uri
-            .clone()
+            .as_deref()
+            .map(|c| expand_curie(c, schema))
             .unwrap_or_else(|| format!("{}#{}", ontology_iri_str, name));
         let class_iri = make_iri(&class_iri_str)?;
 
@@ -153,12 +182,15 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
                 .map_err(|e| IoError::Write(e.to_string()))?;
         }
 
-        // rdfs:subClassOf from is_a
-        if let Some(ref parent) = class_def.is_a {
+        // rdfs:subClassOf from is_a and each mixin. LinkML treats mixins
+        // as multiple inheritance; in OWL that maps to one rdfs:subClassOf
+        // edge per parent, including each mixin.
+        for parent in class_def.is_a.iter().chain(class_def.mixins.iter()) {
             let parent_iri_str = schema
                 .classes
                 .get(parent)
-                .and_then(|c| c.class_uri.clone())
+                .and_then(|c| c.class_uri.as_deref())
+                .map(|c| expand_curie(c, schema))
                 .unwrap_or_else(|| format!("{}#{}", ontology_iri_str, parent));
             let parent_iri = make_iri(&parent_iri_str)?;
             graph
@@ -181,7 +213,8 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
     for (name, slot_def) in &schema.slots {
         let prop_iri_str = slot_def
             .slot_uri
-            .clone()
+            .as_deref()
+            .map(|s| expand_curie(s, schema))
             .unwrap_or_else(|| format!("{}#{}", ontology_iri_str, name));
         let prop_iri = make_iri(&prop_iri_str)?;
 
@@ -231,7 +264,8 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
             let domain_iri_str = schema
                 .classes
                 .get(domain)
-                .and_then(|c| c.class_uri.clone())
+                .and_then(|c| c.class_uri.as_deref())
+                .map(|c| expand_curie(c, schema))
                 .unwrap_or_else(|| format!("{}#{}", ontology_iri_str, domain));
             let domain_iri = make_iri(&domain_iri_str)?;
             graph
@@ -245,7 +279,8 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
                 schema
                     .classes
                     .get(range)
-                    .and_then(|c| c.class_uri.clone())
+                    .and_then(|c| c.class_uri.as_deref())
+                    .map(|c| expand_curie(c, schema))
                     .unwrap_or_else(|| format!("{}#{}", ontology_iri_str, range))
             } else {
                 map_linkml_to_xsd(range)
@@ -261,7 +296,8 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
             let inverse_iri_str = schema
                 .slots
                 .get(inverse)
-                .and_then(|s| s.slot_uri.clone())
+                .and_then(|s| s.slot_uri.as_deref())
+                .map(|s| expand_curie(s, schema))
                 .unwrap_or_else(|| format!("{}#{}", ontology_iri_str, inverse));
             let inverse_iri = make_iri(&inverse_iri_str)?;
             graph
@@ -579,6 +615,136 @@ mod tests {
     fn ntriples_writer_format_id() {
         let writer = NTriplesWriter::new();
         assert_eq!(writer.format_id(), "ntriples");
+    }
+
+    // ----- CURIE expansion --------------------------------------------
+
+    fn schema_with_prefixes() -> SchemaDefinition {
+        let mut schema = SchemaDefinition::new("s");
+        schema.id = Some("http://example.org/s".to_string());
+        schema.prefixes.insert(
+            "cco".to_string(),
+            "https://www.commoncoreontologies.org/".to_string(),
+        );
+        schema.prefixes.insert(
+            "obo".to_string(),
+            "http://purl.obolibrary.org/obo/".to_string(),
+        );
+        schema
+    }
+
+    #[test]
+    fn expand_curie_expands_known_prefix_to_absolute_iri() {
+        let schema = schema_with_prefixes();
+        assert_eq!(
+            expand_curie("cco:ont00000005", &schema),
+            "https://www.commoncoreontologies.org/ont00000005"
+        );
+        assert_eq!(
+            expand_curie("obo:BFO_0000015", &schema),
+            "http://purl.obolibrary.org/obo/BFO_0000015"
+        );
+    }
+
+    #[test]
+    fn expand_curie_passes_absolute_url_through_unchanged() {
+        // A class_uri that's already a full URL must not be re-expanded
+        // (would corrupt the IRI by treating part of the URL as a prefix).
+        let schema = schema_with_prefixes();
+        let already_absolute = "http://example.org/already/absolute";
+        assert_eq!(expand_curie(already_absolute, &schema), already_absolute);
+    }
+
+    #[test]
+    fn expand_curie_passes_bare_name_through_unchanged() {
+        // Names without a colon aren't CURIEs; the caller (build_rdf_graph)
+        // applies the `{ontology}#{name}` fallback for these.
+        let schema = schema_with_prefixes();
+        assert_eq!(expand_curie("BareName", &schema), "BareName");
+    }
+
+    #[test]
+    fn expand_curie_unknown_prefix_passes_through_with_warning() {
+        // A CURIE whose prefix isn't in `schema.prefixes` is suspicious
+        // but not necessarily wrong (e.g. user typo, or external prefix
+        // not yet declared). Pass through so build_rdf_graph can still
+        // produce output; the tracing::warn alerts the user. The
+        // observable behaviour here is the pass-through; the warn fires
+        // via tracing and is checked via integration tests if needed.
+        let schema = schema_with_prefixes();
+        assert_eq!(
+            expand_curie("undeclared:thing", &schema),
+            "undeclared:thing"
+        );
+    }
+
+    #[test]
+    fn build_rdf_graph_expands_class_uri_curies() {
+        // End-to-end: a class with a CURIE `class_uri` produces an
+        // absolute IRI in the emitted graph, NOT a relative `cco:foo`
+        // term that downstream parsers would interpret as an empty-base
+        // relative reference.
+        use sophia::api::term::Term;
+        use sophia::api::triple::Triple;
+
+        let mut schema = schema_with_prefixes();
+        let mut act = ClassDefinition::new("Act");
+        act.class_uri = Some("cco:ont00000005".to_string());
+        schema.classes.insert("Act".to_string(), act);
+        let graph = build_rdf_graph(&schema).unwrap();
+
+        let expected_iri = "https://www.commoncoreontologies.org/ont00000005";
+        let found = graph.triples().any(|t| {
+            let triple = t.unwrap();
+            triple.s().iri().is_some_and(|i| i.as_str() == expected_iri)
+        });
+        assert!(found, "expected expanded class IRI in graph; got none");
+    }
+
+    #[test]
+    fn build_rdf_graph_emits_subclass_of_per_mixin() {
+        // LinkML treats mixins as multiple inheritance; each mixin must
+        // produce its own rdfs:subClassOf alongside the is_a parent.
+        use sophia::api::term::Term;
+        use sophia::api::triple::Triple;
+
+        let mut schema = schema_with_prefixes();
+        for name in ["Parent", "MixinA", "MixinB"] {
+            let mut def = ClassDefinition::new(name);
+            def.class_uri = Some(format!("http://example.org/s#{name}"));
+            schema.classes.insert(name.to_string(), def);
+        }
+        let mut child = ClassDefinition::new("Child");
+        child.class_uri = Some("http://example.org/s#Child".to_string());
+        child.is_a = Some("Parent".to_string());
+        child.mixins = vec!["MixinA".to_string(), "MixinB".to_string()];
+        schema.classes.insert("Child".to_string(), child);
+
+        let graph = build_rdf_graph(&schema).unwrap();
+        let subclass_iri = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+        let child_iri = "http://example.org/s#Child";
+        let parents: std::collections::BTreeSet<String> = graph
+            .triples()
+            .filter_map(|t| {
+                let triple = t.ok()?;
+                let s = triple.s().iri()?;
+                let p = triple.p().iri()?;
+                let o = triple.o().iri()?;
+                (s.as_str() == child_iri && p.as_str() == subclass_iri)
+                    .then(|| o.as_str().to_string())
+            })
+            .collect();
+        assert_eq!(
+            parents,
+            [
+                "http://example.org/s#MixinA",
+                "http://example.org/s#MixinB",
+                "http://example.org/s#Parent"
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+        );
     }
 
     #[test]
