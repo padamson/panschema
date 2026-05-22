@@ -9,9 +9,16 @@ test_tool = "nextest"
 additional_cargo_test_args = ["--lib"]
 
 # Mutate only the panschema crate's source.
-# panschema-viz is wasm-only and isn't testable on the host target —
-# the explicit exclude_globs is required because `--in-diff` doesn't
-# honor examine_globs alone (any diff line in panschema-viz/ would
-# otherwise surface a mutant that no native test can catch).
+# panschema-viz is wasm-only and isn't testable on the host target.
+# panschema/src/components.rs is dev-only renderer scaffolding for the
+# styleguide command; production HTML rendering uses Askama's `{% include %}`
+# directly, not these helper functions, so component-level mutations have
+# no production-observable effect.
+# The explicit exclude_globs are required because `--in-diff` doesn't
+# honor examine_globs alone; the same excludes are mirrored in
+# scripts/mutants.sh as `--exclude` CLI flags.
 examine_globs = ["panschema/src/**/*.rs"]
-exclude_globs = ["panschema-viz/**/*.rs"]
+exclude_globs = [
+    "panschema-viz/**/*.rs",
+    "panschema/src/components.rs",
+]

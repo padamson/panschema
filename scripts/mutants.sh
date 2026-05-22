@@ -64,11 +64,19 @@ if [[ ! -s "$DIFF" ]]; then
 fi
 
 echo "mutating changes in ${BASE}..HEAD ($(wc -l < "$DIFF") diff lines)"
-# panschema-viz is wasm-only; native test runs cannot catch mutations
-# there, so exclude it at the CLI level. (`.mutants.toml`'s examine_globs
-# and exclude_globs are ignored by `--in-diff`.)
+# Exclude rationale (`--in-diff` ignores `.mutants.toml`'s examine/exclude
+# globs, so they're repeated at the CLI):
+# - `panschema-viz/**`: wasm-only; native test runs can't catch mutations.
+# - `panschema/src/components.rs`: dev-only renderer scaffolding for the
+#   styleguide command. Production `panschema generate --format html` uses
+#   Askama's `{% include %}` directly, not these helper functions; the
+#   tests for them are gated to `cargo test` (not `--lib`), so cargo-mutants
+#   with `--lib` would always miss mutants here.
 #
 # `--jobs 4` parallelises mutant runs; on a 10-core laptop the per-push
 # diff job goes from minutes-serial to single-digit wall time. Users can
 # override by passing `--jobs N` as a trailing arg (later wins).
-exec cargo mutants --in-diff "$DIFF" --jobs 4 --exclude 'panschema-viz/**/*.rs' "$@"
+exec cargo mutants --in-diff "$DIFF" --jobs 4 \
+  --exclude 'panschema-viz/**/*.rs' \
+  --exclude 'panschema/src/components.rs' \
+  "$@"
