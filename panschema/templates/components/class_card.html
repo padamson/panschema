@@ -15,7 +15,7 @@
     </div>
 {%- if let Some(desc) = description %}
 
-    <p class="entity-description">{{ desc }}</p>
+    <p class="entity-description">{{ desc|safe }}</p>
 {%- endif %}
 
     <div class="entity-details">

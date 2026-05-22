@@ -242,7 +242,10 @@ impl HtmlWriter {
                     .class_uri
                     .clone()
                     .unwrap_or_else(|| (*class_id).clone()),
-                description: class_def.description.clone(),
+                description: class_def
+                    .description
+                    .as_deref()
+                    .map(|d| resolve_xrefs(d, schema)),
                 superclass,
                 subclasses,
                 mixins,
@@ -544,6 +547,76 @@ impl Writer for HtmlWriter {
     }
 }
 
+/// Resolve `[[Name]]` markers in `text` against `schema` into anchor
+/// links, returning HTML. Plain text is HTML-escaped; injected anchors
+/// are not. Unresolved names pass through literally with a `<!-- WARNING -->`
+/// comment so the gap is visible in the generated HTML source rather
+/// than silently dropped.
+fn resolve_xrefs(text: &str, schema: &SchemaDefinition) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut remainder = text;
+    // `split_once` returns the parts on each side of the delimiter, so
+    // `after_open` is guaranteed to be the suffix strictly after the
+    // `[[` — no manual index arithmetic that could be mutated into a
+    // non-forward-progressing slice.
+    while let Some((before, after_open)) = remainder.split_once("[[") {
+        push_escaped(&mut out, before);
+        if let Some((name, after_close)) = after_open.split_once("]]")
+            && is_xref_ident(name)
+        {
+            out.push_str(&render_xref(name, schema));
+            remainder = after_close;
+            continue;
+        }
+        // Not a valid xref — emit a literal `[[` and resume scanning
+        // after it, so a later `[[Name]]` in the same string still
+        // gets resolved.
+        out.push_str("[[");
+        remainder = after_open;
+    }
+    push_escaped(&mut out, remainder);
+    out
+}
+
+fn is_xref_ident(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_alphabetic() && first != '_' {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn push_escaped(out: &mut String, text: &str) {
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+}
+
+fn render_xref(name: &str, schema: &SchemaDefinition) -> String {
+    if schema.classes.contains_key(name) {
+        format!(r##"<a href="#class-{name}" class="entity-ref class-ref">{name}</a>"##)
+    } else if schema.enums.contains_key(name) {
+        format!(r##"<a href="#enum-{name}" class="entity-ref enum-ref">{name}</a>"##)
+    } else if schema.slots.contains_key(name) {
+        format!(r##"<a href="#prop-{name}" class="entity-ref prop-ref">{name}</a>"##)
+    } else {
+        format!(
+            "[[{name}]]<!-- WARNING: [[{name}]] does not resolve to a class, \
+             enum, or slot in this schema -->"
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -633,6 +706,155 @@ mod tests {
             document.mixins.is_empty(),
             "expected unresolved mixin to be skipped; got: {:?}",
             document.mixins
+        );
+    }
+
+    #[test]
+    fn resolve_xrefs_links_known_class_reference() {
+        use crate::linkml::{ClassDefinition, SchemaDefinition};
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .classes
+            .insert("Question".to_string(), ClassDefinition::new("Question"));
+        let html = resolve_xrefs("see [[Question]] for context", &schema);
+        assert_eq!(
+            html,
+            r##"see <a href="#class-Question" class="entity-ref class-ref">Question</a> for context"##
+        );
+    }
+
+    #[test]
+    fn resolve_xrefs_links_known_enum_reference() {
+        use crate::linkml::{EnumDefinition, SchemaDefinition};
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .enums
+            .insert("ActStatus".to_string(), EnumDefinition::new("ActStatus"));
+        let html = resolve_xrefs("captured by the [[ActStatus]] enum", &schema);
+        assert!(
+            html.contains(
+                r##"<a href="#enum-ActStatus" class="entity-ref enum-ref">ActStatus</a>"##
+            ),
+            "expected enum anchor; got: {html}"
+        );
+    }
+
+    #[test]
+    fn resolve_xrefs_links_known_slot_reference() {
+        use crate::linkml::{SchemaDefinition, SlotDefinition};
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .slots
+            .insert("status".to_string(), SlotDefinition::new("status"));
+        let html = resolve_xrefs("the [[status]] slot", &schema);
+        assert!(
+            html.contains(r##"<a href="#prop-status" class="entity-ref prop-ref">status</a>"##),
+            "expected slot anchor; got: {html}"
+        );
+    }
+
+    #[test]
+    fn resolve_xrefs_emits_warning_comment_for_unresolved_reference() {
+        use crate::linkml::SchemaDefinition;
+        let schema = SchemaDefinition::new("s");
+        let html = resolve_xrefs("nothing here: [[Phantom]]", &schema);
+        assert!(
+            html.contains("[[Phantom]]"),
+            "expected literal text; got: {html}"
+        );
+        assert!(
+            html.contains("<!-- WARNING:"),
+            "expected warning comment; got: {html}"
+        );
+    }
+
+    #[test]
+    fn resolve_xrefs_html_escapes_surrounding_plain_text() {
+        use crate::linkml::SchemaDefinition;
+        let schema = SchemaDefinition::new("s");
+        let html = resolve_xrefs("if a < b & c > d", &schema);
+        // < > & in plain text must be escaped so the output is safe to
+        // mark `|safe` in the template.
+        assert_eq!(html, "if a &lt; b &amp; c &gt; d");
+    }
+
+    #[test]
+    fn resolve_xrefs_escapes_quotes_in_plain_text() {
+        // Descriptions can contain " and ' (e.g., scimantic's PlannedAct
+        // description includes `"Planned" denotes intentionality`).
+        // Both must escape so the result is attribute-safe when marked
+        // `|safe` in any template context.
+        use crate::linkml::SchemaDefinition;
+        let schema = SchemaDefinition::new("s");
+        assert_eq!(
+            resolve_xrefs(r#"says "hi" and 'bye'"#, &schema),
+            "says &quot;hi&quot; and &#39;bye&#39;"
+        );
+    }
+
+    #[test]
+    fn resolve_xrefs_rejects_invalid_idents() {
+        // `[[Name]]` requires a LinkML-style ident: alphabetic or `_`
+        // first char, alphanumeric or `_` continuation. Anything else
+        // is treated as literal `[[...]]` text, not a cross-reference.
+        use crate::linkml::SchemaDefinition;
+        let schema = SchemaDefinition::new("s");
+        // Empty interior.
+        assert_eq!(resolve_xrefs("[[]]", &schema), "[[]]");
+        // Digit-leading.
+        assert_eq!(resolve_xrefs("[[123abc]]", &schema), "[[123abc]]");
+        // Contains a space (LinkML idents are alphanumeric + underscore).
+        assert_eq!(resolve_xrefs("[[has space]]", &schema), "[[has space]]");
+        // Contains a hyphen.
+        assert_eq!(resolve_xrefs("[[a-b]]", &schema), "[[a-b]]");
+    }
+
+    #[test]
+    fn resolve_xrefs_accepts_underscore_leading_ident() {
+        // Underscore-leading idents are valid LinkML identifiers and
+        // must resolve to a class card link when the class exists.
+        use crate::linkml::{ClassDefinition, SchemaDefinition};
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .classes
+            .insert("_Internal".to_string(), ClassDefinition::new("_Internal"));
+        let html = resolve_xrefs("[[_Internal]]", &schema);
+        assert!(
+            html.contains(r##"<a href="#class-_Internal""##),
+            "expected underscore-leading ident to resolve; got: {html}"
+        );
+    }
+
+    #[test]
+    fn resolve_xrefs_passes_lone_brackets_through() {
+        use crate::linkml::SchemaDefinition;
+        let schema = SchemaDefinition::new("s");
+        // A single `[` or `[[` without a matching `]]` isn't an xref.
+        let html = resolve_xrefs("[note] and [[unclosed", &schema);
+        assert_eq!(html, "[note] and [[unclosed");
+    }
+
+    #[test]
+    fn build_template_data_resolves_xrefs_in_class_description() {
+        use crate::linkml::{ClassDefinition, EnumDefinition, SchemaDefinition};
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .enums
+            .insert("ActStatus".to_string(), EnumDefinition::new("ActStatus"));
+        let mut planned = ClassDefinition::new("PlannedAct");
+        planned.description = Some("lifecycle captured by the [[ActStatus]] enum".to_string());
+        schema.classes.insert("PlannedAct".to_string(), planned);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let card = data
+            .class_data
+            .iter()
+            .find(|c| c.id == "PlannedAct")
+            .unwrap();
+        let desc = card.description.as_deref().unwrap();
+        assert!(
+            desc.contains(r##"<a href="#enum-ActStatus""##),
+            "expected resolved xref in class description; got: {desc}"
         );
     }
 

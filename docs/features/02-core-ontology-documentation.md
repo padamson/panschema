@@ -121,7 +121,7 @@ Building on Feature 01 (Foundational UI Stack), this feature adds actual ontolog
 
 ### Slice 5: Class card content (v0.3.0 dogfood follow-up)
 
-**Status:** In Progress (β.1 mixins shipped; β.2 xrefs + β.3 slots pending)
+**Status:** In Progress (β.1 mixins + β.2 xrefs shipped; β.3 slots pending)
 
 **User Value:** A reader of generated HTML can see every constraint the schema actually declares about a class — its direct slots, every `slot_usage` refinement (range, `any_of`, required narrowing), every mixin, and links to entities referenced via `[[Name]]` in descriptions — without falling back to the raw YAML.
 
@@ -131,7 +131,7 @@ Building on Feature 01 (Foundational UI Stack), this feature adds actual ontolog
 - [ ] The class card lists every resolved slot (direct attributes + slots referenced via `slots:` + inherited slots from `is_a` and mixins), with each slot's range, required/optional, and multivalued framing visible.
 - [ ] `slot_usage` refinements are rendered alongside the inherited slot, with the narrowed range (`any_of: [A, B, C]`), narrowed `required: true`, or other overrides clearly distinguished from the inherited definition (e.g. "Refined here: required, range any of …").
 - [x] The card lists each mixin under a "Mixes in" section, with anchor links to the mixin's class card.
-- [ ] `[[Name]]` markers in class / slot / enum descriptions are resolved to `<a href="#class-Name">Name</a>` (or `#enum-Name` / `#slot-Name`), matching LinkML's documentation cross-reference convention. Unresolved names fall back to literal text with a `// WARNING` comment in the generated HTML source (mirroring [`render_class`'s unresolved-slot pattern](../../panschema/src/rust_writer.rs)).
+- [x] `[[Name]]` markers in class / slot / enum descriptions are resolved to `<a href="#class-Name">Name</a>` (or `#enum-Name` / `#slot-Name`), matching LinkML's documentation cross-reference convention. Unresolved names fall back to literal text with an HTML `<!-- WARNING -->` comment in the generated source. (Class descriptions only in β.2; slot/enum descriptions extend in β.3.)
 - [ ] Snapshot test extended against the reference ontology + a multi-mixin / `any_of`-bearing test fixture; e2e test asserts at least one mixin link and one resolved `[[xref]]` are present in the rendered scimantic page.
 
 **Notes:**
