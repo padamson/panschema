@@ -142,11 +142,11 @@ impl Canvas2DRenderer {
             };
 
             if is_connected {
-                self.ctx.set_stroke_style_str("rgba(100, 100, 120, 0.5)");
+                self.ctx.set_stroke_style_str("rgba(160, 160, 185, 0.85)");
             } else {
-                self.ctx.set_stroke_style_str("rgba(100, 100, 120, 0.15)");
+                self.ctx.set_stroke_style_str("rgba(160, 160, 185, 0.25)");
             }
-            self.ctx.set_line_width(1.0);
+            self.ctx.set_line_width(1.5);
 
             self.ctx.begin_path();
             self.ctx.move_to(x1 as f64, y1 as f64);

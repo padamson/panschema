@@ -116,12 +116,46 @@ struct IndexTemplate<'a> {
     graph_node_count: usize,
     /// Number of edges in the graph (for sidebar badge)
     graph_edge_count: usize,
+    /// Graph viz aspect ratio components, rendered into the
+    /// `.graph-container` CSS rule.
+    graph_aspect_w: u32,
+    graph_aspect_h: u32,
 }
 
 /// Writer for HTML documentation output
 pub struct HtmlWriter {
     /// Whether to include graph visualization (default: true)
     pub include_graph: bool,
+    /// Schema graph viz aspect ratio as `(width, height)`. Default 16:8
+    /// — fits a typical laptop screen alongside browser chrome and an
+    /// OS task bar. Consumers can override per-schema via the manifest's
+    /// `html_graph_aspect = "W:H"` field.
+    pub graph_aspect: (u32, u32),
+}
+
+/// Parse a `"W:H"` aspect-ratio string. Both components must be positive
+/// integers and at most 9999 (a sanity cap; nothing useful needs more
+/// digits and bigger values would suggest a typo such as a wall-clock
+/// time slipped into the field).
+pub fn parse_graph_aspect(s: &str) -> Result<(u32, u32), String> {
+    let (w_str, h_str) = s
+        .split_once(':')
+        .ok_or_else(|| format!("aspect ratio `{s}` must be `W:H` (e.g. `16:9`)"))?;
+    let w: u32 = w_str
+        .trim()
+        .parse()
+        .map_err(|_| format!("aspect ratio width `{w_str}` is not a non-negative integer"))?;
+    let h: u32 = h_str
+        .trim()
+        .parse()
+        .map_err(|_| format!("aspect ratio height `{h_str}` is not a non-negative integer"))?;
+    if w == 0 || h == 0 {
+        return Err(format!("aspect ratio `{s}` must have non-zero components"));
+    }
+    if w > 9999 || h > 9999 {
+        return Err(format!("aspect ratio `{s}` components must be <= 9999"));
+    }
+    Ok((w, h))
 }
 
 /// Embedded WASM visualization files (from panschema-viz build)
@@ -134,16 +168,30 @@ mod wasm_files {
 }
 
 impl HtmlWriter {
-    /// Create a new HTML writer with default options (graph enabled)
+    /// Create a new HTML writer with default options (graph enabled,
+    /// 16:8 graph aspect ratio).
     pub fn new() -> Self {
         Self {
             include_graph: true,
+            graph_aspect: (16, 8),
         }
     }
 
     /// Create a new HTML writer with custom options
     pub fn with_options(include_graph: bool) -> Self {
-        Self { include_graph }
+        Self {
+            include_graph,
+            graph_aspect: (16, 8),
+        }
+    }
+
+    /// Override the schema graph viz aspect ratio. The writer accepts
+    /// any pair of positive `u32`s; pre-validate strings via
+    /// [`parse_graph_aspect`].
+    #[must_use]
+    pub fn with_graph_aspect(mut self, w: u32, h: u32) -> Self {
+        self.graph_aspect = (w, h);
+        self
     }
 
     /// Build template data from SchemaDefinition
@@ -546,6 +594,8 @@ impl Writer for HtmlWriter {
             graph_json: graph_json_string.as_deref(),
             graph_node_count,
             graph_edge_count,
+            graph_aspect_w: self.graph_aspect.0,
+            graph_aspect_h: self.graph_aspect.1,
         };
 
         let html = template
@@ -1208,6 +1258,100 @@ mod tests {
 
         // Cleanup
         let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn html_writer_emits_responsive_card_grid_and_aspect_ratio_graph() {
+        let reader = OwlReader::new();
+        let schema = reader.read(&reference_ontology_path()).unwrap();
+        let writer = HtmlWriter::new();
+        let temp_dir = std::env::temp_dir().join("panschema_responsive_layout_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        writer.write(&schema, &temp_dir).expect("Write failed");
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("Failed to read");
+
+        // Card grid uses `auto-fill` so it tiles at wide viewports and
+        // collapses to one column when the minimum can't fit twice.
+        assert!(
+            html.contains("repeat(auto-fill, minmax(380px, 1fr))"),
+            "responsive card grid template missing from rendered HTML"
+        );
+        // Graph container uses aspect-ratio instead of a fixed height
+        // so it scales with the available content area. Default is 16:8
+        // — fits a laptop screen plus browser chrome + OS task bar.
+        // The ratio is set via a `--graph-aspect` custom property on the
+        // container (inline) so the stylesheet stays valid CSS for IDE
+        // linters, and the stylesheet reads from `var(...)` with the same
+        // 16/8 fallback.
+        assert!(
+            html.contains("--graph-aspect: 16 / 8"),
+            "graph container --graph-aspect inline custom property missing"
+        );
+        assert!(
+            html.contains("aspect-ratio: var(--graph-aspect, 16 / 8)"),
+            "graph container aspect-ratio CSS rule missing from rendered HTML"
+        );
+        // Old fixed-height rule must be gone.
+        assert!(
+            !html.contains("height: 500px"),
+            "stale `height: 500px` rule still present in graph container CSS"
+        );
+        // `.content-area`'s hard max-width cap must be gone so the page
+        // can expand fluidly with the viewport.
+        assert!(
+            !html.contains("max-width: var(--content-max-width)"),
+            "content-area max-width cap still constrains the layout"
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn html_writer_with_graph_aspect_overrides_the_default() {
+        let reader = OwlReader::new();
+        let schema = reader.read(&reference_ontology_path()).unwrap();
+        let writer = HtmlWriter::new().with_graph_aspect(4, 3);
+        let temp_dir = std::env::temp_dir().join("panschema_aspect_override_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        writer.write(&schema, &temp_dir).expect("Write failed");
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("Failed to read");
+        assert!(
+            html.contains("--graph-aspect: 4 / 3"),
+            "expected overridden 4:3 aspect ratio in inline custom property"
+        );
+        assert!(
+            !html.contains("--graph-aspect: 16 / 8"),
+            "default 16:8 leaked into output despite explicit override"
+        );
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn parse_graph_aspect_accepts_valid_ratios() {
+        assert_eq!(parse_graph_aspect("16:9").unwrap(), (16, 9));
+        assert_eq!(parse_graph_aspect("16:8").unwrap(), (16, 8));
+        assert_eq!(parse_graph_aspect("4:3").unwrap(), (4, 3));
+        // Whitespace tolerance.
+        assert_eq!(parse_graph_aspect(" 21 : 9 ").unwrap(), (21, 9));
+        // Upper-bound boundary: the sanity cap is `<= 9999`, so 9999
+        // itself must round-trip on both sides.
+        assert_eq!(parse_graph_aspect("9999:1").unwrap(), (9999, 1));
+        assert_eq!(parse_graph_aspect("1:9999").unwrap(), (1, 9999));
+        assert_eq!(parse_graph_aspect("9999:9999").unwrap(), (9999, 9999));
+    }
+
+    #[test]
+    fn parse_graph_aspect_rejects_malformed_input() {
+        assert!(parse_graph_aspect("16").is_err(), "missing colon");
+        assert!(parse_graph_aspect("16x9").is_err(), "wrong separator");
+        assert!(parse_graph_aspect("16:0").is_err(), "zero height");
+        assert!(parse_graph_aspect("0:9").is_err(), "zero width");
+        assert!(parse_graph_aspect("a:b").is_err(), "non-numeric");
+        assert!(parse_graph_aspect("10000:1").is_err(), "exceeds sanity cap");
+        assert!(
+            parse_graph_aspect("1:10000").is_err(),
+            "exceeds sanity cap on height side"
+        );
     }
 
     #[test]

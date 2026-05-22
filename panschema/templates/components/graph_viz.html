@@ -14,7 +14,7 @@
         <span class="graph-badge" id="graph-node-count"></span>
     </div>
 
-    <div class="graph-container">
+    <div class="graph-container" style="--graph-aspect: {{ graph_aspect_w }} / {{ graph_aspect_h }};">
         {# Loading state #}
         <div id="graph-loading" class="graph-loading">
             <div class="spinner"></div>
@@ -120,7 +120,8 @@
 .graph-container {
     position: relative;
     width: 100%;
-    height: 500px;
+    aspect-ratio: var(--graph-aspect, 16 / 8);
+    height: auto;
     background-color: var(--color-bg-tertiary, #1a1a2e);
     border-radius: var(--radius-lg, 8px);
     overflow: hidden;

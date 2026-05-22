@@ -141,6 +141,30 @@ Building on Feature 01 (Foundational UI Stack), this feature adds actual ontolog
 
 ---
 
+### Slice 6: Responsive full-width layout + configurable graph aspect ratio
+
+**Status:** In Progress
+
+**User Value:** Documentation pages use the available browser-window width fluidly. On a large display, entity cards tile into a multi-column grid; on narrow viewports they collapse to a single column. The schema graph visualization expands to fill the full content area at a configurable aspect ratio (default 16:8) so consumers can explore large graphs on big screens. Per-schema override via `panschema.toml` lets producers tune the ratio for their target audience (laptop default vs. desktop 16:9 vs. ultrawide 21:9, etc.).
+
+**Context:** The pre-existing layout capped `.content-area` at `--content-max-width: 900px`, so on a 4K monitor the documentation sat in a narrow column with most of the screen blank. The schema graph was fixed at `height: 500px` regardless of viewport. Both bite hardest on the dogfood case (scimantic v0.2.0's 49-class BFO/CCO graph), where a larger graph viewport would meaningfully improve exploration. The 16:8 default (vs. the more familiar 16:9) fits a typical laptop screen alongside browser chrome and an OS task bar without the page needing to scroll.
+
+**Acceptance Criteria:**
+- [x] `.content-area` expands fluidly with no hard `max-width` cap; on viewports ≥769px the sidebar holds its fixed share and the rest of the row is content area.
+- [x] Class, property, and individual card sections render as a responsive CSS grid (`repeat(auto-fill, minmax(~380px, 1fr))`). On viewports too narrow for two columns the cards stack to a single column.
+- [x] `.graph-container` uses `aspect-ratio: W/H` (height derived from width) instead of the fixed `height: 500px`. Width remains `100%` of the content area. Default ratio is 16:8.
+- [x] At widths ≤768px the existing single-column / collapsed-sidebar behavior is preserved unchanged.
+- [x] `panschema.toml` accepts an optional `html_graph_aspect = "W:H"` field under each `[generate.<name>]` block, overriding the default per schema. Parser validates that both components are positive integers ≤9999 and rejects malformed input with an actionable error.
+- [x] e2e test (Playwright) at 1280×720 asserts: at least two class cards share a row (within a small Y tolerance) AND the graph container's bounding box satisfies `width / height ≈ 16/8 ± 5%`. A narrow-viewport companion (375×667) asserts cards are strictly stacked.
+- [x] Unit tests cover: `aspect-ratio: 16 / 8` in the default-rendered CSS; `aspect-ratio: 4 / 3` (or any override) when constructed via `HtmlWriter::with_graph_aspect`; `parse_graph_aspect` accepts well-formed `"W:H"` and rejects malformed input; the manifest field round-trips through `Manifest::from_str`.
+
+**Notes:**
+- Line-length-readability for descriptions is bounded by each card's individual width (~380–500px under the grid layout), not by the outer content frame, so wide viewports don't produce unreadable prose lines.
+- The graph already uses `width: 100%`; the change is to replace `height: 500px` with `aspect-ratio: W/H` + `height: auto`. The wasm-side renderer queries `canvas.getBoundingClientRect()` at init, so it picks up the new dimensions automatically.
+- Aspect ratio is stored internally as `(u32, u32)` because CSS's `aspect-ratio: W / H` declaration takes integer components. A single-`f64` representation would simplify the API but lose authorial intent (`16:9` is more readable than `1.778`) and introduce floating-point fuzz on clean ratios like `4/3`.
+
+---
+
 ## Slice Priority and Dependencies
 
 | Slice | Priority | Depends On | Status |
@@ -150,3 +174,4 @@ Building on Feature 01 (Foundational UI Stack), this feature adds actual ontolog
 | Slice 3: Individuals | Should Have | Slice 2 | Completed |
 | Slice 4: Release | Must Have | Slice 1-3 | Completed |
 | Slice 5: Class card content | Should Have (v0.3.0) | Slice 1, Feature 03 | Completed |
+| Slice 6: Responsive layout + configurable graph aspect | Should Have (v0.3.0) | Slice 1, Feature 04 | In Progress |

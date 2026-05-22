@@ -564,6 +564,55 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         browser_name
     );
 
+    // 8a-1. Class-card grid tiles to multiple columns on desktop:
+    // the first two class cards share a row (within a small Y
+    // tolerance). Wait for layout to settle after the resize.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let class_cards = page.locator(".class-card").await;
+    let card0_box = class_cards
+        .nth(0)
+        .bounding_box()
+        .await
+        .expect("Failed to query first card box")
+        .expect("First class card should have a bounding box");
+    let card1_box = class_cards
+        .nth(1)
+        .bounding_box()
+        .await
+        .expect("Failed to query second card box")
+        .expect("Second class card should have a bounding box");
+    assert!(
+        (card0_box.y - card1_box.y).abs() < 10.0,
+        "[{}] On a 1280px viewport the first two class cards should tile \
+         on the same row (Y delta < 10px); got y0={}, y1={}",
+        browser_name,
+        card0_box.y,
+        card1_box.y
+    );
+
+    // 8a-2. Graph container's aspect ratio matches the writer's
+    // default (16:8) within 5% — derived dynamically rather than
+    // hard-coded so future default-ratio changes only need to bump
+    // this constant.
+    let graph_container = page.locator(".graph-container").await;
+    let graph_box = graph_container
+        .bounding_box()
+        .await
+        .expect("Failed to query graph container box")
+        .expect("Graph container should have a bounding box");
+    let ratio = graph_box.width / graph_box.height;
+    let target = 16.0_f64 / 8.0;
+    assert!(
+        (ratio - target).abs() / target < 0.05,
+        "[{}] Graph container aspect ratio should be ~16:8 (±5%); \
+         got w={}, h={}, ratio={:.3} (target {:.3})",
+        browser_name,
+        graph_box.width,
+        graph_box.height,
+        ratio,
+        target
+    );
+
     // 8b. Resize to mobile viewport and verify responsive behavior
     page.set_viewport_size(playwright_rs::Viewport {
         width: 375,
@@ -583,6 +632,31 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         toggle_visible_mobile,
         "[{}] Mobile menu toggle should be visible on mobile viewport",
         browser_name
+    );
+
+    // 8b-1. On a narrow viewport (375px) the card grid collapses to
+    // one column — successive class cards stack rather than sharing
+    // a row (each card's top sits below the previous card's bottom).
+    let m_card0 = class_cards
+        .nth(0)
+        .bounding_box()
+        .await
+        .expect("Failed to query first card box on mobile")
+        .expect("First class card should have a bounding box");
+    let m_card1 = class_cards
+        .nth(1)
+        .bounding_box()
+        .await
+        .expect("Failed to query second card box on mobile")
+        .expect("Second class card should have a bounding box");
+    assert!(
+        m_card1.y > m_card0.y + m_card0.height - 4.0,
+        "[{}] On a 375px viewport the class cards should stack \
+         (card2.y > card1.bottom); got card1 y={} h={}, card2 y={}",
+        browser_name,
+        m_card0.y,
+        m_card0.height,
+        m_card1.y
     );
 
     // 8c. Test mobile menu toggle functionality

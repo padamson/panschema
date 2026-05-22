@@ -468,7 +468,7 @@ impl WebGpuRenderer {
 
     /// Update edge vertex buffer
     fn update_edge_vertices(&mut self, edges: &[SimEdge3D], nodes: &[SimNode3D]) {
-        let edge_color = [0.4, 0.4, 0.47, 0.5];
+        let edge_color = [0.63, 0.63, 0.73, 0.85];
 
         let vertices: Vec<EdgeVertex> = edges
             .iter()

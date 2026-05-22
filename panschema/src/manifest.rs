@@ -73,6 +73,12 @@ pub struct GenerateConfig {
     /// HTML documentation output directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub html: Option<PathBuf>,
+    /// Override the schema graph viz aspect ratio in HTML output. Format
+    /// `"W:H"` (e.g. `"16:9"`, `"4:3"`). Only meaningful when `html` is set.
+    /// Default is 16:8, chosen so a laptop screen fits the graph + browser
+    /// chrome + OS task bar without overflow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub html_graph_aspect: Option<String>,
     /// Rust module output file path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rust: Option<PathBuf>,
@@ -428,6 +434,35 @@ rust = "src/generated/foo.rs"
         let cfg = m.generate.get("foo").unwrap();
         assert_eq!(cfg.html, Some(PathBuf::from("docs/")));
         assert_eq!(cfg.rust, Some(PathBuf::from("src/generated/foo.rs")));
+    }
+
+    #[test]
+    fn parses_html_graph_aspect_override() {
+        let toml = r#"
+[schemas]
+foo = { path = "./foo-pkg" }
+
+[generate.foo]
+html = "docs/"
+html_graph_aspect = "21:9"
+"#;
+        let m = toml.parse::<Manifest>().expect("should parse");
+        let cfg = m.generate.get("foo").unwrap();
+        assert_eq!(cfg.html_graph_aspect.as_deref(), Some("21:9"));
+    }
+
+    #[test]
+    fn html_graph_aspect_is_optional_and_defaults_to_none() {
+        let toml = r#"
+[schemas]
+foo = { path = "./foo-pkg" }
+
+[generate.foo]
+html = "docs/"
+"#;
+        let m = toml.parse::<Manifest>().expect("should parse");
+        let cfg = m.generate.get("foo").unwrap();
+        assert!(cfg.html_graph_aspect.is_none());
     }
 
     #[test]

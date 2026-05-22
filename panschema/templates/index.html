@@ -131,6 +131,23 @@
         gap: var(--space-2);
     }
 
+    /* Card grids tile to multiple columns on wide viewports; collapse to
+       a single column when the minimum card width can't fit twice. */
+    .class-cards,
+    .property-cards,
+    .individual-cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+        gap: var(--space-4);
+        margin-top: var(--space-4);
+    }
+
+    .class-cards .entity-card,
+    .property-cards .entity-card,
+    .individual-cards .entity-card {
+        margin-bottom: 0;
+    }
+
     .entity-link {
         display: inline-flex;
         align-items: center;
