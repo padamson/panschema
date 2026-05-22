@@ -55,6 +55,40 @@
             </dd>
         </div>
 {%- endif %}
+{%- if !slots.is_empty() %}
+        <div class="detail-row">
+            <dt>Slots</dt>
+            <dd>
+                <ul class="slot-list">
+{%- for slot in slots %}
+                    <li class="slot-entry">
+                        <a href="#prop-{{ slot.name }}" class="slot-name">{{ slot.name }}</a>
+{%- if !slot.any_of.is_empty() %}
+                        : any of [
+{%- for branch in slot.any_of %}
+{%- if let Some(class_ref) = branch.class_ref.as_ref() %}<a href="#class-{{ class_ref.id }}" class="entity-ref class-ref">{{ class_ref.label }}</a>{% else %}<span class="entity-ref datatype-ref">{{ branch.datatype }}</span>{% endif %}{% if !loop.last %}, {% endif %}
+{%- endfor %}
+                        ]
+{%- else if let Some(range) = slot.range.as_ref() %}
+                        :
+{%- if let Some(class_ref) = range.class_ref.as_ref() %}
+                        <a href="#class-{{ class_ref.id }}" class="entity-ref class-ref">{{ class_ref.label }}</a>
+{%- else %}
+                        <span class="entity-ref datatype-ref">{{ range.datatype }}</span>
+{%- endif %}
+{%- endif %}
+{%- if slot.required %}                        <span class="slot-flag required">required</span>{% endif %}
+{%- if slot.multivalued %}                        <span class="slot-flag multivalued">multivalued</span>{% endif %}
+{%- if slot.refined_here %}                        <span class="slot-flag refined">refined here</span>{% endif %}
+{%- if let Some(desc) = slot.description.as_deref() %}
+                        <p class="slot-description">{{ desc|safe }}</p>
+{%- endif %}
+                    </li>
+{%- endfor %}
+                </ul>
+            </dd>
+        </div>
+{%- endif %}
     </div>
 </article>
 <style>
@@ -200,6 +234,63 @@
 
     .prop-ref:hover {
         background-color: color-mix(in srgb, var(--color-property) 10%, transparent);
+    }
+
+    .datatype-ref {
+        color: var(--color-text-muted);
+        font-family: monospace;
+    }
+
+    .slot-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: grid;
+        gap: var(--space-2);
+    }
+
+    .slot-entry {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: var(--space-1) var(--space-2);
+    }
+
+    .slot-name {
+        font-family: monospace;
+        color: var(--color-property);
+        font-weight: 500;
+    }
+
+    .slot-flag {
+        font-size: var(--text-xs);
+        padding: 0 var(--space-2);
+        border-radius: var(--radius-sm);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+
+    .slot-flag.required {
+        background-color: color-mix(in srgb, var(--color-class) 15%, transparent);
+        color: var(--color-class);
+    }
+
+    .slot-flag.multivalued {
+        background-color: color-mix(in srgb, var(--color-property) 15%, transparent);
+        color: var(--color-property);
+    }
+
+    .slot-flag.refined {
+        background-color: color-mix(in srgb, var(--color-text-muted) 15%, transparent);
+        color: var(--color-text-muted);
+        font-style: italic;
+    }
+
+    .slot-description {
+        flex-basis: 100%;
+        margin: var(--space-1) 0 0 0;
+        font-size: var(--text-sm);
+        color: var(--color-text-muted);
     }
 
     @media (max-width: 640px) {

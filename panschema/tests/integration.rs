@@ -47,6 +47,74 @@ main = "sample_schema.yaml"
 }
 
 #[test]
+fn class_card_surfaces_mixins_slots_and_resolved_xrefs() {
+    let output_dir = std::env::temp_dir().join("panschema_class_card_dogfood");
+    let _ = fs::remove_dir_all(&output_dir);
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "--input",
+            "tests/fixtures/class_card_dogfood.yaml",
+            "--output",
+            output_dir.to_str().unwrap(),
+        ])
+        .status()
+        .expect("Failed to execute panschema");
+    assert!(status.success(), "panschema exited with error");
+
+    let html =
+        fs::read_to_string(output_dir.join("index.html")).expect("Failed to read index.html");
+    let doc_card = extract_class_card(&html, "Document");
+    assert!(
+        doc_card.contains(r##"href="#class-Auditable""##),
+        "Document card missing anchor to Auditable mixin; got:\n{doc_card}"
+    );
+    assert!(
+        doc_card.contains(r##"href="#class-Publishable""##),
+        "Document card missing anchor to Publishable mixin; got:\n{doc_card}"
+    );
+    assert!(
+        doc_card.contains(r##"href="#enum-Status""##),
+        "Document card missing resolved Status xref; got:\n{doc_card}"
+    );
+    assert!(
+        !doc_card.contains("[[Status]]"),
+        "literal [[Status]] should not remain; got:\n{doc_card}"
+    );
+    assert!(doc_card.contains("Slots"), "missing Slots section");
+    assert!(
+        doc_card.contains("title") && doc_card.contains("body"),
+        "Document slots not surfaced; got:\n{doc_card}"
+    );
+
+    let report_card = extract_class_card(&html, "Report");
+    assert!(
+        report_card.contains("refined here"),
+        "Report card missing 'refined here' flag for body slot_usage override; got:\n{report_card}"
+    );
+
+    assert!(
+        html.contains("cco") && html.contains("https://www.commoncoreontologies.org/"),
+        "cco prefix declaration missing from rendered HTML"
+    );
+    assert!(
+        html.contains("obo") && html.contains("http://purl.obolibrary.org/obo/"),
+        "obo prefix declaration missing from rendered HTML"
+    );
+}
+
+fn extract_class_card<'a>(html: &'a str, class_id: &str) -> &'a str {
+    let anchor = format!(r##"id="class-{class_id}""##);
+    let start = html
+        .find(&anchor)
+        .unwrap_or_else(|| panic!("`{class_id}` class card not found"));
+    let end = html[start..]
+        .find("</article>")
+        .map(|n| start + n)
+        .unwrap_or_else(|| panic!("`{class_id}` class card has no closing tag"));
+    &html[start..end]
+}
+
+#[test]
 fn generates_documentation_from_reference_ontology() {
     let output_dir = std::env::temp_dir().join("panschema_integration_test");
     let _ = fs::remove_dir_all(&output_dir);

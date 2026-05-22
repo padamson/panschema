@@ -1,0 +1,58 @@
+name: class_card_dogfood
+id: https://example.org/class-card-dogfood
+description: >-
+  Fixture for slice β class-card content tests. Exercises mixins,
+  slot_usage refinements, any_of unions, and `[[Name]]` xref resolution
+  in descriptions.
+version: "0.1.0"
+
+prefixes:
+  ex: https://example.org/
+  cco: https://www.commoncoreontologies.org/
+  obo: http://purl.obolibrary.org/obo/
+
+default_range: string
+
+enums:
+  Status:
+    name: Status
+    description: A status of some thing.
+    permissible_values:
+      open:
+        text: open
+      closed:
+        text: closed
+
+classes:
+  Auditable:
+    name: Auditable
+    description: Mixin granting an audit trail to a class.
+
+  Publishable:
+    name: Publishable
+    description: Mixin that allows publication. See [[Auditable]] for related metadata.
+
+  Document:
+    name: Document
+    description: A document. Lifecycle is tracked by the [[Status]] enum.
+    mixins:
+      - Auditable
+      - Publishable
+    attributes:
+      title:
+        name: title
+        description: The document's title.
+        range: string
+        required: true
+      body:
+        name: body
+        range: string
+
+  Report:
+    name: Report
+    description: A specialised [[Document]] subclass.
+    is_a: Document
+    slot_usage:
+      body:
+        name: body
+        required: true

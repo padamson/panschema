@@ -10,6 +10,7 @@ use askama::Template;
 use crate::graph_writer::GraphWriter;
 use crate::io::{IoError, IoResult, Writer};
 use crate::linkml::SchemaDefinition;
+use crate::rust_writer::resolve_slots;
 
 /// Entity reference for sidebar navigation.
 #[derive(Debug, Clone)]
@@ -35,6 +36,22 @@ pub struct ClassData {
     pub superclass: Option<EntityRef>,
     pub subclasses: Vec<EntityRef>,
     pub mixins: Vec<EntityRef>,
+    pub slots: Vec<SlotInClass>,
+}
+
+/// A slot as it appears on a specific class, with framing resolved for
+/// rendering.
+#[derive(Debug, Clone)]
+pub struct SlotInClass {
+    pub name: String,
+    pub range: Option<RangeRef>,
+    pub required: bool,
+    pub multivalued: bool,
+    /// Members of an `any_of` union; empty for single-range slots.
+    pub any_of: Vec<RangeRef>,
+    pub description: Option<String>,
+    /// `true` when this class's `slot_usage` overrides an inherited slot.
+    pub refined_here: bool,
 }
 
 /// Range reference for property cards - either a class link or a datatype name.
@@ -134,29 +151,7 @@ impl HtmlWriter {
         let iri = schema.id.clone().unwrap_or_else(|| schema.name.clone());
         let title = schema.title.clone().unwrap_or_else(|| schema.name.clone());
 
-        // Build default namespaces
-        let namespaces = vec![
-            Namespace {
-                prefix: "".to_string(),
-                iri: iri.clone(),
-            },
-            Namespace {
-                prefix: "owl".to_string(),
-                iri: "http://www.w3.org/2002/07/owl#".to_string(),
-            },
-            Namespace {
-                prefix: "rdf".to_string(),
-                iri: "http://www.w3.org/1999/02/22-rdf-syntax-ns#".to_string(),
-            },
-            Namespace {
-                prefix: "rdfs".to_string(),
-                iri: "http://www.w3.org/2000/01/rdf-schema#".to_string(),
-            },
-            Namespace {
-                prefix: "xsd".to_string(),
-                iri: "http://www.w3.org/2001/XMLSchema#".to_string(),
-            },
-        ];
+        let namespaces = build_namespaces(schema, &iri);
 
         // Build class data
         let mut class_refs = Vec::new();
@@ -235,6 +230,33 @@ impl HtmlWriter {
                 })
                 .collect();
 
+            let resolved = resolve_slots(class_def, schema);
+            let slots: Vec<SlotInClass> = resolved
+                .iter()
+                .map(|(slot_name, slot_def)| SlotInClass {
+                    name: slot_name.clone(),
+                    range: slot_def.range.as_deref().map(|r| range_ref_for(r, schema)),
+                    required: slot_def.required,
+                    multivalued: slot_def.multivalued,
+                    any_of: slot_def
+                        .any_of
+                        .iter()
+                        .filter_map(|branch| {
+                            branch
+                                .range
+                                .as_deref()
+                                .or(slot_def.range.as_deref())
+                                .map(|r| range_ref_for(r, schema))
+                        })
+                        .collect(),
+                    description: slot_def
+                        .description
+                        .as_deref()
+                        .map(|d| resolve_xrefs(d, schema)),
+                    refined_here: class_def.slot_usage.contains_key(slot_name),
+                })
+                .collect();
+
             class_data_list.push(ClassData {
                 id: (*class_id).clone(),
                 label,
@@ -249,6 +271,7 @@ impl HtmlWriter {
                 superclass,
                 subclasses,
                 mixins,
+                slots,
             });
         }
 
@@ -555,10 +578,9 @@ impl Writer for HtmlWriter {
 fn resolve_xrefs(text: &str, schema: &SchemaDefinition) -> String {
     let mut out = String::with_capacity(text.len());
     let mut remainder = text;
-    // `split_once` returns the parts on each side of the delimiter, so
-    // `after_open` is guaranteed to be the suffix strictly after the
-    // `[[` — no manual index arithmetic that could be mutated into a
-    // non-forward-progressing slice.
+    // `split_once` guarantees `after_open` strictly shrinks `remainder`
+    // — important for the literal-`[[` fallthrough path below, which
+    // would otherwise need an explicit forward-progress assertion.
     while let Some((before, after_open)) = remainder.split_once("[[") {
         push_escaped(&mut out, before);
         if let Some((name, after_close)) = after_open.split_once("]]")
@@ -598,6 +620,65 @@ fn push_escaped(out: &mut String, text: &str) {
             '"' => out.push_str("&quot;"),
             '\'' => out.push_str("&#39;"),
             _ => out.push(c),
+        }
+    }
+}
+
+/// Defaults are appended only for prefix names the schema didn't
+/// declare, so generated docs that reference `xsd:string` etc. always
+/// have a namespace entry even when the source schema is sparse.
+fn build_namespaces(schema: &SchemaDefinition, schema_iri: &str) -> Vec<Namespace> {
+    let mut out = Vec::with_capacity(schema.prefixes.len() + 5);
+    out.push(Namespace {
+        prefix: String::new(),
+        iri: schema_iri.to_string(),
+    });
+    for (prefix, base) in &schema.prefixes {
+        out.push(Namespace {
+            prefix: prefix.clone(),
+            iri: base.clone(),
+        });
+    }
+    let defaults: &[(&str, &str)] = &[
+        ("owl", "http://www.w3.org/2002/07/owl#"),
+        ("rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#"),
+        ("rdfs", "http://www.w3.org/2000/01/rdf-schema#"),
+        ("xsd", "http://www.w3.org/2001/XMLSchema#"),
+    ];
+    for (prefix, iri) in defaults {
+        if !schema.prefixes.contains_key(*prefix) {
+            out.push(Namespace {
+                prefix: (*prefix).to_string(),
+                iri: (*iri).to_string(),
+            });
+        }
+    }
+    out
+}
+
+/// Map a LinkML range name onto a `RangeRef` — a class anchor link when
+/// the range names a class declared in this schema, otherwise the bare
+/// name as a datatype (covers LinkML primitives like `string`, `integer`,
+/// `datetime`, plus enum / type names, plus unresolved CURIE-style refs
+/// from imported schemas).
+fn range_ref_for(range: &str, schema: &SchemaDefinition) -> RangeRef {
+    if let Some(class_def) = schema.classes.get(range) {
+        let label = class_def
+            .annotations
+            .get("panschema:label")
+            .cloned()
+            .unwrap_or_else(|| range.to_string());
+        RangeRef {
+            class_ref: Some(EntityRef {
+                id: range.to_string(),
+                label,
+            }),
+            datatype: String::new(),
+        }
+    } else {
+        RangeRef {
+            class_ref: None,
+            datatype: range.to_string(),
         }
     }
 }
@@ -856,6 +937,189 @@ mod tests {
             desc.contains(r##"<a href="#enum-ActStatus""##),
             "expected resolved xref in class description; got: {desc}"
         );
+    }
+
+    #[test]
+    fn build_namespaces_includes_schema_declared_prefixes() {
+        use crate::linkml::SchemaDefinition;
+        let mut schema = SchemaDefinition::new("s");
+        schema.id = Some("http://example.org/s".to_string());
+        schema.prefixes.insert(
+            "cco".to_string(),
+            "https://www.commoncoreontologies.org/".to_string(),
+        );
+        schema.prefixes.insert(
+            "obo".to_string(),
+            "http://purl.obolibrary.org/obo/".to_string(),
+        );
+
+        let ns = build_namespaces(&schema, "http://example.org/s");
+        let by_prefix: std::collections::BTreeMap<&str, &str> = ns
+            .iter()
+            .map(|n| (n.prefix.as_str(), n.iri.as_str()))
+            .collect();
+        assert_eq!(
+            by_prefix.get("cco"),
+            Some(&"https://www.commoncoreontologies.org/")
+        );
+        assert_eq!(
+            by_prefix.get("obo"),
+            Some(&"http://purl.obolibrary.org/obo/")
+        );
+    }
+
+    #[test]
+    fn build_namespaces_appends_default_prefixes_when_schema_lacks_them() {
+        use crate::linkml::SchemaDefinition;
+        let schema = SchemaDefinition::new("s");
+        let ns = build_namespaces(&schema, "http://example.org/s");
+        let prefixes: Vec<&str> = ns.iter().map(|n| n.prefix.as_str()).collect();
+        for default in ["owl", "rdf", "rdfs", "xsd"] {
+            assert!(
+                prefixes.contains(&default),
+                "missing default prefix `{default}`; got: {prefixes:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_namespaces_lets_schema_prefix_override_default() {
+        use crate::linkml::SchemaDefinition;
+        let mut schema = SchemaDefinition::new("s");
+        schema.prefixes.insert(
+            "xsd".to_string(),
+            "https://example.org/custom-xsd#".to_string(),
+        );
+        let ns = build_namespaces(&schema, "http://example.org/s");
+        let xsd_entries: Vec<&Namespace> = ns.iter().filter(|n| n.prefix == "xsd").collect();
+        assert_eq!(xsd_entries.len(), 1, "xsd must appear exactly once");
+        assert_eq!(xsd_entries[0].iri, "https://example.org/custom-xsd#");
+    }
+
+    #[test]
+    fn build_namespaces_keeps_schema_local_empty_prefix() {
+        use crate::linkml::SchemaDefinition;
+        let schema = SchemaDefinition::new("s");
+        let ns = build_namespaces(&schema, "http://example.org/local");
+        assert_eq!(
+            ns.iter()
+                .find(|n| n.prefix.is_empty())
+                .map(|n| n.iri.as_str()),
+            Some("http://example.org/local")
+        );
+    }
+
+    #[test]
+    fn class_data_lists_resolved_slots_with_framing() {
+        use crate::linkml::{ClassDefinition, SchemaDefinition, SlotDefinition};
+        let mut schema = SchemaDefinition::new("s");
+        let mut def = ClassDefinition::new("Question");
+        let mut label = SlotDefinition::new("label");
+        label.range = Some("string".to_string());
+        label.required = true;
+        def.attributes.insert("label".to_string(), label);
+        let mut tags = SlotDefinition::new("tags");
+        tags.range = Some("string".to_string());
+        tags.multivalued = true;
+        def.attributes.insert("tags".to_string(), tags);
+        schema.classes.insert("Question".to_string(), def);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let card = data.class_data.iter().find(|c| c.id == "Question").unwrap();
+        let by_name: std::collections::BTreeMap<&str, &SlotInClass> =
+            card.slots.iter().map(|s| (s.name.as_str(), s)).collect();
+
+        let label_slot = by_name["label"];
+        assert!(label_slot.required);
+        assert!(!label_slot.multivalued);
+        assert!(!label_slot.refined_here);
+        assert_eq!(label_slot.range.as_ref().unwrap().datatype, "string");
+
+        let tags_slot = by_name["tags"];
+        assert!(!tags_slot.required);
+        assert!(tags_slot.multivalued);
+    }
+
+    #[test]
+    fn class_data_flags_slot_usage_refinements_with_refined_here() {
+        use crate::linkml::{ClassDefinition, SchemaDefinition, SlotDefinition};
+        let mut schema = SchemaDefinition::new("s");
+
+        // Global slot defined as optional.
+        let mut global = SlotDefinition::new("status");
+        global.range = Some("string".to_string());
+        schema.slots.insert("status".to_string(), global);
+
+        // Parent declares the slot reference.
+        let mut parent = ClassDefinition::new("Parent");
+        parent.slots.push("status".to_string());
+        schema.classes.insert("Parent".to_string(), parent);
+
+        // Child inherits from Parent AND narrows `status` to required.
+        let mut child = ClassDefinition::new("Child");
+        child.is_a = Some("Parent".to_string());
+        let mut override_def = SlotDefinition::new("status");
+        override_def.required = true;
+        child.slot_usage.insert("status".to_string(), override_def);
+        schema.classes.insert("Child".to_string(), child);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let parent_card = data.class_data.iter().find(|c| c.id == "Parent").unwrap();
+        let child_card = data.class_data.iter().find(|c| c.id == "Child").unwrap();
+
+        // Parent has the slot but doesn't refine it.
+        let parent_status = parent_card
+            .slots
+            .iter()
+            .find(|s| s.name == "status")
+            .unwrap();
+        assert!(!parent_status.refined_here);
+        assert!(!parent_status.required);
+
+        // Child refines it: required = true AND refined_here = true.
+        let child_status = child_card
+            .slots
+            .iter()
+            .find(|s| s.name == "status")
+            .unwrap();
+        assert!(child_status.refined_here);
+        assert!(child_status.required);
+    }
+
+    #[test]
+    fn class_data_resolves_any_of_branches_into_range_refs() {
+        use crate::linkml::{ClassDefinition, SchemaDefinition, SlotDefinition};
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .classes
+            .insert("Hypothesis".to_string(), ClassDefinition::new("Hypothesis"));
+        schema
+            .classes
+            .insert("Evidence".to_string(), ClassDefinition::new("Evidence"));
+
+        let mut def = ClassDefinition::new("DesignOfExperiment");
+        let mut slot = SlotDefinition::new("hasInput");
+        let mut hypothesis_branch = SlotDefinition::new("hasInput");
+        hypothesis_branch.range = Some("Hypothesis".to_string());
+        let mut evidence_branch = SlotDefinition::new("hasInput");
+        evidence_branch.range = Some("Evidence".to_string());
+        slot.any_of = vec![hypothesis_branch, evidence_branch];
+        def.attributes.insert("hasInput".to_string(), slot);
+        schema.classes.insert("DesignOfExperiment".to_string(), def);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let card = data
+            .class_data
+            .iter()
+            .find(|c| c.id == "DesignOfExperiment")
+            .unwrap();
+        let slot = card.slots.iter().find(|s| s.name == "hasInput").unwrap();
+        let any_of_ids: Vec<&str> = slot
+            .any_of
+            .iter()
+            .filter_map(|r| r.class_ref.as_ref().map(|c| c.id.as_str()))
+            .collect();
+        assert_eq!(any_of_ids, vec!["Hypothesis", "Evidence"]);
     }
 
     #[test]

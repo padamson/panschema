@@ -47,6 +47,7 @@
         {%- let superclass = class.superclass.as_ref() %}
         {%- let subclasses = class.subclasses.as_slice() %}
         {%- let mixins = class.mixins.as_slice() %}
+        {%- let slots = class.slots.as_slice() %}
         {%- let properties = empty_properties %}
         {% include "components/class_card.html" %}
 {%- endfor %}

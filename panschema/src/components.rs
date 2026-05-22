@@ -236,6 +236,7 @@ pub struct ClassCardComponent<'a> {
     pub subclasses: &'a [EntityRef],
     pub properties: &'a [EntityRef],
     pub mixins: &'a [EntityRef],
+    pub slots: &'a [panschema::html_writer::SlotInClass],
 }
 
 /// Property card component template.
@@ -274,6 +275,7 @@ pub struct SampleClass<'a> {
     pub subclasses: &'a [EntityRef],
     pub properties: &'a [EntityRef],
     pub mixins: &'a [EntityRef],
+    pub slots: &'a [panschema::html_writer::SlotInClass],
 }
 
 /// Sample property data for styleguide previews.
@@ -413,6 +415,7 @@ impl ComponentRenderer {
         subclasses: &[EntityRef],
         properties: &[EntityRef],
         mixins: &[EntityRef],
+        slots: &[panschema::html_writer::SlotInClass],
     ) -> anyhow::Result<String> {
         let template = ClassCardComponent {
             id,
@@ -423,6 +426,7 @@ impl ComponentRenderer {
             subclasses,
             properties,
             mixins,
+            slots,
         };
         Ok(template.render()?)
     }
@@ -487,6 +491,32 @@ impl ComponentRenderer {
             EntityRef::new("auditable", "Auditable"),
             EntityRef::new("publishable", "Publishable"),
         ];
+        let class_slots: Vec<panschema::html_writer::SlotInClass> = vec![
+            panschema::html_writer::SlotInClass {
+                name: "name".to_string(),
+                range: Some(panschema::html_writer::RangeRef {
+                    class_ref: None,
+                    datatype: "string".to_string(),
+                }),
+                required: true,
+                multivalued: false,
+                any_of: vec![],
+                description: Some("Full legal name.".to_string()),
+                refined_here: false,
+            },
+            panschema::html_writer::SlotInClass {
+                name: "age".to_string(),
+                range: Some(panschema::html_writer::RangeRef {
+                    class_ref: None,
+                    datatype: "integer".to_string(),
+                }),
+                required: false,
+                multivalued: false,
+                any_of: vec![],
+                description: None,
+                refined_here: true,
+            },
+        ];
         let sample_class = SampleClass {
             id: "person",
             label: "Person",
@@ -496,6 +526,7 @@ impl ComponentRenderer {
             subclasses: &subclasses,
             properties: &class_properties,
             mixins: &class_mixins,
+            slots: &class_slots,
         };
 
         let domain = EntityRef::new("person", "Person");
@@ -763,6 +794,7 @@ mod tests {
                 &subclasses,
                 &properties,
                 &[],
+                &[],
             )
             .unwrap();
             insta::assert_snapshot!(html);
@@ -776,6 +808,7 @@ mod tests {
                 "https://example.org/ontology#Thing",
                 None,
                 None,
+                &[],
                 &[],
                 &[],
                 &[],
@@ -799,6 +832,7 @@ mod tests {
                 &[],
                 &[],
                 &mixins,
+                &[],
             )
             .unwrap();
             assert!(
@@ -823,6 +857,7 @@ mod tests {
                 "https://example.org/ontology#Leaf",
                 None,
                 None,
+                &[],
                 &[],
                 &[],
                 &[],
