@@ -78,10 +78,11 @@ insta = "1"
 # downstream consumers cover the semantic class of errors.
 syn = { version = "2", features = ["full"] }
 
-# E2E browser testing — pulled from main of the upstream repo (authored by
-# the same maintainer) for active dogfood. Cargo.lock pins the resolved
-# commit; `cargo update -p playwright-rs` rolls forward.
-playwright-rs = { git = "https://github.com/padamson/playwright-rust" }
+# E2E browser testing. The npm-pinned Playwright version in
+# `.github/workflows/{test,security}.yml` and `.pre-commit-config.yaml`
+# must match `playwright_rs::PLAYWRIGHT_VERSION` exactly — wire-protocol
+# mismatches silently break the harness.
+playwright-rs = "0.13"
 tempfile = "3.24.0"
 
 # Profile settings are in workspace root Cargo.toml
