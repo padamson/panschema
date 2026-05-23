@@ -223,6 +223,7 @@ fn generate(
     format: &str,
     include_graph: bool,
     html_graph_aspect: Option<&str>,
+    html_default_layout: Option<&str>,
 ) -> anyhow::Result<()> {
     let registry = FormatRegistry::with_defaults();
 
@@ -235,11 +236,16 @@ fn generate(
     if format.eq_ignore_ascii_case("html") {
         use panschema::html_writer::{HtmlWriter, parse_graph_aspect};
         use panschema::io::Writer;
+        use panschema::manifest::validate_layout_name;
         let (aw, ah) = match html_graph_aspect {
             Some(s) => parse_graph_aspect(s).map_err(|e| anyhow::anyhow!("{}", e))?,
             None => (16, 8),
         };
-        let writer = HtmlWriter::with_options(include_graph).with_graph_aspect(aw, ah);
+        let layout = html_default_layout.unwrap_or("force-directed");
+        validate_layout_name(layout).map_err(|e| anyhow::anyhow!("{}", e))?;
+        let writer = HtmlWriter::with_options(include_graph)
+            .with_graph_aspect(aw, ah)
+            .with_default_layout(layout);
         writer
             .write(&schema, output)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -351,12 +357,13 @@ fn generate_from_manifest() -> anyhow::Result<()> {
                 "html",
                 true,
                 gen_cfg.html_graph_aspect.as_deref(),
+                gen_cfg.html_default_layout.as_deref(),
             )?;
             produced_anything = true;
         }
         if let Some(rust_out) = &gen_cfg.rust {
             let rust_out = manifest_dir.join(rust_out);
-            generate(&schema_path, &rust_out, "rust", false, None)?;
+            generate(&schema_path, &rust_out, "rust", false, None, None)?;
             produced_anything = true;
         }
     }
@@ -1046,7 +1053,7 @@ async fn main() -> anyhow::Result<()> {
                     };
                     eprintln!("Graph visualization: {}", mode_str);
                 }
-                generate(&input, &output, &format, !no_graph, None)?;
+                generate(&input, &output, &format, !no_graph, None, None)?;
             }
             None => generate_from_manifest()?,
         },
@@ -1101,7 +1108,7 @@ async fn main() -> anyhow::Result<()> {
         None => {
             // Default behavior: generate if input provided (with graph enabled by default)
             if let Some(input) = cli.input {
-                generate(&input, &cli.output, &cli.format, true, None)?;
+                generate(&input, &cli.output, &cli.format, true, None, None)?;
             } else {
                 println!("panschema: no input specified. Use --help for usage.");
             }

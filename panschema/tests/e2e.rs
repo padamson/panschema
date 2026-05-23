@@ -994,6 +994,62 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         println!("[{}] 3D mode available", browser_name);
     }
 
+    // 24b. Layout picker: the chrome is present, the implemented
+    // variant is selectable, and the rest are disabled.
+    let layout_select = page.locator("#graph-layout-select").await;
+    let layout_select_count = layout_select
+        .count()
+        .await
+        .expect("Failed to count layout picker");
+    assert!(
+        layout_select_count > 0,
+        "[{}] Layout picker <select> should exist",
+        browser_name
+    );
+    // Default selection from html_writer should be `force-directed`,
+    // which is also the only currently-implemented option.
+    let initial_value = layout_select
+        .input_value(None)
+        .await
+        .expect("Failed to read layout select value");
+    assert_eq!(
+        initial_value, "force-directed",
+        "[{}] Layout picker initial value should be force-directed; got `{}`",
+        browser_name, initial_value
+    );
+    // Every other canonical layout identifier is present as an
+    // option but disabled (not yet implemented).
+    for unimplemented in &[
+        "hierarchical",
+        "stress",
+        "kamada-kawai",
+        "sgd",
+        "circular",
+        "radial-tree",
+    ] {
+        let opt = page
+            .locator(&format!(
+                "#graph-layout-select option[value=\"{unimplemented}\"]"
+            ))
+            .await;
+        let count = opt.count().await.expect("Failed to count option");
+        assert_eq!(
+            count, 1,
+            "[{}] Picker should expose option for `{}`",
+            browser_name, unimplemented
+        );
+        let disabled = opt
+            .get_attribute("disabled")
+            .await
+            .expect("Failed to read disabled attr");
+        assert!(
+            disabled.is_some(),
+            "[{}] Option `{}` should be disabled (not yet implemented)",
+            browser_name,
+            unimplemented
+        );
+    }
+
     // 25. Test sidebar navigation to Schema Graph section
     graph_sidebar_link
         .click(None)

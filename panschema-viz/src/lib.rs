@@ -13,6 +13,7 @@ mod canvas2d;
 mod graph_types;
 mod interaction;
 mod labels;
+pub mod layout;
 mod sim_common;
 mod simulation;
 
@@ -84,13 +85,30 @@ impl Visualization {
     /// toward a bounding box of that aspect ratio (e.g. `16, 8` for a
     /// landscape container). Use `1, 1` for the historical circular
     /// equilibrium.
+    ///
+    /// `layout` selects which algorithm produces node positions. See
+    /// [`layout::LayoutAlgorithm`] for the canonical identifiers.
+    /// Only `"force-directed"` resolves to a working implementation;
+    /// the other variants return a clear error so the picker UI can
+    /// validate availability without losing typing information.
     #[wasm_bindgen(constructor)]
     pub fn new(
         canvas: HtmlCanvasElement,
         graph_json: &str,
         aspect_w: u32,
         aspect_h: u32,
+        layout: &str,
     ) -> Result<Visualization, JsValue> {
+        use std::str::FromStr;
+        let algorithm = layout::LayoutAlgorithm::from_str(layout)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        if !algorithm.is_implemented() {
+            return Err(JsValue::from_str(&format!(
+                "layout algorithm `{}` is not yet implemented; pass `force-directed`",
+                algorithm.as_str()
+            )));
+        }
+
         // Parse graph data
         let graph: GraphData = serde_json::from_str(graph_json)
             .map_err(|e| JsValue::from_str(&format!("Failed to parse graph JSON: {}", e)))?;
@@ -593,15 +611,17 @@ fn node_type_string(color: &[f32; 4]) -> &'static str {
 }
 
 /// Create a 2D visualization (convenience function). Pass `1, 1` for
-/// the original circular equilibrium.
+/// the original circular equilibrium and `"force-directed"` for the
+/// only currently-implemented layout.
 #[wasm_bindgen]
 pub fn create_visualization(
     canvas: HtmlCanvasElement,
     graph_json: &str,
     aspect_w: u32,
     aspect_h: u32,
+    layout: &str,
 ) -> Result<Visualization, JsValue> {
-    Visualization::new(canvas, graph_json, aspect_w, aspect_h)
+    Visualization::new(canvas, graph_json, aspect_w, aspect_h, layout)
 }
 
 // ============================================================================
@@ -1125,7 +1145,9 @@ pub async fn create_visualization_3d(
 /// Try to create a 3D visualization, falling back to 2D if WebGPU is unavailable
 /// Returns a JsValue that can be either Visualization or Visualization3D.
 /// `aspect_w` / `aspect_h` configure the 2D fallback's aspect bias;
-/// the 3D path currently ignores them (ellipsoid extension is a follow-up).
+/// `layout` selects the 2D fallback's algorithm. The 3D path currently
+/// ignores both — ellipsoid biasing and layout-picker support on
+/// the WebGPU renderer are still to be built.
 #[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
 #[wasm_bindgen]
 pub async fn create_visualization_auto(
@@ -1133,12 +1155,13 @@ pub async fn create_visualization_auto(
     graph_json: &str,
     aspect_w: u32,
     aspect_h: u32,
+    layout: &str,
 ) -> Result<JsValue, JsValue> {
     if !check_webgpu_support().await {
         web_sys::console::info_1(
             &"panschema-viz: navigator.gpu unavailable; rendering 2D Canvas.".into(),
         );
-        let viz = Visualization::new(canvas, graph_json, aspect_w, aspect_h)?;
+        let viz = Visualization::new(canvas, graph_json, aspect_w, aspect_h, layout)?;
         return Ok(JsValue::from(viz));
     }
 
@@ -1153,7 +1176,7 @@ pub async fn create_visualization_auto(
                 )
                 .into(),
             );
-            let viz = Visualization::new(canvas, graph_json, aspect_w, aspect_h)?;
+            let viz = Visualization::new(canvas, graph_json, aspect_w, aspect_h, layout)?;
             Ok(JsValue::from(viz))
         }
     }

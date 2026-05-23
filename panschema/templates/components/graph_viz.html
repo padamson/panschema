@@ -14,7 +14,7 @@
         <span class="graph-badge" id="graph-node-count"></span>
     </div>
 
-    <div class="graph-container" style="--graph-aspect: {{ graph_aspect_w }} / {{ graph_aspect_h }};">
+    <div class="graph-container" style="--graph-aspect: {{ graph_aspect_w }} / {{ graph_aspect_h }};" data-default-layout="{{ graph_default_layout }}">
         {# Loading state #}
         <div id="graph-loading" class="graph-loading">
             <div class="spinner"></div>
@@ -58,6 +58,23 @@
         <div class="graph-mode-toggle" id="graph-mode-toggle">
             <button id="graph-mode-2d" class="graph-mode-btn active" title="2D Canvas mode">2D</button>
             <button id="graph-mode-3d" class="graph-mode-btn" title="3D WebGPU mode (requires WebGPU support)" disabled>3D</button>
+        </div>
+
+        {# Layout picker. Only force-directed is selectable; the
+           other algorithms appear in the dropdown as disabled
+           options so the wire format stays stable as
+           implementations land. #}
+        <div class="graph-layout-picker" id="graph-layout-picker">
+            <label for="graph-layout-select" class="graph-layout-label">Layout</label>
+            <select id="graph-layout-select" class="graph-layout-select">
+                <option value="force-directed">Force-directed</option>
+                <option value="hierarchical" disabled title="Not yet implemented">Hierarchical (coming soon)</option>
+                <option value="stress" disabled title="Not yet implemented">Stress majorization (coming soon)</option>
+                <option value="kamada-kawai" disabled title="Not yet implemented">Kamada-Kawai (coming soon)</option>
+                <option value="sgd" disabled title="Not yet implemented">SGD (coming soon)</option>
+                <option value="circular" disabled title="Not yet implemented">Circular (coming soon)</option>
+                <option value="radial-tree" disabled title="Not yet implemented">Radial tree (coming soon)</option>
+            </select>
         </div>
 
         {# Info overlay #}
@@ -259,14 +276,18 @@
     top: var(--spacing-md, 12px);
     left: var(--spacing-md, 12px);
     display: flex;
+    align-items: center;
     gap: 0;
+    height: 24px;
     z-index: 10;
 }
 
 .graph-mode-btn {
     background: var(--color-bg-secondary, #2d2d44);
     border: 1px solid var(--color-border, #374151);
-    padding: 4px 10px;
+    padding: 0 10px;
+    height: 24px;
+    box-sizing: border-box;
     font-size: var(--font-size-xs, 11px);
     font-weight: 600;
     color: var(--color-text-muted, #9ca3af);
@@ -297,6 +318,60 @@
 .graph-mode-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
+}
+
+/* Layout picker — placed to the right of the 2D/3D toggle and
+   sized to match its height so the controls baseline-align. */
+.graph-layout-picker {
+    position: absolute;
+    top: var(--spacing-md, 12px);
+    /* 88px = approximate toggle width (~64) + small gap. */
+    left: calc(var(--spacing-md, 12px) + 88px);
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs, 4px);
+    height: 24px;
+    z-index: 10;
+}
+
+.graph-layout-label {
+    height: 24px;
+    line-height: 24px;
+    font-size: var(--font-size-xs, 11px);
+    font-weight: 600;
+    color: var(--color-text-muted, #9ca3af);
+}
+
+.graph-layout-select {
+    background: var(--color-bg-secondary, #2d2d44);
+    border: 1px solid var(--color-border, #374151);
+    border-radius: var(--radius-sm, 4px);
+    padding: 0 8px;
+    height: 24px;
+    box-sizing: border-box;
+    font-size: var(--font-size-xs, 11px);
+    font-weight: 600;
+    color: var(--color-text, #e5e7eb);
+    cursor: pointer;
+    /* Strip native UA chrome so the height/padding above are
+       authoritative; a custom caret keeps the dropdown affordance. */
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, var(--color-text-muted, #9ca3af) 50%),
+                      linear-gradient(135deg, var(--color-text-muted, #9ca3af) 50%, transparent 50%);
+    background-position: calc(100% - 14px) 50%, calc(100% - 10px) 50%;
+    background-size: 4px 4px, 4px 4px;
+    background-repeat: no-repeat;
+    padding-right: 22px;
+}
+
+.graph-layout-select:hover {
+    border-color: var(--color-primary, #3b82f6);
+}
+
+.graph-layout-select option:disabled {
+    color: var(--color-text-muted, #9ca3af);
 }
 
 /* 3D Labels overlay */
@@ -785,6 +860,39 @@
         return { aspectW: 16, aspectH: 8 };
     }
 
+    // Layout picker resolution precedence:
+    //   1. localStorage (last user selection)
+    //   2. `data-default-layout` attribute on `.graph-container` (set
+    //      by html_writer from the manifest's `html_default_layout`)
+    //   3. `"force-directed"` fallback
+    const LAYOUT_PREF_KEY = 'panschema-graph-layout';
+    const KNOWN_LAYOUTS = new Set([
+        'force-directed', 'hierarchical', 'stress',
+        'kamada-kawai', 'sgd', 'circular', 'radial-tree',
+    ]);
+    // Layouts that resolve to a real implementation on the wasm side.
+    const IMPLEMENTED_LAYOUTS = new Set(['force-directed']);
+
+    function readGraphLayout() {
+        try {
+            const stored = localStorage.getItem(LAYOUT_PREF_KEY);
+            if (stored && IMPLEMENTED_LAYOUTS.has(stored)) {
+                return stored;
+            }
+        } catch (e) { /* localStorage may be unavailable */ }
+        const container = document.querySelector('.graph-container');
+        const fromAttr = container?.dataset.defaultLayout;
+        if (fromAttr && KNOWN_LAYOUTS.has(fromAttr) && IMPLEMENTED_LAYOUTS.has(fromAttr)) {
+            return fromAttr;
+        }
+        return 'force-directed';
+    }
+
+    function saveGraphLayout(name) {
+        try { localStorage.setItem(LAYOUT_PREF_KEY, name); }
+        catch (e) { /* localStorage may be unavailable */ }
+    }
+
     // Convert edge_type to human-readable label
     function formatEdgeType(edgeType) {
         const labels = {
@@ -1009,6 +1117,7 @@
             startRenderLoop();
             setupInteraction();
             setupModeToggle();
+            setupLayoutPicker();
         } catch (e) {
             console.warn('WASM visualization not available, using static fallback:', e.message);
             // Fall back to static graph display
@@ -1050,6 +1159,7 @@
         // Defaults to 16:8 (the html_writer default) if absent.
         const { aspectW, aspectH } = readGraphAspect();
         const graphJson = JSON.stringify(graphData);
+        const layout = readGraphLayout();
 
         if (use3D && hasWebGPU && typeof wasmModule.create_visualization_3d === 'function') {
             try {
@@ -1059,11 +1169,11 @@
                 // e3d may be a JsValue string, not an Error object
                 const errMsg = typeof e3d === 'string' ? e3d : (e3d.message || e3d.toString());
                 console.warn('WebGPU 3D failed, falling back to 2D:', errMsg);
-                viz = new wasmModule.Visualization(canvas, graphJson, aspectW, aspectH);
+                viz = new wasmModule.Visualization(canvas, graphJson, aspectW, aspectH, layout);
                 is3D = false;
             }
         } else {
-            viz = new wasmModule.Visualization(canvas, graphJson, aspectW, aspectH);
+            viz = new wasmModule.Visualization(canvas, graphJson, aspectW, aspectH, layout);
             is3D = false;
         }
 
@@ -1129,6 +1239,30 @@
         mode3dBtn.addEventListener('click', async () => {
             if (is3D || mode3dBtn.disabled) return; // Already in 3D or not available
             await createVisualization(true);
+            updateModeUI();
+        });
+    }
+
+    function setupLayoutPicker() {
+        const select = document.getElementById('graph-layout-select');
+        if (!select) return;
+        select.value = readGraphLayout();
+        select.addEventListener('change', async (event) => {
+            const chosen = event.target.value;
+            if (!IMPLEMENTED_LAYOUTS.has(chosen)) {
+                // Hard guard: the option's `disabled` should already
+                // prevent this, but if a future picker variant breaks
+                // that, fall back to a clear refusal rather than a
+                // panicking wasm constructor.
+                console.warn('Layout not yet implemented:', chosen);
+                event.target.value = readGraphLayout();
+                return;
+            }
+            saveGraphLayout(chosen);
+            // Re-create the visualization in the same 2D/3D mode so
+            // the new layout takes effect immediately. createVisualization
+            // already reads the layout via readGraphLayout() at construction.
+            await createVisualization(is3D);
             updateModeUI();
         });
     }

@@ -120,6 +120,10 @@ struct IndexTemplate<'a> {
     /// `.graph-container` CSS rule.
     graph_aspect_w: u32,
     graph_aspect_h: u32,
+    /// Layout-algorithm identifier rendered into the
+    /// `--graph-layout` CSS custom property. The JS picker reads this
+    /// to set its initial selection.
+    graph_default_layout: &'a str,
 }
 
 /// Writer for HTML documentation output
@@ -131,6 +135,12 @@ pub struct HtmlWriter {
     /// OS task bar. Consumers can override per-schema via the manifest's
     /// `html_graph_aspect = "W:H"` field.
     pub graph_aspect: (u32, u32),
+    /// Layout-algorithm identifier (e.g. `"force-directed"`) for the
+    /// initial value of the graph-viz layout picker. Consumers override
+    /// per-schema via the manifest's `html_default_layout` field.
+    /// Defaults to `"force-directed"`, the only fully-implemented
+    /// algorithm.
+    pub graph_default_layout: String,
 }
 
 /// Parse a `"W:H"` aspect-ratio string. Both components must be positive
@@ -169,11 +179,12 @@ mod wasm_files {
 
 impl HtmlWriter {
     /// Create a new HTML writer with default options (graph enabled,
-    /// 16:8 graph aspect ratio).
+    /// 16:8 graph aspect ratio, force-directed default layout).
     pub fn new() -> Self {
         Self {
             include_graph: true,
             graph_aspect: (16, 8),
+            graph_default_layout: "force-directed".to_string(),
         }
     }
 
@@ -182,6 +193,7 @@ impl HtmlWriter {
         Self {
             include_graph,
             graph_aspect: (16, 8),
+            graph_default_layout: "force-directed".to_string(),
         }
     }
 
@@ -191,6 +203,16 @@ impl HtmlWriter {
     #[must_use]
     pub fn with_graph_aspect(mut self, w: u32, h: u32) -> Self {
         self.graph_aspect = (w, h);
+        self
+    }
+
+    /// Override the default layout algorithm for the graph picker.
+    /// Pre-validate via [`crate::manifest::validate_layout_name`] —
+    /// this method does not re-check, on the assumption the value
+    /// already passed manifest parsing.
+    #[must_use]
+    pub fn with_default_layout(mut self, name: impl Into<String>) -> Self {
+        self.graph_default_layout = name.into();
         self
     }
 
@@ -596,6 +618,7 @@ impl Writer for HtmlWriter {
             graph_edge_count,
             graph_aspect_w: self.graph_aspect.0,
             graph_aspect_h: self.graph_aspect.1,
+            graph_default_layout: &self.graph_default_layout,
         };
 
         let html = template

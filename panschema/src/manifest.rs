@@ -21,6 +21,8 @@ pub enum ManifestError {
     Io(#[from] std::io::Error),
     #[error("invalid manifest: {0}")]
     Parse(#[from] toml::de::Error),
+    #[error("invalid manifest field for `[generate.{schema}]`: {message}")]
+    InvalidField { schema: String, message: String },
 }
 
 /// Top-level structure of `panschema.toml`.
@@ -79,16 +81,67 @@ pub struct GenerateConfig {
     /// chrome + OS task bar without overflow.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub html_graph_aspect: Option<String>,
+    /// Default layout algorithm for the HTML schema-graph viz picker.
+    /// Accepted values: `force-directed`, `hierarchical`, `stress`,
+    /// `kamada-kawai`, `sgd`, `circular`, `radial-tree`. Only
+    /// `force-directed` resolves to a real implementation; the other
+    /// names are accepted (and persisted) so manifest files can pin
+    /// a producer's intended default before each algorithm lands.
+    /// Only meaningful when `html` is set. Defaults to
+    /// `force-directed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub html_default_layout: Option<String>,
     /// Rust module output file path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rust: Option<PathBuf>,
+}
+
+/// Canonical layout-algorithm identifiers accepted by
+/// [`GenerateConfig::html_default_layout`]. Kept in sync with
+/// `panschema-viz`'s `layout::LayoutAlgorithm::ALL` — when a new
+/// variant lands there, add the same identifier here. The dual source
+/// of truth is intentional: `panschema-viz` is a wasm-target crate
+/// and `panschema` doesn't currently depend on it as a Rust crate, so
+/// validation lives in both crates separately.
+const KNOWN_LAYOUT_ALGORITHMS: &[&str] = &[
+    "force-directed",
+    "hierarchical",
+    "stress",
+    "kamada-kawai",
+    "sgd",
+    "circular",
+    "radial-tree",
+];
+
+/// Validate a layout-algorithm identifier against
+/// [`KNOWN_LAYOUT_ALGORITHMS`], returning a clear actionable error on
+/// mismatch.
+pub fn validate_layout_name(name: &str) -> Result<(), String> {
+    if KNOWN_LAYOUT_ALGORITHMS.contains(&name) {
+        Ok(())
+    } else {
+        Err(format!(
+            "unknown layout `{}`; expected one of: {}",
+            name,
+            KNOWN_LAYOUT_ALGORITHMS.join(", ")
+        ))
+    }
 }
 
 impl FromStr for Manifest {
     type Err = ManifestError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(toml::from_str(s)?)
+        let manifest: Manifest = toml::from_str(s)?;
+        for (name, cfg) in &manifest.generate {
+            if let Some(layout) = cfg.html_default_layout.as_deref() {
+                validate_layout_name(layout).map_err(|message| ManifestError::InvalidField {
+                    schema: name.clone(),
+                    message,
+                })?;
+            }
+        }
+        Ok(manifest)
     }
 }
 
@@ -463,6 +516,91 @@ html = "docs/"
         let m = toml.parse::<Manifest>().expect("should parse");
         let cfg = m.generate.get("foo").unwrap();
         assert!(cfg.html_graph_aspect.is_none());
+    }
+
+    #[test]
+    fn parses_html_default_layout() {
+        let toml = r#"
+[schemas]
+foo = { path = "./foo-pkg" }
+
+[generate.foo]
+html = "docs/"
+html_default_layout = "force-directed"
+"#;
+        let m = toml.parse::<Manifest>().expect("should parse");
+        let cfg = m.generate.get("foo").unwrap();
+        assert_eq!(cfg.html_default_layout.as_deref(), Some("force-directed"));
+    }
+
+    #[test]
+    fn html_default_layout_is_optional_and_defaults_to_none() {
+        let toml = r#"
+[schemas]
+foo = { path = "./foo-pkg" }
+
+[generate.foo]
+html = "docs/"
+"#;
+        let m = toml.parse::<Manifest>().expect("should parse");
+        let cfg = m.generate.get("foo").unwrap();
+        assert!(cfg.html_default_layout.is_none());
+    }
+
+    #[test]
+    fn html_default_layout_accepts_every_canonical_name() {
+        for name in &[
+            "force-directed",
+            "hierarchical",
+            "stress",
+            "kamada-kawai",
+            "sgd",
+            "circular",
+            "radial-tree",
+        ] {
+            let toml = format!(
+                r#"
+[schemas]
+foo = {{ path = "./foo-pkg" }}
+
+[generate.foo]
+html = "docs/"
+html_default_layout = "{name}"
+"#
+            );
+            let m = toml.parse::<Manifest>().expect("should parse");
+            assert_eq!(
+                m.generate
+                    .get("foo")
+                    .unwrap()
+                    .html_default_layout
+                    .as_deref(),
+                Some(*name),
+            );
+        }
+    }
+
+    #[test]
+    fn html_default_layout_rejects_unknown_value() {
+        let toml = r#"
+[schemas]
+foo = { path = "./foo-pkg" }
+
+[generate.foo]
+html = "docs/"
+html_default_layout = "wat"
+"#;
+        let err = toml.parse::<Manifest>().expect_err("should reject `wat`");
+        match err {
+            ManifestError::InvalidField { schema, message } => {
+                assert_eq!(schema, "foo");
+                assert!(
+                    message.contains("wat") && message.contains("force-directed"),
+                    "error should mention the bad value AND list valid options; got: {message}"
+                );
+            }
+            other => panic!("expected InvalidField, got {other:?}"),
+        }
     }
 
     #[test]
