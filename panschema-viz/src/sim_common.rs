@@ -103,6 +103,29 @@ mod tests {
     }
 
     #[test]
+    fn cross_with_first_segment_horizontal_second_vertical_above_then_below() {
+        // Horizontal AB on the x-axis, vertical CD from above to below.
+        // Exercises the branches of the segments-cross predicate that
+        // square_diagonals doesn't reach (d3 positive, d4 negative).
+        // Catches mutants that swap the comparison operator in the
+        // first half of the cross-predicate's second `||` operand.
+        let positions = [(0.0, 0.0), (2.0, 0.0), (1.0, 1.0), (1.0, -1.0)];
+        let edges = [(0, 1), (2, 3)];
+        assert_eq!(count_edge_crossings_2d(&positions, &edges), 1);
+    }
+
+    #[test]
+    fn cross_with_first_segment_horizontal_second_vertical_below_then_above() {
+        // Mirror of the above: CD goes from below to above. (d3 < 0,
+        // d4 > 0.) Together these two tests cover all four crossing
+        // orientation quadrants — the original square_diagonals case
+        // is one corner of that space.
+        let positions = [(0.0, 0.0), (2.0, 0.0), (1.0, -1.0), (1.0, 1.0)];
+        let edges = [(0, 1), (2, 3)];
+        assert_eq!(count_edge_crossings_2d(&positions, &edges), 1);
+    }
+
+    #[test]
     fn star_edges_sharing_center_dont_cross() {
         let positions = [(0.0, 0.0), (1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)];
         let edges = [(0, 1), (0, 2), (0, 3), (0, 4)];
@@ -139,6 +162,27 @@ mod tests {
         // be `||` (either out-of-bounds triggers skip), not `&&` (both).
         let positions = [(0.0, 0.0), (1.0, 0.0)];
         let edges = [(0, 1), (0, 7)];
+        assert_eq!(count_edge_crossings_2d(&positions, &edges), 0);
+    }
+
+    #[test]
+    fn outer_oob_with_valid_edges_following() {
+        // OOB edge appears FIRST in the list, so a faulty bounds check
+        // (`||` → `&&`) would let it through the outer skip and then
+        // attempt `positions[oob_index]` against the inner edges that
+        // follow, panicking. Original `||` correctly skips.
+        let positions = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)];
+        let edges = [(0, 7), (2, 3)];
+        assert_eq!(count_edge_crossings_2d(&positions, &edges), 0);
+    }
+
+    #[test]
+    fn inner_oob_with_valid_outer_edge() {
+        // Symmetric of the test above: outer edge is valid; inner edge
+        // has one OOB endpoint. Mutation `||` → `&&` at the inner
+        // bounds check would let it through and panic on positions[oob].
+        let positions = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)];
+        let edges = [(0, 1), (2, 7)];
         assert_eq!(count_edge_crossings_2d(&positions, &edges), 0);
     }
 
