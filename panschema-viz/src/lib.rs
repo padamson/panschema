@@ -78,15 +78,29 @@ pub struct Visualization {
 
 #[wasm_bindgen]
 impl Visualization {
-    /// Create a new 2D visualization from graph JSON data
+    /// Create a new 2D visualization from graph JSON data.
+    ///
+    /// `aspect_w` and `aspect_h` bias the simulation's settled layout
+    /// toward a bounding box of that aspect ratio (e.g. `16, 8` for a
+    /// landscape container). Use `1, 1` for the historical circular
+    /// equilibrium.
     #[wasm_bindgen(constructor)]
-    pub fn new(canvas: HtmlCanvasElement, graph_json: &str) -> Result<Visualization, JsValue> {
+    pub fn new(
+        canvas: HtmlCanvasElement,
+        graph_json: &str,
+        aspect_w: u32,
+        aspect_h: u32,
+    ) -> Result<Visualization, JsValue> {
         // Parse graph data
         let graph: GraphData = serde_json::from_str(graph_json)
             .map_err(|e| JsValue::from_str(&format!("Failed to parse graph JSON: {}", e)))?;
 
-        // Create simulation
-        let simulation = CpuSimulation::from_graph_data(&graph);
+        // Create simulation. (1, 1) → no-op centering; the historical
+        // default. Non-square aspects activate anisotropic forceX/forceY.
+        let mut simulation = CpuSimulation::from_graph_data(&graph);
+        if aspect_w != aspect_h && aspect_w > 0 && aspect_h > 0 {
+            simulation = simulation.with_aspect_ratio(aspect_w, aspect_h);
+        }
 
         // Create renderer
         let renderer = Canvas2DRenderer::new(canvas)
@@ -561,13 +575,16 @@ fn node_type_string(color: &[f32; 4]) -> &'static str {
     }
 }
 
-/// Create a 2D visualization (convenience function)
+/// Create a 2D visualization (convenience function). Pass `1, 1` for
+/// the original circular equilibrium.
 #[wasm_bindgen]
 pub fn create_visualization(
     canvas: HtmlCanvasElement,
     graph_json: &str,
+    aspect_w: u32,
+    aspect_h: u32,
 ) -> Result<Visualization, JsValue> {
-    Visualization::new(canvas, graph_json)
+    Visualization::new(canvas, graph_json, aspect_w, aspect_h)
 }
 
 // ============================================================================
@@ -1089,18 +1106,22 @@ pub async fn create_visualization_3d(
 }
 
 /// Try to create a 3D visualization, falling back to 2D if WebGPU is unavailable
-/// Returns a JsValue that can be either Visualization or Visualization3D
+/// Returns a JsValue that can be either Visualization or Visualization3D.
+/// `aspect_w` / `aspect_h` configure the 2D fallback's aspect bias; the
+/// 3D path currently ignores them (ellipsoid extension is a follow-up).
 #[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
 #[wasm_bindgen]
 pub async fn create_visualization_auto(
     canvas: HtmlCanvasElement,
     graph_json: &str,
+    aspect_w: u32,
+    aspect_h: u32,
 ) -> Result<JsValue, JsValue> {
     if !check_webgpu_support().await {
         web_sys::console::info_1(
             &"panschema-viz: navigator.gpu unavailable; rendering 2D Canvas.".into(),
         );
-        let viz = Visualization::new(canvas, graph_json)?;
+        let viz = Visualization::new(canvas, graph_json, aspect_w, aspect_h)?;
         return Ok(JsValue::from(viz));
     }
 
@@ -1115,7 +1136,7 @@ pub async fn create_visualization_auto(
                 )
                 .into(),
             );
-            let viz = Visualization::new(canvas, graph_json)?;
+            let viz = Visualization::new(canvas, graph_json, aspect_w, aspect_h)?;
             Ok(JsValue::from(viz))
         }
     }

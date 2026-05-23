@@ -770,6 +770,21 @@
         hoveredEdgeIndex = closestEdgeIdx;
     }
 
+    // Read the graph container's `--graph-aspect` CSS custom property
+    // (set inline by html_writer as e.g. `16 / 8`) and split into the
+    // two integer components. Falls back to 16:8 if absent or malformed.
+    function readGraphAspect() {
+        const container = document.querySelector('.graph-container');
+        if (container) {
+            const raw = getComputedStyle(container).getPropertyValue('--graph-aspect').trim();
+            const parts = raw.split('/').map(s => parseInt(s.trim(), 10));
+            if (parts.length === 2 && Number.isFinite(parts[0]) && Number.isFinite(parts[1]) && parts[0] > 0 && parts[1] > 0) {
+                return { aspectW: parts[0], aspectH: parts[1] };
+            }
+        }
+        return { aspectW: 16, aspectH: 8 };
+    }
+
     // Convert edge_type to human-readable label
     function formatEdgeType(edgeType) {
         const labels = {
@@ -1029,19 +1044,26 @@
         canvas.width = rect.width * window.devicePixelRatio;
         canvas.height = rect.height * window.devicePixelRatio;
 
+        // Read the configured aspect from the container's
+        // `--graph-aspect` CSS custom property so the simulation biases
+        // its settled layout toward the same shape as the container.
+        // Defaults to 16:8 (the html_writer default) if absent.
+        const { aspectW, aspectH } = readGraphAspect();
+        const graphJson = JSON.stringify(graphData);
+
         if (use3D && hasWebGPU && typeof wasmModule.create_visualization_3d === 'function') {
             try {
-                viz = await wasmModule.create_visualization_3d(canvas, JSON.stringify(graphData));
+                viz = await wasmModule.create_visualization_3d(canvas, graphJson);
                 is3D = true;
             } catch (e3d) {
                 // e3d may be a JsValue string, not an Error object
                 const errMsg = typeof e3d === 'string' ? e3d : (e3d.message || e3d.toString());
                 console.warn('WebGPU 3D failed, falling back to 2D:', errMsg);
-                viz = new wasmModule.Visualization(canvas, JSON.stringify(graphData));
+                viz = new wasmModule.Visualization(canvas, graphJson, aspectW, aspectH);
                 is3D = false;
             }
         } else {
-            viz = new wasmModule.Visualization(canvas, JSON.stringify(graphData));
+            viz = new wasmModule.Visualization(canvas, graphJson, aspectW, aspectH);
             is3D = false;
         }
 

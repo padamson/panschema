@@ -167,25 +167,57 @@ Building on Feature 01 (Foundational UI Stack), this feature adds actual ontolog
 
 ### Slice 7: Improve force-directed default so the graph fills its viewport
 
-**Status:** Not Started (an initial attempt — y-scale-everything + multi-seed best-of-k — was reverted on 2026-05-22 after dogfooding against scimantic v0.2.0 showed the cluster still collapsed and isolated nodes piled up. The y-scale trick fought the underlying physics rather than working with it; the fix is to switch to a principled forceX/forceY axial-centering force per the d3-force composable-forces model.)
+**Status:** Completed
 
-**User Value:** The schema graph fills the available width AND height of its container — no big horizontal margins on wide viewports, no vertical wastage on tall ones. Isolated property/slot nodes distribute around the connected cluster rather than piling up on one side.
+**User Value:** The schema graph fills the available width and height of its container. Connected clusters spread far enough that node labels read individually instead of stacking into an unreadable blob. Isolated property/slot nodes distribute around the connected cluster rather than piling up on one side. The same default parameters work across phone-sized, laptop-sized, and 4K viewports.
 
-**Context:** After slice 6 made the graph container fluidly fill the content area at a configurable aspect ratio, the underlying simulation still settled into a roughly-circular equilibrium because its forces are isotropic. Biasing the equilibrium to match the container aspect requires either anisotropic forces (the principled fix) or anisotropic clamps/coordinate-scaling (a hack that fights the physics). The reverted attempt was the latter and didn't survive a real schema.
+**Context:** After slice 6 made the graph container fluidly fill the content area at a configurable aspect ratio, the underlying simulation still settled into a roughly-circular equilibrium because its forces were isotropic and its parameters didn't scale with node count — a 100-node cluster packed into the same ~200-unit radius as a 10-node one, with severely overlapping labels.
 
-**Approach for the next attempt — `forceX` / `forceY` axial centering:** Each tick, every node feels a weak harmonic pull toward the origin with anisotropic stiffness: `vy -= ky · y`, `vx -= kx · x`, where `ky / kx = (w/h)²`. For `aspect = 16:8` that's `ky = 4·kx` — y-pull is 4× stronger, equilibrium spreads 2× wider in x. Singletons (no springs) equilibrate at a radius where this centering balances inter-component repulsion — no more "drift to MAX_RADIUS" or magic angle redistribution. Dense and sparse graphs settle the same way; the same code path handles both.
+**Approach:** Three composable changes to the existing CPU force simulation:
 
-**Deferred to [Feature 09 (Graph layout selection)](09-graph-layout-selection.md):** the user-selectable picker for alternate layout algorithms (Hierarchical / Sugiyama, Circular, Radial, Stress majorization). The picker is only useful if the force-directed default is trustworthy, which is this slice.
+1. **Anisotropic axial centering (`forceX` / `forceY`).** Each tick, every node feels a weak harmonic pull toward the origin with anisotropic stiffness:
 
-**Acceptance Criteria (to be re-drafted before implementation):**
-- [ ] `SimulationConfig` gains `gravity_x_strength: f32` and `gravity_y_strength: f32` (or equivalent) defaulting to 0.0 (no-op).
-- [ ] `with_aspect_ratio(w, h)` sets these so `ky / kx = (w/h)²`, with the absolute magnitudes tuned so the equilibrium bounding box fills ≥70% of the configured container area on a representative scimantic-sized graph (84 nodes, ~1 edge/node).
-- [ ] Lopsided-graph tests (extreme outliers, angular spread of isolated nodes, bbox extent) — based on a fixture that mirrors scimantic v0.2.0's connectivity ratio — pass without the `redistribute_singletons_2d` hack from the reverted attempt.
-- [ ] Manual verification: scimantic v0.2.0 dogfood produces a layout that fills ≥70% of width AND height of a 1280×640 viewport, with isolated nodes distributed around the cluster.
+   ```
+   vx -= gravity_x · x
+   vy -= gravity_y · y
+   ```
+
+   For an isolated node feeling cluster repulsion `R/d²` and centering pull `g·d` along axis `a`, the equilibrium distance is `d_a = (R/g_a)^(1/3)`. Choosing `gravity_y / gravity_x = (w/h)³` gives `d_x / d_y = w/h` — bbox aspect matches the configured container aspect for isolated nodes. Spring-bound cluster nodes are dominated by their links and barely move, which is the intent.
+
+2. **Largest-component-at-origin initial layout.** `layout_by_component_2d` places the biggest connected component at the origin and rings smaller components around it. Placing the dominant component off-origin would interact poorly with the anisotropic gravity — gravity can only partially correct an off-origin start within the alpha schedule, so any offset bakes a layout asymmetry into the equilibrium.
+
+3. **`√N` scaling of force parameters.** `link_distance`, `charge`, and especially `collide_padding` all scale with `√N` inside `from_graph_data`. The collide-padding scaling matters most: it enforces a minimum geometric distance between every node pair, which is the only force in the system that breaks up "siblings stacked at angle 2π/B around a high-branching tree node." Without it, the natural layout for any tree-structured ontology has labels stacking at the trunk regardless of repulsion strength.
+
+**Validation harness:** a multi-scale Playwright iteration test (`#[ignore]`-d for routine CI, run explicitly) generates a synthetic ontology + screenshot at three viewport / graph-size combinations:
+
+| Scale | Viewport | Synthetic graph |
+|---|---|---|
+| Phone | 390 × 844 | 6 connected + 2 isolated |
+| Laptop | 1440 × 900 | 30 connected + 8 isolated |
+| 4K | 3840 × 2160 | 80 connected + 20 isolated |
+
+Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-bbox summary so parameter changes can be compared numerically across scales without manual rebuilds.
+
+**Deferred to [Feature 09 (Graph layout selection)](09-graph-layout-selection.md):** the user-selectable picker for alternate layout algorithms (Sugiyama for tree-structured ontologies, circular for cycles, etc.). Force-directed inherently produces a dense core for high-branching trees — the structural fix is a different algorithm, not parameter tuning.
+
+**Edge-crossing minimization** (multi-seed best-of-K) is a follow-up slice on top of this one — orthogonal to viewport filling, and easier to evaluate once the layout is otherwise stable.
+
+**Acceptance Criteria:**
+- [x] `SimulationConfig` gains `gravity_x_strength: f32` and `gravity_y_strength: f32`, default `0.0` (no-op, preserving existing single-render behavior in callers that don't opt in).
+- [x] `CpuSimulation::with_aspect_ratio(w: u32, h: u32) -> Self` builder sets `gravity_y_strength / gravity_x_strength = (w/h)³`, with absolute magnitudes split asymmetrically (`base · (h/w)^1.5` and `base · (w/h)^1.5`) so both axes converge in similar tick counts regardless of which aspect is configured.
+- [x] `tick_with_fixed` applies the centering forces after repulsion and link forces, before velocity integration. Fixed (pinned) nodes are not affected.
+- [x] `from_graph_data` scales `link_distance` (`× (1 + √N · 0.10)`), `charge` (`× (1 + √N · 0.10)`), and `collide_padding` (`4 + √N · 4`) with the node count, so the same defaults produce legible layouts from 6-node up to 100-node graphs.
+- [x] `layout_by_component_2d` places the largest connected component at origin; smaller components ring around it on a `big_radius = 150` circle.
+- [x] Native unit test: with `with_aspect_ratio(16, 8)` on a lopsided graph (20 connected + 8 isolated), the post-settle bbox is biased wider than tall (`w > h · 1.3`). Symmetric `(8, 16)` test passes the same tolerance taller-than-wide.
+- [x] Native unit test: with `with_aspect_ratio(16, 8)` on a lopsided graph (30 connected + 5 isolated), the layout has (a) no node more than 3× the median distance from centroid, (b) the angular distribution of isolated nodes spans ≥ π radians (largest open arc < π), (c) bbox width ≥ 200 world units (catches "collapsed to origin").
+- [x] Default (no `with_aspect_ratio` call): `gravity_*_strength` stays at `0.0`, preserving the historical circular equilibrium for callers that don't opt in.
+- [x] 2D JS init in `graph_viz.html` reads the container's `--graph-aspect` custom property and calls `with_aspect_ratio` accordingly. (3D path: API parity but no-op — ellipsoid centering is a follow-up.)
+- [x] Multi-scale Playwright screenshot harness (`e2e_2d_graph_screenshots`, `#[ignore]`-d) writes three PNGs and dumps pixel-bbox stats; used as the iteration feedback loop while tuning force parameters.
 
 **Notes:**
-- The reverted attempt's `count_edge_crossings_2d` helper and multi-seed `from_graph_data_best_of` were sound — those can come back as a follow-up after the axial-centering fix lands, since they're orthogonal (crossing minimization is a separate goal from viewport filling).
-- The full reverted change set is recoverable from git history; the commit was never pushed.
+- `gravity_y / gravity_x = (w/h)³`, not `(w/h)²` — derived from `equilibrium_d³ = repulsion / gravity` (centering linear in `d`, repulsion quadratic). The cube exponent is what gives the right ratio for the 2D case.
+- Aggressive `√N` scaling of `link_distance` / `charge` (factor ≥ 0.20) backfires: it blows the world bbox out past the viewport and `fit_to_bounds` zooms back to fit, shrinking the rendered cluster to a tiny patch. The `0.10` factor keeps the bbox roughly canvas-sized; collide-padding does the legibility work without needing larger world dimensions.
+- Strength tuning is empirical: `GRAVITY_BASE = 0.003` and the `√N` factors above produce visibly-good layouts at all three test scales. The single-source-of-truth is the screenshot harness; future parameter changes should re-run it and compare PNGs across scales.
 
 ---
 
@@ -199,4 +231,4 @@ Building on Feature 01 (Foundational UI Stack), this feature adds actual ontolog
 | Slice 4: Release | Must Have | Slice 1-3 | Completed |
 | Slice 5: Class card content | Should Have (v0.3.0) | Slice 1, Feature 03 | Completed |
 | Slice 6: Responsive layout + configurable graph aspect | Should Have (v0.3.0) | Slice 1, Feature 04 | Completed |
-| Slice 7: Improved force-directed default (fill viewport) | Should Have (v0.3.0) | Slice 6, Feature 04 | Not Started |
+| Slice 7: Improved force-directed default (fill viewport) | Should Have (v0.3.0) | Slice 6, Feature 04 | Completed |

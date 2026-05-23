@@ -93,13 +93,29 @@ pub struct SimulationConfig {
     pub collide_padding: f32,
     /// Fraction of overlap resolved per tick (0..1); lower values are smoother
     pub collide_strength: f32,
+    /// Harmonic pull toward `x = 0`, applied per tick as `vx -= gx · x`.
+    /// Zero (the default) preserves the historical circular equilibrium.
+    /// Use `with_aspect_ratio` to derive non-zero values from a target
+    /// bbox aspect.
+    pub gravity_x_strength: f32,
+    /// Harmonic pull toward `y = 0`, applied per tick as `vy -= gy · y`.
+    /// Setting `gravity_y / gravity_x = (w/h)³` biases the post-settle
+    /// bbox aspect toward `w/h` (derivation: equilibrium `d_a³ = R / g_a`
+    /// for cluster repulsion `R/d²` balanced against centering `g·d`).
+    pub gravity_y_strength: f32,
 }
 
 impl Default for SimulationConfig {
     fn default() -> Self {
         Self {
-            charge: -60.0,
-            link_distance: 50.0,
+            // Tuned for legible labels on schema sizes we care about
+            // (~30-100 connected nodes): repulsion strong enough to
+            // separate siblings of a tree node, link rest length long
+            // enough that adjacent labels rarely touch. `from_graph_data`
+            // applies further √N scaling on top so very-small and
+            // very-large graphs both fit on screen.
+            charge: -120.0,
+            link_distance: 100.0,
             link_strength: 1.0,
             velocity_decay: 0.6,
             alpha: 1.0,
@@ -107,6 +123,8 @@ impl Default for SimulationConfig {
             alpha_decay: 1.0 - 0.001_f32.powf(1.0 / 300.0),
             collide_padding: 2.0,
             collide_strength: 0.7,
+            gravity_x_strength: 0.0,
+            gravity_y_strength: 0.0,
         }
     }
 }
@@ -122,7 +140,15 @@ pub struct CpuSimulation {
 }
 
 impl CpuSimulation {
-    /// Create simulation from graph data
+    /// Create simulation from graph data.
+    ///
+    /// Force parameters scale with `√N` so the equilibrium cluster
+    /// size grows with the node count. Without this, a 100-node
+    /// cluster packs into the same world-space radius as a 10-node
+    /// cluster, with predictable label overlap and unreadable
+    /// rendering on large schemas. The `√N` ratio is the same one
+    /// d3-force uses (`linkDistance().strength()` and `charge()` both
+    /// scale this way under the hood).
     pub fn from_graph_data(graph: &GraphData) -> Self {
         let total = graph.nodes.len();
 
@@ -173,12 +199,62 @@ impl CpuSimulation {
         // traverse through each other to find equilibrium.
         layout_by_component_2d(&mut nodes, &components);
 
+        // Scale collide padding with √N. The collide force enforces a
+        // minimum geometric distance between every node pair, which is
+        // the only force in the system that breaks up "siblings stacked
+        // on top of each other" for high-branching tree clusters
+        // (springs and repulsion alone can't, because siblings at the
+        // same link_distance from a parent are forced close together
+        // at angle 2π/B). Scaling with √N keeps small graphs from
+        // looking sparse while still spreading dense ones.
+        //
+        // Modest √N scaling on link_distance + charge so very-small
+        // graphs (≤10 nodes) still get visible spacing even before the
+        // collide force kicks in. Aggressive scaling here backfires:
+        // it blows the world bbox out past the viewport and
+        // fit_to_bounds zooms back in to fit, making the rendered
+        // cluster tinier than before.
+        let mut config = SimulationConfig::default();
+        let n_scale = (total.max(1) as f32).sqrt();
+        config.link_distance *= 1.0 + n_scale * 0.10;
+        config.charge *= 1.0 + n_scale * 0.10;
+        config.collide_padding = 4.0 + n_scale * 4.0;
+
         Self {
             nodes,
             edges,
-            config: SimulationConfig::default(),
+            config,
             node_id_to_index,
         }
+    }
+
+    /// Configure anisotropic axial centering so the post-settle bounding
+    /// box approximates the given aspect ratio. The y-pull is scaled by
+    /// `(w/h)³` relative to the x-pull, which (given `1/d²` repulsion
+    /// from the connected cluster on each isolated node) produces an
+    /// equilibrium where `d_x / d_y ≈ w/h`.
+    ///
+    /// The absolute strength `GRAVITY_X_BASE` is calibrated against
+    /// scimantic-v0.2.0-scale schemas (~75 connected + ~10 isolated).
+    /// Smaller graphs settle at proportionally smaller radii (still
+    /// aspect-correct), which is generally fine — small graphs have less
+    /// reason to spread out.
+    pub fn with_aspect_ratio(mut self, w: u32, h: u32) -> Self {
+        // Split a base strength asymmetrically so the *ratio* matches
+        // (gy / gx) = (w/h)³ — the value needed to balance 1/d² cluster
+        // repulsion against linear centering at a target d_x/d_y = w/h
+        // — while the geometric mean √(gx · gy) stays equal to the
+        // base. This keeps both axes near the same convergence speed
+        // regardless of which aspect is configured: landscape and
+        // portrait reach equilibrium in symmetric numbers of ticks.
+        const GRAVITY_BASE: f32 = 0.003;
+        let wf = w as f32;
+        let hf = h as f32;
+        // gx · gy = base² ; gy / gx = (w/h)³  →  solve.
+        let aspect_sqrt_cubed = (wf / hf).powf(1.5);
+        self.config.gravity_x_strength = GRAVITY_BASE / aspect_sqrt_cubed;
+        self.config.gravity_y_strength = GRAVITY_BASE * aspect_sqrt_cubed;
+        self
     }
 
     /// Check if simulation is still running
@@ -229,9 +305,19 @@ impl CpuSimulation {
         // Apply link force (springs between connected nodes)
         self.apply_link_force();
 
+        // Apply anisotropic axial centering. Default strengths are 0.0
+        // (no-op); `with_aspect_ratio` derives non-zero values from the
+        // configured aspect so the post-settle bounding box approximates
+        // that aspect.
+        self.apply_gravity_force(fixed_nodes);
+
         // Velocity integration with a hard sphere clamp — bounds drift so
-        // fit_to_bounds always frames a sensible region.
-        const MAX_RADIUS: f32 = 200.0;
+        // fit_to_bounds always frames a sensible region. Set well past
+        // the equilibrium radius the centering force produces for the
+        // graph sizes we care about (~75-node clusters with ~10
+        // isolated nodes), so the clamp is a safety net for runaway
+        // dynamics rather than the dominant geometry-setting force.
+        const MAX_RADIUS: f32 = 800.0;
         const MAX_RADIUS_SQ: f32 = MAX_RADIUS * MAX_RADIUS;
         for (i, node) in self.nodes.iter_mut().enumerate() {
             if !fixed_nodes.contains(&i) {
@@ -349,6 +435,26 @@ impl CpuSimulation {
         }
     }
 
+    /// Apply harmonic axial centering: `vx -= gx · x`, `vy -= gy · y`.
+    /// Strengths default to 0.0 (no-op); `with_aspect_ratio` sets them
+    /// so the equilibrium bbox approximates a target aspect ratio.
+    /// Fixed (pinned) nodes are skipped.
+    fn apply_gravity_force(&mut self, fixed_nodes: &std::collections::HashSet<usize>) {
+        let gx = self.config.gravity_x_strength;
+        let gy = self.config.gravity_y_strength;
+        if gx == 0.0 && gy == 0.0 {
+            return;
+        }
+        let any_fixed = !fixed_nodes.is_empty();
+        for (i, node) in self.nodes.iter_mut().enumerate() {
+            if any_fixed && fixed_nodes.contains(&i) {
+                continue;
+            }
+            node.vx -= gx * node.x;
+            node.vy -= gy * node.y;
+        }
+    }
+
     /// Apply spring force between connected nodes
     fn apply_link_force(&mut self) {
         for edge in &self.edges {
@@ -426,14 +532,45 @@ fn layout_by_component_2d(nodes: &mut [SimNode], components: &[usize]) {
         by_component[c].push(i);
     }
 
-    let arc_per_component = 2.0 * PI / num_components as f32;
+    // The largest component is placed at origin; smaller components ring
+    // around it. Placing the largest off-origin would interact poorly
+    // with the anisotropic gravity in `with_aspect_ratio`: gravity can
+    // only partially correct the offset within the alpha schedule, so
+    // any off-origin start of the dominant component bakes a layout
+    // asymmetry into the rest of the simulation.
+    let largest_component_id = by_component
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, members)| members.len())
+        .map(|(id, _)| id);
+
     let big_radius = 150.0;
     let small_radius = 50.0;
+    // Outer components share the ring; the largest occupies the center,
+    // so divide the full circle by the count of non-largest components.
+    let outer_count = if largest_component_id.is_some() {
+        num_components - 1
+    } else {
+        num_components
+    };
+    let arc_per_outer = if outer_count > 0 {
+        2.0 * PI / outer_count as f32
+    } else {
+        0.0
+    };
 
+    let mut outer_index: usize = 0;
     for (component_id, members) in by_component.iter().enumerate() {
-        let component_angle = component_id as f32 * arc_per_component;
-        let cx = big_radius * component_angle.cos();
-        let cy = big_radius * component_angle.sin();
+        let (cx, cy) = if Some(component_id) == largest_component_id {
+            (0.0, 0.0)
+        } else {
+            let component_angle = outer_index as f32 * arc_per_outer;
+            outer_index += 1;
+            (
+                big_radius * component_angle.cos(),
+                big_radius * component_angle.sin(),
+            )
+        };
         let m = members.len();
         for (intra_idx, &node_idx) in members.iter().enumerate() {
             let angle = if m <= 1 {
@@ -803,5 +940,231 @@ mod tests {
         // Edge with missing target should be filtered out
         assert_eq!(sim.nodes.len(), 1);
         assert_eq!(sim.edges.len(), 0);
+    }
+
+    fn make_ring_graph(n: usize) -> GraphData {
+        let nodes = (0..n)
+            .map(|i| GraphNode {
+                id: format!("n{i}"),
+                label: format!("N{i}"),
+                node_type: NodeType::Class,
+                color: [1.0, 0.0, 0.0, 1.0],
+                description: None,
+                uri: None,
+                is_abstract: false,
+            })
+            .collect();
+        let edges = (0..n)
+            .map(|i| GraphEdge {
+                source: format!("n{i}"),
+                target: format!("n{}", (i + 1) % n),
+                edge_type: EdgeType::SubclassOf,
+                label: None,
+            })
+            .collect();
+        GraphData {
+            schema_name: "ring".to_string(),
+            schema_title: None,
+            format_version: "1.0".to_string(),
+            nodes,
+            edges,
+        }
+    }
+
+    /// Connected ring of `connected_n` + `isolated_n` disconnected
+    /// singletons. Edge-per-node ratio = 1, matching scimantic v0.2.0
+    /// density. Used to exercise centering's effect on isolated nodes.
+    fn make_lopsided_graph(connected_n: usize, isolated_n: usize) -> GraphData {
+        let total = connected_n + isolated_n;
+        let nodes = (0..total)
+            .map(|i| GraphNode {
+                id: format!("n{i}"),
+                label: format!("N{i}"),
+                node_type: NodeType::Class,
+                color: [1.0, 0.0, 0.0, 1.0],
+                description: None,
+                uri: None,
+                is_abstract: false,
+            })
+            .collect();
+        let edges = (0..connected_n)
+            .map(|i| GraphEdge {
+                source: format!("n{i}"),
+                target: format!("n{}", (i + 1) % connected_n),
+                edge_type: EdgeType::SubclassOf,
+                label: None,
+            })
+            .collect();
+        GraphData {
+            schema_name: "lopsided".to_string(),
+            schema_title: None,
+            format_version: "1.0".to_string(),
+            nodes,
+            edges,
+        }
+    }
+
+    fn bbox(sim: &CpuSimulation) -> (f32, f32) {
+        let xs: Vec<f32> = sim.nodes.iter().map(|n| n.x).collect();
+        let ys: Vec<f32> = sim.nodes.iter().map(|n| n.y).collect();
+        let w = xs.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
+            - xs.iter().cloned().fold(f32::INFINITY, f32::min);
+        let h = ys.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
+            - ys.iter().cloned().fold(f32::INFINITY, f32::min);
+        (w, h)
+    }
+
+    fn dist_from_centroid(sim: &CpuSimulation, i: usize) -> f32 {
+        let n = sim.nodes.len() as f32;
+        let cx: f32 = sim.nodes.iter().map(|n| n.x).sum::<f32>() / n;
+        let cy: f32 = sim.nodes.iter().map(|n| n.y).sum::<f32>() / n;
+        let dx = sim.nodes[i].x - cx;
+        let dy = sim.nodes[i].y - cy;
+        (dx * dx + dy * dy).sqrt()
+    }
+
+    #[test]
+    fn gravity_strengths_default_to_zero() {
+        let config = SimulationConfig::default();
+        assert_eq!(config.gravity_x_strength, 0.0);
+        assert_eq!(config.gravity_y_strength, 0.0);
+    }
+
+    #[test]
+    fn with_aspect_ratio_sets_gravity_strengths_in_cube_ratio() {
+        // gy / gx = (w/h)³, derived from equilibrium d_a³ = R/g_a for
+        // 1/d² cluster repulsion. (16,8) is 2:1, so the cube ratio is 8.
+        let sim = CpuSimulation::from_graph_data(&make_ring_graph(5)).with_aspect_ratio(16, 8);
+        let ratio = sim.config.gravity_y_strength / sim.config.gravity_x_strength;
+        assert!(
+            (ratio - 8.0).abs() < 0.01,
+            "expected gy/gx ≈ 8 for (16,8) aspect, got {ratio}"
+        );
+    }
+
+    #[test]
+    fn default_aspect_settles_to_roughly_square_bbox() {
+        // No `with_aspect_ratio` → gravity strengths are 0.0 → historical
+        // circular equilibrium preserved.
+        let graph = make_ring_graph(15);
+        let mut sim = CpuSimulation::from_graph_data(&graph);
+        for _ in 0..400 {
+            sim.tick();
+        }
+        let (w, h) = bbox(&sim);
+        let aspect = w / h;
+        assert!(
+            (0.6..=1.66).contains(&aspect),
+            "default aspect should settle near 1:1, got w/h={aspect}"
+        );
+    }
+
+    #[test]
+    fn aspect_16_8_biases_layout_wider_than_tall() {
+        // Anisotropic axial centering biases the equilibrium layout
+        // toward the configured aspect, but the strength of the bias
+        // depends on graph topology — tightly-connected graphs are
+        // dominated by spring forces and bias less than loosely
+        // connected ones. This test asserts directional bias (wider
+        // than tall) without pinning a specific ratio, which is what
+        // forceX/forceY can reliably guarantee across graph shapes.
+        let graph = make_lopsided_graph(20, 8);
+        let mut sim = CpuSimulation::from_graph_data(&graph).with_aspect_ratio(16, 8);
+        sim.run_to_convergence(500);
+        let (w, h) = bbox(&sim);
+        assert!(
+            w > h * 1.3,
+            "aspect (16,8) should bias bbox toward wider-than-tall (\
+             w > h * 1.3); got w={w:.1} h={h:.1} (ratio {:.2})",
+            w / h
+        );
+    }
+
+    #[test]
+    fn aspect_8_16_biases_layout_taller_than_wide() {
+        let graph = make_lopsided_graph(20, 8);
+        let mut sim = CpuSimulation::from_graph_data(&graph).with_aspect_ratio(8, 16);
+        sim.run_to_convergence(500);
+        let (w, h) = bbox(&sim);
+        assert!(
+            h > w * 1.3,
+            "aspect (8,16) should bias bbox toward taller-than-wide (\
+             h > w * 1.3); got w={w:.1} h={h:.1} (ratio {:.2})",
+            w / h
+        );
+    }
+
+    #[test]
+    fn lopsided_graph_has_no_extreme_outlier_nodes() {
+        // No single node should drift far enough from the cluster to
+        // dominate fit_to_bounds, which would zoom the whole layout
+        // out and shrink the cluster into an unreadable patch. The
+        // metric — max distance from centroid ≤ 3× median — catches
+        // the "one node escaped" failure mode without pinning specific
+        // positions.
+        let graph = make_lopsided_graph(30, 5);
+        let mut sim = CpuSimulation::from_graph_data(&graph).with_aspect_ratio(16, 8);
+        sim.run_to_convergence(500);
+        let mut dists: Vec<f32> = (0..sim.nodes.len())
+            .map(|i| dist_from_centroid(&sim, i))
+            .collect();
+        dists.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let median = dists[dists.len() / 2];
+        let max = *dists.last().unwrap();
+        assert!(
+            max <= median * 3.0,
+            "no node should be more than 3× median distance from \
+             centroid; got max={max:.1}, median={median:.1} (ratio {:.2})",
+            max / median
+        );
+    }
+
+    #[test]
+    fn lopsided_graph_isolated_nodes_distribute_around_perimeter() {
+        // Without anisotropic centering, isolated nodes that happen to
+        // be numbered consecutively (singleton property nodes after the
+        // connected classes) pile up on one side of the layout. Asserts
+        // the largest open arc among isolated-node angles is < π.
+        let graph = make_lopsided_graph(30, 6);
+        let mut sim = CpuSimulation::from_graph_data(&graph).with_aspect_ratio(16, 8);
+        sim.run_to_convergence(500);
+        let n = sim.nodes.len() as f32;
+        let cx: f32 = sim.nodes.iter().map(|n| n.x).sum::<f32>() / n;
+        let cy: f32 = sim.nodes.iter().map(|n| n.y).sum::<f32>() / n;
+        let mut isolated_angles: Vec<f32> = (30..36)
+            .map(|i| (sim.nodes[i].y - cy).atan2(sim.nodes[i].x - cx))
+            .collect();
+        isolated_angles.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut max_gap: f32 = 0.0;
+        for w in isolated_angles.windows(2) {
+            max_gap = max_gap.max(w[1] - w[0]);
+        }
+        let wrap_gap = std::f32::consts::TAU
+            - (isolated_angles.last().unwrap() - isolated_angles.first().unwrap());
+        max_gap = max_gap.max(wrap_gap);
+        assert!(
+            max_gap < std::f32::consts::PI,
+            "largest open arc among isolated-node angles should be < π; \
+             got {max_gap:.2} rad. Angles = {isolated_angles:?}"
+        );
+    }
+
+    #[test]
+    fn lopsided_graph_bbox_fills_a_substantial_extent() {
+        // Anisotropic centering must not over-tighten the cluster. The
+        // 200-world-unit floor is a hard "didn't collapse to origin"
+        // check — large enough to catch the failure mode where every
+        // node sits within ~50 units of the centroid, small enough that
+        // the test isn't a self-fulfilling proxy for our own scaling.
+        let graph = make_lopsided_graph(30, 5);
+        let mut sim = CpuSimulation::from_graph_data(&graph).with_aspect_ratio(16, 8);
+        sim.run_to_convergence(500);
+        let (w, _h) = bbox(&sim);
+        let floor = 200.0;
+        assert!(
+            w >= floor,
+            "post-settle bbox width should be >= {floor:.0} (catches \
+             'collapsed to origin'); got {w:.1}"
+        );
     }
 }

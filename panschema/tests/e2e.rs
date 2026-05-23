@@ -35,13 +35,29 @@ fn find_available_port() -> u16 {
 
 /// Generate documentation to a temporary directory.
 fn generate_docs() -> PathBuf {
-    let output_dir = std::env::temp_dir().join(format!("panschema_e2e_{}", std::process::id()));
+    generate_docs_for("tests/fixtures/reference.ttl")
+}
+
+/// Generate documentation for an explicit fixture path. Used by tests
+/// that want a non-default ontology (e.g. the multi-scale screenshot
+/// harness, which writes a synthetic TTL to a tempfile and points
+/// here).
+fn generate_docs_for(fixture_path: &str) -> PathBuf {
+    let output_dir = std::env::temp_dir().join(format!(
+        "panschema_e2e_{}_{}",
+        std::process::id(),
+        fixture_path
+            .rsplit('/')
+            .next()
+            .unwrap_or("default")
+            .replace('.', "_")
+    ));
     let _ = fs::remove_dir_all(&output_dir);
 
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "--input",
-            "tests/fixtures/reference.ttl",
+            fixture_path,
             "--output",
             output_dir.to_str().unwrap(),
         ])
@@ -1107,5 +1123,262 @@ fn e2e_happy_path() {
         let _ = shutdown_tx.send(());
         let _ = server_handle.await;
         let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
+/// A target viewport + graph size for the multi-scale screenshot
+/// iteration harness. We pin three configurations that cover the device
+/// spectrum we care about visually.
+struct ScreenshotScale {
+    /// Short tag used in the output filename and log lines.
+    name: &'static str,
+    /// Number of connected classes in the synthetic ontology (the
+    /// connected component, modeled as a balanced tree via subClassOf).
+    connected: usize,
+    /// Number of disconnected datatype properties (singleton components).
+    isolated: usize,
+    /// Browser viewport width in CSS pixels.
+    viewport_w: u32,
+    /// Browser viewport height in CSS pixels.
+    viewport_h: u32,
+}
+
+const SCALES: &[ScreenshotScale] = &[
+    ScreenshotScale {
+        name: "phone",
+        connected: 6,
+        isolated: 2,
+        viewport_w: 390,
+        viewport_h: 844,
+    },
+    ScreenshotScale {
+        name: "laptop",
+        connected: 30,
+        isolated: 8,
+        viewport_w: 1440,
+        viewport_h: 900,
+    },
+    ScreenshotScale {
+        name: "4k",
+        connected: 80,
+        isolated: 20,
+        viewport_w: 3840,
+        viewport_h: 2160,
+    },
+];
+
+/// Generate a synthetic Turtle ontology with `connected_n` classes laid
+/// out as a roughly-balanced tree (each new class subclasses one of the
+/// already-emitted classes) plus `isolated_n` disconnected datatype
+/// properties (singleton components). Mirrors the scimantic-style shape
+/// — one tree-like cluster + several dangling properties — at any
+/// requested scale.
+fn build_synthetic_ttl(connected_n: usize, isolated_n: usize) -> String {
+    let mut out = String::new();
+    out.push_str(
+        "@prefix : <http://example.org/panschema/synthetic#> .\n\
+         @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+         @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\n\
+         <http://example.org/panschema/synthetic> a owl:Ontology ;\n    \
+             rdfs:label \"Synthetic test ontology\" .\n\n",
+    );
+    // Balanced tree: parent(i) = (i - 1) / branching_factor. The
+    // branching factor scales with sqrt(N) so a 6-class graph stays
+    // mostly linear and an 80-class graph fans out to ~9 children per
+    // node — both visually informative for their respective scales.
+    let branching = ((connected_n as f64).sqrt().max(2.0) as usize).max(2);
+    for i in 0..connected_n {
+        let label = format!("C{i}");
+        if i == 0 {
+            out.push_str(&format!(
+                ":{label} a owl:Class ; rdfs:label \"{label}\" .\n"
+            ));
+        } else {
+            let parent = format!("C{}", (i - 1) / branching);
+            out.push_str(&format!(
+                ":{label} a owl:Class ; rdfs:subClassOf :{parent} ; rdfs:label \"{label}\" .\n"
+            ));
+        }
+    }
+    out.push('\n');
+    for i in 0..isolated_n {
+        let label = format!("p{i}");
+        out.push_str(&format!(
+            ":{label} a owl:DatatypeProperty ; rdfs:label \"{label}\" .\n"
+        ));
+    }
+    out
+}
+
+/// Render one screenshot scale: write a synthetic TTL fixture, run
+/// `panschema generate`, serve the output, take a 2D-canvas screenshot
+/// at the target viewport, and return the pixel-bbox stats JSON string
+/// for the eprintln summary at the end of the multi-scale test.
+async fn capture_scale_screenshot(
+    playwright: &Playwright,
+    scale: &ScreenshotScale,
+) -> (String, PathBuf) {
+    let fixture_path = std::env::temp_dir().join(format!(
+        "panschema_synthetic_{}_{}.ttl",
+        scale.name,
+        std::process::id()
+    ));
+    fs::write(
+        &fixture_path,
+        build_synthetic_ttl(scale.connected, scale.isolated),
+    )
+    .expect("Failed to write synthetic TTL");
+
+    let output_dir = generate_docs_for(fixture_path.to_str().unwrap());
+    let port = find_available_port();
+    let base_url = format!("http://127.0.0.1:{}", port);
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let browser = playwright
+        .chromium()
+        .launch()
+        .await
+        .expect("Failed to launch Chromium");
+    let context = browser
+        .new_context()
+        .await
+        .expect("Failed to create context");
+    let page = context.new_page().await.expect("Failed to create page");
+
+    page.set_viewport_size(playwright_rs::Viewport {
+        width: scale.viewport_w,
+        height: scale.viewport_h,
+    })
+    .await
+    .expect("Failed to set viewport");
+
+    // Stub navigator.gpu so init() picks 2D from the start (the 2D-mode
+    // click otherwise leaves an async canvas swap mid-flight at test time).
+    page.add_init_script(
+        "Object.defineProperty(navigator, 'gpu', { value: undefined, configurable: true });",
+    )
+    .await
+    .expect("Failed to inject init script");
+
+    let url = format!("{}/index.html", base_url);
+    page.goto(&url, None).await.expect("Failed to navigate");
+
+    // wasm load + canvas wire-up + 300-tick settle (~5s at 60fps) +
+    // some headroom for slower viewports.
+    tokio::time::sleep(Duration::from_millis(8000)).await;
+
+    let container = page.locator(".graph-container").await;
+
+    let screenshot_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("Workspace root")
+        .join("target")
+        .join(format!("graph-2d-{}.png", scale.name));
+    let _ = fs::create_dir_all(screenshot_path.parent().unwrap());
+
+    let png_bytes = container
+        .screenshot(None)
+        .await
+        .expect("Failed to capture screenshot");
+    fs::write(&screenshot_path, &png_bytes).expect("Failed to write screenshot");
+
+    let stats_json = page
+        .evaluate_value(
+            r#"
+            (() => {
+                try {
+                    const canvas = document.getElementById('graph-canvas');
+                    const w = canvas.width;
+                    const h = canvas.height;
+                    if (!w || !h) return JSON.stringify({ error: 'zero size' });
+                    const ctx = canvas.getContext('2d');
+                    if (!ctx) return JSON.stringify({ error: 'no 2d ctx' });
+                    const img = ctx.getImageData(0, 0, w, h);
+                    const px = img.data;
+                    // Background is `--color-bg-tertiary` (#1a1a2e) → (26, 26, 46).
+                    // Node fill colors and label text are well outside ±15
+                    // per channel; light grey label text (~232, 232, 234)
+                    // is captured separately so we can size-check the
+                    // "amount of label text" vs node count.
+                    let min_x = w, max_x = -1, min_y = h, max_y = -1;
+                    let non_bg = 0, label_px = 0;
+                    for (let y = 0; y < h; y += 2) {
+                        for (let x = 0; x < w; x += 2) {
+                            const i = (y * w + x) * 4;
+                            const r = px[i], g = px[i + 1], b = px[i + 2];
+                            const dr = r - 26, dg = g - 26, db = b - 46;
+                            const is_bg = Math.abs(dr) < 15 && Math.abs(dg) < 15 && Math.abs(db) < 15;
+                            if (!is_bg) {
+                                if (x < min_x) min_x = x;
+                                if (x > max_x) max_x = x;
+                                if (y < min_y) min_y = y;
+                                if (y > max_y) max_y = y;
+                                non_bg++;
+                                // Light text (~232) is the label color.
+                                if (r > 200 && g > 200 && b > 200) label_px++;
+                            }
+                        }
+                    }
+                    return JSON.stringify({
+                        canvas_w: w, canvas_h: h,
+                        bbox_w: max_x - min_x,
+                        bbox_h: max_y - min_y,
+                        fill_x: ((max_x - min_x) / w).toFixed(3),
+                        fill_y: ((max_y - min_y) / h).toFixed(3),
+                        non_bg_px: non_bg,
+                        label_px: label_px,
+                    });
+                } catch (e) {
+                    return JSON.stringify({ error: e.toString() });
+                }
+            })()
+            "#,
+        )
+        .await
+        .unwrap_or_default();
+
+    browser.close().await.expect("Failed to close browser");
+    let _ = shutdown_tx.send(());
+    let _ = server_handle.await;
+    let _ = fs::remove_dir_all(output_dir);
+    let _ = fs::remove_file(fixture_path);
+
+    (stats_json, screenshot_path)
+}
+
+/// Iteration harness for the 2D graph layout, run at three scales
+/// (phone / laptop / 4K) against synthetic ontologies of corresponding
+/// sizes. Writes one PNG per scale to `target/graph-2d-<scale>.png` and
+/// dumps pixel-bbox + label-pixel-count for each.
+///
+/// `#[ignore]` keeps it out of routine CI: it's a developer feedback
+/// loop, not a regression check. Run with `cargo nextest run --ignored
+/// e2e_2d_graph_screenshots --nocapture` after each parameter change.
+#[test]
+#[ignore = "manual iteration harness; run explicitly with --ignored"]
+fn e2e_2d_graph_screenshots() {
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
+
+    rt.block_on(async {
+        let playwright = Playwright::launch()
+            .await
+            .expect("Failed to initialize Playwright");
+
+        for scale in SCALES {
+            let (stats, path) = capture_scale_screenshot(&playwright, scale).await;
+            eprintln!(
+                "[{}] viewport={}x{} graph={}c+{}i → {} ({})",
+                scale.name,
+                scale.viewport_w,
+                scale.viewport_h,
+                scale.connected,
+                scale.isolated,
+                path.display(),
+                stats
+            );
+        }
     });
 }
