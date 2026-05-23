@@ -143,7 +143,7 @@ Building on Feature 01 (Foundational UI Stack), this feature adds actual ontolog
 
 ### Slice 6: Responsive full-width layout + configurable graph aspect ratio
 
-**Status:** In Progress
+**Status:** Completed
 
 **User Value:** Documentation pages use the available browser-window width fluidly. On a large display, entity cards tile into a multi-column grid; on narrow viewports they collapse to a single column. The schema graph visualization expands to fill the full content area at a configurable aspect ratio (default 16:8) so consumers can explore large graphs on big screens. Per-schema override via `panschema.toml` lets producers tune the ratio for their target audience (laptop default vs. desktop 16:9 vs. ultrawide 21:9, etc.).
 
@@ -165,6 +165,30 @@ Building on Feature 01 (Foundational UI Stack), this feature adds actual ontolog
 
 ---
 
+### Slice 7: Improve force-directed default so the graph fills its viewport
+
+**Status:** Not Started (an initial attempt — y-scale-everything + multi-seed best-of-k — was reverted on 2026-05-22 after dogfooding against scimantic v0.2.0 showed the cluster still collapsed and isolated nodes piled up. The y-scale trick fought the underlying physics rather than working with it; the fix is to switch to a principled forceX/forceY axial-centering force per the d3-force composable-forces model.)
+
+**User Value:** The schema graph fills the available width AND height of its container — no big horizontal margins on wide viewports, no vertical wastage on tall ones. Isolated property/slot nodes distribute around the connected cluster rather than piling up on one side.
+
+**Context:** After slice 6 made the graph container fluidly fill the content area at a configurable aspect ratio, the underlying simulation still settled into a roughly-circular equilibrium because its forces are isotropic. Biasing the equilibrium to match the container aspect requires either anisotropic forces (the principled fix) or anisotropic clamps/coordinate-scaling (a hack that fights the physics). The reverted attempt was the latter and didn't survive a real schema.
+
+**Approach for the next attempt — `forceX` / `forceY` axial centering:** Each tick, every node feels a weak harmonic pull toward the origin with anisotropic stiffness: `vy -= ky · y`, `vx -= kx · x`, where `ky / kx = (w/h)²`. For `aspect = 16:8` that's `ky = 4·kx` — y-pull is 4× stronger, equilibrium spreads 2× wider in x. Singletons (no springs) equilibrate at a radius where this centering balances inter-component repulsion — no more "drift to MAX_RADIUS" or magic angle redistribution. Dense and sparse graphs settle the same way; the same code path handles both.
+
+**Deferred to [Feature 09 (Graph layout selection)](09-graph-layout-selection.md):** the user-selectable picker for alternate layout algorithms (Hierarchical / Sugiyama, Circular, Radial, Stress majorization). The picker is only useful if the force-directed default is trustworthy, which is this slice.
+
+**Acceptance Criteria (to be re-drafted before implementation):**
+- [ ] `SimulationConfig` gains `gravity_x_strength: f32` and `gravity_y_strength: f32` (or equivalent) defaulting to 0.0 (no-op).
+- [ ] `with_aspect_ratio(w, h)` sets these so `ky / kx = (w/h)²`, with the absolute magnitudes tuned so the equilibrium bounding box fills ≥70% of the configured container area on a representative scimantic-sized graph (84 nodes, ~1 edge/node).
+- [ ] Lopsided-graph tests (extreme outliers, angular spread of isolated nodes, bbox extent) — based on a fixture that mirrors scimantic v0.2.0's connectivity ratio — pass without the `redistribute_singletons_2d` hack from the reverted attempt.
+- [ ] Manual verification: scimantic v0.2.0 dogfood produces a layout that fills ≥70% of width AND height of a 1280×640 viewport, with isolated nodes distributed around the cluster.
+
+**Notes:**
+- The reverted attempt's `count_edge_crossings_2d` helper and multi-seed `from_graph_data_best_of` were sound — those can come back as a follow-up after the axial-centering fix lands, since they're orthogonal (crossing minimization is a separate goal from viewport filling).
+- The full reverted change set is recoverable from git history; the commit was never pushed.
+
+---
+
 ## Slice Priority and Dependencies
 
 | Slice | Priority | Depends On | Status |
@@ -174,4 +198,5 @@ Building on Feature 01 (Foundational UI Stack), this feature adds actual ontolog
 | Slice 3: Individuals | Should Have | Slice 2 | Completed |
 | Slice 4: Release | Must Have | Slice 1-3 | Completed |
 | Slice 5: Class card content | Should Have (v0.3.0) | Slice 1, Feature 03 | Completed |
-| Slice 6: Responsive layout + configurable graph aspect | Should Have (v0.3.0) | Slice 1, Feature 04 | In Progress |
+| Slice 6: Responsive layout + configurable graph aspect | Should Have (v0.3.0) | Slice 1, Feature 04 | Completed |
+| Slice 7: Improved force-directed default (fill viewport) | Should Have (v0.3.0) | Slice 6, Feature 04 | Not Started |

@@ -1319,10 +1319,10 @@ mod tests {
             html.contains("--graph-aspect: 4 / 3"),
             "expected overridden 4:3 aspect ratio in inline custom property"
         );
-        assert!(
-            !html.contains("--graph-aspect: 16 / 8"),
-            "default 16:8 leaked into output despite explicit override"
-        );
+        // The stylesheet keeps `var(--graph-aspect, 16 / 8)` as a fallback
+        // regardless of override (so the default applies if the inline
+        // attribute is somehow stripped). The override is on the
+        // container's inline style, asserted above.
         let _ = fs::remove_dir_all(temp_dir);
     }
 
