@@ -140,7 +140,7 @@ Existing in-tree CPU force simulation (slice 7 work in [Feature 02](02-core-onto
 
 ### Slice 1: Picker chrome + `LayoutAlgorithm` enum (no algorithm changes)
 
-**Status:** Not Started
+**Status:** Completed (commit fa9d538)
 
 **User Value:** The graph viz UI has a layout-picker control next to the existing 2D / 3D toggle. The picker is visible and functional but only has one option, "Force-directed," wired to the existing in-tree CPU simulation. Subsequent slices add options without re-designing the UI.
 

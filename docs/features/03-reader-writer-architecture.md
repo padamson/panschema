@@ -156,7 +156,7 @@ All existing E2E tests must continue passing throughout the refactor.
 
 ### Slice 6: Release v0.2.0
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** Users can install panschema from crates.io.
 
