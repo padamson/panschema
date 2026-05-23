@@ -132,4 +132,86 @@ mod tests {
         let edges = [(0, 1), (5, 7)];
         assert_eq!(count_edge_crossings_2d(&positions, &edges), 0);
     }
+
+    #[test]
+    fn partially_out_of_bounds_edge_skipped() {
+        // One endpoint in bounds, the other not — the bounds check must
+        // be `||` (either out-of-bounds triggers skip), not `&&` (both).
+        let positions = [(0.0, 0.0), (1.0, 0.0)];
+        let edges = [(0, 1), (0, 7)];
+        assert_eq!(count_edge_crossings_2d(&positions, &edges), 0);
+    }
+
+    #[test]
+    fn t_junction_doesnt_cross_when_one_segment_lies_above() {
+        // AB is the x-axis segment from (0,0) to (2,0). CD is a vertical
+        // segment from (1,1) to (1,2), above AB. A and B are on opposite
+        // sides of CD's infinite line (x-axis splits at x=1) — so the
+        // first half of the segments-cross predicate would say "yes" —
+        // but C and D are both above AB, so the second half says "no".
+        // Proper crossing requires BOTH halves to be true. Catches an
+        // `&&` → `||` swap in the conjunction between halves.
+        let positions = [(0.0, 0.0), (2.0, 0.0), (1.0, 1.0), (1.0, 2.0)];
+        let edges = [(0, 1), (2, 3)];
+        assert_eq!(count_edge_crossings_2d(&positions, &edges), 0);
+    }
+
+    #[test]
+    fn t_junction_doesnt_cross_when_first_segment_misses_second() {
+        // Mirror of the case above: AB is on one side of CD's line, so
+        // its predicate-half says "no." CD straddles AB's line, so its
+        // half says "yes." Catches an `&&` → `||` swap.
+        let positions = [(0.0, 1.0), (2.0, 1.0), (1.0, -1.0), (1.0, 2.0)];
+        let edges = [(0, 1), (2, 3)];
+        // AB is at y=1, CD spans y=-1 to y=2 vertically at x=1. CD
+        // crosses AB's line at (1, 1) — which is on AB. So this is
+        // a genuine crossing.
+        assert_eq!(count_edge_crossings_2d(&positions, &edges), 1);
+    }
+
+    #[test]
+    fn endpoints_on_same_side_no_cross() {
+        // Two segments both above the x-axis, neither crossing the
+        // other. Specifically chosen so the orientation predicates
+        // produce two same-signed values per pair — catches the
+        // inner `||` mutants in the conjunctions like
+        // `(d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)`.
+        let positions = [(0.0, 1.0), (2.0, 1.0), (3.0, 2.0), (5.0, 2.0)];
+        let edges = [(0, 1), (2, 3)];
+        assert_eq!(count_edge_crossings_2d(&positions, &edges), 0);
+    }
+
+    #[test]
+    fn endpoint_on_other_segment_doesnt_count() {
+        // A=(0,0), B=(2,0); C=(1,0), D=(1,1). C lies exactly on AB.
+        // The CCW orientation predicate of A vs CD gives d3 = 0
+        // (collinear). The strict-inequality test `> 0 && < 0` fails
+        // when one side is 0, so this returns "no cross" — collinear
+        // touches aren't proper crossings. Catches `> 0` → `>= 0`
+        // boundary mutants that would let the zero through.
+        let positions = [(0.0, 0.0), (2.0, 0.0), (1.0, 0.0), (1.0, 1.0)];
+        let edges = [(0, 1), (2, 3)];
+        assert_eq!(count_edge_crossings_2d(&positions, &edges), 0);
+    }
+
+    #[test]
+    fn ccw_returns_zero_for_collinear_three_points() {
+        // Direct test of the CCW helper. Three collinear points
+        // produce a zero cross-product. Catches `-` → `+` in the
+        // signed-area expression: the result would be non-zero for
+        // collinear inputs.
+        let v = ccw((0.0, 0.0), (1.0, 0.0), (2.0, 0.0));
+        assert!(v.abs() < 1e-6, "collinear ccw should be ~0, got {v}");
+    }
+
+    #[test]
+    fn ccw_sign_distinguishes_orientation() {
+        // Point above the directed segment (0,0)→(1,0) gives positive
+        // CCW; below gives negative. Catches sign-flip mutants in the
+        // CCW expression.
+        let above = ccw((0.0, 0.0), (1.0, 0.0), (0.5, 1.0));
+        let below = ccw((0.0, 0.0), (1.0, 0.0), (0.5, -1.0));
+        assert!(above > 0.0, "above-segment point should be ccw-positive");
+        assert!(below < 0.0, "below-segment point should be ccw-negative");
+    }
 }

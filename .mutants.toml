@@ -8,17 +8,36 @@ test_tool = "nextest"
 # Run only unit tests (skip integration tests in tests/ and the e2e Playwright suite)
 additional_cargo_test_args = ["--lib"]
 
-# Mutate only the panschema crate's source.
-# panschema-viz is wasm-only and isn't testable on the host target.
-# panschema/src/components.rs is dev-only renderer scaffolding for the
-# styleguide command; production HTML rendering uses Askama's `{% include %}`
-# directly, not these helper functions, so component-level mutations have
-# no production-observable effect.
+# Examine `panschema` + the host-testable parts of `panschema-viz`.
+# `panschema-viz` is a wasm-targeted crate, but `simulation.rs` and
+# `sim_common.rs` are pure-Rust force-simulation + graph helpers with
+# real native unit tests that `cargo test --lib` runs on the host.
+# wasm-only modules (canvas2d, webgpu, simulation3d, the
+# wasm_bindgen-wrapped `Visualization` API in lib.rs) stay excluded —
+# their tests need a browser context.
+#
+# `panschema/src/components.rs` is dev-only renderer scaffolding for
+# the styleguide command; production HTML rendering uses Askama's
+# `{% include %}` directly, not these helper functions, so
+# component-level mutations have no production-observable effect.
+#
 # The explicit exclude_globs are required because `--in-diff` doesn't
 # honor examine_globs alone; the same excludes are mirrored in
 # scripts/mutants.sh as `--exclude` CLI flags.
-examine_globs = ["panschema/src/**/*.rs"]
+examine_globs = [
+    "panschema/src/**/*.rs",
+    "panschema-viz/src/simulation.rs",
+    "panschema-viz/src/sim_common.rs",
+]
 exclude_globs = [
-    "panschema-viz/**/*.rs",
     "panschema/src/components.rs",
+    "panschema-viz/src/lib.rs",
+    "panschema-viz/src/canvas2d.rs",
+    "panschema-viz/src/webgpu.rs",
+    "panschema-viz/src/simulation3d.rs",
+    "panschema-viz/src/camera.rs",
+    "panschema-viz/src/camera3d.rs",
+    "panschema-viz/src/interaction.rs",
+    "panschema-viz/src/labels.rs",
+    "panschema-viz/src/graph_types.rs",
 ]

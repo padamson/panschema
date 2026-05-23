@@ -942,6 +942,55 @@ mod tests {
         assert_eq!(sim.edges.len(), 0);
     }
 
+    #[test]
+    fn from_graph_node_places_nodes_on_circle_at_correct_angles() {
+        // Build a 4-node graph and check that each node lands at the
+        // expected angle on a circle of radius 100. Catches mutants
+        // that alter the `2π · i / total` formula (e.g., `*` → `+` or
+        // `/` → `%`), which would put nodes at wildly wrong angles.
+        let g = GraphData {
+            schema_name: "ring".to_string(),
+            schema_title: None,
+            format_version: "1.0".to_string(),
+            nodes: (0..4)
+                .map(|i| GraphNode {
+                    id: format!("n{i}"),
+                    label: format!("N{i}"),
+                    node_type: NodeType::Class,
+                    color: [1.0, 0.0, 0.0, 1.0],
+                    description: None,
+                    uri: None,
+                    is_abstract: false,
+                })
+                .collect(),
+            edges: vec![],
+        };
+        let nodes: Vec<SimNode> = g
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| SimNode::from_graph_node(n, i, 4))
+            .collect();
+        // All nodes on the radius-100 circle.
+        for n in &nodes {
+            let r = (n.x * n.x + n.y * n.y).sqrt();
+            assert!((r - 100.0).abs() < 0.01, "expected radius 100, got {r}");
+        }
+        // Specific angle assertions catch `*` → `+`, `/` → `%`, etc.
+        // Index 0 → angle 0 → (100, 0).
+        assert!((nodes[0].x - 100.0).abs() < 0.01);
+        assert!(nodes[0].y.abs() < 0.01);
+        // Index 1 → angle π/2 → (0, 100).
+        assert!(nodes[1].x.abs() < 0.01);
+        assert!((nodes[1].y - 100.0).abs() < 0.01);
+        // Index 2 → angle π → (-100, 0).
+        assert!((nodes[2].x + 100.0).abs() < 0.01);
+        assert!(nodes[2].y.abs() < 0.01);
+        // Index 3 → angle 3π/2 → (0, -100).
+        assert!(nodes[3].x.abs() < 0.01);
+        assert!((nodes[3].y + 100.0).abs() < 0.01);
+    }
+
     fn make_ring_graph(n: usize) -> GraphData {
         let nodes = (0..n)
             .map(|i| GraphNode {
