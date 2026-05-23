@@ -1067,6 +1067,13 @@
             is3D = false;
         }
 
+        // Expose the viz handle so post-render test introspection
+        // (e.g., the screenshot harness scoring `viz.edge_crossings()`)
+        // can reach into the wasm Visualization. Production code paths
+        // don't read this — they hold their own `viz` reference inside
+        // the IIFE.
+        window.__panschema_viz = viz;
+
         // Update node count display
         if (nodeCount) {
             nodeCount.textContent = `${viz.node_count()} nodes, ${viz.edge_count()} edges`;

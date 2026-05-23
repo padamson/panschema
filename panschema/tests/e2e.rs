@@ -1170,9 +1170,11 @@ const SCALES: &[ScreenshotScale] = &[
 /// Generate a synthetic Turtle ontology with `connected_n` classes laid
 /// out as a roughly-balanced tree (each new class subclasses one of the
 /// already-emitted classes) plus `isolated_n` disconnected datatype
-/// properties (singleton components). Mirrors the scimantic-style shape
-/// — one tree-like cluster + several dangling properties — at any
-/// requested scale.
+/// properties (singleton components). For `connected_n ≥ 10` an
+/// `owl:ObjectProperty` per class adds a domain→range chord linking
+/// `Ci` to `C((i + n/3) mod n)`, breaking the tree's rotational
+/// symmetry so the multi-seed crossing-min selector has non-isomorphic
+/// basins to choose between.
 fn build_synthetic_ttl(connected_n: usize, isolated_n: usize) -> String {
     let mut out = String::new();
     out.push_str(
@@ -1197,6 +1199,23 @@ fn build_synthetic_ttl(connected_n: usize, isolated_n: usize) -> String {
             let parent = format!("C{}", (i - 1) / branching);
             out.push_str(&format!(
                 ":{label} a owl:Class ; rdfs:subClassOf :{parent} ; rdfs:label \"{label}\" .\n"
+            ));
+        }
+    }
+    // Chord edges. Only emitted for graphs large enough that the chord
+    // offset (n/3) is meaningful. Each chord is an owl:ObjectProperty
+    // with domain Ci and range C((i + n/3) mod n); the resulting cycle
+    // structure makes the post-settle crossing count dependent on
+    // which initial rotation the simulation lands in, so the
+    // multi-seed selector has something to optimize against.
+    if connected_n >= 10 {
+        out.push('\n');
+        let chord_offset = (connected_n / 3).max(1);
+        for i in 0..connected_n {
+            let src = format!("C{i}");
+            let tgt = format!("C{}", (i + chord_offset) % connected_n);
+            out.push_str(&format!(
+                ":chord{i} a owl:ObjectProperty ; rdfs:domain :{src} ; rdfs:range :{tgt} ; rdfs:label \"chord{i}\" .\n"
             ));
         }
     }
@@ -1298,11 +1317,6 @@ async fn capture_scale_screenshot(
                     if (!ctx) return JSON.stringify({ error: 'no 2d ctx' });
                     const img = ctx.getImageData(0, 0, w, h);
                     const px = img.data;
-                    // Background is `--color-bg-tertiary` (#1a1a2e) → (26, 26, 46).
-                    // Node fill colors and label text are well outside ±15
-                    // per channel; light grey label text (~232, 232, 234)
-                    // is captured separately so we can size-check the
-                    // "amount of label text" vs node count.
                     let min_x = w, max_x = -1, min_y = h, max_y = -1;
                     let non_bg = 0, label_px = 0;
                     for (let y = 0; y < h; y += 2) {
@@ -1317,11 +1331,20 @@ async fn capture_scale_screenshot(
                                 if (y < min_y) min_y = y;
                                 if (y > max_y) max_y = y;
                                 non_bg++;
-                                // Light text (~232) is the label color.
                                 if (r > 200 && g > 200 && b > 200) label_px++;
                             }
                         }
                     }
+                    // Read the per-layout edge-crossing count directly
+                    // from the wasm Visualization. window.__panschema_viz
+                    // is the handle the IIFE in graph_viz.html exposes for
+                    // exactly this kind of post-render introspection.
+                    let crossings = -1;
+                    try {
+                        if (window.__panschema_viz && typeof window.__panschema_viz.edge_crossings === 'function') {
+                            crossings = window.__panschema_viz.edge_crossings();
+                        }
+                    } catch (e) { /* leave -1 */ }
                     return JSON.stringify({
                         canvas_w: w, canvas_h: h,
                         bbox_w: max_x - min_x,
@@ -1330,6 +1353,7 @@ async fn capture_scale_screenshot(
                         fill_y: ((max_y - min_y) / h).toFixed(3),
                         non_bg_px: non_bg,
                         label_px: label_px,
+                        crossings: crossings,
                     });
                 } catch (e) {
                     return JSON.stringify({ error: e.toString() });

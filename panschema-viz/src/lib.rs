@@ -97,10 +97,11 @@ impl Visualization {
 
         // Create simulation. (1, 1) → no-op centering; the historical
         // default. Non-square aspects activate anisotropic forceX/forceY.
-        let mut simulation = CpuSimulation::from_graph_data(&graph);
-        if aspect_w != aspect_h && aspect_w > 0 && aspect_h > 0 {
-            simulation = simulation.with_aspect_ratio(aspect_w, aspect_h);
-        }
+        let simulation = if aspect_w != aspect_h && aspect_w > 0 && aspect_h > 0 {
+            CpuSimulation::from_graph_data(&graph).with_aspect_ratio(aspect_w, aspect_h)
+        } else {
+            CpuSimulation::from_graph_data(&graph)
+        };
 
         // Create renderer
         let renderer = Canvas2DRenderer::new(canvas)
@@ -215,6 +216,22 @@ impl Visualization {
     /// Get number of edges
     pub fn edge_count(&self) -> usize {
         self.simulation.edges.len()
+    }
+
+    /// Count the number of edge-segment pairs that cross in the
+    /// current 2D layout. Shared-endpoint pairs are excluded; only
+    /// proper crossings count. Used by the screenshot harness to
+    /// compare layout quality between single-seed and multi-seed
+    /// constructors.
+    pub fn edge_crossings(&self) -> usize {
+        let positions: Vec<(f32, f32)> = self.simulation.nodes.iter().map(|n| (n.x, n.y)).collect();
+        let edges: Vec<(usize, usize)> = self
+            .simulation
+            .edges
+            .iter()
+            .map(|e| (e.source, e.target))
+            .collect();
+        crate::sim_common::count_edge_crossings_2d(&positions, &edges)
     }
 
     /// Resize the canvas
@@ -1107,8 +1124,8 @@ pub async fn create_visualization_3d(
 
 /// Try to create a 3D visualization, falling back to 2D if WebGPU is unavailable
 /// Returns a JsValue that can be either Visualization or Visualization3D.
-/// `aspect_w` / `aspect_h` configure the 2D fallback's aspect bias; the
-/// 3D path currently ignores them (ellipsoid extension is a follow-up).
+/// `aspect_w` / `aspect_h` configure the 2D fallback's aspect bias;
+/// the 3D path currently ignores them (ellipsoid extension is a follow-up).
 #[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
 #[wasm_bindgen]
 pub async fn create_visualization_auto(

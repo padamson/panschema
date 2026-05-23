@@ -29,9 +29,9 @@ pub struct SimNode {
 }
 
 impl SimNode {
-    /// Create from GraphNode with random initial position
+    /// Create from GraphNode with a deterministic initial position on a
+    /// circle of radius 100.
     pub fn from_graph_node(node: &GraphNode, index: usize, total: usize) -> Self {
-        // Distribute nodes in a circle initially
         let angle = 2.0 * std::f32::consts::PI * (index as f32) / (total as f32);
         let radius = 100.0;
 

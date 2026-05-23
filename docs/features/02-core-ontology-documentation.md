@@ -200,7 +200,7 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 
 **Deferred to [Feature 09 (Graph layout selection)](09-graph-layout-selection.md):** the user-selectable picker for alternate layout algorithms (Sugiyama for tree-structured ontologies, circular for cycles, etc.). Force-directed inherently produces a dense core for high-branching trees — the structural fix is a different algorithm, not parameter tuning.
 
-**Edge-crossing minimization** (multi-seed best-of-K) is a follow-up slice on top of this one — orthogonal to viewport filling, and easier to evaluate once the layout is otherwise stable.
+**Edge-crossing minimization** is deferred to [Feature 09 (Graph layout selection)](09-graph-layout-selection.md), where adopting a maintained algorithm crate (`rust-sugiyama` for hierarchical, `egraph-rs` for stress / KK / SGD) addresses crossings as part of the broader algorithm-picker effort. An earlier attempt at multi-seed best-of-K within this slice was empirically a no-op — for the synthetic test graphs all rotations land in basins with identical crossing counts — so the right path is to adopt algorithms that target crossings as an objective, not to layer rotation-sampling on top of FR.
 
 **Acceptance Criteria:**
 - [x] `SimulationConfig` gains `gravity_x_strength: f32` and `gravity_y_strength: f32`, default `0.0` (no-op, preserving existing single-render behavior in callers that don't opt in).
@@ -212,12 +212,14 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 - [x] Native unit test: with `with_aspect_ratio(16, 8)` on a lopsided graph (30 connected + 5 isolated), the layout has (a) no node more than 3× the median distance from centroid, (b) the angular distribution of isolated nodes spans ≥ π radians (largest open arc < π), (c) bbox width ≥ 200 world units (catches "collapsed to origin").
 - [x] Default (no `with_aspect_ratio` call): `gravity_*_strength` stays at `0.0`, preserving the historical circular equilibrium for callers that don't opt in.
 - [x] 2D JS init in `graph_viz.html` reads the container's `--graph-aspect` custom property and calls `with_aspect_ratio` accordingly. (3D path: API parity but no-op — ellipsoid centering is a follow-up.)
-- [x] Multi-scale Playwright screenshot harness (`e2e_2d_graph_screenshots`, `#[ignore]`-d) writes three PNGs and dumps pixel-bbox stats; used as the iteration feedback loop while tuning force parameters.
+- [x] Multi-scale Playwright screenshot harness (`e2e_2d_graph_screenshots`, `#[ignore]`-d) writes three PNGs and dumps pixel-bbox stats plus a post-settle edge-crossing count, used as the iteration feedback loop while tuning force parameters. Supporting infrastructure: `sim_common::count_edge_crossings_2d` (CCW orientation predicates, shared-endpoints excluded) with unit tests, `Visualization::edge_crossings()` exposing the count over the wasm boundary, and a `chord` enrichment in the synthetic-TTL generator so non-isomorphic basin structures appear in graphs with ≥10 connected nodes (a precondition for any future crossing-aware algorithm to meaningfully reduce crossings).
 
 **Notes:**
 - `gravity_y / gravity_x = (w/h)³`, not `(w/h)²` — derived from `equilibrium_d³ = repulsion / gravity` (centering linear in `d`, repulsion quadratic). The cube exponent is what gives the right ratio for the 2D case.
 - Aggressive `√N` scaling of `link_distance` / `charge` (factor ≥ 0.20) backfires: it blows the world bbox out past the viewport and `fit_to_bounds` zooms back to fit, shrinking the rendered cluster to a tiny patch. The `0.10` factor keeps the bbox roughly canvas-sized; collide-padding does the legibility work without needing larger world dimensions.
 - Strength tuning is empirical: `GRAVITY_BASE = 0.003` and the `√N` factors above produce visibly-good layouts at all three test scales. The single-source-of-truth is the screenshot harness; future parameter changes should re-run it and compare PNGs across scales.
+
+---
 
 ---
 
