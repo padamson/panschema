@@ -57,18 +57,18 @@ impl OwlReader {
         let owl_ontology = owl.get("Ontology")?;
 
         // Find the ontology IRI (subject of rdf:type owl:Ontology)
-        let ontology_iri = graph
+        let ontology_iri: SimpleTerm = graph
             .triples_matching(Any, [rdf::type_], [owl_ontology])
             .filter_map(Result::ok)
-            .map(|t| t.s().to_owned())
+            .map(|t| t.s().into_term::<SimpleTerm>())
             .next()
             .ok_or_else(|| anyhow::anyhow!("No owl:Ontology found in {}", path.display()))?;
 
         // Extract the IRI string
-        let iri = match &ontology_iri {
-            SimpleTerm::Iri(iri) => iri.to_string(),
-            _ => anyhow::bail!("Ontology subject is not an IRI"),
-        };
+        let iri = ontology_iri
+            .iri()
+            .ok_or_else(|| anyhow::anyhow!("Ontology subject is not an IRI"))?
+            .to_string();
 
         // Helper to get a string literal for a predicate
         fn get_literal_value<T: Term>(
@@ -79,11 +79,7 @@ impl OwlReader {
             graph
                 .triples_matching([subject], [predicate], Any)
                 .filter_map(Result::ok)
-                .filter_map(|t| match t.o() {
-                    SimpleTerm::LiteralLanguage(lit, _) => Some(lit.to_string()),
-                    SimpleTerm::LiteralDatatype(lit, _) => Some(lit.to_string()),
-                    _ => None,
-                })
+                .filter_map(|t| t.o().lexical_form().map(|l| l.to_string()))
                 .next()
         }
 
@@ -142,11 +138,7 @@ impl OwlReader {
             graph
                 .triples_matching([subject], [predicate], Any)
                 .filter_map(Result::ok)
-                .filter_map(|t| match t.o() {
-                    SimpleTerm::LiteralLanguage(lit, _) => Some(lit.to_string()),
-                    SimpleTerm::LiteralDatatype(lit, _) => Some(lit.to_string()),
-                    _ => None,
-                })
+                .filter_map(|t| t.o().lexical_form().map(|l| l.to_string()))
                 .next()
         }
 
@@ -159,10 +151,7 @@ impl OwlReader {
             graph
                 .triples_matching([subject], [predicate], Any)
                 .filter_map(Result::ok)
-                .filter_map(|t| match t.o() {
-                    SimpleTerm::Iri(iri) => Some(iri.to_string()),
-                    _ => None,
-                })
+                .filter_map(|t| t.o().iri().map(|i| i.to_string()))
                 .next()
         }
 
@@ -170,16 +159,15 @@ impl OwlReader {
         let class_iris: Vec<SimpleTerm> = graph
             .triples_matching(Any, [rdf::type_], [owl_class])
             .filter_map(Result::ok)
-            .map(|t| t.s().to_owned())
+            .map(|t| t.s().into_term::<SimpleTerm>())
             .collect();
 
         let mut classes = Vec::new();
 
         for class_iri in class_iris {
             // Skip blank nodes and non-IRI subjects
-            let iri = match &class_iri {
-                SimpleTerm::Iri(iri) => iri.to_string(),
-                _ => continue,
+            let Some(iri) = class_iri.iri().map(|i| i.to_string()) else {
+                continue;
             };
 
             // Skip built-in OWL classes
@@ -223,11 +211,7 @@ impl OwlReader {
             graph
                 .triples_matching([subject], [predicate], Any)
                 .filter_map(Result::ok)
-                .filter_map(|t| match t.o() {
-                    SimpleTerm::LiteralLanguage(lit, _) => Some(lit.to_string()),
-                    SimpleTerm::LiteralDatatype(lit, _) => Some(lit.to_string()),
-                    _ => None,
-                })
+                .filter_map(|t| t.o().lexical_form().map(|l| l.to_string()))
                 .next()
         }
 
@@ -240,10 +224,7 @@ impl OwlReader {
             graph
                 .triples_matching([subject], [predicate], Any)
                 .filter_map(Result::ok)
-                .filter_map(|t| match t.o() {
-                    SimpleTerm::Iri(iri) => Some(iri.to_string()),
-                    _ => None,
-                })
+                .filter_map(|t| t.o().iri().map(|i| i.to_string()))
                 .next()
         }
 
@@ -253,13 +234,12 @@ impl OwlReader {
         let object_prop_iris: Vec<SimpleTerm> = graph
             .triples_matching(Any, [rdf::type_], [owl_object_property])
             .filter_map(Result::ok)
-            .map(|t| t.s().to_owned())
+            .map(|t| t.s().into_term::<SimpleTerm>())
             .collect();
 
         for prop_iri in object_prop_iris {
-            let iri = match &prop_iri {
-                SimpleTerm::Iri(iri) => iri.to_string(),
-                _ => continue,
+            let Some(iri) = prop_iri.iri().map(|i| i.to_string()) else {
+                continue;
             };
             if iri.starts_with(OWL_NS) {
                 continue;
@@ -288,13 +268,12 @@ impl OwlReader {
         let datatype_prop_iris: Vec<SimpleTerm> = graph
             .triples_matching(Any, [rdf::type_], [owl_datatype_property])
             .filter_map(Result::ok)
-            .map(|t| t.s().to_owned())
+            .map(|t| t.s().into_term::<SimpleTerm>())
             .collect();
 
         for prop_iri in datatype_prop_iris {
-            let iri = match &prop_iri {
-                SimpleTerm::Iri(iri) => iri.to_string(),
-                _ => continue,
+            let Some(iri) = prop_iri.iri().map(|i| i.to_string()) else {
+                continue;
             };
             if iri.starts_with(OWL_NS) {
                 continue;
@@ -338,11 +317,7 @@ impl OwlReader {
             graph
                 .triples_matching([subject], [predicate], Any)
                 .filter_map(Result::ok)
-                .filter_map(|t| match t.o() {
-                    SimpleTerm::LiteralLanguage(lit, _) => Some(lit.to_string()),
-                    SimpleTerm::LiteralDatatype(lit, _) => Some(lit.to_string()),
-                    _ => None,
-                })
+                .filter_map(|t| t.o().lexical_form().map(|l| l.to_string()))
                 .next()
         }
 
@@ -354,16 +329,15 @@ impl OwlReader {
         let ind_iris: Vec<SimpleTerm> = graph
             .triples_matching(Any, [rdf::type_], [owl_named_individual])
             .filter_map(Result::ok)
-            .map(|t| t.s().to_owned())
+            .map(|t| t.s().into_term::<SimpleTerm>())
             .collect();
 
         let mut individuals = Vec::new();
 
         for ind_iri in ind_iris {
             // Skip blank nodes and non-IRI subjects
-            let iri = match &ind_iri {
-                SimpleTerm::Iri(iri) => iri.to_string(),
-                _ => continue,
+            let Some(iri) = ind_iri.iri().map(|i| i.to_string()) else {
+                continue;
             };
 
             let id = extract_id_from_iri(&iri);
@@ -374,16 +348,10 @@ impl OwlReader {
             let type_iris: Vec<String> = graph
                 .triples_matching([&ind_iri], [rdf::type_], Any)
                 .filter_map(Result::ok)
-                .filter_map(|t| match t.o() {
-                    SimpleTerm::Iri(iri) => {
-                        let iri_str = iri.to_string();
-                        if iri_str.starts_with(OWL_NS) || iri_str.starts_with(RDF_NS) {
-                            None
-                        } else {
-                            Some(iri_str)
-                        }
-                    }
-                    _ => None,
+                .filter_map(|t| {
+                    t.o().iri().map(|i| i.to_string()).filter(|iri_str| {
+                        !iri_str.starts_with(OWL_NS) && !iri_str.starts_with(RDF_NS)
+                    })
                 })
                 .collect();
 
@@ -393,23 +361,22 @@ impl OwlReader {
                 .filter_map(Result::ok)
                 .filter_map(|t| {
                     // Get the predicate IRI
-                    let pred_iri = match t.p() {
-                        SimpleTerm::Iri(iri) => iri.to_string(),
-                        _ => return None,
-                    };
+                    let pred_iri = t.p().iri()?.to_string();
 
                     // Skip metadata predicates
                     if pred_iri.starts_with(RDF_NS) || pred_iri.starts_with(RDFS_NS) {
                         return None;
                     }
 
-                    // Get the object value as a string
-                    let value = match t.o() {
-                        SimpleTerm::LiteralLanguage(lit, _) => lit.to_string(),
-                        SimpleTerm::LiteralDatatype(lit, _) => lit.to_string(),
-                        SimpleTerm::Iri(iri) => iri.to_string(),
-                        _ => return None,
-                    };
+                    // Get the object value as a string: literal lexical form
+                    // takes precedence; bare IRIs fall back to their string
+                    // form. Anything else (blank nodes, triple terms, …) is
+                    // skipped because there's no useful string projection.
+                    let value = t
+                        .o()
+                        .lexical_form()
+                        .map(|l| l.to_string())
+                        .or_else(|| t.o().iri().map(|i| i.to_string()))?;
 
                     let property_id = extract_id_from_iri(&pred_iri);
 

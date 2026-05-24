@@ -490,12 +490,12 @@ impl Writer for NTriplesWriter {
     fn write(&self, schema: &SchemaDefinition, output: &Path) -> IoResult<()> {
         let graph = build_rdf_graph(schema)?;
 
-        use sophia::turtle::serializer::nt::NtSerializer;
+        use sophia::turtle::serializer::nt::NTriplesSerializer;
 
         let file = File::create(output).map_err(IoError::Io)?;
         let writer = BufWriter::new(file);
 
-        let mut serializer = NtSerializer::new(writer);
+        let mut serializer = NTriplesSerializer::new(writer);
 
         serializer
             .serialize_graph(&graph)
@@ -727,11 +727,10 @@ mod tests {
             .triples()
             .filter_map(|t| {
                 let triple = t.ok()?;
-                let s = triple.s().iri()?;
-                let p = triple.p().iri()?;
-                let o = triple.o().iri()?;
-                (s.as_str() == child_iri && p.as_str() == subclass_iri)
-                    .then(|| o.as_str().to_string())
+                let s = triple.s().iri()?.as_str().to_string();
+                let p = triple.p().iri()?.as_str().to_string();
+                let o = triple.o().iri()?.as_str().to_string();
+                (s == child_iri && p == subclass_iri).then_some(o)
             })
             .collect();
         assert_eq!(

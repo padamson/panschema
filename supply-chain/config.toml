@@ -326,7 +326,7 @@ criteria = "safe-to-deploy"
 
 [[exemptions.id-arena]]
 version = "2.3.0"
-criteria = "safe-to-run"
+criteria = "safe-to-deploy"
 
 [[exemptions.idna_adapter]]
 version = "1.2.2"
@@ -588,6 +588,14 @@ criteria = "safe-to-deploy"
 version = "0.2.11"
 criteria = "safe-to-deploy"
 
+[[exemptions.oxrdf]]
+version = "0.3.3"
+criteria = "safe-to-deploy"
+
+[[exemptions.oxrdfxml]]
+version = "0.2.3"
+criteria = "safe-to-deploy"
+
 [[exemptions.panschema]]
 version = "0.2.0"
 criteria = "safe-to-deploy"
@@ -644,6 +652,10 @@ criteria = "safe-to-deploy"
 version = "1.4.0"
 criteria = "safe-to-run"
 
+[[exemptions.ppv-lite86]]
+version = "0.2.21"
+criteria = "safe-to-deploy"
+
 [[exemptions.pretty_dtoa]]
 version = "0.3.0"
 criteria = "safe-to-deploy"
@@ -656,13 +668,17 @@ criteria = "safe-to-deploy"
 version = "0.36.2"
 criteria = "safe-to-deploy"
 
+[[exemptions.quick-xml]]
+version = "0.37.5"
+criteria = "safe-to-deploy"
+
 [[exemptions.r-efi]]
 version = "5.3.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.r-efi]]
 version = "6.0.0"
-criteria = "safe-to-run"
+criteria = "safe-to-deploy"
 
 [[exemptions.range-alloc]]
 version = "0.1.5"
@@ -781,51 +797,55 @@ version = "0.6.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.sophia]]
-version = "0.9.0"
+version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.sophia_api]]
-version = "0.9.0"
+version = "0.10.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.sophia_bcp47]]
+version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.sophia_c14n]]
-version = "0.9.0"
+version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.sophia_inmem]]
-version = "0.9.0"
+version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.sophia_iri]]
-version = "0.9.0"
+version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.sophia_isomorphism]]
-version = "0.9.0"
+version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.sophia_jsonld]]
-version = "0.9.0"
+version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.sophia_resource]]
-version = "0.9.0"
+version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.sophia_rio]]
-version = "0.9.0"
+version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.sophia_term]]
-version = "0.9.0"
+version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.sophia_turtle]]
-version = "0.9.0"
+version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.sophia_xml]]
-version = "0.9.0"
+version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.spirv]]
@@ -842,6 +862,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.sync_wrapper]]
 version = "1.0.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.tar]]
+version = "0.4.46"
 criteria = "safe-to-deploy"
 
 [[exemptions.time]]
@@ -931,6 +955,10 @@ criteria = "safe-to-deploy"
 [[exemptions.utf8-zero]]
 version = "0.8.1"
 criteria = "safe-to-run"
+
+[[exemptions.uuid]]
+version = "1.23.1"
+criteria = "safe-to-deploy"
 
 [[exemptions.version_check]]
 version = "0.9.5"

@@ -16,7 +16,7 @@ clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 
 # RDF/OWL parsing and serialization
-sophia = { version = "0.9", features = ["jsonld", "xml"] }
+sophia = { version = "0.10", features = ["jsonld", "xml"] }
 
 # Templating
 askama = "0.16"
