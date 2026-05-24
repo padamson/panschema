@@ -84,11 +84,11 @@ pub struct GenerateConfig {
     /// Default layout algorithm for the HTML schema-graph viz picker.
     /// Accepted values: `force-directed`, `hierarchical`, `stress`,
     /// `kamada-kawai`, `sgd`, `circular`, `radial-tree`. Only
-    /// `force-directed` resolves to a real implementation; the other
-    /// names are accepted (and persisted) so manifest files can pin
-    /// a producer's intended default before each algorithm lands.
-    /// Only meaningful when `html` is set. Defaults to
-    /// `force-directed`.
+    /// `force-directed` and `kamada-kawai` resolve to real
+    /// implementations today; the other names are accepted (and
+    /// persisted) so manifest files can pin a producer's intended
+    /// default before each algorithm lands. Only meaningful when
+    /// `html` is set. Defaults to `force-directed`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub html_default_layout: Option<String>,
     /// Rust module output file path.

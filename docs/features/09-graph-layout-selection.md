@@ -181,19 +181,20 @@ Existing in-tree CPU force simulation (slice 7 work in [Feature 02](02-core-onto
 
 ### Slice 3: Kamada-Kawai algorithm (via `egraph-rs`)
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** Selecting "Kamada-Kawai" runs the classical KK energy-minimization layout, which often produces visibly nicer node spacing for medium graphs (≤500 nodes) than force-directed at the cost of higher init latency. Best fit when convergence quality matters more than interactivity.
 
 **Acceptance Criteria:**
-- [ ] `LayoutAlgorithm::KamadaKawai` resolves to a real implementation that calls the slice-2 pilot helper.
-- [ ] Aspect-bias post-process applied to KK output so the rendered bbox approximates the configured `--graph-aspect`.
-- [ ] Picker UI exposes "Kamada-Kawai" as a selectable option, with a "slower init" annotation visible at hover.
-- [ ] Multi-scale screenshot harness produces a `target/graph-2d-{phone,laptop,4k}.png` for `LayoutAlgorithm::KamadaKawai`; output is visually compared to force-directed at the same scale and the iteration baselines are committed.
-- [ ] Native unit tests on `egraph-rs`-derived positions confirm: no NaN/Inf in any coordinate, bbox is non-degenerate (≥ 100 world units on both axes for any reasonable test graph), positions stay within `MAX_RADIUS`-equivalent bounds.
+- [x] `LayoutAlgorithm::KamadaKawai` resolves to a real implementation; `Visualization::new` calls the slice-2 pilot helper when the layout argument is `"kamada-kawai"` and freezes the simulation at the computed positions (`CpuSimulation::freeze_at`) so per-tick physics doesn't re-shape the layout.
+- [x] Aspect-bias post-process applied to KK output (carried over from slice 2 — `√(w/h)` x-scale, `√(h/w)` y-scale).
+- [x] Picker UI exposes "Kamada-Kawai (slower init)" as a selectable option with a hover tooltip explaining the trade-off. JS `IMPLEMENTED_LAYOUTS` accepts the new identifier so the localStorage round-trip works.
+- [ ] Multi-scale screenshot harness produces a `target/graph-2d-{phone,laptop,4k}.png` for `LayoutAlgorithm::KamadaKawai`. **Deferred:** the multi-scale screenshot baselines for force-directed are already committed; adding KK baselines is a follow-on once we have UI consensus that the captured layouts are the intended reference.
+- [x] Native unit tests on `egraph-rs`-derived positions confirm: no NaN/Inf in any coordinate, bbox is non-degenerate (≥ 100 world units on both axes for any reasonable test graph), positions stay within `MAX_RADIUS`-equivalent bounds. See `kamada_kawai_scaled_bbox_is_non_degenerate_and_within_world_bounds` in `panschema-viz/src/layout.rs`.
 
 **Notes:**
 - KK convergence cost is `O(N³)` for the all-pairs shortest-path preprocess plus `O(N²)` per iteration. For schemas ≥ 500 classes the init latency becomes uncomfortable — surface a "switch to Force-directed" hint in the UI when the graph exceeds that threshold.
+- KK output is scaled to a target world bbox via `layout::scale_to_world(positions, layout::WORLD_TARGET_DIMENSION)` so it fills the existing simulation's coordinate space (anchored to `CpuSimulation`'s `MAX_RADIUS = 800` safety net). This decoupling keeps the slice-2 helper aspect-bias-only and lets the visualization integrate any future static layout the same way.
 
 ---
 

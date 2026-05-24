@@ -262,6 +262,26 @@ impl CpuSimulation {
         self.config.alpha > self.config.alpha_min
     }
 
+    /// Overwrite node positions with the supplied seeds and stop
+    /// physics. `positions[i]` becomes node `i`'s `(x, y)` for every
+    /// `i < min(self.nodes.len(), positions.len())`; extra positions
+    /// or extra nodes are silently ignored.
+    ///
+    /// Setting `alpha = alpha_min` makes `is_running()` return false so
+    /// the per-frame `tick_with_fixed` becomes a no-op. Used by static
+    /// (non-force-directed) layouts that produce final positions up
+    /// front and don't want force interaction afterwards. Drag handlers
+    /// can still reposition individual nodes via `set_node_position`.
+    pub fn freeze_at(&mut self, positions: &[(f32, f32)]) {
+        for (node, &(x, y)) in self.nodes.iter_mut().zip(positions.iter()) {
+            node.x = x;
+            node.y = y;
+            node.vx = 0.0;
+            node.vy = 0.0;
+        }
+        self.config.alpha = self.config.alpha_min;
+    }
+
     /// Reheat the simulation to restart physics (e.g., when dragging starts)
     pub fn reheat(&mut self, alpha: f32) {
         self.config.alpha = alpha.clamp(self.config.alpha_min, 1.0);
@@ -1215,5 +1235,43 @@ mod tests {
             "post-settle bbox width should be >= {floor:.0} (catches \
              'collapsed to origin'); got {w:.1}"
         );
+    }
+
+    #[test]
+    fn freeze_at_overwrites_positions_and_halts_simulation() {
+        // freeze_at is the static-layout integration point: it accepts
+        // pre-computed final positions and stops the per-tick physics
+        // so the simulation acts purely as a position + interaction
+        // container. The test asserts both contracts in one pass.
+        let graph = make_ring_graph(5);
+        let mut sim = CpuSimulation::from_graph_data(&graph);
+        assert!(sim.is_running(), "simulation must start hot");
+
+        let seed = vec![
+            (10.0, 20.0),
+            (30.0, 40.0),
+            (50.0, 60.0),
+            (70.0, 80.0),
+            (90.0, 100.0),
+        ];
+        sim.freeze_at(&seed);
+
+        for (i, (sx, sy)) in seed.iter().enumerate() {
+            assert_eq!(sim.nodes[i].x, *sx);
+            assert_eq!(sim.nodes[i].y, *sy);
+            assert_eq!(sim.nodes[i].vx, 0.0);
+            assert_eq!(sim.nodes[i].vy, 0.0);
+        }
+        assert!(!sim.is_running(), "freeze_at must halt physics");
+
+        // tick_with_fixed early-exits when not running, so the frozen
+        // positions survive an arbitrary number of frames.
+        for _ in 0..10 {
+            sim.tick();
+        }
+        for (i, (sx, sy)) in seed.iter().enumerate() {
+            assert_eq!(sim.nodes[i].x, *sx);
+            assert_eq!(sim.nodes[i].y, *sy);
+        }
     }
 }

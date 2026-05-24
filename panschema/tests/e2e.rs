@@ -1017,16 +1017,32 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         "[{}] Layout picker initial value should be force-directed; got `{}`",
         browser_name, initial_value
     );
-    // Every other canonical layout identifier is present as an
-    // option but disabled (not yet implemented).
-    for unimplemented in &[
-        "hierarchical",
-        "stress",
-        "kamada-kawai",
-        "sgd",
-        "circular",
-        "radial-tree",
-    ] {
+    // Implemented options are present and selectable; the rest are
+    // reserved-wire-format placeholders carrying the disabled attribute.
+    for implemented in &["force-directed", "kamada-kawai"] {
+        let opt = page
+            .locator(&format!(
+                "#graph-layout-select option[value=\"{implemented}\"]"
+            ))
+            .await;
+        let count = opt.count().await.expect("Failed to count option");
+        assert_eq!(
+            count, 1,
+            "[{}] Picker should expose option for `{}`",
+            browser_name, implemented
+        );
+        let disabled = opt
+            .get_attribute("disabled")
+            .await
+            .expect("Failed to read disabled attr");
+        assert!(
+            disabled.is_none(),
+            "[{}] Option `{}` should be selectable",
+            browser_name,
+            implemented
+        );
+    }
+    for unimplemented in &["hierarchical", "stress", "sgd", "circular", "radial-tree"] {
         let opt = page
             .locator(&format!(
                 "#graph-layout-select option[value=\"{unimplemented}\"]"
@@ -1049,6 +1065,66 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
             unimplemented
         );
     }
+
+    // Force the picker into 3D mode through the exposed helper
+    // (toggling 3D via the UI requires WebGPU support, which isn't
+    // available in every e2e runner). In 3D only force-directed
+    // is implemented, so every other option must be disabled with
+    // a "(not implemented)" label suffix.
+    page.evaluate::<(), ()>("window.__panschema_apply_layout_picker_mode(true)", None)
+        .await
+        .expect("Failed to force picker into 3D mode");
+    let fd_3d = page
+        .locator("#graph-layout-select option[value=\"force-directed\"]")
+        .await;
+    let fd_disabled = fd_3d
+        .get_attribute("disabled")
+        .await
+        .expect("Failed to read force-directed disabled attr in 3D mode");
+    assert!(
+        fd_disabled.is_none(),
+        "[{}] force-directed must stay selectable in 3D mode",
+        browser_name
+    );
+    for layout in &[
+        "kamada-kawai",
+        "hierarchical",
+        "stress",
+        "sgd",
+        "circular",
+        "radial-tree",
+    ] {
+        let opt = page
+            .locator(&format!("#graph-layout-select option[value=\"{layout}\"]"))
+            .await;
+        let disabled = opt
+            .get_attribute("disabled")
+            .await
+            .expect("Failed to read disabled attr in 3D mode");
+        assert!(
+            disabled.is_some(),
+            "[{}] Option `{}` must be disabled in 3D mode",
+            browser_name,
+            layout
+        );
+        let label = opt
+            .text_content()
+            .await
+            .expect("Failed to read option label in 3D mode")
+            .unwrap_or_default();
+        assert!(
+            label.contains("(not implemented)"),
+            "[{}] Option `{}` should carry `(not implemented)` label in 3D mode; got `{}`",
+            browser_name,
+            layout,
+            label
+        );
+    }
+    // Restore the 2D state so subsequent assertions in this test
+    // don't see the 3D-mode label/disabled flags.
+    page.evaluate::<(), ()>("window.__panschema_apply_layout_picker_mode(false)", None)
+        .await
+        .expect("Failed to restore picker to 2D mode");
 
     // 25. Test sidebar navigation to Schema Graph section
     graph_sidebar_link

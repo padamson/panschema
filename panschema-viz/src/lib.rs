@@ -87,10 +87,11 @@ impl Visualization {
     /// equilibrium.
     ///
     /// `layout` selects which algorithm produces node positions. See
-    /// [`layout::LayoutAlgorithm`] for the canonical identifiers.
-    /// Only `"force-directed"` resolves to a working implementation;
-    /// the other variants return a clear error so the picker UI can
-    /// validate availability without losing typing information.
+    /// [`layout::LayoutAlgorithm`] for the canonical identifiers and
+    /// [`layout::LayoutAlgorithm::is_implemented`] for which variants
+    /// resolve to a real implementation. Unimplemented variants return
+    /// a clear error so the picker UI can validate availability
+    /// without losing typing information.
     #[wasm_bindgen(constructor)]
     pub fn new(
         canvas: HtmlCanvasElement,
@@ -104,7 +105,7 @@ impl Visualization {
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
         if !algorithm.is_implemented() {
             return Err(JsValue::from_str(&format!(
-                "layout algorithm `{}` is not yet implemented; pass `force-directed`",
+                "layout algorithm `{}` is not yet implemented",
                 algorithm.as_str()
             )));
         }
@@ -115,11 +116,21 @@ impl Visualization {
 
         // Create simulation. (1, 1) → no-op centering; the historical
         // default. Non-square aspects activate anisotropic forceX/forceY.
-        let simulation = if aspect_w != aspect_h && aspect_w > 0 && aspect_h > 0 {
+        let mut simulation = if aspect_w != aspect_h && aspect_w > 0 && aspect_h > 0 {
             CpuSimulation::from_graph_data(&graph).with_aspect_ratio(aspect_w, aspect_h)
         } else {
             CpuSimulation::from_graph_data(&graph)
         };
+
+        // Static layouts compute final positions up-front and then halt
+        // the per-tick physics; the simulation acts as a position
+        // container plus drag/hover state. Aspect bias is baked into
+        // the algorithm output (not the per-tick forces).
+        if matches!(algorithm, layout::LayoutAlgorithm::KamadaKawai) {
+            let mut positions = layout::kamada_kawai(&graph, aspect_w as f32, aspect_h as f32);
+            layout::scale_to_world(&mut positions, layout::WORLD_TARGET_DIMENSION);
+            simulation.freeze_at(&positions);
+        }
 
         // Create renderer
         let renderer = Canvas2DRenderer::new(canvas)

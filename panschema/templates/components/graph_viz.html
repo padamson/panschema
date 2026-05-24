@@ -60,17 +60,16 @@
             <button id="graph-mode-3d" class="graph-mode-btn" title="3D WebGPU mode (requires WebGPU support)" disabled>3D</button>
         </div>
 
-        {# Layout picker. Only force-directed is selectable; the
-           other algorithms appear in the dropdown as disabled
-           options so the wire format stays stable as
-           implementations land. #}
+        {# Layout picker. Disabled options reserve their wire-format
+           identifier so the manifest, CSS custom property, and JS
+           localStorage key stay stable as implementations land. #}
         <div class="graph-layout-picker" id="graph-layout-picker">
             <label for="graph-layout-select" class="graph-layout-label">Layout</label>
             <select id="graph-layout-select" class="graph-layout-select">
                 <option value="force-directed">Force-directed</option>
+                <option value="kamada-kawai" title="Energy-minimization layout; slower init than force-directed, often produces nicer node spacing for medium graphs">Kamada-Kawai (slower init)</option>
                 <option value="hierarchical" disabled title="Not yet implemented">Hierarchical (coming soon)</option>
                 <option value="stress" disabled title="Not yet implemented">Stress majorization (coming soon)</option>
-                <option value="kamada-kawai" disabled title="Not yet implemented">Kamada-Kawai (coming soon)</option>
                 <option value="sgd" disabled title="Not yet implemented">SGD (coming soon)</option>
                 <option value="circular" disabled title="Not yet implemented">Circular (coming soon)</option>
                 <option value="radial-tree" disabled title="Not yet implemented">Radial tree (coming soon)</option>
@@ -871,22 +870,97 @@
         'kamada-kawai', 'sgd', 'circular', 'radial-tree',
     ]);
     // Layouts that resolve to a real implementation on the wasm side.
-    const IMPLEMENTED_LAYOUTS = new Set(['force-directed']);
+    const IMPLEMENTED_LAYOUTS = new Set(['force-directed', 'kamada-kawai']);
 
-    function readGraphLayout() {
+    // Which modes each algorithm supports today. Mirrors what
+    // `Visualization::new` / `create_visualization_3d` actually do on
+    // the wasm side: force-directed runs in both 2D (CpuSimulation)
+    // and 3D (WebGPU); KK is 2D-only via egraph-rs; the rest aren't
+    // implemented in either mode yet. The picker UI uses this to grey
+    // out unsupported options per-mode with a clear label suffix.
+    const LAYOUT_MODES = {
+        'force-directed': { '2d': true, '3d': true },
+        'kamada-kawai':   { '2d': true, '3d': false },
+        'hierarchical':   { '2d': false, '3d': false },
+        'stress':         { '2d': false, '3d': false },
+        'sgd':            { '2d': false, '3d': false },
+        'circular':       { '2d': false, '3d': false },
+        'radial-tree':    { '2d': false, '3d': false },
+    };
+
+    // Per-mode display labels. The "(slower init)" suffix on KK
+    // signals a real cost tradeoff; "(coming soon)" reserves an
+    // unimplemented identifier for a future slice; "(not implemented)"
+    // distinguishes "exists but not in this mode" from "doesn't exist
+    // anywhere yet." Keep these in sync with the corresponding labels
+    // baked into the `<option>` elements above.
+    const LAYOUT_LABELS_2D = {
+        'force-directed': 'Force-directed',
+        'kamada-kawai':   'Kamada-Kawai (slower init)',
+        'hierarchical':   'Hierarchical (coming soon)',
+        'stress':         'Stress majorization (coming soon)',
+        'sgd':            'SGD (coming soon)',
+        'circular':       'Circular (coming soon)',
+        'radial-tree':    'Radial tree (coming soon)',
+    };
+    const LAYOUT_LABELS_3D = {
+        'force-directed': 'Force-directed',
+        'kamada-kawai':   'Kamada-Kawai (not implemented)',
+        'hierarchical':   'Hierarchical (not implemented)',
+        'stress':         'Stress majorization (not implemented)',
+        'sgd':            'SGD (not implemented)',
+        'circular':       'Circular (not implemented)',
+        'radial-tree':    'Radial tree (not implemented)',
+    };
+
+    function layoutSupportsMode(layout, is3D) {
+        const mode = is3D ? '3d' : '2d';
+        return LAYOUT_MODES[layout]?.[mode] === true;
+    }
+
+    function readGraphLayout(is3D = false) {
+        // Mode-aware: a stored 2D-only preference (e.g. KK) falls back
+        // to force-directed in 3D without overwriting localStorage, so
+        // toggling 3D → 2D restores the user's KK choice.
         try {
             const stored = localStorage.getItem(LAYOUT_PREF_KEY);
-            if (stored && IMPLEMENTED_LAYOUTS.has(stored)) {
+            if (stored && IMPLEMENTED_LAYOUTS.has(stored) && layoutSupportsMode(stored, is3D)) {
                 return stored;
             }
         } catch (e) { /* localStorage may be unavailable */ }
         const container = document.querySelector('.graph-container');
         const fromAttr = container?.dataset.defaultLayout;
-        if (fromAttr && KNOWN_LAYOUTS.has(fromAttr) && IMPLEMENTED_LAYOUTS.has(fromAttr)) {
+        if (fromAttr && KNOWN_LAYOUTS.has(fromAttr)
+            && IMPLEMENTED_LAYOUTS.has(fromAttr) && layoutSupportsMode(fromAttr, is3D)) {
             return fromAttr;
         }
         return 'force-directed';
     }
+
+    function applyLayoutPickerMode(is3D) {
+        const select = document.getElementById('graph-layout-select');
+        if (!select) return;
+        const labels = is3D ? LAYOUT_LABELS_3D : LAYOUT_LABELS_2D;
+        for (const opt of Array.from(select.options)) {
+            const supported = layoutSupportsMode(opt.value, is3D);
+            opt.disabled = !supported;
+            if (labels[opt.value]) {
+                opt.textContent = labels[opt.value];
+            }
+        }
+        // Drop a no-longer-supported selection back to force-directed
+        // so the visible state matches what the active mode can do.
+        if (!layoutSupportsMode(select.value, is3D)) {
+            select.value = 'force-directed';
+        }
+    }
+
+    // Expose the picker mode helper unconditionally — it operates on
+    // the DOM only, with no wasm dependency, so it should be reachable
+    // from e2e tests as soon as this script runs (i.e. before
+    // `createVisualization` resolves). Lets tests assert the 3D
+    // disabled/label state without needing WebGPU on the test runner.
+    window.__panschema_apply_layout_picker_mode = applyLayoutPickerMode;
 
     function saveGraphLayout(name) {
         try { localStorage.setItem(LAYOUT_PREF_KEY, name); }
@@ -1159,7 +1233,7 @@
         // Defaults to 16:8 (the html_writer default) if absent.
         const { aspectW, aspectH } = readGraphAspect();
         const graphJson = JSON.stringify(graphData);
-        const layout = readGraphLayout();
+        const layout = readGraphLayout(use3D);
 
         if (use3D && hasWebGPU && typeof wasmModule.create_visualization_3d === 'function') {
             try {
@@ -1224,6 +1298,14 @@
             mode2dBtn.classList.add('active');
             mode3dBtn.classList.remove('active');
         }
+        // Greying-out + label suffixes are mode-dependent: a 2D-only
+        // layout must reset to force-directed on the 3D toggle, and
+        // recover its "(slower init)" label on the way back.
+        applyLayoutPickerMode(is3D);
+        const select = document.getElementById('graph-layout-select');
+        if (select) {
+            select.value = readGraphLayout(is3D);
+        }
     }
 
     function setupModeToggle() {
@@ -1246,16 +1328,17 @@
     function setupLayoutPicker() {
         const select = document.getElementById('graph-layout-select');
         if (!select) return;
-        select.value = readGraphLayout();
+        applyLayoutPickerMode(is3D);
+        select.value = readGraphLayout(is3D);
         select.addEventListener('change', async (event) => {
             const chosen = event.target.value;
-            if (!IMPLEMENTED_LAYOUTS.has(chosen)) {
+            if (!IMPLEMENTED_LAYOUTS.has(chosen) || !layoutSupportsMode(chosen, is3D)) {
                 // Hard guard: the option's `disabled` should already
                 // prevent this, but if a future picker variant breaks
                 // that, fall back to a clear refusal rather than a
                 // panicking wasm constructor.
-                console.warn('Layout not yet implemented:', chosen);
-                event.target.value = readGraphLayout();
+                console.warn('Layout not supported in current mode:', chosen);
+                event.target.value = readGraphLayout(is3D);
                 return;
             }
             saveGraphLayout(chosen);

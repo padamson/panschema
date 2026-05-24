@@ -79,7 +79,7 @@ impl LayoutAlgorithm {
     /// `true` for variants that resolve to a working implementation.
     /// Picker UIs use this to grey out unselectable options.
     pub fn is_implemented(&self) -> bool {
-        matches!(self, Self::ForceDirected)
+        matches!(self, Self::ForceDirected | Self::KamadaKawai)
     }
 
     /// Human-readable label, suitable for the picker UI.
@@ -210,6 +210,53 @@ pub fn kamada_kawai(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> Vec<(f32
         .collect()
 }
 
+/// Default target for [`scale_to_world`] in world units. Sized so the
+/// rendered layout fills the in-tree `CpuSimulation`'s world bounding
+/// box without clipping against its `MAX_RADIUS = 800` safety net.
+pub const WORLD_TARGET_DIMENSION: f32 = 600.0;
+
+/// Rescale a position list in place so its bounding box has its larger
+/// dimension equal to `target_max_dim` world units, while preserving
+/// aspect ratio and centroid. A degenerate bbox (all points coincident,
+/// or only one node) is left untouched — there's nothing meaningful to
+/// scale.
+///
+/// Used by static (non-force-directed) layouts so their natural
+/// coordinate system (typically O(1) magnitudes from `egraph-rs` or
+/// `petgraph_drawing`) lands inside the visualization's expected world
+/// range.
+pub fn scale_to_world(positions: &mut [(f32, f32)], target_max_dim: f32) {
+    if positions.len() < 2 {
+        return;
+    }
+    let mut min_x = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for &(x, y) in positions.iter() {
+        if !x.is_finite() || !y.is_finite() {
+            continue;
+        }
+        min_x = min_x.min(x);
+        max_x = max_x.max(x);
+        min_y = min_y.min(y);
+        max_y = max_y.max(y);
+    }
+    let bbox_w = max_x - min_x;
+    let bbox_h = max_y - min_y;
+    let bbox_max = bbox_w.max(bbox_h);
+    if bbox_max <= 0.0 || !bbox_max.is_finite() {
+        return;
+    }
+    let scale = target_max_dim / bbox_max;
+    let cx = (min_x + max_x) * 0.5;
+    let cy = (min_y + max_y) * 0.5;
+    for p in positions.iter_mut() {
+        p.0 = (p.0 - cx) * scale;
+        p.1 = (p.1 - cy) * scale;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,11 +284,13 @@ mod tests {
     }
 
     #[test]
-    fn force_directed_is_the_only_implemented_variant() {
+    fn only_real_implementations_report_implemented() {
         for variant in LayoutAlgorithm::ALL {
             let implemented = variant.is_implemented();
             match variant {
-                LayoutAlgorithm::ForceDirected => assert!(implemented),
+                LayoutAlgorithm::ForceDirected | LayoutAlgorithm::KamadaKawai => {
+                    assert!(implemented, "{:?} should be implemented", variant)
+                }
                 _ => assert!(!implemented, "{:?} should not be implemented", variant),
             }
         }
@@ -456,6 +505,88 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    fn bbox(positions: &[(f32, f32)]) -> (f32, f32, f32, f32) {
+        let (mut min_x, mut max_x) = (f32::INFINITY, f32::NEG_INFINITY);
+        let (mut min_y, mut max_y) = (f32::INFINITY, f32::NEG_INFINITY);
+        for &(x, y) in positions {
+            min_x = min_x.min(x);
+            max_x = max_x.max(x);
+            min_y = min_y.min(y);
+            max_y = max_y.max(y);
+        }
+        (min_x, max_x, min_y, max_y)
+    }
+
+    #[test]
+    fn scale_to_world_targets_max_bbox_dimension() {
+        // After scaling, the larger bbox dimension equals the target,
+        // and the smaller dimension preserves the input aspect ratio.
+        let mut positions = vec![(0.0, 0.0), (4.0, 0.0), (4.0, 2.0), (0.0, 2.0)];
+        scale_to_world(&mut positions, 600.0);
+        let (min_x, max_x, min_y, max_y) = bbox(&positions);
+        let w = max_x - min_x;
+        let h = max_y - min_y;
+        assert!((w - 600.0).abs() < 1e-3, "width {w} != 600");
+        // Aspect 4:2 → 2:1. After scaling so width=600, height should be 300.
+        assert!((h - 300.0).abs() < 1e-3, "height {h} != 300");
+    }
+
+    #[test]
+    fn scale_to_world_centers_bbox_on_origin() {
+        let mut positions = vec![(100.0, 200.0), (400.0, 800.0)];
+        scale_to_world(&mut positions, 600.0);
+        let (min_x, max_x, min_y, max_y) = bbox(&positions);
+        // Centroid sits at origin so the rendered layout fills the
+        // simulation's world symmetrically around (0, 0).
+        assert!((min_x + max_x).abs() < 1e-3);
+        assert!((min_y + max_y).abs() < 1e-3);
+    }
+
+    #[test]
+    fn scale_to_world_leaves_degenerate_inputs_alone() {
+        // Singleton, empty, and all-coincident inputs have no meaningful
+        // bbox to scale; the function must not divide by zero or NaN.
+        let mut empty: Vec<(f32, f32)> = Vec::new();
+        scale_to_world(&mut empty, 600.0);
+        assert!(empty.is_empty());
+
+        let mut singleton = vec![(123.0, 456.0)];
+        scale_to_world(&mut singleton, 600.0);
+        assert_eq!(singleton, vec![(123.0, 456.0)]);
+
+        let mut coincident = vec![(5.0, 5.0), (5.0, 5.0), (5.0, 5.0)];
+        scale_to_world(&mut coincident, 600.0);
+        // All points coincident → bbox_max = 0 → no scaling applied.
+        assert_eq!(coincident, vec![(5.0, 5.0), (5.0, 5.0), (5.0, 5.0)]);
+    }
+
+    #[test]
+    fn kamada_kawai_scaled_bbox_is_non_degenerate_and_within_world_bounds() {
+        // Picker integration requires KK output to land inside the
+        // in-tree CpuSimulation's world (its hard MAX_RADIUS = 800).
+        // After `scale_to_world(..., WORLD_TARGET_DIMENSION = 600.0)`
+        // the bbox larger dimension must be exactly 600 and every
+        // node's distance from origin must stay under MAX_RADIUS.
+        for graph in [make_ring(15), make_lopsided(20, 8), make_ring(30)] {
+            let mut positions = kamada_kawai(&graph, 1.0, 1.0);
+            scale_to_world(&mut positions, WORLD_TARGET_DIMENSION);
+            for &(x, y) in &positions {
+                assert!(x.is_finite() && y.is_finite(), "non-finite coordinate");
+                let r = (x * x + y * y).sqrt();
+                assert!(
+                    r < 800.0,
+                    "node at radius {r} exceeds simulation MAX_RADIUS"
+                );
+            }
+            let (min_x, max_x, min_y, max_y) = bbox(&positions);
+            let w = max_x - min_x;
+            let h = max_y - min_y;
+            assert!(w >= 100.0, "scaled bbox width {w} is degenerate (< 100)");
+            assert!(h >= 100.0, "scaled bbox height {h} is degenerate (< 100)");
+            assert!(w.max(h) - WORLD_TARGET_DIMENSION < 1e-2);
         }
     }
 }
