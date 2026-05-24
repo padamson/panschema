@@ -161,16 +161,16 @@ Existing in-tree CPU force simulation (slice 7 work in [Feature 02](02-core-onto
 
 ### Slice 2: `egraph-rs` integration (dependency adoption + wasm smoke test)
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** No user-visible change. This slice de-risks adopting `egraph-rs` for later slices by wiring it into `panschema-viz`, confirming wasm32 compilation, and proving the round-trip `panschema-viz GraphData → petgraph::Graph → egraph-rs algorithm → positions back into Visualization` works end-to-end on a single representative algorithm (Kamada-Kawai is the proposed pilot — it's the simplest non-force algorithm).
 
 **Acceptance Criteria:**
-- [ ] `panschema-viz/Cargo.toml` adds dependencies on `egraph-wasm` and the specific sub-crates we'll consume in slices 3-5 (`petgraph-layout-kamada-kawai`, `petgraph-layout-stress-majorization`, `petgraph-layout-sgd`). Sub-crates not published to crates.io are pulled via `git = "..."` with a pinned commit, or vendored under `panschema-viz/vendor/`. Choice of git-dep vs vendoring is the implementer's call based on the state of each sub-crate at integration time.
-- [ ] `cargo check --target wasm32-unknown-unknown -p panschema-viz` passes cleanly. CI gains a wasm-target check for `panschema-viz` to catch wasm-incompat regressions in future dep bumps.
-- [ ] An internal helper `panschema_viz::layout::to_petgraph(&GraphData) -> petgraph::Graph<NodeData, EdgeData>` converts our wire format to petgraph; tested with native unit tests.
-- [ ] A pilot `panschema_viz::layout::kamada_kawai(&GraphData, aspect_w, aspect_h) -> Vec<(f32, f32)>` runs `petgraph-layout-kamada-kawai` end-to-end and returns post-settle positions. Native unit test confirms it doesn't panic on the existing `make_ring_graph(15)` and `make_lopsided_graph(20, 8)` test fixtures.
-- [ ] The pilot is NOT yet wired into the picker — that lands in slice 3. This slice is "plumbing exists, wasm builds, one algorithm produces positions."
+- [x] `panschema-viz/Cargo.toml` adds dependencies on `petgraph-layout-kamada-kawai` and its required workspace siblings (`petgraph-drawing`, transitively `petgraph-algorithm-shortest-path`). Pulled via `git = "..."` pinned to `8e986826534774fe7beb9546154407927260e446`. *Scope note: only the KK sub-crate is added in this slice. `petgraph-layout-stress-majorization` and `petgraph-layout-sgd` land with slices 4 and 5 so each slice owns its dep churn; the wasm-build gate here proves the workspace integrates regardless.*
+- [x] `cargo check --target wasm32-unknown-unknown -p panschema-viz` passes cleanly. CI's lint job gained a `cargo check --target wasm32-unknown-unknown -p panschema-viz` step as a cheap canary for wasm-incompat regressions in future dep bumps.
+- [x] Internal helper `panschema_viz::layout::to_petgraph(&GraphData) -> (Graph<String, (), Undirected>, BTreeMap<String, NodeIndex>)` converts the wire format to petgraph; native unit tests cover node/edge counts and the unknown-endpoint drop rule.
+- [x] Pilot `panschema_viz::layout::kamada_kawai(&GraphData, aspect_w, aspect_h) -> Vec<(f32, f32)>` runs `petgraph-layout-kamada-kawai` end-to-end and returns post-settle positions with an aspect-bias post-process. Native unit tests cover: `make_ring(15)` produces a non-degenerate bbox, `make_lopsided(20, 8)` (8 isolated singletons) doesn't panic and emits finite coordinates per node, the empty-graph case returns an empty Vec, and the aspect-bias scaling matches the analytic √(w/h) ratio.
+- [x] The pilot is NOT yet wired into the picker — that lands in slice 3.
 
 **Notes:**
 - The pilot algorithm choice is debatable; Stress Majorization is also a reasonable first pick (it's `egraph-rs`'s most-cited algorithm). The criterion is "one algorithm working end-to-end through the new dep," not "the right algorithm shipped first."

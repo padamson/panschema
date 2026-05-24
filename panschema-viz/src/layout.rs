@@ -1,16 +1,25 @@
-//! Layout-algorithm enumeration for the schema-graph visualization.
+//! Layout-algorithm enumeration and helpers for the schema-graph
+//! visualization.
 //!
-//! Each variant is one of the algorithms exposed in the picker UI.
-//! Only the variants whose [`LayoutAlgorithm::is_implemented`] returns
-//! `true` actually produce node positions; the rest return a clear
-//! "not yet implemented" error so the picker UI, wasm constructor,
-//! CSS custom property, and manifest field can all agree on the
-//! canonical wire format before each implementation lands.
+//! Each [`LayoutAlgorithm`] variant is one of the algorithms exposed
+//! in the picker UI. Only the variants whose
+//! [`LayoutAlgorithm::is_implemented`] returns `true` actually produce
+//! node positions; the rest return a clear "not yet implemented"
+//! error so the picker UI, wasm constructor, CSS custom property,
+//! and manifest field can all agree on the canonical wire format
+//! before each implementation lands.
 //!
 //! The string identifiers are the canonical wire-format used by:
 //! - the wasm `Visualization::new` constructor's `layout` parameter,
 //! - the `--graph-layout` CSS custom property on `.graph-container`,
 //! - panschema's `panschema.toml` `html_default_layout` field.
+//!
+//! The module also hosts the conversion glue between panschema-viz's
+//! wire-format [`GraphData`](crate::graph_types::GraphData) and the
+//! [`petgraph`] graphs consumed by `egraph-rs`-backed layout
+//! algorithms ([`to_petgraph`]), plus the
+//! Kamada-Kawai pilot helper ([`kamada_kawai`]) that proves the
+//! integration end-to-end.
 
 /// Identifies which layout algorithm should produce node positions for
 /// the schema-graph render. Only [`LayoutAlgorithm::ForceDirected`]
@@ -125,6 +134,82 @@ impl std::fmt::Display for LayoutAlgorithmParseError {
 
 impl std::error::Error for LayoutAlgorithmParseError {}
 
+// ---------------------------------------------------------------
+// petgraph integration + Kamada-Kawai pilot
+// ---------------------------------------------------------------
+
+use crate::graph_types::GraphData;
+use petgraph::Graph;
+use petgraph::Undirected;
+use petgraph::graph::NodeIndex;
+use std::collections::BTreeMap;
+
+/// Convert panschema-viz's wire-format [`GraphData`] into an
+/// undirected [`petgraph::Graph`] suitable for `egraph-rs`-backed
+/// layout algorithms.
+///
+/// Returns the graph plus an `id → NodeIndex` lookup so callers can
+/// map algorithm output back to the input node order. Edges
+/// referencing unknown node ids are silently dropped, matching how
+/// the in-tree force simulation handles missing endpoints.
+pub fn to_petgraph(
+    graph: &GraphData,
+) -> (Graph<String, (), Undirected>, BTreeMap<String, NodeIndex>) {
+    let mut pg = Graph::new_undirected();
+    let mut id_to_idx = BTreeMap::new();
+    for node in &graph.nodes {
+        let idx = pg.add_node(node.id.clone());
+        id_to_idx.insert(node.id.clone(), idx);
+    }
+    for edge in &graph.edges {
+        if let (Some(&s), Some(&t)) = (id_to_idx.get(&edge.source), id_to_idx.get(&edge.target)) {
+            pg.add_edge(s, t, ());
+        }
+    }
+    (pg, id_to_idx)
+}
+
+/// Run Kamada-Kawai energy-minimization via
+/// `petgraph-layout-kamada-kawai` and return positions in the
+/// original [`GraphData`] node order.
+///
+/// Applies an aspect-bias post-process so the rendered bounding box
+/// approximates `aspect_w : aspect_h` while preserving area: `x` is
+/// scaled by √(w/h), `y` by √(h/w). Disconnected components carry
+/// the algorithm's native placement, which may overlap; cluster
+/// separation for disconnected graphs is the caller's concern.
+///
+/// Empty input returns an empty `Vec`. Coordinates that the
+/// algorithm leaves unset (e.g. nodes the algorithm couldn't place)
+/// fall back to `(0.0, 0.0)`.
+pub fn kamada_kawai(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> Vec<(f32, f32)> {
+    use petgraph_drawing::DrawingEuclidean2d;
+    use petgraph_layout_kamada_kawai::KamadaKawai;
+
+    if graph.nodes.is_empty() {
+        return Vec::new();
+    }
+
+    let (pg, id_to_idx) = to_petgraph(graph);
+    let mut drawing = DrawingEuclidean2d::<NodeIndex, f32>::initial_placement(&pg);
+    let kk = KamadaKawai::new(&pg, |_| 1.0_f32);
+    kk.run(&mut drawing);
+
+    let sx = (aspect_w / aspect_h).sqrt();
+    let sy = (aspect_h / aspect_w).sqrt();
+
+    graph
+        .nodes
+        .iter()
+        .map(|n| {
+            let idx = id_to_idx[&n.id];
+            let x = drawing.x(idx).unwrap_or(0.0);
+            let y = drawing.y(idx).unwrap_or(0.0);
+            (x * sx, y * sy)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,6 +283,176 @@ mod tests {
                 "identifier `{id}` must be kebab-case ASCII"
             );
             assert!(!id.starts_with('-') && !id.ends_with('-'));
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // petgraph integration + Kamada-Kawai pilot tests
+    // ---------------------------------------------------------------
+
+    use crate::graph_types::{EdgeType, GraphEdge, GraphNode, NodeType};
+
+    fn make_ring(n: usize) -> GraphData {
+        let nodes = (0..n)
+            .map(|i| GraphNode {
+                id: format!("n{i}"),
+                label: format!("N{i}"),
+                node_type: NodeType::Class,
+                color: [1.0, 0.0, 0.0, 1.0],
+                description: None,
+                uri: None,
+                is_abstract: false,
+            })
+            .collect();
+        let edges = (0..n)
+            .map(|i| GraphEdge {
+                source: format!("n{i}"),
+                target: format!("n{}", (i + 1) % n),
+                edge_type: EdgeType::SubclassOf,
+                label: None,
+            })
+            .collect();
+        GraphData {
+            schema_name: "ring".into(),
+            schema_title: None,
+            format_version: "1.0".into(),
+            nodes,
+            edges,
+        }
+    }
+
+    fn make_lopsided(connected_n: usize, isolated_n: usize) -> GraphData {
+        let total = connected_n + isolated_n;
+        let nodes = (0..total)
+            .map(|i| GraphNode {
+                id: format!("n{i}"),
+                label: format!("N{i}"),
+                node_type: NodeType::Class,
+                color: [1.0, 0.0, 0.0, 1.0],
+                description: None,
+                uri: None,
+                is_abstract: false,
+            })
+            .collect();
+        let edges = (0..connected_n)
+            .map(|i| GraphEdge {
+                source: format!("n{i}"),
+                target: format!("n{}", (i + 1) % connected_n),
+                edge_type: EdgeType::SubclassOf,
+                label: None,
+            })
+            .collect();
+        GraphData {
+            schema_name: "lopsided".into(),
+            schema_title: None,
+            format_version: "1.0".into(),
+            nodes,
+            edges,
+        }
+    }
+
+    #[test]
+    fn to_petgraph_preserves_node_and_edge_counts() {
+        let ring = make_ring(5);
+        let (pg, idx) = to_petgraph(&ring);
+        assert_eq!(pg.node_count(), 5);
+        assert_eq!(pg.edge_count(), 5);
+        assert_eq!(idx.len(), 5);
+        for id in idx.keys() {
+            assert!(id.starts_with('n'));
+        }
+    }
+
+    #[test]
+    fn to_petgraph_drops_edges_with_unknown_endpoints() {
+        let mut graph = make_ring(3);
+        graph.edges.push(GraphEdge {
+            source: "ghost".into(),
+            target: "n0".into(),
+            edge_type: EdgeType::SubclassOf,
+            label: None,
+        });
+        let (pg, _) = to_petgraph(&graph);
+        assert_eq!(pg.node_count(), 3);
+        // 3 ring edges retained; the ghost edge is dropped.
+        assert_eq!(pg.edge_count(), 3);
+    }
+
+    #[test]
+    fn kamada_kawai_returns_position_per_node_on_ring() {
+        let ring = make_ring(15);
+        let positions = kamada_kawai(&ring, 1.0, 1.0);
+        assert_eq!(positions.len(), 15);
+        for (x, y) in &positions {
+            assert!(x.is_finite(), "x must be finite, got {x}");
+            assert!(y.is_finite(), "y must be finite, got {y}");
+        }
+        // A 15-node ring with KK should not collapse to a single
+        // point: the bbox must have non-zero width and height.
+        let xs: Vec<f32> = positions.iter().map(|p| p.0).collect();
+        let ys: Vec<f32> = positions.iter().map(|p| p.1).collect();
+        let w = xs.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
+            - xs.iter().cloned().fold(f32::INFINITY, f32::min);
+        let h = ys.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
+            - ys.iter().cloned().fold(f32::INFINITY, f32::min);
+        assert!(w > 0.1, "ring layout collapsed in x (width={w})");
+        assert!(h > 0.1, "ring layout collapsed in y (height={h})");
+    }
+
+    #[test]
+    fn kamada_kawai_returns_position_per_node_on_lopsided_graph() {
+        // 20 connected nodes in a ring + 8 isolated singletons.
+        // The pilot must not panic on disconnected components and
+        // must emit exactly one position per input node.
+        let graph = make_lopsided(20, 8);
+        let positions = kamada_kawai(&graph, 1.0, 1.0);
+        assert_eq!(positions.len(), 28);
+        for (x, y) in &positions {
+            assert!(x.is_finite(), "x must be finite on disconnected input");
+            assert!(y.is_finite(), "y must be finite on disconnected input");
+        }
+    }
+
+    #[test]
+    fn kamada_kawai_on_empty_graph_returns_empty_vec() {
+        let empty = GraphData {
+            schema_name: "empty".into(),
+            schema_title: None,
+            format_version: "1.0".into(),
+            nodes: Vec::new(),
+            edges: Vec::new(),
+        };
+        assert!(kamada_kawai(&empty, 1.0, 1.0).is_empty());
+    }
+
+    #[test]
+    fn kamada_kawai_aspect_bias_scales_coordinates() {
+        // Doubling the aspect ratio (wider) should stretch x by
+        // √2 and compress y by √2 relative to the square case.
+        let ring = make_ring(10);
+        let square = kamada_kawai(&ring, 1.0, 1.0);
+        let wide = kamada_kawai(&ring, 2.0, 1.0);
+        assert_eq!(square.len(), wide.len());
+        // Aspect bias is a deterministic per-coordinate scaling, so
+        // wide.x / square.x ≈ √2 and wide.y / square.y ≈ 1/√2 for
+        // every node where square.x and square.y are non-trivial.
+        let sx_expected = (2.0_f32 / 1.0).sqrt();
+        let sy_expected = (1.0_f32 / 2.0).sqrt();
+        for (i, ((sx, sy), (wx, wy))) in square.iter().zip(wide.iter()).enumerate() {
+            if sx.abs() > 0.01 {
+                let ratio = wx / sx;
+                assert!(
+                    (ratio - sx_expected).abs() < 1e-4,
+                    "node {i}: x ratio {ratio} != expected {sx_expected}"
+                );
+            }
+            if sy.abs() > 0.01 {
+                let ratio = wy / sy;
+                assert!(
+                    (ratio - sy_expected).abs() < 1e-4,
+                    "node {i}: y ratio {ratio} != expected {sy_expected}"
+                );
+            }
         }
     }
 }

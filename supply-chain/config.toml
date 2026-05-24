@@ -504,6 +504,10 @@ criteria = "safe-to-run"
 version = "0.8.4"
 criteria = "safe-to-deploy"
 
+[[exemptions.matrixmultiply]]
+version = "0.3.10"
+criteria = "safe-to-deploy"
+
 [[exemptions.mime_guess]]
 version = "2.0.5"
 criteria = "safe-to-deploy"
@@ -528,6 +532,10 @@ criteria = "safe-to-deploy"
 version = "0.2.18"
 criteria = "safe-to-run"
 
+[[exemptions.ndarray]]
+version = "0.16.1"
+criteria = "safe-to-deploy"
+
 [[exemptions.ndk-sys]]
 version = "0.6.0+11769913"
 criteria = "safe-to-deploy"
@@ -538,6 +546,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.notify-types]]
 version = "2.1.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.num-complex]]
+version = "0.4.6"
 criteria = "safe-to-deploy"
 
 [[exemptions.objc2]]
@@ -559,6 +571,10 @@ criteria = "safe-to-run"
 [[exemptions.openssl-sys]]
 version = "0.9.116"
 criteria = "safe-to-run"
+
+[[exemptions.ordered-float]]
+version = "3.9.2"
+criteria = "safe-to-deploy"
 
 [[exemptions.ordered-float]]
 version = "5.3.0"
@@ -586,6 +602,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.permutohedron]]
 version = "0.2.4"
+criteria = "safe-to-deploy"
+
+[[exemptions.petgraph]]
+version = "0.6.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.pin-project-lite]]
@@ -646,6 +666,10 @@ criteria = "safe-to-run"
 
 [[exemptions.range-alloc]]
 version = "0.1.5"
+criteria = "safe-to-deploy"
+
+[[exemptions.rawpointer]]
+version = "0.2.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.rdf-types]]
