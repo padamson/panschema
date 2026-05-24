@@ -546,6 +546,33 @@ mod tests {
     }
 
     #[test]
+    fn scale_to_world_skips_positions_with_any_non_finite_coordinate() {
+        // The bbox computation must ignore a position when *either*
+        // coordinate is non-finite. With the (correct) `||`, a
+        // mixed-finite point like (NaN, 0.0) is dropped before
+        // min/max see it; weakening to `&&` would let the NaN
+        // propagate into the bbox and make every scaled output NaN.
+        let mut positions = vec![
+            (0.0, 0.0),
+            (100.0, 100.0),
+            (f32::NAN, 0.0),      // x not finite, y finite
+            (0.0, f32::INFINITY), // x finite, y not finite
+        ];
+        scale_to_world(&mut positions, 600.0);
+        // The first two finite points define a bbox of side 100;
+        // scaled to 600, they sit at ±300 from the centroid (50, 50).
+        assert!(positions[0].0.is_finite() && positions[0].1.is_finite());
+        assert!(positions[1].0.is_finite() && positions[1].1.is_finite());
+        assert!((positions[0].0 + positions[1].0).abs() < 1e-3);
+        assert!((positions[0].1 + positions[1].1).abs() < 1e-3);
+        let bbox_dim = (positions[1].0 - positions[0].0).abs();
+        assert!(
+            (bbox_dim - 600.0).abs() < 1e-3,
+            "scaled finite bbox dim should be 600, got {bbox_dim}"
+        );
+    }
+
+    #[test]
     fn scale_to_world_leaves_degenerate_inputs_alone() {
         // Singleton, empty, and all-coincident inputs have no meaningful
         // bbox to scale; the function must not divide by zero or NaN.
