@@ -30,6 +30,13 @@ console_error_panic_hook = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# Graph layout (egraph-rs workspace, git-only — sub-crates not on
+# crates.io). Pinned to the 2025-10-29 HEAD; bump deliberately, since
+# the workspace ships breaking changes silently across revs.
+petgraph = "0.6"
+petgraph-drawing = { version = "0.1", git = "https://github.com/likr/egraph-rs", rev = "8e986826534774fe7beb9546154407927260e446" }
+petgraph-layout-kamada-kawai = { version = "0.1", git = "https://github.com/likr/egraph-rs", rev = "8e986826534774fe7beb9546154407927260e446" }
+
 # WebGPU (optional, only with webgpu feature)
 wgpu = { version = "29", features = ["webgpu"], optional = true }
 bytemuck = { version = "1", features = ["derive"], optional = true }

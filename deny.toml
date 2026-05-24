@@ -37,7 +37,25 @@ allow = [
     "MPL-2.0",
 ]
 confidence-threshold = 0.8
-exceptions = []
+# egraph-rs sub-crates don't carry per-crate license fields in their
+# Cargo.toml. The workspace root carries an MIT LICENSE
+# (https://github.com/likr/egraph-rs/blob/main/LICENSE) that applies
+# to every member crate; explicitly assert MIT here so cargo-deny's
+# strict "no license field" check doesn't gate the build.
+[[licenses.clarify]]
+crate = "petgraph-algorithm-shortest-path"
+expression = "MIT"
+license-files = []
+
+[[licenses.clarify]]
+crate = "petgraph-drawing"
+expression = "MIT"
+license-files = []
+
+[[licenses.clarify]]
+crate = "petgraph-layout-kamada-kawai"
+expression = "MIT"
+license-files = []
 
 [licenses.private]
 ignore = false
@@ -62,5 +80,6 @@ skip-tree = []
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# playwright-rs is dogfooded from its upstream repo (same maintainer as panschema).
-allow-git = ["https://github.com/padamson/playwright-rust"]
+# egraph-rs is a Rust graph-layout workspace whose sub-crates aren't
+# published to crates.io. Pinned via rev in panschema-viz/Cargo.toml.
+allow-git = ["https://github.com/likr/egraph-rs"]
