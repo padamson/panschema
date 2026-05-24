@@ -765,14 +765,140 @@ mod tests {
         // Sugiyama on a 3-layer binary tree (7 nodes) must place every
         // node and produce finite coordinates. The exact layout
         // depends on rust-sugiyama's internals (which heuristic, which
-        // version) so we don't pin coordinates — just emit-per-node
-        // and finiteness.
+        // version) so we don't pin coordinates.
+        //
+        // To distinguish real Sugiyama output from the orphan-grid
+        // fallback (which fires when the layered region is empty, e.g.
+        // the layout loop's bounds check breaks): Sugiyama groups the
+        // 4 leaves on a single layer (same y). The orphan grid for
+        // 7 nodes uses `columns = ceil(sqrt(7)) = 3` columns, so it
+        // can pack at most 3 nodes per y. A max-per-y count ≥ 4
+        // therefore proves we got the layered output.
         let tree = make_balanced_tree(3);
         let positions = hierarchical(&tree, 1.0, 1.0);
         assert_eq!(positions.len(), 7);
         for (x, y) in &positions {
             assert!(x.is_finite() && y.is_finite(), "non-finite coordinate");
         }
+        let mut by_y: std::collections::BTreeMap<i32, usize> = std::collections::BTreeMap::new();
+        for (_x, y) in &positions {
+            *by_y.entry((y * 100.0) as i32).or_insert(0) += 1;
+        }
+        let max_per_layer = by_y.values().copied().max().unwrap_or(0);
+        assert!(
+            max_per_layer >= 4,
+            "expected at least 4 nodes on the leaf layer, got max {max_per_layer} — likely fell to orphan grid"
+        );
+    }
+
+    #[test]
+    fn is_hierarchy_edge_includes_subclass_and_mixin_only() {
+        assert!(is_hierarchy_edge(EdgeType::SubclassOf));
+        assert!(is_hierarchy_edge(EdgeType::Mixin));
+        assert!(!is_hierarchy_edge(EdgeType::Domain));
+        assert!(!is_hierarchy_edge(EdgeType::Range));
+        assert!(!is_hierarchy_edge(EdgeType::Inverse));
+        assert!(!is_hierarchy_edge(EdgeType::TypeOf));
+    }
+
+    #[test]
+    fn hierarchical_places_disjoint_components_side_by_side_with_gap() {
+        // Two disjoint 3-node hierarchies (parent + 2 children each).
+        // Each component spans the full vertex_spacing width because
+        // siblings sit on a shared layer; that makes the per-component
+        // `width` sugiyama returns large enough (~10) to distinguish
+        // `width + COMPONENT_GAP` (60) from `width * COMPONENT_GAP`
+        // (500) in the x_offset accumulator. Smaller components would
+        // collapse `width ≈ 1`, where `+` and `*` produce nearly
+        // identical results — an observationally-equivalent mutation
+        // hole we deliberately close here.
+        let nodes: Vec<GraphNode> = ["a0", "a1", "a2", "b0", "b1", "b2"]
+            .iter()
+            .map(|id| GraphNode {
+                id: (*id).to_string(),
+                label: (*id).to_string(),
+                node_type: NodeType::Class,
+                color: [1.0, 0.0, 0.0, 1.0],
+                description: None,
+                uri: None,
+                is_abstract: false,
+            })
+            .collect();
+        let edges = vec![
+            GraphEdge {
+                source: "a1".into(),
+                target: "a0".into(),
+                edge_type: EdgeType::SubclassOf,
+                label: None,
+            },
+            GraphEdge {
+                source: "a2".into(),
+                target: "a0".into(),
+                edge_type: EdgeType::SubclassOf,
+                label: None,
+            },
+            GraphEdge {
+                source: "b1".into(),
+                target: "b0".into(),
+                edge_type: EdgeType::SubclassOf,
+                label: None,
+            },
+            GraphEdge {
+                source: "b2".into(),
+                target: "b0".into(),
+                edge_type: EdgeType::SubclassOf,
+                label: None,
+            },
+        ];
+        let g = GraphData {
+            schema_name: "two_trees".into(),
+            schema_title: None,
+            format_version: "1.0".into(),
+            nodes,
+            edges,
+        };
+        let positions = hierarchical(&g, 1.0, 1.0);
+        let a_x_max = positions[..3]
+            .iter()
+            .map(|p| p.0)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let b_x_min = positions[3..]
+            .iter()
+            .map(|p| p.0)
+            .fold(f32::INFINITY, f32::min);
+        let b_x_max = positions[3..]
+            .iter()
+            .map(|p| p.0)
+            .fold(f32::NEG_INFINITY, f32::max);
+
+        // Pin the direction: rust-sugiyama orders subgraphs by their
+        // smallest node index, so tree A (nodes 0–2) is processed
+        // first at x_offset=0 and tree B (nodes 3–5) at x_offset > 0.
+        // The implementation accumulates x_offset *positively* after
+        // each component. Mutations that flip the operator or sign
+        // (`+=` → `-=`, `+` → `-` on the per-component apply) push
+        // tree B to the left of tree A, which this assertion catches.
+        // If a future rust-sugiyama release changes its subgraph
+        // ordering, this assertion is the right place to re-engineer
+        // the integration — better than silently shipping a layout
+        // that grew in the wrong direction.
+        assert!(
+            a_x_max < b_x_min,
+            "tree A (indices 0–2) must sit left of tree B (indices 3–5): a_x_max={a_x_max} b_x_min={b_x_min}"
+        );
+
+        let gap = b_x_min - a_x_max;
+        // COMPONENT_GAP is 50 in source; the actual gap may be larger
+        // because sugiyama adds internal padding to each component's
+        // bbox. Floor at 40 to allow for that; ceiling at 200 catches
+        // a `+ COMPONENT_GAP` being replaced by `* COMPONENT_GAP` on
+        // non-tiny widths.
+        assert!(
+            (40.0..200.0).contains(&gap),
+            "gap {gap} between disjoint trees out of expected [40, 200] range"
+        );
+        // Sanity: tree B's max sits to the right of its min.
+        assert!(b_x_min <= b_x_max);
     }
 
     #[test]
@@ -834,6 +960,105 @@ mod tests {
             edges: Vec::new(),
         };
         assert!(hierarchical(&empty, 1.0, 1.0).is_empty());
+    }
+
+    #[test]
+    fn hierarchical_orphans_sit_below_layered_region_with_grid_spacing() {
+        // Build 3 hierarchy nodes + 5 orphans. Use square aspect so
+        // the bias pass is a no-op and we can read absolute spacing.
+        // The orphans must sit *below* the layered region (lower y)
+        // and form a grid with exactly `ORPHAN_SPACING = 30` between
+        // adjacent rows and columns. This pins the orphan-positioning
+        // arithmetic: any flip of the `-` to `+` puts orphans above
+        // the layered cluster; any `*` → `+` / `/` collapses the
+        // grid's row spacing to ~1.
+        let mut g = make_balanced_tree(2);
+        let layered_n = g.nodes.len();
+        for i in 100..105 {
+            g.nodes.push(GraphNode {
+                id: format!("orphan{i}"),
+                label: format!("O{i}"),
+                node_type: NodeType::Class,
+                color: [1.0, 0.0, 0.0, 1.0],
+                description: None,
+                uri: None,
+                is_abstract: false,
+            });
+        }
+        let positions = hierarchical(&g, 1.0, 1.0);
+        assert_eq!(positions.len(), layered_n + 5);
+
+        let layered_min_y = positions[..layered_n]
+            .iter()
+            .map(|p| p.1)
+            .fold(f32::INFINITY, f32::min);
+        let orphan_max_y = positions[layered_n..]
+            .iter()
+            .map(|p| p.1)
+            .fold(f32::NEG_INFINITY, f32::max);
+        assert!(
+            orphan_max_y < layered_min_y,
+            "orphans must sit below layered region: orphan_max_y={orphan_max_y} layered_min_y={layered_min_y}"
+        );
+
+        // 5 orphans → sqrt(5).ceil() = 3 columns. Column 0 holds
+        // orphans 0 and 3 (one per row). Row gap should be exactly
+        // ORPHAN_SPACING = 30 in y.
+        let row0_col0 = positions[layered_n];
+        let row1_col0 = positions[layered_n + 3];
+        let row_gap = row0_col0.1 - row1_col0.1;
+        assert!(
+            (row_gap - 30.0).abs() < 1e-3,
+            "row gap should be 30, got {row_gap}"
+        );
+        // Column gap: orphans 0 and 1 sit in the same row, different
+        // columns. Spacing in x should also be 30.
+        let row0_col1 = positions[layered_n + 1];
+        let col_gap = row0_col1.0 - row0_col0.0;
+        assert!(
+            (col_gap - 30.0).abs() < 1e-3,
+            "col gap should be 30, got {col_gap}"
+        );
+        // Orphan grid origin sits at x=0 — pins the `col as f32 *
+        // ORPHAN_SPACING` formula against an `%` → `+` swap that
+        // would shift the entire grid right by `columns *
+        // ORPHAN_SPACING`.
+        assert!(
+            row0_col0.0.abs() < 1e-3,
+            "first orphan column should be at x=0, got {}",
+            row0_col0.0
+        );
+    }
+
+    #[test]
+    fn hierarchical_aspect_bias_scales_coordinates_per_axis() {
+        // Sugiyama output for the same input must scale by √(w/h) in
+        // x and √(h/w) in y when an aspect-biased layout is requested.
+        // The 4:2 aspect distinguishes `/` from `*` (√2 ≠ √8) and
+        // distinguishes `*=` from `+=` / `/=` (ratio biased/square
+        // would otherwise be additive or inverted).
+        let g = make_balanced_tree(3);
+        let square = hierarchical(&g, 1.0, 1.0);
+        let biased = hierarchical(&g, 4.0, 2.0);
+        assert_eq!(square.len(), biased.len());
+        let sx_expected = (4.0_f32 / 2.0).sqrt();
+        let sy_expected = (2.0_f32 / 4.0).sqrt();
+        for (i, ((sx, sy), (bx, by))) in square.iter().zip(biased.iter()).enumerate() {
+            if sx.abs() > 0.01 {
+                let ratio = bx / sx;
+                assert!(
+                    (ratio - sx_expected).abs() < 1e-3,
+                    "node {i}: x ratio {ratio} != expected {sx_expected}"
+                );
+            }
+            if sy.abs() > 0.01 {
+                let ratio = by / sy;
+                assert!(
+                    (ratio - sy_expected).abs() < 1e-3,
+                    "node {i}: y ratio {ratio} != expected {sy_expected}"
+                );
+            }
+        }
     }
 
     #[test]
