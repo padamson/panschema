@@ -68,7 +68,7 @@
             <select id="graph-layout-select" class="graph-layout-select">
                 <option value="force-directed">Force-directed</option>
                 <option value="kamada-kawai" title="Energy-minimization layout; slower init than force-directed, often produces nicer node spacing for medium graphs">Kamada-Kawai (slower init)</option>
-                <option value="hierarchical" disabled title="Not yet implemented">Hierarchical (coming soon)</option>
+                <option value="hierarchical" title="Sugiyama layered layout over the is_a / mixin sub-DAG; best for class hierarchies">Hierarchical (best for class hierarchies)</option>
                 <option value="stress" disabled title="Not yet implemented">Stress majorization (coming soon)</option>
                 <option value="sgd" disabled title="Not yet implemented">SGD (coming soon)</option>
                 <option value="circular" disabled title="Not yet implemented">Circular (coming soon)</option>
@@ -870,34 +870,35 @@
         'kamada-kawai', 'sgd', 'circular', 'radial-tree',
     ]);
     // Layouts that resolve to a real implementation on the wasm side.
-    const IMPLEMENTED_LAYOUTS = new Set(['force-directed', 'kamada-kawai']);
+    const IMPLEMENTED_LAYOUTS = new Set(['force-directed', 'kamada-kawai', 'hierarchical']);
 
     // Which modes each algorithm supports today. Mirrors what
     // `Visualization::new` / `create_visualization_3d` actually do on
     // the wasm side: force-directed runs in both 2D (CpuSimulation)
-    // and 3D (WebGPU); KK is 2D-only via egraph-rs; the rest aren't
-    // implemented in either mode yet. The picker UI uses this to grey
-    // out unsupported options per-mode with a clear label suffix.
+    // and 3D (WebGPU); KK and Hierarchical are 2D-only via egraph-rs
+    // and rust-sugiyama respectively; the rest aren't implemented in
+    // either mode yet. The picker UI uses this to grey out
+    // unsupported options per-mode with a clear label suffix.
     const LAYOUT_MODES = {
         'force-directed': { '2d': true, '3d': true },
         'kamada-kawai':   { '2d': true, '3d': false },
-        'hierarchical':   { '2d': false, '3d': false },
+        'hierarchical':   { '2d': true, '3d': false },
         'stress':         { '2d': false, '3d': false },
         'sgd':            { '2d': false, '3d': false },
         'circular':       { '2d': false, '3d': false },
         'radial-tree':    { '2d': false, '3d': false },
     };
 
-    // Per-mode display labels. The "(slower init)" suffix on KK
-    // signals a real cost tradeoff; "(coming soon)" reserves an
-    // unimplemented identifier for a future slice; "(not implemented)"
-    // distinguishes "exists but not in this mode" from "doesn't exist
-    // anywhere yet." Keep these in sync with the corresponding labels
-    // baked into the `<option>` elements above.
+    // Per-mode display labels. "(best for class hierarchies)" and
+    // "(slower init)" signal real algorithmic trade-offs; "(coming
+    // soon)" reserves an unimplemented identifier for a future slice;
+    // "(not implemented)" distinguishes "exists but not in this mode"
+    // from "doesn't exist anywhere yet." Keep these in sync with the
+    // corresponding labels baked into the `<option>` elements above.
     const LAYOUT_LABELS_2D = {
         'force-directed': 'Force-directed',
         'kamada-kawai':   'Kamada-Kawai (slower init)',
-        'hierarchical':   'Hierarchical (coming soon)',
+        'hierarchical':   'Hierarchical (best for class hierarchies)',
         'stress':         'Stress majorization (coming soon)',
         'sgd':            'SGD (coming soon)',
         'circular':       'Circular (coming soon)',

@@ -236,7 +236,7 @@ Existing in-tree CPU force simulation (slice 7 work in [Feature 02](02-core-onto
 
 ### Slice 6: Hierarchical algorithm (via `rust-sugiyama`)
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** Selecting "Hierarchical" lays out the schema as top-to-bottom layered Sugiyama, with each `is_a` / `subClassOf` chain becoming a vertical descent and crossings between layers explicitly minimized via Barth-Mutzel-Jünger. Class hierarchies snap into legible form; non-tree edges (range, domain, mixin) draw as overlays in a contrasting style.
 

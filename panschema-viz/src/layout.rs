@@ -79,7 +79,10 @@ impl LayoutAlgorithm {
     /// `true` for variants that resolve to a working implementation.
     /// Picker UIs use this to grey out unselectable options.
     pub fn is_implemented(&self) -> bool {
-        matches!(self, Self::ForceDirected | Self::KamadaKawai)
+        matches!(
+            self,
+            Self::ForceDirected | Self::KamadaKawai | Self::Hierarchical
+        )
     }
 
     /// Human-readable label, suitable for the picker UI.
@@ -257,6 +260,131 @@ pub fn scale_to_world(positions: &mut [(f32, f32)], target_max_dim: f32) {
     }
 }
 
+use crate::graph_types::EdgeType;
+
+/// Edge types that contribute to the class-hierarchy spine. Sugiyama
+/// runs over the sub-DAG these edges form; property edges (`Domain`,
+/// `Range`, `Inverse`, `TypeOf`) overlay the layered output later
+/// without participating in layering or cycle-breaking.
+fn is_hierarchy_edge(t: EdgeType) -> bool {
+    matches!(t, EdgeType::SubclassOf | EdgeType::Mixin)
+}
+
+/// Run a Sugiyama-style layered layout over the `is_a` / `mixin`
+/// sub-DAG of the schema and return positions in original
+/// [`GraphData`] node order.
+///
+/// Property edges (range / domain / inverse / typeof) deliberately
+/// don't participate in the layering — they overlay the layered
+/// output afterwards. Nodes that don't appear in any hierarchy edge
+/// (orphans relative to the hierarchy spine, even if they carry
+/// property edges) fall back to a grid arrangement below the layered
+/// region so the connected layered cluster keeps the central
+/// viewport.
+///
+/// `aspect_w` and `aspect_h` bias the final bbox toward that aspect
+/// via the same √(w/h), √(h/w) post-process used by [`kamada_kawai`].
+///
+/// Cycles in the hierarchy edge subset (which LinkML schemas
+/// shouldn't have, but pathological inputs might) are broken by
+/// rust-sugiyama's internal greedy feedback arc set. We don't surface
+/// which edges got reversed — that's a follow-on diagnostic.
+pub fn hierarchical(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> Vec<(f32, f32)> {
+    use rust_sugiyama::configure::Config;
+
+    if graph.nodes.is_empty() {
+        return Vec::new();
+    }
+
+    let id_to_idx: BTreeMap<&str, u32> = graph
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.id.as_str(), i as u32))
+        .collect();
+
+    let hierarchy_edges: Vec<(u32, u32)> = graph
+        .edges
+        .iter()
+        .filter(|e| is_hierarchy_edge(e.edge_type))
+        .filter_map(|e| {
+            let s = id_to_idx.get(e.source.as_str())?;
+            let t = id_to_idx.get(e.target.as_str())?;
+            Some((*s, *t))
+        })
+        .collect();
+
+    // Track which node indices Sugiyama actually placed so we can
+    // arrange orphans (nodes with no hierarchy edges) in a separate
+    // region after layout completes.
+    let mut placed: Vec<bool> = vec![false; graph.nodes.len()];
+    let mut positions: Vec<(f32, f32)> = vec![(0.0, 0.0); graph.nodes.len()];
+
+    let layouts = if hierarchy_edges.is_empty() {
+        Vec::new()
+    } else {
+        let config = Config::default();
+        rust_sugiyama::from_edges(&hierarchy_edges, &config)
+    };
+
+    // Concatenate disjoint hierarchy components left-to-right, with a
+    // gap between each component proportional to its width, so a
+    // schema with multiple roots reads as side-by-side trees rather
+    // than overlapping.
+    let mut x_offset = 0.0_f64;
+    const COMPONENT_GAP: f64 = 50.0;
+    for (subgraph, width, _height) in layouts {
+        for (vertex_id, (x, y)) in subgraph {
+            let node_idx = vertex_id;
+            if node_idx < graph.nodes.len() {
+                positions[node_idx] = ((x + x_offset) as f32, y as f32);
+                placed[node_idx] = true;
+            }
+        }
+        x_offset += width + COMPONENT_GAP;
+    }
+
+    // Arrange orphan nodes (no hierarchy edges) in a grid below the
+    // layered region. The grid sits at a deliberate vertical gap so
+    // the layered cluster stays in the central viewport.
+    let orphan_indices: Vec<usize> = placed
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &p)| (!p).then_some(i))
+        .collect();
+    if !orphan_indices.is_empty() {
+        let layered_min_y = positions
+            .iter()
+            .zip(placed.iter())
+            .filter_map(|(p, &pl)| pl.then_some(p.1))
+            .fold(f32::INFINITY, f32::min);
+        let orphan_top_y = if layered_min_y.is_finite() {
+            layered_min_y - 80.0
+        } else {
+            0.0
+        };
+        const ORPHAN_SPACING: f32 = 30.0;
+        let columns = ((orphan_indices.len() as f32).sqrt().ceil() as usize).max(1);
+        for (i, &idx) in orphan_indices.iter().enumerate() {
+            let col = i % columns;
+            let row = i / columns;
+            positions[idx] = (
+                (col as f32) * ORPHAN_SPACING,
+                orphan_top_y - (row as f32) * ORPHAN_SPACING,
+            );
+        }
+    }
+
+    let sx = (aspect_w / aspect_h).sqrt();
+    let sy = (aspect_h / aspect_w).sqrt();
+    for p in positions.iter_mut() {
+        p.0 *= sx;
+        p.1 *= sy;
+    }
+
+    positions
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,7 +416,9 @@ mod tests {
         for variant in LayoutAlgorithm::ALL {
             let implemented = variant.is_implemented();
             match variant {
-                LayoutAlgorithm::ForceDirected | LayoutAlgorithm::KamadaKawai => {
+                LayoutAlgorithm::ForceDirected
+                | LayoutAlgorithm::KamadaKawai
+                | LayoutAlgorithm::Hierarchical => {
                     assert!(implemented, "{:?} should be implemented", variant)
                 }
                 _ => assert!(!implemented, "{:?} should not be implemented", variant),
@@ -588,6 +718,140 @@ mod tests {
         scale_to_world(&mut coincident, 600.0);
         // All points coincident → bbox_max = 0 → no scaling applied.
         assert_eq!(coincident, vec![(5.0, 5.0), (5.0, 5.0), (5.0, 5.0)]);
+    }
+
+    fn make_balanced_tree(depth: u32) -> GraphData {
+        // Binary tree: 2^depth - 1 nodes, every non-leaf has 2 children
+        // wired via `subClassOf` edges. The canonical input that
+        // Sugiyama should render as cleanly stacked layers.
+        let total = (1u32 << depth) - 1;
+        let nodes: Vec<GraphNode> = (0..total)
+            .map(|i| GraphNode {
+                id: format!("n{i}"),
+                label: format!("N{i}"),
+                node_type: NodeType::Class,
+                color: [1.0, 0.0, 0.0, 1.0],
+                description: None,
+                uri: None,
+                is_abstract: false,
+            })
+            .collect();
+        let mut edges = Vec::new();
+        for parent in 0..total {
+            let left = 2 * parent + 1;
+            let right = 2 * parent + 2;
+            for child in [left, right] {
+                if child < total {
+                    edges.push(GraphEdge {
+                        source: format!("n{child}"),
+                        target: format!("n{parent}"),
+                        edge_type: EdgeType::SubclassOf,
+                        label: None,
+                    });
+                }
+            }
+        }
+        GraphData {
+            schema_name: "tree".into(),
+            schema_title: None,
+            format_version: "1.0".into(),
+            nodes,
+            edges,
+        }
+    }
+
+    #[test]
+    fn hierarchical_returns_position_per_node_on_balanced_tree() {
+        // Sugiyama on a 3-layer binary tree (7 nodes) must place every
+        // node and produce finite coordinates. The exact layout
+        // depends on rust-sugiyama's internals (which heuristic, which
+        // version) so we don't pin coordinates — just emit-per-node
+        // and finiteness.
+        let tree = make_balanced_tree(3);
+        let positions = hierarchical(&tree, 1.0, 1.0);
+        assert_eq!(positions.len(), 7);
+        for (x, y) in &positions {
+            assert!(x.is_finite() && y.is_finite(), "non-finite coordinate");
+        }
+    }
+
+    #[test]
+    fn hierarchical_falls_back_when_no_hierarchy_edges() {
+        // Graph with only property edges (no SubclassOf / Mixin)
+        // has nothing for Sugiyama to layer. Every node falls into
+        // the orphan-grid fallback rather than panicking.
+        let mut g = make_ring(5);
+        for e in g.edges.iter_mut() {
+            e.edge_type = EdgeType::Range;
+        }
+        let positions = hierarchical(&g, 1.0, 1.0);
+        assert_eq!(positions.len(), 5);
+        for (x, y) in &positions {
+            assert!(x.is_finite() && y.is_finite());
+        }
+        // The orphan grid should spread nodes — not collapse to a point.
+        let xs: Vec<f32> = positions.iter().map(|p| p.0).collect();
+        let unique_xs = xs
+            .iter()
+            .map(|x| (*x * 100.0) as i32)
+            .collect::<std::collections::HashSet<_>>();
+        assert!(
+            unique_xs.len() > 1,
+            "orphan grid should distribute nodes across x"
+        );
+    }
+
+    #[test]
+    fn hierarchical_filters_non_hierarchy_edges_from_layout() {
+        // A two-layer hierarchy with a cross-cutting property edge:
+        // the property edge must NOT feed Sugiyama (it would create a
+        // cycle once direction is normalized) and must not affect the
+        // layered positions of the hierarchy nodes.
+        let mut g = make_balanced_tree(2); // root + 2 leaves
+        g.edges.push(GraphEdge {
+            source: "n1".into(),
+            target: "n2".into(),
+            edge_type: EdgeType::Range,
+            label: None,
+        });
+        let positions = hierarchical(&g, 1.0, 1.0);
+        assert_eq!(positions.len(), 3);
+        // Root and its two children should still land on distinct
+        // y-coordinates (different Sugiyama layers); the cross-cutting
+        // property edge can't have collapsed them onto one layer.
+        let ys: std::collections::HashSet<i32> =
+            positions.iter().map(|p| (p.1 * 100.0) as i32).collect();
+        assert!(ys.len() >= 2, "hierarchy should produce at least 2 layers");
+    }
+
+    #[test]
+    fn hierarchical_handles_empty_graph() {
+        let empty = GraphData {
+            schema_name: "empty".into(),
+            schema_title: None,
+            format_version: "1.0".into(),
+            nodes: Vec::new(),
+            edges: Vec::new(),
+        };
+        assert!(hierarchical(&empty, 1.0, 1.0).is_empty());
+    }
+
+    #[test]
+    fn hierarchical_handles_cycle_in_hierarchy_edges() {
+        // Pathological: SubclassOf edges that form a cycle. LinkML
+        // shouldn't accept this, but rust-sugiyama's feedback arc set
+        // must break the cycle internally so we don't panic. The test
+        // succeeds if the function returns finite positions for every
+        // node.
+        let mut g = make_ring(4);
+        for e in g.edges.iter_mut() {
+            e.edge_type = EdgeType::SubclassOf;
+        }
+        let positions = hierarchical(&g, 1.0, 1.0);
+        assert_eq!(positions.len(), 4);
+        for (x, y) in &positions {
+            assert!(x.is_finite() && y.is_finite(), "cycle broke Sugiyama");
+        }
     }
 
     #[test]

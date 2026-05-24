@@ -36,6 +36,11 @@ serde_json = "1"
 petgraph = "0.6"
 petgraph-drawing = { version = "0.1", git = "https://github.com/likr/egraph-rs", rev = "8e986826534774fe7beb9546154407927260e446" }
 petgraph-layout-kamada-kawai = { version = "0.1", git = "https://github.com/likr/egraph-rs", rev = "8e986826534774fe7beb9546154407927260e446" }
+# Sugiyama for layered/hierarchical layout. Brings petgraph 0.8 in
+# alongside egraph-rs's 0.6 — the two versions coexist; the wire
+# format between them is just our own `(u32, u32)` edge tuples, never
+# a shared `NodeIndex`.
+rust-sugiyama = "0.4"
 
 # WebGPU (optional, only with webgpu feature)
 wgpu = { version = "29", features = ["webgpu"], optional = true }

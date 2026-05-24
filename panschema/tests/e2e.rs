@@ -1019,7 +1019,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
     // Implemented options are present and selectable; the rest are
     // reserved-wire-format placeholders carrying the disabled attribute.
-    for implemented in &["force-directed", "kamada-kawai"] {
+    for implemented in &["force-directed", "kamada-kawai", "hierarchical"] {
         let opt = page
             .locator(&format!(
                 "#graph-layout-select option[value=\"{implemented}\"]"
@@ -1042,7 +1042,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
             implemented
         );
     }
-    for unimplemented in &["hierarchical", "stress", "sgd", "circular", "radial-tree"] {
+    for unimplemented in &["stress", "sgd", "circular", "radial-tree"] {
         let opt = page
             .locator(&format!(
                 "#graph-layout-select option[value=\"{unimplemented}\"]"
@@ -1094,6 +1094,8 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         "circular",
         "radial-tree",
     ] {
+        // In 3D mode every non-force-directed layout (including the
+        // 2D-only implemented ones, KK and Hierarchical) is greyed.
         let opt = page
             .locator(&format!("#graph-layout-select option[value=\"{layout}\"]"))
             .await;

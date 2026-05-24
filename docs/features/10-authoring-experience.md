@@ -22,9 +22,9 @@ This feature collects the rule set + the UX for surfacing it.
 
 The friction-gathering slice (slice 1) and the rule-design slices that follow should be grounded in established LinkML / ontology authoring conventions. The three highest-signal sources:
 
-1. **LinkML's authoring documentation** — [linkml.io/linkml/schemas](https://linkml.io/linkml/schemas/index.html) and [linkml.io/linkml/intro](https://linkml.io/linkml/intro/index.html). The "Best Practices" subsection and the worked examples are the single most LinkML-specific reference; any gap between idiomatic LinkML and what panschema currently renders / accepts is a candidate rule.
+1. **LinkML's authoring documentation** — [linkml.io/linkml/schemas](https://linkml.io/linkml/schemas/index.html). The "Best Practices" subsection and the worked examples are the single most LinkML-specific reference; any gap between idiomatic LinkML and what panschema currently renders / accepts is a candidate rule.
 2. **OBO Foundry principles** — [obofoundry.org/principles/fp-000-summary](https://obofoundry.org/principles/fp-000-summary.html). The bio-ontology community's distilled discipline (open IRIs, versioning, modularity, controlled-vocabulary term deprecation, etc.). Companion text: *Building Ontologies with Basic Formal Ontology* (Arp, Smith, Spear, 2015) for the BFO-aligned methodological lens.
-3. **Ontology Development 101** — Noy & McGuinness, Stanford 2001 (free PDF). Outdated on syntax, evergreen on methodology: when is something a class vs a property vs an instance, naming-convention discipline, scope discipline. The canonical free intro.
+3. **Ontology Development 101** — [https://protege.stanford.edu/publications/ontology_development/ontology101.pdf](https://protege.stanford.edu/publications/ontology_development/ontology101.pdf). Noy & McGuinness, Stanford 2001 (free PDF). Outdated on syntax, evergreen on methodology: when is something a class vs a property vs an instance, naming-convention discipline, scope discipline. The canonical free intro.
 
 The intent is *not* to wrap any of these into panschema verbatim — it's to use them as the source of common "this is a known good pattern" / "this is a known anti-pattern" candidates for the rule set.
 

@@ -126,10 +126,22 @@ impl Visualization {
         // the per-tick physics; the simulation acts as a position
         // container plus drag/hover state. Aspect bias is baked into
         // the algorithm output (not the per-tick forces).
-        if matches!(algorithm, layout::LayoutAlgorithm::KamadaKawai) {
-            let mut positions = layout::kamada_kawai(&graph, aspect_w as f32, aspect_h as f32);
-            layout::scale_to_world(&mut positions, layout::WORLD_TARGET_DIMENSION);
-            simulation.freeze_at(&positions);
+        let mut static_positions: Option<Vec<(f32, f32)>> = match algorithm {
+            layout::LayoutAlgorithm::KamadaKawai => Some(layout::kamada_kawai(
+                &graph,
+                aspect_w as f32,
+                aspect_h as f32,
+            )),
+            layout::LayoutAlgorithm::Hierarchical => Some(layout::hierarchical(
+                &graph,
+                aspect_w as f32,
+                aspect_h as f32,
+            )),
+            _ => None,
+        };
+        if let Some(positions) = static_positions.as_mut() {
+            layout::scale_to_world(positions, layout::WORLD_TARGET_DIMENSION);
+            simulation.freeze_at(positions);
         }
 
         // Create renderer
