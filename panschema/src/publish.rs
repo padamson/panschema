@@ -30,6 +30,14 @@ pub enum PublishError {
     MissingVersionField,
     #[error("`{value}` is not a valid semver version")]
     InvalidVersion { value: String },
+    #[error(
+        "[publishing].current = `{current}` must appear in [publishing].versions = {versions:?} or equal [publishing].edge = {edge:?}"
+    )]
+    InvalidCurrent {
+        current: String,
+        versions: Vec<String>,
+        edge: Option<String>,
+    },
 }
 
 /// Which component of a semver version to bump.
@@ -45,6 +53,10 @@ pub enum BumpLevel {
 pub struct PublishConfig {
     pub schema: SchemaInfo,
     pub files: FileMapping,
+    /// Optional multi-version doc-publish orchestration config. Absent
+    /// for single-version schemas; presence enables `panschema publish`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publishing: Option<PublishingConfig>,
 }
 
 /// `[schema]` table — identity and versioning metadata.
@@ -65,11 +77,73 @@ pub struct FileMapping {
     pub main: PathBuf,
 }
 
+/// `[publishing]` table — multi-version doc orchestration config. Drives
+/// `panschema publish`: which git refs to build, where they land on disk,
+/// and which version the `current/` alias points to. Defaults are chosen
+/// so a minimal block (`versions = [...]`, `current = "..."`) works
+/// out-of-the-box.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublishingConfig {
+    /// Git tag names whose docs should be built. Each must resolve via
+    /// `git rev-parse` (validated at extraction time, not parse time).
+    #[serde(default)]
+    pub versions: Vec<String>,
+    /// Optional ref (branch or commit-ish) whose HEAD is also built.
+    /// `None` means skip the edge build. Typical value: `"main"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge: Option<String>,
+    /// Alias target — `current/` mirrors this version's output. Must be
+    /// in `versions` OR equal `edge` (validated at parse time).
+    pub current: String,
+    /// URL template for cross-version links. `{version}` placeholder.
+    #[serde(default = "default_url_pattern")]
+    pub url_pattern: String,
+    /// Where per-version subdirs land, relative to repo root.
+    #[serde(default = "default_output_dir")]
+    pub output_dir: PathBuf,
+    /// Output format — reserved for future writer fan-out.
+    #[serde(default = "default_format")]
+    pub format: String,
+}
+
+fn default_url_pattern() -> String {
+    "/schema/{version}/".to_string()
+}
+
+fn default_output_dir() -> PathBuf {
+    PathBuf::from("site/schema")
+}
+
+fn default_format() -> String {
+    "html".to_string()
+}
+
+impl PublishingConfig {
+    /// Validate cross-field invariants that pure serde can't express.
+    /// Currently: `current` must appear in `versions` or equal `edge`.
+    fn validate(&self) -> Result<(), PublishError> {
+        let in_versions = self.versions.iter().any(|v| v == &self.current);
+        let matches_edge = self.edge.as_deref() == Some(self.current.as_str());
+        if !in_versions && !matches_edge {
+            return Err(PublishError::InvalidCurrent {
+                current: self.current.clone(),
+                versions: self.versions.clone(),
+                edge: self.edge.clone(),
+            });
+        }
+        Ok(())
+    }
+}
+
 impl FromStr for PublishConfig {
     type Err = PublishError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(toml::from_str(s)?)
+        let cfg: PublishConfig = toml::from_str(s)?;
+        if let Some(publishing) = &cfg.publishing {
+            publishing.validate()?;
+        }
+        Ok(cfg)
     }
 }
 
@@ -462,6 +536,185 @@ main = "schema.yaml"
         // File must be unchanged.
         let cfg = PublishConfig::from_path(&path).unwrap();
         assert_eq!(cfg.schema.version, "0.1.0");
+    }
+
+    // ----- [publishing] section -----
+
+    #[test]
+    fn parses_publish_spec_without_publishing_section() {
+        // Absent `[publishing]` means single-version generation — the
+        // pre-feature-11 behavior. Must continue to work.
+        let toml = r#"
+[schema]
+name = "x"
+version = "0.1.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+"#;
+        let cfg: PublishConfig = toml.parse().expect("should parse");
+        assert!(cfg.publishing.is_none());
+    }
+
+    #[test]
+    fn parses_minimal_publishing_block_with_defaults() {
+        // Minimal block: just `versions` + `current`. Optional fields
+        // (`edge`, `url_pattern`, `output_dir`, `format`) come from
+        // their serde defaults.
+        let toml = r#"
+[schema]
+name = "x"
+version = "0.2.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+
+[publishing]
+versions = ["v0.1.0", "v0.2.0"]
+current = "v0.2.0"
+"#;
+        let cfg: PublishConfig = toml.parse().expect("should parse");
+        let publishing = cfg.publishing.expect("publishing should be present");
+        assert_eq!(publishing.versions, vec!["v0.1.0", "v0.2.0"]);
+        assert_eq!(publishing.current, "v0.2.0");
+        assert!(publishing.edge.is_none());
+        assert_eq!(publishing.url_pattern, "/schema/{version}/");
+        assert_eq!(publishing.output_dir, PathBuf::from("site/schema"));
+        assert_eq!(publishing.format, "html");
+    }
+
+    #[test]
+    fn parses_full_publishing_block_with_overrides() {
+        // Every optional field overridden. Round-trips through serde
+        // without losing values.
+        let toml = r#"
+[schema]
+name = "x"
+version = "0.3.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+
+[publishing]
+versions = ["v0.1.0", "v0.2.0"]
+edge = "main"
+current = "main"
+url_pattern = "/docs/{version}/"
+output_dir = "build/site"
+format = "html"
+"#;
+        let cfg: PublishConfig = toml.parse().expect("should parse");
+        let publishing = cfg.publishing.expect("publishing should be present");
+        assert_eq!(publishing.edge.as_deref(), Some("main"));
+        assert_eq!(publishing.current, "main");
+        assert_eq!(publishing.url_pattern, "/docs/{version}/");
+        assert_eq!(publishing.output_dir, PathBuf::from("build/site"));
+    }
+
+    #[test]
+    fn accepts_current_matching_edge_even_when_not_in_versions() {
+        // The validation rule: `current` is OK if it matches `edge`,
+        // even when not listed in `versions`. Useful for "publish only
+        // edge" setups.
+        let toml = r#"
+[schema]
+name = "x"
+version = "0.1.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+
+[publishing]
+versions = []
+edge = "main"
+current = "main"
+"#;
+        toml.parse::<PublishConfig>().expect("should parse");
+    }
+
+    #[test]
+    fn rejects_current_not_in_versions_and_not_equal_edge() {
+        // `current = "v9.9.9"` is neither in `versions` nor `== edge`.
+        // Parse must fail at parse time with InvalidCurrent.
+        let toml = r#"
+[schema]
+name = "x"
+version = "0.1.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+
+[publishing]
+versions = ["v0.1.0", "v0.2.0"]
+edge = "main"
+current = "v9.9.9"
+"#;
+        let err = toml
+            .parse::<PublishConfig>()
+            .expect_err("should reject invalid current");
+        assert!(
+            matches!(err, PublishError::InvalidCurrent { ref current, .. } if current == "v9.9.9"),
+            "expected InvalidCurrent with current=v9.9.9; got {err:?}"
+        );
+        // Error message should be actionable — name the offending field
+        // and what it can be.
+        let msg = err.to_string();
+        assert!(msg.contains("current"));
+        assert!(msg.contains("v9.9.9"));
+        assert!(msg.contains("versions"));
+    }
+
+    #[test]
+    fn rejects_current_when_versions_empty_and_no_edge() {
+        // Empty versions + no edge means there's nothing `current` could
+        // legitimately match. Reject rather than silently produce an
+        // unusable manifest.
+        let toml = r#"
+[schema]
+name = "x"
+version = "0.1.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+
+[publishing]
+versions = []
+current = "v0.1.0"
+"#;
+        let err = toml
+            .parse::<PublishConfig>()
+            .expect_err("should reject when current has nothing to match");
+        assert!(matches!(err, PublishError::InvalidCurrent { .. }));
+    }
+
+    #[test]
+    fn rejects_missing_current_field() {
+        // `current` is required when `[publishing]` is present —
+        // there's no sensible default.
+        let toml = r#"
+[schema]
+name = "x"
+version = "0.1.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+
+[publishing]
+versions = ["v0.1.0"]
+"#;
+        let err = toml
+            .parse::<PublishConfig>()
+            .expect_err("should reject missing current");
+        // serde gives a generic Parse error pointing at the missing field.
+        assert!(matches!(err, PublishError::Parse(_)));
+        assert!(err.to_string().contains("current"));
     }
 
     #[test]
