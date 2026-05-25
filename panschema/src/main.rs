@@ -180,6 +180,24 @@ enum Commands {
     /// Verify that on-disk schemas match the checksums recorded in
     /// `panschema.lock`. Errors on drift.
     Verify,
+    /// Build versioned HTML docs from a `panschema-publish.toml` with a
+    /// `[publishing]` section. Produces `<output>/<tag>/` per version,
+    /// `<output>/<edge>/` if edge is configured, and a `<output>/current/`
+    /// alias that mirrors the configured version's output.
+    Publish {
+        /// Path to `panschema-publish.toml`. Defaults to the file in CWD.
+        #[arg(long, default_value = "panschema-publish.toml")]
+        manifest: PathBuf,
+        /// Output directory for per-version doc trees. Overrides the
+        /// manifest's `[publishing].output_dir`. Resolved relative to the
+        /// manifest's parent directory when relative.
+        ///
+        /// Distinct long name (`--output-dir`) avoids collision with the
+        /// global `--output` flag, whose `default_value` would otherwise
+        /// shadow a `None` here through clap's arg propagation.
+        #[arg(long = "output-dir")]
+        output_dir: Option<PathBuf>,
+    },
     /// Start development server with hot reload
     Serve {
         /// Input ontology file (.ttl, .yaml, .yml)
@@ -1017,6 +1035,70 @@ fn verify_from_manifest() -> anyhow::Result<()> {
     anyhow::bail!("{msg}");
 }
 
+/// `panschema publish`: build versioned HTML docs from a
+/// `panschema-publish.toml` with a `[publishing]` section. Each entry
+/// in `versions` (and `edge` if set) becomes `<output>/<ref>/`, and
+/// `<output>/current/` mirrors the configured version.
+///
+/// Thin CLI plumbing around [`panschema::publish::publish_versioned`].
+/// `#[mutants::skip]` because the real orchestration logic lives in
+/// the library function (which has full unit coverage); CLI-level
+/// regressions are caught by the integration test that shells out
+/// to this binary, but those tests aren't visible to
+/// `cargo mutants --lib`.
+#[mutants::skip]
+fn publish_command(manifest: &Path, output_override: Option<&Path>) -> anyhow::Result<()> {
+    use panschema::publish::{PublishConfig, publish_versioned};
+
+    let manifest = if manifest.is_absolute() {
+        manifest.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(manifest)
+    };
+    if !manifest.exists() {
+        anyhow::bail!(
+            "publish file not found: {}\n\
+             Create one with `panschema init` or pass `--manifest <path>`.",
+            manifest.display()
+        );
+    }
+    let manifest_dir = manifest.parent().ok_or_else(|| {
+        anyhow::anyhow!(
+            "publish file has no parent directory: {}",
+            manifest.display()
+        )
+    })?;
+
+    let cfg = PublishConfig::from_path(&manifest)?;
+    let publishing = cfg.publishing.as_ref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "`{}` has no [publishing] section — `panschema publish` requires one. \
+             See docs/features/11-versioned-docs-publish.md.",
+            manifest.display()
+        )
+    })?;
+
+    // Output dir precedence: CLI flag > manifest field. Relative paths
+    // resolve against the manifest's parent (the repo root, typically).
+    let output_dir = output_override
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| publishing.output_dir.clone());
+    let output_dir = if output_dir.is_absolute() {
+        output_dir
+    } else {
+        manifest_dir.join(output_dir)
+    };
+
+    publish_versioned(manifest_dir, &cfg, &output_dir)?;
+
+    println!(
+        "Published {} versions to {}",
+        publishing.versions.len() + publishing.edge.iter().count(),
+        output_dir.display()
+    );
+    Ok(())
+}
+
 #[cfg(feature = "dev")]
 fn generate_styleguide(output: &Path) -> anyhow::Result<()> {
     use std::fs;
@@ -1082,6 +1164,10 @@ async fn main() -> anyhow::Result<()> {
         }) => release_schema(level, version.as_deref(), git, push, dry_run)?,
         Some(Commands::Fetch) => fetch_from_manifest()?,
         Some(Commands::Verify) => verify_from_manifest()?,
+        Some(Commands::Publish {
+            manifest,
+            output_dir,
+        }) => publish_command(&manifest, output_dir.as_deref())?,
         Some(Commands::Serve {
             input,
             output,

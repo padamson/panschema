@@ -57,6 +57,13 @@ pub enum PublishError {
     },
     #[error("`git` not found on PATH — required for versioned publish")]
     GitNotFound,
+    #[error(
+        "`panschema publish` requires a [publishing] section in {}",
+        PUBLISH_FILENAME
+    )]
+    MissingPublishingSection,
+    #[error("failed to generate docs for version `{version}`: {message}")]
+    GenerateFailed { version: String, message: String },
 }
 
 /// Which component of a semver version to bump.
@@ -331,6 +338,127 @@ pub fn extract_main_at_ref(
     use std::io::Write;
     file.write_all(&output.stdout).map_err(PublishError::Io)?;
     Ok(file)
+}
+
+/// Orchestrate the multi-version doc build described by
+/// `publish_cfg`'s `[publishing]` section. For each entry in
+/// `versions` (and `edge` if set), extracts the schema's main file
+/// at that ref into a temp file, runs the HTML generator against it,
+/// and writes output to `<output_dir>/<ref>/`. Finally copies the
+/// `current` version's output to `<output_dir>/current/` so consumers
+/// can link to `/schema/current/` without hard-coding a version.
+///
+/// `output_dir` may be relative; resolved against the caller's CWD.
+///
+/// Resolves all refs up-front via [`resolve_refs`] so a bad tag
+/// fails fast with a single combined error rather than after a
+/// partial build.
+pub fn publish_versioned(
+    repo_root: &Path,
+    publish_cfg: &PublishConfig,
+    output_dir: &Path,
+) -> Result<(), PublishError> {
+    let publishing = publish_cfg
+        .publishing
+        .as_ref()
+        .ok_or(PublishError::MissingPublishingSection)?;
+
+    // Fail fast on any unresolvable ref. Combined error names every bad
+    // ref at once so the user fixes all of them in one editor pass.
+    let mut all_refs: Vec<&str> = publishing.versions.iter().map(String::as_str).collect();
+    if let Some(edge) = &publishing.edge {
+        all_refs.push(edge.as_str());
+    }
+    resolve_refs(repo_root, &all_refs)?;
+
+    let manifest_main = &publish_cfg.files.main;
+
+    for version in &publishing.versions {
+        build_version(repo_root, version, manifest_main, output_dir)?;
+    }
+    if let Some(edge) = &publishing.edge {
+        build_version(repo_root, edge, manifest_main, output_dir)?;
+    }
+
+    // current/ is a copy of the configured version's output, not a
+    // symlink (static hosts handle directories cleanly; symlinks are
+    // flaky on GH Pages) and not a re-render (would duplicate work and
+    // risk byte divergence). The src is guaranteed to exist because
+    // `current` is parse-time-validated to be in `versions` or equal
+    // `edge`, both of which we just built.
+    let current_src = output_dir.join(&publishing.current);
+    let current_dst = output_dir.join("current");
+    if current_dst.exists() {
+        std::fs::remove_dir_all(&current_dst)?;
+    }
+    copy_dir_recursive(&current_src, &current_dst)?;
+
+    Ok(())
+}
+
+fn build_version(
+    repo_root: &Path,
+    ref_: &str,
+    manifest_main: &Path,
+    output_dir: &Path,
+) -> Result<(), PublishError> {
+    let extracted = extract_main_at_ref(repo_root, ref_, manifest_main)?;
+    let version_out = output_dir.join(ref_);
+    std::fs::create_dir_all(&version_out)?;
+    generate_html_for_version(ref_, extracted.path(), &version_out)
+}
+
+/// Run the HTML generator against a single extracted schema file.
+/// Wraps the existing Reader/Writer pipeline so any failure is
+/// surfaced as [`PublishError::GenerateFailed`] tagged with the
+/// version that failed.
+fn generate_html_for_version(
+    version: &str,
+    input: &Path,
+    output: &Path,
+) -> Result<(), PublishError> {
+    use crate::html_writer::HtmlWriter;
+    use crate::io::{FormatRegistry, Writer};
+
+    let registry = FormatRegistry::with_defaults();
+    let reader = registry
+        .reader_for_path(input)
+        .map_err(|e| PublishError::GenerateFailed {
+            version: version.to_string(),
+            message: e.to_string(),
+        })?;
+    let schema = reader
+        .read(input)
+        .map_err(|e| PublishError::GenerateFailed {
+            version: version.to_string(),
+            message: e.to_string(),
+        })?;
+    let writer = HtmlWriter::with_options(true);
+    writer
+        .write(&schema, output)
+        .map_err(|e| PublishError::GenerateFailed {
+            version: version.to_string(),
+            message: e.to_string(),
+        })?;
+    Ok(())
+}
+
+/// Recursive directory copy. `std::fs` only ships single-file copy;
+/// the `current/` alias is a small tree so a hand-rolled walker is
+/// fine. Errors propagate via `std::io::Error` → `PublishError::Io`.
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let dest = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_recursive(&entry.path(), &dest)?;
+        } else {
+            std::fs::copy(entry.path(), dest)?;
+        }
+    }
+    Ok(())
 }
 
 /// Translate a failure from spawning `git` into the right
@@ -870,7 +998,7 @@ versions = ["v0.1.0"]
         );
     }
 
-    // ----- resolve_refs / extract_main_at_ref (slice 2) -----
+    // ----- resolve_refs / extract_main_at_ref -----
 
     /// Build a synthetic git repo with two committed tags + an extra
     /// HEAD commit on `main`. Each commit rewrites `schema.yaml` with
@@ -1003,6 +1131,193 @@ versions = ["v0.1.0"]
         let err = extract_main_at_ref(repo.path(), "v0.1.0", Path::new("missing/file.yaml"))
             .expect_err("missing path");
         assert!(matches!(err, PublishError::ExtractFailed { .. }));
+    }
+
+    // ----- publish_versioned -----
+
+    /// Build a versioned fixture repo whose `schema.yaml` is a real
+    /// (minimal) LinkML schema at each tag — enough that the HTML
+    /// writer can run end-to-end against the extracted content.
+    fn make_versioned_linkml_repo() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path();
+        run(path, &["init", "--initial-branch=main", "--quiet"]);
+        run(path, &["config", "user.email", "test@example.com"]);
+        run(path, &["config", "user.name", "Test"]);
+        run(path, &["config", "commit.gpgsign", "false"]);
+        for (tag, version_marker) in [("v0.1.0", "0.1.0"), ("v0.2.0", "0.2.0")] {
+            let schema = format!(
+                "id: https://example.org/{tag}\n\
+                 name: fixture_{version_marker}\n\
+                 version: {version_marker}\n\
+                 prefixes:\n  schema: https://example.org/\n\
+                 default_prefix: schema\n\
+                 classes:\n  Thing:\n    description: a thing\n"
+            );
+            std::fs::write(path.join("schema.yaml"), schema).unwrap();
+            run(path, &["add", "schema.yaml"]);
+            run(
+                path,
+                &["commit", "-m", &format!("release {tag}"), "--quiet"],
+            );
+            run(path, &["tag", tag]);
+        }
+        // Move main beyond v0.2.0 so the edge build differs.
+        let edge_schema = "id: https://example.org/main\n\
+             name: fixture_edge\n\
+             version: 0.3.0-dev\n\
+             prefixes:\n  schema: https://example.org/\n\
+             default_prefix: schema\n\
+             classes:\n  Thing:\n    description: a thing\n  EdgeOnly:\n    description: only on edge\n";
+        std::fs::write(path.join("schema.yaml"), edge_schema).unwrap();
+        run(path, &["add", "schema.yaml"]);
+        run(path, &["commit", "-m", "WIP", "--quiet"]);
+        tmp
+    }
+
+    fn make_publish_cfg_with_versions(
+        versions: Vec<&str>,
+        edge: Option<&str>,
+        current: &str,
+    ) -> PublishConfig {
+        PublishConfig {
+            schema: SchemaInfo {
+                name: "fixture".into(),
+                version: "0.2.0".into(),
+                linkml: "1.7.0".into(),
+            },
+            files: FileMapping {
+                main: PathBuf::from("schema.yaml"),
+            },
+            publishing: Some(PublishingConfig {
+                versions: versions.into_iter().map(String::from).collect(),
+                edge: edge.map(String::from),
+                current: current.into(),
+                url_pattern: default_url_pattern(),
+                output_dir: PathBuf::from("site/schema"),
+                format: default_format(),
+            }),
+        }
+    }
+
+    #[test]
+    fn publish_versioned_errors_when_publishing_section_absent() {
+        let repo = make_versioned_linkml_repo();
+        let cfg = PublishConfig {
+            schema: SchemaInfo {
+                name: "x".into(),
+                version: "0.1.0".into(),
+                linkml: "1.7.0".into(),
+            },
+            files: FileMapping {
+                main: PathBuf::from("schema.yaml"),
+            },
+            publishing: None,
+        };
+        let out = tempfile::tempdir().unwrap();
+        let err = publish_versioned(repo.path(), &cfg, out.path()).expect_err("no publishing");
+        assert!(matches!(err, PublishError::MissingPublishingSection));
+    }
+
+    #[test]
+    fn publish_versioned_writes_per_version_subdirs() {
+        let repo = make_versioned_linkml_repo();
+        let cfg = make_publish_cfg_with_versions(vec!["v0.1.0", "v0.2.0"], None, "v0.2.0");
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path()).expect("publish succeeds");
+        assert!(out.path().join("v0.1.0").is_dir());
+        assert!(out.path().join("v0.2.0").is_dir());
+        // HtmlWriter produces an index.html per version.
+        assert!(out.path().join("v0.1.0/index.html").is_file());
+        assert!(out.path().join("v0.2.0/index.html").is_file());
+    }
+
+    #[test]
+    fn publish_versioned_builds_edge_when_configured() {
+        let repo = make_versioned_linkml_repo();
+        let cfg = make_publish_cfg_with_versions(vec!["v0.1.0"], Some("main"), "v0.1.0");
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path()).expect("publish succeeds");
+        assert!(out.path().join("v0.1.0/index.html").is_file());
+        assert!(out.path().join("main/index.html").is_file());
+        // The edge schema declares an EdgeOnly class that v0.1.0 doesn't —
+        // proves the HTML for `main` came from a different schema than v0.1.0.
+        let edge_html = std::fs::read_to_string(out.path().join("main/index.html")).unwrap();
+        assert!(edge_html.contains("EdgeOnly"));
+        let v01_html = std::fs::read_to_string(out.path().join("v0.1.0/index.html")).unwrap();
+        assert!(!v01_html.contains("EdgeOnly"));
+    }
+
+    #[test]
+    fn publish_versioned_current_is_byte_copy_of_configured_version() {
+        let repo = make_versioned_linkml_repo();
+        let cfg = make_publish_cfg_with_versions(vec!["v0.1.0", "v0.2.0"], None, "v0.2.0");
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path()).expect("publish succeeds");
+        // current/ exists, contains an index.html byte-equal to v0.2.0's.
+        let current_html = std::fs::read(out.path().join("current/index.html")).unwrap();
+        let v02_html = std::fs::read(out.path().join("v0.2.0/index.html")).unwrap();
+        assert_eq!(current_html, v02_html);
+    }
+
+    #[test]
+    fn publish_versioned_current_can_alias_edge() {
+        // Edge case: `current` points at `edge` instead of a released
+        // version. Validated at parse time; orchestration must build
+        // edge's output and copy it into current/.
+        let repo = make_versioned_linkml_repo();
+        let cfg = make_publish_cfg_with_versions(vec!["v0.1.0"], Some("main"), "main");
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path()).expect("publish succeeds");
+        let current = std::fs::read(out.path().join("current/index.html")).unwrap();
+        let edge = std::fs::read(out.path().join("main/index.html")).unwrap();
+        assert_eq!(current, edge);
+    }
+
+    #[test]
+    fn publish_versioned_combines_unresolved_refs_into_one_error() {
+        let repo = make_versioned_linkml_repo();
+        let cfg = make_publish_cfg_with_versions(
+            vec!["v0.1.0", "v9.9.9"],
+            Some("not-a-real-branch"),
+            "v0.1.0",
+        );
+        let out = tempfile::tempdir().unwrap();
+        let err = publish_versioned(repo.path(), &cfg, out.path()).expect_err("bad refs");
+        match err {
+            PublishError::RefsUnresolvable { refs, .. } => {
+                assert!(refs.contains(&"v9.9.9".to_string()));
+                assert!(refs.contains(&"not-a-real-branch".to_string()));
+            }
+            other => panic!("expected RefsUnresolvable, got {other:?}"),
+        }
+        // No partial state: outputs for any version must not exist.
+        assert!(!out.path().join("v0.1.0").exists());
+    }
+
+    #[test]
+    fn publish_versioned_overwrites_existing_current_directory() {
+        // Running publish twice in a row should produce the same
+        // result — the second run's current/ overwrite must not leak
+        // files from an earlier different `current` target.
+        let repo = make_versioned_linkml_repo();
+        let out = tempfile::tempdir().unwrap();
+
+        // First run: current = v0.1.0
+        let cfg = make_publish_cfg_with_versions(vec!["v0.1.0", "v0.2.0"], None, "v0.1.0");
+        publish_versioned(repo.path(), &cfg, out.path()).expect("first publish");
+        let after_first = std::fs::read(out.path().join("current/index.html")).unwrap();
+        let v01 = std::fs::read(out.path().join("v0.1.0/index.html")).unwrap();
+        assert_eq!(after_first, v01);
+
+        // Second run with the same dir but current = v0.2.0
+        let cfg = make_publish_cfg_with_versions(vec!["v0.1.0", "v0.2.0"], None, "v0.2.0");
+        publish_versioned(repo.path(), &cfg, out.path()).expect("second publish");
+        let after_second = std::fs::read(out.path().join("current/index.html")).unwrap();
+        let v02 = std::fs::read(out.path().join("v0.2.0/index.html")).unwrap();
+        assert_eq!(after_second, v02);
+        // And it's not the v0.1.0 content from the first run.
+        assert_ne!(after_second, after_first);
     }
 
     #[test]

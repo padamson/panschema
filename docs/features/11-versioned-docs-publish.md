@@ -100,18 +100,18 @@ Field semantics:
 
 ### Slice 3: `panschema publish` command — per-version build + `current` alias
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** First user-facing milestone. `panschema publish` reads the manifest, builds each version's HTML output into `output_dir/<tag>/`, copies the configured `current` version to `output_dir/current/`, and exits cleanly. No dropdown/banner in the rendered output yet — that's slice 4.
 
 **Acceptance Criteria:**
-- [ ] New subcommand `panschema publish [--manifest <path>] [--output <dir>]` wired into `main.rs`.
-- [ ] Reads manifest, errors if `[publishing]` is absent.
-- [ ] For each entry in `versions`: extracts via slice 2, runs the existing HTML generator against the extracted file, output to `<output_dir>/<tag>/`.
-- [ ] If `edge` is set: extracts and builds to `<output_dir>/<edge-name>/` (typically `main`).
-- [ ] `current/` is a `cp -r` of the `current` version's output (not a symlink — static hosts handle directories reliably; not a re-render — risk of byte divergence).
-- [ ] Exit non-zero on: missing `[publishing]`, any tag failing to resolve, `current` not in `versions` and not equal to `edge`, any individual generate failing (don't continue producing partial state).
-- [ ] Integration test against a fixture repo verifies: all configured outputs exist, `current/` is byte-equal to the configured version's output.
+- [x] New subcommand `panschema publish [--manifest <path>] [--output <dir>]` wired into `main.rs`. `--output` overrides the manifest's `[publishing].output_dir`; relative paths resolve against the manifest's parent.
+- [x] Library entry point `publish_versioned(repo_root, &PublishConfig, output_dir)` does the work; the binary wrapper is a thin CLI surface around it. Errors with `PublishError::MissingPublishingSection` when `[publishing]` is absent.
+- [x] For each entry in `versions`: extracts the schema's main file via slice 2's `extract_main_at_ref`, then runs `HtmlWriter::with_options(true).write(...)` against the extracted file, output to `<output_dir>/<tag>/`. Failures surface as `PublishError::GenerateFailed { version, message }`.
+- [x] If `edge` is set: same flow, output to `<output_dir>/<edge-name>/`.
+- [x] `current/` is built via `copy_dir_recursive` of the `current` version's output (not a symlink — static hosts handle directories reliably; not a re-render — risk of byte divergence). Running publish twice with different `current` values overwrites the directory cleanly.
+- [x] All refs resolved up-front via `resolve_refs` so a bad tag fails fast with a single combined error before any partial build state is produced.
+- [x] Integration tests: per-version subdirs exist, edge subdir exists when configured, `current/` is byte-equal to the configured version's output, current-aliasing-edge works, unresolved refs combine into one error with no partial state, second-run overwrite produces the new current.
 
 **Notes:**
 - The existing HTML generator API is the right reuse target; this slice doesn't change `HtmlWriter` itself, just orchestrates it.
@@ -183,6 +183,6 @@ If/when panschema gains a "split per class" output mode, stable URLs become impo
 |-------|----------|------------|--------|
 | Slice 1: `[publishing]` parsing + validation | Must Have | None | Completed |
 | Slice 2: Per-version git extraction | Must Have | Slice 1 | Completed |
-| Slice 3: `panschema publish` command | Must Have | Slices 1, 2 | Not Started |
+| Slice 3: `panschema publish` command | Must Have | Slices 1, 2 | Completed |
 | Slice 4: Template integration (dropdown + banner) | Must Have | Slice 3 | Not Started |
 | Slice 5: scimantic-schema dogfood + panschema release | Must Have | Slice 4 | Not Started |

@@ -2214,6 +2214,125 @@ fn init_output_shows_field_provenance() {
     );
 }
 
+/// End-to-end exercise of the `panschema publish` subcommand: builds
+/// a synthetic git repo with a tagged release, writes a manifest with
+/// a `[publishing]` block, invokes the CLI, and confirms the per-tag
+/// and `current/` outputs land where they should.
+///
+/// This is the integration-level counterpart to the unit tests in
+/// `publish.rs::tests` — those exercise the library function;
+/// this one exercises the CLI wrapper that's intentionally
+/// `#[mutants::skip]`'d in `main.rs`.
+#[test]
+fn cli_publish_builds_per_version_subdirs_and_current_alias() {
+    fn git(cwd: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(cwd)
+            .args(args)
+            .status()
+            .expect("git on PATH");
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = tmp.path();
+
+    // Init a synthetic repo with one tagged release. Deterministic
+    // identity so commits hash stably across CI runners and the local
+    // dev box.
+    git(repo, &["init", "--initial-branch=main", "--quiet"]);
+    git(repo, &["config", "user.email", "test@example.com"]);
+    git(repo, &["config", "user.name", "Test"]);
+    git(repo, &["config", "commit.gpgsign", "false"]);
+    fs::write(
+        repo.join("schema.yaml"),
+        "id: https://example.org/v0.1.0\n\
+         name: cli_publish_fixture\n\
+         version: 0.1.0\n\
+         prefixes:\n  schema: https://example.org/\n\
+         default_prefix: schema\n\
+         classes:\n  Thing:\n    description: a thing\n",
+    )
+    .unwrap();
+    git(repo, &["add", "schema.yaml"]);
+    git(repo, &["commit", "-m", "release v0.1.0", "--quiet"]);
+    git(repo, &["tag", "v0.1.0"]);
+
+    // Manifest with [publishing]. Note `current = "v0.1.0"` — that's
+    // the only legal value here (no other versions, no edge).
+    fs::write(
+        repo.join("panschema-publish.toml"),
+        r#"[schema]
+name = "cli_publish_fixture"
+version = "0.1.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+
+[publishing]
+versions = ["v0.1.0"]
+current = "v0.1.0"
+output_dir = "site"
+"#,
+    )
+    .unwrap();
+
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("publish")
+        .current_dir(repo)
+        .status()
+        .expect("panschema");
+    assert!(status.success(), "panschema publish exited with error");
+
+    // Per-tag output exists.
+    assert!(
+        repo.join("site/v0.1.0/index.html").is_file(),
+        "expected site/v0.1.0/index.html to exist"
+    );
+    // current/ alias is a byte-equal copy of the v0.1.0 output.
+    let v01 = fs::read(repo.join("site/v0.1.0/index.html")).unwrap();
+    let current = fs::read(repo.join("site/current/index.html")).unwrap();
+    assert_eq!(
+        current, v01,
+        "current/index.html must be byte-equal to v0.1.0/index.html"
+    );
+}
+
+/// CLI exit-code contract: `panschema publish` against a manifest
+/// without a `[publishing]` section fails fast and the error message
+/// names the missing section.
+#[test]
+fn cli_publish_errors_when_publishing_section_absent() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        tmp.path().join("panschema-publish.toml"),
+        r#"[schema]
+name = "x"
+version = "0.1.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+"#,
+    )
+    .unwrap();
+    fs::write(tmp.path().join("schema.yaml"), "id: x\nname: x\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("publish")
+        .current_dir(tmp.path())
+        .output()
+        .expect("panschema");
+    assert!(!output.status.success(), "expected non-zero exit");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("[publishing]"),
+        "stderr should name the missing [publishing] section: {stderr}"
+    );
+}
+
 /// Fix 4 corollary: `--from` provenance is labeled distinctly.
 #[test]
 fn init_output_shows_from_provenance_when_from_used() {
