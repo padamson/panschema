@@ -182,7 +182,7 @@ criteria = "safe-to-run"
 
 [[exemptions.fastrand]]
 version = "2.4.1"
-criteria = "safe-to-run"
+criteria = "safe-to-deploy"
 
 [[exemptions.find-msvc-tools]]
 version = "0.1.9"
@@ -526,6 +526,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.mownstr]]
 version = "0.3.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.mutants]]
+version = "0.0.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.naga]]
@@ -878,6 +882,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.tar]]
 version = "0.4.46"
+criteria = "safe-to-deploy"
+
+[[exemptions.tempfile]]
+version = "3.27.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.time]]

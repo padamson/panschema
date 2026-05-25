@@ -2280,6 +2280,7 @@ dependencies = [
  "fs2",
  "hex",
  "insta",
+ "mutants",
  "notify",
  "playwright-rs",
  "pollster",

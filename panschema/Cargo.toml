@@ -53,6 +53,16 @@ tar = "0.4"
 directories = "6"
 fs2 = "0.4"
 
+# Versioned-publish — `git show <ref>:<path>` output lands in a temp
+# file managed via NamedTempFile (auto-unlinked on drop).
+tempfile = "3.24.0"
+
+# Empty no-op crate providing `#[mutants::skip]`. Used to suppress
+# specific mutation-test mutations on inline-equivalent expressions
+# where the cleanest skip is a tiny helper function rather than a
+# brittle line-number exclude in scripts/mutants.sh.
+mutants = "0.0.3"
+
 # GPU force simulation (optional)
 wgpu = { version = "29", optional = true }
 bytemuck = { version = "1", features = ["derive"], optional = true }
@@ -83,6 +93,5 @@ syn = { version = "2", features = ["full"] }
 # must match `playwright_rs::PLAYWRIGHT_VERSION` exactly — wire-protocol
 # mismatches silently break the harness.
 playwright-rs = "0.13"
-tempfile = "3.24.0"
 
 # Profile settings are in workspace root Cargo.toml

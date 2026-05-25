@@ -8,6 +8,7 @@
 //! Reference: [`docs/features/05-schema-manager.md`](../../docs/features/05-schema-manager.md)
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
@@ -38,6 +39,24 @@ pub enum PublishError {
         versions: Vec<String>,
         edge: Option<String>,
     },
+    #[error(
+        "the following git refs failed to resolve in `{}`: {}",
+        repo_root.display(),
+        refs.join(", ")
+    )]
+    RefsUnresolvable {
+        repo_root: PathBuf,
+        refs: Vec<String>,
+    },
+    #[error("`git show {ref_}:{path}` failed in `{repo_root}`: {stderr}")]
+    ExtractFailed {
+        repo_root: String,
+        ref_: String,
+        path: String,
+        stderr: String,
+    },
+    #[error("`git` not found on PATH — required for versioned publish")]
+    GitNotFound,
 }
 
 /// Which component of a semver version to bump.
@@ -238,6 +257,111 @@ pub fn bump_version(path: &Path, level: BumpLevel) -> Result<(String, String), P
     std::fs::write(path, doc.to_string())?;
 
     Ok((old_str, new_str))
+}
+
+/// Resolve a list of git refs in `repo_root` via `git rev-parse`,
+/// returning the resolved commit IDs in the same order as the input.
+/// On any failure, collects *every* unresolved ref into a single
+/// [`PublishError::RefsUnresolvable`] rather than failing fast — the
+/// caller usually wants to know the full damage before retrying.
+///
+/// Uses `--verify` plus `^{commit}` to force resolution to a commit
+/// object specifically (catches the case where a name resolves but
+/// points at a tag object or tree rather than a commit).
+pub fn resolve_refs(repo_root: &Path, refs: &[&str]) -> Result<Vec<String>, PublishError> {
+    let mut resolved = Vec::with_capacity(refs.len());
+    let mut failed: Vec<String> = Vec::new();
+    for r in refs {
+        let arg = format!("{r}^{{commit}}");
+        match run_git_capture(repo_root, &["rev-parse", "--verify", "--quiet", &arg]) {
+            Ok(out) => resolved.push(out.trim().to_string()),
+            Err(_) => failed.push((*r).to_string()),
+        }
+    }
+    if !failed.is_empty() {
+        return Err(PublishError::RefsUnresolvable {
+            repo_root: repo_root.to_path_buf(),
+            refs: failed,
+        });
+    }
+    Ok(resolved)
+}
+
+/// Extract the contents of `path_in_repo` at git ref `ref_` into a
+/// fresh [`tempfile::NamedTempFile`]. Uses `git show <ref>:<path>` so
+/// the working tree stays exactly as the user left it.
+///
+/// `path_in_repo` is interpreted relative to the repo root; pass the
+/// publish-spec's `files.main` value here when the spec lives at the
+/// repo root (the typical case).
+///
+/// Returns a [`PublishError::ExtractFailed`] when the file doesn't
+/// exist at that ref or `git show` fails for any reason; the stderr
+/// captured in the error gives the caller the underlying cause.
+pub fn extract_main_at_ref(
+    repo_root: &Path,
+    ref_: &str,
+    path_in_repo: &Path,
+) -> Result<tempfile::NamedTempFile, PublishError> {
+    let spec = format!("{ref_}:{}", path_in_repo.display());
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args(["show", &spec])
+        .output()
+        .map_err(classify_git_spawn_error)?;
+    if !output.status.success() {
+        return Err(PublishError::ExtractFailed {
+            repo_root: repo_root.display().to_string(),
+            ref_: ref_.to_string(),
+            path: path_in_repo.display().to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        });
+    }
+
+    let extension = path_in_repo
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("dat");
+    let mut file = tempfile::Builder::new()
+        .prefix("panschema-extract-")
+        .suffix(&format!(".{extension}"))
+        .tempfile()
+        .map_err(PublishError::Io)?;
+    use std::io::Write;
+    file.write_all(&output.stdout).map_err(PublishError::Io)?;
+    Ok(file)
+}
+
+/// Translate a failure from spawning `git` into the right
+/// [`PublishError`] variant: `ErrorKind::NotFound` means `git` isn't
+/// installed (actionable hint), anything else is a generic IO error.
+/// Extracted into its own function so `#[mutants::skip]` can suppress
+/// the boundary check — there's no portable test for "is `git` on
+/// PATH right now" without mutating the test runner's environment.
+#[mutants::skip]
+fn classify_git_spawn_error(e: std::io::Error) -> PublishError {
+    if e.kind() == std::io::ErrorKind::NotFound {
+        PublishError::GitNotFound
+    } else {
+        PublishError::Io(e)
+    }
+}
+
+/// Run `git <args>` in `repo_root`, returning captured stdout on
+/// success or a generic `io::Error` carrying stderr otherwise.
+fn run_git_capture(repo_root: &Path, args: &[&str]) -> Result<String, std::io::Error> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args(args)
+        .output()?;
+    if !output.status.success() {
+        return Err(std::io::Error::other(
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// Set `[schema].version` to an exact value (parsed as semver). Returns
@@ -744,5 +868,160 @@ versions = ["v0.1.0"]
                 && version_pos < linkml_pos
                 && linkml_pos < files_pos
         );
+    }
+
+    // ----- resolve_refs / extract_main_at_ref (slice 2) -----
+
+    /// Build a synthetic git repo with two committed tags + an extra
+    /// HEAD commit on `main`. Each commit rewrites `schema.yaml` with
+    /// a per-version marker line so extraction can be verified
+    /// byte-exactly.
+    fn make_versioned_fixture_repo() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path();
+
+        // Init repo with deterministic identity so commits hash stably
+        // across runs (not strictly required for these tests, but
+        // avoids depending on the runner's git config).
+        run(path, &["init", "--initial-branch=main", "--quiet"]);
+        run(path, &["config", "user.email", "test@example.com"]);
+        run(path, &["config", "user.name", "Test"]);
+        run(path, &["config", "commit.gpgsign", "false"]);
+
+        for (version, marker) in [("v0.1.0", "v0.1.0"), ("v0.2.0", "v0.2.0")] {
+            std::fs::write(path.join("schema.yaml"), format!("version: {marker}\n")).unwrap();
+            run(path, &["add", "schema.yaml"]);
+            run(
+                path,
+                &["commit", "-m", &format!("release {version}"), "--quiet"],
+            );
+            run(path, &["tag", version]);
+        }
+        // Move main beyond v0.2.0 so HEAD differs from any tag.
+        std::fs::write(path.join("schema.yaml"), "version: 0.3.0-dev\n").unwrap();
+        run(path, &["add", "schema.yaml"]);
+        run(path, &["commit", "-m", "WIP", "--quiet"]);
+
+        tmp
+    }
+
+    fn run(cwd: &std::path::Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(cwd)
+            .args(args)
+            .status()
+            .expect("git available on PATH");
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    #[test]
+    fn resolve_refs_returns_commits_in_input_order() {
+        let repo = make_versioned_fixture_repo();
+        let resolved =
+            resolve_refs(repo.path(), &["v0.1.0", "v0.2.0", "main"]).expect("all refs resolve");
+        assert_eq!(resolved.len(), 3);
+        // Each entry is a 40-char hex commit ID and all three are distinct.
+        for sha in &resolved {
+            assert_eq!(sha.len(), 40);
+            assert!(sha.chars().all(|c| c.is_ascii_hexdigit()));
+        }
+        assert!(resolved[0] != resolved[1]);
+        assert!(resolved[1] != resolved[2]);
+    }
+
+    #[test]
+    fn resolve_refs_surfaces_combined_error_for_unresolved() {
+        let repo = make_versioned_fixture_repo();
+        // Mix one good, one bad, one good. The error must list the
+        // bad one but the good ones must NOT short-circuit the loop
+        // (the AC: surface combined error for any failures).
+        let err = resolve_refs(repo.path(), &["v0.1.0", "v9.9.9", "main"]).expect_err("bad ref");
+        match err {
+            PublishError::RefsUnresolvable { ref refs, .. } => {
+                assert_eq!(refs.len(), 1);
+                assert_eq!(refs[0], "v9.9.9");
+            }
+            other => panic!("expected RefsUnresolvable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_refs_combines_multiple_failures_in_one_error() {
+        let repo = make_versioned_fixture_repo();
+        let err = resolve_refs(repo.path(), &["nope1", "v0.1.0", "nope2"]).expect_err("bad refs");
+        match err {
+            PublishError::RefsUnresolvable { refs, .. } => {
+                // Both bad refs in the error, in input order.
+                assert_eq!(refs, vec!["nope1".to_string(), "nope2".to_string()]);
+            }
+            other => panic!("expected RefsUnresolvable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extract_main_at_ref_returns_per_version_contents() {
+        let repo = make_versioned_fixture_repo();
+        for (ref_, expected_marker) in [("v0.1.0", "v0.1.0"), ("v0.2.0", "v0.2.0")] {
+            let file = extract_main_at_ref(repo.path(), ref_, Path::new("schema.yaml")).unwrap();
+            let contents = std::fs::read_to_string(file.path()).unwrap();
+            assert_eq!(contents, format!("version: {expected_marker}\n"));
+        }
+    }
+
+    #[test]
+    fn extract_main_at_ref_reads_main_branch_separately_from_tags() {
+        // HEAD on `main` carries the v0.3.0-dev marker, distinct from
+        // either of the committed tags. The extraction must read each
+        // ref's content at that ref's snapshot, not the working tree.
+        let repo = make_versioned_fixture_repo();
+        let file = extract_main_at_ref(repo.path(), "main", Path::new("schema.yaml")).unwrap();
+        let contents = std::fs::read_to_string(file.path()).unwrap();
+        assert_eq!(contents, "version: 0.3.0-dev\n");
+    }
+
+    #[test]
+    fn extract_main_at_ref_errors_for_unknown_ref() {
+        let repo = make_versioned_fixture_repo();
+        let err = extract_main_at_ref(repo.path(), "v9.9.9", Path::new("schema.yaml"))
+            .expect_err("unknown ref");
+        match err {
+            PublishError::ExtractFailed { ref_, path, .. } => {
+                assert_eq!(ref_, "v9.9.9");
+                assert_eq!(path, "schema.yaml");
+            }
+            other => panic!("expected ExtractFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extract_main_at_ref_errors_for_unknown_path_at_ref() {
+        // The ref exists, but the path doesn't exist at that ref.
+        // Common failure mode: the manifest's `files.main` was added
+        // *after* the tag we're trying to extract from.
+        let repo = make_versioned_fixture_repo();
+        let err = extract_main_at_ref(repo.path(), "v0.1.0", Path::new("missing/file.yaml"))
+            .expect_err("missing path");
+        assert!(matches!(err, PublishError::ExtractFailed { .. }));
+    }
+
+    #[test]
+    fn extract_main_at_ref_does_not_mutate_working_tree() {
+        // Critical contract: the user's working tree stays as they
+        // left it. We change a file in the working tree, extract a
+        // *different* version, and assert the working-tree file
+        // wasn't touched.
+        let repo = make_versioned_fixture_repo();
+        let working_tree_file = repo.path().join("schema.yaml");
+        let before = std::fs::read_to_string(&working_tree_file).unwrap();
+        // Set the working tree to a unique marker.
+        std::fs::write(&working_tree_file, "version: wt-marker\n").unwrap();
+
+        let _file = extract_main_at_ref(repo.path(), "v0.1.0", Path::new("schema.yaml")).unwrap();
+
+        let after = std::fs::read_to_string(&working_tree_file).unwrap();
+        assert_eq!(after, "version: wt-marker\n");
+        // Sanity check that the test is exercising what we think.
+        assert_ne!(after, before);
     }
 }

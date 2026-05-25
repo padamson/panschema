@@ -81,19 +81,20 @@ Field semantics:
 
 ### Slice 2: Per-version git extraction (no command surface yet)
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** The plumbing that turns a tag list into per-version schema files. Used internally by slice 3's `publish` command; lands separately so its failure modes (missing tag, missing main file at tag, extraction race) are isolated.
 
 **Acceptance Criteria:**
-- [ ] Internal helper `extract_main_at_ref(ref: &str, manifest_main: &Path) -> Result<TempFile>` that runs `git show <ref>:<path>` and returns the extracted content as a temp file path. No working-tree mutation.
-- [ ] Resolve each tag in `versions` via `git rev-parse` and surface a single combined error if any fails to resolve.
-- [ ] Per-tag extraction tolerates the case where `files.main` *moved* between versions — the older tag's manifest may have listed a different path; v1 of this feature reads only the current manifest's `files.main` and documents that as the contract (consumers who rename their main file need a follow-up slice).
-- [ ] Tests over a fixture repo with two committed tags + a main branch, asserting extraction succeeds for both tags and surfaces a clean error for a non-existent tag.
+- [x] Internal helper `extract_main_at_ref(repo_root: &Path, ref_: &str, path_in_repo: &Path) -> Result<NamedTempFile, PublishError>` that runs `git show <ref>:<path>` and returns the extracted content as a `NamedTempFile`. No working-tree mutation (verified by test).
+- [x] `resolve_refs(repo_root, &[ref_])` calls `git rev-parse --verify <ref>^{commit}` per ref and surfaces a single combined `PublishError::RefsUnresolvable` error listing every ref that failed, rather than failing fast on the first.
+- [x] Per-tag extraction tolerates the case where `files.main` *moved* between versions — v1 reads only the current manifest's `files.main` and the caller documents that contract; missing-path-at-ref surfaces as `PublishError::ExtractFailed` carrying git stderr.
+- [x] Tests over a synthetic fixture repo (built at test time via `git init` in a tempdir) with two committed tags (`v0.1.0`, `v0.2.0`) + a `main` branch HEAD beyond both. Coverage: per-version content extraction, main-branch extraction distinct from tags, unknown ref error, unknown path-at-ref error, working-tree non-mutation, single-ref-failure combined error, multi-ref-failure combined error.
 
 **Notes:**
 - `git show <ref>:<path>` is the right primitive: works on bare and non-bare repos, doesn't mutate the working tree, fails loudly when the path doesn't exist at that ref.
-- Test fixture lives under `panschema/tests/fixtures/` as a small init-script that builds a synthetic git repo at test time; checked-in `.git` directories are awkward.
+- Test fixture builds a synthetic git repo via `git init` + `git commit` in a tempdir at test time; checked-in `.git` directories are awkward and `git config commit.gpgsign=false` keeps the fixture independent of the runner's signing setup.
+- `tempfile` was promoted from dev-dep to a regular dep so `NamedTempFile` can appear in the public API (`extract_main_at_ref` return type). Supply-chain exemption updated accordingly.
 
 ---
 
@@ -181,7 +182,7 @@ If/when panschema gains a "split per class" output mode, stable URLs become impo
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | Slice 1: `[publishing]` parsing + validation | Must Have | None | Completed |
-| Slice 2: Per-version git extraction | Must Have | Slice 1 | Not Started |
+| Slice 2: Per-version git extraction | Must Have | Slice 1 | Completed |
 | Slice 3: `panschema publish` command | Must Have | Slices 1, 2 | Not Started |
 | Slice 4: Template integration (dropdown + banner) | Must Have | Slice 3 | Not Started |
 | Slice 5: scimantic-schema dogfood + panschema release | Must Have | Slice 4 | Not Started |
