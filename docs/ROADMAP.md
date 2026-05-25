@@ -66,7 +66,7 @@ Input → Reader → LinkML IR → [Filters] → Writer → Output
 - **Hierarchical (Sugiyama) layout** ([feature 09 slice 6](features/09-graph-layout-selection.md)): `rust-sugiyama` over the `is_a` / `mixin` sub-DAG. Property edges (range / domain / inverse / typeof) overlay the layered output without participating in layering, so cyclic property graphs don't break the render. Orphan nodes fall back to a grid below the layered region. The literature's answer for "minimize crossings on layered DAGs." Shipped.
 - **Dep bump: sophia 0.9 → 0.10**: RDF 1.2 ground-truth migration. `LiteralLanguage` becomes a 3-tuple (adds optional direction); `FastGraph::Triple` now uses `IndexedTerm` rather than `SimpleTerm`. `owl_reader` and RDF serializers migrated to use Term trait methods (`iri()`, `lexical_form()`) uniformly across any Term implementation rather than pattern-matching on `SimpleTerm` variants. `NtSerializer` renamed to `NTriplesSerializer` upstream. Shipped.
 - **`cargo install --git` bootstrap**: `build.rs` runs `wasm-pack build --features webgpu` when the viz artifacts are missing, so consumer installs Just Work. Shipped.
-- **Versioned docs** ([feature 11](features/11-versioned-docs-publish.md)): `panschema publish` command + `[publishing]` manifest section. Orchestrates per-version HTML builds (`/schema/v0.1.0/`, `/schema/v0.2.0/`, `/schema/main/`, `/schema/current/`) and injects a version dropdown + "you're viewing X; current is Y" banner into each rendered page. Slices 1–4 shipped; slice 5 (scimantic-schema dogfood + panschema release) remaining.
+- **Versioned docs** ([feature 11](features/11-versioned-docs-publish.md)): `panschema publish` command + `[publishing]` manifest section. Orchestrates per-version HTML builds (`/schema/v0.1.0/`, `/schema/v0.2.0/`, `/schema/main/`, `/schema/current/`) and injects a version dropdown + "you're viewing X; current is Y" banner into each rendered page. `--edge-from-worktree` flag lets local dev preview reflect uncommitted edits. Slices 1–4, 6 shipped; slice 5 (scimantic-schema dogfood + panschema release) remaining.
 
 ### v0.4.0 — Bootstrap LinkML IR + Schema Validation + Authoring Experience
 *Planned. See [feature 07](features/07-schema-validation.md), [feature 08](features/08-bootstrap-linkml-ir.md), and [feature 10](features/10-authoring-experience.md).*
@@ -105,7 +105,7 @@ Input → Reader → LinkML IR → [Filters] → Writer → Output
 | 08 | [Bootstrap LinkML IR from the metaschema](features/08-bootstrap-linkml-ir.md) | Replace hand-rolled LinkML types with codegen from the metaschema | **Planned (v0.4.0)** |
 | 09 | [Graph Layout Selection](features/09-graph-layout-selection.md) | Layout-algorithm picker + egraph-rs / rust-sugiyama adoption (KK, stress, SGD, Sugiyama, circular, radial) | **In progress (v0.3.0+): slices 1–3 + 6 shipped (FD, KK, Hierarchical); slices 4–5, 7–8 planned** |
 | 10 | [Authoring Experience](features/10-authoring-experience.md) | Schema/ontology authoring lints + diagnostics (friction-gathered from real authoring passes) | **Planned (v0.4.0+)** |
-| 11 | [Versioned Docs (`panschema publish`)](features/11-versioned-docs-publish.md) | Multi-version HTML orchestration + in-page version dropdown/banner | **In progress (v0.3.0+): slices 1–4 shipped, slice 5 (dogfood) remaining** |
+| 11 | [Versioned Docs (`panschema publish`)](features/11-versioned-docs-publish.md) | Multi-version HTML orchestration + in-page version dropdown/banner | **In progress (v0.3.0+): slices 1–4, 6 shipped; slice 5 (dogfood) remaining** |
 
 ## Delivery Approach
 

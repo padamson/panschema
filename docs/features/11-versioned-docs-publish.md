@@ -154,8 +154,26 @@ Field semantics:
 - [ ] Deployed Pages site shows `/schema/v0.1.0/`, `/schema/v0.2.0/`, `/schema/main/`, `/schema/current/` rendering with a working dropdown.
 - [ ] Cut a panschema release (cross-repo note 05-12 `release-command-gaps` flagged this path needs exercise; the feature's release is a fine vehicle).
 
+---
+
+### Slice 6: `--edge-from-worktree` flag for local preview
+
+**Status:** Completed
+
+**User Value:** Local dev preview shows uncommitted schema edits at `/schema/<edge>/`. Today `panschema publish` always reads `edge` via `git show <ref>:<path>`, so a developer editing `schema.yaml` and running their preview script sees the last *committed* state, not what's on disk. The commit-first / preview-second loop defeats the iterative-edit pattern that makes dogfooding a schema rebuild manageable.
+
+**Acceptance Criteria:**
+- [x] New CLI flag `panschema publish --edge-from-worktree` (boolean, default `false`).
+- [x] When set: `edge`'s `files.main` is read directly from the working tree at `<manifest-dir>/<files.main>`, not via `git show <ref>:<path>`. Output still lands at `<output_dir>/<edge-name>/` with the same template context.
+- [x] Tagged versions (`versions`) are **unaffected** by the flag — they always come from their git refs. This preserves CI reproducibility for released versions while opening the preview window for in-progress edits.
+- [x] Flag-only, not a manifest field. Local dev scripts opt in per invocation; CI does not set it.
+- [x] Bonus: when the flag is set, the edge ref's `git rev-parse` resolution is also skipped — the ref name is only a subdir label in this mode. Lets developers preview a branch that hasn't been pushed (or even committed) yet.
+- [x] Unit tests cover: with-flag picks up working-tree edits, without-flag ignores the dirty working tree, tagged versions ignore the flag entirely, edge ref doesn't need to resolve when the flag is set.
+
 **Notes:**
-- This slice is the "close-out trigger" condition from the cross-repo note. Once it lands, the source note can move to the archive with `affects_repos: [scimantic-schema]` so a future scimantic-schema session sees the follow-up.
+- Surface area: one new boolean argument threaded through `publish_versioned` and the `publish_command` CLI wrapper, plus a small `BuildSource::{GitRef, WorkingTree}` enum so `build_version` can dispatch cleanly.
+- Naming considered: `--edge-from-disk`, `--working-tree-edge`. `--edge-from-worktree` reads most clearly and matches the original spec's TBD placeholder.
+- Consumer-side usage pattern: a project's local `scripts/dev.sh` invokes `panschema publish --edge-from-worktree` so the preview always reflects the editor's current state; `.github/workflows/docs.yml` invokes plain `panschema publish` so deployed pages stay on committed state.
 
 ---
 
@@ -189,3 +207,4 @@ If/when panschema gains a "split per class" output mode, stable URLs become impo
 | Slice 3: `panschema publish` command | Must Have | Slices 1, 2 | Completed |
 | Slice 4: Template integration (dropdown + banner) | Must Have | Slice 3 | Completed |
 | Slice 5: scimantic-schema dogfood + panschema release | Must Have | Slice 4 | Not Started |
+| Slice 6: `--edge-from-worktree` for local preview | Should Have | Slice 3 | Completed |

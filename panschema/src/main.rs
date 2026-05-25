@@ -197,6 +197,14 @@ enum Commands {
         /// shadow a `None` here through clap's arg propagation.
         #[arg(long = "output-dir")]
         output_dir: Option<PathBuf>,
+        /// Read the `edge` ref's schema from the working tree instead
+        /// of `git show <ref>:<path>`. Local dev preview pattern: the
+        /// edit-and-refresh loop reflects uncommitted state. CI should
+        /// NOT set this — released builds must stay reproducible from
+        /// committed refs. Tagged versions in `[publishing].versions`
+        /// are unaffected by this flag.
+        #[arg(long = "edge-from-worktree")]
+        edge_from_worktree: bool,
     },
     /// Start development server with hot reload
     Serve {
@@ -1047,7 +1055,11 @@ fn verify_from_manifest() -> anyhow::Result<()> {
 /// to this binary, but those tests aren't visible to
 /// `cargo mutants --lib`.
 #[mutants::skip]
-fn publish_command(manifest: &Path, output_override: Option<&Path>) -> anyhow::Result<()> {
+fn publish_command(
+    manifest: &Path,
+    output_override: Option<&Path>,
+    edge_from_worktree: bool,
+) -> anyhow::Result<()> {
     use panschema::publish::{PublishConfig, publish_versioned};
 
     let manifest = if manifest.is_absolute() {
@@ -1089,7 +1101,7 @@ fn publish_command(manifest: &Path, output_override: Option<&Path>) -> anyhow::R
         manifest_dir.join(output_dir)
     };
 
-    publish_versioned(manifest_dir, &cfg, &output_dir)?;
+    publish_versioned(manifest_dir, &cfg, &output_dir, edge_from_worktree)?;
 
     println!(
         "Published {} versions to {}",
@@ -1167,7 +1179,8 @@ async fn main() -> anyhow::Result<()> {
         Some(Commands::Publish {
             manifest,
             output_dir,
-        }) => publish_command(&manifest, output_dir.as_deref())?,
+            edge_from_worktree,
+        }) => publish_command(&manifest, output_dir.as_deref(), edge_from_worktree)?,
         Some(Commands::Serve {
             input,
             output,

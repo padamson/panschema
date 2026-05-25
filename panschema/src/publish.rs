@@ -353,10 +353,21 @@ pub fn extract_main_at_ref(
 /// Resolves all refs up-front via [`resolve_refs`] so a bad tag
 /// fails fast with a single combined error rather than after a
 /// partial build.
+/// Source for a per-version build's input schema file. Tagged
+/// versions always come from a git ref; the optional edge build may
+/// instead come from the working tree, for the local-preview use case
+/// where the dev wants to see uncommitted edits.
+#[derive(Debug, Clone, Copy)]
+enum BuildSource<'a> {
+    GitRef(&'a str),
+    WorkingTree,
+}
+
 pub fn publish_versioned(
     repo_root: &Path,
     publish_cfg: &PublishConfig,
     output_dir: &Path,
+    edge_from_worktree: bool,
 ) -> Result<(), PublishError> {
     let publishing = publish_cfg
         .publishing
@@ -365,8 +376,13 @@ pub fn publish_versioned(
 
     // Fail fast on any unresolvable ref. Combined error names every bad
     // ref at once so the user fixes all of them in one editor pass.
+    // Skip the edge ref's resolution when `edge_from_worktree` is set:
+    // the working-tree path is the source of truth in that mode and
+    // the ref name is only used as a subdir label.
     let mut all_refs: Vec<&str> = publishing.versions.iter().map(String::as_str).collect();
-    if let Some(edge) = &publishing.edge {
+    if let Some(edge) = &publishing.edge
+        && !edge_from_worktree
+    {
         all_refs.push(edge.as_str());
     }
     resolve_refs(repo_root, &all_refs)?;
@@ -375,10 +391,22 @@ pub fn publish_versioned(
     let cohort = build_cohort_context(publishing);
 
     for version in &publishing.versions {
-        build_version(repo_root, version, manifest_main, output_dir, &cohort)?;
+        build_version(
+            repo_root,
+            version,
+            manifest_main,
+            output_dir,
+            &cohort,
+            BuildSource::GitRef(version),
+        )?;
     }
     if let Some(edge) = &publishing.edge {
-        build_version(repo_root, edge, manifest_main, output_dir, &cohort)?;
+        let source = if edge_from_worktree {
+            BuildSource::WorkingTree
+        } else {
+            BuildSource::GitRef(edge)
+        };
+        build_version(repo_root, edge, manifest_main, output_dir, &cohort, source)?;
     }
 
     // current/ is a copy of the configured version's output, not a
@@ -399,15 +427,27 @@ pub fn publish_versioned(
 
 fn build_version(
     repo_root: &Path,
-    ref_: &str,
+    label: &str,
     manifest_main: &Path,
     output_dir: &Path,
     cohort: &CohortContext,
+    source: BuildSource<'_>,
 ) -> Result<(), PublishError> {
-    let extracted = extract_main_at_ref(repo_root, ref_, manifest_main)?;
-    let version_out = output_dir.join(ref_);
+    let version_out = output_dir.join(label);
     std::fs::create_dir_all(&version_out)?;
-    generate_html_for_version(ref_, extracted.path(), &version_out, cohort)
+    match source {
+        BuildSource::GitRef(ref_) => {
+            let extracted = extract_main_at_ref(repo_root, ref_, manifest_main)?;
+            generate_html_for_version(label, extracted.path(), &version_out, cohort)
+        }
+        BuildSource::WorkingTree => {
+            // The manifest's `files.main` is documented as relative
+            // to the publish-spec's location; in the supported v1
+            // layout that's the repo root. Resolve there.
+            let input = repo_root.join(manifest_main);
+            generate_html_for_version(label, &input, &version_out, cohort)
+        }
+    }
 }
 
 /// Builder data for [`crate::html_writer::VersionContext`]. Computed
@@ -1261,7 +1301,8 @@ versions = ["v0.1.0"]
             publishing: None,
         };
         let out = tempfile::tempdir().unwrap();
-        let err = publish_versioned(repo.path(), &cfg, out.path()).expect_err("no publishing");
+        let err =
+            publish_versioned(repo.path(), &cfg, out.path(), false).expect_err("no publishing");
         assert!(matches!(err, PublishError::MissingPublishingSection));
     }
 
@@ -1270,7 +1311,7 @@ versions = ["v0.1.0"]
         let repo = make_versioned_linkml_repo();
         let cfg = make_publish_cfg_with_versions(vec!["v0.1.0", "v0.2.0"], None, "v0.2.0");
         let out = tempfile::tempdir().unwrap();
-        publish_versioned(repo.path(), &cfg, out.path()).expect("publish succeeds");
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
         assert!(out.path().join("v0.1.0").is_dir());
         assert!(out.path().join("v0.2.0").is_dir());
         // HtmlWriter produces an index.html per version.
@@ -1283,7 +1324,7 @@ versions = ["v0.1.0"]
         let repo = make_versioned_linkml_repo();
         let cfg = make_publish_cfg_with_versions(vec!["v0.1.0"], Some("main"), "v0.1.0");
         let out = tempfile::tempdir().unwrap();
-        publish_versioned(repo.path(), &cfg, out.path()).expect("publish succeeds");
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
         assert!(out.path().join("v0.1.0/index.html").is_file());
         assert!(out.path().join("main/index.html").is_file());
         // The edge schema declares an EdgeOnly class that v0.1.0 doesn't —
@@ -1299,7 +1340,7 @@ versions = ["v0.1.0"]
         let repo = make_versioned_linkml_repo();
         let cfg = make_publish_cfg_with_versions(vec!["v0.1.0", "v0.2.0"], None, "v0.2.0");
         let out = tempfile::tempdir().unwrap();
-        publish_versioned(repo.path(), &cfg, out.path()).expect("publish succeeds");
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
         // current/ exists, contains an index.html byte-equal to v0.2.0's.
         let current_html = std::fs::read(out.path().join("current/index.html")).unwrap();
         let v02_html = std::fs::read(out.path().join("v0.2.0/index.html")).unwrap();
@@ -1314,7 +1355,7 @@ versions = ["v0.1.0"]
         let repo = make_versioned_linkml_repo();
         let cfg = make_publish_cfg_with_versions(vec!["v0.1.0"], Some("main"), "main");
         let out = tempfile::tempdir().unwrap();
-        publish_versioned(repo.path(), &cfg, out.path()).expect("publish succeeds");
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
         let current = std::fs::read(out.path().join("current/index.html")).unwrap();
         let edge = std::fs::read(out.path().join("main/index.html")).unwrap();
         assert_eq!(current, edge);
@@ -1329,7 +1370,7 @@ versions = ["v0.1.0"]
             "v0.1.0",
         );
         let out = tempfile::tempdir().unwrap();
-        let err = publish_versioned(repo.path(), &cfg, out.path()).expect_err("bad refs");
+        let err = publish_versioned(repo.path(), &cfg, out.path(), false).expect_err("bad refs");
         match err {
             PublishError::RefsUnresolvable { refs, .. } => {
                 assert!(refs.contains(&"v9.9.9".to_string()));
@@ -1350,7 +1391,7 @@ versions = ["v0.1.0"]
         let repo = make_versioned_linkml_repo();
         let cfg = make_publish_cfg_with_versions(vec!["v0.1.0", "v0.2.0"], Some("main"), "v0.2.0");
         let out = tempfile::tempdir().unwrap();
-        publish_versioned(repo.path(), &cfg, out.path()).expect("publish succeeds");
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
 
         for page in ["v0.1.0", "v0.2.0", "main"] {
             let html = std::fs::read_to_string(out.path().join(page).join("index.html")).unwrap();
@@ -1388,7 +1429,7 @@ versions = ["v0.1.0"]
         let repo = make_versioned_linkml_repo();
         let cfg = make_publish_cfg_with_versions(vec!["v0.1.0", "v0.2.0"], None, "v0.2.0");
         let out = tempfile::tempdir().unwrap();
-        publish_versioned(repo.path(), &cfg, out.path()).expect("publish succeeds");
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
 
         let stale = std::fs::read_to_string(out.path().join("v0.1.0/index.html")).unwrap();
         assert!(
@@ -1418,13 +1459,118 @@ versions = ["v0.1.0"]
         let repo = make_versioned_linkml_repo();
         let cfg = make_publish_cfg_with_versions(vec!["v0.1.0"], Some("main"), "v0.1.0");
         let out = tempfile::tempdir().unwrap();
-        publish_versioned(repo.path(), &cfg, out.path()).expect("publish succeeds");
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
 
         let edge_html = std::fs::read_to_string(out.path().join("main/index.html")).unwrap();
         assert!(edge_html.contains(r#"<div class="version-banner version-banner-edge""#));
         assert!(edge_html.contains("edge build from HEAD"));
         // The edge page should NOT also carry the stale banner.
         assert!(!edge_html.contains(r#"<div class="version-banner version-banner-stale""#));
+    }
+
+    #[test]
+    fn edge_from_worktree_reflects_uncommitted_edits() {
+        // Committed v0.2.0 says `class: Thing`; we mutate the working
+        // tree to add `EdgeOnly` after commit, run publish with the
+        // flag, and the edge output must reflect the working tree.
+        let repo = make_versioned_linkml_repo();
+        // Replace schema.yaml with a version that adds a class only
+        // visible in the worktree, NOT in any commit.
+        let worktree_only_schema = "id: https://example.org/worktree\n\
+             name: fixture_worktree\n\
+             version: 0.3.0-wt\n\
+             prefixes:\n  schema: https://example.org/\n\
+             default_prefix: schema\n\
+             classes:\n  Thing:\n    description: a thing\n  WorktreeOnly:\n    description: only on disk\n";
+        std::fs::write(repo.path().join("schema.yaml"), worktree_only_schema).unwrap();
+
+        let cfg = make_publish_cfg_with_versions(vec!["v0.1.0"], Some("main"), "v0.1.0");
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), true).expect("publish succeeds");
+
+        let edge_html = std::fs::read_to_string(out.path().join("main/index.html")).unwrap();
+        assert!(
+            edge_html.contains("WorktreeOnly"),
+            "edge build with --edge-from-worktree must reflect the working tree"
+        );
+    }
+
+    #[test]
+    fn edge_from_worktree_off_reads_last_commit_despite_dirty_worktree() {
+        // Default behavior (flag off): even with a dirty worktree, the
+        // edge build reads from the committed main branch via
+        // `git show`. Required for CI reproducibility.
+        let repo = make_versioned_linkml_repo();
+        std::fs::write(
+            repo.path().join("schema.yaml"),
+            "id: https://example.org/wt\nname: x\nversion: 0.9.9\nclasses:\n  WorktreeOnly: {}\n",
+        )
+        .unwrap();
+
+        let cfg = make_publish_cfg_with_versions(vec!["v0.1.0"], Some("main"), "v0.1.0");
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
+
+        let edge_html = std::fs::read_to_string(out.path().join("main/index.html")).unwrap();
+        // The committed main HEAD declares EdgeOnly; the worktree
+        // garbage we wrote should not leak through.
+        assert!(
+            edge_html.contains("EdgeOnly"),
+            "default path must reflect committed main, not worktree"
+        );
+        assert!(
+            !edge_html.contains("WorktreeOnly"),
+            "default path must NOT reflect dirty worktree"
+        );
+    }
+
+    #[test]
+    fn edge_from_worktree_does_not_affect_tagged_versions() {
+        // Tagged versions always come from their git refs. Mutating
+        // the working tree must not bleed into v0.1.0's output even
+        // when `--edge-from-worktree` is set.
+        let repo = make_versioned_linkml_repo();
+        std::fs::write(
+            repo.path().join("schema.yaml"),
+            "id: https://example.org/wt\nname: x\nversion: 0.9.9\nclasses:\n  WorktreeOnly: {}\n",
+        )
+        .unwrap();
+
+        let cfg = make_publish_cfg_with_versions(vec!["v0.1.0", "v0.2.0"], Some("main"), "v0.1.0");
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), true).expect("publish succeeds");
+
+        // v0.1.0 and v0.2.0 must reflect their committed content.
+        for ref_ in ["v0.1.0", "v0.2.0"] {
+            let html = std::fs::read_to_string(out.path().join(ref_).join("index.html")).unwrap();
+            assert!(
+                !html.contains("WorktreeOnly"),
+                "{ref_} must come from its git ref, not the dirty worktree"
+            );
+        }
+    }
+
+    #[test]
+    fn edge_from_worktree_does_not_require_edge_ref_to_resolve() {
+        // The edge ref name is just a label for the output subdir when
+        // working-tree mode is active — `git rev-parse` on it is
+        // unnecessary and could fail (e.g. a developer working on a
+        // branch that hasn't been pushed yet). Verify a non-existent
+        // edge ref name succeeds when `--edge-from-worktree` is set.
+        let repo = make_versioned_linkml_repo();
+        let cfg = make_publish_cfg_with_versions(
+            vec!["v0.1.0"],
+            Some("feature-branch-that-doesnt-exist"),
+            "v0.1.0",
+        );
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), true).expect("publish succeeds");
+        assert!(
+            out.path()
+                .join("feature-branch-that-doesnt-exist/index.html")
+                .is_file(),
+            "edge subdir is named by the ref label even when working-tree mode bypasses ref resolution"
+        );
     }
 
     #[test]
@@ -1437,14 +1583,14 @@ versions = ["v0.1.0"]
 
         // First run: current = v0.1.0
         let cfg = make_publish_cfg_with_versions(vec!["v0.1.0", "v0.2.0"], None, "v0.1.0");
-        publish_versioned(repo.path(), &cfg, out.path()).expect("first publish");
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("first publish");
         let after_first = std::fs::read(out.path().join("current/index.html")).unwrap();
         let v01 = std::fs::read(out.path().join("v0.1.0/index.html")).unwrap();
         assert_eq!(after_first, v01);
 
         // Second run with the same dir but current = v0.2.0
         let cfg = make_publish_cfg_with_versions(vec!["v0.1.0", "v0.2.0"], None, "v0.2.0");
-        publish_versioned(repo.path(), &cfg, out.path()).expect("second publish");
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("second publish");
         let after_second = std::fs::read(out.path().join("current/index.html")).unwrap();
         let v02 = std::fs::read(out.path().join("v0.2.0/index.html")).unwrap();
         assert_eq!(after_second, v02);
