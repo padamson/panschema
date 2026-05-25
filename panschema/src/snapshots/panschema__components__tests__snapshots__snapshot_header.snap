@@ -1,11 +1,13 @@
 ---
-source: src/components.rs
+source: panschema/src/components.rs
 expression: html
 ---
 <header class="site-header">
     <div class="container">
         <a href="/" class="site-title">Test Ontology</a>
+        
     </div>
+    
 </header>
 <style>
     .site-header {
@@ -36,5 +38,63 @@ expression: html
     .site-title:hover {
         text-decoration: none;
         color: var(--color-primary);
+    }
+
+    .site-header .container {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+    }
+
+    .version-picker {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.875rem;
+    }
+    .version-picker-label {
+        color: var(--color-text-muted, var(--color-text));
+    }
+    .version-select {
+        background-color: var(--color-bg-secondary);
+        color: var(--color-text);
+        border: 1px solid var(--color-border);
+        border-radius: 4px;
+        padding: 0.25rem 0.5rem;
+        font: inherit;
+        font-size: 0.875rem;
+        cursor: pointer;
+    }
+    .version-select:focus {
+        outline: 2px solid var(--color-primary);
+        outline-offset: 2px;
+    }
+
+    .version-banner {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        padding: 0.5rem 1rem;
+        font-size: 0.875rem;
+        text-align: center;
+        border-top: 1px solid var(--color-border);
+    }
+    .version-banner a {
+        color: inherit;
+        text-decoration: underline;
+    }
+    .version-banner-stale {
+        background-color: #fef3c7;
+        color: #78350f;
+    }
+    .version-banner-edge {
+        background-color: #dbeafe;
+        color: #1e40af;
+    }
+    /* When a banner is present, push the body content down to clear it. */
+    body:has(.version-banner) {
+        padding-top: calc(var(--header-height) + 2.25rem);
     }
 </style>

@@ -15,9 +15,15 @@ repos:
       - id: check-merge-conflict
       - id: check-case-conflict
       - id: detect-private-key
+      # Skip `.snap` files: insta records the exact rendered output,
+      # which may legitimately carry trailing whitespace from
+      # templates. Stripping it desyncs the snapshot from the runtime.
       - id: trailing-whitespace
+        exclude: '\.snap$'
       - id: end-of-file-fixer
+        exclude: '\.snap$'
       - id: mixed-line-ending
+        exclude: '\.snap$'
 
   # Local Rust hooks
   - repo: local
