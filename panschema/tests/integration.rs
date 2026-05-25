@@ -2298,6 +2298,23 @@ output_dir = "site"
         current, v01,
         "current/index.html must be byte-equal to v0.1.0/index.html"
     );
+
+    // Rendered output carries the version-cohort UX: the dropdown
+    // names every cohort member, defaults to this page's version,
+    // and the `current` page does NOT show the stale banner.
+    let v01_html = String::from_utf8(v01).unwrap();
+    assert!(
+        v01_html.contains(r#"id="version-select""#),
+        "rendered v0.1.0/index.html must include the version-select dropdown"
+    );
+    assert!(
+        v01_html.contains(r#"value="v0.1.0" selected"#),
+        "v0.1.0 dropdown must default-select its own version"
+    );
+    assert!(
+        !v01_html.contains(r#"<div class="version-banner version-banner-stale""#),
+        "v0.1.0 is the `current` version here; stale banner must not render"
+    );
 }
 
 /// CLI exit-code contract: `panschema publish` against a manifest

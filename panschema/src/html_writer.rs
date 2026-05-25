@@ -124,6 +124,61 @@ struct IndexTemplate<'a> {
     /// `--graph-layout` CSS custom property. The JS picker reads this
     /// to set its initial selection.
     graph_default_layout: &'a str,
+    /// Multi-version cohort context. When `Some`, the header gains a
+    /// version dropdown and the body may show a stale/edge banner.
+    /// Always `None` for the `panschema generate` path.
+    version_context: Option<&'a VersionContext>,
+}
+
+/// Per-page context describing the multi-version cohort this page is
+/// part of. Drives the version-dropdown control in the header and the
+/// "you're viewing X; current is Y" / "edge build" banners. Absent
+/// (`None`) when the schema is rendered as a single-version output by
+/// `panschema generate`; present (`Some(_)`) when rendered by
+/// `panschema publish` for a versioned site.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VersionContext {
+    /// Ordered list of versions to show in the dropdown. Conventionally
+    /// edge first (if present), then released versions newest to oldest.
+    pub all_versions: Vec<String>,
+    /// The version this specific page is rendered for.
+    pub viewing: String,
+    /// The version `current/` aliases. Used to decide whether to show
+    /// the "you're viewing X; current is Y" banner.
+    pub current: String,
+    /// Edge ref name (e.g. `"main"`), if the cohort includes an edge
+    /// build. Pages rendered for this ref get the "edge build from HEAD"
+    /// banner.
+    pub edge: Option<String>,
+    /// URL template with a literal `{version}` placeholder. The dropdown
+    /// JS substitutes each option's value to form cross-version links.
+    pub url_pattern: String,
+}
+
+impl VersionContext {
+    /// Substitute `{version}` in `url_pattern` to produce a navigation
+    /// URL for the given version.
+    pub fn url_for(&self, version: &str) -> String {
+        self.url_pattern.replace("{version}", version)
+    }
+
+    /// `true` if `version` is the cohort's `edge` ref. Templates use
+    /// this to badge the edge entry in the dropdown.
+    pub fn is_edge(&self, version: &str) -> bool {
+        self.edge.as_deref() == Some(version)
+    }
+
+    /// `true` when the page being rendered is the cohort's `current`
+    /// version (so the stale-banner can be suppressed).
+    pub fn viewing_is_current(&self) -> bool {
+        self.viewing == self.current
+    }
+
+    /// `true` when the page being rendered is the cohort's edge build
+    /// (so the edge-banner can be shown).
+    pub fn viewing_is_edge(&self) -> bool {
+        self.edge.as_deref() == Some(self.viewing.as_str())
+    }
 }
 
 /// Writer for HTML documentation output
@@ -141,6 +196,11 @@ pub struct HtmlWriter {
     /// Defaults to `"force-directed"`, the only fully-implemented
     /// algorithm.
     pub graph_default_layout: String,
+    /// Optional multi-version cohort context. Set by `panschema publish`;
+    /// `None` for the single-version `panschema generate` path. When
+    /// present, the rendered page gains a version dropdown in the header
+    /// and a banner when `viewing` differs from `current` or matches `edge`.
+    pub version_context: Option<VersionContext>,
 }
 
 /// Parse a `"W:H"` aspect-ratio string. Both components must be positive
@@ -185,6 +245,7 @@ impl HtmlWriter {
             include_graph: true,
             graph_aspect: (16, 8),
             graph_default_layout: "force-directed".to_string(),
+            version_context: None,
         }
     }
 
@@ -194,7 +255,16 @@ impl HtmlWriter {
             include_graph,
             graph_aspect: (16, 8),
             graph_default_layout: "force-directed".to_string(),
+            version_context: None,
         }
+    }
+
+    /// Attach a multi-version cohort context. Used by `panschema publish`
+    /// to inject the dropdown + banner UX into each per-version page.
+    #[must_use]
+    pub fn with_version_context(mut self, ctx: VersionContext) -> Self {
+        self.version_context = Some(ctx);
+        self
     }
 
     /// Override the schema graph viz aspect ratio. The writer accepts
@@ -619,6 +689,7 @@ impl Writer for HtmlWriter {
             graph_aspect_w: self.graph_aspect.0,
             graph_aspect_h: self.graph_aspect.1,
             graph_default_layout: &self.graph_default_layout,
+            version_context: self.version_context.as_ref(),
         };
 
         let html = template
@@ -777,6 +848,58 @@ mod tests {
     use crate::io::Reader;
     use crate::owl_reader::OwlReader;
     use std::path::PathBuf;
+
+    fn cohort_context(viewing: &str, current: &str, edge: Option<&str>) -> VersionContext {
+        VersionContext {
+            all_versions: vec!["main".into(), "v0.2.0".into(), "v0.1.0".into()],
+            viewing: viewing.into(),
+            current: current.into(),
+            edge: edge.map(String::from),
+            url_pattern: "/schema/{version}/".into(),
+        }
+    }
+
+    #[test]
+    fn version_context_is_edge_matches_only_edge_ref() {
+        let vc = cohort_context("v0.1.0", "v0.2.0", Some("main"));
+        assert!(vc.is_edge("main"));
+        assert!(!vc.is_edge("v0.1.0"));
+        assert!(!vc.is_edge("v0.2.0"));
+        assert!(!vc.is_edge("not-a-ref"));
+
+        // When `edge` is None, nothing is the edge — every probe returns false.
+        let vc_no_edge = cohort_context("v0.1.0", "v0.2.0", None);
+        assert!(!vc_no_edge.is_edge("main"));
+        assert!(!vc_no_edge.is_edge("v0.1.0"));
+    }
+
+    #[test]
+    fn version_context_viewing_predicates_distinguish_current_and_edge() {
+        let viewing_current = cohort_context("v0.2.0", "v0.2.0", Some("main"));
+        assert!(viewing_current.viewing_is_current());
+        assert!(!viewing_current.viewing_is_edge());
+
+        let viewing_edge = cohort_context("main", "v0.2.0", Some("main"));
+        assert!(!viewing_edge.viewing_is_current());
+        assert!(viewing_edge.viewing_is_edge());
+
+        let viewing_stale = cohort_context("v0.1.0", "v0.2.0", Some("main"));
+        assert!(!viewing_stale.viewing_is_current());
+        assert!(!viewing_stale.viewing_is_edge());
+    }
+
+    #[test]
+    fn version_context_url_for_substitutes_version_placeholder() {
+        let vc = cohort_context("v0.1.0", "v0.2.0", None);
+        assert_eq!(vc.url_for("v0.2.0"), "/schema/v0.2.0/");
+        assert_eq!(vc.url_for("main"), "/schema/main/");
+        // A pattern without the placeholder is returned unchanged.
+        let vc_no_placeholder = VersionContext {
+            url_pattern: "/static-url".into(),
+            ..vc
+        };
+        assert_eq!(vc_no_placeholder.url_for("v0.2.0"), "/static-url");
+    }
 
     fn reference_ontology_path() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))

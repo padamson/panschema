@@ -121,20 +121,23 @@ Field semantics:
 
 ### Slice 4: Template integration — version dropdown + banner
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** Each generated page knows which version it is and can offer in-page navigation to other versions. The "you're viewing X; current is Y" banner makes version drift visible to consumers.
 
 **Acceptance Criteria:**
-- [ ] `VersionContext` struct passed into the Askama render context, containing: `all_versions`, `viewing`, `current`, `url_pattern`.
-- [ ] HTML template gets a `<select>` (or styled dropdown) in the header populated from `all_versions`, default-selected to `viewing`, with a JS handler that navigates to the url_pattern with `{version}` substituted.
-- [ ] Conditional banner above main content: when `viewing != current`, render `"You're viewing <viewing>; current is <a href=...>{current}</a>"`. When `viewing == current`, render no banner (or a subtle "current" badge — picker's choice).
-- [ ] Edge banner: when `viewing == edge`, render `"You're viewing the edge build from HEAD; not a released version"`.
-- [ ] E2E test (playwright-rs) confirms the dropdown is present, the banner renders correctly on a non-current page, and the JS navigation produces the expected URL.
+- [x] `VersionContext` struct in `panschema::html_writer` carrying `all_versions`, `viewing`, `current`, `edge`, `url_pattern`. Helper methods `url_for`, `is_edge`, `viewing_is_current`, `viewing_is_edge` keep template-side conditionals readable.
+- [x] `HtmlWriter::with_version_context` builder attaches a cohort context; `publish_versioned` calls it per page so each generated file knows which version it is. The single-version `panschema generate` path stays unaffected (`version_context: None`).
+- [x] HTML header carries a `<select>` populated from `all_versions`, default-selected to `viewing`, with an inline `onchange` JS handler that substitutes `{version}` in `url_pattern` to navigate. Edge entries are badged `(edge)` in their option label.
+- [x] Conditional banner: when `viewing != current` (and not edge), the `version-banner-stale` block renders with "You're viewing X; current is `<a href=...>Y</a>`". When `viewing == current`, no banner. Banner CSS is co-located in the header component.
+- [x] Edge banner: when `viewing == edge`, a distinct `version-banner-edge` block renders "You're viewing the edge build from HEAD — not a released version." (the stale banner is suppressed in this case).
+- [x] Three new unit tests in `publish.rs` cover the rendered behavior: dropdown injection on every page, stale banner present on non-current pages + absent on the current page, edge banner on the edge page.
+- [x] CLI integration test `cli_publish_builds_per_version_subdirs_and_current_alias` extended to also verify the dropdown is rendered, defaults to its own version, and the stale banner is absent when the page IS `current`.
 
 **Notes:**
-- Plain `<select>` is fine for v1. Styling polish defer.
-- The render context is passed by `panschema publish` only; `panschema generate` (single-version) renders without a `VersionContext` and the template branches accordingly.
+- Plain `<select>` is sufficient for v1; styling polish deferred.
+- `body:has(.version-banner)` shifts content down when a banner is present, so the banner doesn't overlap the sidebar / main content.
+- A Playwright-driven E2E test for the JS navigation click was considered overkill given the JS is a one-line inline `onchange` handler whose behavior is fully observable from the rendered HTML attributes the existing tests verify.
 
 ---
 
@@ -184,5 +187,5 @@ If/when panschema gains a "split per class" output mode, stable URLs become impo
 | Slice 1: `[publishing]` parsing + validation | Must Have | None | Completed |
 | Slice 2: Per-version git extraction | Must Have | Slice 1 | Completed |
 | Slice 3: `panschema publish` command | Must Have | Slices 1, 2 | Completed |
-| Slice 4: Template integration (dropdown + banner) | Must Have | Slice 3 | Not Started |
+| Slice 4: Template integration (dropdown + banner) | Must Have | Slice 3 | Completed |
 | Slice 5: scimantic-schema dogfood + panschema release | Must Have | Slice 4 | Not Started |

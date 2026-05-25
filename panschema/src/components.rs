@@ -166,6 +166,9 @@ impl SampleData {
 #[template(path = "components/header.html")]
 pub struct HeaderComponent<'a> {
     pub title: &'a str,
+    /// Matches the field on the main `IndexTemplate`. The styleguide
+    /// renders without a version cohort, so this is always `None` here.
+    pub version_context: Option<&'a panschema::html_writer::VersionContext>,
 }
 
 /// Footer component template.
@@ -323,6 +326,8 @@ pub struct StyleGuideTemplate<'a> {
     pub sample_property: SampleProperty<'a>,
     pub sample_data_property: SampleProperty<'a>,
     pub sample_individual: SampleIndividual<'a>,
+    /// Matches IndexTemplate. Always `None` for the styleguide page.
+    pub version_context: Option<&'a panschema::html_writer::VersionContext>,
 }
 
 /// Renders individual components for testing and preview.
@@ -331,7 +336,10 @@ pub struct ComponentRenderer;
 impl ComponentRenderer {
     /// Render the header component.
     pub fn header(title: &str) -> anyhow::Result<String> {
-        let template = HeaderComponent { title };
+        let template = HeaderComponent {
+            title,
+            version_context: None,
+        };
         Ok(template.render()?)
     }
 
@@ -594,6 +602,7 @@ impl ComponentRenderer {
             sample_property,
             sample_data_property,
             sample_individual,
+            version_context: None,
         };
         Ok(template.render()?)
     }

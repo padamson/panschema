@@ -1,7 +1,31 @@
 <header class="site-header">
     <div class="container">
         <a href="/" class="site-title">{{ title }}</a>
+        {% if let Some(vc) = version_context %}
+        <div class="version-picker" role="navigation" aria-label="Version navigation">
+            <label for="version-select" class="version-picker-label">Version</label>
+            <select id="version-select" class="version-select"
+                    data-url-pattern="{{ vc.url_pattern }}"
+                    onchange="window.location.href = this.dataset.urlPattern.replace('{version}', this.value)">
+                {% for v in vc.all_versions %}
+                <option value="{{ v }}"{% if v == &vc.viewing %} selected{% endif %}>{{ v }}{% if vc.is_edge(v) %} (edge){% endif %}</option>
+                {% endfor %}
+            </select>
+        </div>
+        {% endif %}
     </div>
+    {% if let Some(vc) = version_context %}
+        {% if vc.viewing_is_edge() %}
+        <div class="version-banner version-banner-edge" role="status">
+            You're viewing the edge build from HEAD &mdash; not a released version.
+        </div>
+        {% else if !vc.viewing_is_current() %}
+        <div class="version-banner version-banner-stale" role="status">
+            You're viewing {{ vc.viewing }}; current is
+            <a href="{{ vc.url_for(vc.current.as_str()) }}">{{ vc.current }}</a>.
+        </div>
+        {% endif %}
+    {% endif %}
 </header>
 <style>
     .site-header {
@@ -32,5 +56,63 @@
     .site-title:hover {
         text-decoration: none;
         color: var(--color-primary);
+    }
+
+    .site-header .container {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+    }
+
+    .version-picker {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.875rem;
+    }
+    .version-picker-label {
+        color: var(--color-text-muted, var(--color-text));
+    }
+    .version-select {
+        background-color: var(--color-bg-secondary);
+        color: var(--color-text);
+        border: 1px solid var(--color-border);
+        border-radius: 4px;
+        padding: 0.25rem 0.5rem;
+        font: inherit;
+        font-size: 0.875rem;
+        cursor: pointer;
+    }
+    .version-select:focus {
+        outline: 2px solid var(--color-primary);
+        outline-offset: 2px;
+    }
+
+    .version-banner {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        padding: 0.5rem 1rem;
+        font-size: 0.875rem;
+        text-align: center;
+        border-top: 1px solid var(--color-border);
+    }
+    .version-banner a {
+        color: inherit;
+        text-decoration: underline;
+    }
+    .version-banner-stale {
+        background-color: #fef3c7;
+        color: #78350f;
+    }
+    .version-banner-edge {
+        background-color: #dbeafe;
+        color: #1e40af;
+    }
+    /* When a banner is present, push the body content down to clear it. */
+    body:has(.version-banner) {
+        padding-top: calc(var(--header-height) + 2.25rem);
     }
 </style>

@@ -372,12 +372,13 @@ pub fn publish_versioned(
     resolve_refs(repo_root, &all_refs)?;
 
     let manifest_main = &publish_cfg.files.main;
+    let cohort = build_cohort_context(publishing);
 
     for version in &publishing.versions {
-        build_version(repo_root, version, manifest_main, output_dir)?;
+        build_version(repo_root, version, manifest_main, output_dir, &cohort)?;
     }
     if let Some(edge) = &publishing.edge {
-        build_version(repo_root, edge, manifest_main, output_dir)?;
+        build_version(repo_root, edge, manifest_main, output_dir, &cohort)?;
     }
 
     // current/ is a copy of the configured version's output, not a
@@ -401,21 +402,66 @@ fn build_version(
     ref_: &str,
     manifest_main: &Path,
     output_dir: &Path,
+    cohort: &CohortContext,
 ) -> Result<(), PublishError> {
     let extracted = extract_main_at_ref(repo_root, ref_, manifest_main)?;
     let version_out = output_dir.join(ref_);
     std::fs::create_dir_all(&version_out)?;
-    generate_html_for_version(ref_, extracted.path(), &version_out)
+    generate_html_for_version(ref_, extracted.path(), &version_out, cohort)
 }
 
-/// Run the HTML generator against a single extracted schema file.
-/// Wraps the existing Reader/Writer pipeline so any failure is
-/// surfaced as [`PublishError::GenerateFailed`] tagged with the
-/// version that failed.
+/// Builder data for [`crate::html_writer::VersionContext`]. Computed
+/// once per publish run; specialised for each per-version page via
+/// [`CohortContext::context_for`].
+#[derive(Debug, Clone)]
+struct CohortContext {
+    all_versions: Vec<String>,
+    current: String,
+    edge: Option<String>,
+    url_pattern: String,
+}
+
+fn build_cohort_context(publishing: &PublishingConfig) -> CohortContext {
+    // Dropdown ordering: edge first (so it shows up as the topmost
+    // "what's coming next" option), then released versions in the
+    // manifest's input order. The manifest is the source of truth on
+    // ordering — consumers may list newest-first or oldest-first per
+    // their own preference.
+    let mut all_versions: Vec<String> = Vec::new();
+    if let Some(edge) = &publishing.edge {
+        all_versions.push(edge.clone());
+    }
+    all_versions.extend(publishing.versions.iter().cloned());
+    CohortContext {
+        all_versions,
+        current: publishing.current.clone(),
+        edge: publishing.edge.clone(),
+        url_pattern: publishing.url_pattern.clone(),
+    }
+}
+
+impl CohortContext {
+    fn context_for(&self, viewing: &str) -> crate::html_writer::VersionContext {
+        crate::html_writer::VersionContext {
+            all_versions: self.all_versions.clone(),
+            viewing: viewing.to_string(),
+            current: self.current.clone(),
+            edge: self.edge.clone(),
+            url_pattern: self.url_pattern.clone(),
+        }
+    }
+}
+
+/// Run the HTML generator against a single extracted schema file with
+/// the cohort's version context attached, so the rendered page gets
+/// the dropdown + banner UX. Wraps the Reader/Writer pipeline so any
+/// failure is surfaced as [`PublishError::GenerateFailed`] tagged with
+/// the version that failed.
 fn generate_html_for_version(
     version: &str,
     input: &Path,
     output: &Path,
+    cohort: &CohortContext,
 ) -> Result<(), PublishError> {
     use crate::html_writer::HtmlWriter;
     use crate::io::{FormatRegistry, Writer};
@@ -433,7 +479,7 @@ fn generate_html_for_version(
             version: version.to_string(),
             message: e.to_string(),
         })?;
-    let writer = HtmlWriter::with_options(true);
+    let writer = HtmlWriter::with_options(true).with_version_context(cohort.context_for(version));
     writer
         .write(&schema, output)
         .map_err(|e| PublishError::GenerateFailed {
@@ -1293,6 +1339,92 @@ versions = ["v0.1.0"]
         }
         // No partial state: outputs for any version must not exist.
         assert!(!out.path().join("v0.1.0").exists());
+    }
+
+    #[test]
+    fn publish_versioned_injects_version_dropdown_into_each_page() {
+        // Every per-version page must carry the dropdown listing all
+        // versions in the cohort (edge first, then released versions
+        // in manifest order). The dropdown's selected option matches
+        // the page's own version.
+        let repo = make_versioned_linkml_repo();
+        let cfg = make_publish_cfg_with_versions(vec!["v0.1.0", "v0.2.0"], Some("main"), "v0.2.0");
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path()).expect("publish succeeds");
+
+        for page in ["v0.1.0", "v0.2.0", "main"] {
+            let html = std::fs::read_to_string(out.path().join(page).join("index.html")).unwrap();
+            // The dropdown is present.
+            assert!(
+                html.contains(r#"id="version-select""#),
+                "page {page} missing version-select dropdown"
+            );
+            // Every cohort member shows up as an option.
+            for v in ["v0.1.0", "v0.2.0", "main"] {
+                assert!(
+                    html.contains(&format!(r#"value="{v}""#)),
+                    "page {page} missing option for {v}"
+                );
+            }
+            // The page's own version is the selected one.
+            assert!(
+                html.contains(&format!(r#"value="{page}" selected"#)),
+                "page {page} should have its own version selected; html excerpt did not match"
+            );
+        }
+    }
+
+    #[test]
+    fn publish_versioned_renders_stale_banner_on_non_current_page() {
+        // A page rendered for a version other than `current` must
+        // surface the "you're viewing X; current is Y" banner with a
+        // working link to current/. The current page itself does NOT
+        // get the banner.
+        //
+        // Search for the rendered `<div class="version-banner ...">`
+        // rather than the bare class name — the CSS rules in the same
+        // template carry the class string regardless of whether the
+        // banner is actually rendered.
+        let repo = make_versioned_linkml_repo();
+        let cfg = make_publish_cfg_with_versions(vec!["v0.1.0", "v0.2.0"], None, "v0.2.0");
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path()).expect("publish succeeds");
+
+        let stale = std::fs::read_to_string(out.path().join("v0.1.0/index.html")).unwrap();
+        assert!(
+            stale.contains(r#"<div class="version-banner version-banner-stale""#),
+            "v0.1.0 page must render the stale-banner <div>"
+        );
+        assert!(
+            stale.contains("You're viewing v0.1.0"),
+            "stale banner must name the viewing version"
+        );
+        assert!(
+            stale.contains("/schema/v0.2.0/"),
+            "stale banner link must point at current"
+        );
+
+        let current = std::fs::read_to_string(out.path().join("v0.2.0/index.html")).unwrap();
+        assert!(
+            !current.contains(r#"<div class="version-banner version-banner-stale""#),
+            "current page must NOT render the stale banner"
+        );
+    }
+
+    #[test]
+    fn publish_versioned_renders_edge_banner_on_edge_page() {
+        // Page rendered for the edge ref gets a distinct "edge build
+        // from HEAD" banner, not the stale banner.
+        let repo = make_versioned_linkml_repo();
+        let cfg = make_publish_cfg_with_versions(vec!["v0.1.0"], Some("main"), "v0.1.0");
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path()).expect("publish succeeds");
+
+        let edge_html = std::fs::read_to_string(out.path().join("main/index.html")).unwrap();
+        assert!(edge_html.contains(r#"<div class="version-banner version-banner-edge""#));
+        assert!(edge_html.contains("edge build from HEAD"));
+        // The edge page should NOT also carry the stale banner.
+        assert!(!edge_html.contains(r#"<div class="version-banner version-banner-stale""#));
     }
 
     #[test]
