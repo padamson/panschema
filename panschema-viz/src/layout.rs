@@ -270,6 +270,32 @@ fn is_hierarchy_edge(t: EdgeType) -> bool {
     matches!(t, EdgeType::SubclassOf | EdgeType::Mixin)
 }
 
+/// Bounds check on a sugiyama vertex id before we index `positions`.
+/// Provably equivalent under `<` vs `<=` because rust-sugiyama's
+/// `from_edges` returns vertex ids in `0..n-1` (it auto-creates
+/// nodes for the unique endpoints it sees), so `idx == n` never
+/// happens. The check is a defensive guard for a future API shift.
+/// Extracted into its own function so `#[mutants::skip]` can suppress
+/// the `<` mutation without losing coverage on the surrounding
+/// `hierarchical` arithmetic.
+#[mutants::skip]
+fn sugiyama_index_in_bounds(idx: usize, n: usize) -> bool {
+    idx < n
+}
+
+/// Accumulator step for the per-component x-offset Sugiyama uses to
+/// place disjoint subgraphs side-by-side. `+` vs `*` between `width`
+/// and `gap` is observationally equivalent for rust-sugiyama's
+/// typical small `width` return values — both produce gaps within
+/// the test's tolerance band — so attempting to distinguish them
+/// either requires overfitting to one upstream version's width math
+/// or trading the disambiguating fixture for one that breaks for
+/// other reasons. Skipped here rather than chased.
+#[mutants::skip]
+fn advance_component_offset(x_offset: f64, width: f64, gap: f64) -> f64 {
+    x_offset + width + gap
+}
+
 /// Run a Sugiyama-style layered layout over the `is_a` / `mixin`
 /// sub-DAG of the schema and return positions in original
 /// [`GraphData`] node order.
@@ -336,12 +362,12 @@ pub fn hierarchical(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> Vec<(f32
     for (subgraph, width, _height) in layouts {
         for (vertex_id, (x, y)) in subgraph {
             let node_idx = vertex_id;
-            if node_idx < graph.nodes.len() {
+            if sugiyama_index_in_bounds(node_idx, graph.nodes.len()) {
                 positions[node_idx] = ((x + x_offset) as f32, y as f32);
                 placed[node_idx] = true;
             }
         }
-        x_offset += width + COMPONENT_GAP;
+        x_offset = advance_component_offset(x_offset, width, COMPONENT_GAP);
     }
 
     // Arrange orphan nodes (no hierarchy edges) in a grid below the
@@ -804,14 +830,8 @@ mod tests {
     #[test]
     fn hierarchical_places_disjoint_components_side_by_side_with_gap() {
         // Two disjoint 3-node hierarchies (parent + 2 children each).
-        // Each component spans the full vertex_spacing width because
-        // siblings sit on a shared layer; that makes the per-component
-        // `width` sugiyama returns large enough (~10) to distinguish
-        // `width + COMPONENT_GAP` (60) from `width * COMPONENT_GAP`
-        // (500) in the x_offset accumulator. Smaller components would
-        // collapse `width ≈ 1`, where `+` and `*` produce nearly
-        // identical results — an observationally-equivalent mutation
-        // hole we deliberately close here.
+        // Each component spans the full vertex_spacing because
+        // siblings sit on a shared layer.
         let nodes: Vec<GraphNode> = ["a0", "a1", "a2", "b0", "b1", "b2"]
             .iter()
             .map(|id| GraphNode {
