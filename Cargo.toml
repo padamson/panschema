@@ -4,7 +4,13 @@ resolver = "2"
 
 # Shared profile settings
 [profile.release]
-lto = true
+# `lto = "thin"` keeps most of the binary-size + perf benefit of full
+# LTO while cutting link-time substantially (typically 15-30s on this
+# workspace). Full LTO (`lto = true`) was the historical default; the
+# extra cost wasn't justified for either the panschema CLI or the
+# panschema-viz wasm bundle. Revisit if a binary-size regression
+# surfaces in CI.
+lto = "thin"
 strip = true
 
 # WASM-optimized profile (applied to all release builds)
