@@ -33,7 +33,7 @@ serde_json = "1"
 # Graph layout (egraph-rs workspace, git-only — sub-crates not on
 # crates.io). Pinned to the 2025-10-29 HEAD; bump deliberately, since
 # the workspace ships breaking changes silently across revs.
-petgraph = "0.6"
+petgraph = "0.8"
 petgraph-drawing = { version = "0.1", git = "https://github.com/likr/egraph-rs", rev = "8e986826534774fe7beb9546154407927260e446" }
 petgraph-layout-kamada-kawai = { version = "0.1", git = "https://github.com/likr/egraph-rs", rev = "8e986826534774fe7beb9546154407927260e446" }
 # Empty no-op crate providing `#[mutants::skip]` so we can mark
