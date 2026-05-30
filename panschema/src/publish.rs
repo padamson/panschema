@@ -121,7 +121,12 @@ pub struct PublishingConfig {
     /// Alias target — `current/` mirrors this version's output. Must be
     /// in `versions` OR equal `edge` (validated at parse time).
     pub current: String,
-    /// URL template for cross-version links. `{version}` placeholder.
+    /// URL template for cross-version links. `{version}` placeholder is
+    /// substituted with the target version's ref name. Defaults to
+    /// `"../{version}/"`, a parent-relative form that resolves correctly
+    /// regardless of deploy depth — set to an absolute pattern only when
+    /// the consumer specifically needs one (e.g. a non-standard host
+    /// where parent-relative wouldn't reach the right subtree).
     #[serde(default = "default_url_pattern")]
     pub url_pattern: String,
     /// Where per-version subdirs land, relative to repo root.
@@ -133,7 +138,12 @@ pub struct PublishingConfig {
 }
 
 fn default_url_pattern() -> String {
-    "/schema/{version}/".to_string()
+    // Parent-relative so cross-version links resolve correctly at any
+    // deploy depth. An absolute pattern like `/schema/{version}/` would
+    // 404 on subpath deploys (GitHub Pages, anything not at a domain
+    // root). Consumers who genuinely need an absolute URL can still
+    // override `url_pattern` in the manifest.
+    "../{version}/".to_string()
 }
 
 fn default_output_dir() -> PathBuf {
@@ -918,7 +928,7 @@ current = "v0.2.0"
         assert_eq!(publishing.versions, vec!["v0.1.0", "v0.2.0"]);
         assert_eq!(publishing.current, "v0.2.0");
         assert!(publishing.edge.is_none());
-        assert_eq!(publishing.url_pattern, "/schema/{version}/");
+        assert_eq!(publishing.url_pattern, "../{version}/");
         assert_eq!(publishing.output_dir, PathBuf::from("site/schema"));
         assert_eq!(publishing.format, "html");
     }
@@ -1287,6 +1297,32 @@ versions = ["v0.1.0"]
     }
 
     #[test]
+    fn user_supplied_url_pattern_survives_to_rendered_html() {
+        // Back-compat: when the manifest sets `url_pattern` explicitly,
+        // the rendered HTML must use that exact pattern (substituted),
+        // not silently fall back to the new parent-relative default.
+        // Consumers with non-standard hosting may need an absolute
+        // pattern; this test pins that escape hatch.
+        let repo = make_versioned_linkml_repo();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.1.0", "v0.2.0"], None, "v0.2.0");
+        cfg.publishing.as_mut().unwrap().url_pattern = "/custom/path/{version}/".into();
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
+
+        let stale = std::fs::read_to_string(out.path().join("v0.1.0/index.html")).unwrap();
+        assert!(
+            stale.contains("/custom/path/v0.2.0/"),
+            "stale banner must use the user-supplied url_pattern verbatim"
+        );
+        // The new parent-relative default must NOT leak through when
+        // the user overrides — otherwise we've broken back-compat.
+        assert!(
+            !stale.contains("../v0.2.0/"),
+            "default parent-relative pattern must not leak when user supplies url_pattern"
+        );
+    }
+
+    #[test]
     fn publish_versioned_errors_when_publishing_section_absent() {
         let repo = make_versioned_linkml_repo();
         let cfg = PublishConfig {
@@ -1441,8 +1477,8 @@ versions = ["v0.1.0"]
             "stale banner must name the viewing version"
         );
         assert!(
-            stale.contains("/schema/v0.2.0/"),
-            "stale banner link must point at current"
+            stale.contains("../v0.2.0/"),
+            "stale banner link must point at current via parent-relative URL"
         );
 
         let current = std::fs::read_to_string(out.path().join("v0.2.0/index.html")).unwrap();

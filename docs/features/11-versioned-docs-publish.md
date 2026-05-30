@@ -177,6 +177,25 @@ Field semantics:
 
 ---
 
+### Slice 7: Parent-relative `url_pattern` default for deploy portability
+
+**Status:** Completed
+
+**User Value:** The versioned site works out-of-the-box on GitHub Pages (and any other subpath deploy) without the consumer having to think about deploy-target geometry. Today's default `url_pattern = "/schema/{version}/"` is an absolute path from the domain root, which breaks the dropdown on any deploy that isn't at a domain root — clicking v0.1.0 from `https://padamson.github.io/scimantic-schema/schema/v0.2.0/` navigates to `https://padamson.github.io/schema/v0.1.0/` (404) instead of `https://padamson.github.io/scimantic-schema/schema/v0.1.0/` (200). The fix is one character: switch the default to a parent-relative form (`../{version}/`) that resolves correctly regardless of how deep the deploy sits.
+
+**Acceptance Criteria:**
+- [x] `default_url_pattern()` returns `"../{version}/"` instead of `"/schema/{version}/"`.
+- [x] A manifest with no `url_pattern` field produces parent-relative cross-version URLs in the dropdown, the stale banner, and any other cross-version link in the rendered HTML.
+- [x] A manifest that explicitly sets `url_pattern` still uses the user-supplied value verbatim — back-compat preserved for consumers who genuinely want absolute paths.
+- [x] Updated `parses_minimal_publishing_block_with_defaults` to assert the new default; added `user_supplied_url_pattern_survives_to_rendered_html` as a focused back-compat regression test that pins an override pattern through to the rendered HTML.
+- [x] CHANGELOG flags the behavior change as forward-looking guidance — pre-feature-11 consumers don't exist yet, so this isn't a migration concern.
+
+**Notes:**
+- The substitution code (`url_pattern.replace("{version}", v)`) doesn't change — only the default string does. The dropdown JS and the stale banner reuse the same `url_for` helper that already exists, so this slice is genuinely one default-fn change plus test updates.
+- A user-supplied absolute path (e.g., `/path/to/schema/{version}/`) remains a valid escape hatch for non-standard hosting where parent-relative wouldn't reach the right tree.
+
+---
+
 ## Cross-version URL stability — known limitation
 
 For the dropdown to function as cross-version navigation, per-class and per-slot URLs should ideally be stable across versions when the class/slot exists in both. e.g., `/schema/v0.2.0/classes/Question.html` should resolve the same way as `/schema/v0.3.0/classes/Question.html`.
@@ -208,3 +227,4 @@ If/when panschema gains a "split per class" output mode, stable URLs become impo
 | Slice 4: Template integration (dropdown + banner) | Must Have | Slice 3 | Completed |
 | Slice 5: scimantic-schema dogfood + panschema release | Must Have | Slice 4 | Not Started |
 | Slice 6: `--edge-from-worktree` for local preview | Should Have | Slice 3 | Completed |
+| Slice 7: Parent-relative `url_pattern` default | Must Have | Slice 4 | Completed |
