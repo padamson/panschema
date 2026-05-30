@@ -82,4 +82,10 @@ unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 # egraph-rs is a Rust graph-layout workspace whose sub-crates aren't
 # published to crates.io. Pinned via rev in panschema-viz/Cargo.toml.
-allow-git = ["https://github.com/likr/egraph-rs"]
+# Currently using the padamson/egraph-rs fork, which ports the
+# workspace from petgraph 0.6 → 0.8; repin to likr/egraph-rs once
+# our upstream PR lands.
+allow-git = [
+    "https://github.com/likr/egraph-rs",
+    "https://github.com/padamson/egraph-rs",
+]

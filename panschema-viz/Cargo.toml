@@ -31,19 +31,22 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # Graph layout (egraph-rs workspace, git-only — sub-crates not on
-# crates.io). Pinned to the 2025-10-29 HEAD; bump deliberately, since
-# the workspace ships breaking changes silently across revs.
-petgraph = "0.6"
-petgraph-drawing = { version = "0.1", git = "https://github.com/likr/egraph-rs", rev = "8e986826534774fe7beb9546154407927260e446" }
-petgraph-layout-kamada-kawai = { version = "0.1", git = "https://github.com/likr/egraph-rs", rev = "8e986826534774fe7beb9546154407927260e446" }
+# crates.io). Pinned to our padamson/egraph-rs fork that ports the
+# workspace to petgraph 0.8. Upstream `likr/egraph-rs` is still on
+# petgraph 0.6; the fork-based pin unblocks petgraph 0.8 across our
+# direct deps. Repin to upstream once our PR lands there (see the
+# `egraph-rs--petgraph-0.8-fork` cross-repo note for the close-out
+# trigger).
+petgraph = "0.8"
+petgraph-drawing = { version = "0.1", git = "https://github.com/padamson/egraph-rs", rev = "e2aee8fea7878d2574ad8dececc7000c3801c738" }
+petgraph-layout-kamada-kawai = { version = "0.1", git = "https://github.com/padamson/egraph-rs", rev = "e2aee8fea7878d2574ad8dececc7000c3801c738" }
 # Empty no-op crate providing `#[mutants::skip]` so we can mark
 # provably/empirically-equivalent expressions without resorting to
 # brittle line-number based excludes in scripts/mutants.sh.
 mutants = "0.0.4"
-# Sugiyama for layered/hierarchical layout. Brings petgraph 0.8 in
-# alongside egraph-rs's 0.6 — the two versions coexist; the wire
-# format between them is just our own `(u32, u32)` edge tuples, never
-# a shared `NodeIndex`.
+# Sugiyama for layered/hierarchical layout. Now on petgraph 0.8 too
+# (post-fork), so we no longer carry both petgraph 0.6 and 0.8 in the
+# lock file.
 rust-sugiyama = "0.4"
 
 # WebGPU (optional, only with webgpu feature)
