@@ -39,7 +39,7 @@ petgraph-layout-kamada-kawai = { version = "0.1", git = "https://github.com/likr
 # Empty no-op crate providing `#[mutants::skip]` so we can mark
 # provably/empirically-equivalent expressions without resorting to
 # brittle line-number based excludes in scripts/mutants.sh.
-mutants = "0.0.3"
+mutants = "0.0.4"
 # Sugiyama for layered/hierarchical layout. Brings petgraph 0.8 in
 # alongside egraph-rs's 0.6 — the two versions coexist; the wire
 # format between them is just our own `(u32, u32)` edge tuples, never

@@ -421,8 +421,8 @@ user-login = "epage"
 user-name = "Ed Page"
 
 [[publisher.toml_edit]]
-version = "0.25.11+spec-1.1.0"
-when = "2026-04-07"
+version = "0.25.12+spec-1.1.0"
+when = "2026-05-27"
 user-id = 6743
 user-login = "epage"
 user-name = "Ed Page"

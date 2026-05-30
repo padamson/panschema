@@ -529,7 +529,7 @@ version = "0.3.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.mutants]]
-version = "0.0.3"
+version = "0.0.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.naga]]

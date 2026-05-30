@@ -61,7 +61,7 @@ tempfile = "3.24.0"
 # specific mutation-test mutations on inline-equivalent expressions
 # where the cleanest skip is a tiny helper function rather than a
 # brittle line-number exclude in scripts/mutants.sh.
-mutants = "0.0.3"
+mutants = "0.0.4"
 
 # GPU force simulation (optional)
 wgpu = { version = "29", optional = true }
