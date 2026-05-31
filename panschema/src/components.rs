@@ -169,6 +169,9 @@ pub struct HeaderComponent<'a> {
     /// Matches the field on the main `IndexTemplate`. The styleguide
     /// renders without a version cohort, so this is always `None` here.
     pub version_context: Option<&'a panschema::html_writer::VersionContext>,
+    /// Matches the field on the main `IndexTemplate`. The styleguide
+    /// page sits at the output root, so `"./"` is the right value.
+    pub site_root_href: &'a str,
 }
 
 /// Footer component template.
@@ -328,6 +331,8 @@ pub struct StyleGuideTemplate<'a> {
     pub sample_individual: SampleIndividual<'a>,
     /// Matches IndexTemplate. Always `None` for the styleguide page.
     pub version_context: Option<&'a panschema::html_writer::VersionContext>,
+    /// Matches IndexTemplate. Styleguide page sits at the output root.
+    pub site_root_href: &'a str,
 }
 
 /// Renders individual components for testing and preview.
@@ -339,6 +344,7 @@ impl ComponentRenderer {
         let template = HeaderComponent {
             title,
             version_context: None,
+            site_root_href: "./",
         };
         Ok(template.render()?)
     }
@@ -603,6 +609,7 @@ impl ComponentRenderer {
             sample_data_property,
             sample_individual,
             version_context: None,
+            site_root_href: "./",
         };
         Ok(template.render()?)
     }

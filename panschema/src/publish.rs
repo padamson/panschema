@@ -129,6 +129,14 @@ pub struct PublishingConfig {
     /// where parent-relative wouldn't reach the right subtree).
     #[serde(default = "default_url_pattern")]
     pub url_pattern: String,
+    /// URL the header brand link points to from each per-version page.
+    /// Default `"../current/"` — points to the canonical current-version
+    /// docs within the publish output, symmetric with `url_pattern`'s
+    /// parent-relative default. Override when the publish output is
+    /// nested under a parent site (e.g. `"../../"` to escape into a
+    /// containing book) or when an absolute URL is genuinely needed.
+    #[serde(default = "default_site_root_url")]
+    pub site_root_url: String,
     /// Where per-version subdirs land, relative to repo root.
     #[serde(default = "default_output_dir")]
     pub output_dir: PathBuf,
@@ -144,6 +152,16 @@ fn default_url_pattern() -> String {
     // root). Consumers who genuinely need an absolute URL can still
     // override `url_pattern` in the manifest.
     "../{version}/".to_string()
+}
+
+fn default_site_root_url() -> String {
+    // Parent-relative within the publish output so it resolves regardless
+    // of deploy depth, and points at the canonical current-version page —
+    // symmetric with `url_pattern`'s `../{version}/` default. Override
+    // when the publish output is nested under a parent site (e.g.
+    // scimantic-schema lays the publish dir under a book; `"../../"`
+    // escapes back to the book root).
+    "../current/".to_string()
 }
 
 fn default_output_dir() -> PathBuf {
@@ -469,6 +487,7 @@ struct CohortContext {
     current: String,
     edge: Option<String>,
     url_pattern: String,
+    site_root_href: String,
 }
 
 fn build_cohort_context(publishing: &PublishingConfig) -> CohortContext {
@@ -487,6 +506,7 @@ fn build_cohort_context(publishing: &PublishingConfig) -> CohortContext {
         current: publishing.current.clone(),
         edge: publishing.edge.clone(),
         url_pattern: publishing.url_pattern.clone(),
+        site_root_href: publishing.site_root_url.clone(),
     }
 }
 
@@ -529,7 +549,9 @@ fn generate_html_for_version(
             version: version.to_string(),
             message: e.to_string(),
         })?;
-    let writer = HtmlWriter::with_options(true).with_version_context(cohort.context_for(version));
+    let writer = HtmlWriter::with_options(true)
+        .with_version_context(cohort.context_for(version))
+        .with_site_root_href(cohort.site_root_href.clone());
     writer
         .write(&schema, output)
         .map_err(|e| PublishError::GenerateFailed {
@@ -929,6 +951,7 @@ current = "v0.2.0"
         assert_eq!(publishing.current, "v0.2.0");
         assert!(publishing.edge.is_none());
         assert_eq!(publishing.url_pattern, "../{version}/");
+        assert_eq!(publishing.site_root_url, "../current/");
         assert_eq!(publishing.output_dir, PathBuf::from("site/schema"));
         assert_eq!(publishing.format, "html");
     }
@@ -951,6 +974,7 @@ versions = ["v0.1.0", "v0.2.0"]
 edge = "main"
 current = "main"
 url_pattern = "/docs/{version}/"
+site_root_url = "../../"
 output_dir = "build/site"
 format = "html"
 "#;
@@ -959,6 +983,7 @@ format = "html"
         assert_eq!(publishing.edge.as_deref(), Some("main"));
         assert_eq!(publishing.current, "main");
         assert_eq!(publishing.url_pattern, "/docs/{version}/");
+        assert_eq!(publishing.site_root_url, "../../");
         assert_eq!(publishing.output_dir, PathBuf::from("build/site"));
     }
 
@@ -1290,6 +1315,7 @@ versions = ["v0.1.0"]
                 edge: edge.map(String::from),
                 current: current.into(),
                 url_pattern: default_url_pattern(),
+                site_root_url: default_site_root_url(),
                 output_dir: PathBuf::from("site/schema"),
                 format: default_format(),
             }),
@@ -1447,6 +1473,58 @@ versions = ["v0.1.0"]
             assert!(
                 html.contains(&format!(r#"value="{page}" selected"#)),
                 "page {page} should have its own version selected; html excerpt did not match"
+            );
+        }
+    }
+
+    #[test]
+    fn publish_versioned_header_brand_link_defaults_to_parent_current() {
+        // The manifest's `site_root_url` defaults to `../current/` —
+        // parent-relative within the publish output, symmetric with
+        // `url_pattern`'s `../{version}/` default. It points each
+        // per-version page's brand link at the canonical current
+        // version's docs without making any assumption about a
+        // containing parent site.
+        let repo = make_versioned_linkml_repo();
+        let cfg = make_publish_cfg_with_versions(vec!["v0.1.0", "v0.2.0"], Some("main"), "v0.2.0");
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
+
+        for page in ["v0.1.0", "v0.2.0", "main"] {
+            let html = std::fs::read_to_string(out.path().join(page).join("index.html")).unwrap();
+            assert!(
+                html.contains(r#"<a href="../current/" class="site-title""#),
+                "page {page} must carry the default parent-relative brand link"
+            );
+            assert!(
+                !html.contains(r#"<a href="/" class="site-title""#),
+                "page {page} still has the absolute brand link"
+            );
+        }
+    }
+
+    #[test]
+    fn publish_versioned_user_supplied_site_root_url_survives_to_rendered_html() {
+        // Consumers whose publish output is nested under a parent site
+        // (e.g. scimantic-schema lays the publish dir under a book at
+        // `<book>/schema/<version>/`) override `site_root_url` in the
+        // manifest. The value is emitted verbatim as the brand link.
+        let repo = make_versioned_linkml_repo();
+        let mut cfg =
+            make_publish_cfg_with_versions(vec!["v0.1.0", "v0.2.0"], Some("main"), "v0.2.0");
+        cfg.publishing.as_mut().unwrap().site_root_url = "../../".into();
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
+
+        for page in ["v0.1.0", "v0.2.0", "main"] {
+            let html = std::fs::read_to_string(out.path().join(page).join("index.html")).unwrap();
+            assert!(
+                html.contains(r#"<a href="../../" class="site-title""#),
+                "page {page} must carry the user-supplied brand link"
+            );
+            assert!(
+                !html.contains(r#"<a href="../current/" class="site-title""#),
+                "default brand link must not leak when user supplies site_root_url"
             );
         }
     }

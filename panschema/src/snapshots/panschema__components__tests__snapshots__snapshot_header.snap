@@ -4,7 +4,7 @@ expression: html
 ---
 <header class="site-header">
     <div class="container">
-        <a href="/" class="site-title">Test Ontology</a>
+        <a href="./" class="site-title">Test Ontology</a>
         
     </div>
     

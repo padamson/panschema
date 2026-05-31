@@ -128,6 +128,13 @@ struct IndexTemplate<'a> {
     /// version dropdown and the body may show a stale/edge banner.
     /// Always `None` for the `panschema generate` path.
     version_context: Option<&'a VersionContext>,
+    /// URL the header brand link targets — always the deploy root,
+    /// expressed parent-relatively from this page's depth so it
+    /// resolves correctly regardless of whether the site sits at a
+    /// domain root or at a subpath. `"./"` for single-version output
+    /// (page at `<output>/index.html`); `"../../"` for versioned
+    /// output (page at `<output>/<version>/index.html`).
+    site_root_href: &'a str,
 }
 
 /// Per-page context describing the multi-version cohort this page is
@@ -201,6 +208,11 @@ pub struct HtmlWriter {
     /// present, the rendered page gains a version dropdown in the header
     /// and a banner when `viewing` differs from `current` or matches `edge`.
     pub version_context: Option<VersionContext>,
+    /// Override for the header brand link target. `None` means use the
+    /// per-flow default: `"./"` for single-version output (page sits at
+    /// the deploy root) — `panschema publish` always sets this explicitly
+    /// from the manifest's `site_root_url`.
+    pub site_root_href: Option<String>,
 }
 
 /// Parse a `"W:H"` aspect-ratio string. Both components must be positive
@@ -246,6 +258,7 @@ impl HtmlWriter {
             graph_aspect: (16, 8),
             graph_default_layout: "force-directed".to_string(),
             version_context: None,
+            site_root_href: None,
         }
     }
 
@@ -256,6 +269,7 @@ impl HtmlWriter {
             graph_aspect: (16, 8),
             graph_default_layout: "force-directed".to_string(),
             version_context: None,
+            site_root_href: None,
         }
     }
 
@@ -264,6 +278,15 @@ impl HtmlWriter {
     #[must_use]
     pub fn with_version_context(mut self, ctx: VersionContext) -> Self {
         self.version_context = Some(ctx);
+        self
+    }
+
+    /// Override the header brand-link target. Consumed by
+    /// `panschema publish` to forward the manifest's `site_root_url`
+    /// into each per-version page.
+    #[must_use]
+    pub fn with_site_root_href(mut self, href: impl Into<String>) -> Self {
+        self.site_root_href = Some(href.into());
         self
     }
 
@@ -690,6 +713,10 @@ impl Writer for HtmlWriter {
             graph_aspect_h: self.graph_aspect.1,
             graph_default_layout: &self.graph_default_layout,
             version_context: self.version_context.as_ref(),
+            // `panschema generate` writes the page at the output root, so
+            // `./` always resolves to the deploy root. `panschema publish`
+            // sets this explicitly from the manifest's `site_root_url`.
+            site_root_href: self.site_root_href.as_deref().unwrap_or("./"),
         };
 
         let html = template
@@ -912,6 +939,28 @@ mod tests {
     fn html_writer_format_id() {
         let writer = HtmlWriter::new();
         assert_eq!(writer.format_id(), "html");
+    }
+
+    #[test]
+    fn html_writer_emits_single_version_brand_link_as_dot_slash() {
+        // `panschema generate` writes index.html at the output root,
+        // so the brand link must be `./` — equivalent to the deploy
+        // root from that path. The versioned `panschema publish`
+        // path is exercised separately in publish::tests.
+        let reader = OwlReader::new();
+        let schema = reader.read(&reference_ontology_path()).unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let writer = HtmlWriter::with_options(false);
+        crate::io::Writer::write(&writer, &schema, out.path()).unwrap();
+        let html = std::fs::read_to_string(out.path().join("index.html")).unwrap();
+        assert!(
+            html.contains(r#"<a href="./" class="site-title""#),
+            "single-version output must use `./` brand link"
+        );
+        assert!(
+            !html.contains(r#"<a href="/" class="site-title""#),
+            "absolute brand link must not appear"
+        );
     }
 
     #[test]

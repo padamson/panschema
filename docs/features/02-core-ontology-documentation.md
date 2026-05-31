@@ -221,6 +221,47 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 
 ---
 
+### Slice 8: Parent-relative header brand link + absolute-URL audit
+
+**Status:** Completed
+
+**User Value:** The "back to root" navigation affordance in every rendered page (the site-title brand link in the header) resolves correctly regardless of whether the site is deployed at a domain root or at a subpath. Today's template emits `<a href="/" class="site-title">` — absolute path against the domain root, so on standard GitHub Pages (`https://<user>.github.io/<repo>/`) clicking the brand sends the reader to `https://<user>.github.io/` (404 for the project), not the project's landing page. This is the same bug class as feature 11 slice 7's `url_pattern` default; slice 7 fixed the cross-version dropdown links but didn't audit the rest of the template.
+
+**Design — why configurable, not hardcoded:** A naive depth-based fix would emit `./` for `panschema generate` (page at output root) and `../../` for `panschema publish` (page two levels down). `../../` works for scimantic-schema's specific layout (publish dir nested under a book at `<book>/schema/<version>/`) but bakes in that assumption — a standalone publish deploy at `https://<user>.github.io/<repo>/<version>/` would emit `../../` and land at `https://<user>.github.io/` (the user's gh-pages root), same bug class, one level up. So the brand link target is a manifest-configurable field, symmetric with slice 7's `url_pattern`: `[publishing].site_root_url`, default `"../current/"` (parent-relative to the canonical current-version page within the publish output cohort — works for any standalone deploy). Consumers whose publish output is nested under a parent site override to e.g. `"../../"`.
+
+**Acceptance Criteria:**
+- [x] `panschema generate` (single-version) emits `<a href="./" class="site-title">` — page lives at the output root, `./` is the deploy root.
+- [x] `panschema publish` (versioned) emits the brand link from a manifest field `[publishing].site_root_url`. Default `"../current/"`; the value is forwarded verbatim into each per-version page.
+- [x] Audit `panschema/templates/**` for any other `href="/..."` or `src="/..."` absolute-URL emissions. Each finding is either (a) routed through a configurable / depth-aware mechanism or (b) explicitly justified in a comment.
+- [x] Unit tests assert: (i) the default `site_root_url` (`../current/`) renders on each per-version page; (ii) a user-supplied override (`../../`) survives verbatim to the rendered HTML; (iii) a single-version page emits `./`.
+
+**Notes:**
+- The depth computation must thread through the same render context as the existing `VersionContext` (slice 4 of feature 11): the writer knows whether it's rendering single-version or per-version output, and per-version output knows it sits two directory levels deep below the deploy root.
+- This slice is small but unblocks the scimantic-schema dogfood's "back to book" navigation immediately — the header brand becomes the back-link affordance once it resolves correctly. No schema-side workaround is acceptable; the fix must land in panschema.
+
+---
+
+### Slice 9: Markdown rendering in description fields (preserve `[[Name]]` xrefs)
+
+**Status:** Not Started
+
+**User Value:** Schema authors can use standard markdown in `description:` fields — `[link text](url)`, `**bold**`, `*italic*`, `` `code` `` — and have it render as HTML in the documentation. Today the description processor handles `[[Name]]` cross-reference markers (slice 5 work) but escapes every other markup, so authors can't put inline links or emphasis in schema descriptions. The `[[Name]]` xref handling is the strong precedent: descriptions are *already* processed text, not raw text — extending that processor to also handle markdown is a natural increment.
+
+**Acceptance Criteria:**
+- [ ] Description fields (schema-level + per-class + per-slot + per-individual) accept standard CommonMark markdown and render the canonical HTML output for at minimum:
+  - Inline links: `[text](url)` → `<a href="url">text</a>`
+  - Emphasis: `**bold**`, `*italic*`, `` `code` ``
+  - Stretch (call separately): paragraphs, lists, fenced code blocks
+- [ ] Existing `[[Name]]` cross-reference resolution continues to work and produces anchor links as today.
+- [ ] HTML safety: the markdown processor's output is HTML-safe by construction (e.g. `pulldown-cmark` with safe-mode HTML disallowed); raw HTML embedded in descriptions is either rendered safely or escaped — pick one explicitly and document the choice in source.
+- [ ] All existing description-rendering tests continue to pass; new tests cover the new markup forms and the no-regression case for `[[Name]]` xrefs.
+- [ ] One markdown-aware library lands as a new dep (likely `pulldown-cmark`; supply-chain exemption added).
+
+**Notes:**
+- The processing order matters: `[[Name]]` xref expansion should run *before* markdown so that `[[ClassName]]` doesn't get parsed as a markdown reference (`[ClassName]` would otherwise be a markdown link reference syntax). Or run xref resolution against the post-markdown HTML; pick whichever produces cleaner edge-case behavior.
+- HTML-safety policy: the cleanest default is "markdown only — raw HTML escaped." Authors who genuinely need raw HTML (`<a href="...">` linking to external resources) can use the equivalent markdown form. If that's too restrictive in practice, revisit; until then, prefer the safer default.
+- The `[[Name]]` xref handling itself shipped under [slice 5](#slice-5-class-card-content-v030-dogfood-follow-up); this slice extends the same processor.
+
 ---
 
 ## Slice Priority and Dependencies
@@ -234,3 +275,5 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 | Slice 5: Class card content | Should Have (v0.3.0) | Slice 1, Feature 03 | Completed |
 | Slice 6: Responsive layout + configurable graph aspect | Should Have (v0.3.0) | Slice 1, Feature 04 | Completed |
 | Slice 7: Improved force-directed default (fill viewport) | Should Have (v0.3.0) | Slice 6, Feature 04 | Completed |
+| Slice 8: Parent-relative header brand link + absolute-URL audit | Must Have | Slice 4, Feature 11 slice 4 | Completed |
+| Slice 9: Markdown rendering in description fields | Should Have | Slice 5 | Not Started |

@@ -1,6 +1,6 @@
 <header class="site-header">
     <div class="container">
-        <a href="/" class="site-title">{{ title }}</a>
+        <a href="{{ site_root_href }}" class="site-title">{{ title }}</a>
         {% if let Some(vc) = version_context %}
         <div class="version-picker" role="navigation" aria-label="Version navigation">
             <label for="version-select" class="version-picker-label">Version</label>
