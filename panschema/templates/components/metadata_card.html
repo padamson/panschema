@@ -14,7 +14,7 @@
 {%- if let Some(comment) = comment %}
         <div class="metadata-item">
             <dt>Description</dt>
-            <dd>{{ comment }}</dd>
+            <dd>{{ comment|safe }}</dd>
         </div>
 {%- endif %}
     </dl>

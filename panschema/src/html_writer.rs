@@ -979,6 +979,45 @@ mod tests {
     }
 
     #[test]
+    fn html_writer_renders_schema_description_markdown_as_live_html() {
+        // The schema-level description is mounted into the metadata
+        // card. Like the entity cards, the writer hands the template
+        // already-rendered HTML from `render_description`, so the
+        // template must mount it via `|safe` — otherwise Askama
+        // double-escapes the writer's output and the user sees the
+        // literal `<p>…<a href="…">…</a>` markup as visible text
+        // instead of a live link.
+        use crate::linkml::SchemaDefinition;
+        let mut schema = SchemaDefinition::new("s");
+        schema.id = Some("http://example.org/s".to_string());
+        schema.description = Some(
+            "see the [book](https://example.org/book) for context — Noy & McGuinness".to_string(),
+        );
+        let out = tempfile::tempdir().unwrap();
+        let writer = HtmlWriter::with_options(false);
+        crate::io::Writer::write(&writer, &schema, out.path()).unwrap();
+        let html = std::fs::read_to_string(out.path().join("index.html")).unwrap();
+
+        assert!(
+            html.contains(r#"<a href="https://example.org/book">book</a>"#),
+            "schema description markdown link must render as a live anchor; got: {html}"
+        );
+        // Double-escape signature: any of the writer-produced markup
+        // appearing as escaped text means Askama escaped it a second
+        // time. `&lt;a ` would mean the anchor's own `<a` got escaped;
+        // `&amp;amp;` / `&#38;amp;` would mean the writer's `&amp;` got
+        // re-escaped.
+        assert!(
+            !html.contains("&lt;a "),
+            "rendered anchor must not be re-escaped; got: {html}"
+        );
+        assert!(
+            !html.contains("&amp;amp;") && !html.contains("&#38;amp;"),
+            "ampersand must not be double-escaped; got: {html}"
+        );
+    }
+
+    #[test]
     fn html_writer_builds_template_data_from_schema() {
         let reader = OwlReader::new();
         let schema = reader.read(&reference_ontology_path()).unwrap();
