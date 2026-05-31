@@ -242,7 +242,57 @@ impl GraphWriter {
         // Must run after enum/type nodes exist so resolve_range_target can find them.
         self.add_inline_attribute_edges(schema, &mut graph);
 
+        // Must run after `add_slots` so the slot-side `domain` edges are
+        // present for dedup. LinkML treats `slot.domain` and `class.slots`
+        // as the same relation — `domain_of` is the computed inverse of
+        // `domain:` — so a slot referenced from a class's `slots:` list
+        // is connected to that class even when the slot itself omits
+        // `domain:`.
+        if self.options.include_slots {
+            self.add_class_side_slot_edges(schema, &mut graph);
+        }
+
         graph
+    }
+
+    /// Emit a class↔slot edge for each `slot` referenced from a class's
+    /// `slots:` list. The slot-side traversal in [`add_slots`] only emits
+    /// when the slot itself declares `domain:`; this pass covers the
+    /// LinkML pattern where the class lists the slot but the slot omits
+    /// `domain:`. Skipped silently when the named slot isn't declared in
+    /// `schema.slots`, matching the existing graceful-skip in `add_slots`'s
+    /// inverse-edge path. Idempotent against the slot-side pass — if both
+    /// `slot.domain = C` and `C.slots = [s]` are present, a single edge
+    /// is emitted.
+    fn add_class_side_slot_edges(&self, schema: &SchemaDefinition, graph: &mut GraphData) {
+        if !self.options.include_domain_edges {
+            return;
+        }
+        let mut seen: std::collections::HashSet<(String, String)> = graph
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Domain)
+            .map(|e| (e.source.clone(), e.target.clone()))
+            .collect();
+        for (class_name, class_def) in &schema.classes {
+            for slot_name in &class_def.slots {
+                if !schema.slots.contains_key(slot_name) {
+                    continue;
+                }
+                let key = (
+                    format!("slot:{}", slot_name),
+                    format!("class:{}", class_name),
+                );
+                if seen.insert(key.clone()) {
+                    graph.edges.push(GraphEdge {
+                        source: key.0,
+                        target: key.1,
+                        edge_type: EdgeType::Domain,
+                        label: Some("domain".to_string()),
+                    });
+                }
+            }
+        }
     }
 
     /// Walk inline class attributes and emit range edges from each owning
@@ -607,6 +657,148 @@ mod tests {
             .expect("Should have inverse edge");
         assert_eq!(inverse_edge.source, "slot:hasOwner");
         assert_eq!(inverse_edge.target, "slot:owns");
+    }
+
+    // ========== Class-side `slots:` (inverse domain) Tests ==========
+
+    #[test]
+    fn class_side_slot_reference_emits_domain_edge_when_slot_lacks_domain() {
+        // A class lists a slot in `class.slots:` but the slot itself
+        // declares no `domain:`. LinkML treats this as a valid
+        // class↔slot relation (the class card already renders it),
+        // so the graph must connect them. Without this pass, the slot
+        // appears as an orphan node.
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .slots
+            .insert("title".to_string(), SlotDefinition::new("title"));
+        let mut book = ClassDefinition::new("Book");
+        book.slots.push("title".to_string());
+        schema.classes.insert("Book".to_string(), book);
+
+        let graph = GraphWriter::new().schema_to_graph(&schema);
+        let domain_edges: Vec<_> = graph
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Domain)
+            .collect();
+        assert_eq!(
+            domain_edges.len(),
+            1,
+            "expected one domain edge from class-side reference; got: {:?}",
+            domain_edges
+        );
+        assert_eq!(domain_edges[0].source, "slot:title");
+        assert_eq!(domain_edges[0].target, "class:Book");
+    }
+
+    #[test]
+    fn class_side_slot_reference_is_deduped_against_slot_side_domain() {
+        // When BOTH `slot.domain = C` and `C.slots: [s]` are set,
+        // the result is a single edge — the two write-paths express
+        // the same relation and must not produce two graph edges.
+        let mut schema = SchemaDefinition::new("s");
+        let mut author_slot = SlotDefinition::new("author");
+        author_slot.domain = Some("Book".to_string());
+        schema.slots.insert("author".to_string(), author_slot);
+        let mut book = ClassDefinition::new("Book");
+        book.slots.push("author".to_string());
+        schema.classes.insert("Book".to_string(), book);
+
+        let graph = GraphWriter::new().schema_to_graph(&schema);
+        let domain_edges: Vec<_> = graph
+            .edges
+            .iter()
+            .filter(|e| {
+                e.edge_type == EdgeType::Domain
+                    && e.source == "slot:author"
+                    && e.target == "class:Book"
+            })
+            .collect();
+        assert_eq!(
+            domain_edges.len(),
+            1,
+            "expected exactly one (slot:author, class:Book) edge; got: {:?}",
+            domain_edges
+        );
+    }
+
+    #[test]
+    fn class_side_slot_reference_emits_one_edge_per_host_class() {
+        // A slot referenced from N classes' `slots:` lists produces
+        // N distinct edges — one per host. The scimantic case is
+        // `content` used by both `Evidence` and `Conclusion`.
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .slots
+            .insert("content".to_string(), SlotDefinition::new("content"));
+        let mut evidence = ClassDefinition::new("Evidence");
+        evidence.slots.push("content".to_string());
+        schema.classes.insert("Evidence".to_string(), evidence);
+        let mut conclusion = ClassDefinition::new("Conclusion");
+        conclusion.slots.push("content".to_string());
+        schema.classes.insert("Conclusion".to_string(), conclusion);
+
+        let graph = GraphWriter::new().schema_to_graph(&schema);
+        let targets: std::collections::BTreeSet<&str> = graph
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Domain && e.source == "slot:content")
+            .map(|e| e.target.as_str())
+            .collect();
+        assert_eq!(
+            targets,
+            ["class:Conclusion", "class:Evidence"].into_iter().collect(),
+            "expected `content` to connect to both host classes; got: {:?}",
+            targets
+        );
+    }
+
+    #[test]
+    fn class_side_slot_reference_skips_undeclared_slot_names() {
+        // A class can reference a slot name that isn't declared in
+        // `schema.slots` (e.g. typo, removed slot). No edge should
+        // be emitted, and the pass must not panic — matching the
+        // graceful-skip pattern in `add_slots`'s inverse-edge path.
+        let mut schema = SchemaDefinition::new("s");
+        let mut book = ClassDefinition::new("Book");
+        book.slots.push("phantom".to_string());
+        schema.classes.insert("Book".to_string(), book);
+
+        let graph = GraphWriter::new().schema_to_graph(&schema);
+        assert!(
+            graph
+                .edges
+                .iter()
+                .all(|e| e.source != "slot:phantom" && e.target != "slot:phantom"),
+            "no edges should reference the undeclared slot; got: {:?}",
+            graph.edges
+        );
+    }
+
+    #[test]
+    fn class_side_slot_pass_respects_include_domain_edges_flag() {
+        // The class-side pass shares the `include_domain_edges`
+        // toggle with the slot-side pass — they emit the same edge
+        // type, so disabling one disables the other.
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .slots
+            .insert("title".to_string(), SlotDefinition::new("title"));
+        let mut book = ClassDefinition::new("Book");
+        book.slots.push("title".to_string());
+        schema.classes.insert("Book".to_string(), book);
+
+        let opts = GraphOptions {
+            include_domain_edges: false,
+            ..GraphOptions::default()
+        };
+        let graph = GraphWriter::with_options(opts).schema_to_graph(&schema);
+        assert!(
+            !graph.edges.iter().any(|e| e.edge_type == EdgeType::Domain),
+            "expected no domain edges when include_domain_edges = false; got: {:?}",
+            graph.edges
+        );
     }
 
     // ========== Inline Attribute Tests ==========

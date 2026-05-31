@@ -368,6 +368,29 @@ For 2D mode, labels are rendered directly on the Canvas2D context with hover sup
 
 ---
 
+### Slice 8: Class↔slot edges via `class.slots:` (inverse-of-`domain:`)
+
+**Status:** Completed
+
+**Priority:** Should Have
+
+**User Value:** Every slot a class actually uses connects to that class in the rendered graph, regardless of whether the LinkML author wrote `slot.domain` on the slot side or just listed it in `class.slots:` on the class side. Per the LinkML metamodel, `domain_of` is the computed inverse of `domain:` — the graph should treat both as equivalent for class↔slot connectivity. Today the graph builder only honors `slot.domain`, so a schema where the host class lists the slot but the slot itself omits `domain:` shows the slot as an orphan node in the rendered viz, even though the class clearly uses it (and the HTML class-card already lists it correctly). Verified against scimantic-schema v0.2.0: at least 13 slots are currently orphan for this exact reason, including the multi-class `content` slot used by both `Evidence` and `Conclusion`.
+
+**Acceptance Criteria:**
+- [x] `GraphWriter` walks `schema.classes.<C>.slots:` lists during graph build and emits a class↔slot edge for each reference, in addition to (not instead of) the existing `slot.domain` traversal.
+- [x] When a slot is referenced from N classes' `slots:` lists, the graph emits N distinct edges (one per class). Multi-class slots like scimantic's `content` (used by both `Evidence` and `Conclusion`) connect to both classes.
+- [x] Idempotent: when a slot has `domain: X` AND `X.slots:` lists it, the result is a single `(slot:s, class:X)` edge — no duplicate emitted.
+- [x] Edge type/label: reuse `EdgeType::Domain` (LinkML treats `domain` and `domain_of` as equivalent; a separate variant would split a semantically identical relation in two for no UX gain). Label stays `"domain"`.
+- [x] Behavior gated by the existing `options.include_domain_edges` flag — class-side traversal is the same relation as slot-side traversal, not a separate toggle.
+- [x] Range-edge behavior is unchanged: slots whose `range` is a primitive (`string`, `integer`, etc.) still produce no range node — this slice is strictly about class↔slot connectivity.
+- [x] Unit tests: minimal class-side reference, idempotent both-sides, multi-class slot, non-existent slot reference (graceful skip, no panic).
+
+**Notes:**
+- One small helper in `GraphWriter`, called once after `add_slots` so the slot-side `domain` edges are already in `graph.edges` for the dedup seed. No new `EnumType` variants, no new option fields — pure additive logic.
+- After this slice ships, scimantic-schema's deployed Pages graph at `/schema/v0.2.0/` gains edges for every previously-orphan slot, closing the cross-repo bug. Re-render needed downstream.
+
+---
+
 ## Slice Priority and Dependencies
 
 | Slice | Priority | Depends On | Status |
@@ -379,6 +402,7 @@ For 2D mode, labels are rendered directly on the Canvas2D context with hover sup
 | Slice 5: Node and Edge Labels | Should Have | Slice 4 | ✅ Complete |
 | Slice 6: Interaction and Dragging | Should Have | Slice 4 | 🚧 In Progress |
 | Slice 7: Barnes-Hut Optimization | Nice to Have | Slice 1 | Not Started |
+| Slice 8: Class↔slot edges via `class.slots:` | Should Have | Slice 3 | ✅ Complete |
 
 ---
 
