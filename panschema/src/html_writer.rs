@@ -128,12 +128,10 @@ struct IndexTemplate<'a> {
     /// version dropdown and the body may show a stale/edge banner.
     /// Always `None` for the `panschema generate` path.
     version_context: Option<&'a VersionContext>,
-    /// URL the header brand link targets — always the deploy root,
-    /// expressed parent-relatively from this page's depth so it
-    /// resolves correctly regardless of whether the site sits at a
-    /// domain root or at a subpath. `"./"` for single-version output
-    /// (page at `<output>/index.html`); `"../../"` for versioned
-    /// output (page at `<output>/<version>/index.html`).
+    /// URL the header brand link targets. `"./"` for single-version
+    /// output (page sits at the deploy root). `panschema publish`
+    /// supplies this explicitly from the manifest's
+    /// `[publishing].site_root_url` (default `"../current/"`).
     site_root_href: &'a str,
 }
 
@@ -415,7 +413,7 @@ impl HtmlWriter {
                     description: slot_def
                         .description
                         .as_deref()
-                        .map(|d| resolve_xrefs(d, schema)),
+                        .map(|d| render_description(d, schema)),
                     refined_here: class_def.slot_usage.contains_key(slot_name),
                 })
                 .collect();
@@ -430,7 +428,7 @@ impl HtmlWriter {
                 description: class_def
                     .description
                     .as_deref()
-                    .map(|d| resolve_xrefs(d, schema)),
+                    .map(|d| render_description(d, schema)),
                 superclass,
                 subclasses,
                 mixins,
@@ -530,7 +528,10 @@ impl HtmlWriter {
                     .clone()
                     .unwrap_or_else(|| (*slot_id).clone()),
                 property_type,
-                description: slot_def.description.clone(),
+                description: slot_def
+                    .description
+                    .as_deref()
+                    .map(|d| render_description(d, schema)),
                 domain,
                 range,
                 characteristics,
@@ -640,7 +641,10 @@ impl HtmlWriter {
             title,
             iri,
             version: schema.version.clone(),
-            comment: schema.description.clone(),
+            comment: schema
+                .description
+                .as_deref()
+                .map(|d| render_description(d, schema)),
             namespaces,
             class_refs,
             class_data: class_data_list,
@@ -741,19 +745,46 @@ impl Writer for HtmlWriter {
     }
 }
 
-/// Resolve `[[Name]]` markers in `text` against `schema` into anchor
-/// links, returning HTML. Plain text is HTML-escaped; injected anchors
-/// are not. Unresolved names pass through literally with a `<!-- WARNING -->`
-/// comment so the gap is visible in the generated HTML source rather
-/// than silently dropped.
-fn resolve_xrefs(text: &str, schema: &SchemaDefinition) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut remainder = text;
-    // `split_once` guarantees `after_open` strictly shrinks `remainder`
-    // — important for the literal-`[[` fallthrough path below, which
-    // would otherwise need an explicit forward-progress assertion.
+/// Render a LinkML `description:` value to HTML. Runs CommonMark
+/// markdown over the input then expands `[[Name]]` cross-reference
+/// markers against `schema` into anchor links.
+///
+/// Markdown handles inline links (`[text](url)`), emphasis
+/// (`**bold**`, `*italic*`), code spans, and block constructs
+/// (paragraphs, lists, fenced code). Raw HTML embedded in
+/// descriptions is escaped — `<a href="…">…</a>` typed by the
+/// author renders as literal angle-bracket text, not a real anchor.
+/// Authors who need a clickable link use markdown syntax instead.
+///
+/// `[[Name]]` markers pass through markdown as plain text (no
+/// markdown construct starts with `[[`), so post-processing the
+/// rendered HTML to substitute them is safe — they only appear in
+/// text nodes, never inside tag attributes.
+fn render_description(text: &str, schema: &SchemaDefinition) -> String {
+    use pulldown_cmark::{Event, Parser, html};
+
+    // Route raw HTML through text escaping so author-embedded
+    // `<a href="…">` cannot inject markup into the output. The
+    // pulldown-cmark HTML renderer escapes `< > &` in `Event::Text`
+    // automatically.
+    let events = Parser::new(text).map(|ev| match ev {
+        Event::Html(s) | Event::InlineHtml(s) => Event::Text(s),
+        other => other,
+    });
+    let mut rendered = String::with_capacity(text.len());
+    html::push_html(&mut rendered, events);
+    substitute_xref_markers(&rendered, schema)
+}
+
+/// Walk the markdown-rendered HTML, replacing `[[Name]]` markers
+/// (which markdown passes through as text — see [`render_description`])
+/// with anchor links. Plain text outside markers is left as-is; it has
+/// already been HTML-escaped by the markdown renderer.
+fn substitute_xref_markers(html: &str, schema: &SchemaDefinition) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut remainder = html;
     while let Some((before, after_open)) = remainder.split_once("[[") {
-        push_escaped(&mut out, before);
+        out.push_str(before);
         if let Some((name, after_close)) = after_open.split_once("]]")
             && is_xref_ident(name)
         {
@@ -761,13 +792,10 @@ fn resolve_xrefs(text: &str, schema: &SchemaDefinition) -> String {
             remainder = after_close;
             continue;
         }
-        // Not a valid xref — emit a literal `[[` and resume scanning
-        // after it, so a later `[[Name]]` in the same string still
-        // gets resolved.
         out.push_str("[[");
         remainder = after_open;
     }
-    push_escaped(&mut out, remainder);
+    out.push_str(remainder);
     out
 }
 
@@ -780,19 +808,6 @@ fn is_xref_ident(name: &str) -> bool {
         return false;
     }
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-}
-
-fn push_escaped(out: &mut String, text: &str) {
-    for c in text.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            _ => out.push(c),
-        }
-    }
 }
 
 /// Defaults are appended only for prefix names the schema didn't
@@ -1036,27 +1051,29 @@ mod tests {
     }
 
     #[test]
-    fn resolve_xrefs_links_known_class_reference() {
+    fn render_description_links_known_class_reference() {
         use crate::linkml::{ClassDefinition, SchemaDefinition};
         let mut schema = SchemaDefinition::new("s");
         schema
             .classes
             .insert("Question".to_string(), ClassDefinition::new("Question"));
-        let html = resolve_xrefs("see [[Question]] for context", &schema);
-        assert_eq!(
-            html,
-            r##"see <a href="#class-Question" class="entity-ref class-ref">Question</a> for context"##
+        let html = render_description("see [[Question]] for context", &schema);
+        assert!(
+            html.contains(
+                r##"<a href="#class-Question" class="entity-ref class-ref">Question</a>"##
+            ),
+            "expected class anchor; got: {html}"
         );
     }
 
     #[test]
-    fn resolve_xrefs_links_known_enum_reference() {
+    fn render_description_links_known_enum_reference() {
         use crate::linkml::{EnumDefinition, SchemaDefinition};
         let mut schema = SchemaDefinition::new("s");
         schema
             .enums
             .insert("ActStatus".to_string(), EnumDefinition::new("ActStatus"));
-        let html = resolve_xrefs("captured by the [[ActStatus]] enum", &schema);
+        let html = render_description("captured by the [[ActStatus]] enum", &schema);
         assert!(
             html.contains(
                 r##"<a href="#enum-ActStatus" class="entity-ref enum-ref">ActStatus</a>"##
@@ -1066,13 +1083,13 @@ mod tests {
     }
 
     #[test]
-    fn resolve_xrefs_links_known_slot_reference() {
+    fn render_description_links_known_slot_reference() {
         use crate::linkml::{SchemaDefinition, SlotDefinition};
         let mut schema = SchemaDefinition::new("s");
         schema
             .slots
             .insert("status".to_string(), SlotDefinition::new("status"));
-        let html = resolve_xrefs("the [[status]] slot", &schema);
+        let html = render_description("the [[status]] slot", &schema);
         assert!(
             html.contains(r##"<a href="#prop-status" class="entity-ref prop-ref">status</a>"##),
             "expected slot anchor; got: {html}"
@@ -1080,10 +1097,10 @@ mod tests {
     }
 
     #[test]
-    fn resolve_xrefs_emits_warning_comment_for_unresolved_reference() {
+    fn render_description_emits_warning_comment_for_unresolved_reference() {
         use crate::linkml::SchemaDefinition;
         let schema = SchemaDefinition::new("s");
-        let html = resolve_xrefs("nothing here: [[Phantom]]", &schema);
+        let html = render_description("nothing here: [[Phantom]]", &schema);
         assert!(
             html.contains("[[Phantom]]"),
             "expected literal text; got: {html}"
@@ -1095,56 +1112,53 @@ mod tests {
     }
 
     #[test]
-    fn resolve_xrefs_html_escapes_surrounding_plain_text() {
+    fn render_description_html_escapes_surrounding_plain_text() {
         use crate::linkml::SchemaDefinition;
         let schema = SchemaDefinition::new("s");
-        let html = resolve_xrefs("if a < b & c > d", &schema);
-        // < > & in plain text must be escaped so the output is safe to
-        // mark `|safe` in the template.
-        assert_eq!(html, "if a &lt; b &amp; c &gt; d");
+        let html = render_description("if a < b & c > d", &schema);
+        // `< > &` in body content must be escaped — the rendered HTML
+        // is mounted via `|safe` in entity descriptions, so the writer
+        // can't lean on Askama for escaping. `"` and `'` are body-safe
+        // in HTML5 and pass through, matching CommonMark output.
+        assert!(html.contains("&lt;"), "got: {html}");
+        assert!(html.contains("&amp;"), "got: {html}");
+        assert!(html.contains("&gt;"), "got: {html}");
     }
 
     #[test]
-    fn resolve_xrefs_escapes_quotes_in_plain_text() {
-        // Descriptions can contain " and ' (e.g., scimantic's PlannedAct
-        // description includes `"Planned" denotes intentionality`).
-        // Both must escape so the result is attribute-safe when marked
-        // `|safe` in any template context.
+    fn render_description_passes_body_safe_quotes_through() {
+        // Descriptions land in element body content (mounted into
+        // `<div class="entity-description">…</div>`), where `"` and
+        // `'` are HTML5-safe and need no escape. CommonMark output
+        // matches; we keep authors' quote characters readable in the
+        // rendered source instead of `&quot;`/`&#39;`-encoding them.
         use crate::linkml::SchemaDefinition;
         let schema = SchemaDefinition::new("s");
-        assert_eq!(
-            resolve_xrefs(r#"says "hi" and 'bye'"#, &schema),
-            "says &quot;hi&quot; and &#39;bye&#39;"
-        );
+        let html = render_description(r#"says "hi" and 'bye'"#, &schema);
+        assert!(html.contains(r#"says "hi" and 'bye'"#), "got: {html}");
     }
 
     #[test]
-    fn resolve_xrefs_rejects_invalid_idents() {
+    fn render_description_rejects_invalid_xref_idents() {
         // `[[Name]]` requires a LinkML-style ident: alphabetic or `_`
         // first char, alphanumeric or `_` continuation. Anything else
         // is treated as literal `[[...]]` text, not a cross-reference.
         use crate::linkml::SchemaDefinition;
         let schema = SchemaDefinition::new("s");
-        // Empty interior.
-        assert_eq!(resolve_xrefs("[[]]", &schema), "[[]]");
-        // Digit-leading.
-        assert_eq!(resolve_xrefs("[[123abc]]", &schema), "[[123abc]]");
-        // Contains a space (LinkML idents are alphanumeric + underscore).
-        assert_eq!(resolve_xrefs("[[has space]]", &schema), "[[has space]]");
-        // Contains a hyphen.
-        assert_eq!(resolve_xrefs("[[a-b]]", &schema), "[[a-b]]");
+        assert!(render_description("[[]]", &schema).contains("[[]]"));
+        assert!(render_description("[[123abc]]", &schema).contains("[[123abc]]"));
+        assert!(render_description("[[has space]]", &schema).contains("[[has space]]"));
+        assert!(render_description("[[a-b]]", &schema).contains("[[a-b]]"));
     }
 
     #[test]
-    fn resolve_xrefs_accepts_underscore_leading_ident() {
-        // Underscore-leading idents are valid LinkML identifiers and
-        // must resolve to a class card link when the class exists.
+    fn render_description_accepts_underscore_leading_xref_ident() {
         use crate::linkml::{ClassDefinition, SchemaDefinition};
         let mut schema = SchemaDefinition::new("s");
         schema
             .classes
             .insert("_Internal".to_string(), ClassDefinition::new("_Internal"));
-        let html = resolve_xrefs("[[_Internal]]", &schema);
+        let html = render_description("[[_Internal]]", &schema);
         assert!(
             html.contains(r##"<a href="#class-_Internal""##),
             "expected underscore-leading ident to resolve; got: {html}"
@@ -1152,12 +1166,89 @@ mod tests {
     }
 
     #[test]
-    fn resolve_xrefs_passes_lone_brackets_through() {
+    fn render_description_passes_lone_brackets_through() {
         use crate::linkml::SchemaDefinition;
         let schema = SchemaDefinition::new("s");
-        // A single `[` or `[[` without a matching `]]` isn't an xref.
-        let html = resolve_xrefs("[note] and [[unclosed", &schema);
-        assert_eq!(html, "[note] and [[unclosed");
+        let html = render_description("[note] and [[unclosed", &schema);
+        assert!(html.contains("[note] and [[unclosed"), "got: {html}");
+    }
+
+    #[test]
+    fn render_description_renders_markdown_inline_links() {
+        // `[text](url)` is the canonical markdown affordance for
+        // embedding a clickable link in a description. Before this
+        // slice, descriptions escaped all markup so the only way to
+        // reference another schema entity was the in-band `[[Name]]`
+        // marker. Markdown links cover external URLs that don't fit
+        // the xref mechanism (book chapters, papers, glossaries).
+        use crate::linkml::SchemaDefinition;
+        let schema = SchemaDefinition::new("s");
+        let html = render_description("see the [book](../../) for context", &schema);
+        assert!(
+            html.contains(r#"<a href="../../">book</a>"#),
+            "expected rendered markdown link; got: {html}"
+        );
+    }
+
+    #[test]
+    fn render_description_renders_markdown_emphasis_and_code() {
+        use crate::linkml::SchemaDefinition;
+        let schema = SchemaDefinition::new("s");
+        let html = render_description("**bold** and *italic* and `code`", &schema);
+        assert!(
+            html.contains("<strong>bold</strong>"),
+            "expected bold; got: {html}"
+        );
+        assert!(
+            html.contains("<em>italic</em>"),
+            "expected italic; got: {html}"
+        );
+        assert!(
+            html.contains("<code>code</code>"),
+            "expected code; got: {html}"
+        );
+    }
+
+    #[test]
+    fn render_description_escapes_raw_html_embedded_by_author() {
+        // HTML safety policy: markdown only. Raw HTML in descriptions
+        // is escaped so an author can't smuggle markup (or worse,
+        // scripts) into the rendered page. The schema author who needs
+        // a link uses markdown `[text](url)` syntax instead.
+        use crate::linkml::SchemaDefinition;
+        let schema = SchemaDefinition::new("s");
+        let html = render_description(r#"plain <a href="evil.html">click</a> tail"#, &schema);
+        assert!(
+            !html.contains(r#"<a href="evil.html">"#),
+            "raw HTML must not survive verbatim; got: {html}"
+        );
+        // The literal `<a` opener must be escaped in the rendered output.
+        assert!(
+            html.contains("&lt;a "),
+            "raw HTML must be escaped; got: {html}"
+        );
+    }
+
+    #[test]
+    fn render_description_preserves_xref_inside_markdown_link_text() {
+        // A `[[ClassName]]` marker nested inside a markdown link's
+        // text is processed by xref expansion after markdown renders,
+        // so the anchor's display text becomes the resolved entity
+        // link. Verifies the ordering decision: markdown first, then
+        // xref substitution against the rendered HTML.
+        use crate::linkml::{ClassDefinition, SchemaDefinition};
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .classes
+            .insert("Question".to_string(), ClassDefinition::new("Question"));
+        let html = render_description("[via [[Question]]](../../)", &schema);
+        // Outer markdown link survives.
+        assert!(html.contains(r#"<a href="../../">"#), "got: {html}");
+        // Inner xref also resolves.
+        assert!(
+            html.contains(r##"<a href="#class-Question""##),
+            "got: {html}"
+        );
     }
 
     #[test]

@@ -21,6 +21,11 @@ sophia = { version = "0.10", features = ["jsonld", "xml"] }
 # Templating
 askama = "0.16"
 
+# Markdown rendering inside LinkML `description:` fields. CommonMark
+# only; raw HTML inside descriptions is escaped (Event::Html /
+# Event::InlineHtml are routed through text escaping at render time).
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

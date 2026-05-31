@@ -1,10 +1,10 @@
 ---
-source: src/components.rs
+source: panschema/src/components.rs
 expression: html
 ---
 <section class="hero">
     <h1 class="hero-title">Test Ontology</h1>
-    <p class="hero-description">A test ontology description.</p>
+    <div class="hero-description">A test ontology description.</div>
 </section>
 <style>
     .hero {

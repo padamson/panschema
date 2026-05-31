@@ -1,7 +1,7 @@
 <section class="hero">
     <h1 class="hero-title">{{ title }}</h1>
 {%- if let Some(comment) = comment %}
-    <p class="hero-description">{{ comment }}</p>
+    <div class="hero-description">{{ comment|safe }}</div>
 {%- endif %}
 </section>
 <style>

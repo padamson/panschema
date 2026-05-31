@@ -1,5 +1,5 @@
 ---
-source: src/components.rs
+source: panschema/src/components.rs
 expression: html
 ---
 <article class="entity-card property-card" id="prop-name">
@@ -18,7 +18,7 @@ expression: html
         <code class="mono">https://example.org/ontology#name</code>
     </div>
 
-    <p class="entity-description">The name of a person.</p>
+    <div class="entity-description">The name of a person.</div>
 
     <div class="entity-details">
         <div class="detail-row">

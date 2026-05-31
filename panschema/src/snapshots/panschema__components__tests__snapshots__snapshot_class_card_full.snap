@@ -1,6 +1,5 @@
 ---
 source: panschema/src/components.rs
-assertion_line: 800
 expression: html
 ---
 <article class="entity-card class-card" id="class-person">
@@ -19,7 +18,7 @@ expression: html
         <code class="mono">https://example.org/ontology#Person</code>
     </div>
 
-    <p class="entity-description">Represents a human being.</p>
+    <div class="entity-description">Represents a human being.</div>
 
     <div class="entity-details">
         <div class="detail-row">

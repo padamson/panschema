@@ -15,7 +15,7 @@
     </div>
 {%- if let Some(desc) = description %}
 
-    <p class="entity-description">{{ desc|safe }}</p>
+    <div class="entity-description">{{ desc|safe }}</div>
 {%- endif %}
 
     <div class="entity-details">
@@ -81,7 +81,7 @@
 {%- if slot.multivalued %}                        <span class="slot-flag multivalued">multivalued</span>{% endif %}
 {%- if slot.refined_here %}                        <span class="slot-flag refined">refined here</span>{% endif %}
 {%- if let Some(desc) = slot.description.as_deref() %}
-                        <p class="slot-description">{{ desc|safe }}</p>
+                        <div class="slot-description">{{ desc|safe }}</div>
 {%- endif %}
                     </li>
 {%- endfor %}

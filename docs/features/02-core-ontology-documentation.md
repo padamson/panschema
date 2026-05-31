@@ -243,19 +243,19 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 
 ### Slice 9: Markdown rendering in description fields (preserve `[[Name]]` xrefs)
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** Schema authors can use standard markdown in `description:` fields — `[link text](url)`, `**bold**`, `*italic*`, `` `code` `` — and have it render as HTML in the documentation. Today the description processor handles `[[Name]]` cross-reference markers (slice 5 work) but escapes every other markup, so authors can't put inline links or emphasis in schema descriptions. The `[[Name]]` xref handling is the strong precedent: descriptions are *already* processed text, not raw text — extending that processor to also handle markdown is a natural increment.
 
 **Acceptance Criteria:**
-- [ ] Description fields (schema-level + per-class + per-slot + per-individual) accept standard CommonMark markdown and render the canonical HTML output for at minimum:
+- [x] Description fields (schema-level + per-class + per-slot + per-individual) accept standard CommonMark markdown and render the canonical HTML output for at minimum:
   - Inline links: `[text](url)` → `<a href="url">text</a>`
   - Emphasis: `**bold**`, `*italic*`, `` `code` ``
   - Stretch (call separately): paragraphs, lists, fenced code blocks
-- [ ] Existing `[[Name]]` cross-reference resolution continues to work and produces anchor links as today.
-- [ ] HTML safety: the markdown processor's output is HTML-safe by construction (e.g. `pulldown-cmark` with safe-mode HTML disallowed); raw HTML embedded in descriptions is either rendered safely or escaped — pick one explicitly and document the choice in source.
-- [ ] All existing description-rendering tests continue to pass; new tests cover the new markup forms and the no-regression case for `[[Name]]` xrefs.
-- [ ] One markdown-aware library lands as a new dep (likely `pulldown-cmark`; supply-chain exemption added).
+- [x] Existing `[[Name]]` cross-reference resolution continues to work and produces anchor links as today.
+- [x] HTML safety: the markdown processor's output is HTML-safe by construction (e.g. `pulldown-cmark` with safe-mode HTML disallowed); raw HTML embedded in descriptions is either rendered safely or escaped — pick one explicitly and document the choice in source.
+- [x] All existing description-rendering tests continue to pass; new tests cover the new markup forms and the no-regression case for `[[Name]]` xrefs.
+- [x] One markdown-aware library lands as a new dep (likely `pulldown-cmark`; supply-chain exemption added).
 
 **Notes:**
 - The processing order matters: `[[Name]]` xref expansion should run *before* markdown so that `[[ClassName]]` doesn't get parsed as a markdown reference (`[ClassName]` would otherwise be a markdown link reference syntax). Or run xref resolution against the post-markdown HTML; pick whichever produces cleaner edge-case behavior.
@@ -276,4 +276,4 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 | Slice 6: Responsive layout + configurable graph aspect | Should Have (v0.3.0) | Slice 1, Feature 04 | Completed |
 | Slice 7: Improved force-directed default (fill viewport) | Should Have (v0.3.0) | Slice 6, Feature 04 | Completed |
 | Slice 8: Parent-relative header brand link + absolute-URL audit | Must Have | Slice 4, Feature 11 slice 4 | Completed |
-| Slice 9: Markdown rendering in description fields | Should Have | Slice 5 | Not Started |
+| Slice 9: Markdown rendering in description fields | Should Have | Slice 5 | Completed |
