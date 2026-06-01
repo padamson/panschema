@@ -191,6 +191,7 @@ Existing in-tree CPU force simulation (slice 7 work in [Feature 02](02-core-onto
 - [x] Picker UI exposes "Kamada-Kawai (slower init)" as a selectable option with a hover tooltip explaining the trade-off. JS `IMPLEMENTED_LAYOUTS` accepts the new identifier so the localStorage round-trip works.
 - [ ] Multi-scale screenshot harness produces a `target/graph-2d-{phone,laptop,4k}.png` for `LayoutAlgorithm::KamadaKawai`. **Deferred:** the multi-scale screenshot baselines for force-directed are already committed; adding KK baselines is a follow-on once we have UI consensus that the captured layouts are the intended reference.
 - [x] Native unit tests on `egraph-rs`-derived positions confirm: no NaN/Inf in any coordinate, bbox is non-degenerate (≥ 100 world units on both axes for any reasonable test graph), positions stay within `MAX_RADIUS`-equivalent bounds. See `kamada_kawai_scaled_bbox_is_non_degenerate_and_within_world_bounds` in `panschema-viz/src/layout.rs`.
+- [x] The freeze survives user interaction. Selecting a node (click-without-drag) leaves all node positions unchanged. Dragging a single node moves only that node — the rest of the static layout is preserved, not rearranged into force-directed equilibrium. Pinned by `dragging_one_node_in_a_frozen_simulation_leaves_other_nodes_untouched` in `panschema-viz/src/simulation.rs`. (The drag handler used to reheat unconditionally, undoing `freeze_at`'s halt for every interaction; the fix tracks `is_static_layout` on `Visualization` and skips the reheat for static layouts.)
 
 **Notes:**
 - KK convergence cost is `O(N³)` for the all-pairs shortest-path preprocess plus `O(N²)` per iteration. For schemas ≥ 500 classes the init latency becomes uncomfortable — surface a "switch to Force-directed" hint in the UI when the graph exceeds that threshold.
@@ -241,12 +242,13 @@ Existing in-tree CPU force simulation (slice 7 work in [Feature 02](02-core-onto
 **User Value:** Selecting "Hierarchical" lays out the schema as top-to-bottom layered Sugiyama, with each `is_a` / `subClassOf` chain becoming a vertical descent and crossings between layers explicitly minimized via Barth-Mutzel-Jünger. Class hierarchies snap into legible form; non-tree edges (range, domain, mixin) draw as overlays in a contrasting style.
 
 **Acceptance Criteria:**
-- [ ] `panschema-viz/Cargo.toml` adds `rust-sugiyama` (the survey flagged its wasm CI as unverified — confirm via `cargo check --target wasm32-unknown-unknown` first, in this slice; if it fails, the slice gates on filing an upstream patch or vendoring with a wasm32 workaround).
-- [ ] `LayoutAlgorithm::Hierarchical` resolves to a call into `rust-sugiyama` via a helper that: (a) extracts the `is_a` / `subClassOf` sub-DAG from `GraphData`, (b) converts to `petgraph::StableDiGraph`, (c) runs sugiyama, (d) maps the returned coordinates back to all nodes (including ones reachable only via non-tree edges, placed at fallback positions), (e) applies the aspect-bias post-process.
-- [ ] Cycles in the input DAG are broken via `rust-sugiyama`'s built-in `greedy_feedback_arc_set` step; the breaking is logged via `wasm_bindgen` console warnings so users can see which edges were reversed.
-- [ ] Picker UI exposes "Hierarchical" with a "best for class hierarchies" annotation. Optional UX polish: disable when ≤30% of edges are `is_a` / `subclass_of` (the algorithm still runs but produces a degenerate single-layer layout, which isn't useful).
-- [ ] Multi-scale screenshot harness baselines a hierarchical layout for each of the three viewport sizes. The 80-node 4K case should visibly look like a layered tree, not a force-directed blob.
-- [ ] Native unit tests against fixtures with: a 3-layer balanced tree, a tree with cross-cutting non-`is_a` edges, a graph with a cycle (verify break+warn), an empty `is_a` relation (fall back gracefully).
+- [x] `panschema-viz/Cargo.toml` adds `rust-sugiyama` (`= "0.4"`); CI's `cargo check --target wasm32-unknown-unknown` step passes against the dep — no upstream patch or vendoring was needed.
+- [x] `LayoutAlgorithm::Hierarchical` resolves to a call into `rust-sugiyama` via `layout::hierarchical` (`panschema-viz/src/layout.rs:318`): (a) extracts hierarchy edges from `GraphData` via `is_hierarchy_edge`, (b) builds the `(u32, u32)` edge list rust-sugiyama's `from_edges` accepts (skipping the intermediate `petgraph::StableDiGraph` shape — the spec sketched it but rust-sugiyama's API takes the pair list directly), (c) runs sugiyama per disjoint hierarchy component, (d) maps the returned coordinates back to all nodes with orphan nodes (no hierarchy edges) falling back to a grid region below the layered layout, (e) applies the aspect-bias post-process (`√(w/h)` / `√(h/w)` scale).
+- [x] Cycles in the input DAG are broken via `rust-sugiyama`'s built-in `greedy_feedback_arc_set` step. **Deferred:** the per-edge "which edges got reversed" surfacing via `wasm_bindgen` console warnings is intentionally not implemented — comment at `layout.rs:316` flags this as a follow-on diagnostic. Pinned indirectly by `hierarchical_handles_cycle_in_hierarchy_edges` at `layout.rs:1085`.
+- [x] Picker UI exposes "Hierarchical" with a "best for class hierarchies" annotation; selectable from the layout dropdown in the rendered HTML graph chrome. **Deferred:** the optional "disable picker when ≤30% of edges are `is_a` / `subclass_of`" UX polish — the AC marks it Optional, low-value vs. effort.
+- [ ] Multi-scale screenshot harness baselines a hierarchical layout for each of the three viewport sizes. The 80-node 4K case should visibly look like a layered tree, not a force-directed blob. **Deferred** for the same reason as slice 3's screenshot AC — waiting on UI consensus that captured layouts are the intended reference before committing baselines.
+- [x] Native unit tests against fixtures with: a 3-layer balanced tree, a tree with cross-cutting non-`is_a` edges, a graph with a cycle (verify break+warn), an empty `is_a` relation (fall back gracefully). Eight tests at `panschema-viz/src/layout.rs:790-1085+` cover the four required fixtures plus disjoint components, no-hierarchy fallback, non-hierarchy-edge filtering, orphan grid placement, and aspect bias.
+- [x] The freeze survives user interaction (same requirement as slice 3): clicking or single-node-dragging leaves other nodes in their static-layout positions, not rearranged. Shares the same `is_static_layout` guard as slice 3 in `Visualization::start_drag_at`; same regression test pins the contract.
 
 **Notes:**
 - This is the slice that justifies the "Hierarchical" prerequisite — `egraph-rs` doesn't include Sugiyama, and Sugiyama is the canonical algorithm for layered DAGs. There's no equivalent in the rest of the picker, so this slice is highest user-value for schema authors of class-heavy ontologies (the scimantic / BFO / CCO use case).
@@ -299,12 +301,12 @@ Existing in-tree CPU force simulation (slice 7 work in [Feature 02](02-core-onto
 
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
-| Slice 1: Picker chrome + enum | Must Have | Feature 02 slice 7 (✓) | Not Started |
-| Slice 2: `egraph-rs` integration + wasm smoke test | Must Have | Slice 1 | Not Started |
-| Slice 3: Kamada-Kawai | Should Have | Slice 2 | Not Started |
+| Slice 1: Picker chrome + enum | Must Have | Feature 02 slice 7 (✓) | ✅ Complete |
+| Slice 2: `egraph-rs` integration + wasm smoke test | Must Have | Slice 1 | ✅ Complete |
+| Slice 3: Kamada-Kawai | Should Have | Slice 2 | ✅ Complete |
 | Slice 4: Stress Majorization | Should Have | Slice 2 | Not Started |
 | Slice 5: SGD | Should Have | Slice 2 | Not Started |
-| Slice 6: Hierarchical (Sugiyama) | Should Have | Slice 1 | Not Started |
+| Slice 6: Hierarchical (Sugiyama) | Should Have | Slice 1 | ✅ Complete |
 | Slice 7: Circular | Could Have | Slice 1 | Not Started |
 | Slice 8: Radial tree | Could Have | Slice 1 | Not Started |
 

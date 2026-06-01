@@ -75,6 +75,12 @@ pub struct Visualization {
     interaction: InteractionState,
     hovered_node: Option<usize>,
     hovered_edge: Option<usize>,
+    /// `true` for static layouts (KK / Sugiyama) whose `freeze_at` set
+    /// the simulation to `alpha_min`. The drag handler reads this to
+    /// decide whether a click-or-drag should reheat physics:
+    /// force-directed → yes (so other nodes adjust); static → no
+    /// (only the dragged node moves; rest of layout is preserved).
+    is_static_layout: bool,
 }
 
 #[wasm_bindgen]
@@ -139,6 +145,7 @@ impl Visualization {
             )),
             _ => None,
         };
+        let is_static_layout = static_positions.is_some();
         if let Some(positions) = static_positions.as_mut() {
             layout::scale_to_world(positions, layout::WORLD_TARGET_DIMENSION);
             simulation.freeze_at(positions);
@@ -155,6 +162,7 @@ impl Visualization {
             interaction: InteractionState::new(),
             hovered_node: None,
             hovered_edge: None,
+            is_static_layout,
         })
     }
 
@@ -447,8 +455,14 @@ impl Visualization {
             .node_at(canvas_x, canvas_y, &self.simulation.nodes)
         {
             self.interaction.start_drag(index, canvas_x, canvas_y);
-            // Reheat simulation so physics runs while dragging
-            self.simulation.reheat(0.3);
+            // Force-directed layouts reheat so the rest of the graph
+            // adjusts around the drag. Static layouts (KK / Sugiyama)
+            // skip reheat — `drag_to` moves the dragged node directly
+            // via `set_node_position`, and the rest of the layout
+            // stays where the static algorithm placed it.
+            if !self.is_static_layout {
+                self.simulation.reheat(0.3);
+            }
             index as i32
         } else {
             -1

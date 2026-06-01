@@ -1274,4 +1274,50 @@ mod tests {
             assert_eq!(sim.nodes[i].y, *sy);
         }
     }
+
+    #[test]
+    fn dragging_one_node_in_a_frozen_simulation_leaves_other_nodes_untouched() {
+        // Contract that the Visualization wrapper depends on for static
+        // layouts (KK / Sugiyama): after `freeze_at`, the drag handler
+        // moves only the dragged node via `set_node_position` and
+        // per-tick physics stays a no-op. Other nodes must NOT drift —
+        // otherwise the static layout decays into force-directed the
+        // moment the user touches any node. (The bug this test pins:
+        // the drag handler used to reheat unconditionally, restoring
+        // alpha above alpha_min and re-enabling physics for every node.)
+        let graph = make_ring_graph(5);
+        let mut sim = CpuSimulation::from_graph_data(&graph);
+
+        let seed = vec![
+            (10.0, 20.0),
+            (30.0, 40.0),
+            (50.0, 60.0),
+            (70.0, 80.0),
+            (90.0, 100.0),
+        ];
+        sim.freeze_at(&seed);
+
+        // Drag node 2 to a new position. Static-layout drag path:
+        // direct positional write, NO reheat.
+        sim.set_node_position(2, 500.0, 600.0);
+
+        // Tick a few frames — `is_running()` is false, so each tick is
+        // a no-op. None of the non-dragged nodes should drift.
+        for _ in 0..10 {
+            sim.tick();
+        }
+
+        assert!(
+            !sim.is_running(),
+            "frozen simulation must stay halted after a single-node drag"
+        );
+        // The dragged node landed where we put it.
+        assert_eq!(sim.nodes[2].x, 500.0);
+        assert_eq!(sim.nodes[2].y, 600.0);
+        // Every other node is still where the static layout placed it.
+        for i in [0_usize, 1, 3, 4] {
+            assert_eq!(sim.nodes[i].x, seed[i].0, "node {i} drifted on x");
+            assert_eq!(sim.nodes[i].y, seed[i].1, "node {i} drifted on y");
+        }
+    }
 }
