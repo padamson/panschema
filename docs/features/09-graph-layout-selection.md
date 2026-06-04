@@ -201,19 +201,21 @@ Existing in-tree CPU force simulation (slice 7 work in [Feature 02](02-core-onto
 
 ### Slice 4: Stress Majorization algorithm (via `egraph-rs`)
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** Selecting "Stress Majorization" runs a higher-quality (slower) layout that minimizes the squared deviation between Euclidean and graph-theoretic distances. Produces cleaner cluster separation and more uniform edge lengths than force-directed. The algorithm of choice when the schema has natural clusters that force-directed mashes together.
 
 **Acceptance Criteria:**
-- [ ] `LayoutAlgorithm::Stress` resolves to a call into `petgraph-layout-stress-majorization` via the slice-2 helper layer.
-- [ ] Aspect-bias post-process applied as in slice 3.
-- [ ] Picker UI exposes "Stress majorization" as a selectable option.
-- [ ] Multi-scale screenshot harness produces baseline PNGs and the comparison vs force-directed is reviewed.
-- [ ] For graphs ≥ 500 classes, stress majorization gracefully degrades to a single-pass MDS via `petgraph-layout-mds` (the `egraph-rs` `pivot_mds` variant — `O(N·k)` for `k` pivots) so the wasm init doesn't hang the page.
+- [x] `LayoutAlgorithm::Stress` resolves to a call into `petgraph-layout-stress-majorization` via the slice-2 helper layer (`panschema-viz/src/layout.rs::stress_majorization`). Picker integration: `Visualization::new` matches `LayoutAlgorithm::Stress` alongside KK / Hierarchical, calls `freeze_at` on the resulting positions, and inherits the slice-3 `is_static_layout` guard so node selection doesn't undo the static layout.
+- [x] Aspect-bias post-process applied as in slice 3 (`√(w/h)` x-scale, `√(h/w)` y-scale). Pinned by `stress_majorization_aspect_bias_scales_coordinates` mirroring the KK test.
+- [x] Picker UI exposes "Stress majorization" as a selectable option. Label: "Stress majorization (cluster separation)" in 2D mode, "(not implemented)" in 3D mode (stress is 2D-only via egraph-rs's `DrawingEuclidean2d`). `IMPLEMENTED_LAYOUTS` and `LAYOUT_MODES` in `graph_viz.html` updated accordingly; e2e test asserts the option is selectable in 2D and disabled in 3D.
+- [ ] Multi-scale screenshot harness produces baseline PNGs and the comparison vs force-directed is reviewed. **Deferred** for the same reason as slices 3 and 6 — waiting on UI consensus before committing baselines.
+- [ ] For graphs ≥ 500 classes, stress majorization gracefully degrades to a single-pass MDS via `petgraph-layout-mds` (the `egraph-rs` `pivot_mds` variant — `O(N·k)` for `k` pivots) so the wasm init doesn't hang the page. **Deferred** — no real-world panschema consumer hits the 500-class threshold yet (scimantic-schema is ~80 classes). When the first large-schema consumer surfaces, add the MDS dep + threshold check as a follow-up slice.
+- [x] Native unit tests on the helper output confirm no NaN/Inf on connected inputs, bbox is non-degenerate after `scale_to_world`, aspect-bias scales per axis as advertised, and empty input returns an empty Vec. Five tests at `panschema-viz/src/layout.rs::tests::stress_majorization_*` cover the ring, connected-input bbox, empty graph, aspect bias, and the disconnected-components clamp-to-finite behavior.
 
 **Notes:**
 - Stress majorization is the algorithm behind graphviz's `neato -Kstress`. The output quality is the literature reference point for "what a good static layout looks like" on schemas in the 50-2000 node range.
+- **Disconnected-components limitation:** stress majorization computes all-pairs graph-theoretic distances; any infinite entry (between unreachable pairs) propagates to NaN across the entire optimization, not just the disconnected nodes. The wrapper clamps NaN to `0.0` at the output edge so the picker integration always sees finite coordinates, but disconnected components stack at the origin. For schemas with isolated subgraphs, the picker UX should recommend force-directed instead. A connected-component fallback (run stress on the largest component, place others defensively) is reserved as a follow-up if a real schema hits this case.
 
 ---
 
@@ -304,7 +306,7 @@ Existing in-tree CPU force simulation (slice 7 work in [Feature 02](02-core-onto
 | Slice 1: Picker chrome + enum | Must Have | Feature 02 slice 7 (✓) | ✅ Complete |
 | Slice 2: `egraph-rs` integration + wasm smoke test | Must Have | Slice 1 | ✅ Complete |
 | Slice 3: Kamada-Kawai | Should Have | Slice 2 | ✅ Complete |
-| Slice 4: Stress Majorization | Should Have | Slice 2 | Not Started |
+| Slice 4: Stress Majorization | Should Have | Slice 2 | ✅ Complete |
 | Slice 5: SGD | Should Have | Slice 2 | Not Started |
 | Slice 6: Hierarchical (Sugiyama) | Should Have | Slice 1 | ✅ Complete |
 | Slice 7: Circular | Could Have | Slice 1 | Not Started |

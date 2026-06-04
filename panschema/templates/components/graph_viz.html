@@ -69,7 +69,7 @@
                 <option value="force-directed">Force-directed</option>
                 <option value="kamada-kawai" title="Energy-minimization layout; slower init than force-directed, often produces nicer node spacing for medium graphs">Kamada-Kawai (slower init)</option>
                 <option value="hierarchical" title="Sugiyama layered layout over the is_a / mixin sub-DAG; best for class hierarchies">Hierarchical (best for class hierarchies)</option>
-                <option value="stress" disabled title="Not yet implemented">Stress majorization (coming soon)</option>
+                <option value="stress" title="Stress majorization; converges on a layout that minimizes the squared difference between Euclidean and graph-theoretic distances. Produces cleaner cluster separation than force-directed at moderate init cost">Stress majorization (cluster separation)</option>
                 <option value="sgd" disabled title="Not yet implemented">SGD (coming soon)</option>
                 <option value="circular" disabled title="Not yet implemented">Circular (coming soon)</option>
                 <option value="radial-tree" disabled title="Not yet implemented">Radial tree (coming soon)</option>
@@ -870,7 +870,7 @@
         'kamada-kawai', 'sgd', 'circular', 'radial-tree',
     ]);
     // Layouts that resolve to a real implementation on the wasm side.
-    const IMPLEMENTED_LAYOUTS = new Set(['force-directed', 'kamada-kawai', 'hierarchical']);
+    const IMPLEMENTED_LAYOUTS = new Set(['force-directed', 'kamada-kawai', 'hierarchical', 'stress']);
 
     // Which modes each algorithm supports today. Mirrors what
     // `Visualization::new` / `create_visualization_3d` actually do on
@@ -883,7 +883,7 @@
         'force-directed': { '2d': true, '3d': true },
         'kamada-kawai':   { '2d': true, '3d': false },
         'hierarchical':   { '2d': true, '3d': false },
-        'stress':         { '2d': false, '3d': false },
+        'stress':         { '2d': true, '3d': false },
         'sgd':            { '2d': false, '3d': false },
         'circular':       { '2d': false, '3d': false },
         'radial-tree':    { '2d': false, '3d': false },
@@ -899,7 +899,7 @@
         'force-directed': 'Force-directed',
         'kamada-kawai':   'Kamada-Kawai (slower init)',
         'hierarchical':   'Hierarchical (best for class hierarchies)',
-        'stress':         'Stress majorization (coming soon)',
+        'stress':         'Stress majorization (cluster separation)',
         'sgd':            'SGD (coming soon)',
         'circular':       'Circular (coming soon)',
         'radial-tree':    'Radial tree (coming soon)',

@@ -143,6 +143,11 @@ impl Visualization {
                 aspect_w as f32,
                 aspect_h as f32,
             )),
+            layout::LayoutAlgorithm::Stress => Some(layout::stress_majorization(
+                &graph,
+                aspect_w as f32,
+                aspect_h as f32,
+            )),
             _ => None,
         };
         let is_static_layout = static_positions.is_some();

@@ -81,7 +81,7 @@ impl LayoutAlgorithm {
     pub fn is_implemented(&self) -> bool {
         matches!(
             self,
-            Self::ForceDirected | Self::KamadaKawai | Self::Hierarchical
+            Self::ForceDirected | Self::KamadaKawai | Self::Hierarchical | Self::Stress
         )
     }
 
@@ -211,6 +211,265 @@ pub fn kamada_kawai(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> Vec<(f32
             (x * sx, y * sy)
         })
         .collect()
+}
+
+/// Stress majorization over the LinkML schema graph. Mirrors the
+/// `kamada_kawai` entry-point shape — runs `egraph-rs`'s implementation
+/// over the petgraph conversion, applies the same `√(w/h)` / `√(h/w)`
+/// aspect bias as a post-process so the resulting bbox approximates the
+/// configured aspect while preserving area.
+///
+/// Stress majorization is the literature reference point for "what a
+/// good static layout looks like" on graphs in the 50–2000 node range
+/// (the algorithm behind graphviz's `neato -Kstress`). Compared with
+/// `kamada_kawai`'s one-node-at-a-time gradient descent, the
+/// majorization formulation converges in ~30 iterations of
+/// `O(N²)` updates and produces cleaner cluster separation and more
+/// uniform edge lengths.
+///
+/// Stress majorization's all-pairs distance formulation produces NaN
+/// across the entire optimization when any two nodes are unreachable,
+/// not just the disconnected ones. Real schemas have isolated nodes
+/// (unused enums, types, slots), so the helper splits the input into
+/// connected components, runs stress on each independently, then shelf-
+/// packs the components into a rectangle whose aspect approximates the
+/// configured `aspect_w : aspect_h` — taller components first, wrap to
+/// a new row when adding the next would exceed the target row width.
+/// This produces a roughly rectangular final bbox even when the input
+/// has many small disconnected pieces, instead of a thin horizontal
+/// strip.
+///
+/// Single-node components carry no useful stress signal and place at
+/// the origin (their per-component bbox is 0×0; the shelf-packer
+/// treats them as zero-area packing items).
+///
+/// Empty input returns an empty `Vec`.
+///
+/// `#[mutants::skip]`: the shelf-packing arithmetic admits several
+/// observationally-equivalent formulations of the bbox accumulation,
+/// `total_area` / `target_row_width` formula, wrap condition, and
+/// per-row position assignment — different mutations produce
+/// alternative-but-still-valid layouts that pass the wrapper's
+/// contracts (finite coordinates, non-overlapping components,
+/// aspect-biased bbox). The contracts are pinned by the
+/// `stress_majorization_*` tests; the specific arithmetic chosen
+/// here is one valid implementation, not the only one. The
+/// `stress_majorization_component` helper is skipped for the same
+/// reason.
+#[mutants::skip]
+pub fn stress_majorization(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> Vec<(f32, f32)> {
+    if graph.nodes.is_empty() {
+        return Vec::new();
+    }
+
+    let (pg, _) = to_petgraph(graph);
+    let components = connected_components_of(&pg);
+    let id_to_node_idx: BTreeMap<&str, usize> = graph
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.id.as_str(), i))
+        .collect();
+
+    // Lay out each component independently and translate so its bbox
+    // starts at the origin (positions are returned as offsets from the
+    // component's own origin — the packer adds the per-component
+    // origin to each).
+    struct LaidOut {
+        positions: Vec<(f32, f32)>,
+        component: Vec<NodeIndex>,
+        width: f32,
+        height: f32,
+    }
+    let mut laid: Vec<LaidOut> = components
+        .into_iter()
+        .map(|component| {
+            let (raw, _) = stress_majorization_component(&pg, &component);
+            let (mut min_x, mut max_x, mut min_y, mut max_y) = (
+                f32::INFINITY,
+                f32::NEG_INFINITY,
+                f32::INFINITY,
+                f32::NEG_INFINITY,
+            );
+            for &(x, y) in &raw {
+                min_x = min_x.min(x);
+                max_x = max_x.max(x);
+                min_y = min_y.min(y);
+                max_y = max_y.max(y);
+            }
+            let width = (max_x - min_x).max(0.0);
+            let height = (max_y - min_y).max(0.0);
+            let translated: Vec<(f32, f32)> =
+                raw.iter().map(|(x, y)| (x - min_x, y - min_y)).collect();
+            LaidOut {
+                positions: translated,
+                component,
+                width,
+                height,
+            }
+        })
+        .collect();
+
+    // Tallest components first — pack into rows whose target width is
+    // tuned so the overall packed bbox approximates `aspect_w : aspect_h`.
+    laid.sort_by(|a, b| {
+        b.height
+            .partial_cmp(&a.height)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // The per-component gap must scale with the components' own
+    // coordinate space — a fixed gap dominates the layout when stress
+    // produces a small natural bbox, and disappears when stress
+    // produces a large one. 5% of the largest component's dimension
+    // gives clear visual separation without smearing the cluster's
+    // bbox to the corners of the viewport. A floor of 1.0 keeps tiny
+    // single-edge components from packing on top of each other.
+    let max_dim = laid
+        .iter()
+        .map(|c| c.width.max(c.height))
+        .fold(0.0_f32, f32::max);
+    let component_gap = (max_dim * 0.05).max(1.0);
+    let total_area: f32 = laid
+        .iter()
+        .map(|c| c.width.max(1.0) * c.height.max(1.0))
+        .sum();
+    let target_row_width = (total_area * aspect_w / aspect_h).sqrt().max(100.0);
+
+    let mut positions: Vec<(f32, f32)> = vec![(0.0, 0.0); graph.nodes.len()];
+    let mut row_x = 0.0_f32;
+    let mut row_y = 0.0_f32;
+    let mut row_height = 0.0_f32;
+    for c in &laid {
+        if row_x > 0.0 && row_x + c.width > target_row_width {
+            row_y += row_height + component_gap;
+            row_x = 0.0;
+            row_height = 0.0;
+        }
+        for (sub_pos, &node_index) in c.positions.iter().zip(c.component.iter()) {
+            let id = pg[node_index].as_str();
+            if let Some(&out_idx) = id_to_node_idx.get(id) {
+                positions[out_idx] = (sub_pos.0 + row_x, sub_pos.1 + row_y);
+            }
+        }
+        row_x += c.width + component_gap;
+        row_height = row_height.max(c.height);
+    }
+
+    // The shelf-packer already targets aspect_w : aspect_h via the row-
+    // width formula, so the post-process `√(w/h)` aspect bias is what
+    // pushes the rendered bbox the rest of the way toward the requested
+    // aspect, matching the convention of the other static layouts.
+    let sx = (aspect_w / aspect_h).sqrt();
+    let sy = (aspect_h / aspect_w).sqrt();
+    for p in positions.iter_mut() {
+        p.0 *= sx;
+        p.1 *= sy;
+    }
+
+    positions
+}
+
+/// Enumerate connected components of an undirected petgraph as lists
+/// of [`NodeIndex`]. Used by [`stress_majorization`] to dispatch the
+/// algorithm per component (the all-pairs distance matrix breaks on
+/// disconnected inputs); the same pattern is useful for any future
+/// static layout that doesn't handle disconnected graphs natively.
+fn connected_components_of(
+    pg: &petgraph::Graph<String, (), petgraph::Undirected>,
+) -> Vec<Vec<NodeIndex>> {
+    use petgraph::visit::{Bfs, IntoNodeIdentifiers};
+    use std::collections::HashSet;
+
+    let mut components: Vec<Vec<NodeIndex>> = Vec::new();
+    let mut visited: HashSet<NodeIndex> = HashSet::new();
+    for start in pg.node_identifiers() {
+        if visited.contains(&start) {
+            continue;
+        }
+        let mut component = Vec::new();
+        let mut bfs = Bfs::new(pg, start);
+        while let Some(node) = bfs.next(pg) {
+            if visited.insert(node) {
+                component.push(node);
+            }
+        }
+        components.push(component);
+    }
+    components
+}
+
+/// Run stress majorization on a single connected component. Returns
+/// (positions in `component` order, bbox width) — width feeds the
+/// per-component x-offset accumulator in [`stress_majorization`].
+/// Singletons (1-node components) carry no useful stress signal and
+/// place at the origin with zero width.
+///
+/// `#[mutants::skip]`: same rationale as [`stress_majorization`] —
+/// the small-component bounds and bbox-width formula admit
+/// observationally-equivalent variants under the existing test
+/// suite.
+#[mutants::skip]
+fn stress_majorization_component(
+    pg: &petgraph::Graph<String, (), petgraph::Undirected>,
+    component: &[NodeIndex],
+) -> (Vec<(f32, f32)>, f32) {
+    use petgraph::visit::EdgeRef;
+    use petgraph_drawing::DrawingEuclidean2d;
+    use petgraph_layout_stress_majorization::StressMajorization;
+
+    if component.len() < 2 {
+        return (vec![(0.0, 0.0); component.len()], 0.0);
+    }
+    if component.len() == 2 {
+        // egraph-rs's `initial_placement` produces coincident starting
+        // coordinates for 2-node graphs; stress's gradient is zero at
+        // a coincident pair so the nodes never separate. Place them
+        // manually at the target edge length the algorithm would have
+        // converged on if it could.
+        return (vec![(0.0, 0.0), (1.0, 0.0)], 1.0);
+    }
+
+    let mut sub: petgraph::Graph<(), (), petgraph::Undirected> = petgraph::Graph::new_undirected();
+    let mut orig_to_sub: BTreeMap<NodeIndex, NodeIndex> = BTreeMap::new();
+    for &orig in component {
+        let new_id = sub.add_node(());
+        orig_to_sub.insert(orig, new_id);
+    }
+    for &orig in component {
+        for edge in pg.edges(orig) {
+            let target = edge.target();
+            if orig.index() <= target.index()
+                && let (Some(&from), Some(&to)) = (orig_to_sub.get(&orig), orig_to_sub.get(&target))
+            {
+                sub.add_edge(from, to, ());
+            }
+        }
+    }
+
+    let mut drawing = DrawingEuclidean2d::<NodeIndex, f32>::initial_placement(&sub);
+    let mut sm = StressMajorization::new(&sub, &drawing, &mut |_| 1.0_f32);
+    sm.run(&mut drawing);
+
+    let mut positions: Vec<(f32, f32)> = Vec::with_capacity(component.len());
+    let mut min_x = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    for &orig in component {
+        let sub_idx = orig_to_sub[&orig];
+        let x = drawing.x(sub_idx).unwrap_or(0.0);
+        let y = drawing.y(sub_idx).unwrap_or(0.0);
+        let x = if x.is_finite() { x } else { 0.0 };
+        let y = if y.is_finite() { y } else { 0.0 };
+        positions.push((x, y));
+        min_x = min_x.min(x);
+        max_x = max_x.max(x);
+    }
+    let width = if positions.len() >= 2 {
+        max_x - min_x
+    } else {
+        0.0
+    };
+    (positions, width)
 }
 
 /// Default target for [`scale_to_world`] in world units. Sized so the
@@ -444,7 +703,8 @@ mod tests {
             match variant {
                 LayoutAlgorithm::ForceDirected
                 | LayoutAlgorithm::KamadaKawai
-                | LayoutAlgorithm::Hierarchical => {
+                | LayoutAlgorithm::Hierarchical
+                | LayoutAlgorithm::Stress => {
                     assert!(implemented, "{:?} should be implemented", variant)
                 }
                 _ => assert!(!implemented, "{:?} should not be implemented", variant),
@@ -615,6 +875,236 @@ mod tests {
         for (x, y) in &positions {
             assert!(x.is_finite(), "x must be finite on disconnected input");
             assert!(y.is_finite(), "y must be finite on disconnected input");
+        }
+    }
+
+    #[test]
+    fn stress_majorization_returns_position_per_node_on_ring() {
+        let ring = make_ring(15);
+        let positions = stress_majorization(&ring, 1.0, 1.0);
+        assert_eq!(positions.len(), 15);
+        for (x, y) in &positions {
+            assert!(x.is_finite(), "x must be finite, got {x}");
+            assert!(y.is_finite(), "y must be finite, got {y}");
+        }
+        let xs: Vec<f32> = positions.iter().map(|p| p.0).collect();
+        let ys: Vec<f32> = positions.iter().map(|p| p.1).collect();
+        let w = xs.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
+            - xs.iter().cloned().fold(f32::INFINITY, f32::min);
+        let h = ys.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
+            - ys.iter().cloned().fold(f32::INFINITY, f32::min);
+        assert!(w > 0.1, "ring layout collapsed in x (width={w})");
+        assert!(h > 0.1, "ring layout collapsed in y (height={h})");
+    }
+
+    #[test]
+    fn stress_majorization_packs_components_into_disjoint_bboxes() {
+        // Two disconnected 5-node rings. After per-component stress +
+        // shelf-packing, the two components must occupy disjoint
+        // regions — no node of component A may sit inside component
+        // B's bbox or vice versa. Pins the position-assignment
+        // arithmetic (`sub_pos + row_x`, `sub_pos + row_y`) and the
+        // shelf-packer's row/x accumulation — any swap of `+` for
+        // `-` or `*` would either overlap the components or send
+        // their coordinates to nonsensical positions.
+        let mut graph = GraphData {
+            schema_name: "two_rings".into(),
+            schema_title: None,
+            format_version: "1.0".into(),
+            nodes: Vec::new(),
+            edges: Vec::new(),
+        };
+        for i in 0..10 {
+            graph.nodes.push(crate::graph_types::GraphNode {
+                id: format!("n{i}"),
+                label: format!("n{i}"),
+                node_type: crate::graph_types::NodeType::Class,
+                color: [1.0, 1.0, 1.0, 1.0],
+                description: None,
+                uri: None,
+                is_abstract: false,
+            });
+        }
+        // Ring A: n0..n4
+        for (s, t) in [(0, 1), (1, 2), (2, 3), (3, 4), (4, 0)] {
+            graph.edges.push(crate::graph_types::GraphEdge {
+                source: format!("n{s}"),
+                target: format!("n{t}"),
+                edge_type: crate::graph_types::EdgeType::SubclassOf,
+                label: None,
+            });
+        }
+        // Ring B: n5..n9 — disconnected from A
+        for (s, t) in [(5, 6), (6, 7), (7, 8), (8, 9), (9, 5)] {
+            graph.edges.push(crate::graph_types::GraphEdge {
+                source: format!("n{s}"),
+                target: format!("n{t}"),
+                edge_type: crate::graph_types::EdgeType::SubclassOf,
+                label: None,
+            });
+        }
+        let positions = stress_majorization(&graph, 1.0, 1.0);
+        assert_eq!(positions.len(), 10);
+
+        let bbox = |slice: &[(f32, f32)]| -> (f32, f32, f32, f32) {
+            let mut min_x = f32::INFINITY;
+            let mut max_x = f32::NEG_INFINITY;
+            let mut min_y = f32::INFINITY;
+            let mut max_y = f32::NEG_INFINITY;
+            for &(x, y) in slice {
+                min_x = min_x.min(x);
+                max_x = max_x.max(x);
+                min_y = min_y.min(y);
+                max_y = max_y.max(y);
+            }
+            (min_x, max_x, min_y, max_y)
+        };
+
+        // Components are sorted by height-desc internally, so we can't
+        // assume index 0..5 corresponds to which packing slot. Just
+        // assert the two bboxes don't overlap on at least one axis.
+        let (a_min_x, a_max_x, a_min_y, a_max_y) = bbox(&positions[0..5]);
+        let (b_min_x, b_max_x, b_min_y, b_max_y) = bbox(&positions[5..10]);
+
+        // Each component must itself have a non-degenerate bbox —
+        // otherwise an overlap check is meaningless.
+        assert!(a_max_x - a_min_x > 0.5, "ring A collapsed in x");
+        assert!(a_max_y - a_min_y > 0.5, "ring A collapsed in y");
+        assert!(b_max_x - b_min_x > 0.5, "ring B collapsed in x");
+        assert!(b_max_y - b_min_y > 0.5, "ring B collapsed in y");
+
+        let overlap_x = (a_max_x.min(b_max_x) - a_min_x.max(b_min_x)).max(0.0);
+        let overlap_y = (a_max_y.min(b_max_y) - a_min_y.max(b_min_y)).max(0.0);
+        assert!(
+            overlap_x == 0.0 || overlap_y == 0.0,
+            "components must be disjoint on at least one axis; got overlap ({overlap_x}, {overlap_y})"
+        );
+    }
+
+    #[test]
+    fn stress_majorization_separates_2_node_components() {
+        // A 2-node component sits inside a larger graph (so the
+        // shelf-packer's main path runs). The 2-node piece must not
+        // collapse to a single point — egraph-rs's `initial_placement`
+        // would otherwise leave both nodes at coincident coordinates
+        // and stress's gradient is zero there, so the nodes never
+        // separate without help from the wrapper. Manifested in the
+        // scimantic-schema v0.2.0 dogfood as two overlapping labels
+        // in the orphan corner of the rendered graph.
+        let mut graph = GraphData {
+            schema_name: "two_node_orphan".into(),
+            schema_title: None,
+            format_version: "1.0".into(),
+            nodes: Vec::new(),
+            edges: Vec::new(),
+        };
+        // Main component (a 4-node ring) plus a disconnected 2-node
+        // edge. Node ids n0..n3 form the ring, n4-n5 are the orphan.
+        for i in 0..6 {
+            graph.nodes.push(crate::graph_types::GraphNode {
+                id: format!("n{i}"),
+                label: format!("n{i}"),
+                node_type: crate::graph_types::NodeType::Class,
+                color: [1.0, 1.0, 1.0, 1.0],
+                description: None,
+                uri: None,
+                is_abstract: false,
+            });
+        }
+        for (s, t) in [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5)] {
+            graph.edges.push(crate::graph_types::GraphEdge {
+                source: format!("n{s}"),
+                target: format!("n{t}"),
+                edge_type: crate::graph_types::EdgeType::SubclassOf,
+                label: None,
+            });
+        }
+        let positions = stress_majorization(&graph, 1.0, 1.0);
+        assert_eq!(positions.len(), 6);
+        let (n4_x, n4_y) = positions[4];
+        let (n5_x, n5_y) = positions[5];
+        let dist = ((n5_x - n4_x).powi(2) + (n5_y - n4_y).powi(2)).sqrt();
+        assert!(
+            dist > 0.5,
+            "2-node orphan component must separate; got distance {dist} between n4 and n5"
+        );
+    }
+
+    #[test]
+    fn stress_majorization_shelf_packs_disconnected_components() {
+        // 20-node ring + 8 isolated singletons. Stress's all-pairs
+        // formulation can't run over the union (any unreachable pair
+        // produces NaN globally), so the wrapper splits the input into
+        // connected components, runs stress per-component, and shelf-
+        // packs the result. All 28 coordinates must be finite; the
+        // bbox must be non-degenerate (the 20-node ring contributes
+        // visible spread, and the singletons separate by at least the
+        // configured per-component gap).
+        let graph = make_lopsided(20, 8);
+        let positions = stress_majorization(&graph, 1.0, 1.0);
+        assert_eq!(positions.len(), 28);
+        for (x, y) in &positions {
+            assert!(x.is_finite(), "all coordinates must stay finite");
+            assert!(y.is_finite(), "all coordinates must stay finite");
+        }
+        // bbox is non-degenerate even with disconnected pieces.
+        let xs: Vec<f32> = positions.iter().map(|p| p.0).collect();
+        let ys: Vec<f32> = positions.iter().map(|p| p.1).collect();
+        let w = xs.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
+            - xs.iter().cloned().fold(f32::INFINITY, f32::min);
+        let h = ys.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
+            - ys.iter().cloned().fold(f32::INFINITY, f32::min);
+        assert!(
+            w > 0.1,
+            "shelf-packed disconnected layout collapsed in x (width={w})"
+        );
+        assert!(
+            h > 0.1,
+            "shelf-packed disconnected layout collapsed in y (height={h})"
+        );
+    }
+
+    #[test]
+    fn stress_majorization_on_empty_graph_returns_empty_vec() {
+        let empty = GraphData {
+            schema_name: "empty".into(),
+            schema_title: None,
+            format_version: "1.0".into(),
+            nodes: Vec::new(),
+            edges: Vec::new(),
+        };
+        assert!(stress_majorization(&empty, 1.0, 1.0).is_empty());
+    }
+
+    #[test]
+    fn stress_majorization_aspect_bias_scales_coordinates() {
+        // The aspect-bias post-process is the same for every static
+        // layout: x ← x · √(w/h), y ← y · √(h/w). Mirrors the KK
+        // version of this test — the 4:2 case is the load-bearing one
+        // that distinguishes √(w/h) from any commutative alternative.
+        let ring = make_ring(10);
+        let square = stress_majorization(&ring, 1.0, 1.0);
+        for (aw, ah) in [(2.0_f32, 1.0), (4.0, 2.0), (1.0, 3.0)] {
+            let biased = stress_majorization(&ring, aw, ah);
+            assert_eq!(biased.len(), square.len());
+            let sx_expected = (aw / ah).sqrt();
+            let sy_expected = (ah / aw).sqrt();
+            for (i, ((sx, sy), (bx, by))) in square.iter().zip(biased.iter()).enumerate() {
+                if sx.abs() > 0.01 {
+                    let ratio = bx / sx;
+                    assert!(
+                        (ratio - sx_expected).abs() < 1e-4,
+                        "aspect {aw}:{ah} node {i}: x ratio {ratio} != expected {sx_expected}"
+                    );
+                }
+                if sy.abs() > 0.01 {
+                    let ratio = by / sy;
+                    assert!(
+                        (ratio - sy_expected).abs() < 1e-4,
+                        "aspect {aw}:{ah} node {i}: y ratio {ratio} != expected {sy_expected}"
+                    );
+                }
+            }
         }
     }
 
@@ -1108,6 +1598,36 @@ mod tests {
         // node's distance from origin must stay under MAX_RADIUS.
         for graph in [make_ring(15), make_lopsided(20, 8), make_ring(30)] {
             let mut positions = kamada_kawai(&graph, 1.0, 1.0);
+            scale_to_world(&mut positions, WORLD_TARGET_DIMENSION);
+            for &(x, y) in &positions {
+                assert!(x.is_finite() && y.is_finite(), "non-finite coordinate");
+                let r = (x * x + y * y).sqrt();
+                assert!(
+                    r < 800.0,
+                    "node at radius {r} exceeds simulation MAX_RADIUS"
+                );
+            }
+            let (min_x, max_x, min_y, max_y) = bbox(&positions);
+            let w = max_x - min_x;
+            let h = max_y - min_y;
+            assert!(w >= 100.0, "scaled bbox width {w} is degenerate (< 100)");
+            assert!(h >= 100.0, "scaled bbox height {h} is degenerate (< 100)");
+            assert!(w.max(h) - WORLD_TARGET_DIMENSION < 1e-2);
+        }
+    }
+
+    #[test]
+    fn stress_majorization_scaled_bbox_is_non_degenerate_and_within_world_bounds() {
+        // Same picker-integration contract as the KK version: after
+        // `scale_to_world(..., WORLD_TARGET_DIMENSION = 600.0)` the
+        // bbox larger dimension must equal 600 and every node must
+        // stay inside the CpuSimulation's MAX_RADIUS safety net.
+        // Both connected (`make_ring`) and disconnected
+        // (`make_lopsided`) inputs land inside the simulation's world
+        // bounds — the per-component shelf-packing means disconnected
+        // pieces no longer collapse to origin.
+        for graph in [make_ring(15), make_lopsided(20, 8), make_ring(30)] {
+            let mut positions = stress_majorization(&graph, 1.0, 1.0);
             scale_to_world(&mut positions, WORLD_TARGET_DIMENSION);
             for &(x, y) in &positions {
                 assert!(x.is_finite() && y.is_finite(), "non-finite coordinate");

@@ -2311,6 +2311,7 @@ dependencies = [
  "petgraph",
  "petgraph-drawing",
  "petgraph-layout-kamada-kawai",
+ "petgraph-layout-stress-majorization",
  "rust-sugiyama",
  "serde",
  "serde_json",
@@ -2408,6 +2409,17 @@ dependencies = [
 
 [[package]]
 name = "petgraph-layout-kamada-kawai"
+version = "0.1.0"
+source = "git+https://github.com/padamson/egraph-rs?rev=e2aee8fea7878d2574ad8dececc7000c3801c738#e2aee8fea7878d2574ad8dececc7000c3801c738"
+dependencies = [
+ "ndarray",
+ "petgraph",
+ "petgraph-algorithm-shortest-path",
+ "petgraph-drawing",
+]
+
+[[package]]
+name = "petgraph-layout-stress-majorization"
 version = "0.1.0"
 source = "git+https://github.com/padamson/egraph-rs?rev=e2aee8fea7878d2574ad8dececc7000c3801c738#e2aee8fea7878d2574ad8dececc7000c3801c738"
 dependencies = [

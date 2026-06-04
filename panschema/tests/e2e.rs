@@ -1019,7 +1019,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
     // Implemented options are present and selectable; the rest are
     // reserved-wire-format placeholders carrying the disabled attribute.
-    for implemented in &["force-directed", "kamada-kawai", "hierarchical"] {
+    for implemented in &["force-directed", "kamada-kawai", "hierarchical", "stress"] {
         let opt = page
             .locator(&format!(
                 "#graph-layout-select option[value=\"{implemented}\"]"
@@ -1042,7 +1042,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
             implemented
         );
     }
-    for unimplemented in &["stress", "sgd", "circular", "radial-tree"] {
+    for unimplemented in &["sgd", "circular", "radial-tree"] {
         let opt = page
             .locator(&format!(
                 "#graph-layout-select option[value=\"{unimplemented}\"]"
