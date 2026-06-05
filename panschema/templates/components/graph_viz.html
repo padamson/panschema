@@ -958,7 +958,13 @@
             && IMPLEMENTED_LAYOUTS.has(fromAttr) && layoutSupportsMode(fromAttr, is3D)) {
             return fromAttr;
         }
-        return 'force-directed';
+        // When the user hasn't picked a layout and the manifest didn't
+        // set `html_default_layout`, fall back to SGD — visibly the
+        // best quality-per-time for typical schema graphs (cleaner
+        // cluster separation than force-directed, comparable to
+        // stress at lower init cost). In 3D mode the picker upstream
+        // routes to force-directed since SGD is 2D-only.
+        return is3D ? 'force-directed' : 'sgd';
     }
 
     function applyLayoutPickerMode(is3D) {

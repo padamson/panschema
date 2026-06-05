@@ -391,6 +391,59 @@ For 2D mode, labels are rendered directly on the Canvas2D context with hover sup
 
 ---
 
+### Slice 9: Hover-driven ephemeral node and edge details
+
+**Status:** Not Started
+
+**Priority:** Should Have
+
+**User Value:** A schema author scanning the rendered graph can see what a node or edge represents *without* committing to a click. Hover surfaces an ephemeral mini-card (label, type, IRI, connection count for nodes; edge-type and endpoints for edges) anchored near the cursor; it disappears on hover-out. Faster than the slice-6 click-to-select flow for "I just want to identify this node and move on" — the dominant interaction pattern when reading an unfamiliar schema.
+
+The current slice-6 click-to-select behavior is preserved for "I want to lock this view in" — clicking still pins the persistent details panel that already exists. Hover is the *additive* affordance, not a replacement.
+
+**Acceptance Criteria:**
+- [ ] Hovering a node surfaces an ephemeral mini-card anchored near the cursor (offset so the cursor doesn't occlude the card). Card content: label, type badge (Class / Slot / Enum / Type), IRI, connection count.
+- [ ] Hovering an edge surfaces an ephemeral mini-card: edge type (`subclassOf`, `domain`, `range`, `mixin`, `inverseOf`, `typeOf`), source label, target label.
+- [ ] Hover-out (cursor leaves the node/edge or leaves the canvas) hides the card immediately — no lingering or fade-in/out (snappy reading).
+- [ ] The card auto-positions to stay within the viewport (flip to the cursor's other side when near the right or bottom edge).
+- [ ] Click-to-select (slice 6) still works and shows the persistent details panel. The hover card hides itself when a click happens on the same target, since the persistent panel is now showing the same content.
+- [ ] Hit testing: the same hit-test path slice 6 uses for click (3D ray-cast in WebGPU mode, 2D point-in-circle in Canvas mode) handles hover. Edge hit-testing is new — point-to-line-segment distance threshold against a configurable px tolerance.
+- [ ] Mobile/touch: hover doesn't exist on touch devices. The card is rendered only on `pointer: fine` media (mouse/trackpad). Touch users still get the slice-6 tap-to-select flow unchanged.
+
+**Notes:**
+- The ephemeral card and the slice-6 persistent panel can share their HTML template — DRYing the rendering logic is the right move. The card is a "preview"; the panel is the "pinned" view of the same data.
+- Throttle hover updates so dragging the cursor across many nodes doesn't fire 60 re-renders per second. `requestAnimationFrame`-aligned debouncing (~16ms) is the standard pattern.
+- Edge hit-testing needs a px-tolerance default that works at all zoom levels; 6px at world-1.0 zoom seems reasonable, scaled inversely with viewport zoom so edges remain pickable when zoomed out.
+
+---
+
+### Slice 10: Hover focus-mode highlight (node + 1-hop + 2-hop neighbors)
+
+**Status:** Not Started
+
+**Priority:** Should Have
+
+**User Value:** A schema author can see the *local subgraph* around any node by hovering — the hovered node, its 1-hop neighbors (directly-connected nodes), and its 2-hop neighbors (one more level out) snap to full opacity and slightly enlarged size, everything else dims to ~25% opacity. The "local context" jumps out without any clicks. Restores instantly on hover-out.
+
+This is the most asked-for affordance in graph-exploration UIs (Gephi's "Ego network filter," Cytoscape's "focus-on-hover" mode, Cosmograph's `hovered-state-neighbors`). It transforms a 100-node tangle from "where is X" into "X and its neighborhood, clearly."
+
+**Acceptance Criteria:**
+- [ ] Hovering a node activates focus mode: hovered node + 1-hop neighbors + 2-hop neighbors render at full opacity; all other nodes and edges dim to ~25% opacity. Edges between focused-set nodes render at full opacity; edges with one endpoint outside the focused set dim alongside the unfocused side.
+- [ ] Hover-out restores all nodes/edges to full opacity instantly. No fade animation — visual snap is the right read.
+- [ ] Focus mode is on by default but toggleable via a UI control (a checkbox or icon-button in the graph controls strip). The pref persists to localStorage like the layout pref.
+- [ ] Hovered-set highlight: the *hovered* node specifically gets a brighter border or larger scale so the user can tell which one their cursor is on (when 1-hop neighbors are dense, the hovered node should stand out from the in-focus neighbors).
+- [ ] Configurable hop depth: the default of 2 is the right balance for typical schemas. A future slice (or a small UI knob inside this slice) could expose a 1/2/3-hop selector; for v1, hardcode 2 and document the trade-off.
+- [ ] Performance: the neighbor set lookup must be O(1) amortized — precompute an adjacency map once at construction. For graphs ≤ ~5000 nodes (every schema in practice) this is sub-millisecond.
+- [ ] Touch / `pointer: coarse`: focus mode is mouse-only. Disable when the input is touch (the user already taps to select via slice 6).
+- [ ] Composes with slice 9: the hover details card is shown for the hovered node; focus mode dims the rest of the graph at the same time. Both effects active during a single hover.
+
+**Notes:**
+- Adjacency is computed from the same `GraphData` the renderer consumes — no need to walk the LinkML IR. Build a `Map<nodeId, Set<nodeId>>` once.
+- Dim opacity: 0.25 is the literature default; 0.15 reads as "almost hidden," 0.4 reads as "barely dimmed." Adjust if multi-scale screenshots reveal a different sweet spot.
+- The "focus-mode toggle" UI control should sit in the existing graph controls strip alongside Labels / Nodes / Edges toggles. Same idiom; new toggle.
+
+---
+
 ## Slice Priority and Dependencies
 
 | Slice | Priority | Depends On | Status |
@@ -403,6 +456,8 @@ For 2D mode, labels are rendered directly on the Canvas2D context with hover sup
 | Slice 6: Interaction and Dragging | Should Have | Slice 4 | 🚧 In Progress |
 | Slice 7: Barnes-Hut Optimization | Nice to Have | Slice 1 | Not Started |
 | Slice 8: Class↔slot edges via `class.slots:` | Should Have | Slice 3 | ✅ Complete |
+| Slice 9: Hover-driven ephemeral node and edge details | Should Have | Slice 6 | Not Started |
+| Slice 10: Hover focus-mode highlight (1-hop + 2-hop neighbors) | Should Have | Slice 6 | Not Started |
 
 ---
 

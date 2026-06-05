@@ -195,11 +195,13 @@ pub struct HtmlWriter {
     /// OS task bar. Consumers can override per-schema via the manifest's
     /// `html_graph_aspect = "W:H"` field.
     pub graph_aspect: (u32, u32),
-    /// Layout-algorithm identifier (e.g. `"force-directed"`) for the
-    /// initial value of the graph-viz layout picker. Consumers override
-    /// per-schema via the manifest's `html_default_layout` field.
-    /// Defaults to `"force-directed"`, the only fully-implemented
-    /// algorithm.
+    /// Layout-algorithm identifier (e.g. `"sgd"` / `"force-directed"`)
+    /// for the initial value of the graph-viz layout picker. Consumers
+    /// override per-schema via the manifest's `html_default_layout`
+    /// field. Defaults to `"sgd"` — visibly the best quality-per-time
+    /// for typical schema graphs (cleaner cluster separation than
+    /// force-directed at lower init cost than stress). The JS picker
+    /// falls back to force-directed in 3D mode since SGD is 2D-only.
     pub graph_default_layout: String,
     /// Optional multi-version cohort context. Set by `panschema publish`;
     /// `None` for the single-version `panschema generate` path. When
@@ -249,12 +251,13 @@ mod wasm_files {
 
 impl HtmlWriter {
     /// Create a new HTML writer with default options (graph enabled,
-    /// 16:8 graph aspect ratio, force-directed default layout).
+    /// 16:8 graph aspect ratio, SGD default layout — see
+    /// [`Self::graph_default_layout`] for the choice).
     pub fn new() -> Self {
         Self {
             include_graph: true,
             graph_aspect: (16, 8),
-            graph_default_layout: "force-directed".to_string(),
+            graph_default_layout: "sgd".to_string(),
             version_context: None,
             site_root_href: None,
         }
@@ -265,7 +268,7 @@ impl HtmlWriter {
         Self {
             include_graph,
             graph_aspect: (16, 8),
-            graph_default_layout: "force-directed".to_string(),
+            graph_default_layout: "sgd".to_string(),
             version_context: None,
             site_root_href: None,
         }
