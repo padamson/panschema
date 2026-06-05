@@ -221,19 +221,23 @@ Existing in-tree CPU force simulation (slice 7 work in [Feature 02](02-core-onto
 
 ### Slice 5: SGD algorithm (via `egraph-rs`)
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** Selecting "SGD" runs the modern stochastic-gradient variant of stress majorization. Often the best quality-per-unit-time of any algorithm in `egraph-rs`'s lineup; converges in `O(N · iters)` instead of `O(N² · iters)` and produces visibly comparable output. The recommended default for medium-to-large graphs once the picker exists.
 
 **Acceptance Criteria:**
-- [ ] `LayoutAlgorithm::Sgd` resolves to `petgraph-layout-sgd` (Full/Sparse/Omega/Kernel — implementer picks the variant best suited for our typical schema sizes).
-- [ ] Aspect-bias post-process applied as in slice 3.
-- [ ] Picker UI exposes "SGD" as a selectable option.
-- [ ] Multi-scale screenshot harness baselines committed; output compared against stress majorization (slice 4) for quality and against force-directed (the existing default) for speed.
-- [ ] If quality at all three test scales matches or beats force-directed, consider making SGD the new default — but defer that decision to a follow-up commit so the change is reviewable on its own.
+- [x] `LayoutAlgorithm::Sgd` resolves to `petgraph-layout-sgd::FullSgd` via the slice-2 helper layer. `FullSgd` runs the all-pairs-shortest-paths variant; that's the right pick for schema-sized graphs (≤ a few hundred nodes), where the `O(N²)` distance preprocess is cheap compared with the user-visible quality win from globally-accurate distances.
+- [x] Aspect-bias post-process applied as in slices 3 and 4 (`√(w/h)` x-scale, `√(h/w)` y-scale).
+- [x] Picker UI exposes "SGD (fast quality)" as a selectable option in 2D mode; 3D mode greys it out with the standard `(not implemented)` label.
+- [ ] Multi-scale screenshot harness baselines committed; output compared against stress majorization (slice 4) for quality and against force-directed (the existing default) for speed. **Deferred** — same reason as slices 3, 4, 6 (waiting on UI consensus before locking in reference baselines).
+- [ ] If quality at all three test scales matches or beats force-directed, consider making SGD the new default. **Deferred** to a follow-up — the default change is its own decision that should be reviewable independently of this slice.
+- [x] Disconnected components: same per-component shelf-packing pattern as slice 4. Stress's all-pairs-distance limitation also applies to SGD's distance matrix, so the helper splits the input into connected components, runs SGD on each, and shelf-packs the results into a rectangle whose aspect approximates the configured aspect.
+- [x] Determinism: the internal RNG (`StdRng::seed_from_u64(42)`) is seeded with a constant so two calls on the same input produce byte-identical positions. Pinned by `sgd_is_deterministic_under_fixed_seed`. This is load-bearing for `panschema publish`'s idempotent-republish guarantee.
+- [x] Native unit tests: ring layout, empty graph, determinism, disconnected-components shelf-packing without overlap.
 
 **Notes:**
-- SGD's stochastic nature means runs aren't bit-identical across browsers / RNG seeds. The harness's pixel-bbox check tolerates this (it's a coarse metric); the edge-crossing-count check might not. Pin the seed via `egraph-rs`'s API if it exposes one; otherwise document that SGD output is run-to-run variable within ~5% of the mean bbox dimensions.
+- SGD's stochastic nature would normally mean runs aren't bit-identical, but the seed-from-a-constant pattern makes the output deterministic — chosen so panschema publish's "same input → same output" guarantee survives this layout. If a future feature wants non-deterministic SGD (e.g. user-driven re-seeding), expose the seed as a knob rather than dropping determinism.
+- The `petgraph-layout-sgd` dep pulls in `rand = "0.8"` (matching egraph-rs's version). Rand 0.9 is already in the lockfile via other deps; the two versions coexist via separate crate versions, no API surface conflict.
 
 ---
 
@@ -307,7 +311,7 @@ Existing in-tree CPU force simulation (slice 7 work in [Feature 02](02-core-onto
 | Slice 2: `egraph-rs` integration + wasm smoke test | Must Have | Slice 1 | ✅ Complete |
 | Slice 3: Kamada-Kawai | Should Have | Slice 2 | ✅ Complete |
 | Slice 4: Stress Majorization | Should Have | Slice 2 | ✅ Complete |
-| Slice 5: SGD | Should Have | Slice 2 | Not Started |
+| Slice 5: SGD | Should Have | Slice 2 | ✅ Complete |
 | Slice 6: Hierarchical (Sugiyama) | Should Have | Slice 1 | ✅ Complete |
 | Slice 7: Circular | Could Have | Slice 1 | Not Started |
 | Slice 8: Radial tree | Could Have | Slice 1 | Not Started |

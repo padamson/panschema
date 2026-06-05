@@ -56,8 +56,8 @@
 
         {# Mode toggle (2D/3D) #}
         <div class="graph-mode-toggle" id="graph-mode-toggle">
-            <button id="graph-mode-2d" class="graph-mode-btn active" title="2D Canvas mode">2D</button>
-            <button id="graph-mode-3d" class="graph-mode-btn" title="3D WebGPU mode (requires WebGPU support)" disabled>3D</button>
+            <button id="graph-mode-2d" class="graph-mode-btn active" title="Render the graph in 2D on an HTML Canvas. All layout algorithms (Force-directed, Kamada-Kawai, Hierarchical, Stress, SGD) are available in this mode.">2D</button>
+            <button id="graph-mode-3d" class="graph-mode-btn" title="Render the graph in 3D using WebGPU. Only Force-directed is available — the static layouts are 2D-only. Drag to orbit, scroll to zoom. Requires a browser with WebGPU support; disabled otherwise." disabled>3D</button>
         </div>
 
         {# Layout picker. Disabled options reserve their wire-format
@@ -66,11 +66,11 @@
         <div class="graph-layout-picker" id="graph-layout-picker">
             <label for="graph-layout-select" class="graph-layout-label">Layout</label>
             <select id="graph-layout-select" class="graph-layout-select">
-                <option value="force-directed">Force-directed</option>
+                <option value="force-directed" title="Iterative physics simulation: connected nodes attract, all nodes repel, the layout converges to a balanced spread. Continuously animated so the user can drag a node and watch the rest of the graph adjust. The all-purpose default; in 3D mode it's the only available algorithm.">Force-directed</option>
                 <option value="kamada-kawai" title="Energy-minimization layout; slower init than force-directed, often produces nicer node spacing for medium graphs">Kamada-Kawai (slower init)</option>
                 <option value="hierarchical" title="Sugiyama layered layout over the is_a / mixin sub-DAG; best for class hierarchies">Hierarchical (best for class hierarchies)</option>
                 <option value="stress" title="Stress majorization; converges on a layout that minimizes the squared difference between Euclidean and graph-theoretic distances. Produces cleaner cluster separation than force-directed at moderate init cost">Stress majorization (cluster separation)</option>
-                <option value="sgd" disabled title="Not yet implemented">SGD (coming soon)</option>
+                <option value="sgd" title="Stochastic Gradient Descent variant of stress majorization; typically the best quality-per-time for medium-to-large graphs. Converges in O(N · iters) vs stress's O(N² · iters) at comparable visible quality">SGD (fast quality)</option>
                 <option value="circular" disabled title="Not yet implemented">Circular (coming soon)</option>
                 <option value="radial-tree" disabled title="Not yet implemented">Radial tree (coming soon)</option>
             </select>
@@ -870,7 +870,7 @@
         'kamada-kawai', 'sgd', 'circular', 'radial-tree',
     ]);
     // Layouts that resolve to a real implementation on the wasm side.
-    const IMPLEMENTED_LAYOUTS = new Set(['force-directed', 'kamada-kawai', 'hierarchical', 'stress']);
+    const IMPLEMENTED_LAYOUTS = new Set(['force-directed', 'kamada-kawai', 'hierarchical', 'stress', 'sgd']);
 
     // Which modes each algorithm supports today. Mirrors what
     // `Visualization::new` / `create_visualization_3d` actually do on
@@ -884,7 +884,7 @@
         'kamada-kawai':   { '2d': true, '3d': false },
         'hierarchical':   { '2d': true, '3d': false },
         'stress':         { '2d': true, '3d': false },
-        'sgd':            { '2d': false, '3d': false },
+        'sgd':            { '2d': true, '3d': false },
         'circular':       { '2d': false, '3d': false },
         'radial-tree':    { '2d': false, '3d': false },
     };
@@ -900,7 +900,7 @@
         'kamada-kawai':   'Kamada-Kawai (slower init)',
         'hierarchical':   'Hierarchical (best for class hierarchies)',
         'stress':         'Stress majorization (cluster separation)',
-        'sgd':            'SGD (coming soon)',
+        'sgd':            'SGD (fast quality)',
         'circular':       'Circular (coming soon)',
         'radial-tree':    'Radial tree (coming soon)',
     };
@@ -912,6 +912,29 @@
         'sgd':            'SGD (not implemented)',
         'circular':       'Circular (not implemented)',
         'radial-tree':    'Radial tree (not implemented)',
+    };
+
+    // Per-mode hover tooltips. Force-directed renders on a different
+    // backend per mode (2D Canvas physics vs 3D WebGPU physics), so its
+    // tooltip swaps to match what the user is actually about to see.
+    // The other algorithms are 2D-only; their 3D tooltip explains why.
+    const LAYOUT_TITLES_2D = {
+        'force-directed': 'Iterative 2D physics on a Canvas: connected nodes attract, all nodes repel. Continuously animated — drag a node and watch the rest of the graph adjust. The all-purpose default.',
+        'kamada-kawai':   'Energy-minimization layout; slower init than force-directed, often produces nicer node spacing for medium graphs.',
+        'hierarchical':   'Sugiyama layered layout over the is_a / mixin sub-DAG; best for class hierarchies.',
+        'stress':         'Stress majorization; converges on a layout that minimizes the squared difference between Euclidean and graph-theoretic distances. Produces cleaner cluster separation than force-directed at moderate init cost.',
+        'sgd':            'Stochastic Gradient Descent variant of stress majorization; typically the best quality-per-time for medium-to-large graphs. Converges in O(N · iters) vs stress\'s O(N² · iters) at comparable visible quality.',
+        'circular':       'Not yet implemented.',
+        'radial-tree':    'Not yet implemented.',
+    };
+    const LAYOUT_TITLES_3D = {
+        'force-directed': 'Iterative 3D physics via WebGPU: nodes pushed apart on x, y, z. Drag with the mouse to orbit, scroll to zoom. The only 3D algorithm — KK, Hierarchical, Stress, and SGD are 2D-only.',
+        'kamada-kawai':   'Not available in 3D — switch to 2D mode to use this layout.',
+        'hierarchical':   'Not available in 3D — switch to 2D mode to use this layout.',
+        'stress':         'Not available in 3D — switch to 2D mode to use this layout.',
+        'sgd':            'Not available in 3D — switch to 2D mode to use this layout.',
+        'circular':       'Not yet implemented.',
+        'radial-tree':    'Not yet implemented.',
     };
 
     function layoutSupportsMode(layout, is3D) {
@@ -942,11 +965,15 @@
         const select = document.getElementById('graph-layout-select');
         if (!select) return;
         const labels = is3D ? LAYOUT_LABELS_3D : LAYOUT_LABELS_2D;
+        const titles = is3D ? LAYOUT_TITLES_3D : LAYOUT_TITLES_2D;
         for (const opt of Array.from(select.options)) {
             const supported = layoutSupportsMode(opt.value, is3D);
             opt.disabled = !supported;
             if (labels[opt.value]) {
                 opt.textContent = labels[opt.value];
+            }
+            if (titles[opt.value]) {
+                opt.title = titles[opt.value];
             }
         }
         // Drop a no-longer-supported selection back to force-directed
@@ -1164,9 +1191,11 @@
             const can3D = hasWebGPU && typeof wasmModule.create_visualization_3d === 'function';
             if (can3D) {
                 mode3dBtn.disabled = false;
-                mode3dBtn.title = '3D WebGPU mode';
+                mode3dBtn.title = 'Render the graph in 3D using WebGPU. Only Force-directed is available — the static layouts (KK, Hierarchical, Stress, SGD) are 2D-only. Drag to orbit, scroll to zoom.';
             } else {
-                mode3dBtn.title = hasWebGPU ? '3D not available in this build' : 'WebGPU not supported in this browser';
+                mode3dBtn.title = hasWebGPU
+                    ? 'This build of panschema-viz wasn\'t compiled with WebGPU support, so 3D is unavailable. Stay in 2D mode.'
+                    : 'This browser doesn\'t support WebGPU, so the 3D render path is unavailable. Try Chrome 113+, Firefox 121+, or Safari 18+.';
             }
 
             // Show canvas first so we can measure its dimensions
@@ -1181,8 +1210,14 @@
             canvas.width = rect.width * window.devicePixelRatio;
             canvas.height = rect.height * window.devicePixelRatio;
 
-            // Create 3D visualization by default when WebGPU is available, else 2D
-            await createVisualization(can3D);
+            // Default to 2D regardless of WebGPU availability — the 2D
+            // layout algorithms (Kamada-Kawai, Hierarchical, Stress) all
+            // produce visibly better results than the WebGPU 3D
+            // force-directed path for typical schema graphs, and 2D is
+            // the mode the picker UX is tuned for. The 3D button stays
+            // selectable when WebGPU is supported, so users who prefer
+            // 3D can switch with one click.
+            await createVisualization(false);
 
             // Update UI
             nodeCount.textContent = `${viz.node_count()} nodes, ${viz.edge_count()} edges`;
@@ -1194,7 +1229,16 @@
             setupModeToggle();
             setupLayoutPicker();
         } catch (e) {
-            console.warn('WASM visualization not available, using static fallback:', e.message);
+            // wasm panics arrive as JsValue (often a string), not a JS
+            // Error object, so `e.message` is `undefined` for them.
+            // Log the value directly to surface the actual panic
+            // message in the browser console; keep `.message` as a
+            // hint for the JS-Error case.
+            console.warn(
+                'WASM visualization not available, using static fallback:',
+                e?.message ?? e,
+            );
+            console.warn('WASM init error (raw):', e);
             // Fall back to static graph display
             showStaticFallback();
         }

@@ -81,7 +81,7 @@ impl LayoutAlgorithm {
     pub fn is_implemented(&self) -> bool {
         matches!(
             self,
-            Self::ForceDirected | Self::KamadaKawai | Self::Hierarchical | Self::Stress
+            Self::ForceDirected | Self::KamadaKawai | Self::Hierarchical | Self::Stress | Self::Sgd
         )
     }
 
@@ -472,6 +472,196 @@ fn stress_majorization_component(
     (positions, width)
 }
 
+/// Run SGD (Stochastic Gradient Descent) layout over the LinkML
+/// schema graph. Like [`stress_majorization`], SGD minimizes a stress
+/// function but using a stochastic per-pair update instead of a global
+/// majorization step — typically the best quality-per-time of the
+/// `egraph-rs` lineup, converging in `O(N · iters)` time with
+/// visibly comparable quality to stress majorization.
+///
+/// Same shelf-pack-by-component pattern as [`stress_majorization`]:
+/// SGD's all-pairs distance matrix doesn't tolerate unreachable pairs,
+/// so the helper splits the input into connected components, runs SGD
+/// on each independently, and shelf-packs the results into a
+/// rectangle whose aspect approximates the configured aspect.
+///
+/// The RNG is seeded deterministically so the same input produces
+/// byte-identical output across runs; this matters for the
+/// idempotent-publish guarantee that `panschema publish` makes.
+///
+/// `#[mutants::skip]`: same rationale as [`stress_majorization`] —
+/// the shelf-packing arithmetic has multiple observationally-
+/// equivalent formulations.
+#[mutants::skip]
+pub fn sgd(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> Vec<(f32, f32)> {
+    if graph.nodes.is_empty() {
+        return Vec::new();
+    }
+
+    let (pg, _) = to_petgraph(graph);
+    let components = connected_components_of(&pg);
+    let id_to_node_idx: BTreeMap<&str, usize> = graph
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.id.as_str(), i))
+        .collect();
+
+    struct LaidOut {
+        positions: Vec<(f32, f32)>,
+        component: Vec<NodeIndex>,
+        width: f32,
+        height: f32,
+    }
+    let mut laid: Vec<LaidOut> = components
+        .into_iter()
+        .map(|component| {
+            let (raw, _) = sgd_component(&pg, &component);
+            let (mut min_x, mut max_x, mut min_y, mut max_y) = (
+                f32::INFINITY,
+                f32::NEG_INFINITY,
+                f32::INFINITY,
+                f32::NEG_INFINITY,
+            );
+            for &(x, y) in &raw {
+                min_x = min_x.min(x);
+                max_x = max_x.max(x);
+                min_y = min_y.min(y);
+                max_y = max_y.max(y);
+            }
+            let width = (max_x - min_x).max(0.0);
+            let height = (max_y - min_y).max(0.0);
+            let translated: Vec<(f32, f32)> =
+                raw.iter().map(|(x, y)| (x - min_x, y - min_y)).collect();
+            LaidOut {
+                positions: translated,
+                component,
+                width,
+                height,
+            }
+        })
+        .collect();
+
+    laid.sort_by(|a, b| {
+        b.height
+            .partial_cmp(&a.height)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let max_dim = laid
+        .iter()
+        .map(|c| c.width.max(c.height))
+        .fold(0.0_f32, f32::max);
+    let component_gap = (max_dim * 0.05).max(1.0);
+    let total_area: f32 = laid
+        .iter()
+        .map(|c| c.width.max(1.0) * c.height.max(1.0))
+        .sum();
+    let target_row_width = (total_area * aspect_w / aspect_h).sqrt().max(100.0);
+
+    let mut positions: Vec<(f32, f32)> = vec![(0.0, 0.0); graph.nodes.len()];
+    let mut row_x = 0.0_f32;
+    let mut row_y = 0.0_f32;
+    let mut row_height = 0.0_f32;
+    for c in &laid {
+        if row_x > 0.0 && row_x + c.width > target_row_width {
+            row_y += row_height + component_gap;
+            row_x = 0.0;
+            row_height = 0.0;
+        }
+        for (sub_pos, &node_index) in c.positions.iter().zip(c.component.iter()) {
+            let id = pg[node_index].as_str();
+            if let Some(&out_idx) = id_to_node_idx.get(id) {
+                positions[out_idx] = (sub_pos.0 + row_x, sub_pos.1 + row_y);
+            }
+        }
+        row_x += c.width + component_gap;
+        row_height = row_height.max(c.height);
+    }
+
+    let sx = (aspect_w / aspect_h).sqrt();
+    let sy = (aspect_h / aspect_w).sqrt();
+    for p in positions.iter_mut() {
+        p.0 *= sx;
+        p.1 *= sy;
+    }
+
+    positions
+}
+
+/// Run SGD on a single connected component. Returns
+/// (positions in `component` order, bbox width).
+///
+/// `#[mutants::skip]`: matches [`stress_majorization_component`].
+#[mutants::skip]
+fn sgd_component(
+    pg: &petgraph::Graph<String, (), petgraph::Undirected>,
+    component: &[NodeIndex],
+) -> (Vec<(f32, f32)>, f32) {
+    use petgraph::visit::EdgeRef;
+    use petgraph_drawing::DrawingEuclidean2d;
+    use petgraph_layout_sgd::{FullSgd, Scheduler, SchedulerExponential};
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
+
+    if component.len() < 2 {
+        return (vec![(0.0, 0.0); component.len()], 0.0);
+    }
+    if component.len() == 2 {
+        // Match stress_majorization_component's 2-node handling —
+        // `initial_placement` for tiny graphs leaves both nodes at
+        // coincident coordinates and SGD's gradient at coincident
+        // pairs is zero, so the nodes never separate without help.
+        return (vec![(0.0, 0.0), (1.0, 0.0)], 1.0);
+    }
+
+    let mut sub: petgraph::Graph<(), (), petgraph::Undirected> = petgraph::Graph::new_undirected();
+    let mut orig_to_sub: BTreeMap<NodeIndex, NodeIndex> = BTreeMap::new();
+    for &orig in component {
+        let new_id = sub.add_node(());
+        orig_to_sub.insert(orig, new_id);
+    }
+    for &orig in component {
+        for edge in pg.edges(orig) {
+            let target = edge.target();
+            if orig.index() <= target.index()
+                && let (Some(&from), Some(&to)) = (orig_to_sub.get(&orig), orig_to_sub.get(&target))
+            {
+                sub.add_edge(from, to, ());
+            }
+        }
+    }
+
+    let mut sgd_state = FullSgd::new().build(&sub, |_| 1.0_f32);
+    let mut drawing = DrawingEuclidean2d::<NodeIndex, f32>::initial_placement(&sub);
+    let mut rng = StdRng::seed_from_u64(42);
+    let mut scheduler = sgd_state.scheduler::<SchedulerExponential<f32>>(100, 0.1);
+    scheduler.run(&mut |eta| {
+        sgd_state.shuffle(&mut rng);
+        sgd_state.apply(&mut drawing, eta);
+    });
+
+    let mut positions: Vec<(f32, f32)> = Vec::with_capacity(component.len());
+    let mut min_x = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    for &orig in component {
+        let sub_idx = orig_to_sub[&orig];
+        let x = drawing.x(sub_idx).unwrap_or(0.0);
+        let y = drawing.y(sub_idx).unwrap_or(0.0);
+        let x = if x.is_finite() { x } else { 0.0 };
+        let y = if y.is_finite() { y } else { 0.0 };
+        positions.push((x, y));
+        min_x = min_x.min(x);
+        max_x = max_x.max(x);
+    }
+    let width = if positions.len() >= 2 {
+        max_x - min_x
+    } else {
+        0.0
+    };
+    (positions, width)
+}
+
 /// Default target for [`scale_to_world`] in world units. Sized so the
 /// rendered layout fills the in-tree `CpuSimulation`'s world bounding
 /// box without clipping against its `MAX_RADIUS = 800` safety net.
@@ -704,7 +894,8 @@ mod tests {
                 LayoutAlgorithm::ForceDirected
                 | LayoutAlgorithm::KamadaKawai
                 | LayoutAlgorithm::Hierarchical
-                | LayoutAlgorithm::Stress => {
+                | LayoutAlgorithm::Stress
+                | LayoutAlgorithm::Sgd => {
                     assert!(implemented, "{:?} should be implemented", variant)
                 }
                 _ => assert!(!implemented, "{:?} should not be implemented", variant),
@@ -978,6 +1169,125 @@ mod tests {
         assert!(
             overlap_x == 0.0 || overlap_y == 0.0,
             "components must be disjoint on at least one axis; got overlap ({overlap_x}, {overlap_y})"
+        );
+    }
+
+    #[test]
+    fn sgd_returns_position_per_node_on_ring() {
+        let ring = make_ring(15);
+        let positions = sgd(&ring, 1.0, 1.0);
+        assert_eq!(positions.len(), 15);
+        for (x, y) in &positions {
+            assert!(x.is_finite(), "x must be finite, got {x}");
+            assert!(y.is_finite(), "y must be finite, got {y}");
+        }
+        let xs: Vec<f32> = positions.iter().map(|p| p.0).collect();
+        let ys: Vec<f32> = positions.iter().map(|p| p.1).collect();
+        let w = xs.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
+            - xs.iter().cloned().fold(f32::INFINITY, f32::min);
+        let h = ys.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
+            - ys.iter().cloned().fold(f32::INFINITY, f32::min);
+        assert!(w > 0.1, "ring layout collapsed in x (width={w})");
+        assert!(h > 0.1, "ring layout collapsed in y (height={h})");
+    }
+
+    #[test]
+    fn sgd_on_empty_graph_returns_empty_vec() {
+        let empty = GraphData {
+            schema_name: "empty".into(),
+            schema_title: None,
+            format_version: "1.0".into(),
+            nodes: Vec::new(),
+            edges: Vec::new(),
+        };
+        assert!(sgd(&empty, 1.0, 1.0).is_empty());
+    }
+
+    #[test]
+    fn sgd_is_deterministic_under_fixed_seed() {
+        // The internal RNG is seeded with a constant so re-running
+        // `panschema publish` against an unchanged schema produces
+        // byte-identical HTML (per the idempotency guarantee). Two
+        // calls on the same input must produce identical positions.
+        let ring = make_ring(10);
+        let first = sgd(&ring, 1.0, 1.0);
+        let second = sgd(&ring, 1.0, 1.0);
+        assert_eq!(first.len(), second.len());
+        for ((a_x, a_y), (b_x, b_y)) in first.iter().zip(second.iter()) {
+            assert_eq!(a_x, b_x, "non-deterministic x");
+            assert_eq!(a_y, b_y, "non-deterministic y");
+        }
+    }
+
+    #[test]
+    fn sgd_shelf_packs_disconnected_components_without_overlap() {
+        // Same per-component pattern as stress majorization: two
+        // disconnected 5-node rings, packed into disjoint bboxes.
+        let mut graph = GraphData {
+            schema_name: "two_rings".into(),
+            schema_title: None,
+            format_version: "1.0".into(),
+            nodes: Vec::new(),
+            edges: Vec::new(),
+        };
+        for i in 0..10 {
+            graph.nodes.push(crate::graph_types::GraphNode {
+                id: format!("n{i}"),
+                label: format!("n{i}"),
+                node_type: crate::graph_types::NodeType::Class,
+                color: [1.0, 1.0, 1.0, 1.0],
+                description: None,
+                uri: None,
+                is_abstract: false,
+            });
+        }
+        for (s, t) in [(0, 1), (1, 2), (2, 3), (3, 4), (4, 0)] {
+            graph.edges.push(crate::graph_types::GraphEdge {
+                source: format!("n{s}"),
+                target: format!("n{t}"),
+                edge_type: crate::graph_types::EdgeType::SubclassOf,
+                label: None,
+            });
+        }
+        for (s, t) in [(5, 6), (6, 7), (7, 8), (8, 9), (9, 5)] {
+            graph.edges.push(crate::graph_types::GraphEdge {
+                source: format!("n{s}"),
+                target: format!("n{t}"),
+                edge_type: crate::graph_types::EdgeType::SubclassOf,
+                label: None,
+            });
+        }
+        let positions = sgd(&graph, 1.0, 1.0);
+        assert_eq!(positions.len(), 10);
+
+        let bbox = |slice: &[(f32, f32)]| -> (f32, f32, f32, f32) {
+            let mut min_x = f32::INFINITY;
+            let mut max_x = f32::NEG_INFINITY;
+            let mut min_y = f32::INFINITY;
+            let mut max_y = f32::NEG_INFINITY;
+            for &(x, y) in slice {
+                min_x = min_x.min(x);
+                max_x = max_x.max(x);
+                min_y = min_y.min(y);
+                max_y = max_y.max(y);
+            }
+            (min_x, max_x, min_y, max_y)
+        };
+        let (a_min_x, a_max_x, a_min_y, a_max_y) = bbox(&positions[0..5]);
+        let (b_min_x, b_max_x, b_min_y, b_max_y) = bbox(&positions[5..10]);
+        for (label, lo, hi) in [
+            ("ring A x", a_max_x - a_min_x, 0.5),
+            ("ring A y", a_max_y - a_min_y, 0.5),
+            ("ring B x", b_max_x - b_min_x, 0.5),
+            ("ring B y", b_max_y - b_min_y, 0.5),
+        ] {
+            assert!(lo > hi, "{label} collapsed (extent {lo})");
+        }
+        let overlap_x = (a_max_x.min(b_max_x) - a_min_x.max(b_min_x)).max(0.0);
+        let overlap_y = (a_max_y.min(b_max_y) - a_min_y.max(b_min_y)).max(0.0);
+        assert!(
+            overlap_x == 0.0 || overlap_y == 0.0,
+            "components must be disjoint on at least one axis"
         );
     }
 

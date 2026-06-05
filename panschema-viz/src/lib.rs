@@ -148,6 +148,9 @@ impl Visualization {
                 aspect_w as f32,
                 aspect_h as f32,
             )),
+            layout::LayoutAlgorithm::Sgd => {
+                Some(layout::sgd(&graph, aspect_w as f32, aspect_h as f32))
+            }
             _ => None,
         };
         let is_static_layout = static_positions.is_some();

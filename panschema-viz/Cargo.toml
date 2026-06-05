@@ -41,6 +41,16 @@ petgraph = "0.8"
 petgraph-drawing = { version = "0.1", git = "https://github.com/padamson/egraph-rs", rev = "e2aee8fea7878d2574ad8dececc7000c3801c738" }
 petgraph-layout-kamada-kawai = { version = "0.1", git = "https://github.com/padamson/egraph-rs", rev = "e2aee8fea7878d2574ad8dececc7000c3801c738" }
 petgraph-layout-stress-majorization = { version = "0.1", git = "https://github.com/padamson/egraph-rs", rev = "e2aee8fea7878d2574ad8dececc7000c3801c738" }
+petgraph-layout-sgd = { version = "0.1", git = "https://github.com/padamson/egraph-rs", rev = "e2aee8fea7878d2574ad8dececc7000c3801c738" }
+# Matches the rand version petgraph-layout-sgd depends on. Used to
+# seed the SGD scheduler's shuffle step.
+rand = "0.8"
+# Wasm32 needs the `js` feature on getrandom (transitive dep of rand)
+# so rand's StdRng can source entropy from `crypto.getRandomValues`.
+# We also seed deterministically via `SeedableRng::seed_from_u64` in
+# the SGD path itself, so this is mostly about getting rand to
+# compile cleanly for the wasm32-unknown-unknown target.
+getrandom = { version = "0.2", features = ["js"] }
 # Empty no-op crate providing `#[mutants::skip]` so we can mark
 # provably/empirically-equivalent expressions without resorting to
 # brittle line-number based excludes in scripts/mutants.sh.

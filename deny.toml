@@ -62,6 +62,11 @@ crate = "petgraph-layout-stress-majorization"
 expression = "MIT"
 license-files = []
 
+[[licenses.clarify]]
+crate = "petgraph-layout-sgd"
+expression = "MIT"
+license-files = []
+
 [licenses.private]
 ignore = false
 registries = []
