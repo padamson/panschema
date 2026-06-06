@@ -266,21 +266,37 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 
 ### Slice 10: Class card consumes the shared slot resolver
 
-**Status:** Not Started
+**Status:** ✅ Complete
 
 **Priority:** Should Have
 
-**User Value:** The class card's `slot_usage` refinement rendering (slice 5) walks its own copy of the inheritance + mixin + slot_usage chain. After this slice, it calls into `panschema::linkml::resolve` so the HTML output, Rust output, and graph output share one correctness story. Slot provenance ("inherited from `<class>`") becomes available for free once feature 12 slice 12.4 lands.
+**User Value:** The class card now reads its effective slot set directly from `panschema::linkml_resolve` instead of through a re-export chain. The HTML output, Rust output, and graph output all observe the same effective slot data — fixes for `slot_usage`, mixin flattening, or cycle handling that land in the shared resolver light up in every writer simultaneously.
 
 **Acceptance Criteria:**
-- [ ] `html_writer`'s class-card slot resolution delegates to `linkml::resolve::resolve_effective_slots` instead of walking the IR locally.
-- [ ] Class-card "refined here" tags continue to render exactly as today for `slot_usage` overrides — the `Provenance::Refined` variant from the shared resolver drives the same UI.
-- [ ] Inherited slots gain a small "from `<class>`" tag sourced from `Provenance::Inherited` (depends on feature 12 slice 12.4; can be deferred to slice 11 of this feature if 12.4 isn't ready).
-- [ ] Existing class-card integration tests (including `class_card_surfaces_mixins_slots_and_resolved_xrefs`) pass unchanged.
-- [ ] One new test asserts that the class card and the graph hover card surface the same effective range / cardinality for a slot refined via `slot_usage` — pin the cross-writer consistency.
+- [x] `html_writer`'s class-card slot resolution imports `linkml_resolve::resolve_effective_slots` directly. (Previously imported `resolve_slots` from `rust_writer`; after feature 12 slice 12.1 that was already a re-export of the shared resolver, so byte-identity for the rendered HTML is guaranteed.)
+- [x] Class-card "refined here" tags continue to render exactly as today for `slot_usage` overrides — driven by `class_def.slot_usage.contains_key(slot_name)`, which is independent of which resolver returned the effective slot.
+- [x] Existing class-card integration tests (including `class_data_flags_slot_usage_refinements_with_refined_here`) pass unchanged.
 
 **Notes:**
-- Pure refactor at the boundary. If the shared resolver returns the same effective slot data the local walker did, the rendered HTML should be byte-identical for schemas that don't use `slot_usage` (which is the bulk of existing fixtures). A snapshot test pinning that byte-identity would catch accidental behaviour drift.
+- This shipped as a one-line import change because feature 12 slice 12.1's `rust_writer::resolve_slots` re-export had already pointed html_writer at the shared implementation transitively. The direct import is for clarity and to make the dependency visible to anyone reading the file. Output remains byte-identical.
+- Two follow-up items — surfacing slot provenance ("from `<class>`" tags) and a cross-writer consistency test — were originally drafted as part of this slice but blocked on other work (provenance needs feature 12 slice 12.4's `ResolvedSlot` wrapper; the consistency test needs feature 04 slice 12's deferred per-class slot views). They moved to slice 11 below.
+
+---
+
+### Slice 11: Class card surfaces slot provenance + cross-writer consistency test
+
+**Status:** Not Started
+
+**Priority:** Nice to Have
+
+**User Value:** Once the shared resolver carries provenance metadata, the class card can surface "inherited from `<Parent>`" / "from `<Mixin>` (mixin)" tags on flattened slots — authors building intuition for inheritance get the answer without manually walking the hierarchy. A consistency test then pins that the class card and the graph hover card agree on the effective shape of a `slot_usage`-refined slot.
+
+**Acceptance Criteria:**
+- [ ] Inherited slots in the class card carry a small "from `<class>`" tag sourced from `Provenance::Inherited` (depends on feature 12 slice 12.4). Direct attributes get no tag; `slot_usage`-refined slots get the existing "refined here" tag in addition.
+- [ ] One new integration test builds a fixture where `Question` (extending `Activity`) refines `wasGeneratedBy` via `slot_usage`, runs both `html_writer` and `graph_writer`, and asserts that both surface the same effective range (`QuestionFormation`, not `Activity`). Depends on feature 04 slice 12's slot-side ACs landing so the graph side actually carries the refined view.
+
+**Notes:**
+- Blocked on feature 12 slice 12.4 and feature 04 slice 12's deferred slot-side completion. Both are tracked as dependencies; this slice can ship as soon as either's payload is available.
 
 ---
 
@@ -297,4 +313,5 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 | Slice 7: Improved force-directed default (fill viewport) | Should Have (v0.3.0) | Slice 6, Feature 04 | Completed |
 | Slice 8: Parent-relative header brand link + absolute-URL audit | Must Have | Slice 4, Feature 11 slice 4 | Completed |
 | Slice 9: Markdown rendering in description fields | Should Have | Slice 5 | Completed |
-| Slice 10: Class card consumes the shared slot resolver | Should Have | Slice 5, Feature 12 slice 12.1 | Not Started |
+| Slice 10: Class card consumes the shared slot resolver | Should Have | Slice 5, Feature 12 slice 12.1 | ✅ Complete |
+| Slice 11: Class card slot provenance + cross-writer consistency test | Nice to Have | Slice 10, Feature 12 slice 12.4, Feature 04 slice 12 | Not Started |

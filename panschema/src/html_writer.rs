@@ -10,7 +10,7 @@ use askama::Template;
 use crate::graph_writer::GraphWriter;
 use crate::io::{IoError, IoResult, Writer};
 use crate::linkml::SchemaDefinition;
-use crate::rust_writer::resolve_slots;
+use crate::linkml_resolve::resolve_effective_slots as resolve_slots;
 
 /// Entity reference for sidebar navigation.
 #[derive(Debug, Clone)]
