@@ -496,6 +496,7 @@ mod tests {
                     description: None,
                     uri: None,
                     is_abstract: false,
+                    kind_metadata: None,
                 },
                 GraphNode {
                     id: "b".to_string(),
@@ -505,6 +506,7 @@ mod tests {
                     description: None,
                     uri: None,
                     is_abstract: false,
+                    kind_metadata: None,
                 },
             ],
             edges: vec![GraphEdge {
@@ -593,6 +595,7 @@ mod tests {
                 description: None,
                 uri: None,
                 is_abstract: false,
+                kind_metadata: None,
             }],
             edges: vec![],
         };
@@ -629,6 +632,7 @@ mod tests {
                     description: None,
                     uri: None,
                     is_abstract: false,
+                    kind_metadata: None,
                 })
                 .collect(),
             edges: (1..10)
@@ -675,6 +679,7 @@ mod tests {
                     description: None,
                     uri: None,
                     is_abstract: false,
+                    kind_metadata: None,
                 },
                 GraphNode {
                     id: "b".to_string(),
@@ -684,6 +689,7 @@ mod tests {
                     description: None,
                     uri: None,
                     is_abstract: false,
+                    kind_metadata: None,
                 },
             ],
             edges: vec![],

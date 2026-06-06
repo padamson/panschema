@@ -91,6 +91,50 @@ pub struct GraphNode {
     /// Whether this is an abstract class (visual indicator)
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub is_abstract: bool,
+
+    /// Resolved per-kind metadata for the hover-card's structured
+    /// view: slots / parents / mixins for classes; domain / range /
+    /// required / multivalued for slots; permissible values for
+    /// enums. Populated by `GraphWriter` from the LinkML IR — the
+    /// visualization layer never walks the IR itself. `None` for
+    /// kinds whose extra payload would be empty (e.g. types).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind_metadata: Option<KindMetadata>,
+}
+
+/// Per-kind structured payload carried by [`GraphNode::kind_metadata`].
+/// Tagged with `serde(tag = "kind")` so the wire format reads
+/// `{"kind": "class", "slots": [...], ...}` — the JS hover card
+/// dispatches on the tag to render the right rows.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(
+    tag = "kind",
+    rename_all = "lowercase",
+    rename_all_fields = "camelCase"
+)]
+pub enum KindMetadata {
+    /// Resolved view of a LinkML class: every slot reachable via
+    /// direct attributes / `slots:` references / `is_a` chain /
+    /// `mixins:` list, plus the immediate parents and mixins for
+    /// the inheritance view.
+    Class {
+        slots: Vec<String>,
+        parents: Vec<String>,
+        mixins: Vec<String>,
+    },
+    /// Resolved view of a LinkML slot.
+    Slot {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        domain: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        range: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        required: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        multivalued: bool,
+    },
+    /// Permissible values for a LinkML enum, in declaration order.
+    Enum { permissible_values: Vec<String> },
 }
 
 /// An edge connecting two nodes

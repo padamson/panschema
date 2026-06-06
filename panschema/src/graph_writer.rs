@@ -95,6 +95,52 @@ pub struct GraphNode {
     /// Whether this is an abstract class (visual indicator)
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub is_abstract: bool,
+
+    /// Resolved per-kind metadata surfaced by the hover card:
+    /// slots/parents/mixins for classes; domain/range/required/
+    /// multivalued for slots; permissible values for enums.
+    /// Populated here so the visualization layer never has to walk
+    /// the LinkML IR itself. `None` for kinds whose payload would
+    /// be empty (e.g. types).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind_metadata: Option<KindMetadata>,
+}
+
+/// Per-kind structured payload carried by [`GraphNode::kind_metadata`].
+/// Tagged with `serde(tag = "kind")` so the wire format reads
+/// `{"kind": "class", "slots": [...], ...}` — the JS hover card
+/// dispatches on the tag to render the right rows. Mirrors the
+/// shape in `panschema_viz::graph_types::KindMetadata` so the two
+/// crates can serialize/deserialize the same payload.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(
+    tag = "kind",
+    rename_all = "lowercase",
+    rename_all_fields = "camelCase"
+)]
+pub enum KindMetadata {
+    /// Resolved view of a LinkML class: every slot reachable via
+    /// direct attributes / `slots:` references / `is_a` chain /
+    /// `mixins:` list, plus the immediate parents and mixins for
+    /// the inheritance view.
+    Class {
+        slots: Vec<String>,
+        parents: Vec<String>,
+        mixins: Vec<String>,
+    },
+    /// Resolved view of a LinkML slot.
+    Slot {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        domain: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        range: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        required: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        multivalued: bool,
+    },
+    /// Permissible values for a LinkML enum, in declaration order.
+    Enum { permissible_values: Vec<String> },
 }
 
 /// An edge connecting two nodes
@@ -112,6 +158,41 @@ pub struct GraphEdge {
     /// Optional label for the edge
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+}
+
+/// Resolve every slot reachable from `class_name` via its direct
+/// `attributes:`, `slots:` references, and (transitively) its
+/// `is_a` parent and `mixins:` lists. Duplicates are dropped while
+/// preserving the first-seen order so the hover card surfaces
+/// direct slots before inherited ones. Cycles in the inheritance
+/// graph (which a well-formed LinkML schema doesn't have, but a
+/// truncated source might) are guarded by a visited-set.
+fn resolve_class_slots(schema: &SchemaDefinition, class_name: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut seen_slots: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut visited_classes: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut stack: Vec<String> = vec![class_name.to_string()];
+
+    while let Some(cls_name) = stack.pop() {
+        if !visited_classes.insert(cls_name.clone()) {
+            continue;
+        }
+        let Some(cls) = schema.classes.get(&cls_name) else {
+            continue;
+        };
+        for slot_name in cls.attributes.keys().chain(cls.slots.iter()) {
+            if seen_slots.insert(slot_name.clone()) {
+                out.push(slot_name.clone());
+            }
+        }
+        if let Some(parent) = &cls.is_a {
+            stack.push(parent.clone());
+        }
+        for mixin in &cls.mixins {
+            stack.push(mixin.clone());
+        }
+    }
+    out
 }
 
 /// Complete graph data for serialization
@@ -334,6 +415,12 @@ impl GraphWriter {
                 color[3] = colors::ABSTRACT_ALPHA;
             }
 
+            let kind_metadata = Some(KindMetadata::Class {
+                slots: resolve_class_slots(schema, name),
+                parents: class_def.is_a.iter().cloned().collect(),
+                mixins: class_def.mixins.clone(),
+            });
+
             graph.nodes.push(GraphNode {
                 id: format!("class:{}", name),
                 label,
@@ -342,6 +429,7 @@ impl GraphWriter {
                 description: class_def.description.clone(),
                 uri: class_def.class_uri.clone(),
                 is_abstract: class_def.r#abstract,
+                kind_metadata,
             });
 
             // Add subclass edge (is_a)
@@ -375,6 +463,13 @@ impl GraphWriter {
                 .cloned()
                 .unwrap_or_else(|| name.clone());
 
+            let kind_metadata = Some(KindMetadata::Slot {
+                domain: slot_def.domain.clone(),
+                range: slot_def.range.clone(),
+                required: slot_def.required,
+                multivalued: slot_def.multivalued,
+            });
+
             graph.nodes.push(GraphNode {
                 id: format!("slot:{}", name),
                 label,
@@ -383,6 +478,7 @@ impl GraphWriter {
                 description: slot_def.description.clone(),
                 uri: slot_def.slot_uri.clone(),
                 is_abstract: false,
+                kind_metadata,
             });
 
             // Add domain edge (slot -> class)
@@ -445,6 +541,10 @@ impl GraphWriter {
     /// Add enum nodes
     fn add_enums(&self, schema: &SchemaDefinition, graph: &mut GraphData) {
         for (name, enum_def) in &schema.enums {
+            let kind_metadata = Some(KindMetadata::Enum {
+                permissible_values: enum_def.permissible_values.keys().cloned().collect(),
+            });
+
             graph.nodes.push(GraphNode {
                 id: format!("enum:{}", name),
                 label: name.clone(),
@@ -453,6 +553,7 @@ impl GraphWriter {
                 description: enum_def.description.clone(),
                 uri: None,
                 is_abstract: false,
+                kind_metadata,
             });
         }
     }
@@ -468,6 +569,7 @@ impl GraphWriter {
                 description: type_def.description.clone(),
                 uri: type_def.uri.clone(),
                 is_abstract: false,
+                kind_metadata: None,
             });
 
             // Add typeof edge (type -> parent type)
@@ -511,7 +613,9 @@ impl Writer for GraphWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::linkml::{ClassDefinition, EnumDefinition, SlotDefinition, TypeDefinition};
+    use crate::linkml::{
+        ClassDefinition, EnumDefinition, PermissibleValue, SlotDefinition, TypeDefinition,
+    };
 
     // ========== Empty/Minimal Schema Tests ==========
 
@@ -1034,6 +1138,7 @@ mod tests {
             description: Some("A living thing".to_string()),
             uri: Some("http://example.org#Animal".to_string()),
             is_abstract: false,
+            kind_metadata: None,
         });
         graph.edges.push(GraphEdge {
             source: "class:Dog".to_string(),
@@ -1071,5 +1176,173 @@ mod tests {
             .find(|e| e.edge_type == EdgeType::Range)
             .expect("Should have range edge to enum");
         assert_eq!(range_edge.target, "enum:Status");
+    }
+
+    // ========== kind_metadata Tests ==========
+
+    /// Pull the `KindMetadata::Class` payload from `graph` for the
+    /// named class. Test helper — the production code carries the
+    /// metadata on `GraphNode` and doesn't need a direct lookup.
+    fn class_kind_metadata<'a>(
+        graph: &'a GraphData,
+        name: &str,
+    ) -> (&'a [String], &'a [String], &'a [String]) {
+        let id = format!("class:{}", name);
+        let node = graph
+            .nodes
+            .iter()
+            .find(|n| n.id == id)
+            .expect("class node should exist");
+        match node.kind_metadata.as_ref().expect("class needs metadata") {
+            KindMetadata::Class {
+                slots,
+                parents,
+                mixins,
+            } => (slots.as_slice(), parents.as_slice(), mixins.as_slice()),
+            other => panic!("expected Class metadata, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn class_kind_metadata_collects_inherited_slots_in_direct_first_order() {
+        // Authors care about "what's the full set of fields on this
+        // class?". The hover card surfaces every slot reachable
+        // through `is_a` and `mixins`, but lists each class's own
+        // direct slots first so the inherited ones don't bury what
+        // the class itself introduces.
+        let mut schema = SchemaDefinition::new("inheritance");
+        let mut animal = ClassDefinition::new("Animal");
+        animal.slots = vec!["name".into()];
+        schema.classes.insert("Animal".to_string(), animal);
+
+        let mut dog = ClassDefinition::new("Dog");
+        dog.is_a = Some("Animal".into());
+        dog.slots = vec!["breed".into()];
+        schema.classes.insert("Dog".to_string(), dog);
+
+        let writer = GraphWriter::new();
+        let graph = writer.schema_to_graph(&schema);
+
+        let (slots, parents, mixins) = class_kind_metadata(&graph, "Dog");
+        assert_eq!(slots, &["breed".to_string(), "name".to_string()]);
+        assert_eq!(parents, &["Animal".to_string()]);
+        assert!(mixins.is_empty());
+    }
+
+    #[test]
+    fn class_kind_metadata_walks_mixins_and_dedupes() {
+        // Mixins flatten in: their slots show up in the consuming
+        // class's resolved list. When the same slot name reaches a
+        // class via two paths (its own attributes plus a mixin),
+        // the list keeps only the first occurrence so the card
+        // doesn't show duplicate rows.
+        let mut schema = SchemaDefinition::new("mixin_resolve");
+        let mut named = ClassDefinition::new("Named");
+        named.slots = vec!["name".into()];
+        schema.classes.insert("Named".to_string(), named);
+
+        let mut person = ClassDefinition::new("Person");
+        person.mixins = vec!["Named".into()];
+        person.slots = vec!["name".into(), "age".into()];
+        schema.classes.insert("Person".to_string(), person);
+
+        let writer = GraphWriter::new();
+        let graph = writer.schema_to_graph(&schema);
+
+        let (slots, _, mixins) = class_kind_metadata(&graph, "Person");
+        assert_eq!(slots, &["name".to_string(), "age".to_string()]);
+        assert_eq!(mixins, &["Named".to_string()]);
+    }
+
+    #[test]
+    fn slot_kind_metadata_captures_domain_range_and_flags() {
+        // Required + multivalued ride along on every slot so the
+        // hover card can render a "required, multi-valued" line
+        // without re-deriving from elsewhere. Domain/range come
+        // through verbatim and are what the card pivots on when
+        // suggesting jump-to-class affordances.
+        let mut schema = SchemaDefinition::new("slot_meta");
+        let mut owners = SlotDefinition::new("owners");
+        owners.domain = Some("Animal".into());
+        owners.range = Some("Person".into());
+        owners.required = true;
+        owners.multivalued = true;
+        schema.slots.insert("owners".to_string(), owners);
+
+        let writer = GraphWriter::new();
+        let graph = writer.schema_to_graph(&schema);
+
+        let node = graph.nodes.iter().find(|n| n.id == "slot:owners").unwrap();
+        match node.kind_metadata.as_ref().unwrap() {
+            KindMetadata::Slot {
+                domain,
+                range,
+                required,
+                multivalued,
+            } => {
+                assert_eq!(domain.as_deref(), Some("Animal"));
+                assert_eq!(range.as_deref(), Some("Person"));
+                assert!(*required);
+                assert!(*multivalued);
+            }
+            other => panic!("expected Slot metadata, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn enum_kind_metadata_surfaces_permissible_values() {
+        // The enum's permissible values are what the hover card
+        // shows when an author lands on an enum node. Order matches
+        // the BTreeMap iteration order, which is sorted — fine for
+        // hover-card display since the card chunks long lists with
+        // "+N more" anyway.
+        let mut schema = SchemaDefinition::new("enum_meta");
+        let mut severity = EnumDefinition::new("Severity");
+        severity
+            .permissible_values
+            .insert("low".to_string(), PermissibleValue::new("low"));
+        severity
+            .permissible_values
+            .insert("high".to_string(), PermissibleValue::new("high"));
+        schema.enums.insert("Severity".to_string(), severity);
+
+        let writer = GraphWriter::new();
+        let graph = writer.schema_to_graph(&schema);
+
+        let node = graph
+            .nodes
+            .iter()
+            .find(|n| n.id == "enum:Severity")
+            .unwrap();
+        match node.kind_metadata.as_ref().unwrap() {
+            KindMetadata::Enum { permissible_values } => {
+                assert!(permissible_values.contains(&"low".to_string()));
+                assert!(permissible_values.contains(&"high".to_string()));
+            }
+            other => panic!("expected Enum metadata, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn type_nodes_have_no_kind_metadata() {
+        // Type nodes have no extra payload worth surfacing yet —
+        // their `uri` and `description` already cover what the card
+        // would show. Pinning `None` here means the JS card can
+        // skip the per-kind dispatch entirely for types and just
+        // render the common header.
+        let mut schema = SchemaDefinition::new("type_meta");
+        schema
+            .types
+            .insert("Distance".to_string(), TypeDefinition::new("Distance"));
+
+        let writer = GraphWriter::new();
+        let graph = writer.schema_to_graph(&schema);
+
+        let node = graph
+            .nodes
+            .iter()
+            .find(|n| n.id == "type:Distance")
+            .unwrap();
+        assert!(node.kind_metadata.is_none());
     }
 }

@@ -958,6 +958,7 @@ mod tests {
                 description: None,
                 uri: None,
                 is_abstract: false,
+                kind_metadata: None,
             })
             .collect();
         let edges = (0..n)
@@ -988,6 +989,7 @@ mod tests {
                 description: None,
                 uri: None,
                 is_abstract: false,
+                kind_metadata: None,
             })
             .collect();
         let edges = (0..connected_n)
@@ -1114,6 +1116,7 @@ mod tests {
                 description: None,
                 uri: None,
                 is_abstract: false,
+                kind_metadata: None,
             });
         }
         // Ring A: n0..n4
@@ -1239,6 +1242,7 @@ mod tests {
                 description: None,
                 uri: None,
                 is_abstract: false,
+                kind_metadata: None,
             });
         }
         for (s, t) in [(0, 1), (1, 2), (2, 3), (3, 4), (4, 0)] {
@@ -1319,6 +1323,7 @@ mod tests {
                 description: None,
                 uri: None,
                 is_abstract: false,
+                kind_metadata: None,
             });
         }
         for (s, t) in [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5)] {
@@ -1560,6 +1565,7 @@ mod tests {
                 description: None,
                 uri: None,
                 is_abstract: false,
+                kind_metadata: None,
             })
             .collect();
         let mut edges = Vec::new();
@@ -1642,6 +1648,7 @@ mod tests {
                 description: None,
                 uri: None,
                 is_abstract: false,
+                kind_metadata: None,
             })
             .collect();
         let edges = vec![
@@ -1803,6 +1810,7 @@ mod tests {
                 description: None,
                 uri: None,
                 is_abstract: false,
+                kind_metadata: None,
             });
         }
         let positions = hierarchical(&g, 1.0, 1.0);

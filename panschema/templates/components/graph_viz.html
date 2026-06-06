@@ -582,6 +582,13 @@
     white-space: normal;
 }
 
+/* Suffix on truncated lists (e.g. "+3 more"). Muted so it reads as
+   metadata rather than as another entry in the list. */
+.graph-hover-more {
+    color: var(--color-text-muted, #9ca3af);
+    font-style: italic;
+}
+
 /* Hide the hover card on coarse-pointer (touch) inputs — there's no
    hover concept; the slice-6 tap-to-select flow still works. */
 @media (pointer: coarse) {
@@ -731,6 +738,80 @@
         return tmp.innerHTML;
     }
 
+    // Cap how many items we show before collapsing to "+N more"; longer
+    // lists would push the card past the 280px max-width and turn the
+    // hover surface into a wall of text.
+    const HOVER_LIST_LIMIT = 5;
+
+    // Render a list of names (slots, parents, mixins, permissible
+    // values) with a "+N more" suffix when over-long. Returns an HTML
+    // fragment with the values comma-separated. Returns empty string
+    // when the input is empty.
+    function renderHoverList(items) {
+        if (!Array.isArray(items) || items.length === 0) return '';
+        const shown = items.slice(0, HOVER_LIST_LIMIT)
+            .map(escapeForText)
+            .join(', ');
+        if (items.length > HOVER_LIST_LIMIT) {
+            return shown + ' <span class="graph-hover-more">+' + (items.length - HOVER_LIST_LIMIT) + ' more</span>';
+        }
+        return shown;
+    }
+
+    function renderHoverRow(key, valueHtml) {
+        return '<div class="graph-hover-row">'
+            + '<span class="graph-hover-key">' + escapeForText(key) + ':</span>'
+            + '<span class="graph-hover-value">' + valueHtml + '</span>'
+            + '</div>';
+    }
+
+    // Build the kind-specific rows from a `kindMetadata` payload (the
+    // serde-tagged enum mirrored from Rust). Returns an empty string
+    // for nodes without metadata (today: Type nodes) so the caller
+    // can concatenate unconditionally.
+    function renderKindMetadata(km) {
+        if (!km || !km.kind) return '';
+        let rows = '';
+        if (km.kind === 'class') {
+            if (km.parents && km.parents.length) {
+                rows += renderHoverRow('Parents', renderHoverList(km.parents));
+            }
+            if (km.mixins && km.mixins.length) {
+                rows += renderHoverRow('Mixins', renderHoverList(km.mixins));
+            }
+            if (km.slots && km.slots.length) {
+                rows += renderHoverRow('Slots', renderHoverList(km.slots));
+            }
+        } else if (km.kind === 'slot') {
+            if (km.domain) rows += renderHoverRow('Domain', escapeForText(km.domain));
+            if (km.range)  rows += renderHoverRow('Range',  escapeForText(km.range));
+            // Combine the two cardinality flags into one row so the
+            // card stays compact. Absent flags read as false on the
+            // wire (serde skips defaults), so guard with `=== true`.
+            const flagBits = [];
+            if (km.required === true)    flagBits.push('required');
+            if (km.multivalued === true) flagBits.push('multi-valued');
+            if (flagBits.length) rows += renderHoverRow('Flags', escapeForText(flagBits.join(', ')));
+        } else if (km.kind === 'enum') {
+            if (km.permissibleValues && km.permissibleValues.length) {
+                rows += renderHoverRow('Values', renderHoverList(km.permissibleValues));
+            }
+        }
+        return rows;
+    }
+
+    // Short, author-readable gloss for each LinkML edge kind. Looked
+    // up by the stable `kind` tag the Rust side emits (independent of
+    // the displayed label, which authors may override per-edge).
+    const EDGE_KIND_BLURBS = {
+        subclassOf: 'subclass-of: target is a more general class',
+        mixin:      'mixin: source flattens target\'s slots into itself',
+        domain:     'domain: slot is defined on target',
+        range:      'range: slot points at target type / class / enum',
+        inverseOf:  'inverse-of: the two slots traverse the same relation in opposite directions',
+        typeOf:     'type-of: source narrows target',
+    };
+
     // Render the hover card and position it near (clientX, clientY).
     // The card auto-flips when it would clip the viewport's right or
     // bottom edge so it stays fully visible regardless of cursor
@@ -787,6 +868,12 @@
                     }
                     rows += '<div class="graph-hover-row"><span class="graph-hover-key">Connections:</span>'
                         + '<span class="graph-hover-value">' + connCount + '</span></div>';
+                    // Resolved-schema context for the entity: slots /
+                    // parents / mixins for classes; domain / range /
+                    // flags for slots; permissible values for enums.
+                    // Comes off the wire pre-resolved so the card
+                    // doesn't have to walk the schema itself.
+                    rows += renderKindMetadata(d.kindMetadata);
                     // Description spans a row of its own (no
                     // key/value columns) so longer prose wraps
                     // naturally inside the 280px card max-width.
@@ -807,6 +894,14 @@
                         + '<span class="graph-hover-edge-type">↓ ' + escapeForText(d.type) + '</span>'
                         + '<span class="graph-hover-value">' + escapeForText(tgtLabel) + '</span>'
                         + '</div>';
+                    // Semantic blurb: a one-liner explaining what the
+                    // edge means in LinkML terms. Helps authors who
+                    // are still building intuition for `subclassOf`
+                    // vs `mixin` vs `domain` vs `range`.
+                    const blurb = d.kind && EDGE_KIND_BLURBS[d.kind];
+                    if (blurb) {
+                        html += '<div class="graph-hover-description">' + escapeForText(blurb) + '</div>';
+                    }
                 }
                 hoverContent.innerHTML = html;
                 hoverCard.style.display = 'block';

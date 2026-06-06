@@ -3,7 +3,7 @@
 //! Implements a simple force-directed layout algorithm that runs in the browser.
 //! Uses the same physics as the GPU version but runs on CPU for compatibility.
 
-use crate::graph_types::{EdgeType, GraphData, GraphNode};
+use crate::graph_types::{EdgeType, GraphData, GraphNode, KindMetadata};
 use crate::sim_common;
 
 /// A node with position and velocity for simulation
@@ -27,6 +27,12 @@ pub struct SimNode {
     /// at a glance which classes are meant as intermediates and
     /// shouldn't be instantiated directly.
     pub is_abstract: bool,
+    /// Resolved per-kind metadata carried straight from the
+    /// [`GraphNode`]. The hover card dispatches on the tagged
+    /// variant to render slots/parents/mixins for classes,
+    /// domain/range/required/multivalued for slots, and
+    /// permissible values for enums.
+    pub kind_metadata: Option<KindMetadata>,
     /// Position in 2D space
     pub x: f32,
     pub y: f32,
@@ -55,6 +61,7 @@ impl SimNode {
             description: node.description.clone(),
             uri: node.uri.clone(),
             is_abstract: node.is_abstract,
+            kind_metadata: node.kind_metadata.clone(),
             x: radius * angle.cos(),
             y: radius * angle.sin(),
             vx: 0.0,
@@ -73,6 +80,11 @@ pub struct SimEdge {
     pub target: usize,
     /// Human-readable label for display
     pub label: String,
+    /// Carried through from the source [`GraphEdge`] so the hover
+    /// card can render a stable, machine-readable kind tag
+    /// (`subclassOf`, `domain`, `range`, …) independent of the
+    /// human-facing label, which authors may override per-edge.
+    pub edge_type: EdgeType,
 }
 
 impl SimEdge {
@@ -199,6 +211,7 @@ impl CpuSimulation {
                     source: *source,
                     target: *target,
                     label,
+                    edge_type: e.edge_type,
                 })
             })
             .collect();
@@ -640,6 +653,7 @@ mod tests {
                     description: None,
                     uri: None,
                     is_abstract: false,
+                    kind_metadata: None,
                 },
                 GraphNode {
                     id: "b".to_string(),
@@ -649,6 +663,7 @@ mod tests {
                     description: None,
                     uri: None,
                     is_abstract: false,
+                    kind_metadata: None,
                 },
             ],
             edges: vec![GraphEdge {
@@ -723,6 +738,7 @@ mod tests {
                 description: None,
                 uri: None,
                 is_abstract: false,
+                kind_metadata: None,
             }],
             edges: vec![],
         };
@@ -762,6 +778,7 @@ mod tests {
                     description: None,
                     uri: None,
                     is_abstract: false,
+                    kind_metadata: None,
                 },
                 GraphNode {
                     id: "b".to_string(),
@@ -771,6 +788,7 @@ mod tests {
                     description: None,
                     uri: None,
                     is_abstract: false,
+                    kind_metadata: None,
                 },
             ],
             edges: vec![], // No edges - nodes should repel
@@ -819,6 +837,7 @@ mod tests {
                     description: None,
                     uri: None,
                     is_abstract: false,
+                    kind_metadata: None,
                 },
                 GraphNode {
                     id: "b".to_string(),
@@ -828,6 +847,7 @@ mod tests {
                     description: None,
                     uri: None,
                     is_abstract: false,
+                    kind_metadata: None,
                 },
             ],
             edges: vec![],
@@ -873,6 +893,7 @@ mod tests {
                     description: None,
                     uri: None,
                     is_abstract: false,
+                    kind_metadata: None,
                 },
                 GraphNode {
                     id: "b".to_string(),
@@ -882,6 +903,7 @@ mod tests {
                     description: None,
                     uri: None,
                     is_abstract: false,
+                    kind_metadata: None,
                 },
             ],
             edges: vec![],
@@ -918,6 +940,7 @@ mod tests {
                     description: None,
                     uri: None,
                     is_abstract: false,
+                    kind_metadata: None,
                 },
                 GraphNode {
                     id: "b".to_string(),
@@ -927,6 +950,7 @@ mod tests {
                     description: None,
                     uri: None,
                     is_abstract: false,
+                    kind_metadata: None,
                 },
             ],
             edges: vec![
@@ -964,6 +988,7 @@ mod tests {
                 description: None,
                 uri: None,
                 is_abstract: false,
+                kind_metadata: None,
             }],
             edges: vec![GraphEdge {
                 source: "a".to_string(),
@@ -998,6 +1023,7 @@ mod tests {
                     description: None,
                     uri: None,
                     is_abstract: false,
+                    kind_metadata: None,
                 })
                 .collect(),
             edges: vec![],
@@ -1038,6 +1064,7 @@ mod tests {
                 description: None,
                 uri: None,
                 is_abstract: false,
+                kind_metadata: None,
             })
             .collect();
         let edges = (0..n)
@@ -1071,6 +1098,7 @@ mod tests {
                 description: None,
                 uri: None,
                 is_abstract: false,
+                kind_metadata: None,
             })
             .collect();
         let edges = (0..connected_n)

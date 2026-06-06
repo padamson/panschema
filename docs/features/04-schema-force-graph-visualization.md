@@ -447,7 +447,7 @@ This is the most asked-for affordance in graph-exploration UIs (Gephi's "Ego net
 
 ### Slice 11: Hover card surfaces resolved-schema context (slots, parents, mixins, permissible values)
 
-**Status:** Not Started
+**Status:** ✅ Complete
 
 **Priority:** Should Have
 
@@ -461,20 +461,20 @@ This is the most asked-for affordance in graph-exploration UIs (Gephi's "Ego net
 These are the questions whose answers currently require a click-to-pin, then scroll, then squint at the entity card. Surfacing them on hover would turn the graph from a static map into an *active* exploration surface — closer to what authoring tools like Protégé and WebProtégé do with their hover affordances.
 
 **Acceptance Criteria:**
-- [ ] `GraphNode` (in `panschema-viz/src/graph_types.rs`) gains a `kind_metadata` field — an enum carrying the per-kind structured payload:
+- [x] `GraphNode` (in `panschema-viz/src/graph_types.rs`) gains a `kind_metadata` field — an enum carrying the per-kind structured payload:
   - `Class { slots: Vec<String>, parents: Vec<String>, mixins: Vec<String> }`
   - `Slot { domain: Option<String>, range: Option<String>, required: bool, multivalued: bool }`
   - `Enum { permissible_values: Vec<String> }`
   - `Type` carries no extra payload (LinkML types are leaf primitives).
-- [ ] `GraphWriter` populates `kind_metadata` from the LinkML IR during graph build. Resolves `is_a` chains and `mixins:` lists by label (not by id), so the hover card can show "is_a: Premise" not "is_a: class:Premise".
-- [ ] `SimNode` carries the `kind_metadata` through unchanged (same propagation pattern as `description` / `uri` in slice 9).
-- [ ] `build_node_details_json` emits the structured payload under a `kindMetadata` JSON key. The JS card renderer dispatches per `type` to render the right rows.
-- [ ] Class hover shows up to 5 slot names with a "+N more" tail when overflow; full slot list still available on click-to-pin (slice-6 persistent panel). Same overflow pattern for parents and mixins.
-- [ ] Slot hover shows `domain`, `range`, and a small row of flags (`required`, `multivalued`) when set.
-- [ ] Enum hover shows permissible values inline (same overflow pattern as slot list).
-- [ ] Edge hover gains a one-sentence semantic blurb keyed by `EdgeType` — `SubclassOf`, `Mixin`, `Domain`, `Range`, `Inverse`, `TypeOf`. Hardcoded table in JS; ~6 short strings.
-- [ ] Native unit tests for `GraphWriter`'s metadata population: one fixture per kind covering the resolution rules (slots with overrides, `is_a` chains, multi-mixin classes, enums with 10+ permissible values).
-- [ ] `build_node_details_json` tests extended to cover each kind's structured payload.
+- [x] `GraphWriter` populates `kind_metadata` from the LinkML IR during graph build. Resolves `is_a` chains and `mixins:` lists by label (not by id), so the hover card can show "is_a: Premise" not "is_a: class:Premise".
+- [x] `SimNode` carries the `kind_metadata` through unchanged (same propagation pattern as `description` / `uri` in slice 9).
+- [x] `build_node_details_json` emits the structured payload under a `kindMetadata` JSON key. The JS card renderer dispatches per `type` to render the right rows.
+- [x] Class hover shows up to 5 slot names with a "+N more" tail when overflow; full slot list still available on click-to-pin (slice-6 persistent panel). Same overflow pattern for parents and mixins.
+- [x] Slot hover shows `domain`, `range`, and a small row of flags (`required`, `multivalued`) when set.
+- [x] Enum hover shows permissible values inline (same overflow pattern as slot list).
+- [x] Edge hover gains a one-sentence semantic blurb keyed by `EdgeType` — `SubclassOf`, `Mixin`, `Domain`, `Range`, `Inverse`, `TypeOf`. Hardcoded table in JS; ~6 short strings.
+- [x] Native unit tests for `GraphWriter`'s metadata population: one fixture per kind covering the resolution rules (slots with overrides, `is_a` chains, multi-mixin classes, enums with 10+ permissible values).
+- [x] `build_node_details_json` tests extended to cover each kind's structured payload.
 
 **Notes:**
 - The right home for the per-kind payload is an enum on `GraphNode`, not a bag of optional fields. Pattern-matching at the JSON-emit site keeps each kind's shape clean.
@@ -498,7 +498,7 @@ These are the questions whose answers currently require a click-to-pin, then scr
 | Slice 8: Class↔slot edges via `class.slots:` | Should Have | Slice 3 | ✅ Complete |
 | Slice 9: Hover-driven ephemeral node and edge details | Should Have | Slice 6 | ✅ Complete |
 | Slice 10: Hover focus-mode highlight (1-hop + 2-hop neighbors) | Should Have | Slice 6 | ✅ Complete |
-| Slice 11: Hover card surfaces resolved-schema context | Should Have | Slice 9 | Not Started |
+| Slice 11: Hover card surfaces resolved-schema context | Should Have | Slice 9 | ✅ Complete |
 
 ---
 

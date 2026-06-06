@@ -663,6 +663,7 @@ pub(crate) fn build_node_details_json(
         "description": node.description,
         "isFixed": is_fixed,
         "connections": connections,
+        "kindMetadata": node.kind_metadata,
         "x": node.x,
         "y": node.y,
     })
@@ -681,6 +682,7 @@ pub(crate) fn build_edge_details_json(
 ) -> String {
     serde_json::json!({
         "type": edge.label,
+        "kind": edge_type_tag(edge.edge_type),
         "source": {
             "id": source_node.id,
             "label": source_node.label,
@@ -691,6 +693,22 @@ pub(crate) fn build_edge_details_json(
         },
     })
     .to_string()
+}
+
+/// Stable string tag for an [`EdgeType`]. Matches the lower-camel
+/// labels the hover card already shows, but is produced from the
+/// type tag rather than the edge label so author-overridden labels
+/// don't break the JS lookup of the matching blurb.
+fn edge_type_tag(edge_type: crate::graph_types::EdgeType) -> &'static str {
+    use crate::graph_types::EdgeType;
+    match edge_type {
+        EdgeType::SubclassOf => "subclassOf",
+        EdgeType::Mixin => "mixin",
+        EdgeType::Domain => "domain",
+        EdgeType::Range => "range",
+        EdgeType::Inverse => "inverseOf",
+        EdgeType::TypeOf => "typeOf",
+    }
 }
 
 /// Helper to determine node type from color
@@ -718,7 +736,7 @@ fn node_type_string(color: &[f32; 4]) -> &'static str {
 #[cfg(test)]
 mod details_json_tests {
     use super::*;
-    use crate::graph_types::{EdgeType, GraphEdge, GraphNode, NodeType};
+    use crate::graph_types::{EdgeType, GraphEdge, GraphNode, KindMetadata, NodeType};
     use crate::simulation::{SimEdge, SimNode};
 
     fn make_class_node(id: &str, label: &str) -> SimNode {
@@ -731,6 +749,7 @@ mod details_json_tests {
                 description: None,
                 uri: None,
                 is_abstract: false,
+                kind_metadata: None,
             },
             0,
             1,
@@ -753,6 +772,7 @@ mod details_json_tests {
                 description: description.map(|s| s.to_string()),
                 uri: uri.map(|s| s.to_string()),
                 is_abstract,
+                kind_metadata: None,
             },
             0,
             1,
@@ -835,6 +855,7 @@ mod details_json_tests {
             source: 0,
             target: 1,
             label: SimEdge::format_edge_type_external(EdgeType::SubclassOf),
+            edge_type: EdgeType::SubclassOf,
         };
         let json: serde_json::Value =
             serde_json::from_str(&build_edge_details_json(&edge, &source, &target)).unwrap();
@@ -871,6 +892,7 @@ mod details_json_tests {
                     description: None,
                     uri: None,
                     is_abstract: false,
+                    kind_metadata: None,
                 },
                 GraphNode {
                     id: "b".into(),
@@ -880,6 +902,7 @@ mod details_json_tests {
                     description: None,
                     uri: None,
                     is_abstract: false,
+                    kind_metadata: None,
                 },
             ];
             let graph = crate::graph_types::GraphData {
@@ -895,6 +918,141 @@ mod details_json_tests {
                 .map(|e| e.label.clone())
                 .unwrap_or_default()
         }
+    }
+
+    fn make_node_with_kind(id: &str, label: &str, kind: KindMetadata) -> SimNode {
+        SimNode::from_graph_node(
+            &GraphNode {
+                id: id.to_string(),
+                label: label.to_string(),
+                node_type: NodeType::Class,
+                color: NodeType::Class.color(),
+                description: None,
+                uri: None,
+                is_abstract: false,
+                kind_metadata: Some(kind),
+            },
+            0,
+            1,
+        )
+    }
+
+    #[test]
+    fn build_node_details_json_omits_kind_metadata_when_none() {
+        // A node with no resolved metadata (the common case for `Type`
+        // nodes today) must still produce a JSON object whose
+        // `kindMetadata` key is `null`, not absent. The hover-card JS
+        // distinguishes "no extra context yet" (`null`) from "consumer
+        // hasn't shipped" (key missing) — keeping the key present
+        // means the JS branch reads `details.kindMetadata == null`
+        // rather than `'kindMetadata' in details`.
+        let node = make_class_node("class:Foo", "Foo");
+        let json: serde_json::Value =
+            serde_json::from_str(&build_node_details_json(&node, false, Vec::new())).unwrap();
+        assert!(
+            json.get("kindMetadata").is_some(),
+            "kindMetadata key must be present"
+        );
+        assert!(json["kindMetadata"].is_null());
+    }
+
+    #[test]
+    fn build_node_details_json_surfaces_class_kind_metadata() {
+        // A LinkML class with resolved slots/parents/mixins must
+        // round-trip the lists verbatim and tag the payload as
+        // `kind: "class"`. The JS hover card dispatches on the tag to
+        // pick which section to render, so the tag is part of the
+        // contract — not implementation detail.
+        let node = make_node_with_kind(
+            "class:Activity",
+            "Activity",
+            KindMetadata::Class {
+                slots: vec!["startedAt".into(), "endedAt".into()],
+                parents: vec!["Entity".into()],
+                mixins: vec!["Auditable".into()],
+            },
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(&build_node_details_json(&node, false, Vec::new())).unwrap();
+        let km = &json["kindMetadata"];
+        assert_eq!(km["kind"], "class");
+        assert_eq!(km["slots"][0], "startedAt");
+        assert_eq!(km["slots"][1], "endedAt");
+        assert_eq!(km["parents"][0], "Entity");
+        assert_eq!(km["mixins"][0], "Auditable");
+    }
+
+    #[test]
+    fn build_node_details_json_surfaces_slot_kind_metadata() {
+        // Slots carry domain/range plus boolean flags. The booleans
+        // ride along even when `false` so the JS card can render an
+        // explicit "single-valued" badge instead of guessing from key
+        // absence.
+        let node = make_node_with_kind(
+            "slot:hasOwner",
+            "hasOwner",
+            KindMetadata::Slot {
+                domain: Some("Animal".into()),
+                range: Some("Person".into()),
+                required: true,
+                multivalued: false,
+            },
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(&build_node_details_json(&node, false, Vec::new())).unwrap();
+        let km = &json["kindMetadata"];
+        assert_eq!(km["kind"], "slot");
+        assert_eq!(km["domain"], "Animal");
+        assert_eq!(km["range"], "Person");
+        assert_eq!(km["required"], true);
+        // `multivalued: false` is skipped by serde to keep the wire
+        // small; the JS card treats absent as `false`.
+        assert!(km.get("multivalued").is_none());
+    }
+
+    #[test]
+    fn build_node_details_json_surfaces_enum_permissible_values_in_order() {
+        // Enum permissible-value order is meaningful (it matches the
+        // LinkML schema's declaration order, which authors often use
+        // for severity scales / ordinal categories). The wire format
+        // must preserve that order without resorting alphabetically.
+        let node = make_node_with_kind(
+            "enum:Severity",
+            "Severity",
+            KindMetadata::Enum {
+                permissible_values: vec!["low".into(), "medium".into(), "high".into()],
+            },
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(&build_node_details_json(&node, false, Vec::new())).unwrap();
+        let km = &json["kindMetadata"];
+        assert_eq!(km["kind"], "enum");
+        let pvs = km["permissibleValues"].as_array().unwrap();
+        assert_eq!(pvs.len(), 3);
+        assert_eq!(pvs[0], "low");
+        assert_eq!(pvs[1], "medium");
+        assert_eq!(pvs[2], "high");
+    }
+
+    #[test]
+    fn build_edge_details_json_emits_kind_tag_independent_of_label() {
+        // The `kind` tag comes from the edge_type, not the label.
+        // Author-supplied labels can override the displayed text
+        // (e.g. a domain-specific "produces" instead of "range"); the
+        // hover card needs the stable tag to look up the matching
+        // semantic blurb.
+        let source = make_class_node("class:A", "A");
+        let target = make_class_node("class:B", "B");
+        let edge = SimEdge {
+            source: 0,
+            target: 1,
+            label: "produces".to_string(),
+            edge_type: EdgeType::Range,
+        };
+        let json: serde_json::Value =
+            serde_json::from_str(&build_edge_details_json(&edge, &source, &target)).unwrap();
+        assert_eq!(json["type"], "produces");
+        assert_eq!(json["kind"], "range");
     }
 }
 
