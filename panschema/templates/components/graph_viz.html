@@ -81,6 +81,14 @@
             <span id="graph-info-label"></span>
         </div>
 
+        {# Ephemeral hover card — shown while the cursor is over a
+           node or edge; hides on hover-out. Separate from the
+           persistent details panel below so clicking pins a view
+           without losing the hover affordance. #}
+        <div class="graph-hover-card" id="graph-hover-card" style="display: none;" role="tooltip" aria-hidden="true">
+            <div class="graph-hover-content" id="graph-hover-content"></div>
+        </div>
+
         {# Details panel (shown when a node is selected) #}
         <div class="graph-details-panel" id="graph-details-panel" style="display: none;">
             <div class="graph-details-header">
@@ -498,6 +506,85 @@
     color: var(--color-text-muted, #9ca3af);
 }
 
+/* Ephemeral hover card — positioned at the cursor via JS. The card
+   intercepts no pointer events so hovering its own edge doesn't
+   trigger a hover-out on the underlying node/edge. Uses `position:
+   fixed` so left/top resolve against the viewport instead of the
+   nearest positioned ancestor (the .graph-container itself is
+   positioned, which would otherwise yank the card offset). */
+.graph-hover-card {
+    position: fixed;
+    z-index: 25;
+    background-color: var(--color-bg-secondary, #1f2937);
+    border: 1px solid var(--color-border, #374151);
+    border-radius: var(--radius-md, 6px);
+    padding: 8px 10px;
+    font-size: var(--font-size-xs, 11px);
+    line-height: 1.4;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+    pointer-events: none;
+    max-width: 280px;
+    color: var(--color-text, #e5e7eb);
+}
+
+.graph-hover-content {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.graph-hover-row {
+    display: flex;
+    gap: 6px;
+    align-items: baseline;
+}
+
+.graph-hover-key {
+    color: var(--color-text-muted, #9ca3af);
+    flex: 0 0 auto;
+}
+
+.graph-hover-value {
+    color: var(--color-text, #e5e7eb);
+    word-break: break-word;
+    min-width: 0;
+}
+
+.graph-hover-value-id {
+    font-family: var(--font-mono, monospace);
+    color: var(--color-text-muted, #9ca3af);
+}
+
+.graph-hover-triple {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.graph-hover-edge-type {
+    font-weight: 600;
+    color: var(--color-accent, #60a5fa);
+}
+
+/* Description row: full-width, slightly muted, italic — visually
+   separated from the key/value rows above by a subtle divider so a
+   long description doesn't read as just more rows. */
+.graph-hover-description {
+    margin-top: 4px;
+    padding-top: 6px;
+    border-top: 1px solid var(--color-border, #374151);
+    color: var(--color-text-muted, #9ca3af);
+    font-style: italic;
+    line-height: 1.4;
+    white-space: normal;
+}
+
+/* Hide the hover card on coarse-pointer (touch) inputs — there's no
+   hover concept; the slice-6 tap-to-select flow still works. */
+@media (pointer: coarse) {
+    .graph-hover-card { display: none !important; }
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     .graph-container {
@@ -562,6 +649,140 @@
 
     // Node dragging state
     let draggingNodeIndex = -1;
+
+    // Ephemeral hover card (slice 9): tracks the cursor and surfaces
+    // node/edge details without committing to a click. State is just
+    // the most-recent card content so we skip DOM updates when the
+    // hover target is unchanged across frames.
+    const hoverCard = document.getElementById('graph-hover-card');
+    const hoverContent = document.getElementById('graph-hover-content');
+    // Cache the last-rendered (kind, idx) so mousemove events that
+    // don't change the hover target don't re-stamp the DOM.
+    let lastHoverKey = null;
+
+    function hideHoverCard() {
+        if (hoverCard && hoverCard.style.display !== 'none') {
+            hoverCard.style.display = 'none';
+            hoverCard.setAttribute('aria-hidden', 'true');
+        }
+        lastHoverKey = null;
+    }
+
+    // Escape an attribute / text node value so author-supplied labels
+    // and IDs can't smuggle HTML into the popup. Uses the standard
+    // textContent assignment pattern via a detached element.
+    function escapeForText(s) {
+        const tmp = document.createElement('span');
+        tmp.textContent = String(s ?? '');
+        return tmp.innerHTML;
+    }
+
+    // Render the hover card and position it near (clientX, clientY).
+    // The card auto-flips when it would clip the viewport's right or
+    // bottom edge so it stays fully visible regardless of cursor
+    // position.
+    function updateHoverCard(clientX, clientY) {
+        if (!hoverCard || !viz) return;
+        // Only the 2D path has WASM-side edge hit-test today; 3D mode
+        // populates the hover card from node hover only.
+        const nodeIdx = (typeof viz.hovered_node_index === 'function')
+            ? viz.hovered_node_index() : -1;
+        const edgeIdx = (!is3D && typeof viz.hovered_edge_index === 'function')
+            ? viz.hovered_edge_index() : -1;
+
+        let kind = null, idx = -1;
+        if (nodeIdx >= 0) { kind = 'node'; idx = nodeIdx; }
+        else if (edgeIdx >= 0) { kind = 'edge'; idx = edgeIdx; }
+        else { hideHoverCard(); return; }
+
+        // If the user has already click-selected this same node, the
+        // persistent details panel is showing the same content — the
+        // ephemeral hover card would be redundant. Skip rendering it.
+        if (kind === 'node' && idx === selectedNodeIndex) {
+            hideHoverCard();
+            return;
+        }
+
+        const key = `${kind}:${idx}`;
+        if (key !== lastHoverKey) {
+            try {
+                let html = '';
+                if (kind === 'node') {
+                    const d = JSON.parse(viz.get_node_details(idx));
+                    if (!d.id) { hideHoverCard(); return; }
+                    const connCount = Array.isArray(d.connections) ? d.connections.length : 0;
+                    // Type row carries an "(abstract)" suffix when
+                    // the LinkML class is declared abstract — the
+                    // visual "don't instantiate me" signal authors
+                    // want at a glance.
+                    const typeText = (d.type || '—') + (d.isAbstract ? ' (abstract)' : '');
+                    let rows = ''
+                        + '<div class="graph-hover-row"><span class="graph-hover-key">Label:</span>'
+                        + '<span class="graph-hover-value">' + escapeForText(d.label || '—') + '</span></div>'
+                        + '<div class="graph-hover-row"><span class="graph-hover-key">Type:</span>'
+                        + '<span class="graph-hover-value">' + escapeForText(typeText) + '</span></div>'
+                        + '<div class="graph-hover-row"><span class="graph-hover-key">ID:</span>'
+                        + '<span class="graph-hover-value graph-hover-value-id">' + escapeForText(d.id) + '</span></div>';
+                    // The IRI row only appears when the entity
+                    // declares one — for slot/enum/type nodes the
+                    // schema-internal ID is often the only thing
+                    // we have.
+                    if (d.uri) {
+                        rows += '<div class="graph-hover-row"><span class="graph-hover-key">IRI:</span>'
+                            + '<span class="graph-hover-value graph-hover-value-id">' + escapeForText(d.uri) + '</span></div>';
+                    }
+                    rows += '<div class="graph-hover-row"><span class="graph-hover-key">Connections:</span>'
+                        + '<span class="graph-hover-value">' + connCount + '</span></div>';
+                    // Description spans a row of its own (no
+                    // key/value columns) so longer prose wraps
+                    // naturally inside the 280px card max-width.
+                    if (d.description) {
+                        rows += '<div class="graph-hover-description">' + escapeForText(d.description) + '</div>';
+                    }
+                    html = rows;
+                } else {
+                    // edge
+                    if (typeof viz.get_edge_details !== 'function') { hideHoverCard(); return; }
+                    const d = JSON.parse(viz.get_edge_details(idx));
+                    if (!d.type) { hideHoverCard(); return; }
+                    const srcLabel = (d.source && d.source.label) || '—';
+                    const tgtLabel = (d.target && d.target.label) || '—';
+                    html = ''
+                        + '<div class="graph-hover-triple">'
+                        + '<span class="graph-hover-value">' + escapeForText(srcLabel) + '</span>'
+                        + '<span class="graph-hover-edge-type">↓ ' + escapeForText(d.type) + '</span>'
+                        + '<span class="graph-hover-value">' + escapeForText(tgtLabel) + '</span>'
+                        + '</div>';
+                }
+                hoverContent.innerHTML = html;
+                hoverCard.style.display = 'block';
+                hoverCard.setAttribute('aria-hidden', 'false');
+                lastHoverKey = key;
+            } catch (err) {
+                console.warn('Failed to render hover card:', err);
+                hideHoverCard();
+                return;
+            }
+        }
+
+        // Position the card near the cursor. The card uses
+        // `position: fixed` so left/top are viewport-relative and
+        // map directly to clientX/clientY — no scroll-offset math
+        // and no dependence on which ancestor is positioned.
+        const cardRect = hoverCard.getBoundingClientRect();
+        const cardW = cardRect.width || 240;
+        const cardH = cardRect.height || 80;
+        const margin = 14;  // distance from cursor
+        // Default: down-right of the cursor. Flip horizontally if the
+        // card would overflow the viewport's right edge; flip
+        // vertically if it would overflow the bottom.
+        const flipX = (clientX + margin + cardW) > window.innerWidth;
+        const flipY = (clientY + margin + cardH) > window.innerHeight;
+        const left = flipX ? (clientX - margin - cardW) : (clientX + margin);
+        const top  = flipY ? (clientY - margin - cardH) : (clientY + margin);
+        hoverCard.style.left = Math.max(0, left) + 'px';
+        hoverCard.style.top  = Math.max(0, top) + 'px';
+    }
 
     // Details panel elements
     const detailsPanel = document.getElementById('graph-details-panel');
@@ -1503,12 +1724,17 @@
                     // 2D mode: use WASM hover detection (needs scaled coordinates)
                     const dpr = window.devicePixelRatio || 1;
                     if (typeof viz.update_hover === 'function') {
-                        const changed = viz.update_hover(mouseX * dpr, mouseY * dpr);
+                        viz.update_hover(mouseX * dpr, mouseY * dpr);
                         // Update cursor based on hover state
                         const nodeIdx = viz.hovered_node_index ? viz.hovered_node_index() : -1;
                         canvas.style.cursor = nodeIdx >= 0 ? 'grab' : 'default';
                     }
                 }
+                // Ephemeral hover card (slice 9): show details for the
+                // hovered node or edge anchored near the cursor. Uses
+                // viewport coords so positioning is independent of the
+                // canvas's own scroll/transform.
+                updateHoverCard(e.clientX, e.clientY);
             }
         });
 
@@ -1519,6 +1745,7 @@
             if (viz && !is3D && typeof viz.clear_hover === 'function') {
                 viz.clear_hover();
             }
+            hideHoverCard();
         });
 
         // Scroll for zoom

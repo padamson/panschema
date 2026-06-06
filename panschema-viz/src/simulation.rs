@@ -13,6 +13,20 @@ pub struct SimNode {
     pub id: String,
     /// Human-readable label for display
     pub label: String,
+    /// LinkML `description:` value carried verbatim from the schema
+    /// source. Surfaced in the hover-card so authors don't have to
+    /// chase down what an entity represents while reading the graph.
+    pub description: Option<String>,
+    /// Full IRI for the entity (e.g. `prov:Activity`,
+    /// `cco:ont00000007`). Shown beneath the schema-internal ID in
+    /// the hover card so the IRI under which the entity is
+    /// canonically known is visible without click-to-pin.
+    pub uri: Option<String>,
+    /// `true` for LinkML classes with `abstract: true`. The hover
+    /// card surfaces this with an "abstract" badge so authors can see
+    /// at a glance which classes are meant as intermediates and
+    /// shouldn't be instantiated directly.
+    pub is_abstract: bool,
     /// Position in 2D space
     pub x: f32,
     pub y: f32,
@@ -38,6 +52,9 @@ impl SimNode {
         Self {
             id: node.id.clone(),
             label: node.label.clone(),
+            description: node.description.clone(),
+            uri: node.uri.clone(),
+            is_abstract: node.is_abstract,
             x: radius * angle.cos(),
             y: radius * angle.sin(),
             vx: 0.0,

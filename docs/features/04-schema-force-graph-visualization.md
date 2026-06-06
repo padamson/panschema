@@ -393,7 +393,7 @@ For 2D mode, labels are rendered directly on the Canvas2D context with hover sup
 
 ### Slice 9: Hover-driven ephemeral node and edge details
 
-**Status:** Not Started
+**Status:** Completed
 
 **Priority:** Should Have
 
@@ -402,18 +402,19 @@ For 2D mode, labels are rendered directly on the Canvas2D context with hover sup
 The current slice-6 click-to-select behavior is preserved for "I want to lock this view in" — clicking still pins the persistent details panel that already exists. Hover is the *additive* affordance, not a replacement.
 
 **Acceptance Criteria:**
-- [ ] Hovering a node surfaces an ephemeral mini-card anchored near the cursor (offset so the cursor doesn't occlude the card). Card content: label, type badge (Class / Slot / Enum / Type), IRI, connection count.
-- [ ] Hovering an edge surfaces an ephemeral mini-card: edge type (`subclassOf`, `domain`, `range`, `mixin`, `inverseOf`, `typeOf`), source label, target label.
-- [ ] Hover-out (cursor leaves the node/edge or leaves the canvas) hides the card immediately — no lingering or fade-in/out (snappy reading).
-- [ ] The card auto-positions to stay within the viewport (flip to the cursor's other side when near the right or bottom edge).
-- [ ] Click-to-select (slice 6) still works and shows the persistent details panel. The hover card hides itself when a click happens on the same target, since the persistent panel is now showing the same content.
-- [ ] Hit testing: the same hit-test path slice 6 uses for click (3D ray-cast in WebGPU mode, 2D point-in-circle in Canvas mode) handles hover. Edge hit-testing is new — point-to-line-segment distance threshold against a configurable px tolerance.
-- [ ] Mobile/touch: hover doesn't exist on touch devices. The card is rendered only on `pointer: fine` media (mouse/trackpad). Touch users still get the slice-6 tap-to-select flow unchanged.
+- [x] Hovering a node surfaces an ephemeral mini-card anchored near the cursor (offset so the cursor doesn't occlude the card). Card content: label, type (Class / Slot / Enum / Type) with an "(abstract)" suffix when applicable, schema-internal ID, IRI when the entity declares one, connection count, and the LinkML description as a wrapped block at the bottom.
+- [x] Hovering an edge surfaces an ephemeral mini-card: edge type (`subclassOf`, `domain`, `range`, `mixin`, `inverseOf`, `typeOf`), source label, target label, rendered as a vertical triple `<source> ↓ <edge-type> ↓ <target>`.
+- [x] Hover-out (cursor leaves the node/edge or leaves the canvas) hides the card immediately — no lingering or fade-in/out (snappy reading).
+- [x] The card auto-positions to stay within the viewport (flip to the cursor's other side when near the right or bottom edge). `position: fixed` against the viewport so cursor-relative positioning works regardless of which ancestor is positioned.
+- [x] Click-to-select (slice 6) still works and shows the persistent details panel. The hover card hides itself when the hovered node is already the currently click-selected node — the persistent panel below already shows the same content.
+- [x] Hit testing: reuses the existing slice-6 hit-test path (`update_hover` for nodes; `edge_at` for edges). No new code on the Rust side; the hover card just consumes the existing hover state.
+- [x] Mobile/touch: a `@media (pointer: coarse)` rule hides the card entirely on touch devices. Touch users still get the slice-6 tap-to-select flow unchanged.
 
 **Notes:**
-- The ephemeral card and the slice-6 persistent panel can share their HTML template — DRYing the rendering logic is the right move. The card is a "preview"; the panel is the "pinned" view of the same data.
-- Throttle hover updates so dragging the cursor across many nodes doesn't fire 60 re-renders per second. `requestAnimationFrame`-aligned debouncing (~16ms) is the standard pattern.
-- Edge hit-testing needs a px-tolerance default that works at all zoom levels; 6px at world-1.0 zoom seems reasonable, scaled inversely with viewport zoom so edges remain pickable when zoomed out.
+- The ephemeral card and the slice-6 persistent panel both consume the same `get_node_details` / `get_edge_details` JSON contract on the Rust side — DRYing the rendering logic so the card is a "preview" and the panel is the "pinned" view of the same data.
+- The JSON-builder logic moved from the wasm-only `Visualization` methods into `pub(crate) build_*_details_json` free functions so the contract is unit-testable natively (the wasm `Visualization` itself needs an `HtmlCanvasElement` and can only be constructed in a browser).
+- `SimNode` gained `description`, `uri`, and `is_abstract` fields — these existed on `GraphNode` but dropped on conversion before this slice. Carrying them through unlocks the hover-card content the user actually wants without changing the wire format.
+- Hover state is cached by `kind:idx` so re-renders only happen when the hover target changes; mousemove events that don't change the target are O(1).
 
 ---
 
@@ -444,6 +445,45 @@ This is the most asked-for affordance in graph-exploration UIs (Gephi's "Ego net
 
 ---
 
+### Slice 11: Hover card surfaces resolved-schema context (slots, parents, mixins, permissible values)
+
+**Status:** Not Started
+
+**Priority:** Should Have
+
+**User Value:** Slice 9 surfaces what's already on the visualization wire format (label, type, IRI, description, abstract flag, raw connection count). This slice extends the hover card to answer the actual questions a schema author asks while reading the graph:
+
+- For a **class** node: which slots can this class have? Which parents does it inherit from (`is_a` chain)? Which mixins does it mix in?
+- For a **slot** node: what's its domain? What's its range? Is it required, multivalued?
+- For an **enum** node: what are the permissible values?
+- For an **edge**: a one-sentence LinkML semantic blurb keyed by edge type (e.g. `subclassOf`: "children inherit parent's slots and constraints"; `domain`: "this slot can appear on this class").
+
+These are the questions whose answers currently require a click-to-pin, then scroll, then squint at the entity card. Surfacing them on hover would turn the graph from a static map into an *active* exploration surface — closer to what authoring tools like Protégé and WebProtégé do with their hover affordances.
+
+**Acceptance Criteria:**
+- [ ] `GraphNode` (in `panschema-viz/src/graph_types.rs`) gains a `kind_metadata` field — an enum carrying the per-kind structured payload:
+  - `Class { slots: Vec<String>, parents: Vec<String>, mixins: Vec<String> }`
+  - `Slot { domain: Option<String>, range: Option<String>, required: bool, multivalued: bool }`
+  - `Enum { permissible_values: Vec<String> }`
+  - `Type` carries no extra payload (LinkML types are leaf primitives).
+- [ ] `GraphWriter` populates `kind_metadata` from the LinkML IR during graph build. Resolves `is_a` chains and `mixins:` lists by label (not by id), so the hover card can show "is_a: Premise" not "is_a: class:Premise".
+- [ ] `SimNode` carries the `kind_metadata` through unchanged (same propagation pattern as `description` / `uri` in slice 9).
+- [ ] `build_node_details_json` emits the structured payload under a `kindMetadata` JSON key. The JS card renderer dispatches per `type` to render the right rows.
+- [ ] Class hover shows up to 5 slot names with a "+N more" tail when overflow; full slot list still available on click-to-pin (slice-6 persistent panel). Same overflow pattern for parents and mixins.
+- [ ] Slot hover shows `domain`, `range`, and a small row of flags (`required`, `multivalued`) when set.
+- [ ] Enum hover shows permissible values inline (same overflow pattern as slot list).
+- [ ] Edge hover gains a one-sentence semantic blurb keyed by `EdgeType` — `SubclassOf`, `Mixin`, `Domain`, `Range`, `Inverse`, `TypeOf`. Hardcoded table in JS; ~6 short strings.
+- [ ] Native unit tests for `GraphWriter`'s metadata population: one fixture per kind covering the resolution rules (slots with overrides, `is_a` chains, multi-mixin classes, enums with 10+ permissible values).
+- [ ] `build_node_details_json` tests extended to cover each kind's structured payload.
+
+**Notes:**
+- The right home for the per-kind payload is an enum on `GraphNode`, not a bag of optional fields. Pattern-matching at the JSON-emit site keeps each kind's shape clean.
+- Resolution: slot inheritance via `is_a` / mixins should be resolved by `GraphWriter` before emission — the visualization layer shouldn't traverse the LinkML IR. The hover card sees a flat list of slot names with the inheritance already applied.
+- Edge blurb table is JS-side because it's display copy, not data. Keep it close to the renderer.
+- Out of scope (defer to a later slice): clickable cross-references inside the hover card (clicking a parent class name in the hover card should jump-to that class — needs URL routing + viewport pan). Slice 11 ships read-only context; navigation is its own affordance.
+
+---
+
 ## Slice Priority and Dependencies
 
 | Slice | Priority | Depends On | Status |
@@ -456,8 +496,9 @@ This is the most asked-for affordance in graph-exploration UIs (Gephi's "Ego net
 | Slice 6: Interaction and Dragging | Should Have | Slice 4 | 🚧 In Progress |
 | Slice 7: Barnes-Hut Optimization | Nice to Have | Slice 1 | Not Started |
 | Slice 8: Class↔slot edges via `class.slots:` | Should Have | Slice 3 | ✅ Complete |
-| Slice 9: Hover-driven ephemeral node and edge details | Should Have | Slice 6 | Not Started |
+| Slice 9: Hover-driven ephemeral node and edge details | Should Have | Slice 6 | ✅ Complete |
 | Slice 10: Hover focus-mode highlight (1-hop + 2-hop neighbors) | Should Have | Slice 6 | Not Started |
+| Slice 11: Hover card surfaces resolved-schema context | Should Have | Slice 9 | Not Started |
 
 ---
 

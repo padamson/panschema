@@ -536,24 +536,26 @@ impl Visualization {
         if index >= self.simulation.nodes.len() {
             return "{}".to_string();
         }
-
         let node = &self.simulation.nodes[index];
-        let node_type = node_type_string(&node.color);
         let is_fixed = self.interaction.is_fixed(index);
+        let connections = self.get_connected_node_ids(index);
+        build_node_details_json(node, is_fixed, connections)
+    }
 
-        // Get connected nodes
-        let connected = self.get_connected_node_ids(index);
-
-        serde_json::json!({
-            "id": node.id,
-            "label": node.label,
-            "type": node_type,
-            "isFixed": is_fixed,
-            "connections": connected,
-            "x": node.x,
-            "y": node.y
-        })
-        .to_string()
+    /// Get details for an edge as JSON. Returns an empty object if
+    /// `index` is out of bounds. Used by the hover-driven ephemeral
+    /// details card to surface edge metadata without committing to a
+    /// click. The card consumer reads `type`, `source`, and `target`
+    /// to render a "<source-label> --(<edge-type>)--> <target-label>"
+    /// triple.
+    pub fn get_edge_details(&self, index: usize) -> String {
+        if index >= self.simulation.edges.len() {
+            return "{}".to_string();
+        }
+        let edge = &self.simulation.edges[index];
+        let source_node = &self.simulation.nodes[edge.source];
+        let target_node = &self.simulation.nodes[edge.target];
+        build_edge_details_json(edge, source_node, target_node)
     }
 
     /// Get IDs of nodes directly connected to the given node
@@ -633,6 +635,56 @@ impl Visualization {
     }
 }
 
+/// Build the JSON payload returned by `Visualization::get_node_details`
+/// — extracted as a free function so it's unit-testable without a
+/// `Visualization` (which needs an `HtmlCanvasElement` and so can only
+/// be constructed in a browser). Both the 2D and 3D wasm-bindgen
+/// methods delegate here.
+pub(crate) fn build_node_details_json(
+    node: &crate::simulation::SimNode,
+    is_fixed: bool,
+    connections: Vec<String>,
+) -> String {
+    let node_type = node_type_string(&node.color);
+    serde_json::json!({
+        "id": node.id,
+        "label": node.label,
+        "type": node_type,
+        "isAbstract": node.is_abstract,
+        "uri": node.uri,
+        "description": node.description,
+        "isFixed": is_fixed,
+        "connections": connections,
+        "x": node.x,
+        "y": node.y,
+    })
+    .to_string()
+}
+
+/// Build the JSON payload returned by `Visualization::get_edge_details`
+/// — extracted alongside [`build_node_details_json`] for the same
+/// testability reason. The hover-card JS consumer reads `type`,
+/// `source.{id,label}`, and `target.{id,label}` to render an
+/// edge-flavored triple.
+pub(crate) fn build_edge_details_json(
+    edge: &crate::simulation::SimEdge,
+    source_node: &crate::simulation::SimNode,
+    target_node: &crate::simulation::SimNode,
+) -> String {
+    serde_json::json!({
+        "type": edge.label,
+        "source": {
+            "id": source_node.id,
+            "label": source_node.label,
+        },
+        "target": {
+            "id": target_node.id,
+            "label": target_node.label,
+        },
+    })
+    .to_string()
+}
+
 /// Helper to determine node type from color
 fn node_type_string(color: &[f32; 4]) -> &'static str {
     // Match colors defined in graph_types::colors
@@ -652,6 +704,189 @@ fn node_type_string(color: &[f32; 4]) -> &'static str {
         "Type"
     } else {
         "Unknown"
+    }
+}
+
+#[cfg(test)]
+mod details_json_tests {
+    use super::*;
+    use crate::graph_types::{EdgeType, GraphEdge, GraphNode, NodeType};
+    use crate::simulation::{SimEdge, SimNode};
+
+    fn make_class_node(id: &str, label: &str) -> SimNode {
+        SimNode::from_graph_node(
+            &GraphNode {
+                id: id.to_string(),
+                label: label.to_string(),
+                node_type: NodeType::Class,
+                color: NodeType::Class.color(),
+                description: None,
+                uri: None,
+                is_abstract: false,
+            },
+            0,
+            1,
+        )
+    }
+
+    fn make_node_with_metadata(
+        id: &str,
+        label: &str,
+        description: Option<&str>,
+        uri: Option<&str>,
+        is_abstract: bool,
+    ) -> SimNode {
+        SimNode::from_graph_node(
+            &GraphNode {
+                id: id.to_string(),
+                label: label.to_string(),
+                node_type: NodeType::Class,
+                color: NodeType::Class.color(),
+                description: description.map(|s| s.to_string()),
+                uri: uri.map(|s| s.to_string()),
+                is_abstract,
+            },
+            0,
+            1,
+        )
+    }
+
+    #[test]
+    fn build_node_details_json_emits_required_fields_for_minimal_node() {
+        // A node with no description, no IRI, no abstract flag, and no
+        // connections still produces a JSON object with every field
+        // the hover-card consumer reads. Missing values come through
+        // as `null` (description, uri) or empty arrays (connections),
+        // not absent keys.
+        let node = make_class_node("class:Foo", "Foo");
+        let json: serde_json::Value =
+            serde_json::from_str(&build_node_details_json(&node, false, Vec::new())).unwrap();
+        assert_eq!(json["id"], "class:Foo");
+        assert_eq!(json["label"], "Foo");
+        assert_eq!(json["type"], "Class");
+        assert_eq!(json["isFixed"], false);
+        assert_eq!(json["isAbstract"], false);
+        assert!(json["description"].is_null(), "description should be null");
+        assert!(json["uri"].is_null(), "uri should be null");
+        assert_eq!(json["connections"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn build_node_details_json_surfaces_description_uri_and_abstract() {
+        // When the LinkML source provides description / uri /
+        // abstract=true, the wire format carries them verbatim so the
+        // hover card can render them. Pinned because these three are
+        // the schema-author-facing fields the card was designed
+        // around — silently dropping any of them turns the card back
+        // into label-echo.
+        let node = make_node_with_metadata(
+            "class:BFOEntity",
+            "BFOEntity",
+            Some("The root of the BFO upper ontology."),
+            Some("http://purl.obolibrary.org/obo/BFO_0000001"),
+            true,
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(&build_node_details_json(&node, false, Vec::new())).unwrap();
+        assert_eq!(json["isAbstract"], true);
+        assert_eq!(json["description"], "The root of the BFO upper ontology.");
+        assert_eq!(json["uri"], "http://purl.obolibrary.org/obo/BFO_0000001");
+    }
+
+    #[test]
+    fn build_node_details_json_returns_connection_ids_in_order() {
+        // The connection list is the caller's responsibility (the
+        // wasm-bindgen wrapper computes it from the simulation
+        // edges). The JSON builder must pass it through unchanged so
+        // the consumer can show the count and, in a future slice, the
+        // list itself.
+        let node = make_class_node("class:Foo", "Foo");
+        let json: serde_json::Value = serde_json::from_str(&build_node_details_json(
+            &node,
+            true,
+            vec!["class:Bar".to_string(), "class:Baz".to_string()],
+        ))
+        .unwrap();
+        assert_eq!(json["isFixed"], true);
+        let connections = json["connections"].as_array().unwrap();
+        assert_eq!(connections.len(), 2);
+        assert_eq!(connections[0], "class:Bar");
+        assert_eq!(connections[1], "class:Baz");
+    }
+
+    #[test]
+    fn build_edge_details_json_emits_source_target_triple() {
+        // The hover card renders an edge as
+        // "<source-label> ↓ <edge-type> ↓ <target-label>". The
+        // builder's contract is to surface labels (for display) and
+        // ids (for any future hop-out affordance) on both endpoints
+        // plus the edge's type string.
+        let source = make_class_node("class:Hypothesis", "Hypothesis");
+        let target = make_class_node("class:Premise", "Premise");
+        let edge = SimEdge {
+            source: 0,
+            target: 1,
+            label: SimEdge::format_edge_type_external(EdgeType::SubclassOf),
+        };
+        let json: serde_json::Value =
+            serde_json::from_str(&build_edge_details_json(&edge, &source, &target)).unwrap();
+        assert_eq!(json["type"], "subclassOf");
+        assert_eq!(json["source"]["id"], "class:Hypothesis");
+        assert_eq!(json["source"]["label"], "Hypothesis");
+        assert_eq!(json["target"]["id"], "class:Premise");
+        assert_eq!(json["target"]["label"], "Premise");
+    }
+
+    // Used here to exercise the same edge-type → string mapping the
+    // production path uses, without exposing the inner `format_edge_type`
+    // helper publicly. Avoids the test reinventing the label table.
+    impl SimEdge {
+        fn format_edge_type_external(edge_type: EdgeType) -> String {
+            // Mirror the production helper. If the production helper's
+            // mapping ever changes, this test will catch the divergence
+            // when the asserted label no longer matches.
+            let edge = GraphEdge {
+                source: "a".into(),
+                target: "b".into(),
+                edge_type,
+                label: None,
+            };
+            // Construct via the same factory the simulation uses so we
+            // catch the exact label format. Two nodes — the simulation
+            // drops edges whose endpoints aren't declared.
+            let nodes = vec![
+                GraphNode {
+                    id: "a".into(),
+                    label: "a".into(),
+                    node_type: NodeType::Class,
+                    color: NodeType::Class.color(),
+                    description: None,
+                    uri: None,
+                    is_abstract: false,
+                },
+                GraphNode {
+                    id: "b".into(),
+                    label: "b".into(),
+                    node_type: NodeType::Class,
+                    color: NodeType::Class.color(),
+                    description: None,
+                    uri: None,
+                    is_abstract: false,
+                },
+            ];
+            let graph = crate::graph_types::GraphData {
+                schema_name: "x".into(),
+                schema_title: None,
+                format_version: "1.0".into(),
+                nodes,
+                edges: vec![edge],
+            };
+            let sim = crate::simulation::CpuSimulation::from_graph_data(&graph);
+            sim.edges
+                .first()
+                .map(|e| e.label.clone())
+                .unwrap_or_default()
+        }
     }
 }
 

@@ -905,6 +905,19 @@ mod tests {
     }
 
     #[test]
+    fn html_writer_default_layout_is_sgd() {
+        // SGD is the picker default — visibly better cluster
+        // separation than force-directed on schema graphs. The
+        // manifest's `html_default_layout` field still overrides at
+        // generate time; this test pins the in-tree fallback so a
+        // future regression that flips it back to "force-directed"
+        // without a deliberate decision will fail loudly.
+        assert_eq!(HtmlWriter::new().graph_default_layout, "sgd");
+        assert_eq!(HtmlWriter::with_options(true).graph_default_layout, "sgd");
+        assert_eq!(HtmlWriter::with_options(false).graph_default_layout, "sgd");
+    }
+
+    #[test]
     fn version_context_is_edge_matches_only_edge_ref() {
         let vc = cohort_context("v0.1.0", "v0.2.0", Some("main"));
         assert!(vc.is_edge("main"));

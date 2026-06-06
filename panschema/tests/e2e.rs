@@ -708,6 +708,34 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         browser_name
     );
 
+    // 9b. The ephemeral hover card (slice 9) ships in the template
+    // so the JS hover handler has somewhere to populate. Verifying
+    // the element renders pins the template wiring even though
+    // simulating an actual hover-over-node interaction requires the
+    // WASM-driven canvas, which is outside this happy-path test's
+    // scope.
+    let hover_card = page.locator("#graph-hover-card").await;
+    let hover_card_count = hover_card
+        .count()
+        .await
+        .expect("Failed to count hover card");
+    assert_eq!(
+        hover_card_count, 1,
+        "[{}] Hover card element (#graph-hover-card) should be rendered exactly once",
+        browser_name
+    );
+    let hover_card_classes = hover_card
+        .get_attribute("class")
+        .await
+        .expect("Failed to read hover card class attr")
+        .unwrap_or_default();
+    assert!(
+        hover_card_classes.contains("graph-hover-card"),
+        "[{}] Hover card should carry the graph-hover-card class for CSS targeting; got: {}",
+        browser_name,
+        hover_card_classes
+    );
+
     // 10. Verify canvas is present and visible
     let canvas = page.locator("#graph-canvas").await;
     let canvas_count = canvas.count().await.expect("Failed to count canvas");
