@@ -8,6 +8,7 @@ pub mod graph_writer;
 pub mod html_writer;
 pub mod io;
 pub mod linkml;
+pub mod linkml_resolve;
 pub mod lockfile;
 pub mod manifest;
 pub mod owl_model;

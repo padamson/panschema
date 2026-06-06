@@ -53,24 +53,24 @@ The resolver is a sibling module to `linkml.rs`, not part of `SchemaDefinition` 
 
 ### Slice 12.1: Extract `resolve_effective_slots` into shared module
 
-**Status:** Not Started
+**Status:** ✅ Complete
 
 **Priority:** Must Have
 
 **User Value:** One resolver for slot inheritance. Rust writer, HTML writer, and graph writer all call the same code; `slot_usage` refinements light up everywhere at once.
 
 **Acceptance Criteria:**
-- [ ] New module `panschema/src/linkml/resolve.rs` (or `panschema/src/resolve.rs` — placement is the smaller question). `panschema/src/linkml.rs` re-exports the public surface.
-- [ ] `pub fn resolve_effective_slots(schema: &SchemaDefinition, class_name: &str) -> BTreeMap<String, ResolvedSlot>` lifted from `rust_writer::resolve_slots`. Behaviour preserved exactly: walks `is_a` chain + mixins + own `attributes` + own `slots:` refs, applies `slot_usage` as merge-overlay (only fields the override actually sets).
-- [ ] `ResolvedSlot` carries: the effective `SlotDefinition`, plus origin metadata (which class introduced it, whether `slot_usage` refined it here). The origin metadata lays the groundwork for slice 12.4.
-- [ ] Visited-set cycle guard preserved from `rust_writer::resolve_slots` (the `_walk` helper threading `BTreeSet<String>` of class names currently on the recursion stack).
-- [ ] `rust_writer::resolve_slots` becomes a thin delegate: takes the `ResolvedSlot` map and returns whatever shape rust_writer's downstream code needs (likely unchanged).
-- [ ] All 16 existing rust_writer unit tests (`compute_class_roles`, `resolve_slots` inheritance + mixin + slot_usage merge cases, `is_descendant_of`, etc., per feature 06 slice 6.3) still pass.
-- [ ] New unit tests for the lifted module: same coverage moved to `linkml::resolve::tests`, plus a regression test that asserts the public API for at least one downstream surface that doesn't exist yet (e.g. graph_writer slice 12 in feature 04 — call into the resolver from a test fixture and assert it returns the expected refined slot).
+- [x] New module `panschema/src/linkml_resolve.rs` (sibling to `linkml.rs`; no folder migration required for the simple lift).
+- [x] `pub fn resolve_effective_slots(class: &ClassDefinition, schema: &SchemaDefinition) -> BTreeMap<String, SlotDefinition>` lifted from `rust_writer::resolve_slots`. Signature and return type preserved verbatim — the `ResolvedSlot` wrapper that carries provenance metadata lands in slice 12.4 once consumers actually need it. The point of 12.1 is to make the lift pure.
+- [x] Behaviour preserved exactly: walks `is_a` chain + mixins + own `attributes` + own `slots:` refs, applies `slot_usage` as merge-overlay (only fields the override actually sets).
+- [x] Visited-set cycle guard preserved from `rust_writer::resolve_slots` (the `_walk` helper threading `BTreeSet<String>` of class names currently on the recursion stack). `resolve_slots_walk` and `merge_slot_override` move with it.
+- [x] `rust_writer` calls `linkml_resolve::resolve_effective_slots` at the two existing call sites; the private `resolve_slots` / `resolve_slots_walk` / `merge_slot_override` go away. (Implemented as a `pub(crate) use` re-export so the call sites and their tests remain untouched — only the source-of-truth definition moved.)
+- [x] All 16 existing rust_writer unit tests (`compute_class_roles`, `resolve_slots` inheritance + mixin + slot_usage merge cases, `is_descendant_of`, etc., per feature 06 slice 6.3) still pass without modification — they continue to test the same `resolve_slots` function, just imported from a different module.
+- [x] One new test in `linkml_resolve::tests` pins the public-surface contract directly (a single fixture covering is_a + mixin + slot_usage in one shot) so a future change to the public API trips a test in the *resolver's* own module, not just in rust_writer's.
 
 **Notes:**
-- This is a pure refactor + module-promote. Behaviour change is zero. The point is to make the *next* slot-related change (slice 12.2 of feature 04, slice 6.x migration of html_writer) trivially small.
-- Don't try to "improve" the resolver while lifting it. Lift first, change second. If a different resolver shape would serve graph_writer better, file it as slice 12.2+ here.
+- This is a pure refactor + module-promote. Behaviour change is zero. The point is to make the *next* slot-related change (slice 12 of feature 04, slice 6.11 of feature 06, slice 10 of feature 02) trivially small.
+- Don't try to "improve" the resolver while lifting it. Lift first, change second. `ResolvedSlot` wrapper + provenance metadata is deliberately deferred to slice 12.4 so the lift can ship with byte-identical rust_writer output.
 - The merge-overlay quirk on bool fields (only `true` overrides flow through; documented in `merge_slot_override`) is preserved verbatim. Distinguishing "absent" from "explicit false" would need a hand-rolled IR refactor to `Option<bool>` — out of scope for the extract step.
 
 ---
@@ -138,7 +138,7 @@ The resolver is a sibling module to `linkml.rs`, not part of `SchemaDefinition` 
 
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
-| 12.1: Extract `resolve_effective_slots` | Must Have | feature 06 slice 6.3 (the resolver to lift) | Not Started |
+| 12.1: Extract `resolve_effective_slots` | Must Have | feature 06 slice 6.3 (the resolver to lift) | ✅ Complete |
 | 12.2: `expand_curie` | Should Have | None | Not Started |
 | 12.3: `effective_cardinality` | Should Have | 12.1 | Not Started |
 | 12.4: Slot provenance | Nice to Have | 12.1 | Not Started |
