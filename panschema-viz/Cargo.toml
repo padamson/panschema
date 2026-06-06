@@ -42,7 +42,7 @@ petgraph-layout-stress-majorization = { version = "0.1", git = "https://github.c
 petgraph-layout-sgd = { version = "0.1", git = "https://github.com/padamson/egraph-rs", rev = "c149ba911802ad699577a115841e4a73ed2c2835" }
 # Matches the rand version petgraph-layout-sgd depends on. Used to
 # seed the SGD scheduler's shuffle step.
-rand = "0.9"
+rand = "0.10"
 # Wasm32 needs the `wasm_js` backend on getrandom 0.3 (transitive dep
 # of rand 0.9) so the SGD path's deterministic `StdRng::seed_from_u64`
 # compiles cleanly for the wasm32-unknown-unknown target. The cfg
