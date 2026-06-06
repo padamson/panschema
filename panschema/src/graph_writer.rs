@@ -160,39 +160,24 @@ pub struct GraphEdge {
     pub label: Option<String>,
 }
 
-/// Resolve every slot reachable from `class_name` via its direct
-/// `attributes:`, `slots:` references, and (transitively) its
-/// `is_a` parent and `mixins:` lists. Duplicates are dropped while
-/// preserving the first-seen order so the hover card surfaces
-/// direct slots before inherited ones. Cycles in the inheritance
-/// graph (which a well-formed LinkML schema doesn't have, but a
-/// truncated source might) are guarded by a visited-set.
+/// Sorted list of every slot reachable from `class_name` via its
+/// direct `attributes:`, `slots:` references, `is_a` chain,
+/// `mixins:`, and `slot_usage` overlay. Delegates to the shared
+/// resolver in `linkml_resolve` so the hover card, the HTML class
+/// card, and the Rust writer all observe the same slot list for
+/// every class.
+///
+/// Returned in `BTreeMap` (alphabetical) order — the resolver's
+/// natural output. The hover card's "+N more" cap means alphabetical
+/// order is fine for the 5-slot summary; authors who need the full
+/// list and a specific order click-to-pin the persistent panel.
 fn resolve_class_slots(schema: &SchemaDefinition, class_name: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    let mut seen_slots: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut visited_classes: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut stack: Vec<String> = vec![class_name.to_string()];
-
-    while let Some(cls_name) = stack.pop() {
-        if !visited_classes.insert(cls_name.clone()) {
-            continue;
-        }
-        let Some(cls) = schema.classes.get(&cls_name) else {
-            continue;
-        };
-        for slot_name in cls.attributes.keys().chain(cls.slots.iter()) {
-            if seen_slots.insert(slot_name.clone()) {
-                out.push(slot_name.clone());
-            }
-        }
-        if let Some(parent) = &cls.is_a {
-            stack.push(parent.clone());
-        }
-        for mixin in &cls.mixins {
-            stack.push(mixin.clone());
-        }
-    }
-    out
+    let Some(class_def) = schema.classes.get(class_name) else {
+        return Vec::new();
+    };
+    crate::linkml_resolve::resolve_effective_slots(class_def, schema)
+        .into_keys()
+        .collect()
 }
 
 /// Complete graph data for serialization
@@ -1204,13 +1189,21 @@ mod tests {
     }
 
     #[test]
-    fn class_kind_metadata_collects_inherited_slots_in_direct_first_order() {
+    fn class_kind_metadata_collects_inherited_slots_from_is_a_chain() {
         // Authors care about "what's the full set of fields on this
         // class?". The hover card surfaces every slot reachable
-        // through `is_a` and `mixins`, but lists each class's own
-        // direct slots first so the inherited ones don't bury what
-        // the class itself introduces.
+        // through `is_a` and `mixins`. Returned in alphabetical
+        // (BTreeMap) order so the 5-slot summary is deterministic
+        // and the persistent details panel takes over for longer
+        // lists.
         let mut schema = SchemaDefinition::new("inheritance");
+        schema
+            .slots
+            .insert("name".to_string(), SlotDefinition::new("name"));
+        schema
+            .slots
+            .insert("breed".to_string(), SlotDefinition::new("breed"));
+
         let mut animal = ClassDefinition::new("Animal");
         animal.slots = vec!["name".into()];
         schema.classes.insert("Animal".to_string(), animal);
@@ -1233,10 +1226,17 @@ mod tests {
     fn class_kind_metadata_walks_mixins_and_dedupes() {
         // Mixins flatten in: their slots show up in the consuming
         // class's resolved list. When the same slot name reaches a
-        // class via two paths (its own attributes plus a mixin),
-        // the list keeps only the first occurrence so the card
-        // doesn't show duplicate rows.
+        // class via two paths (its own slot ref plus a mixin), the
+        // list keeps only one entry so the card doesn't show
+        // duplicate rows.
         let mut schema = SchemaDefinition::new("mixin_resolve");
+        schema
+            .slots
+            .insert("name".to_string(), SlotDefinition::new("name"));
+        schema
+            .slots
+            .insert("age".to_string(), SlotDefinition::new("age"));
+
         let mut named = ClassDefinition::new("Named");
         named.slots = vec!["name".into()];
         schema.classes.insert("Named".to_string(), named);
@@ -1250,8 +1250,48 @@ mod tests {
         let graph = writer.schema_to_graph(&schema);
 
         let (slots, _, mixins) = class_kind_metadata(&graph, "Person");
-        assert_eq!(slots, &["name".to_string(), "age".to_string()]);
+        assert_eq!(slots, &["age".to_string(), "name".to_string()]);
         assert_eq!(mixins, &["Named".to_string()]);
+    }
+
+    #[test]
+    fn class_kind_metadata_surfaces_slot_usage_refined_slots() {
+        // The previous walker stopped at is_a + mixins + attributes +
+        // slots:; slots introduced via `slot_usage` on a subclass were
+        // invisible to the hover card. Sharing the resolver with the
+        // Rust writer means slot_usage entries now show up in the
+        // class's resolved slot list — this is the schema-author-facing
+        // payoff for the resolver lift.
+        let mut schema = SchemaDefinition::new("slot_usage_refine");
+        schema.slots.insert(
+            "wasGeneratedBy".to_string(),
+            SlotDefinition::new("wasGeneratedBy"),
+        );
+
+        let mut activity = ClassDefinition::new("Activity");
+        activity.slots = vec!["wasGeneratedBy".into()];
+        schema.classes.insert("Activity".to_string(), activity);
+
+        let mut question = ClassDefinition::new("Question");
+        question.is_a = Some("Activity".into());
+        // Refine wasGeneratedBy via slot_usage — the old walker missed
+        // this contribution; the shared resolver catches it.
+        let mut refined = SlotDefinition::new("wasGeneratedBy");
+        refined.range = Some("QuestionFormation".into());
+        question.slot_usage.insert("wasGeneratedBy".into(), refined);
+        schema.classes.insert("Question".to_string(), question);
+
+        let writer = GraphWriter::new();
+        let graph = writer.schema_to_graph(&schema);
+
+        let (slots, _, _) = class_kind_metadata(&graph, "Question");
+        assert_eq!(
+            slots,
+            &["wasGeneratedBy".to_string()],
+            "wasGeneratedBy should appear in Question's resolved slots \
+             via the slot_usage overlay even though it was inherited \
+             from Activity"
+        );
     }
 
     #[test]

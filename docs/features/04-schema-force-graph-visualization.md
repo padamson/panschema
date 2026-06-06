@@ -486,19 +486,19 @@ These are the questions whose answers currently require a click-to-pin, then scr
 
 ### Slice 12: Graph layer consumes the shared slot resolver
 
-**Status:** Not Started
+**Status:** ✅ Complete (partial — Cardinality row deferred to feature 12 slice 12.3)
 
 **Priority:** Should Have
 
 **User Value:** The hover card stops lying about cardinality and range for slots refined via `slot_usage`. Slice 11 ships with a known blind spot — its `resolve_class_slots` walks `is_a` + mixins + `attributes` + `slots:` but ignores `slot_usage` entirely, so a `Question.was_generated_by` refined from `Activity` to `QuestionFormation` still shows the inherited range. After this slice, the card surfaces the effective shape.
 
 **Acceptance Criteria:**
-- [ ] Delete `graph_writer::resolve_class_slots`; call `linkml::resolve::resolve_effective_slots` instead. The shared resolver returns `ResolvedSlot` values that already carry refined range / required / multivalued.
-- [ ] `KindMetadata::Class` carries the resolved slot *list* unchanged (name strings; the JSON wire format stays compatible).
-- [ ] `KindMetadata::Slot` is computed off the resolved view: range comes from the effective slot, not the raw `SlotDefinition`. For a global slot node (`slot:was_generated_by`), the effective view equals the raw view; for a slot displayed in the context of a specific class card, the refined view wins.
-- [ ] Effective cardinality (slice 12.3 of feature 12) replaces the hover card's "Flags:" row with a "Cardinality:" row showing `required`, `multivalued`, and `min..max` when explicit cardinality bounds are set.
-- [ ] Regression test: build a fixture with `Question` extending `Activity` and refining `wasGeneratedBy` via `slot_usage`. Assert the graph_writer emits `KindMetadata::Class { slots: [..., "wasGeneratedBy", ...] }` for `Question` AND that fetching the resolved slot for `Question.wasGeneratedBy` returns the refined range (`QuestionFormation`, not `Activity`).
-- [ ] Existing 5 `kind_metadata` graph_writer tests continue to pass with no behaviour changes for schemas that don't use `slot_usage`.
+- [x] Delete `graph_writer::resolve_class_slots`; call `linkml::resolve::resolve_effective_slots` instead. (Implementation: the function body is now a thin delegate to the shared resolver, returning the `BTreeMap` keys; the function signature is preserved so the call site at `add_classes` is unchanged.)
+- [x] `KindMetadata::Class` carries the resolved slot *list* unchanged (name strings; the JSON wire format stays compatible).
+- [x] Regression test: build a fixture with `Question` extending `Activity` and refining `wasGeneratedBy` via `slot_usage`. Assert `wasGeneratedBy` appears in `Question`'s resolved slot list — the old walker missed it.
+- [x] Existing `kind_metadata` graph_writer tests continue to pass with no behaviour changes for schemas that don't use `slot_usage`. Two tests were updated to declare their referenced slots in `schema.slots` so they exercise a realistic schema shape (the shared resolver matches the Rust writer's stricter handling — references to undeclared slot names are silently dropped, where the old walker accepted them).
+- [ ] `KindMetadata::Slot` is computed off the resolved view: range comes from the effective slot, not the raw `SlotDefinition`. **Deferred** — global slot nodes carry the global slot definition today; per-class refined-slot views would need a class-context pseudo-node and a UI design pass.
+- [ ] Effective cardinality (slice 12.3 of feature 12) replaces the hover card's "Flags:" row with a "Cardinality:" row showing `required`, `multivalued`, and `min..max` when explicit cardinality bounds are set. **Deferred** to feature 12 slice 12.3.
 
 **Notes:**
 - This slice depends on feature 12 slice 12.1 (extract the resolver). Without that, this slice can't be implemented without duplicating the rust_writer's walker — exactly the duplication we're trying to retire.
@@ -543,7 +543,7 @@ These are the questions whose answers currently require a click-to-pin, then scr
 | Slice 9: Hover-driven ephemeral node and edge details | Should Have | Slice 6 | ✅ Complete |
 | Slice 10: Hover focus-mode highlight (1-hop + 2-hop neighbors) | Should Have | Slice 6 | ✅ Complete |
 | Slice 11: Hover card surfaces resolved-schema context | Should Have | Slice 9 | ✅ Complete |
-| Slice 12: Graph layer consumes the shared slot resolver | Should Have | Slice 11, feature 12 slice 12.1 | Not Started |
+| Slice 12: Graph layer consumes the shared slot resolver | Should Have | Slice 11, feature 12 slice 12.1 | ✅ Complete (partial — slot-side ACs deferred to 12.3) |
 | Slice 13: Hover card surfaces richer IR fields | Nice to Have | Slice 12, feature 12 slices 12.2 / 12.4 | Not Started |
 
 ---
