@@ -1,0 +1,8 @@
+[target.wasm32-unknown-unknown]
+# getrandom 0.3 (transitive via rand 0.9) emits a compile_error! on
+# wasm32-unknown-unknown unless a backend cfg is set. `wasm_js` routes
+# entropy through `crypto.getRandomValues` via js-sys. The SGD path
+# seeds deterministically (`StdRng::seed_from_u64(42)`) and never
+# actually calls into the backend at runtime, but rand 0.9 still
+# requires the cfg to be picked at compile time.
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

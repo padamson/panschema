@@ -949,10 +949,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0"
 dependencies = [
  "cfg-if",
- "js-sys",
  "libc",
  "wasi",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -962,9 +960,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 5.3.0",
  "wasip2",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -2244,7 +2244,7 @@ checksum = "0afd5c28e4a399c57ee2bc3accd40c7b671fdc7b6537499f14e95b265af7d7e0"
 dependencies = [
  "oxilangtag",
  "oxiri",
- "rand 0.9.4",
+ "rand",
  "thiserror 2.0.18",
 ]
 
@@ -2308,7 +2308,7 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "console_error_panic_hook",
- "getrandom 0.2.17",
+ "getrandom 0.3.4",
  "js-sys",
  "mutants",
  "petgraph",
@@ -2316,7 +2316,7 @@ dependencies = [
  "petgraph-layout-kamada-kawai",
  "petgraph-layout-sgd",
  "petgraph-layout-stress-majorization",
- "rand 0.8.6",
+ "rand",
  "rust-sugiyama",
  "serde",
  "serde_json",
@@ -2395,7 +2395,7 @@ dependencies = [
 [[package]]
 name = "petgraph-algorithm-shortest-path"
 version = "0.1.0"
-source = "git+https://github.com/padamson/egraph-rs?rev=e2aee8fea7878d2574ad8dececc7000c3801c738#e2aee8fea7878d2574ad8dececc7000c3801c738"
+source = "git+https://github.com/padamson/egraph-rs?rev=c149ba911802ad699577a115841e4a73ed2c2835#c149ba911802ad699577a115841e4a73ed2c2835"
 dependencies = [
  "ndarray",
  "ordered-float 3.9.2",
@@ -2405,7 +2405,7 @@ dependencies = [
 [[package]]
 name = "petgraph-drawing"
 version = "0.1.0"
-source = "git+https://github.com/padamson/egraph-rs?rev=e2aee8fea7878d2574ad8dececc7000c3801c738#e2aee8fea7878d2574ad8dececc7000c3801c738"
+source = "git+https://github.com/padamson/egraph-rs?rev=c149ba911802ad699577a115841e4a73ed2c2835#c149ba911802ad699577a115841e4a73ed2c2835"
 dependencies = [
  "ndarray",
  "num-traits",
@@ -2415,7 +2415,7 @@ dependencies = [
 [[package]]
 name = "petgraph-layout-kamada-kawai"
 version = "0.1.0"
-source = "git+https://github.com/padamson/egraph-rs?rev=e2aee8fea7878d2574ad8dececc7000c3801c738#e2aee8fea7878d2574ad8dececc7000c3801c738"
+source = "git+https://github.com/padamson/egraph-rs?rev=c149ba911802ad699577a115841e4a73ed2c2835#c149ba911802ad699577a115841e4a73ed2c2835"
 dependencies = [
  "ndarray",
  "petgraph",
@@ -2426,20 +2426,20 @@ dependencies = [
 [[package]]
 name = "petgraph-layout-sgd"
 version = "0.1.0"
-source = "git+https://github.com/padamson/egraph-rs?rev=e2aee8fea7878d2574ad8dececc7000c3801c738#e2aee8fea7878d2574ad8dececc7000c3801c738"
+source = "git+https://github.com/padamson/egraph-rs?rev=c149ba911802ad699577a115841e4a73ed2c2835#c149ba911802ad699577a115841e4a73ed2c2835"
 dependencies = [
  "ndarray",
  "ordered-float 3.9.2",
  "petgraph",
  "petgraph-algorithm-shortest-path",
  "petgraph-drawing",
- "rand 0.8.6",
+ "rand",
 ]
 
 [[package]]
 name = "petgraph-layout-stress-majorization"
 version = "0.1.0"
-source = "git+https://github.com/padamson/egraph-rs?rev=e2aee8fea7878d2574ad8dececc7000c3801c738#e2aee8fea7878d2574ad8dececc7000c3801c738"
+source = "git+https://github.com/padamson/egraph-rs?rev=c149ba911802ad699577a115841e4a73ed2c2835#c149ba911802ad699577a115841e4a73ed2c2835"
 dependencies = [
  "ndarray",
  "petgraph",
@@ -2662,33 +2662,12 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rand"
-version = "0.8.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ca0ecfa931c29007047d1bc58e623ab12e5590e8c7cc53200d5202b69266d8a"
-dependencies = [
- "libc",
- "rand_chacha 0.3.1",
- "rand_core 0.6.4",
-]
-
-[[package]]
-name = "rand"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "44c5af06bb1b7d3216d91932aed5265164bf384dc89cd6ba05cf59a35f5f76ea"
 dependencies = [
- "rand_chacha 0.9.0",
- "rand_core 0.9.5",
-]
-
-[[package]]
-name = "rand_chacha"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6c10a63a0fa32252be49d21e7709d4d4baf8d231c2dbce1eaa8141b9b127d88"
-dependencies = [
- "ppv-lite86",
- "rand_core 0.6.4",
+ "rand_chacha",
+ "rand_core",
 ]
 
 [[package]]
@@ -2698,16 +2677,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
 dependencies = [
  "ppv-lite86",
- "rand_core 0.9.5",
-]
-
-[[package]]
-name = "rand_core"
-version = "0.6.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
-dependencies = [
- "getrandom 0.2.17",
+ "rand_core",
 ]
 
 [[package]]
@@ -3811,7 +3781,7 @@ dependencies = [
  "httparse",
  "log",
  "native-tls",
- "rand 0.9.4",
+ "rand",
  "sha1 0.10.6",
  "thiserror 2.0.18",
 ]
