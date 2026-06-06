@@ -264,6 +264,26 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 
 ---
 
+### Slice 10: Class card consumes the shared slot resolver
+
+**Status:** Not Started
+
+**Priority:** Should Have
+
+**User Value:** The class card's `slot_usage` refinement rendering (slice 5) walks its own copy of the inheritance + mixin + slot_usage chain. After this slice, it calls into `panschema::linkml::resolve` so the HTML output, Rust output, and graph output share one correctness story. Slot provenance ("inherited from `<class>`") becomes available for free once feature 12 slice 12.4 lands.
+
+**Acceptance Criteria:**
+- [ ] `html_writer`'s class-card slot resolution delegates to `linkml::resolve::resolve_effective_slots` instead of walking the IR locally.
+- [ ] Class-card "refined here" tags continue to render exactly as today for `slot_usage` overrides — the `Provenance::Refined` variant from the shared resolver drives the same UI.
+- [ ] Inherited slots gain a small "from `<class>`" tag sourced from `Provenance::Inherited` (depends on feature 12 slice 12.4; can be deferred to slice 11 of this feature if 12.4 isn't ready).
+- [ ] Existing class-card integration tests (including `class_card_surfaces_mixins_slots_and_resolved_xrefs`) pass unchanged.
+- [ ] One new test asserts that the class card and the graph hover card surface the same effective range / cardinality for a slot refined via `slot_usage` — pin the cross-writer consistency.
+
+**Notes:**
+- Pure refactor at the boundary. If the shared resolver returns the same effective slot data the local walker did, the rendered HTML should be byte-identical for schemas that don't use `slot_usage` (which is the bulk of existing fixtures). A snapshot test pinning that byte-identity would catch accidental behaviour drift.
+
+---
+
 ## Slice Priority and Dependencies
 
 | Slice | Priority | Depends On | Status |
@@ -277,3 +297,4 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 | Slice 7: Improved force-directed default (fill viewport) | Should Have (v0.3.0) | Slice 6, Feature 04 | Completed |
 | Slice 8: Parent-relative header brand link + absolute-URL audit | Must Have | Slice 4, Feature 11 slice 4 | Completed |
 | Slice 9: Markdown rendering in description fields | Should Have | Slice 5 | Completed |
+| Slice 10: Class card consumes the shared slot resolver | Should Have | Slice 5, Feature 12 slice 12.1 | Not Started |

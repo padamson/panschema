@@ -277,6 +277,26 @@ LinkML uses lowerCamelCase (`wasGeneratedBy`); Rust idiom is snake_case. Slot na
 
 ---
 
+### Slice 6.11: Migrate to shared slot resolver
+
+**Status:** ⬜ Not Started
+
+**Priority:** Should Have
+
+**User Value:** `rust_writer::resolve_slots` (which slice 6.3 introduced) becomes the seed implementation for `linkml::resolve::resolve_effective_slots` in feature 12. After feature 12 slice 12.1 lifts the helper into the shared module, this slice turns the rust_writer's local copy into a thin delegate. Net effect: one resolver, three consumers (rust, html, graph), no behaviour change to the generated Rust.
+
+**Acceptance Criteria:**
+- [ ] `rust_writer::resolve_slots` calls `linkml::resolve::resolve_effective_slots` instead of walking the IR locally; the rest of the rust_writer path (struct emission, trait emission, doc-comment generation) consumes the shared `ResolvedSlot` type.
+- [ ] All 16 existing rust_writer unit tests (`compute_class_roles`, `resolve_slots` inheritance + mixin + slot_usage merge cases, `is_descendant_of`, etc.) pass unchanged.
+- [ ] Snapshot tests for the slice 6.3 fixture and slice 6.4's scimantic@0.1.0 output remain byte-identical — the resolver's behaviour is preserved verbatim.
+- [ ] If feature 12 slice 12.4 (slot provenance) has shipped, rust_writer's doc-comments on flattened inherited fields gain a one-line "inherited from `<Parent>`" tag.
+
+**Notes:**
+- This is a pure migration — the rust_writer's existing walker is *the* reference implementation feature 12 lifts. The migration step is mechanical: replace the call site, delete the local helper, run the test suite. Snapshot byte-identity is the regression gate.
+- Defer until feature 12 slice 12.1 ships. Until then, rust_writer's local walker stays the source of truth.
+
+---
+
 ## Slice Priority and Dependencies
 
 | Slice | Priority | Depends On | Status |
@@ -291,6 +311,7 @@ LinkML uses lowerCamelCase (`wasGeneratedBy`); Rust idiom is snake_case. Slot na
 | 6.8 | Nice to Have | 6.5 | ⬜ Not Started |
 | 6.9 | Should Have | 6.5 | ⬜ Not Started |
 | 6.10 | Nice to Have | 6.6 | ⬜ Not Started |
+| 6.11: Migrate to shared slot resolver | Should Have | 6.3, Feature 12 slice 12.1 | ⬜ Not Started |
 
 ---
 

@@ -484,6 +484,50 @@ These are the questions whose answers currently require a click-to-pin, then scr
 
 ---
 
+### Slice 12: Graph layer consumes the shared slot resolver
+
+**Status:** Not Started
+
+**Priority:** Should Have
+
+**User Value:** The hover card stops lying about cardinality and range for slots refined via `slot_usage`. Slice 11 ships with a known blind spot — its `resolve_class_slots` walks `is_a` + mixins + `attributes` + `slots:` but ignores `slot_usage` entirely, so a `Question.was_generated_by` refined from `Activity` to `QuestionFormation` still shows the inherited range. After this slice, the card surfaces the effective shape.
+
+**Acceptance Criteria:**
+- [ ] Delete `graph_writer::resolve_class_slots`; call `linkml::resolve::resolve_effective_slots` instead. The shared resolver returns `ResolvedSlot` values that already carry refined range / required / multivalued.
+- [ ] `KindMetadata::Class` carries the resolved slot *list* unchanged (name strings; the JSON wire format stays compatible).
+- [ ] `KindMetadata::Slot` is computed off the resolved view: range comes from the effective slot, not the raw `SlotDefinition`. For a global slot node (`slot:was_generated_by`), the effective view equals the raw view; for a slot displayed in the context of a specific class card, the refined view wins.
+- [ ] Effective cardinality (slice 12.3 of feature 12) replaces the hover card's "Flags:" row with a "Cardinality:" row showing `required`, `multivalued`, and `min..max` when explicit cardinality bounds are set.
+- [ ] Regression test: build a fixture with `Question` extending `Activity` and refining `wasGeneratedBy` via `slot_usage`. Assert the graph_writer emits `KindMetadata::Class { slots: [..., "wasGeneratedBy", ...] }` for `Question` AND that fetching the resolved slot for `Question.wasGeneratedBy` returns the refined range (`QuestionFormation`, not `Activity`).
+- [ ] Existing 5 `kind_metadata` graph_writer tests continue to pass with no behaviour changes for schemas that don't use `slot_usage`.
+
+**Notes:**
+- This slice depends on feature 12 slice 12.1 (extract the resolver). Without that, this slice can't be implemented without duplicating the rust_writer's walker — exactly the duplication we're trying to retire.
+- If slice 12.3 (effective_cardinality) hasn't landed yet, this slice can ship with the existing "Flags:" row and migrate later.
+
+---
+
+### Slice 13: Hover card surfaces richer IR fields (patterns, identifiers, expanded IRIs, `any_of`)
+
+**Status:** Not Started
+
+**Priority:** Nice to Have
+
+**User Value:** The IR already carries `pattern`, `identifier`, `any_of`, prefixed curies, and `PermissibleValue.description` / `meaning`. The hover card today surfaces almost none of it. For authors building a schema, these are exactly the fields they edit most — surfacing them shaves a click-to-pin off every iteration.
+
+**Acceptance Criteria:**
+- [ ] **Slot hover** gains: a `Pattern:` row when `slot.pattern` is set (truncated at 40 chars with a tooltip showing the full regex); an `(identifier)` badge in the type row when `slot.identifier = true`; an `Any of:` row listing element ranges when `slot.any_of` is non-empty (replaces or supplements the single `Range:` row).
+- [ ] **Enum hover** shows per-value descriptions when present. Tooltip on each permissible-value chip surfaces `PermissibleValue.description`; the chip's `data-meaning` attribute holds the curie-expanded `meaning` IRI for future click-to-jump affordances.
+- [ ] **Class / slot hover IRI row** uses `expand_curie` (slice 12.2 of feature 12) so the IRI displayed is always fully expanded, regardless of whether the source schema wrote `prov:Entity` or the full URI. If the value can't be expanded (unknown prefix), surface it verbatim with a `?` indicator that the prefix is unrecognised.
+- [ ] **Slot provenance** (slice 12.4 of feature 12) renders as a small "from `<class>`" tag on inherited slot chips in class-node hover. Direct slots have no tag.
+- [ ] Native unit tests for `build_node_details_json` cover the new fields: pattern present / absent, identifier present / absent, any_of present / absent, permissible value with description.
+- [ ] CSS: 30-line bump to support tooltip on hover-card chips (native `title=` attribute is fine — no JS tooltip framework).
+
+**Notes:**
+- Out of scope: clickable jump-to-class on the `from <class>` tag. Routing affordance is its own slice (filed as a follow-up under feature 06's authoring tools, not here).
+- The `any_of` row's element ranges are themselves resolved IRIs / class names — they go through `expand_curie` too so the display is consistent.
+
+---
+
 ## Slice Priority and Dependencies
 
 | Slice | Priority | Depends On | Status |
@@ -499,6 +543,8 @@ These are the questions whose answers currently require a click-to-pin, then scr
 | Slice 9: Hover-driven ephemeral node and edge details | Should Have | Slice 6 | ✅ Complete |
 | Slice 10: Hover focus-mode highlight (1-hop + 2-hop neighbors) | Should Have | Slice 6 | ✅ Complete |
 | Slice 11: Hover card surfaces resolved-schema context | Should Have | Slice 9 | ✅ Complete |
+| Slice 12: Graph layer consumes the shared slot resolver | Should Have | Slice 11, feature 12 slice 12.1 | Not Started |
+| Slice 13: Hover card surfaces richer IR fields | Nice to Have | Slice 12, feature 12 slices 12.2 / 12.4 | Not Started |
 
 ---
 
