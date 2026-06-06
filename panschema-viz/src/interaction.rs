@@ -36,6 +36,12 @@ pub struct InteractionState {
     pub fixed_nodes: HashSet<usize>,
     /// Currently focused node (for dimming unconnected nodes)
     pub focused_node: Option<usize>,
+    /// Precomputed set of nodes within `focused_node`'s neighborhood
+    /// (1-hop ∪ 2-hop ∪ … up to the configured max-hop depth). Cached
+    /// at `focus_node()` time so the renderer doesn't re-walk the
+    /// adjacency every frame; cleared by `clear_focus()`. Empty when
+    /// `focused_node` is `None`.
+    pub focused_neighbors: HashSet<usize>,
     /// Set of hidden node types (for filtering)
     pub hidden_types: HashSet<String>,
 }
@@ -131,14 +137,53 @@ impl InteractionState {
         self.fixed_nodes.remove(&node);
     }
 
-    /// Set the focused node (for dimming unconnected nodes).
-    pub fn focus_node(&mut self, node: usize) {
+    /// Set the focused node (for dimming unconnected nodes) and
+    /// precompute the neighborhood up to `max_hops` away. Both the
+    /// hovered node itself and every node reachable within that hop
+    /// distance render at full opacity; the rest dim. `max_hops = 2`
+    /// is the schema-author sweet spot: 1-hop shows direct
+    /// connections, 2-hop reveals the local cluster without dragging
+    /// in the whole graph.
+    pub fn focus_node(&mut self, node: usize, edges: &[(usize, usize)], max_hops: usize) {
         self.focused_node = Some(node);
+        self.focused_neighbors.clear();
+        if max_hops == 0 {
+            return;
+        }
+        // BFS expansion from `node` to depth `max_hops`. The frontier
+        // doubles as the "what was just added" set; the next iteration
+        // walks edges from those nodes only, so the total work is
+        // O(visited × avg_degree) — sub-millisecond for any schema in
+        // practice.
+        let mut frontier: HashSet<usize> = HashSet::from([node]);
+        let mut visited: HashSet<usize> = HashSet::from([node]);
+        for _ in 0..max_hops {
+            let mut next_frontier: HashSet<usize> = HashSet::new();
+            for &(src, tgt) in edges {
+                if frontier.contains(&src) && !visited.contains(&tgt) {
+                    next_frontier.insert(tgt);
+                }
+                if frontier.contains(&tgt) && !visited.contains(&src) {
+                    next_frontier.insert(src);
+                }
+            }
+            if next_frontier.is_empty() {
+                break;
+            }
+            visited.extend(&next_frontier);
+            frontier = next_frontier;
+        }
+        // `visited` includes the focal node — drop it from the
+        // neighbors set so the renderer can keep the focal-vs-neighbor
+        // distinction it already maintains.
+        visited.remove(&node);
+        self.focused_neighbors = visited;
     }
 
     /// Clear focus mode.
     pub fn clear_focus(&mut self) {
         self.focused_node = None;
+        self.focused_neighbors.clear();
     }
 
     /// Get the currently focused node.
@@ -323,5 +368,78 @@ mod tests {
 
         state.unfix_node(5);
         assert!(!state.is_fixed(5));
+    }
+
+    // Edge fixture: a 5-node path graph 0—1—2—3—4. From node 0,
+    // 1-hop = {1}, 2-hop = {1, 2}, 3-hop = {1, 2, 3}. Used by the
+    // focus-mode BFS expansion tests below.
+    fn make_path_edges() -> Vec<(usize, usize)> {
+        vec![(0, 1), (1, 2), (2, 3), (3, 4)]
+    }
+
+    #[test]
+    fn focus_node_with_zero_hops_clears_neighbors_but_sets_focal() {
+        // max_hops = 0 means "focus this node alone, dim everything
+        // else". The focal node itself stays set; the neighbor set
+        // is empty.
+        let mut state = InteractionState::new();
+        state.focus_node(2, &make_path_edges(), 0);
+        assert_eq!(state.focused_node, Some(2));
+        assert!(state.focused_neighbors.is_empty());
+    }
+
+    #[test]
+    fn focus_node_with_one_hop_finds_direct_neighbors_only() {
+        // From node 2 (middle of the path), 1-hop = {1, 3}. The
+        // focal node 2 must not appear in the neighbors set so the
+        // renderer can keep the focal-vs-neighbor distinction.
+        let mut state = InteractionState::new();
+        state.focus_node(2, &make_path_edges(), 1);
+        assert_eq!(state.focused_node, Some(2));
+        assert_eq!(state.focused_neighbors, HashSet::from([1, 3]));
+    }
+
+    #[test]
+    fn focus_node_with_two_hops_finds_neighbors_and_their_neighbors() {
+        // From node 0, 1-hop = {1}, 2-hop adds {2}; the full set
+        // returned is {1, 2}. Node 4 is 4 hops away and stays
+        // outside the focus set, dimmed at render time.
+        let mut state = InteractionState::new();
+        state.focus_node(0, &make_path_edges(), 2);
+        assert_eq!(state.focused_neighbors, HashSet::from([1, 2]));
+    }
+
+    #[test]
+    fn focus_node_with_overshoot_hops_stops_at_graph_boundary() {
+        // Asking for more hops than the graph supports terminates
+        // gracefully when the BFS frontier goes empty (no new nodes
+        // reachable). The 5-node path graph has diameter 4; max_hops
+        // = 10 from one endpoint still yields just the other 4
+        // nodes.
+        let mut state = InteractionState::new();
+        state.focus_node(0, &make_path_edges(), 10);
+        assert_eq!(state.focused_neighbors, HashSet::from([1, 2, 3, 4]));
+    }
+
+    #[test]
+    fn focus_node_handles_disconnected_node_with_no_neighbors() {
+        // An isolated node (no incident edges) has an empty
+        // neighborhood at any hop depth. The focal node is still
+        // set so the renderer can highlight it solo.
+        let mut state = InteractionState::new();
+        state.focus_node(7, &[], 2);
+        assert_eq!(state.focused_node, Some(7));
+        assert!(state.focused_neighbors.is_empty());
+    }
+
+    #[test]
+    fn clear_focus_removes_focal_and_neighbors() {
+        let mut state = InteractionState::new();
+        state.focus_node(0, &make_path_edges(), 2);
+        assert!(!state.focused_neighbors.is_empty());
+
+        state.clear_focus();
+        assert_eq!(state.focused_node, None);
+        assert!(state.focused_neighbors.is_empty());
     }
 }

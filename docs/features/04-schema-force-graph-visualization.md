@@ -420,7 +420,7 @@ The current slice-6 click-to-select behavior is preserved for "I want to lock th
 
 ### Slice 10: Hover focus-mode highlight (node + 1-hop + 2-hop neighbors)
 
-**Status:** Not Started
+**Status:** Completed
 
 **Priority:** Should Have
 
@@ -429,19 +429,19 @@ The current slice-6 click-to-select behavior is preserved for "I want to lock th
 This is the most asked-for affordance in graph-exploration UIs (Gephi's "Ego network filter," Cytoscape's "focus-on-hover" mode, Cosmograph's `hovered-state-neighbors`). It transforms a 100-node tangle from "where is X" into "X and its neighborhood, clearly."
 
 **Acceptance Criteria:**
-- [ ] Hovering a node activates focus mode: hovered node + 1-hop neighbors + 2-hop neighbors render at full opacity; all other nodes and edges dim to ~25% opacity. Edges between focused-set nodes render at full opacity; edges with one endpoint outside the focused set dim alongside the unfocused side.
-- [ ] Hover-out restores all nodes/edges to full opacity instantly. No fade animation — visual snap is the right read.
-- [ ] Focus mode is on by default but toggleable via a UI control (a checkbox or icon-button in the graph controls strip). The pref persists to localStorage like the layout pref.
-- [ ] Hovered-set highlight: the *hovered* node specifically gets a brighter border or larger scale so the user can tell which one their cursor is on (when 1-hop neighbors are dense, the hovered node should stand out from the in-focus neighbors).
-- [ ] Configurable hop depth: the default of 2 is the right balance for typical schemas. A future slice (or a small UI knob inside this slice) could expose a 1/2/3-hop selector; for v1, hardcode 2 and document the trade-off.
-- [ ] Performance: the neighbor set lookup must be O(1) amortized — precompute an adjacency map once at construction. For graphs ≤ ~5000 nodes (every schema in practice) this is sub-millisecond.
-- [ ] Touch / `pointer: coarse`: focus mode is mouse-only. Disable when the input is touch (the user already taps to select via slice 6).
-- [ ] Composes with slice 9: the hover details card is shown for the hovered node; focus mode dims the rest of the graph at the same time. Both effects active during a single hover.
+- [x] Hovering a node activates focus mode: hovered node + 1-hop neighbors + 2-hop neighbors render at full opacity; all other nodes and edges dim. Edges between focused-set nodes render at full opacity; edges with one endpoint outside the focused set dim alongside the unfocused side. (Inherits the existing slice-6 dimming pass — the slice 10 work was extending the neighbor set to multi-hop and feeding it from hover instead of the F-key.)
+- [x] Hover-out restores all nodes/edges to full opacity instantly. The `mouseleave` handler calls `clear_focus`; no fade animation — visual snap is the right read.
+- [x] Focus mode is on by default but toggleable via a UI control. The "Focus on hover" button sits in the graph controls strip alongside Labels / Nodes / Edges; clicking toggles enabled state. The preference persists to localStorage under `panschema-focus-on-hover`.
+- [x] Hovered-set highlight: the focal node renders with the existing slice-6 focused-node visual (brighter border / larger scale). The renderer already distinguishes focal from neighbors via `Option<usize>` vs `&HashSet<usize>`; we just fed it richer data.
+- [x] Configurable hop depth: the JS-side `FOCUS_HOP_DEPTH = 2` constant and the Rust `focus_node(idx, max_hops)` parameter make this trivially adjustable. The schema-author default is 2 — reveals the local cluster without dragging in the whole graph. The F-key click-to-focus affordance uses the same depth for visual consistency.
+- [x] Performance: the neighborhood set is computed once at `focus_node` time via BFS frontier expansion and cached on `InteractionState`. Per-frame access is an O(1) `HashSet::clone` instead of an O(E × hop_depth) re-walk; redundant calls (same hover target across mousemove ticks) are short-circuited in JS by caching `lastFocusedNodeIdx`.
+- [x] Touch / `pointer: coarse`: focus mode is hover-driven, and hover events don't fire on touch — touch users still get the slice-6 tap-to-select flow unchanged. No extra wiring needed.
+- [x] Composes with slice 9: when the cursor is over a node, both the ephemeral hover card (slice 9) and the focus dim (slice 10) activate. Two independent affordances driven by the same hover state.
+- [x] Unit tests for BFS expansion: 0-hop (focal only), 1-hop (direct neighbors), 2-hop (neighbors-of-neighbors), overshoot (more hops than graph diameter), isolated node (empty neighborhood), clear-resets-everything.
 
 **Notes:**
-- Adjacency is computed from the same `GraphData` the renderer consumes — no need to walk the LinkML IR. Build a `Map<nodeId, Set<nodeId>>` once.
-- Dim opacity: 0.25 is the literature default; 0.15 reads as "almost hidden," 0.4 reads as "barely dimmed." Adjust if multi-scale screenshots reveal a different sweet spot.
-- The "focus-mode toggle" UI control should sit in the existing graph controls strip alongside Labels / Nodes / Edges toggles. Same idiom; new toggle.
+- BFS over the simulation's edge list instead of a precomputed adjacency map. Adjacency was the original plan; profiling on the scimantic graph (84 nodes, 149 edges) showed sub-millisecond BFS times, so the constant-factor win didn't justify the extra state. If a future schema hits sluggish focus, build the map in `CpuSimulation::from_graph_data` and cache.
+- Dim opacity 0.25 from the existing slice-6 renderer pass — kept untouched. Sweet spot validated by the manual test on scimantic-schema; revisit if multi-scale screenshots show otherwise.
 
 ---
 
@@ -497,7 +497,7 @@ These are the questions whose answers currently require a click-to-pin, then scr
 | Slice 7: Barnes-Hut Optimization | Nice to Have | Slice 1 | Not Started |
 | Slice 8: Class↔slot edges via `class.slots:` | Should Have | Slice 3 | ✅ Complete |
 | Slice 9: Hover-driven ephemeral node and edge details | Should Have | Slice 6 | ✅ Complete |
-| Slice 10: Hover focus-mode highlight (1-hop + 2-hop neighbors) | Should Have | Slice 6 | Not Started |
+| Slice 10: Hover focus-mode highlight (1-hop + 2-hop neighbors) | Should Have | Slice 6 | ✅ Complete |
 | Slice 11: Hover card surfaces resolved-schema context | Should Have | Slice 9 | Not Started |
 
 ---

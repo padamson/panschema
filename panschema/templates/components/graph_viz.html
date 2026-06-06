@@ -50,6 +50,9 @@
             <button id="graph-labels-edges" class="graph-btn graph-toggle active" title="Toggle edge labels (E)">
                 Edges
             </button>
+            <button id="graph-focus-on-hover" class="graph-btn graph-toggle active" title="Hover a node to highlight it plus its 1-hop and 2-hop neighbors; the rest of the graph dims. Click to toggle.">
+                Focus on hover
+            </button>
             <span class="graph-help" id="graph-help-2d">Drag to pan • Scroll to zoom</span>
             <span class="graph-help" id="graph-help-3d" style="display: none;">Drag to orbit • Shift+drag to pan • Scroll to zoom</span>
         </div>
@@ -630,6 +633,57 @@
     const labelsAllBtn = document.getElementById('graph-labels-all');
     const labelsNodesBtn = document.getElementById('graph-labels-nodes');
     const labelsEdgesBtn = document.getElementById('graph-labels-edges');
+
+    // Focus-on-hover toggle (slice 10). Tracks whether moving the
+    // cursor over a node should bring that node + its 1-hop +
+    // 2-hop neighbors to full opacity (dimming the rest). State
+    // persists across reloads via localStorage so a user's
+    // preference survives navigation.
+    const focusOnHoverBtn = document.getElementById('graph-focus-on-hover');
+    const FOCUS_HOVER_PREF_KEY = 'panschema-focus-on-hover';
+    const FOCUS_HOP_DEPTH = 2;
+    // The last node that triggered focus, so the mousemove handler
+    // can skip redundant focus_node calls (which would otherwise
+    // re-walk the BFS expansion on every mousemove tick).
+    let lastFocusedNodeIdx = -1;
+    let focusOnHoverEnabled = true;
+    try {
+        const stored = localStorage.getItem(FOCUS_HOVER_PREF_KEY);
+        if (stored !== null) focusOnHoverEnabled = stored === '1';
+    } catch (e) { /* localStorage may be unavailable */ }
+    if (focusOnHoverBtn) {
+        focusOnHoverBtn.classList.toggle('active', focusOnHoverEnabled);
+        focusOnHoverBtn.addEventListener('click', () => {
+            focusOnHoverEnabled = !focusOnHoverEnabled;
+            focusOnHoverBtn.classList.toggle('active', focusOnHoverEnabled);
+            try { localStorage.setItem(FOCUS_HOVER_PREF_KEY, focusOnHoverEnabled ? '1' : '0'); }
+            catch (e) { /* ignore */ }
+            // Clear any active focus when the user turns the feature
+            // off, otherwise the dimming sticks.
+            if (!focusOnHoverEnabled && viz && typeof viz.clear_focus === 'function') {
+                viz.clear_focus();
+                lastFocusedNodeIdx = -1;
+            }
+        });
+    }
+
+    // Apply focus state given the currently-hovered node. Skips
+    // redundant WASM calls when the hover target hasn't changed
+    // since the last frame. The 2D path uses viz.hovered_node_index;
+    // the 3D path uses a separate JS hover system (see
+    // updateHoverState below) and isn't currently wired.
+    function applyFocusOnHover(hoveredNodeIdx) {
+        if (!viz || !focusOnHoverEnabled) return;
+        if (hoveredNodeIdx === lastFocusedNodeIdx) return;
+        if (hoveredNodeIdx >= 0) {
+            if (typeof viz.focus_node === 'function') {
+                viz.focus_node(hoveredNodeIdx, FOCUS_HOP_DEPTH);
+            }
+        } else if (typeof viz.clear_focus === 'function') {
+            viz.clear_focus();
+        }
+        lastFocusedNodeIdx = hoveredNodeIdx;
+    }
 
     // 3D label overlay management
     const labelsOverlay = document.getElementById('graph-labels-overlay');
@@ -1728,6 +1782,12 @@
                         // Update cursor based on hover state
                         const nodeIdx = viz.hovered_node_index ? viz.hovered_node_index() : -1;
                         canvas.style.cursor = nodeIdx >= 0 ? 'grab' : 'default';
+                        // Hover focus-mode: dim everything outside
+                        // the hovered node's 2-hop neighborhood when
+                        // the user has the toggle enabled. No-op
+                        // when toggle is off or the hover target
+                        // hasn't changed since the last call.
+                        applyFocusOnHover(nodeIdx);
                     }
                 }
                 // Ephemeral hover card (slice 9): show details for the
@@ -1746,6 +1806,10 @@
                 viz.clear_hover();
             }
             hideHoverCard();
+            // Drop the focus dimming when the cursor leaves the
+            // canvas entirely — without this the graph stays dim
+            // until the user moves the cursor back over a node.
+            applyFocusOnHover(-1);
         });
 
         // Scroll for zoom
@@ -1955,8 +2019,11 @@
                         // Already focused on this node, clear focus
                         viz.clear_focus();
                     } else {
-                        // Focus on selected node
-                        viz.focus_node(selectedNodeIndex);
+                        // Focus on selected node — same 2-hop depth
+                        // as the hover-driven focus so the two
+                        // affordances produce visually-consistent
+                        // dimming.
+                        viz.focus_node(selectedNodeIndex, FOCUS_HOP_DEPTH);
                     }
                 }
                 return;

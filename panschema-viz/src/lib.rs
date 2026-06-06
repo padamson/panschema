@@ -225,19 +225,13 @@ impl Visualization {
         hidden
     }
 
-    /// Get set of nodes connected to the focused node (if any)
+    /// Get the cached set of nodes within the focused node's
+    /// neighborhood. The set is computed once at `focus_node()` time
+    /// (the BFS frontier expansion in `InteractionState::focus_node`)
+    /// and cleared on `clear_focus()`, so this is an O(1) clone per
+    /// render frame instead of an O(E × hop_depth) re-walk.
     fn get_focused_connected_set(&self) -> std::collections::HashSet<usize> {
-        let mut connected = std::collections::HashSet::new();
-        if let Some(focused) = self.interaction.focused_node {
-            for edge in &self.simulation.edges {
-                if edge.source == focused {
-                    connected.insert(edge.target);
-                } else if edge.target == focused {
-                    connected.insert(edge.source);
-                }
-            }
-        }
-        connected
+        self.interaction.focused_neighbors.clone()
     }
 
     /// Check if simulation is still running
@@ -577,10 +571,24 @@ impl Visualization {
     // Focus mode
     // ========================================================================
 
-    /// Set focus on a node (dims unconnected nodes).
-    pub fn focus_node(&mut self, index: usize) {
+    /// Set focus on a node (dims everything outside the node's
+    /// neighborhood). The neighborhood is expanded `max_hops` levels
+    /// from the focal node — the typical schema-author setting is 2,
+    /// which reveals the local cluster without dragging in the whole
+    /// graph.
+    pub fn focus_node(&mut self, index: usize, max_hops: usize) {
         if index < self.simulation.nodes.len() {
-            self.interaction.focus_node(index);
+            // Flatten the simulation's edge list into the
+            // (source_idx, target_idx) shape `InteractionState::focus_node`
+            // walks. Cheap (O(E), small constants) and avoids
+            // leaking the SimEdge type across the interaction layer.
+            let edges: Vec<(usize, usize)> = self
+                .simulation
+                .edges
+                .iter()
+                .map(|e| (e.source, e.target))
+                .collect();
+            self.interaction.focus_node(index, &edges, max_hops);
         }
     }
 
@@ -1313,10 +1321,24 @@ impl Visualization3D {
     // Focus mode
     // ========================================================================
 
-    /// Set focus on a node (dims unconnected nodes).
-    pub fn focus_node(&mut self, index: usize) {
+    /// Set focus on a node (dims everything outside the node's
+    /// neighborhood). The neighborhood is expanded `max_hops` levels
+    /// from the focal node — the typical schema-author setting is 2,
+    /// which reveals the local cluster without dragging in the whole
+    /// graph.
+    pub fn focus_node(&mut self, index: usize, max_hops: usize) {
         if index < self.simulation.nodes.len() {
-            self.interaction.focus_node(index);
+            // Flatten the simulation's edge list into the
+            // (source_idx, target_idx) shape `InteractionState::focus_node`
+            // walks. Cheap (O(E), small constants) and avoids
+            // leaking the SimEdge type across the interaction layer.
+            let edges: Vec<(usize, usize)> = self
+                .simulation
+                .edges
+                .iter()
+                .map(|e| (e.source, e.target))
+                .collect();
+            self.interaction.focus_node(index, &edges, max_hops);
         }
     }
 
