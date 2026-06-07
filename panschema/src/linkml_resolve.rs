@@ -150,6 +150,31 @@ fn merge_slot_override(target: &mut SlotDefinition, source: &SlotDefinition) {
     }
 }
 
+/// Expand a CURIE-shaped value against the schema's `prefixes:`
+/// table, falling back to `default_prefix` for bare names.
+///
+/// `urn:` is treated as an absolute IRI scheme even though it lacks
+/// `://`, so `urn:isbn:9780123456789` passes through unchanged
+/// instead of being parsed as a CURIE under the (unlikely) `urn`
+/// prefix.
+pub fn expand_curie(schema: &SchemaDefinition, value: &str) -> Option<String> {
+    if value.is_empty() {
+        return None;
+    }
+    if value.starts_with("http://") || value.starts_with("https://") || value.starts_with("urn:") {
+        return Some(value.to_string());
+    }
+    if let Some((prefix, rest)) = value.split_once(':') {
+        return schema
+            .prefixes
+            .get(prefix)
+            .map(|base| format!("{base}{rest}"));
+    }
+    let default = schema.default_prefix.as_deref()?;
+    let base = schema.prefixes.get(default)?;
+    Some(format!("{base}{value}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,5 +242,70 @@ mod tests {
             Some("integer"),
             "direct attribute should be present"
         );
+    }
+
+    fn schema_with_prov_default() -> SchemaDefinition {
+        let mut schema = SchemaDefinition::new("prov_default");
+        schema
+            .prefixes
+            .insert("prov".to_string(), "http://www.w3.org/ns/prov#".to_string());
+        schema.default_prefix = Some("prov".to_string());
+        schema
+    }
+
+    #[test]
+    fn expand_curie_expands_known_prefix() {
+        let schema = schema_with_prov_default();
+        assert_eq!(
+            expand_curie(&schema, "prov:Entity").as_deref(),
+            Some("http://www.w3.org/ns/prov#Entity")
+        );
+    }
+
+    #[test]
+    fn expand_curie_returns_none_for_unknown_prefix() {
+        let schema = schema_with_prov_default();
+        assert!(expand_curie(&schema, "fictional:Foo").is_none());
+    }
+
+    #[test]
+    fn expand_curie_passes_through_absolute_http_urls() {
+        let schema = schema_with_prov_default();
+        assert_eq!(
+            expand_curie(&schema, "http://example.org/foo").as_deref(),
+            Some("http://example.org/foo")
+        );
+        assert_eq!(
+            expand_curie(&schema, "https://example.org/bar").as_deref(),
+            Some("https://example.org/bar")
+        );
+        assert_eq!(
+            expand_curie(&schema, "urn:isbn:9780123456789").as_deref(),
+            Some("urn:isbn:9780123456789")
+        );
+    }
+
+    #[test]
+    fn expand_curie_uses_default_prefix_for_bare_names() {
+        let schema = schema_with_prov_default();
+        assert_eq!(
+            expand_curie(&schema, "Entity").as_deref(),
+            Some("http://www.w3.org/ns/prov#Entity")
+        );
+    }
+
+    #[test]
+    fn expand_curie_returns_none_for_bare_name_without_default_prefix() {
+        let mut schema = SchemaDefinition::new("no_default");
+        schema
+            .prefixes
+            .insert("prov".to_string(), "http://www.w3.org/ns/prov#".to_string());
+        assert!(expand_curie(&schema, "Entity").is_none());
+    }
+
+    #[test]
+    fn expand_curie_returns_none_for_empty_input() {
+        let schema = schema_with_prov_default();
+        assert!(expand_curie(&schema, "").is_none());
     }
 }

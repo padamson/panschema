@@ -549,6 +549,29 @@ These are the questions whose answers currently require a click-to-pin, then scr
 
 ---
 
+### Slice 15: Directed-edge arrowheads in the graph
+
+**Status:** Not Started
+
+**Priority:** Should Have
+
+**User Value:** All schema-graph edges are directional (`subclassOf`, `domain`, `range`, `inverseOf`, `typeOf`, `mixin`), but the renderer draws plain lines with text labels — direction is only inferable from reading the label. Authors viewing the graph have to mentally translate "the subclassOf line points from child to parent" instead of reading it off the rendering. After this slice, every edge has an arrowhead at the target end so direction is read at a glance.
+
+**Acceptance Criteria:**
+- [ ] The 2D Canvas renderer draws an arrowhead at the target end of every edge. Size scales with the node radius so it stays legible at all zoom levels without dominating short edges.
+- [ ] Arrowheads sit *outside* the target node's circle (computed by stepping back along the edge by the node's radius) so they touch the perimeter rather than disappear into the node.
+- [ ] The 3D WebGPU renderer draws an arrowhead via a small instanced triangle / cone primitive at the target end, oriented along the edge direction. (If the 3D shader change is more invasive than expected, this AC may defer to a follow-up slice — the 2D case is the priority since 2D is the default mode.)
+- [ ] Arrowheads inherit the edge's existing color/style (no new palette).
+- [ ] A toggle in the graph controls strip ("Arrows") lets readers turn arrowheads off when edge density makes them visually noisy. Default: on. Preference persists in `localStorage`.
+- [ ] E2E test: a 2-node fixture with one `subclassOf` edge renders an arrowhead at the parent end (the target of the edge).
+
+**Notes:**
+- Source: friction `[2026-06-06] schema graph draws directed relations as undirected lines` (severity: annoyance).
+- The labels already carry the direction semantically ("subclassOf" with a single direction), so the arrowhead is reinforcing visual information that's already in the data — it's an accessibility / scan-ability win, not a new contract.
+- Out of scope: arrowhead-only edge labels (drop the text, keep the arrow direction). Some graph viz tools do this for less clutter; defer until a user asks.
+
+---
+
 ## Slice Priority and Dependencies
 
 | Slice | Priority | Depends On | Status |
@@ -567,6 +590,7 @@ These are the questions whose answers currently require a click-to-pin, then scr
 | Slice 12: Graph layer consumes the shared slot resolver | Should Have | Slice 11, feature 12 slice 12.1 | ✅ Complete |
 | Slice 13: Hover card surfaces richer IR fields | Nice to Have | Slice 12, feature 12 slices 12.2 / 12.4 | Not Started |
 | Slice 14: Per-class refined slot views + effective-cardinality row | Nice to Have | Slice 12, feature 12 slice 12.3 | Not Started |
+| Slice 15: Directed-edge arrowheads in the graph | Should Have | Slice 4 | Not Started |
 
 ---
 

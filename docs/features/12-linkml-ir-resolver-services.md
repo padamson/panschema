@@ -77,16 +77,16 @@ The resolver is a sibling module to `linkml.rs`, not part of `SchemaDefinition` 
 
 ### Slice 12.2: `expand_curie` on `SchemaDefinition`
 
-**Status:** Not Started
+**Status:** ✅ Complete
 
 **Priority:** Should Have
 
 **User Value:** Every consumer that displays `class_uri` / `slot_uri` / `meaning` can show a stable, expanded IRI regardless of whether the source schema wrote it as a curie or a full URI. The graph hover card's "IRI:" row stops being inconsistent across nodes.
 
 **Acceptance Criteria:**
-- [ ] `pub fn expand_curie(schema: &SchemaDefinition, value: &str) -> Option<String>` in the same `resolve` module. Returns `Some(full_iri)` when `value` matches the `prefix:rest` shape and `prefix` is in `schema.prefixes` or matches `schema.default_prefix`. Returns `None` for inputs that don't look like a curie. Returns `Some(value.to_string())` (i.e. pass-through) when `value` already starts with `http://`, `https://`, or `urn:`.
-- [ ] Unit tests covering: standard prefix expansion (`prov:Entity` → `http://www.w3.org/ns/prov#Entity`); default-prefix fallback when no `:` in input; URL pass-through; unknown prefix returns `None`; empty input returns `None`.
-- [ ] No consumer changes in this slice — that's slice 13 of feature 04 and a follow-up in feature 02.
+- [x] `pub fn expand_curie(schema: &SchemaDefinition, value: &str) -> Option<String>` in `linkml_resolve`. Returns `Some(full_iri)` when `value` matches the `prefix:rest` shape and `prefix` is in `schema.prefixes`, or when `value` is bare and `schema.default_prefix` resolves to a known prefix. Returns `None` for inputs that don't look like a curie. Returns `Some(value.to_string())` pass-through when `value` already starts with `http://`, `https://`, or `urn:`.
+- [x] Unit tests covering: standard prefix expansion (`prov:Entity` → `http://www.w3.org/ns/prov#Entity`); default-prefix fallback when no `:` in input; URL pass-through (http://, https://, urn:); unknown prefix returns `None`; bare name with no `default_prefix` returns `None`; empty input returns `None`. 6 tests total.
+- [x] No consumer changes in this slice — RDF migration and HTML consumption are separate slices.
 
 **Notes:**
 - LinkML curies use `:` as separator; this is unambiguous because LinkML class/slot names disallow `:`.
@@ -139,7 +139,7 @@ The resolver is a sibling module to `linkml.rs`, not part of `SchemaDefinition` 
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | 12.1: Extract `resolve_effective_slots` | Must Have | feature 06 slice 6.3 (the resolver to lift) | ✅ Complete |
-| 12.2: `expand_curie` | Should Have | None | Not Started |
+| 12.2: `expand_curie` | Should Have | None | ✅ Complete |
 | 12.3: `effective_cardinality` | Should Have | 12.1 | Not Started |
 | 12.4: Slot provenance | Nice to Have | 12.1 | Not Started |
 
