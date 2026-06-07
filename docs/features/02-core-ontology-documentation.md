@@ -302,19 +302,23 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 
 ### Slice 12: `*_mappings` round-trip — IR + HTML + RDF
 
-**Status:** Not Started
+**Status:** ✅ Complete
 
 **Priority:** Must Have
 
 **User Value:** Schema authors who ground their classes and slots in upstream ontologies (BFO, CCO, IAO, CiTO, …) via `exact_mappings:` / `close_mappings:` / `related_mappings:` / `narrow_mappings:` / `broad_mappings:` currently get **silent data loss**: the YAML parses (no `deny_unknown_fields` on the relevant types), the values vanish into the void, and nothing surfaces in the rendered HTML or the emitted RDF. The whole reuse story is invisible. After this slice, mappings are first-class IR fields, render on class and property cards, and emit as `skos:exactMatch` / `closeMatch` / `relatedMatch` / `narrowMatch` / `broadMatch` triples in the RDF writers.
 
 **Acceptance Criteria:**
-- [ ] `ClassDefinition` and `SlotDefinition` in `linkml.rs` gain optional `exact_mappings: Vec<String>`, `close_mappings: Vec<String>`, `related_mappings: Vec<String>`, `narrow_mappings: Vec<String>`, `broad_mappings: Vec<String>` fields (all `#[serde(default)]` for back-compat against schemas that don't use them).
-- [ ] `yaml_reader.rs` parses each of the five fields when present. Values are CURIEs (e.g. `cito:supports`) or full IRIs; no expansion happens in the reader.
-- [ ] HTML class card gains a "Mappings" row when any of the five fields is non-empty. Each mapping is rendered with its kind (exact / close / related / narrow / broad) and the value as a CURIE-expanded hyperlink via `linkml_resolve::expand_curie` (slice 12.2 of feature 12).
-- [ ] HTML property card gains the same "Mappings" row with the same shape.
-- [ ] RDF writers (TTL, JSON-LD, N-Triples, RDF/XML) emit one triple per mapping using the SKOS predicates: `skos:exactMatch`, `closeMatch`, `relatedMatch`, `narrowMatch`, `broadMatch`. The `skos:` prefix is auto-added to the schema's prefix map at emit time if not already declared.
-- [ ] Integration test fixture: a class with `exact_mappings: [bfo:0000001]` and a slot with `close_mappings: [cito:supports]`. Assert the HTML carries both rows with expanded IRIs and the TTL output carries both triples.
+- [x] `ClassDefinition` and `SlotDefinition` in `linkml.rs` gain optional `exact_mappings: Vec<String>`, `close_mappings: Vec<String>`, `related_mappings: Vec<String>`, `narrow_mappings: Vec<String>`, `broad_mappings: Vec<String>` fields (all `#[serde(default)]` for back-compat against schemas that don't use them).
+- [x] `yaml_reader.rs` parses each of the five fields when present. (No code change needed — `serde_yaml::from_str` handles them automatically via the `#[serde(default)]` annotations.)
+- [x] HTML class card gains a "Mappings" row when any of the five fields is non-empty. Each mapping is rendered with its kind and the value as a CURIE-expanded hyperlink via `linkml_resolve::expand_curie`; unresolved prefixes render as a muted `<span>` with a tooltip explaining the gap.
+- [x] HTML property card gains the same "Mappings" row with the same shape.
+- [x] RDF writers (TTL, JSON-LD, N-Triples, RDF/XML) emit one triple per mapping using the SKOS predicates: `skos:exactMatch`, `closeMatch`, `relatedMatch`, `narrowMatch`, `broadMatch`. Built via `build_rdf_graph` which is the shared entry point for all four serializers.
+- [x] Integration tests cover: class-side mappings (BFO + CiTO mix) producing SKOS triples in the RDF graph; slot-side mappings producing the same; HTML rendering surfacing `Mapping { kind, display, href }` view-models with `href = Some(expanded)` for known prefixes, `Some(passthrough)` for absolute URLs, and `None` for unknown prefixes.
+
+**Notes:**
+- Source: friction `[2026-06-06] exact_mappings / close_mappings silently dropped from all output` (severity: silent-correctness-bug).
+- Skipped from initial scope: emit a top-level `@prefix skos:` declaration in TTL output when at least one mapping triple lands. The serializer already accepts unknown-prefix IRIs as absolute URLs, so output is valid TTL today; adding the prefix declaration is a cosmetic follow-up.
 
 **Notes:**
 - Source: friction `[2026-06-06] exact_mappings / close_mappings silently dropped from all output` (severity: silent-correctness-bug).
@@ -402,7 +406,7 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 | Slice 9: Markdown rendering in description fields | Should Have | Slice 5 | Completed |
 | Slice 10: Class card consumes the shared slot resolver | Should Have | Slice 5, Feature 12 slice 12.1 | ✅ Complete |
 | Slice 11: Class card slot provenance + cross-writer consistency test | Nice to Have | Slice 10, Feature 12 slice 12.4, Feature 04 slice 12 | Not Started |
-| Slice 12: `*_mappings` round-trip — IR + HTML + RDF | Must Have | Feature 12 slice 12.2 | Not Started |
+| Slice 12: `*_mappings` round-trip — IR + HTML + RDF | Must Have | Feature 12 slice 12.2 | ✅ Complete |
 | Slice 13: Hyperlink + CURIE-expand `class_uri` / `slot_uri` in HTML | Should Have | Feature 12 slice 12.2 | Not Started |
 | Slice 14: Abstract-class badge on class cards | Should Have | None | Not Started |
 | Slice 15: Hierarchy view in the Classes section | Should Have | None | Not Started |

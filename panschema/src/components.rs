@@ -243,6 +243,7 @@ pub struct ClassCardComponent<'a> {
     pub properties: &'a [EntityRef],
     pub mixins: &'a [EntityRef],
     pub slots: &'a [panschema::html_writer::SlotInClass],
+    pub mappings: &'a [panschema::html_writer::Mapping],
 }
 
 /// Property card component template.
@@ -257,6 +258,7 @@ pub struct PropertyCardComponent<'a> {
     pub domain: Option<&'a EntityRef>,
     pub range: Option<&'a RangeSpec>,
     pub characteristics: &'a [String],
+    pub mappings: &'a [panschema::html_writer::Mapping],
 }
 
 /// Individual card component template.
@@ -282,6 +284,7 @@ pub struct SampleClass<'a> {
     pub properties: &'a [EntityRef],
     pub mixins: &'a [EntityRef],
     pub slots: &'a [panschema::html_writer::SlotInClass],
+    pub mappings: &'a [panschema::html_writer::Mapping],
 }
 
 /// Sample property data for styleguide previews.
@@ -294,6 +297,7 @@ pub struct SampleProperty<'a> {
     pub domain: Option<&'a EntityRef>,
     pub range: Option<&'a RangeSpec>,
     pub characteristics: &'a [String],
+    pub mappings: &'a [panschema::html_writer::Mapping],
 }
 
 /// Sample individual data for styleguide previews.
@@ -441,6 +445,7 @@ impl ComponentRenderer {
             properties,
             mixins,
             slots,
+            mappings: &[],
         };
         Ok(template.render()?)
     }
@@ -466,6 +471,7 @@ impl ComponentRenderer {
             domain,
             range,
             characteristics,
+            mappings: &[],
         };
         Ok(template.render()?)
     }
@@ -531,6 +537,18 @@ impl ComponentRenderer {
                 refined_here: true,
             },
         ];
+        let class_mappings = vec![
+            panschema::html_writer::Mapping {
+                kind: "exact",
+                display: "foaf:Person".to_string(),
+                href: Some("http://xmlns.com/foaf/0.1/Person".to_string()),
+            },
+            panschema::html_writer::Mapping {
+                kind: "related",
+                display: "schema:Person".to_string(),
+                href: Some("https://schema.org/Person".to_string()),
+            },
+        ];
         let sample_class = SampleClass {
             id: "person",
             label: "Person",
@@ -541,11 +559,13 @@ impl ComponentRenderer {
             properties: &class_properties,
             mixins: &class_mixins,
             slots: &class_slots,
+            mappings: &class_mappings,
         };
 
         let domain = EntityRef::new("person", "Person");
         let range = RangeSpec::class(EntityRef::new("organization", "Organization"));
         let characteristics = vec!["Functional".to_string()];
+        let property_mappings: Vec<panschema::html_writer::Mapping> = vec![];
 
         let sample_property = SampleProperty {
             id: "member-of",
@@ -556,6 +576,7 @@ impl ComponentRenderer {
             domain: Some(&domain),
             range: Some(&range),
             characteristics: &characteristics,
+            mappings: &property_mappings,
         };
 
         let domain2 = EntityRef::new("person", "Person");
@@ -571,6 +592,7 @@ impl ComponentRenderer {
             domain: Some(&domain2),
             range: Some(&range2),
             characteristics: &empty_characteristics,
+            mappings: &property_mappings,
         };
 
         let ind_types = vec![EntityRef::new("person", "Person")];

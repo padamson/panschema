@@ -37,6 +37,7 @@ pub struct ClassData {
     pub subclasses: Vec<EntityRef>,
     pub mixins: Vec<EntityRef>,
     pub slots: Vec<SlotInClass>,
+    pub mappings: Vec<Mapping>,
 }
 
 /// A slot as it appears on a specific class, with framing resolved for
@@ -61,6 +62,17 @@ pub struct RangeRef {
     pub datatype: String,
 }
 
+/// A cross-ontology mapping rendered on class / property cards.
+/// `kind` is one of "exact" / "close" / "related" / "narrow" /
+/// "broad" — hence the `&'static str`. `href` is `None` for values
+/// whose prefix isn't declared, signalling fallback rendering.
+#[derive(Debug, Clone)]
+pub struct Mapping {
+    pub kind: &'static str,
+    pub display: String,
+    pub href: Option<String>,
+}
+
 /// Full property data for rendering property cards.
 #[derive(Debug, Clone)]
 pub struct PropertyData {
@@ -72,6 +84,7 @@ pub struct PropertyData {
     pub domain: Option<EntityRef>,
     pub range: Option<RangeRef>,
     pub characteristics: Vec<String>,
+    pub mappings: Vec<Mapping>,
 }
 
 /// A resolved property value for rendering individual cards.
@@ -421,6 +434,15 @@ impl HtmlWriter {
                 })
                 .collect();
 
+            let mappings = build_mappings(
+                &class_def.exact_mappings,
+                &class_def.close_mappings,
+                &class_def.related_mappings,
+                &class_def.narrow_mappings,
+                &class_def.broad_mappings,
+                schema,
+            );
+
             class_data_list.push(ClassData {
                 id: (*class_id).clone(),
                 label,
@@ -436,6 +458,7 @@ impl HtmlWriter {
                 subclasses,
                 mixins,
                 slots,
+                mappings,
             });
         }
 
@@ -523,6 +546,15 @@ impl HtmlWriter {
                 characteristics.push(format!("Inverse of: {}", inverse_label));
             }
 
+            let mappings = build_mappings(
+                &slot_def.exact_mappings,
+                &slot_def.close_mappings,
+                &slot_def.related_mappings,
+                &slot_def.narrow_mappings,
+                &slot_def.broad_mappings,
+                schema,
+            );
+
             property_data_list.push(PropertyData {
                 id: (*slot_id).clone(),
                 label,
@@ -538,6 +570,7 @@ impl HtmlWriter {
                 domain,
                 range,
                 characteristics,
+                mappings,
             });
         }
 
@@ -870,6 +903,36 @@ fn range_ref_for(range: &str, schema: &SchemaDefinition) -> RangeRef {
             datatype: range.to_string(),
         }
     }
+}
+
+/// Build the rendered mapping list. The emission order (exact →
+/// narrow → broad → related → close) follows SKOS strictness so the
+/// reader's eye lands on tight matches first.
+fn build_mappings(
+    exact: &[String],
+    close: &[String],
+    related: &[String],
+    narrow: &[String],
+    broad: &[String],
+    schema: &SchemaDefinition,
+) -> Vec<Mapping> {
+    let mut out: Vec<Mapping> = Vec::new();
+    for (kind, values) in [
+        ("exact", exact),
+        ("narrow", narrow),
+        ("broad", broad),
+        ("related", related),
+        ("close", close),
+    ] {
+        for value in values {
+            out.push(Mapping {
+                kind,
+                display: value.clone(),
+                href: crate::linkml_resolve::expand_curie(schema, value),
+            });
+        }
+    }
+    out
 }
 
 fn render_xref(name: &str, schema: &SchemaDefinition) -> String {
@@ -1771,5 +1834,68 @@ mod tests {
 
         // Cleanup
         let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn class_data_surfaces_mappings_with_expanded_iris() {
+        use crate::linkml::{ClassDefinition, SchemaDefinition};
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .prefixes
+            .insert("cito".to_string(), "http://purl.org/spar/cito/".to_string());
+        let mut act = ClassDefinition::new("Act");
+        act.exact_mappings = vec!["cito:supports".into()];
+        act.close_mappings = vec!["http://example.org/already-absolute".into()];
+        act.related_mappings = vec!["unknown:Foo".into()];
+        schema.classes.insert("Act".to_string(), act);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let card = data.class_data.iter().find(|c| c.id == "Act").unwrap();
+
+        assert_eq!(card.mappings.len(), 3);
+        let exact = card.mappings.iter().find(|m| m.kind == "exact").unwrap();
+        assert_eq!(exact.display, "cito:supports");
+        assert_eq!(
+            exact.href.as_deref(),
+            Some("http://purl.org/spar/cito/supports")
+        );
+        let close = card.mappings.iter().find(|m| m.kind == "close").unwrap();
+        assert_eq!(
+            close.href.as_deref(),
+            Some("http://example.org/already-absolute"),
+            "absolute URL should pass through"
+        );
+        let related = card.mappings.iter().find(|m| m.kind == "related").unwrap();
+        assert!(
+            related.href.is_none(),
+            "unresolved prefix should leave href None for template fallback"
+        );
+    }
+
+    #[test]
+    fn property_data_surfaces_mappings_with_expanded_iris() {
+        use crate::linkml::{SchemaDefinition, SlotDefinition};
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .prefixes
+            .insert("cito".to_string(), "http://purl.org/spar/cito/".to_string());
+        let mut supports = SlotDefinition::new("supports");
+        supports.exact_mappings = vec!["cito:supports".into()];
+        schema.slots.insert("supports".to_string(), supports);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let card = data
+            .property_data
+            .iter()
+            .find(|p| p.id == "supports")
+            .unwrap();
+
+        assert_eq!(card.mappings.len(), 1);
+        assert_eq!(card.mappings[0].kind, "exact");
+        assert_eq!(card.mappings[0].display, "cito:supports");
+        assert_eq!(
+            card.mappings[0].href.as_deref(),
+            Some("http://purl.org/spar/cito/supports")
+        );
     }
 }

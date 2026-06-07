@@ -358,6 +358,7 @@
                     {%- let properties = sample_class.properties %}
                     {%- let mixins = sample_class.mixins %}
                     {%- let slots = sample_class.slots %}
+                    {%- let mappings = sample_class.mappings %}
                     {% include "components/class_card.html" %}
                 </div>
             </div>
@@ -381,6 +382,7 @@
                     {%- let domain = sample_property.domain %}
                     {%- let range = sample_property.range %}
                     {%- let characteristics = sample_property.characteristics %}
+                    {%- let mappings = sample_property.mappings %}
                     {% include "components/property_card.html" %}
                 </div>
             </div>
@@ -395,6 +397,7 @@
                     {%- let domain = sample_data_property.domain %}
                     {%- let range = sample_data_property.range %}
                     {%- let characteristics = sample_data_property.characteristics %}
+                    {%- let mappings = sample_data_property.mappings %}
                     {% include "components/property_card.html" %}
                 </div>
             </div>

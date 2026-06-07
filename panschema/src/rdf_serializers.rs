@@ -19,6 +19,7 @@ use crate::linkml::SchemaDefinition;
 // Namespace constants
 const OWL_NS: &str = "http://www.w3.org/2002/07/owl#";
 const DCTERMS_NS: &str = "http://purl.org/dc/terms/";
+const SKOS_NS: &str = "http://www.w3.org/2004/02/skos/core#";
 
 /// Expand a CURIE-shaped name (`prefix:local`) against `schema.prefixes`
 /// into an absolute IRI. Inputs that are already absolute URLs
@@ -46,6 +47,43 @@ fn expand_curie(name: &str, schema: &SchemaDefinition) -> String {
             name.to_string()
         }
     }
+}
+
+/// Emit one SKOS triple per mapping value for the subject IRI,
+/// CURIE-expanded against the schema's prefixes.
+#[allow(clippy::too_many_arguments)]
+fn emit_mappings(
+    graph: &mut FastGraph,
+    subject_iri: &Iri<String>,
+    schema: &SchemaDefinition,
+    exact: &[String],
+    close: &[String],
+    related: &[String],
+    narrow: &[String],
+    broad: &[String],
+) -> IoResult<()> {
+    let skos = Namespace::new_unchecked(SKOS_NS);
+    for (predicate_name, values) in [
+        ("exactMatch", exact),
+        ("closeMatch", close),
+        ("relatedMatch", related),
+        ("narrowMatch", narrow),
+        ("broadMatch", broad),
+    ] {
+        if values.is_empty() {
+            continue;
+        }
+        let predicate = skos
+            .get(predicate_name)
+            .map_err(|e| IoError::Parse(e.to_string()))?;
+        for value in values {
+            let object_iri = make_iri(&expand_curie(value, schema))?;
+            graph
+                .insert(subject_iri, predicate, &object_iri)
+                .map_err(|e| IoError::Write(e.to_string()))?;
+        }
+    }
+    Ok(())
 }
 
 /// Build an RDF graph from a SchemaDefinition
@@ -197,6 +235,17 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
                 .insert(&class_iri, rdfs_subclass_of, &parent_iri)
                 .map_err(|e| IoError::Write(e.to_string()))?;
         }
+
+        emit_mappings(
+            &mut graph,
+            &class_iri,
+            schema,
+            &class_def.exact_mappings,
+            &class_def.close_mappings,
+            &class_def.related_mappings,
+            &class_def.narrow_mappings,
+            &class_def.broad_mappings,
+        )?;
     }
 
     // Properties (slots)
@@ -304,6 +353,17 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
                 .insert(&prop_iri, owl_inverse_of, &inverse_iri)
                 .map_err(|e| IoError::Write(e.to_string()))?;
         }
+
+        emit_mappings(
+            &mut graph,
+            &prop_iri,
+            schema,
+            &slot_def.exact_mappings,
+            &slot_def.close_mappings,
+            &slot_def.related_mappings,
+            &slot_def.narrow_mappings,
+            &slot_def.broad_mappings,
+        )?;
     }
 
     // Individuals
@@ -770,6 +830,81 @@ mod tests {
         assert_eq!(
             map_linkml_to_xsd("custom_type"),
             format!("{xsd}custom_type")
+        );
+    }
+
+    #[test]
+    fn build_rdf_graph_emits_skos_mapping_triples_for_classes() {
+        // Authors ground their classes in upstream ontologies via
+        // exact_mappings / close_mappings / related_mappings. Each
+        // mapping must surface as a triple under the matching SKOS
+        // predicate — without this, the reuse story is invisible in
+        // the emitted RDF and the schema looks like an isolated graph.
+        use sophia::api::term::Term;
+        use sophia::api::triple::Triple;
+
+        let mut schema = schema_with_prefixes();
+        schema
+            .prefixes
+            .insert("cito".to_string(), "http://purl.org/spar/cito/".to_string());
+        let mut act = ClassDefinition::new("Act");
+        act.exact_mappings = vec!["obo:BFO_0000015".into()];
+        act.close_mappings = vec!["cito:supports".into()];
+        schema.classes.insert("Act".to_string(), act);
+
+        let graph = build_rdf_graph(&schema).unwrap();
+
+        let exact_match = format!("{SKOS_NS}exactMatch");
+        let close_match = format!("{SKOS_NS}closeMatch");
+        let bfo_iri = "http://purl.obolibrary.org/obo/BFO_0000015";
+        let cito_iri = "http://purl.org/spar/cito/supports";
+
+        let has_exact = graph.triples().any(|t| {
+            let triple = t.unwrap();
+            triple.p().iri().is_some_and(|i| i.as_str() == exact_match)
+                && triple.o().iri().is_some_and(|i| i.as_str() == bfo_iri)
+        });
+        let has_close = graph.triples().any(|t| {
+            let triple = t.unwrap();
+            triple.p().iri().is_some_and(|i| i.as_str() == close_match)
+                && triple.o().iri().is_some_and(|i| i.as_str() == cito_iri)
+        });
+        assert!(has_exact, "expected skos:exactMatch triple for BFO mapping");
+        assert!(
+            has_close,
+            "expected skos:closeMatch triple for CiTO mapping"
+        );
+    }
+
+    #[test]
+    fn build_rdf_graph_emits_skos_mapping_triples_for_slots() {
+        // Same shape as the class test, but for slots: a property
+        // with cross-ontology mappings produces SKOS triples on the
+        // slot's IRI.
+        use sophia::api::term::Term;
+        use sophia::api::triple::Triple;
+
+        let mut schema = schema_with_prefixes();
+        schema
+            .prefixes
+            .insert("cito".to_string(), "http://purl.org/spar/cito/".to_string());
+        let mut supports = SlotDefinition::new("supports");
+        supports.exact_mappings = vec!["cito:supports".into()];
+        schema.slots.insert("supports".to_string(), supports);
+
+        let graph = build_rdf_graph(&schema).unwrap();
+
+        let exact_match = format!("{SKOS_NS}exactMatch");
+        let cito_iri = "http://purl.org/spar/cito/supports";
+
+        let has_exact = graph.triples().any(|t| {
+            let triple = t.unwrap();
+            triple.p().iri().is_some_and(|i| i.as_str() == exact_match)
+                && triple.o().iri().is_some_and(|i| i.as_str() == cito_iri)
+        });
+        assert!(
+            has_exact,
+            "expected skos:exactMatch triple for slot mapping"
         );
     }
 }

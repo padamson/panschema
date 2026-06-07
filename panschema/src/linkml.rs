@@ -184,6 +184,18 @@ pub struct ClassDefinition {
     /// URI for semantic interpretation (e.g., owl:Class IRI)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub class_uri: Option<String>,
+    /// Cross-ontology mappings (SKOS-aligned). Each value is a CURIE
+    /// or IRI in an upstream vocabulary (BFO, CCO, IAO, …).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exact_mappings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub close_mappings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub related_mappings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub narrow_mappings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub broad_mappings: Vec<String>,
     /// Format-specific annotations
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub annotations: BTreeMap<String, String>,
@@ -202,6 +214,11 @@ impl ClassDefinition {
             attributes: BTreeMap::new(),
             slot_usage: BTreeMap::new(),
             class_uri: None,
+            exact_mappings: Vec::new(),
+            close_mappings: Vec::new(),
+            related_mappings: Vec::new(),
+            narrow_mappings: Vec::new(),
+            broad_mappings: Vec::new(),
             annotations: BTreeMap::new(),
         }
     }
@@ -262,6 +279,17 @@ pub struct SlotDefinition {
     /// is fine.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub any_of: Vec<SlotDefinition>,
+    /// Cross-ontology mappings; see [`ClassDefinition::exact_mappings`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exact_mappings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub close_mappings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub related_mappings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub narrow_mappings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub broad_mappings: Vec<String>,
     /// Format-specific annotations
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub annotations: BTreeMap<String, String>,
@@ -284,6 +312,11 @@ impl SlotDefinition {
             slot_uri: None,
             inverse: None,
             any_of: Vec::new(),
+            exact_mappings: Vec::new(),
+            close_mappings: Vec::new(),
+            related_mappings: Vec::new(),
+            narrow_mappings: Vec::new(),
+            broad_mappings: Vec::new(),
             annotations: BTreeMap::new(),
         }
     }

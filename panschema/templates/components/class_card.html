@@ -55,6 +55,22 @@
             </dd>
         </div>
 {%- endif %}
+{%- if !mappings.is_empty() %}
+        <div class="detail-row">
+            <dt>Mappings</dt>
+            <dd>
+{%- for mapping in mappings %}
+                <span class="mapping-kind">{{ mapping.kind }}:</span>
+{%- match mapping.href %}
+{%- when Some with (href) %}
+                <a href="{{ href }}" class="mapping-iri">{{ mapping.display }}</a>{%- if !loop.last %},{% endif %}
+{%- when None %}
+                <span class="mapping-iri mapping-unresolved" title="prefix not declared in schema.prefixes">{{ mapping.display }}</span>{%- if !loop.last %},{% endif %}
+{%- endmatch %}
+{%- endfor %}
+            </dd>
+        </div>
+{%- endif %}
 {%- if !slots.is_empty() %}
         <div class="detail-row">
             <dt>Slots</dt>
