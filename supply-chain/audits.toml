@@ -1,7 +1,11 @@
 
 # cargo-vet audits file
 
-[audits]
+[[audits.rand_core]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.10.0 -> 0.10.1"
+notes = "Doc-only patch release: CHANGELOG addition + version bump + two doc comments updated to reference the renamed rand::RngExt trait. Zero code changes; no unsafe; no new ambient capabilities."
 
 [[trusted.aho-corasick]]
 criteria = "safe-to-deploy"

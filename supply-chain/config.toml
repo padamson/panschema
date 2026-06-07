@@ -632,14 +632,6 @@ criteria = "safe-to-run"
 version = "0.4.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.pulldown-cmark]]
-version = "0.13.4"
-criteria = "safe-to-deploy"
-
-[[exemptions.pulldown-cmark-escape]]
-version = "0.11.0"
-criteria = "safe-to-deploy"
-
 [[exemptions.portable-atomic]]
 version = "1.13.1"
 criteria = "safe-to-deploy"
@@ -666,6 +658,14 @@ criteria = "safe-to-deploy"
 
 [[exemptions.profiling]]
 version = "1.0.18"
+criteria = "safe-to-deploy"
+
+[[exemptions.pulldown-cmark]]
+version = "0.13.4"
+criteria = "safe-to-deploy"
+
+[[exemptions.pulldown-cmark-escape]]
+version = "0.11.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.quick-xml]]
@@ -850,10 +850,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.sync_wrapper]]
 version = "1.0.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.tar]]
-version = "0.4.46"
 criteria = "safe-to-deploy"
 
 [[exemptions.tempfile]]
