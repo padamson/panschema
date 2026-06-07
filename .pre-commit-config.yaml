@@ -44,13 +44,6 @@ repos:
         types: [rust]
         pass_filenames: false
 
-      - id: cargo-check
-        name: cargo check
-        entry: cargo check --workspace
-        language: system
-        types: [rust]
-        pass_filenames: false
-
       - id: cargo-nextest
         name: cargo nextest
         entry: cargo nextest run --workspace
