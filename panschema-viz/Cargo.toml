@@ -32,23 +32,23 @@ serde_json = "1"
 
 # Graph layout (egraph-rs workspace, git-only — sub-crates not on
 # crates.io). Pinned to our padamson/egraph-rs fork that ports the
-# workspace to petgraph 0.8 and rand 0.9. Upstream `likr/egraph-rs`
+# workspace to petgraph 0.8 and rand 0.10. Upstream `likr/egraph-rs`
 # is still on petgraph 0.6; the fork-based pin unblocks both bumps
 # across our direct deps. Repin to upstream once our PRs land there.
 petgraph = "0.8"
-petgraph-drawing = { version = "0.1", git = "https://github.com/padamson/egraph-rs", rev = "c149ba911802ad699577a115841e4a73ed2c2835" }
-petgraph-layout-kamada-kawai = { version = "0.1", git = "https://github.com/padamson/egraph-rs", rev = "c149ba911802ad699577a115841e4a73ed2c2835" }
-petgraph-layout-stress-majorization = { version = "0.1", git = "https://github.com/padamson/egraph-rs", rev = "c149ba911802ad699577a115841e4a73ed2c2835" }
-petgraph-layout-sgd = { version = "0.1", git = "https://github.com/padamson/egraph-rs", rev = "c149ba911802ad699577a115841e4a73ed2c2835" }
+petgraph-drawing = { version = "0.1", git = "https://github.com/padamson/egraph-rs", rev = "9b38f5d17992b20c1ea0466c1e8805f014ad3b88" }
+petgraph-layout-kamada-kawai = { version = "0.1", git = "https://github.com/padamson/egraph-rs", rev = "9b38f5d17992b20c1ea0466c1e8805f014ad3b88" }
+petgraph-layout-stress-majorization = { version = "0.1", git = "https://github.com/padamson/egraph-rs", rev = "9b38f5d17992b20c1ea0466c1e8805f014ad3b88" }
+petgraph-layout-sgd = { version = "0.1", git = "https://github.com/padamson/egraph-rs", rev = "9b38f5d17992b20c1ea0466c1e8805f014ad3b88" }
 # Matches the rand version petgraph-layout-sgd depends on. Used to
 # seed the SGD scheduler's shuffle step.
-rand = "0.9"
-# Wasm32 needs the `wasm_js` backend on getrandom 0.3 (transitive dep
-# of rand 0.9) so the SGD path's deterministic `StdRng::seed_from_u64`
-# compiles cleanly for the wasm32-unknown-unknown target. The cfg
-# flag selecting the backend lives in `.cargo/config.toml` alongside
-# this manifest — both pieces are required together.
-getrandom = { version = "0.3", features = ["wasm_js"] }
+rand = "0.10"
+# Wasm32 needs the `wasm_js` feature on getrandom 0.4 (transitive dep
+# of rand 0.10) so the SGD path's deterministic `StdRng::seed_from_u64`
+# compiles cleanly for the wasm32-unknown-unknown target. getrandom
+# 0.4 selects the backend via the feature alone — no rustflag cfg
+# required (the cfg the 0.3 round needed is gone with the version).
+getrandom = { version = "0.4", features = ["wasm_js"] }
 # Empty no-op crate providing `#[mutants::skip]` so we can mark
 # provably/empirically-equivalent expressions without resorting to
 # brittle line-number based excludes in scripts/mutants.sh.
