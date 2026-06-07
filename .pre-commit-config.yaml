@@ -86,3 +86,11 @@ repos:
         language: system
         pass_filenames: false
         files: (Cargo\.toml|Cargo\.lock|deny\.toml)$
+
+      - id: cargo-vet
+        name: cargo vet
+        description: Check that every dependency change is covered by an audit
+        entry: cargo vet
+        language: system
+        pass_filenames: false
+        files: (Cargo\.toml|Cargo\.lock|supply-chain/.*\.toml)$
