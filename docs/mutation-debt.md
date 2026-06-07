@@ -133,6 +133,74 @@ either pixel comparisons (out of scope) or "did the simulation
 converge" (noisy under mutation). Defer until a concrete need
 surfaces.
 
+## Snapshot — 2026-06-07 (workflow_dispatch on commit `f89360f`)
+
+The first full run since the initial snapshot, after substantial
+changes landed in the visualization layer (3D path, layout
+algorithms, hover-card metadata) and several writer-side features
+(Rust codegen, schema package manager, versioned docs, mappings
+round-trip).
+
+| Outcome | Count | Share |
+|---|---|---|
+| Caught | 1,034 | 20.0% |
+| Missed | 3,960 | 76.8% |
+| Unviable | 160 | 3.1% |
+| Timeout | 1 | <0.1% |
+
+Wall clock: ~4 hours. Of the 3,960 missed, **3,847 (97.1%) are in
+modules excluded from the per-push `--in-diff` job** (wasm-only or
+dev-styleguide code). The catch-up-able backlog — files that
+already run native tests — is the remaining 113.
+
+### Missed by file (testable from native Rust)
+
+| File | Missed | Notes |
+|---|---|---|
+| `panschema-viz/src/simulation.rs` | 64 | CPU force-simulation; tests exist but don't cover internal math precisely |
+| `panschema-viz/src/sim_common.rs` | 13 | Shared simulation helpers |
+| `panschema/src/rdf_serializers.rs` | 8 | The new SKOS emission code adds a small new surface; the bulk are pre-existing |
+| `panschema/src/main.rs` | 7 | CLI entry shell; rarely worth direct unit tests |
+| `panschema/src/server.rs` | 6 | Dev server |
+| `panschema/src/rust_writer.rs` | 5 | Mostly the new `slot_usage` overlay path |
+| `panschema/src/owl_reader.rs` | 5 | Pre-existing |
+| `panschema/src/source.rs` | 2 | Github / path source dispatch |
+| `panschema/src/html_writer.rs` | 2 | The mapping templates; small surface |
+| `panschema/src/manifest.rs` | 1 | Manifest parsing |
+| **Total** | **113** | |
+
+### Missed in excluded modules (informational)
+
+These mutants live in modules excluded from the per-push job per
+[`.mutants.toml`](../.mutants.toml) — wasm-only entry points, GPU
+shader scaffolding, the dev-feature styleguide. Listed here so the
+full run's noise doesn't get re-discovered as "new" each cycle.
+
+| File | Missed |
+|---|---|
+| `panschema-viz/src/lib.rs` | 278 |
+| `panschema-viz/src/webgpu.rs` | 118 |
+| `panschema-viz/src/simulation3d.rs` | 684 |
+| `panschema/src/gpu/*` | 535 |
+| `panschema/src/components.rs` | 25 |
+| `panschema-viz/src/camera.rs` | 14 |
+| `panschema-viz/src/interaction.rs` | 9 |
+
+### Triage priority
+
+The new code from the recent slice work is well-covered (slice 11
+hover card, slice 12.1 resolver lift, slice 12.2 expand_curie,
+slice 12 mappings round-trip all had near-100% mutant catch on
+their `--in-diff` runs). The 113 testable misses are dominated by
+pre-existing force-simulation math in `panschema-viz/src/`; closing
+that backlog requires test fixtures with known equilibrium states.
+Defer until force-simulation behaviour changes warrant the
+investment.
+
+The `rdf_serializers.rs` and `rust_writer.rs` misses (13 between
+them) are the highest-payoff catch-up targets when the next
+maintenance window opens — small files with clear test patterns.
+
 ## Updating this snapshot
 
 When you want a fresh picture of remaining debt:
