@@ -5,8 +5,8 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
-  # Allow this workflow to be called by other workflows (e.g., release.yml)
   workflow_call:
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -27,8 +27,8 @@ jobs:
         with:
           toolchain: "1.88"
 
-      # panschema/src/html_writer.rs include_bytes! the wasm pkg artifacts at
-      # compile time. For type-checking only, empty placeholders are fine.
+      # html_writer.rs include_bytes! these at compile time; empty
+      # placeholders satisfy type-checking without a wasm-pack run.
       - name: Stub WASM artifacts
         run: |
           mkdir -p panschema-viz/pkg
@@ -62,8 +62,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-lint-
 
-      # Empty placeholders are fine for type-check / clippy / cargo doc /
-      # doctests — they don't exercise the wasm bytes at runtime.
       - name: Stub WASM artifacts
         run: |
           mkdir -p panschema-viz/pkg
@@ -78,9 +76,7 @@ jobs:
       - name: Clippy (with dev feature)
         run: cargo clippy -p panschema --all-targets --features dev -- -D warnings
 
-      # Cheap canary: catches deps that don't compile to wasm32 without
-      # paying the full wasm-pack cost. The full wasm-pack build runs in
-      # the test job below for the published artifact.
+      # Cheap canary; the full wasm-pack build runs in the test job.
       - name: Check panschema-viz on wasm32-unknown-unknown
         run: cargo check --target wasm32-unknown-unknown -p panschema-viz
 
