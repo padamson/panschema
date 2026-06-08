@@ -153,7 +153,17 @@ cargo build
 cargo nextest run --features dev
 ```
 
-`cargo build` invokes wasm-pack via `panschema/build.rs` whenever `panschema-viz/` changes — no manual wasm-pack step needed. Debug builds skip the wasm-opt pass; `cargo build --release` keeps it for size-optimized bundles.
+On a fresh checkout, `cargo build` invokes wasm-pack via `panschema/build.rs` to produce the WASM visualization bundle. Subsequent builds reuse that bundle — see the workflow below.
+
+### Refreshing the WASM bundle after viz edits
+
+The WASM bundle in `panschema-viz/pkg/` is cached across builds. If you edit `panschema-viz/src/`, rebuild it explicitly:
+
+```bash
+wasm-pack build panschema-viz --target web --dev --features webgpu
+```
+
+(Use `--release` instead of `--dev` for size-optimized bundles in CI / publish.) Schema authors who don't touch `panschema-viz/` can ignore this — `cargo build` keeps using the previously-built bundle.
 
 ### Faster builds (optional)
 

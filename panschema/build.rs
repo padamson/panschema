@@ -2,17 +2,25 @@
 //! pulls in via `include_str!` / `include_bytes!`) so a fresh
 //! checkout compiles without a manual `wasm-pack` step.
 //!
-//! cargo's `rerun-if-changed` keeps this out of the incremental
-//! hot path — the script only runs when something under
-//! `panschema-viz/` changes. Each run unconditionally invokes
-//! wasm-pack, which is itself fast when its own incremental cache
-//! is warm.
+//! After the initial bundle exists, this script does nothing.
+//! Viz developers refresh the bundle by running wasm-pack
+//! themselves (see README); CI's lint job stubs the pkg/ files
+//! with empty placeholders, which satisfy `include_bytes!` for
+//! type-checking without needing wasm-pack on the lint runner.
 
+use std::path::Path;
 use std::process::{Command, Stdio};
 
+const PKG_JS: &str = "../panschema-viz/pkg/panschema_viz.js";
+const PKG_WASM: &str = "../panschema-viz/pkg/panschema_viz_bg.wasm";
+
 fn main() {
-    println!("cargo:rerun-if-changed=../panschema-viz/src");
-    println!("cargo:rerun-if-changed=../panschema-viz/Cargo.toml");
+    println!("cargo:rerun-if-changed={PKG_JS}");
+    println!("cargo:rerun-if-changed={PKG_WASM}");
+
+    if Path::new(PKG_JS).exists() && Path::new(PKG_WASM).exists() {
+        return;
+    }
 
     if !wasm_pack_available() {
         eprintln!();
