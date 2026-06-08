@@ -1,0 +1,25 @@
+# Workspace-level cargo config.
+#
+# === Optional: faster linker ===
+#
+# The dominant cost on incremental `cargo build` of this workspace
+# is linking the ~35 MB debug `panschema` binary. Swapping to an
+# alternative linker drops that from seconds to sub-second.
+#
+# Uncomment ONE of the blocks below for your host platform, after
+# installing the corresponding linker:
+#
+#   - lld:  `brew install llvm` (macOS), `apt install lld` (Linux)
+#   - mold: `brew install mold` (macOS, Linux)
+#   - sold: `brew install sold` (Apple Silicon)
+#
+# If you skip this, builds work — they're just slower.
+
+# [target.aarch64-apple-darwin]
+# rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+# [target.x86_64-apple-darwin]
+# rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+# [target.x86_64-unknown-linux-gnu]
+# rustflags = ["-C", "link-arg=-fuse-ld=mold"]

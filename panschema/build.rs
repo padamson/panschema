@@ -1,52 +1,50 @@
-//! Ensures `panschema-viz/pkg/` artifacts exist before `panschema`
-//! compiles its `include_str!` / `include_bytes!` references in
-//! `html_writer.rs`. Without this, `cargo install --git` fails on a
-//! fresh checkout because wasm-pack output isn't tracked in git.
+//! Builds `panschema-viz/pkg/` (the wasm bundle `html_writer.rs`
+//! pulls in via `include_str!` / `include_bytes!`) so a fresh
+//! checkout compiles without a manual `wasm-pack` step.
+//!
+//! cargo's `rerun-if-changed` keeps this out of the incremental
+//! hot path — the script only runs when something under
+//! `panschema-viz/` changes. Each run unconditionally invokes
+//! wasm-pack, which is itself fast when its own incremental cache
+//! is warm.
 
-use std::path::Path;
 use std::process::{Command, Stdio};
-
-const PKG_DIR: &str = "../panschema-viz/pkg";
-const PKG_JS: &str = "../panschema-viz/pkg/panschema_viz.js";
-const PKG_WASM: &str = "../panschema-viz/pkg/panschema_viz_bg.wasm";
 
 fn main() {
     println!("cargo:rerun-if-changed=../panschema-viz/src");
     println!("cargo:rerun-if-changed=../panschema-viz/Cargo.toml");
-    println!("cargo:rerun-if-changed={PKG_JS}");
-    println!("cargo:rerun-if-changed={PKG_WASM}");
-
-    if Path::new(PKG_JS).exists() && Path::new(PKG_WASM).exists() {
-        return;
-    }
 
     if !wasm_pack_available() {
         eprintln!();
-        eprintln!("error: panschema-viz/pkg/ artifacts are missing and `wasm-pack`");
-        eprintln!("       is not on PATH. The HTML writer embeds the WebGPU");
-        eprintln!("       visualization bundle at compile time, so it must exist");
-        eprintln!("       before `cargo build`.");
+        eprintln!("error: `wasm-pack` is not on PATH. The HTML writer");
+        eprintln!("       embeds the WebGPU visualization bundle at");
+        eprintln!("       compile time, so wasm-pack must be installed.");
         eprintln!();
-        eprintln!("Fix: install wasm-pack, then re-run cargo:");
-        eprintln!("     cargo install wasm-pack");
+        eprintln!("Fix: `cargo install wasm-pack`");
         eprintln!();
         std::process::exit(1);
     }
 
-    // `--features webgpu` is required: without it, `create_visualization_3d`
-    // is `#[cfg]`-gated out of the wasm exports, the JS UI sees no 3D entry
-    // point, and the 3D mode button is permanently disabled on the
-    // generated page. Mirrors the wasm-pack invocation in .github/workflows/test.yml.
+    // Debug builds get `--dev` (skips wasm-opt, ~15s/run); release
+    // builds keep `--release` so shipped bundles stay size-optimized.
+    let profile_flag = match std::env::var("PROFILE").as_deref() {
+        Ok("release") => "--release",
+        _ => "--dev",
+    };
+
+    // Use panschema-viz/target/ so wasm-pack's recursive cargo
+    // doesn't fight the outer cargo for the workspace target lock.
     let status = Command::new("wasm-pack")
         .args([
             "build",
             "--target",
             "web",
-            "--release",
+            profile_flag,
             "--features",
             "webgpu",
         ])
         .current_dir("../panschema-viz")
+        .env("CARGO_TARGET_DIR", "target")
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .status()
@@ -55,11 +53,6 @@ fn main() {
     if !status.success() {
         panic!("wasm-pack build failed (exit {status})");
     }
-
-    assert!(
-        Path::new(PKG_JS).exists() && Path::new(PKG_WASM).exists(),
-        "wasm-pack succeeded but {PKG_DIR}/ is missing expected outputs"
-    );
 }
 
 fn wasm_pack_available() -> bool {

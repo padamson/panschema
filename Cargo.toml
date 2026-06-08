@@ -2,6 +2,14 @@
 members = ["panschema", "panschema-viz"]
 resolver = "2"
 
+# `line-tables-only` keeps backtraces line-accurate but drops the
+# bulk of DWARF needed for source-level stepping. The win is link
+# time: the 35 MB debug `panschema` binary stops dominating the
+# incremental edit/build loop. Enable a full `debug = true` locally
+# when reaching for a debugger.
+[profile.dev]
+debug = "line-tables-only"
+
 # Shared profile settings
 [profile.release]
 # `lto = "thin"` keeps most of the binary-size + perf benefit of full

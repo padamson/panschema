@@ -1,4 +1,8 @@
 /target/
+# wasm-pack writes to panschema-viz/target/ — build.rs sets
+# CARGO_TARGET_DIR there so the recursive cargo invocation doesn't
+# fight the outer cargo for the workspace target lock.
+/panschema-viz/target/
 /output/
 examples/**/output/
 examples/**/docs/

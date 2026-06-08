@@ -148,26 +148,16 @@ npx playwright@1.59.1 install
 ### Building & Testing
 
 ```bash
+cargo install wasm-pack    # one-time prerequisite
 cargo build
 cargo nextest run --features dev
 ```
 
-### Building WASM Visualization
+`cargo build` invokes wasm-pack via `panschema/build.rs` whenever `panschema-viz/` changes — no manual wasm-pack step needed. Debug builds skip the wasm-opt pass; `cargo build --release` keeps it for size-optimized bundles.
 
-The browser visualization is built with wasm-pack. The WASM files are embedded in the panschema binary.
+### Faster builds (optional)
 
-```bash
-# Install wasm-pack (one time)
-cargo install wasm-pack
-
-# Build WASM (from repository root)
-cd panschema-viz && wasm-pack build --target web
-
-# Rebuild panschema to embed updated WASM
-cargo build
-```
-
-After building, generated HTML will include the animated graph visualization automatically.
+If the link time on the debug `panschema` binary becomes a bottleneck, uncomment the relevant block in `.cargo/config.toml` to point cargo at `lld` / `mold` / `sold`. Install instructions are in that file.
 
 ### Manual Verification
 
