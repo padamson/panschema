@@ -1,5 +1,6 @@
 ---
 source: panschema/src/components.rs
+assertion_line: 847
 expression: html
 ---
 <article class="entity-card class-card" id="class-person">
@@ -125,6 +126,17 @@ expression: html
         color: var(--color-text-muted);
         font-size: var(--text-sm);
         word-break: break-all;
+    }
+
+    /* CURIE-expanded class_uri / slot_uri rendered as an anchor.
+       Inherits muted color from the inner <code>; underline only on
+       hover so the card stays visually quiet at rest. */
+    .entity-iri-link {
+        text-decoration: none;
+    }
+    .entity-iri-link:hover code {
+        text-decoration: underline;
+        color: var(--color-text);
     }
 
     .entity-description {
