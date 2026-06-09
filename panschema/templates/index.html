@@ -43,6 +43,7 @@
         {%- let id = class.id.as_str() %}
         {%- let label = class.label.as_str() %}
         {%- let iri = class.iri.as_str() %}
+        {%- let iri_href = class.iri_href.as_deref() %}
         {%- let description = class.description.as_deref() %}
         {%- let superclass = class.superclass.as_ref() %}
         {%- let subclasses = class.subclasses.as_slice() %}
@@ -75,6 +76,7 @@
         {%- let id = prop.id.as_str() %}
         {%- let label = prop.label.as_str() %}
         {%- let iri = prop.iri.as_str() %}
+        {%- let iri_href = prop.iri_href.as_deref() %}
         {%- let property_type = prop.property_type.as_str() %}
         {%- let description = prop.description.as_deref() %}
         {%- let domain = prop.domain.as_ref() %}

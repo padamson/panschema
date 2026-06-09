@@ -32,6 +32,9 @@ pub struct ClassData {
     pub id: String,
     pub label: String,
     pub iri: String,
+    /// Expanded link target paired with `iri`; `None` falls back to
+    /// plain text in the template.
+    pub iri_href: Option<String>,
     pub description: Option<String>,
     pub superclass: Option<EntityRef>,
     pub subclasses: Vec<EntityRef>,
@@ -79,6 +82,7 @@ pub struct PropertyData {
     pub id: String,
     pub label: String,
     pub iri: String,
+    pub iri_href: Option<String>,
     pub property_type: String,
     pub description: Option<String>,
     pub domain: Option<EntityRef>,
@@ -443,6 +447,15 @@ impl HtmlWriter {
                 schema,
             );
 
+            // class_uri wins when present; otherwise treat the
+            // class name as a bare CURIE so the schema's
+            // default_prefix resolves it (the LinkML convention).
+            let iri_href = class_def
+                .class_uri
+                .as_deref()
+                .and_then(|c| crate::linkml_resolve::expand_curie(schema, c))
+                .or_else(|| crate::linkml_resolve::expand_curie(schema, class_id));
+
             class_data_list.push(ClassData {
                 id: (*class_id).clone(),
                 label,
@@ -450,6 +463,7 @@ impl HtmlWriter {
                     .class_uri
                     .clone()
                     .unwrap_or_else(|| (*class_id).clone()),
+                iri_href,
                 description: class_def
                     .description
                     .as_deref()
@@ -555,6 +569,12 @@ impl HtmlWriter {
                 schema,
             );
 
+            let iri_href = slot_def
+                .slot_uri
+                .as_deref()
+                .and_then(|s| crate::linkml_resolve::expand_curie(schema, s))
+                .or_else(|| crate::linkml_resolve::expand_curie(schema, slot_id));
+
             property_data_list.push(PropertyData {
                 id: (*slot_id).clone(),
                 label,
@@ -562,6 +582,7 @@ impl HtmlWriter {
                     .slot_uri
                     .clone()
                     .unwrap_or_else(|| (*slot_id).clone()),
+                iri_href,
                 property_type,
                 description: slot_def
                     .description
@@ -1895,6 +1916,94 @@ mod tests {
         assert_eq!(card.mappings[0].display, "cito:supports");
         assert_eq!(
             card.mappings[0].href.as_deref(),
+            Some("http://purl.org/spar/cito/supports")
+        );
+    }
+
+    #[test]
+    fn class_data_expands_class_uri_to_iri_href() {
+        use crate::linkml::{ClassDefinition, SchemaDefinition};
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .prefixes
+            .insert("cco".to_string(), "http://example.org/cco/".to_string());
+
+        let mut grounded = ClassDefinition::new("Grounded");
+        grounded.class_uri = Some("cco:ont00000005".to_string());
+        schema.classes.insert("Grounded".to_string(), grounded);
+
+        // No class_uri, no default_prefix — bare name has nowhere to resolve.
+        schema
+            .classes
+            .insert("Bare".to_string(), ClassDefinition::new("Bare"));
+
+        // Unknown prefix.
+        let mut orphan = ClassDefinition::new("Orphan");
+        orphan.class_uri = Some("unknown:Foo".to_string());
+        schema.classes.insert("Orphan".to_string(), orphan);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let grounded_card = data.class_data.iter().find(|c| c.id == "Grounded").unwrap();
+        assert_eq!(
+            grounded_card.iri_href.as_deref(),
+            Some("http://example.org/cco/ont00000005")
+        );
+        let bare_card = data.class_data.iter().find(|c| c.id == "Bare").unwrap();
+        assert!(
+            bare_card.iri_href.is_none(),
+            "no class_uri AND no default_prefix → no hyperlink target"
+        );
+        let orphan_card = data.class_data.iter().find(|c| c.id == "Orphan").unwrap();
+        assert!(
+            orphan_card.iri_href.is_none(),
+            "unresolved prefix → template falls back to plain text"
+        );
+    }
+
+    #[test]
+    fn class_data_falls_back_to_default_prefix_expansion_for_bare_classes() {
+        // The common LinkML schema pattern: no explicit class_uri,
+        // schema-local classes resolve via default_prefix. Without this
+        // fallback the copy-IRI button on the rendered card would copy
+        // the bare class name instead of a usable IRI.
+        use crate::linkml::{ClassDefinition, SchemaDefinition};
+        let mut schema = SchemaDefinition::new("scimantic");
+        schema.prefixes.insert(
+            "scimantic".to_string(),
+            "https://w3id.org/scimantic/".to_string(),
+        );
+        schema.default_prefix = Some("scimantic".to_string());
+        schema
+            .classes
+            .insert("Act".to_string(), ClassDefinition::new("Act"));
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let card = data.class_data.iter().find(|c| c.id == "Act").unwrap();
+        assert_eq!(
+            card.iri_href.as_deref(),
+            Some("https://w3id.org/scimantic/Act")
+        );
+    }
+
+    #[test]
+    fn property_data_expands_slot_uri_to_iri_href() {
+        use crate::linkml::{SchemaDefinition, SlotDefinition};
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .prefixes
+            .insert("cito".to_string(), "http://purl.org/spar/cito/".to_string());
+        let mut supports = SlotDefinition::new("supports");
+        supports.slot_uri = Some("cito:supports".to_string());
+        schema.slots.insert("supports".to_string(), supports);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let card = data
+            .property_data
+            .iter()
+            .find(|p| p.id == "supports")
+            .unwrap();
+        assert_eq!(
+            card.iri_href.as_deref(),
             Some("http://purl.org/spar/cito/supports")
         );
     }

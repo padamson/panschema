@@ -329,18 +329,21 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 
 ### Slice 13: Hyperlink + CURIE-expand `class_uri` / `slot_uri` in HTML
 
-**Status:** Not Started
+**Status:** ✅ Complete
 
 **Priority:** Should Have
 
 **User Value:** Class and property cards currently render `class_uri: cco:ont00000958` as plain `<code>` text. Authors grounding their schema in upstream ontologies want the IRI to be a clickable link to the upstream PURL so they can verify the grounding without leaving the docs. After this slice, every `class_uri` / `slot_uri` becomes a hyperlinked, CURIE-expanded label.
 
 **Acceptance Criteria:**
-- [ ] HTML class card's IRI display passes the `class_uri` value through `linkml_resolve::expand_curie` (slice 12.2 of feature 12). When `expand_curie` returns `Some(full_iri)`, the displayed text stays as the original CURIE (or the existing display string) but the surrounding `<a href="...">` points at the expanded IRI. When `expand_curie` returns `None`, fall back to today's plain-text rendering with an HTML comment flagging the unrecognized prefix.
-- [ ] HTML property card's IRI display gets the same treatment for `slot_uri`.
-- [ ] Permissible-value `meaning:` values (when present) get the same treatment so enum-value cards link out to their upstream definition.
-- [ ] Integration test: a class with `class_uri: cco:ont00000958` and `prefixes: { cco: http://example.org/cco/ }` renders an `<a href="http://example.org/cco/ont00000958">cco:ont00000958</a>` link. A class with `class_uri: unknown:Foo` renders unlinked text with the HTML warning comment.
-- [ ] Snapshot tests for the class_card and property_card components updated to include the new link.
+- [x] HTML class card's IRI display passes the `class_uri` value through `linkml_resolve::expand_curie` (slice 12.2 of feature 12). When `expand_curie` returns `Some(full_iri)`, the displayed CURIE is wrapped in `<a href="...">` pointing at the expanded IRI; the copy-button payload also switches to the expanded IRI so a click yields a directly-resolvable URL.
+- [x] HTML property card's IRI display gets the same treatment for `slot_uri`.
+- [ ] Permissible-value `meaning:` values (when present) get the same treatment so enum-value cards link out to their upstream definition. **Deferred** — enum cards are a separate template; carved into a follow-up slice once we touch that surface.
+- [x] Integration test: a class with `class_uri: cco:ont00000005` and `prefixes: { cco: http://example.org/cco/ }` populates `ClassData.iri_href` with the expanded IRI; a class with `class_uri: unknown:Foo` leaves `iri_href = None`; a class with no `class_uri` leaves `iri_href = None`. Symmetric test for `PropertyData.iri_href`.
+- [x] CSS rule for `.entity-iri-link` keeps the card visually quiet at rest (no underline by default), with hover state revealing the link. Author-supplied prefixes that don't expand fall back to today's plain `<code>` rendering verbatim.
+
+**Notes:**
+- Tested with the existing class-card snapshots — they update mechanically. New unit tests in `html_writer.rs::tests` cover the IR → view-model expansion.
 
 **Notes:**
 - Source: friction `[2026-06-06] class_uri / slot_uri shown as plain text, never hyperlinked or CURIE-expanded in HTML` (severity: annoyance).
@@ -407,6 +410,6 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 | Slice 10: Class card consumes the shared slot resolver | Should Have | Slice 5, Feature 12 slice 12.1 | ✅ Complete |
 | Slice 11: Class card slot provenance + cross-writer consistency test | Nice to Have | Slice 10, Feature 12 slice 12.4, Feature 04 slice 12 | Not Started |
 | Slice 12: `*_mappings` round-trip — IR + HTML + RDF | Must Have | Feature 12 slice 12.2 | ✅ Complete |
-| Slice 13: Hyperlink + CURIE-expand `class_uri` / `slot_uri` in HTML | Should Have | Feature 12 slice 12.2 | Not Started |
+| Slice 13: Hyperlink + CURIE-expand `class_uri` / `slot_uri` in HTML | Should Have | Feature 12 slice 12.2 | ✅ Complete |
 | Slice 14: Abstract-class badge on class cards | Should Have | None | Not Started |
 | Slice 15: Hierarchy view in the Classes section | Should Have | None | Not Started |

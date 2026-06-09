@@ -125,12 +125,19 @@
     }
 </style>
 <script>
-    document.querySelectorAll('.copy-btn').forEach(btn => {
-        btn.addEventListener('click', async () => {
-            const text = btn.dataset.copy;
-            await navigator.clipboard.writeText(text);
-            btn.classList.add('copied');
-            setTimeout(() => btn.classList.remove('copied'), 1500);
+    // namespace_table.html is the first include that uses .copy-btn, so
+    // this script runs early — before the class/property/individual
+    // card buttons further down the page exist. Defer to DOMContentLoaded
+    // so the wiring catches every .copy-btn, not just the namespace
+    // table's own.
+    document.addEventListener('DOMContentLoaded', () => {
+        document.querySelectorAll('.copy-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const text = btn.dataset.copy;
+                await navigator.clipboard.writeText(text);
+                btn.classList.add('copied');
+                setTimeout(() => btn.classList.remove('copied'), 1500);
+            });
         });
     });
 </script>
