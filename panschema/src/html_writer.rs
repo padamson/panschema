@@ -41,6 +41,11 @@ pub struct ClassData {
     pub mixins: Vec<EntityRef>,
     pub slots: Vec<SlotInClass>,
     pub mappings: Vec<Mapping>,
+    /// External `rdfs:subClassOf` grounding — typically upstream
+    /// ontology classes the schema declares this class as a
+    /// subclass of. Distinct from `superclass`, which models the
+    /// intra-schema `is_a` parent.
+    pub external_superclasses: Vec<ExternalLink>,
     /// `true` for LinkML classes with `abstract: true`. Surfaced as
     /// a small badge in the card heading so readers can tell
     /// foundation classes from instantiable ones at a glance.
@@ -76,6 +81,15 @@ pub struct RangeRef {
 #[derive(Debug, Clone)]
 pub struct Mapping {
     pub kind: &'static str,
+    pub display: String,
+    pub href: Option<String>,
+}
+
+/// External hyperlink with an optional expansion. `display` is the
+/// CURIE or IRI the author wrote; `href` is the expanded link
+/// target, or `None` when the prefix isn't declared.
+#[derive(Debug, Clone)]
+pub struct ExternalLink {
     pub display: String,
     pub href: Option<String>,
 }
@@ -460,6 +474,16 @@ impl HtmlWriter {
                 .and_then(|c| crate::linkml_resolve::expand_curie(schema, c))
                 .or_else(|| crate::linkml_resolve::expand_curie(schema, class_id));
 
+            let external_superclasses: Vec<ExternalLink> = class_def
+                .subclass_of
+                .as_deref()
+                .map(|raw| ExternalLink {
+                    display: raw.to_string(),
+                    href: crate::linkml_resolve::expand_curie(schema, raw),
+                })
+                .into_iter()
+                .collect();
+
             class_data_list.push(ClassData {
                 id: (*class_id).clone(),
                 label,
@@ -477,6 +501,7 @@ impl HtmlWriter {
                 mixins,
                 slots,
                 mappings,
+                external_superclasses,
                 is_abstract: class_def.r#abstract,
             });
         }
@@ -1987,6 +2012,37 @@ mod tests {
         assert_eq!(
             card.iri_href.as_deref(),
             Some("https://w3id.org/scimantic/Act")
+        );
+    }
+
+    #[test]
+    fn class_data_threads_external_subclass_of_with_expanded_iri() {
+        use crate::linkml::{ClassDefinition, SchemaDefinition};
+        let mut schema = SchemaDefinition::new("scimantic");
+        schema
+            .prefixes
+            .insert("cco".to_string(), "http://example.org/cco/".to_string());
+
+        let mut grounded = ClassDefinition::new("Act");
+        grounded.subclass_of = Some("cco:ont00000005".to_string());
+        schema.classes.insert("Act".to_string(), grounded);
+
+        let mut unknown = ClassDefinition::new("Orphan");
+        unknown.subclass_of = Some("unknown:NotDeclared".to_string());
+        schema.classes.insert("Orphan".to_string(), unknown);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let act = data.class_data.iter().find(|c| c.id == "Act").unwrap();
+        assert_eq!(act.external_superclasses.len(), 1);
+        assert_eq!(act.external_superclasses[0].display, "cco:ont00000005");
+        assert_eq!(
+            act.external_superclasses[0].href.as_deref(),
+            Some("http://example.org/cco/ont00000005")
+        );
+        let orphan = data.class_data.iter().find(|c| c.id == "Orphan").unwrap();
+        assert!(
+            orphan.external_superclasses[0].href.is_none(),
+            "undeclared prefix falls through to plain-text rendering"
         );
     }
 

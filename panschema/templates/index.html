@@ -50,6 +50,7 @@
         {%- let mixins = class.mixins.as_slice() %}
         {%- let slots = class.slots.as_slice() %}
         {%- let mappings = class.mappings.as_slice() %}
+        {%- let external_superclasses = class.external_superclasses.as_slice() %}
         {%- let is_abstract = class.is_abstract %}
         {%- let properties = empty_properties %}
         {% include "components/class_card.html" %}

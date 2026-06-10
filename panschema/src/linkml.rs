@@ -184,6 +184,13 @@ pub struct ClassDefinition {
     /// URI for semantic interpretation (e.g., owl:Class IRI)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub class_uri: Option<String>,
+    /// External `rdfs:subClassOf` target — typically an upstream
+    /// ontology class the schema author is grounding this class in
+    /// (BFO, CCO, IAO, …). Distinct from `is_a`, which models
+    /// intra-schema inheritance. Single-valued per the LinkML
+    /// metamodel; authors needing multiple groundings use mixins.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subclass_of: Option<String>,
     /// Cross-ontology mappings (SKOS-aligned). Each value is a CURIE
     /// or IRI in an upstream vocabulary (BFO, CCO, IAO, …).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -214,6 +221,7 @@ impl ClassDefinition {
             attributes: BTreeMap::new(),
             slot_usage: BTreeMap::new(),
             class_uri: None,
+            subclass_of: None,
             exact_mappings: Vec::new(),
             close_mappings: Vec::new(),
             related_mappings: Vec::new(),
@@ -470,6 +478,20 @@ mod tests {
         assert!(yaml.contains("name: example"));
         assert!(yaml.contains("id: https://example.org/schema"));
         assert!(yaml.contains("description: An example schema"));
+    }
+
+    #[test]
+    fn subclass_of_deserializes_as_scalar_per_linkml_metamodel() {
+        // LinkML's ClassDefinition.subclass_of is single-valued (not
+        // multivalued) — authors needing multiple groundings use
+        // mixins. The IR mirrors the metamodel exactly.
+        let yaml = "
+name: Test
+class_uri: ex:Test
+subclass_of: cco:ont00000958
+";
+        let class: ClassDefinition = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(class.subclass_of.as_deref(), Some("cco:ont00000958"));
     }
 
     #[test]

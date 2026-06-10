@@ -245,6 +245,7 @@ pub struct ClassCardComponent<'a> {
     pub mixins: &'a [EntityRef],
     pub slots: &'a [panschema::html_writer::SlotInClass],
     pub mappings: &'a [panschema::html_writer::Mapping],
+    pub external_superclasses: &'a [panschema::html_writer::ExternalLink],
     pub is_abstract: bool,
 }
 
@@ -289,6 +290,7 @@ pub struct SampleClass<'a> {
     pub mixins: &'a [EntityRef],
     pub slots: &'a [panschema::html_writer::SlotInClass],
     pub mappings: &'a [panschema::html_writer::Mapping],
+    pub external_superclasses: &'a [panschema::html_writer::ExternalLink],
     pub is_abstract: bool,
 }
 
@@ -453,6 +455,7 @@ impl ComponentRenderer {
             mixins,
             slots,
             mappings: &[],
+            external_superclasses: &[],
             is_abstract: false,
         };
         Ok(template.render()?)
@@ -570,6 +573,7 @@ impl ComponentRenderer {
             mixins: &class_mixins,
             slots: &class_slots,
             mappings: &class_mappings,
+            external_superclasses: &[],
             is_abstract: false,
         };
 
@@ -885,6 +889,7 @@ mod tests {
                 mixins: &[],
                 slots: &[],
                 mappings: &[],
+                external_superclasses: &[],
                 is_abstract: true,
             };
             let html = template.render().unwrap();

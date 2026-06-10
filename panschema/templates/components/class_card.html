@@ -30,6 +30,21 @@
             <dd><a href="#class-{{ parent.id }}" class="entity-ref class-ref">{{ parent.label }}</a></dd>
         </div>
 {%- endif %}
+{%- if !external_superclasses.is_empty() %}
+        <div class="detail-row">
+            <dt>Subclass of (external)</dt>
+            <dd>
+{%- for ext in external_superclasses %}
+{%- match ext.href %}
+{%- when Some with (href) %}
+                <a href="{{ href }}" class="entity-ref class-ref" target="_blank" rel="noopener">{{ ext.display }}</a>{%- if !loop.last %},{% endif %}
+{%- when None %}
+                <span class="entity-ref class-ref mapping-unresolved" title="prefix not declared in schema.prefixes">{{ ext.display }}</span>{%- if !loop.last %},{% endif %}
+{%- endmatch %}
+{%- endfor %}
+            </dd>
+        </div>
+{%- endif %}
 {%- if !mixins.is_empty() %}
         <div class="detail-row">
             <dt>Mixes in</dt>

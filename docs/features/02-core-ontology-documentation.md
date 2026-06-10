@@ -394,6 +394,27 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 
 ---
 
+### Slice 16: External `subclass_of` grounding — IR + HTML + RDF
+
+**Status:** ✅ Complete
+
+**Priority:** Must Have
+
+**User Value:** Schema authors who ground their classes in upstream ontologies via `subclass_of: cco:ont…` (the LinkML mechanism for declaring `rdfs:subClassOf` to an external term, distinct from intra-schema `is_a`) previously got **silent data loss**: the YAML key vanished into the void, the HTML showed nothing, and the emitted RDF was missing the grounding axioms the schema declared. The whole "this class is a subclass of BFO:Continuant" story was invisible in every output. After this slice, `subclass_of` is a first-class IR field; the HTML class card renders a "Subclass of (external)" row with CURIE-expanded hyperlinks, and the RDF writers emit one `rdfs:subClassOf <expanded>` triple per entry.
+
+**Acceptance Criteria:**
+- [x] `ClassDefinition` in `linkml.rs` gains `subclass_of: Option<String>` — scalar, mirroring the LinkML metamodel (`subclass_of` is `multivalued: false`). Authors needing multiple groundings use mixins.
+- [x] `yaml_reader.rs` parses the field when present. (No code change needed — serde handles it via the standard `Option` deserialization; a regression test `subclass_of_deserializes_as_scalar_per_linkml_metamodel` pins the scalar contract.)
+- [x] HTML class card gains a "Subclass of (external)" row when `subclass_of` is set. The value is CURIE-expanded via `linkml_resolve::expand_curie` and rendered as `<a href="...">` (with `target="_blank"` since the link points outside the schema); unresolved prefixes fall back to plain text with a tooltip flagging the missing declaration.
+- [x] RDF writers (TTL, JSON-LD, N-Triples, RDF/XML) emit `rdfs:subClassOf <expanded>` when `subclass_of` is set. Sits alongside the existing `is_a` / mixin subClassOf emissions — the OWL output now carries every grounding axiom the LinkML source declared.
+- [x] Integration tests cover: class-side `subclass_of` produces an `rdfs:subClassOf` triple in the RDF graph (`build_rdf_graph_emits_rdfs_subclass_of_for_external_subclass_of`); HTML rendering surfaces `external_superclasses` view-models with `href = Some(expanded)` for known prefixes and `None` for unknown (`class_data_threads_external_subclass_of_with_expanded_iri`).
+
+**Notes:**
+- Source: friction `[2026-06-06] subclass_of (external grounding) dropped from HTML and RDF` (severity: silent-correctness-bug — the second one surfaced by the scimantic-schema dogfood).
+- The symmetric pattern to slice 12 (mappings). RDF emission reuses the existing `expand_curie` helper from the rdf_serializers module rather than the linkml_resolve one; consolidating the two is filed under feature 12.
+
+---
+
 ## Slice Priority and Dependencies
 
 | Slice | Priority | Depends On | Status |
@@ -413,3 +434,4 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 | Slice 13: Hyperlink + CURIE-expand `class_uri` / `slot_uri` in HTML | Should Have | Feature 12 slice 12.2 | ✅ Complete |
 | Slice 14: Abstract-class badge on class cards | Should Have | None | ✅ Complete |
 | Slice 15: Hierarchy view in the Classes section | Should Have | None | Not Started |
+| Slice 16: External `subclass_of` grounding — IR + HTML + RDF | Must Have | Feature 12 slice 12.2 | ✅ Complete |

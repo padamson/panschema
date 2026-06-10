@@ -236,6 +236,18 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
                 .map_err(|e| IoError::Write(e.to_string()))?;
         }
 
+        // External rdfs:subClassOf grounding (`subclass_of:` in
+        // LinkML) — typically an upstream ontology class (BFO, CCO,
+        // IAO, …). Same predicate as `is_a`, but resolves through
+        // the schema's prefix table rather than the local classes
+        // map. Single-valued per the LinkML metamodel.
+        if let Some(external) = class_def.subclass_of.as_deref() {
+            let target_iri = make_iri(&expand_curie(external, schema))?;
+            graph
+                .insert(&class_iri, rdfs_subclass_of, &target_iri)
+                .map_err(|e| IoError::Write(e.to_string()))?;
+        }
+
         emit_mappings(
             &mut graph,
             &class_iri,
@@ -905,6 +917,40 @@ mod tests {
         assert!(
             has_exact,
             "expected skos:exactMatch triple for slot mapping"
+        );
+    }
+
+    #[test]
+    fn build_rdf_graph_emits_rdfs_subclass_of_for_external_subclass_of() {
+        // External `subclass_of:` grounding is the LinkML mechanism for
+        // declaring `rdfs:subClassOf` to an upstream ontology class
+        // (BFO/CCO/IAO). Without an explicit emit step the IR field
+        // is silently dropped from RDF — the schema looks like an
+        // isolated graph in the upstream sense even though the author
+        // declared a grounding.
+        use sophia::api::term::Term;
+        use sophia::api::triple::Triple;
+
+        let mut schema = schema_with_prefixes();
+        let mut act = ClassDefinition::new("Act");
+        act.subclass_of = Some("cco:ont00000005".into());
+        schema.classes.insert("Act".to_string(), act);
+
+        let graph = build_rdf_graph(&schema).unwrap();
+
+        let target_iri = "https://www.commoncoreontologies.org/ont00000005";
+        let subclass_of_iri = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+        let has_external_subclass = graph.triples().any(|t| {
+            let triple = t.unwrap();
+            triple
+                .p()
+                .iri()
+                .is_some_and(|i| i.as_str() == subclass_of_iri)
+                && triple.o().iri().is_some_and(|i| i.as_str() == target_iri)
+        });
+        assert!(
+            has_external_subclass,
+            "expected rdfs:subClassOf <cco:ont00000005> triple for external grounding"
         );
     }
 }
