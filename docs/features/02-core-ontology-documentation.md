@@ -353,17 +353,17 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 
 ### Slice 14: Abstract-class badge on class cards
 
-**Status:** Not Started
+**Status:** ✅ Complete
 
 **Priority:** Should Have
 
 **User Value:** Authors marking foundational classes `abstract: true` (e.g. BFO/CCO bases that exist for inheritance but aren't meant to be instantiated) currently get no visual hint in the HTML doc body — `is_abstract` reaches only the graph-viz JSON, not the cards. A reader can't tell at a glance which classes are foundation vs. instantiable. After this slice, abstract classes carry a clear badge on their card heading.
 
 **Acceptance Criteria:**
-- [ ] `ClassData` (the template view model in `html_writer.rs`) gains an `is_abstract: bool` field threaded from `ClassDefinition.r#abstract`.
-- [ ] The `class_card.html` template renders a small `(abstract)` badge — or an equivalent visual indicator — in the card heading when `is_abstract` is true. The badge style should match the existing typography palette and stay subtle (it's a hint, not an alarm).
-- [ ] Snapshot tests for the class_card component get a `class_card_abstract_variant.snap` capturing the badged rendering.
-- [ ] Integration test fixture with one abstract and one concrete class verifies that only the abstract card carries the badge.
+- [x] `ClassData` (the template view model in `html_writer.rs`) gains an `is_abstract: bool` field threaded from `ClassDefinition.r#abstract`.
+- [x] The `class_card.html` template renders a small `abstract` badge in the card heading when `is_abstract` is true — uppercase, muted color, sits inline next to the class title. The badge style stays subtle (it's a hint, not an alarm).
+- [x] Snapshot test `snapshot_class_card_abstract_variant.snap` captures the badged rendering; assertion in the test body pins the `<span class="abstract-badge"` presence.
+- [x] Unit test `class_data_threads_is_abstract_from_class_definition` builds a schema with one abstract + one concrete class and verifies only the abstract `ClassData` carries `is_abstract = true`.
 
 **Notes:**
 - Source: friction `[2026-06-06] abstract classes have no indicator in the HTML doc body` (severity: annoyance).
@@ -411,5 +411,5 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 | Slice 11: Class card slot provenance + cross-writer consistency test | Nice to Have | Slice 10, Feature 12 slice 12.4, Feature 04 slice 12 | Not Started |
 | Slice 12: `*_mappings` round-trip — IR + HTML + RDF | Must Have | Feature 12 slice 12.2 | ✅ Complete |
 | Slice 13: Hyperlink + CURIE-expand `class_uri` / `slot_uri` in HTML | Should Have | Feature 12 slice 12.2 | ✅ Complete |
-| Slice 14: Abstract-class badge on class cards | Should Have | None | Not Started |
+| Slice 14: Abstract-class badge on class cards | Should Have | None | ✅ Complete |
 | Slice 15: Hierarchy view in the Classes section | Should Have | None | Not Started |

@@ -41,6 +41,10 @@ pub struct ClassData {
     pub mixins: Vec<EntityRef>,
     pub slots: Vec<SlotInClass>,
     pub mappings: Vec<Mapping>,
+    /// `true` for LinkML classes with `abstract: true`. Surfaced as
+    /// a small badge in the card heading so readers can tell
+    /// foundation classes from instantiable ones at a glance.
+    pub is_abstract: bool,
 }
 
 /// A slot as it appears on a specific class, with framing resolved for
@@ -473,6 +477,7 @@ impl HtmlWriter {
                 mixins,
                 slots,
                 mappings,
+                is_abstract: class_def.r#abstract,
             });
         }
 
@@ -1983,6 +1988,30 @@ mod tests {
             card.iri_href.as_deref(),
             Some("https://w3id.org/scimantic/Act")
         );
+    }
+
+    #[test]
+    fn class_data_threads_is_abstract_from_class_definition() {
+        use crate::linkml::{ClassDefinition, SchemaDefinition};
+        let mut schema = SchemaDefinition::new("s");
+
+        let mut foundation = ClassDefinition::new("Foundation");
+        foundation.r#abstract = true;
+        schema.classes.insert("Foundation".to_string(), foundation);
+
+        schema
+            .classes
+            .insert("Concrete".to_string(), ClassDefinition::new("Concrete"));
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let foundation_card = data
+            .class_data
+            .iter()
+            .find(|c| c.id == "Foundation")
+            .unwrap();
+        let concrete_card = data.class_data.iter().find(|c| c.id == "Concrete").unwrap();
+        assert!(foundation_card.is_abstract);
+        assert!(!concrete_card.is_abstract);
     }
 
     #[test]

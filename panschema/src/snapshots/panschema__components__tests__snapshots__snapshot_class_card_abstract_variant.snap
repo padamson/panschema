@@ -1,8 +1,13 @@
-<article class="entity-card class-card" id="class-{{ id }}">
+---
+source: panschema/src/components.rs
+assertion_line: 895
+expression: html
+---
+<article class="entity-card class-card" id="class-thing">
     <header class="entity-header">
         <div class="entity-badge class-badge">Class</div>
-        <h3 class="entity-title">{{ label }}{% if is_abstract %} <span class="abstract-badge" title="Abstract class: not meant to be instantiated directly">abstract</span>{% endif %}</h3>
-        <button class="copy-btn" data-copy="{% match iri_href %}{% when Some with (href) %}{{ href }}{% when None %}{{ iri }}{% endmatch %}" title="Copy IRI">
+        <h3 class="entity-title">Thing <span class="abstract-badge" title="Abstract class: not meant to be instantiated directly">abstract</span></h3>
+        <button class="copy-btn" data-copy="https://example.org/ontology#Thing" title="Copy IRI">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
                 <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
@@ -11,105 +16,12 @@
     </header>
 
     <div class="entity-iri">
-{%- match iri_href %}
-{%- when Some with (href) %}
-        <a href="{{ href }}" class="entity-iri-link" target="_blank" rel="noopener"><code class="mono">{{ iri }}</code></a>
-{%- when None %}
-        <code class="mono">{{ iri }}</code>
-{%- endmatch %}
+        <code class="mono">https://example.org/ontology#Thing</code>
     </div>
-{%- if let Some(desc) = description %}
 
-    <div class="entity-description">{{ desc|safe }}</div>
-{%- endif %}
+    <div class="entity-description">Foundation class — not meant to be instantiated.</div>
 
     <div class="entity-details">
-{%- if let Some(parent) = superclass %}
-        <div class="detail-row">
-            <dt>Subclass of</dt>
-            <dd><a href="#class-{{ parent.id }}" class="entity-ref class-ref">{{ parent.label }}</a></dd>
-        </div>
-{%- endif %}
-{%- if !mixins.is_empty() %}
-        <div class="detail-row">
-            <dt>Mixes in</dt>
-            <dd>
-{%- for mixin in mixins %}
-                <a href="#class-{{ mixin.id }}" class="entity-ref class-ref">{{ mixin.label }}</a>{%- if !loop.last %},{% endif %}
-{%- endfor %}
-            </dd>
-        </div>
-{%- endif %}
-{%- if !subclasses.is_empty() %}
-        <div class="detail-row">
-            <dt>Superclass of</dt>
-            <dd>
-{%- for sub in subclasses %}
-                <a href="#class-{{ sub.id }}" class="entity-ref class-ref">{{ sub.label }}</a>{%- if !loop.last %},{% endif %}
-{%- endfor %}
-            </dd>
-        </div>
-{%- endif %}
-{%- if !properties.is_empty() %}
-        <div class="detail-row">
-            <dt>Properties</dt>
-            <dd>
-{%- for prop in properties %}
-                <a href="#prop-{{ prop.id }}" class="entity-ref prop-ref">{{ prop.label }}</a>{%- if !loop.last %},{% endif %}
-{%- endfor %}
-            </dd>
-        </div>
-{%- endif %}
-{%- if !mappings.is_empty() %}
-        <div class="detail-row">
-            <dt>Mappings</dt>
-            <dd>
-{%- for mapping in mappings %}
-                <span class="mapping-kind">{{ mapping.kind }}:</span>
-{%- match mapping.href %}
-{%- when Some with (href) %}
-                <a href="{{ href }}" class="mapping-iri">{{ mapping.display }}</a>{%- if !loop.last %},{% endif %}
-{%- when None %}
-                <span class="mapping-iri mapping-unresolved" title="prefix not declared in schema.prefixes">{{ mapping.display }}</span>{%- if !loop.last %},{% endif %}
-{%- endmatch %}
-{%- endfor %}
-            </dd>
-        </div>
-{%- endif %}
-{%- if !slots.is_empty() %}
-        <div class="detail-row">
-            <dt>Slots</dt>
-            <dd>
-                <ul class="slot-list">
-{%- for slot in slots %}
-                    <li class="slot-entry">
-                        <a href="#prop-{{ slot.name }}" class="slot-name">{{ slot.name }}</a>
-{%- if !slot.any_of.is_empty() %}
-                        : any of [
-{%- for branch in slot.any_of %}
-{%- if let Some(class_ref) = branch.class_ref.as_ref() %}<a href="#class-{{ class_ref.id }}" class="entity-ref class-ref">{{ class_ref.label }}</a>{% else %}<span class="entity-ref datatype-ref">{{ branch.datatype }}</span>{% endif %}{% if !loop.last %}, {% endif %}
-{%- endfor %}
-                        ]
-{%- else if let Some(range) = slot.range.as_ref() %}
-                        :
-{%- if let Some(class_ref) = range.class_ref.as_ref() %}
-                        <a href="#class-{{ class_ref.id }}" class="entity-ref class-ref">{{ class_ref.label }}</a>
-{%- else %}
-                        <span class="entity-ref datatype-ref">{{ range.datatype }}</span>
-{%- endif %}
-{%- endif %}
-{%- if slot.required %}                        <span class="slot-flag required">required</span>{% endif %}
-{%- if slot.multivalued %}                        <span class="slot-flag multivalued">multivalued</span>{% endif %}
-{%- if slot.refined_here %}                        <span class="slot-flag refined">refined here</span>{% endif %}
-{%- if let Some(desc) = slot.description.as_deref() %}
-                        <div class="slot-description">{{ desc|safe }}</div>
-{%- endif %}
-                    </li>
-{%- endfor %}
-                </ul>
-            </dd>
-        </div>
-{%- endif %}
     </div>
 </article>
 <style>

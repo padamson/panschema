@@ -1,6 +1,6 @@
 ---
 source: panschema/src/components.rs
-assertion_line: 847
+assertion_line: 851
 expression: html
 ---
 <article class="entity-card class-card" id="class-person">
@@ -116,6 +116,22 @@ expression: html
 
     .entity-header .copy-btn.copied {
         color: var(--color-property);
+    }
+
+    /* Subtle "abstract" badge next to the class title — uppercase
+       to read as a category tag, muted color so it doesn't compete
+       with the title itself. */
+    .abstract-badge {
+        margin-left: var(--space-2);
+        padding: 2px var(--space-2);
+        font-size: var(--text-xs);
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--color-text-muted);
+        background-color: var(--color-bg-tertiary);
+        border-radius: var(--radius-sm);
+        vertical-align: middle;
     }
 
     .entity-iri {

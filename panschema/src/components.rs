@@ -245,6 +245,7 @@ pub struct ClassCardComponent<'a> {
     pub mixins: &'a [EntityRef],
     pub slots: &'a [panschema::html_writer::SlotInClass],
     pub mappings: &'a [panschema::html_writer::Mapping],
+    pub is_abstract: bool,
 }
 
 /// Property card component template.
@@ -288,6 +289,7 @@ pub struct SampleClass<'a> {
     pub mixins: &'a [EntityRef],
     pub slots: &'a [panschema::html_writer::SlotInClass],
     pub mappings: &'a [panschema::html_writer::Mapping],
+    pub is_abstract: bool,
 }
 
 /// Sample property data for styleguide previews.
@@ -451,6 +453,7 @@ impl ComponentRenderer {
             mixins,
             slots,
             mappings: &[],
+            is_abstract: false,
         };
         Ok(template.render()?)
     }
@@ -567,6 +570,7 @@ impl ComponentRenderer {
             mixins: &class_mixins,
             slots: &class_slots,
             mappings: &class_mappings,
+            is_abstract: false,
         };
 
         let domain = EntityRef::new("person", "Person");
@@ -861,6 +865,33 @@ mod tests {
                 &[],
             )
             .unwrap();
+            insta::assert_snapshot!(html);
+        }
+
+        #[test]
+        fn snapshot_class_card_abstract_variant() {
+            // Bypass ComponentRenderer::class_card so the test can flip
+            // `is_abstract` without expanding the helper signature for
+            // a single styleguide variant.
+            let template = ClassCardComponent {
+                id: "thing",
+                label: "Thing",
+                iri: "https://example.org/ontology#Thing",
+                iri_href: None,
+                description: Some("Foundation class — not meant to be instantiated."),
+                superclass: None,
+                subclasses: &[],
+                properties: &[],
+                mixins: &[],
+                slots: &[],
+                mappings: &[],
+                is_abstract: true,
+            };
+            let html = template.render().unwrap();
+            assert!(
+                html.contains(r#"<span class="abstract-badge""#),
+                "abstract badge should be present when is_abstract = true"
+            );
             insta::assert_snapshot!(html);
         }
 
