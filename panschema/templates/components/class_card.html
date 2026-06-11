@@ -37,7 +37,7 @@
 {%- for ext in external_superclasses %}
 {%- match ext.href %}
 {%- when Some with (href) %}
-                <a href="{{ href }}" class="entity-ref class-ref" target="_blank" rel="noopener">{{ ext.display }}</a>{%- if !loop.last %},{% endif %}
+                <a href="{{ href }}" class="entity-ref class-ref" target="_blank" rel="noopener" title="{{ ext.tooltip() }}">{% match ext.label %}{% when Some with (label) %}{{ label }}{% when None %}{{ ext.display }}{% endmatch %}</a>{%- if !loop.last %},{% endif %}
 {%- when None %}
                 <span class="entity-ref class-ref mapping-unresolved" title="prefix not declared in schema.prefixes">{{ ext.display }}</span>{%- if !loop.last %},{% endif %}
 {%- endmatch %}
@@ -83,7 +83,7 @@
                 <span class="mapping-kind">{{ mapping.kind }}:</span>
 {%- match mapping.href %}
 {%- when Some with (href) %}
-                <a href="{{ href }}" class="mapping-iri">{{ mapping.display }}</a>{%- if !loop.last %},{% endif %}
+                <a href="{{ href }}" class="mapping-iri" title="{{ mapping.tooltip() }}">{% match mapping.label %}{% when Some with (label) %}{{ label }}{% when None %}{{ mapping.display }}{% endmatch %}</a>{%- if !loop.last %},{% endif %}
 {%- when None %}
                 <span class="mapping-iri mapping-unresolved" title="prefix not declared in schema.prefixes">{{ mapping.display }}</span>{%- if !loop.last %},{% endif %}
 {%- endmatch %}

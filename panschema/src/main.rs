@@ -87,6 +87,11 @@ enum Commands {
         /// Visualization mode: auto, 2d, 3d (requires --graph)
         #[arg(long, value_enum, default_value = "auto")]
         viz_mode: VizMode,
+
+        /// Skip fetching upstream ontology labels (cached labels
+        /// still render; uncached external references show CURIEs).
+        #[arg(long)]
+        offline: bool,
     },
     /// Scaffold `panschema-publish.toml` in the current directory.
     ///
@@ -250,6 +255,7 @@ fn generate(
     include_graph: bool,
     html_graph_aspect: Option<&str>,
     html_default_layout: Option<&str>,
+    offline: bool,
 ) -> anyhow::Result<()> {
     let registry = FormatRegistry::with_defaults();
 
@@ -269,9 +275,12 @@ fn generate(
         };
         let layout = html_default_layout.unwrap_or("force-directed");
         validate_layout_name(layout).map_err(|e| anyhow::anyhow!("{}", e))?;
-        let writer = HtmlWriter::with_options(include_graph)
+        let mut writer = HtmlWriter::with_options(include_graph)
             .with_graph_aspect(aw, ah)
             .with_default_layout(layout);
+        if let Some(store) = panschema::labels::open_default_store(&schema, offline) {
+            writer = writer.with_label_store(store);
+        }
         writer
             .write(&schema, output)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -359,7 +368,7 @@ fn resolve_source(
 }
 
 /// `panschema generate` (no --input): walk the manifest and run configured writers.
-fn generate_from_manifest() -> anyhow::Result<()> {
+fn generate_from_manifest(offline: bool) -> anyhow::Result<()> {
     let (manifest, manifest_dir) = load_manifest()?;
 
     if manifest.schemas.is_empty() {
@@ -384,12 +393,13 @@ fn generate_from_manifest() -> anyhow::Result<()> {
                 true,
                 gen_cfg.html_graph_aspect.as_deref(),
                 gen_cfg.html_default_layout.as_deref(),
+                offline,
             )?;
             produced_anything = true;
         }
         if let Some(rust_out) = &gen_cfg.rust {
             let rust_out = manifest_dir.join(rust_out);
-            generate(&schema_path, &rust_out, "rust", false, None, None)?;
+            generate(&schema_path, &rust_out, "rust", false, None, None, offline)?;
             produced_anything = true;
         }
     }
@@ -1137,6 +1147,7 @@ async fn main() -> anyhow::Result<()> {
             format,
             no_graph,
             viz_mode,
+            offline,
         }) => match input {
             Some(input) => {
                 if format.to_lowercase() == "html" && !no_graph {
@@ -1147,9 +1158,9 @@ async fn main() -> anyhow::Result<()> {
                     };
                     eprintln!("Graph visualization: {}", mode_str);
                 }
-                generate(&input, &output, &format, !no_graph, None, None)?;
+                generate(&input, &output, &format, !no_graph, None, None, offline)?;
             }
-            None => generate_from_manifest()?,
+            None => generate_from_manifest(offline)?,
         },
         Some(Commands::Init {
             name,
@@ -1207,7 +1218,7 @@ async fn main() -> anyhow::Result<()> {
         None => {
             // Default behavior: generate if input provided (with graph enabled by default)
             if let Some(input) = cli.input {
-                generate(&input, &cli.output, &cli.format, true, None, None)?;
+                generate(&input, &cli.output, &cli.format, true, None, None, false)?;
             } else {
                 println!("panschema: no input specified. Use --help for usage.");
             }
@@ -1248,12 +1259,14 @@ mod tests {
                 format,
                 no_graph,
                 viz_mode,
+                offline,
             }) => {
                 assert_eq!(input, Some(PathBuf::from("test.ttl")));
                 assert_eq!(output, PathBuf::from("docs"));
                 assert_eq!(format, "html");
                 assert!(!no_graph); // default false (graph enabled)
                 assert!(matches!(viz_mode, VizMode::Auto)); // default auto
+                assert!(!offline); // default false (labels fetched)
             }
             _ => panic!("Expected Generate command"),
         }

@@ -60,7 +60,7 @@
                 <span class="mapping-kind">{{ mapping.kind }}:</span>
 {%- match mapping.href %}
 {%- when Some with (href) %}
-                <a href="{{ href }}" class="mapping-iri">{{ mapping.display }}</a>{%- if !loop.last %},{% endif %}
+                <a href="{{ href }}" class="mapping-iri" title="{{ mapping.tooltip() }}">{% match mapping.label %}{% when Some with (label) %}{{ label }}{% when None %}{{ mapping.display }}{% endmatch %}</a>{%- if !loop.last %},{% endif %}
 {%- when None %}
                 <span class="mapping-iri mapping-unresolved" title="prefix not declared in schema.prefixes">{{ mapping.display }}</span>{%- if !loop.last %},{% endif %}
 {%- endmatch %}

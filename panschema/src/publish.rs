@@ -549,9 +549,12 @@ fn generate_html_for_version(
             version: version.to_string(),
             message: e.to_string(),
         })?;
-    let writer = HtmlWriter::with_options(true)
+    let mut writer = HtmlWriter::with_options(true)
         .with_version_context(cohort.context_for(version))
         .with_site_root_href(cohort.site_root_href.clone());
+    if let Some(store) = crate::labels::open_default_store(&schema, false) {
+        writer = writer.with_label_store(store);
+    }
     writer
         .write(&schema, output)
         .map_err(|e| PublishError::GenerateFailed {

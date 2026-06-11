@@ -83,6 +83,23 @@ pub struct Mapping {
     pub kind: &'static str,
     pub display: String,
     pub href: Option<String>,
+    /// Upstream `rdfs:label` for the expanded IRI, when cached.
+    pub label: Option<String>,
+    /// Upstream definition for the expanded IRI, when cached.
+    pub definition: Option<String>,
+}
+
+impl Mapping {
+    /// Tooltip text: CURIE = IRI identity line, plus the upstream
+    /// definition on its own paragraph when cached. Browsers render
+    /// literal newlines in `title` attributes.
+    pub fn tooltip(&self) -> String {
+        tooltip_text(
+            &self.display,
+            self.href.as_deref(),
+            self.definition.as_deref(),
+        )
+    }
 }
 
 /// External hyperlink with an optional expansion. `display` is the
@@ -92,6 +109,32 @@ pub struct Mapping {
 pub struct ExternalLink {
     pub display: String,
     pub href: Option<String>,
+    /// Upstream `rdfs:label` for the expanded IRI, when cached.
+    pub label: Option<String>,
+    /// Upstream definition for the expanded IRI, when cached.
+    pub definition: Option<String>,
+}
+
+impl ExternalLink {
+    /// See [`Mapping::tooltip`].
+    pub fn tooltip(&self) -> String {
+        tooltip_text(
+            &self.display,
+            self.href.as_deref(),
+            self.definition.as_deref(),
+        )
+    }
+}
+
+fn tooltip_text(display: &str, href: Option<&str>, definition: Option<&str>) -> String {
+    let identity = match href {
+        Some(href) => format!("{display} = {href}"),
+        None => display.to_string(),
+    };
+    match definition {
+        Some(definition) => format!("{identity}\n\n{definition}"),
+        None => identity,
+    }
 }
 
 /// Full property data for rendering property cards.
@@ -248,6 +291,10 @@ pub struct HtmlWriter {
     /// the deploy root) — `panschema publish` always sets this explicitly
     /// from the manifest's `site_root_url`.
     pub site_root_href: Option<String>,
+    /// Upstream label cache. `None` renders external references as
+    /// CURIEs (the historical behavior); the CLI generate path wires
+    /// a populated store so they render as upstream labels.
+    pub label_store: Option<crate::labels::LabelStore>,
 }
 
 /// Parse a `"W:H"` aspect-ratio string. Both components must be positive
@@ -295,6 +342,7 @@ impl HtmlWriter {
             graph_default_layout: "sgd".to_string(),
             version_context: None,
             site_root_href: None,
+            label_store: None,
         }
     }
 
@@ -306,7 +354,16 @@ impl HtmlWriter {
             graph_default_layout: "sgd".to_string(),
             version_context: None,
             site_root_href: None,
+            label_store: None,
         }
+    }
+
+    /// Attach a populated upstream-label cache so external CURIEs
+    /// render as human-readable labels.
+    #[must_use]
+    pub fn with_label_store(mut self, store: crate::labels::LabelStore) -> Self {
+        self.label_store = Some(store);
+        self
     }
 
     /// Attach a multi-version cohort context. Used by `panschema publish`
@@ -345,8 +402,20 @@ impl HtmlWriter {
         self
     }
 
-    /// Build template data from SchemaDefinition
+    /// Test convenience: build template data without a label store
+    /// (external references render as CURIEs).
+    #[cfg(test)]
     fn build_template_data(schema: &SchemaDefinition) -> TemplateData {
+        Self::build_template_data_with_labels(schema, None)
+    }
+
+    /// Build template data, rendering upstream labels for external
+    /// references when a populated [`crate::labels::LabelStore`] is
+    /// supplied.
+    fn build_template_data_with_labels(
+        schema: &SchemaDefinition,
+        labels: Option<&crate::labels::LabelStore>,
+    ) -> TemplateData {
         let iri = schema.id.clone().unwrap_or_else(|| schema.name.clone());
         let title = schema.title.clone().unwrap_or_else(|| schema.name.clone());
 
@@ -463,6 +532,7 @@ impl HtmlWriter {
                 &class_def.narrow_mappings,
                 &class_def.broad_mappings,
                 schema,
+                labels,
             );
 
             // class_uri wins when present; otherwise treat the
@@ -477,9 +547,15 @@ impl HtmlWriter {
             let external_superclasses: Vec<ExternalLink> = class_def
                 .subclass_of
                 .as_deref()
-                .map(|raw| ExternalLink {
-                    display: raw.to_string(),
-                    href: crate::linkml_resolve::expand_curie(schema, raw),
+                .map(|raw| {
+                    let href = crate::linkml_resolve::expand_curie(schema, raw);
+                    let (label, definition) = lookup_term(labels, href.as_deref());
+                    ExternalLink {
+                        display: raw.to_string(),
+                        href,
+                        label,
+                        definition,
+                    }
                 })
                 .into_iter()
                 .collect();
@@ -597,6 +673,7 @@ impl HtmlWriter {
                 &slot_def.narrow_mappings,
                 &slot_def.broad_mappings,
                 schema,
+                labels,
             );
 
             let iri_href = slot_def
@@ -769,7 +846,7 @@ impl Writer for HtmlWriter {
         // Create output directory if it doesn't exist
         fs::create_dir_all(output).map_err(IoError::Io)?;
 
-        let data = Self::build_template_data(schema);
+        let data = Self::build_template_data_with_labels(schema, self.label_store.as_ref());
 
         // Generate graph JSON for visualization (only if enabled)
         let (graph_json_string, graph_node_count, graph_edge_count) = if self.include_graph {
@@ -959,6 +1036,7 @@ fn range_ref_for(range: &str, schema: &SchemaDefinition) -> RangeRef {
 /// Build the rendered mapping list. The emission order (exact →
 /// narrow → broad → related → close) follows SKOS strictness so the
 /// reader's eye lands on tight matches first.
+#[allow(clippy::too_many_arguments)]
 fn build_mappings(
     exact: &[String],
     close: &[String],
@@ -966,6 +1044,7 @@ fn build_mappings(
     narrow: &[String],
     broad: &[String],
     schema: &SchemaDefinition,
+    labels: Option<&crate::labels::LabelStore>,
 ) -> Vec<Mapping> {
     let mut out: Vec<Mapping> = Vec::new();
     for (kind, values) in [
@@ -976,14 +1055,29 @@ fn build_mappings(
         ("close", close),
     ] {
         for value in values {
+            let href = crate::linkml_resolve::expand_curie(schema, value);
+            let (label, definition) = lookup_term(labels, href.as_deref());
             out.push(Mapping {
                 kind,
                 display: value.clone(),
-                href: crate::linkml_resolve::expand_curie(schema, value),
+                href,
+                label,
+                definition,
             });
         }
     }
     out
+}
+
+/// `(label, definition)` for an expanded IRI, when the store has it.
+fn lookup_term(
+    labels: Option<&crate::labels::LabelStore>,
+    iri: Option<&str>,
+) -> (Option<String>, Option<String>) {
+    match labels.zip(iri).and_then(|(store, iri)| store.lookup(iri)) {
+        Some(info) => (info.label.clone(), info.definition.clone()),
+        None => (None, None),
+    }
 }
 
 fn render_xref(name: &str, schema: &SchemaDefinition) -> String {
@@ -2044,6 +2138,121 @@ mod tests {
             orphan.external_superclasses[0].href.is_none(),
             "undeclared prefix falls through to plain-text rendering"
         );
+    }
+
+    #[test]
+    fn class_data_carries_upstream_labels_when_store_has_them() {
+        use crate::labels::LabelStore;
+        use crate::linkml::{ClassDefinition, SchemaDefinition};
+
+        let cache_dir = std::env::temp_dir().join("panschema_html_label_test");
+        let _ = std::fs::remove_dir_all(&cache_dir);
+        let mut store = LabelStore::open(&cache_dir).unwrap();
+        store
+            .insert_source(
+                "https://example.org/cco.ttl",
+                std::collections::BTreeMap::from([
+                    (
+                        "http://example.org/cco/ont00000958".to_string(),
+                        crate::labels::TermInfo {
+                            label: Some("Process".to_string()),
+                            definition: Some(
+                                "A series of events that unfold over time.".to_string(),
+                            ),
+                        },
+                    ),
+                    (
+                        "http://purl.org/spar/cito/supports".to_string(),
+                        crate::labels::TermInfo {
+                            label: Some("supports".to_string()),
+                            definition: None,
+                        },
+                    ),
+                ]),
+            )
+            .unwrap();
+
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .prefixes
+            .insert("cco".to_string(), "http://example.org/cco/".to_string());
+        schema
+            .prefixes
+            .insert("cito".to_string(), "http://purl.org/spar/cito/".to_string());
+
+        let mut act = ClassDefinition::new("Act");
+        act.subclass_of = Some("cco:ont00000958".to_string());
+        act.exact_mappings = vec!["cito:supports".to_string()];
+        // This mapping's IRI is not in the store — label stays None.
+        act.close_mappings = vec!["cco:ont99999999".to_string()];
+        schema.classes.insert("Act".to_string(), act);
+
+        let data = HtmlWriter::build_template_data_with_labels(&schema, Some(&store));
+        let card = data.class_data.iter().find(|c| c.id == "Act").unwrap();
+
+        assert_eq!(
+            card.external_superclasses[0].label.as_deref(),
+            Some("Process")
+        );
+        let exact = card.mappings.iter().find(|m| m.kind == "exact").unwrap();
+        assert_eq!(exact.label.as_deref(), Some("supports"));
+        let close = card.mappings.iter().find(|m| m.kind == "close").unwrap();
+        assert!(close.label.is_none(), "uncached IRI renders unlabeled");
+
+        let _ = std::fs::remove_dir_all(cache_dir);
+    }
+
+    #[test]
+    fn tooltip_carries_identity_line_and_definition_when_present() {
+        let with_definition = ExternalLink {
+            display: "cco:ont00000958".to_string(),
+            href: Some("https://example.org/cco/ont00000958".to_string()),
+            label: Some("Process".to_string()),
+            definition: Some("A series of events.".to_string()),
+        };
+        assert_eq!(
+            with_definition.tooltip(),
+            "cco:ont00000958 = https://example.org/cco/ont00000958\n\nA series of events."
+        );
+
+        let without_definition = ExternalLink {
+            display: "cco:ont00000958".to_string(),
+            href: Some("https://example.org/cco/ont00000958".to_string()),
+            label: None,
+            definition: None,
+        };
+        assert_eq!(
+            without_definition.tooltip(),
+            "cco:ont00000958 = https://example.org/cco/ont00000958"
+        );
+
+        let mapping = Mapping {
+            kind: "exact",
+            display: "cito:supports".to_string(),
+            href: Some("http://purl.org/spar/cito/supports".to_string()),
+            label: Some("supports".to_string()),
+            definition: Some("One claim bears positively on another.".to_string()),
+        };
+        assert_eq!(
+            mapping.tooltip(),
+            "cito:supports = http://purl.org/spar/cito/supports\n\nOne claim bears positively on another."
+        );
+    }
+
+    #[test]
+    fn class_data_labels_are_none_without_a_store() {
+        use crate::linkml::{ClassDefinition, SchemaDefinition};
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .prefixes
+            .insert("cco".to_string(), "http://example.org/cco/".to_string());
+        let mut act = ClassDefinition::new("Act");
+        act.subclass_of = Some("cco:ont00000958".to_string());
+        schema.classes.insert("Act".to_string(), act);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let card = data.class_data.iter().find(|c| c.id == "Act").unwrap();
+        assert!(card.external_superclasses[0].label.is_none());
     }
 
     #[test]
