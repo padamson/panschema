@@ -580,31 +580,106 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         browser_name
     );
 
-    // 8a-1. Class-card grid tiles to multiple columns on desktop:
-    // the first two class cards share a row (within a small Y
-    // tolerance). Wait for layout to settle after the resize.
+    // 8a-1. Classes default to the tree view: Mammal's card is
+    // stacked below Animal's and indented under it. Wait for layout
+    // to settle after the resize.
     tokio::time::sleep(Duration::from_millis(100)).await;
-    let class_cards = page.locator(".class-card").await;
-    let card0_box = class_cards
-        .nth(0)
+    let animal_box = page
+        .locator("#class-Animal")
+        .await
         .bounding_box()
         .await
-        .expect("Failed to query first card box")
-        .expect("First class card should have a bounding box");
-    let card1_box = class_cards
-        .nth(1)
+        .expect("Failed to query Animal card box")
+        .expect("Animal class card should have a bounding box");
+    let mammal_box = page
+        .locator("#class-Mammal")
+        .await
         .bounding_box()
         .await
-        .expect("Failed to query second card box")
-        .expect("Second class card should have a bounding box");
+        .expect("Failed to query Mammal card box")
+        .expect("Mammal class card should have a bounding box");
     assert!(
-        (card0_box.y - card1_box.y).abs() < 10.0,
-        "[{}] On a 1280px viewport the first two class cards should tile \
-         on the same row (Y delta < 10px); got y0={}, y1={}",
+        mammal_box.y > animal_box.y && mammal_box.x > animal_box.x,
+        "[{}] In the tree view Mammal should sit below and indented \
+         under Animal; got animal=({}, {}), mammal=({}, {})",
         browser_name,
-        card0_box.y,
-        card1_box.y
+        animal_box.x,
+        animal_box.y,
+        mammal_box.x,
+        mammal_box.y
     );
+
+    // 8a-1a. Leaf siblings tile within their tree level: Cat and Dog
+    // (both children of Mammal with no descendants) share a row on a
+    // 1280px viewport instead of stacking.
+    let cat_box = page
+        .locator("#class-Cat")
+        .await
+        .bounding_box()
+        .await
+        .expect("Failed to query Cat card box")
+        .expect("Cat class card should have a bounding box");
+    let dog_box = page
+        .locator("#class-Dog")
+        .await
+        .bounding_box()
+        .await
+        .expect("Failed to query Dog card box")
+        .expect("Dog class card should have a bounding box");
+    assert!(
+        (cat_box.y - dog_box.y).abs() < 10.0,
+        "[{}] In the tree view the leaf siblings Cat and Dog should \
+         tile on the same row (Y delta < 10px); got y0={}, y1={}",
+        browser_name,
+        cat_box.y,
+        dog_box.y
+    );
+    assert!(
+        cat_box.x > mammal_box.x,
+        "[{}] Cat should be indented under Mammal; got cat.x={}, mammal.x={}",
+        browser_name,
+        cat_box.x,
+        mammal_box.x
+    );
+
+    // 8a-1b. The Flat toggle switches to an alphabetical grid:
+    // Animal and Cat (alphabetical neighbors) tile on the same row
+    // (within a small Y tolerance) on a 1280px viewport.
+    page.locator(r#".view-toggle-btn[data-view="flat"]"#)
+        .await
+        .click(None)
+        .await
+        .expect("Failed to click the Flat toggle");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let animal_flat_box = page
+        .locator("#class-Animal")
+        .await
+        .bounding_box()
+        .await
+        .expect("Failed to query Animal card box (flat)")
+        .expect("Animal class card should have a bounding box (flat)");
+    let cat_flat_box = page
+        .locator("#class-Cat")
+        .await
+        .bounding_box()
+        .await
+        .expect("Failed to query Cat card box (flat)")
+        .expect("Cat class card should have a bounding box (flat)");
+    assert!(
+        (animal_flat_box.y - cat_flat_box.y).abs() < 10.0,
+        "[{}] In the flat view Animal and Cat should tile on the same \
+         row (Y delta < 10px); got y0={}, y1={}",
+        browser_name,
+        animal_flat_box.y,
+        cat_flat_box.y
+    );
+    // Restore the tree default so later steps see the shipped state.
+    page.locator(r#".view-toggle-btn[data-view="tree"]"#)
+        .await
+        .click(None)
+        .await
+        .expect("Failed to click the Tree toggle");
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
     // 8a-2. Graph container's aspect ratio matches the writer's
     // default (16:8) within 5% — derived dynamically rather than

@@ -38,8 +38,15 @@
         <a href="#class-{{ class.id }}" class="entity-link class-link">{{ class.label }}</a>
 {%- endfor %}
     </div>
-    <div class="class-cards">
-{%- for class in class_data %}
+    <div class="view-toggle" role="group" aria-label="Classes view">
+        <button type="button" class="view-toggle-btn" data-view="tree">Tree</button>
+        <button type="button" class="view-toggle-btn" data-view="flat">Flat</button>
+    </div>
+    <div class="class-cards" id="class-cards" data-view="tree">
+        <ul class="class-tree">
+{%- for entry in class_tree %}
+        {%- let class = class_data[entry.index] %}
+        <li class="class-tree-node" style="--flat-order: {{ entry.index }}">
         {%- let id = class.id.as_str() %}
         {%- let label = class.label.as_str() %}
         {%- let iri = class.iri.as_str() %}
@@ -54,8 +61,41 @@
         {%- let is_abstract = class.is_abstract %}
         {%- let properties = empty_properties %}
         {% include "components/class_card.html" %}
+        {%- if entry.has_children %}
+        <ul class="class-tree-children">
+        {%- else %}
+        </li>{{ entry.close_tags()|safe }}
+        {%- endif %}
 {%- endfor %}
+        </ul>
     </div>
+    <script>
+    (function () {
+        var KEY = 'panschema-classes-view';
+        var container = document.getElementById('class-cards');
+        var buttons = document.querySelectorAll('.view-toggle-btn');
+        if (!container || buttons.length === 0) return;
+        function apply(view) {
+            container.dataset.view = view;
+            buttons.forEach(function (b) {
+                b.classList.toggle('active', b.dataset.view === view);
+            });
+        }
+        var view = 'tree';
+        try {
+            var stored = localStorage.getItem(KEY);
+            if (stored === 'flat' || stored === 'tree') view = stored;
+        } catch (e) { /* localStorage may be unavailable */ }
+        apply(view);
+        buttons.forEach(function (b) {
+            b.addEventListener('click', function () {
+                apply(b.dataset.view);
+                try { localStorage.setItem(KEY, b.dataset.view); }
+                catch (e) { /* localStorage may be unavailable */ }
+            });
+        });
+    })();
+    </script>
 {%- endif %}
 </section>
 
@@ -139,7 +179,6 @@
 
     /* Card grids tile to multiple columns on wide viewports; collapse to
        a single column when the minimum card width can't fit twice. */
-    .class-cards,
     .property-cards,
     .individual-cards {
         display: grid;
@@ -152,6 +191,87 @@
     .property-cards .entity-card,
     .individual-cards .entity-card {
         margin-bottom: 0;
+    }
+
+    /* Classes render as an is_a tree by default: nested lists with
+       indented child groups. The Flat toggle dissolves the list
+       structure (display: contents) and lets the grid order cards
+       alphabetically via each node's --flat-order rank. */
+    .view-toggle {
+        display: inline-flex;
+        gap: var(--space-1);
+        margin-top: var(--space-4);
+    }
+
+    .view-toggle-btn {
+        padding: var(--space-1) var(--space-3);
+        background-color: var(--color-bg-secondary);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-md);
+        font-size: var(--text-sm);
+        color: var(--color-text-muted);
+        cursor: pointer;
+        transition: all var(--transition-fast);
+    }
+
+    .view-toggle-btn:hover {
+        border-color: var(--color-primary);
+    }
+
+    .view-toggle-btn.active {
+        color: var(--color-primary);
+        border-color: var(--color-primary);
+        background-color: color-mix(in srgb, var(--color-primary) 10%, transparent);
+    }
+
+    /* Each tree level is itself a card grid: sibling leaves tile
+       across the available width just like the flat view, while a
+       node with its own subtree spans the full row so its children
+       get the whole width to tile in. */
+    .class-tree,
+    .class-tree ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+    }
+
+    .class-tree,
+    .class-tree-children {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+        gap: var(--space-4);
+    }
+
+    .class-tree > .class-tree-node:has(> .class-tree-children),
+    .class-tree-children > .class-tree-node:has(> .class-tree-children) {
+        grid-column: 1 / -1;
+    }
+
+    /* The child group hangs off a class-colored spine that starts
+       flush under the parent card (padding-top keeps the line
+       unbroken across the gap), making the superclass → subclass
+       connection read at a glance. */
+    .class-tree-children {
+        margin-left: var(--space-6);
+        padding-left: var(--space-6);
+        padding-top: var(--space-4);
+        border-left: 3px solid color-mix(in srgb, var(--color-class) 60%, var(--color-border));
+    }
+
+    .class-cards[data-view="flat"] {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+        gap: var(--space-4);
+    }
+
+    .class-cards[data-view="flat"] .class-tree,
+    .class-cards[data-view="flat"] .class-tree ul,
+    .class-cards[data-view="flat"] .class-tree li {
+        display: contents;
+    }
+
+    .class-cards[data-view="flat"] .entity-card {
+        order: var(--flat-order);
     }
 
     .entity-link {
@@ -185,10 +305,6 @@
 
     .prop-link:hover {
         background-color: color-mix(in srgb, var(--color-property) 10%, transparent);
-    }
-
-    .class-cards {
-        margin-top: var(--space-6);
     }
 
     .individual-link {

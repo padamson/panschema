@@ -184,6 +184,98 @@ fn generates_documentation_from_reference_ontology() {
 }
 
 #[test]
+fn classes_section_renders_is_a_hierarchy_with_flat_toggle() {
+    // The reference ontology's Animal → Mammal → Dog chain must come
+    // out as semantically nested lists, with Person (no is_a, no
+    // descendants) flat alongside; the Flat/Tree toggle and the
+    // alphabetical order ranks the flat view sorts by are part of the
+    // same page.
+    let output_dir = std::env::temp_dir().join("panschema_class_tree_test");
+    let _ = fs::remove_dir_all(&output_dir);
+
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "--input",
+            "tests/fixtures/reference.ttl",
+            "--output",
+            output_dir.to_str().unwrap(),
+        ])
+        .status()
+        .expect("Failed to execute panschema");
+    assert!(status.success(), "panschema exited with error");
+
+    let html = fs::read_to_string(output_dir.join("index.html")).expect("read index.html");
+
+    // Semantic nesting: each level of the chain opens a child <ul>
+    // before the next card appears.
+    let tree_start = html.find(r#"<ul class="class-tree">"#).expect("tree root");
+    let animal = html.find(r##"id="class-Animal""##).expect("Animal card");
+    let mammal = html.find(r##"id="class-Mammal""##).expect("Mammal card");
+    let dog = html.find(r##"id="class-Dog""##).expect("Dog card");
+    assert!(tree_start < animal && animal < mammal && mammal < dog);
+    assert!(
+        html[animal..mammal].contains(r#"<ul class="class-tree-children">"#),
+        "Mammal must open inside Animal's child list"
+    );
+    assert!(
+        html[mammal..dog].contains(r#"<ul class="class-tree-children">"#),
+        "Dog must open inside Mammal's child list"
+    );
+
+    // Each class renders exactly one card, so #class-Foo anchors keep
+    // working in both views.
+    for id in ["Animal", "Mammal", "Dog", "Cat", "Person"] {
+        let anchor = format!(r##"id="class-{id}""##);
+        assert_eq!(
+            html.matches(&anchor).count(),
+            1,
+            "exactly one card for {id}"
+        );
+    }
+
+    // Disconnected root: Person sits at the tree's top level — its
+    // <li> opens after the chain's nesting has fully closed.
+    let person = html.find(r##"id="class-Person""##).expect("Person card");
+    assert!(
+        html[dog..person].contains("</ul></li></ul></li>"),
+        "the Animal subtree must close before Person's top-level entry"
+    );
+
+    // Flat view sorts by --flat-order rank; ranks follow alphabetical
+    // order: Animal, Cat, Dog, Mammal, Person.
+    for (id, rank) in [
+        ("Animal", 0),
+        ("Cat", 1),
+        ("Dog", 2),
+        ("Mammal", 3),
+        ("Person", 4),
+    ] {
+        let card = html.find(&format!(r##"id="class-{id}""##)).unwrap();
+        let node_start = html[..card].rfind("<li class=\"class-tree-node\"").unwrap();
+        assert!(
+            html[node_start..card].contains(&format!("--flat-order: {rank}")),
+            "{id} must carry alphabetical rank {rank}"
+        );
+    }
+
+    // The Flat/Tree toggle ships with the page and defaults to tree.
+    assert!(
+        html.contains(r#"data-view="tree""#),
+        "tree is the default view"
+    );
+    assert!(
+        html.contains(r#"class="view-toggle-btn" data-view="flat""#),
+        "flat toggle button present"
+    );
+    assert!(
+        html.contains("panschema-classes-view"),
+        "view preference persists via localStorage key"
+    );
+
+    let _ = fs::remove_dir_all(output_dir);
+}
+
+#[test]
 fn generates_documentation_from_linkml_yaml() {
     let output_dir = std::env::temp_dir().join("panschema_yaml_integration_test");
     let _ = fs::remove_dir_all(&output_dir);

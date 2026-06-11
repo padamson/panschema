@@ -2,6 +2,7 @@
 //!
 //! Writes LinkML SchemaDefinition to HTML documentation.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -50,6 +51,107 @@ pub struct ClassData {
     /// a small badge in the card heading so readers can tell
     /// foundation classes from instantiable ones at a glance.
     pub is_abstract: bool,
+}
+
+/// One pre-order entry in the Classes hierarchy view. The template
+/// renders the flattened sequence as semantically nested `<ul>`/`<li>`
+/// markup: `has_children` opens a child list after the card, and
+/// `closes` says how many ancestor levels this entry is the last
+/// descendant of (each closed with a `</ul></li>` pair).
+#[derive(Debug, Clone)]
+pub struct ClassTreeEntry {
+    /// Index into the alphabetical `class_data` list — the card to
+    /// render at this position. Doubling as the class's alphabetical
+    /// rank, it is also the CSS `order` value the flat view sorts
+    /// cards by after dissolving the tree with `display: contents`.
+    pub index: usize,
+    pub depth: usize,
+    pub has_children: bool,
+    pub closes: usize,
+}
+
+impl ClassTreeEntry {
+    /// Closing tags for the ancestor levels this leaf terminates.
+    /// Empty for entries with children — their `<ul>` is closed by
+    /// their own last descendant.
+    pub fn close_tags(&self) -> String {
+        "</ul></li>".repeat(self.closes)
+    }
+}
+
+/// Arrange the alphabetical class list into a pre-order `is_a`
+/// forest: roots are classes with no resolvable parent, children
+/// nest under their parent in alphabetical order. Fail-open on
+/// pathological shapes — an `is_a` cycle leaves its members
+/// unreachable from any root, so a sweep pass renders them as
+/// roots rather than dropping them.
+fn build_class_tree(class_data: &[ClassData]) -> Vec<ClassTreeEntry> {
+    let index_by_id: HashMap<&str, usize> = class_data
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.id.as_str(), i))
+        .collect();
+
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); class_data.len()];
+    let mut is_child = vec![false; class_data.len()];
+    for (i, class) in class_data.iter().enumerate() {
+        if let Some(parent) = &class.superclass
+            && let Some(&p) = index_by_id.get(parent.id.as_str())
+            && p != i
+        {
+            children[p].push(i);
+            is_child[i] = true;
+        }
+    }
+
+    let mut entries = Vec::new();
+    let mut visited = vec![false; class_data.len()];
+    let walk_root = |root: usize, entries: &mut Vec<ClassTreeEntry>, visited: &mut Vec<bool>| {
+        let mut stack = vec![(root, 0usize)];
+        while let Some((idx, depth)) = stack.pop() {
+            if visited[idx] {
+                continue;
+            }
+            visited[idx] = true;
+            let kids: Vec<usize> = children[idx]
+                .iter()
+                .copied()
+                .filter(|&k| !visited[k])
+                .collect();
+            entries.push(ClassTreeEntry {
+                index: idx,
+                depth,
+                has_children: !kids.is_empty(),
+                closes: 0,
+            });
+            for &kid in kids.iter().rev() {
+                stack.push((kid, depth + 1));
+            }
+        }
+    };
+    for (root, &child) in is_child.iter().enumerate() {
+        if !child {
+            walk_root(root, &mut entries, &mut visited);
+        }
+    }
+    // Cycle members are nobody's root and nobody reached them; render
+    // them as roots so no class silently disappears from the docs.
+    let unreached: Vec<usize> = (0..class_data.len()).filter(|&i| !visited[i]).collect();
+    for idx in unreached {
+        walk_root(idx, &mut entries, &mut visited);
+    }
+
+    // A leaf closes every ancestor level it is the last descendant
+    // of: the difference between its depth and the next entry's.
+    let depths: Vec<usize> = entries.iter().map(|e| e.depth).collect();
+    for (i, entry) in entries.iter_mut().enumerate() {
+        if entry.has_children {
+            continue;
+        }
+        let next_depth = depths.get(i + 1).copied().unwrap_or(0);
+        entry.closes = entry.depth.saturating_sub(next_depth);
+    }
+    entries
 }
 
 /// A slot as it appears on a specific class, with framing resolved for
@@ -181,6 +283,7 @@ struct IndexTemplate<'a> {
     active_section: &'a str,
     classes: &'a [EntityRef],
     class_data: &'a [ClassData],
+    class_tree: &'a [ClassTreeEntry],
     properties: &'a [EntityRef],
     property_data: &'a [PropertyData],
     individuals: &'a [EntityRef],
@@ -811,6 +914,7 @@ impl HtmlWriter {
                 .map(|d| render_description(d, schema)),
             namespaces,
             class_refs,
+            class_tree: build_class_tree(&class_data_list),
             class_data: class_data_list,
             property_refs,
             property_data: property_data_list,
@@ -835,6 +939,7 @@ struct TemplateData {
     namespaces: Vec<Namespace>,
     class_refs: Vec<EntityRef>,
     class_data: Vec<ClassData>,
+    class_tree: Vec<ClassTreeEntry>,
     property_refs: Vec<EntityRef>,
     property_data: Vec<PropertyData>,
     individual_refs: Vec<EntityRef>,
@@ -868,6 +973,7 @@ impl Writer for HtmlWriter {
             active_section: "metadata",
             classes: &data.class_refs,
             class_data: &data.class_data,
+            class_tree: &data.class_tree,
             properties: &data.property_refs,
             property_data: &data.property_data,
             individuals: &data.individual_refs,
@@ -1269,6 +1375,152 @@ mod tests {
         assert_eq!(dog.label, "Dog");
         assert!(dog.superclass.is_some());
         assert_eq!(dog.superclass.as_ref().unwrap().id, "Mammal");
+    }
+
+    #[test]
+    fn class_tree_nests_reference_hierarchy_preorder() {
+        // Animal → Mammal → {Cat, Dog}, plus Person as a disconnected
+        // root rendered flat alongside the tree. `closes` counts the
+        // ancestor levels a leaf is the last descendant of, so the
+        // template can emit matching `</ul></li>` pairs.
+        let reader = OwlReader::new();
+        let schema = reader.read(&reference_ontology_path()).unwrap();
+        let data = HtmlWriter::build_template_data(&schema);
+
+        let got: Vec<(&str, usize, bool, usize)> = data
+            .class_tree
+            .iter()
+            .map(|e| {
+                (
+                    data.class_data[e.index].id.as_str(),
+                    e.depth,
+                    e.has_children,
+                    e.closes,
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("Animal", 0, true, 0),
+                ("Mammal", 1, true, 0),
+                ("Cat", 2, false, 0),
+                ("Dog", 2, false, 2),
+                ("Person", 0, false, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn class_tree_flat_order_is_alphabetical_rank() {
+        // The flat view sorts cards by CSS `order`; each entry's rank
+        // must match the class's position in the alphabetical
+        // `class_data` list.
+        let reader = OwlReader::new();
+        let schema = reader.read(&reference_ontology_path()).unwrap();
+        let data = HtmlWriter::build_template_data(&schema);
+
+        let mut indices: Vec<usize> = data.class_tree.iter().map(|e| e.index).collect();
+        indices.sort_unstable();
+        let expected: Vec<usize> = (0..data.class_data.len()).collect();
+        assert_eq!(
+            indices, expected,
+            "every alphabetical rank appears exactly once as a flat-order index"
+        );
+    }
+
+    #[test]
+    fn class_tree_mixin_consumer_appears_once_under_is_a_parent() {
+        // Mixins don't create tree edges — a class with both an
+        // `is_a` parent and a mixin nests under the parent only and
+        // appears exactly once.
+        use crate::linkml::{ClassDefinition, SchemaDefinition};
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .classes
+            .insert("Base".to_string(), ClassDefinition::new("Base"));
+        schema
+            .classes
+            .insert("Auditable".to_string(), ClassDefinition::new("Auditable"));
+        let mut child = ClassDefinition::new("Child");
+        child.is_a = Some("Base".to_string());
+        child.mixins = vec!["Auditable".to_string()];
+        schema.classes.insert("Child".to_string(), child);
+
+        let data = HtmlWriter::build_template_data(&schema);
+
+        let child_entries: Vec<_> = data
+            .class_tree
+            .iter()
+            .filter(|e| data.class_data[e.index].id == "Child")
+            .collect();
+        assert_eq!(child_entries.len(), 1, "Child must appear exactly once");
+        assert_eq!(child_entries[0].depth, 1, "Child nests under Base only");
+        assert_eq!(data.class_tree.len(), 3, "every class appears in the tree");
+    }
+
+    #[test]
+    fn class_tree_unresolved_is_a_parent_renders_as_root() {
+        // An `is_a` pointing at a class missing from the schema (e.g.
+        // an un-loaded import) must not drop the class from the tree.
+        use crate::linkml::{ClassDefinition, SchemaDefinition};
+        let mut schema = SchemaDefinition::new("s");
+        let mut orphan = ClassDefinition::new("Orphan");
+        orphan.is_a = Some("Ghost".to_string());
+        schema.classes.insert("Orphan".to_string(), orphan);
+
+        let data = HtmlWriter::build_template_data(&schema);
+
+        assert_eq!(data.class_tree.len(), 1);
+        assert_eq!(data.class_data[data.class_tree[0].index].id, "Orphan");
+        assert_eq!(data.class_tree[0].depth, 0);
+    }
+
+    #[test]
+    fn class_tree_is_a_cycle_fails_open_to_roots() {
+        // A pathological `is_a` cycle must not infinite-loop or drop
+        // classes: cycle members still render, each exactly once.
+        use crate::linkml::{ClassDefinition, SchemaDefinition};
+        let mut schema = SchemaDefinition::new("s");
+        let mut a = ClassDefinition::new("Alpha");
+        a.is_a = Some("Beta".to_string());
+        let mut b = ClassDefinition::new("Beta");
+        b.is_a = Some("Alpha".to_string());
+        schema.classes.insert("Alpha".to_string(), a);
+        schema.classes.insert("Beta".to_string(), b);
+
+        let data = HtmlWriter::build_template_data(&schema);
+
+        let mut ids: Vec<&str> = data
+            .class_tree
+            .iter()
+            .map(|e| data.class_data[e.index].id.as_str())
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec!["Alpha", "Beta"], "cycle members each appear once");
+    }
+
+    #[test]
+    fn class_tree_close_tags_emit_matching_pairs() {
+        // The template closes a leaf's open ancestors via this string;
+        // a leaf with children contributes nothing (its `<ul>` is
+        // closed by its last descendant).
+        let reader = OwlReader::new();
+        let schema = reader.read(&reference_ontology_path()).unwrap();
+        let data = HtmlWriter::build_template_data(&schema);
+
+        let dog = data
+            .class_tree
+            .iter()
+            .find(|e| data.class_data[e.index].id == "Dog")
+            .unwrap();
+        assert_eq!(dog.close_tags(), "</ul></li></ul></li>");
+        let animal = data
+            .class_tree
+            .iter()
+            .find(|e| data.class_data[e.index].id == "Animal")
+            .unwrap();
+        assert_eq!(animal.close_tags(), "");
     }
 
     #[test]

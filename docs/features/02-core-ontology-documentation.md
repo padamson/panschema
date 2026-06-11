@@ -373,19 +373,19 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 
 ### Slice 15: Hierarchy view in the Classes section
 
-**Status:** Not Started
+**Status:** ✅ Complete
 
 **Priority:** Should Have
 
 **User Value:** The Classes section currently renders as an alphabetical flat list of cards. Authors building an `is_a`-rooted hierarchy can't see the subclass/superclass structure at a glance — they have to read each "Subclass of" line on each card, or switch to the graph view. After this slice, classes are grouped or indented by `is_a` so the inheritance tree is visible in the doc body itself.
 
 **Acceptance Criteria:**
-- [ ] HTML Classes section is rendered as a hierarchical structure rooted at classes with no `is_a` parent. Subclasses nest under their parents via CSS indentation (the rendered HTML uses semantic nesting — `<ul>` / `<li>` or equivalent — not just visual indentation).
-- [ ] Classes that participate in multiple inheritance chains (via mixins or pathological `is_a` overrides) appear once under their `is_a` parent; mixin relationships continue to be surfaced via the "Mixes in" section per slice 5.
-- [ ] Disconnected roots (classes with no `is_a` and no descendants) appear as flat top-level entries alongside the rooted trees.
-- [ ] Anchor links from elsewhere in the page (e.g. `#class-Foo`) continue to scroll to the right card; the nesting change is purely structural.
-- [ ] A user-facing toggle ("Flat" / "Tree") in the section header lets readers switch between hierarchical and the existing alphabetical view; the preference persists in `localStorage` like the existing label-visibility prefs.
-- [ ] Integration test: a fixture with a 3-level `is_a` chain (`Animal → Mammal → Dog`) renders Dog nested under Mammal nested under Animal in the tree view, and as a flat alphabetical list in the flat view.
+- [x] HTML Classes section is rendered as a hierarchical structure rooted at classes with no `is_a` parent. Subclasses nest under their parents via CSS indentation (the rendered HTML uses semantic nesting — `<ul>` / `<li>` or equivalent — not just visual indentation).
+- [x] Classes that participate in multiple inheritance chains (via mixins or pathological `is_a` overrides) appear once under their `is_a` parent; mixin relationships continue to be surfaced via the "Mixes in" section per slice 5.
+- [x] Disconnected roots (classes with no `is_a` and no descendants) appear as flat top-level entries alongside the rooted trees.
+- [x] Anchor links from elsewhere in the page (e.g. `#class-Foo`) continue to scroll to the right card; the nesting change is purely structural.
+- [x] A user-facing toggle ("Flat" / "Tree") in the section header lets readers switch between hierarchical and the existing alphabetical view; the preference persists in `localStorage` like the existing label-visibility prefs.
+- [x] Integration test: a fixture with a 3-level `is_a` chain (`Animal → Mammal → Dog`) renders Dog nested under Mammal nested under Animal in the tree view, and as a flat alphabetical list in the flat view.
 
 **Notes:**
 - Source: friction `[2026-06-06] Classes section is a flat list; no hierarchy view` (severity: annoyance / feature request).
@@ -433,5 +433,5 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 | Slice 12: `*_mappings` round-trip — IR + HTML + RDF | Must Have | Feature 12 slice 12.2 | ✅ Complete |
 | Slice 13: Hyperlink + CURIE-expand `class_uri` / `slot_uri` in HTML | Should Have | Feature 12 slice 12.2 | ✅ Complete |
 | Slice 14: Abstract-class badge on class cards | Should Have | None | ✅ Complete |
-| Slice 15: Hierarchy view in the Classes section | Should Have | None | Not Started |
+| Slice 15: Hierarchy view in the Classes section | Should Have | None | ✅ Complete |
 | Slice 16: External `subclass_of` grounding — IR + HTML + RDF | Must Have | Feature 12 slice 12.2 | ✅ Complete |
