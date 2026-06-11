@@ -92,6 +92,11 @@ enum Commands {
         /// still render; uncached external references show CURIEs).
         #[arg(long)]
         offline: bool,
+
+        /// Delete cached upstream labels for this schema's sources
+        /// and refetch them before rendering.
+        #[arg(long = "refresh-labels")]
+        refresh_labels: bool,
     },
     /// Scaffold `panschema-publish.toml` in the current directory.
     ///
@@ -248,6 +253,15 @@ enum Commands {
     },
 }
 
+/// Label-cache behavior for one generate run: offline skips fetching,
+/// refresh evicts cached sources first, and overrides remap a prefix
+/// to a custom source URL (from the manifest's `[label_sources]`).
+struct LabelOptions<'a> {
+    offline: bool,
+    refresh: bool,
+    overrides: &'a std::collections::BTreeMap<String, String>,
+}
+
 fn generate(
     input: &Path,
     output: &Path,
@@ -255,7 +269,7 @@ fn generate(
     include_graph: bool,
     html_graph_aspect: Option<&str>,
     html_default_layout: Option<&str>,
-    offline: bool,
+    labels: &LabelOptions,
 ) -> anyhow::Result<()> {
     let registry = FormatRegistry::with_defaults();
 
@@ -278,7 +292,12 @@ fn generate(
         let mut writer = HtmlWriter::with_options(include_graph)
             .with_graph_aspect(aw, ah)
             .with_default_layout(layout);
-        if let Some(store) = panschema::labels::open_default_store(&schema, offline) {
+        if let Some(store) = panschema::labels::open_default_store(
+            &schema,
+            labels.offline,
+            labels.overrides,
+            labels.refresh,
+        ) {
             writer = writer.with_label_store(store);
         }
         writer
@@ -368,8 +387,13 @@ fn resolve_source(
 }
 
 /// `panschema generate` (no --input): walk the manifest and run configured writers.
-fn generate_from_manifest(offline: bool) -> anyhow::Result<()> {
+fn generate_from_manifest(offline: bool, refresh_labels: bool) -> anyhow::Result<()> {
     let (manifest, manifest_dir) = load_manifest()?;
+    let labels = LabelOptions {
+        offline,
+        refresh: refresh_labels,
+        overrides: &manifest.label_sources,
+    };
 
     if manifest.schemas.is_empty() {
         eprintln!("Manifest has no `[schemas]` entries; nothing to do.");
@@ -393,13 +417,13 @@ fn generate_from_manifest(offline: bool) -> anyhow::Result<()> {
                 true,
                 gen_cfg.html_graph_aspect.as_deref(),
                 gen_cfg.html_default_layout.as_deref(),
-                offline,
+                &labels,
             )?;
             produced_anything = true;
         }
         if let Some(rust_out) = &gen_cfg.rust {
             let rust_out = manifest_dir.join(rust_out);
-            generate(&schema_path, &rust_out, "rust", false, None, None, offline)?;
+            generate(&schema_path, &rust_out, "rust", false, None, None, &labels)?;
             produced_anything = true;
         }
     }
@@ -1148,6 +1172,7 @@ async fn main() -> anyhow::Result<()> {
             no_graph,
             viz_mode,
             offline,
+            refresh_labels,
         }) => match input {
             Some(input) => {
                 if format.to_lowercase() == "html" && !no_graph {
@@ -1158,9 +1183,15 @@ async fn main() -> anyhow::Result<()> {
                     };
                     eprintln!("Graph visualization: {}", mode_str);
                 }
-                generate(&input, &output, &format, !no_graph, None, None, offline)?;
+                let no_overrides = std::collections::BTreeMap::new();
+                let labels = LabelOptions {
+                    offline,
+                    refresh: refresh_labels,
+                    overrides: &no_overrides,
+                };
+                generate(&input, &output, &format, !no_graph, None, None, &labels)?;
             }
-            None => generate_from_manifest(offline)?,
+            None => generate_from_manifest(offline, refresh_labels)?,
         },
         Some(Commands::Init {
             name,
@@ -1218,7 +1249,13 @@ async fn main() -> anyhow::Result<()> {
         None => {
             // Default behavior: generate if input provided (with graph enabled by default)
             if let Some(input) = cli.input {
-                generate(&input, &cli.output, &cli.format, true, None, None, false)?;
+                let no_overrides = std::collections::BTreeMap::new();
+                let labels = LabelOptions {
+                    offline: false,
+                    refresh: false,
+                    overrides: &no_overrides,
+                };
+                generate(&input, &cli.output, &cli.format, true, None, None, &labels)?;
             } else {
                 println!("panschema: no input specified. Use --help for usage.");
             }
@@ -1260,6 +1297,7 @@ mod tests {
                 no_graph,
                 viz_mode,
                 offline,
+                refresh_labels,
             }) => {
                 assert_eq!(input, Some(PathBuf::from("test.ttl")));
                 assert_eq!(output, PathBuf::from("docs"));
@@ -1267,6 +1305,7 @@ mod tests {
                 assert!(!no_graph); // default false (graph enabled)
                 assert!(matches!(viz_mode, VizMode::Auto)); // default auto
                 assert!(!offline); // default false (labels fetched)
+                assert!(!refresh_labels); // default false (cache reused)
             }
             _ => panic!("Expected Generate command"),
         }

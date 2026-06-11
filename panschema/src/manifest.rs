@@ -35,6 +35,10 @@ pub struct Manifest {
     /// Per-schema codegen configuration, keyed by the same name as `schemas`.
     #[serde(default)]
     pub generate: BTreeMap<String, GenerateConfig>,
+    /// Per-prefix overrides for the upstream-label source URL,
+    /// keyed by prefix name. Entries win over the built-in map.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub label_sources: BTreeMap<String, String>,
 }
 
 /// One entry under `[schemas]` — declares where a schema package lives.
@@ -457,6 +461,37 @@ html = "docs/"
             m.generate.get("my-local").unwrap().html,
             Some(PathBuf::from("docs/"))
         );
+    }
+
+    #[test]
+    fn parses_manifest_with_label_sources_section() {
+        let toml = r#"
+[schemas]
+my-local = { path = "./local-pkg" }
+
+[label_sources]
+cco = "https://example.org/pinned/cco-v1.5.ttl"
+local = "https://example.org/own/terms.ttl"
+"#;
+        let m = toml.parse::<Manifest>().expect("should parse");
+        assert_eq!(
+            m.label_sources.get("cco").map(String::as_str),
+            Some("https://example.org/pinned/cco-v1.5.ttl")
+        );
+        assert_eq!(
+            m.label_sources.get("local").map(String::as_str),
+            Some("https://example.org/own/terms.ttl")
+        );
+    }
+
+    #[test]
+    fn manifest_without_label_sources_defaults_empty() {
+        let toml = r#"
+[schemas]
+my-local = { path = "./local-pkg" }
+"#;
+        let m = toml.parse::<Manifest>().expect("should parse");
+        assert!(m.label_sources.is_empty());
     }
 
     #[test]
@@ -928,6 +963,27 @@ existing = { path = "./e" }
         assert!(after.contains("# already-there"));
         assert!(after.contains("existing"));
         assert!(after.contains("newone"));
+    }
+
+    #[test]
+    fn insert_schema_preserves_label_sources_section_and_comments() {
+        let tmp = tempfile::tempdir().unwrap();
+        let body = r#"[schemas]
+existing = { path = "./e" }
+
+# pin CCO to the release we authored against
+[label_sources]
+cco = "https://example.org/pinned/cco-v1.5.ttl"
+"#;
+        let m = write_manifest(tmp.path(), body);
+        insert_schema(&m, &path_req("newone", "./n")).unwrap();
+        let after = std::fs::read_to_string(&m).unwrap();
+        assert!(after.contains("# pin CCO to the release we authored against"));
+        assert!(after.contains(r#"cco = "https://example.org/pinned/cco-v1.5.ttl""#));
+        assert!(after.contains("newone"));
+        after
+            .parse::<Manifest>()
+            .expect("edited manifest must still parse, label_sources intact");
     }
 
     #[test]

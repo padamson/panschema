@@ -105,14 +105,14 @@ Design decisions:
 
 ### Slice 13.5: Manifest override + `--refresh-labels`
 
-**Status:** Not Started
+**Status:** ✅ Complete
 
 **User Value:** Authors can point a prefix at a custom label source (e.g. a corporate ontology) and force-refresh stale caches after an upstream release.
 
 **Acceptance Criteria (write tests first):**
-- [ ] `panschema.toml` / `panschema-publish.toml` accept `[label_sources]` mapping prefix → URL; entries override the built-in map.
-- [ ] `panschema generate --refresh-labels` deletes the relevant cache files before the ensure-labels pass.
-- [ ] Manifest parse round-trips through `toml_edit` preserving comments (consistent with existing manifest handling).
+- [x] `panschema.toml` / `panschema-publish.toml` accept `[label_sources]` mapping prefix → URL; entries override the built-in map.
+- [x] `panschema generate --refresh-labels` deletes the relevant cache files before the ensure-labels pass.
+- [x] Manifest parse round-trips through `toml_edit` preserving comments (consistent with existing manifest handling).
 
 ## Slice Priority and Dependencies
 
@@ -122,7 +122,7 @@ Design decisions:
 | 13.2: LabelSource + extraction | Must Have | None | ✅ Complete |
 | 13.3: Orchestration + built-in map | Must Have | 13.1, 13.2 | ✅ Complete |
 | 13.4: Render labels in HTML | Must Have | 13.3 | ✅ Complete |
-| 13.5: Manifest override + refresh | Should Have | 13.4 | Not Started |
+| 13.5: Manifest override + refresh | Should Have | 13.4 | ✅ Complete |
 
 ## Out of Scope (deferred)
 

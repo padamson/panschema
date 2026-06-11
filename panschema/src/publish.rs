@@ -83,6 +83,10 @@ pub struct PublishConfig {
     /// for single-version schemas; presence enables `panschema publish`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub publishing: Option<PublishingConfig>,
+    /// Per-prefix overrides for the upstream-label source URL,
+    /// keyed by prefix name. Entries win over the built-in map.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub label_sources: std::collections::BTreeMap<String, String>,
 }
 
 /// `[schema]` table — identity and versioning metadata.
@@ -416,7 +420,8 @@ pub fn publish_versioned(
     resolve_refs(repo_root, &all_refs)?;
 
     let manifest_main = &publish_cfg.files.main;
-    let cohort = build_cohort_context(publishing);
+    let mut cohort = build_cohort_context(publishing);
+    cohort.label_sources = publish_cfg.label_sources.clone();
 
     for version in &publishing.versions {
         build_version(
@@ -488,6 +493,7 @@ struct CohortContext {
     edge: Option<String>,
     url_pattern: String,
     site_root_href: String,
+    label_sources: std::collections::BTreeMap<String, String>,
 }
 
 fn build_cohort_context(publishing: &PublishingConfig) -> CohortContext {
@@ -507,6 +513,7 @@ fn build_cohort_context(publishing: &PublishingConfig) -> CohortContext {
         edge: publishing.edge.clone(),
         url_pattern: publishing.url_pattern.clone(),
         site_root_href: publishing.site_root_url.clone(),
+        label_sources: std::collections::BTreeMap::new(),
     }
 }
 
@@ -552,7 +559,9 @@ fn generate_html_for_version(
     let mut writer = HtmlWriter::with_options(true)
         .with_version_context(cohort.context_for(version))
         .with_site_root_href(cohort.site_root_href.clone());
-    if let Some(store) = crate::labels::open_default_store(&schema, false) {
+    if let Some(store) =
+        crate::labels::open_default_store(&schema, false, &cohort.label_sources, false)
+    {
         writer = writer.with_label_store(store);
     }
     writer
@@ -660,6 +669,28 @@ main = "schema/scimantic.yaml"
         assert_eq!(cfg.schema.version, "0.1.3");
         assert_eq!(cfg.schema.linkml, "1.7.0");
         assert_eq!(cfg.files.main, PathBuf::from("schema/scimantic.yaml"));
+        assert!(cfg.label_sources.is_empty());
+    }
+
+    #[test]
+    fn parses_publish_spec_with_label_sources_section() {
+        let toml = r#"
+[schema]
+name = "scimantic-schema"
+version = "0.1.3"
+linkml = "1.7.0"
+
+[files]
+main = "schema/scimantic.yaml"
+
+[label_sources]
+cco = "https://example.org/pinned/cco-v1.5.ttl"
+"#;
+        let cfg = toml.parse::<PublishConfig>().expect("should parse");
+        assert_eq!(
+            cfg.label_sources.get("cco").map(String::as_str),
+            Some("https://example.org/pinned/cco-v1.5.ttl")
+        );
     }
 
     #[test]
@@ -1322,6 +1353,7 @@ versions = ["v0.1.0"]
                 output_dir: PathBuf::from("site/schema"),
                 format: default_format(),
             }),
+            label_sources: std::collections::BTreeMap::new(),
         }
     }
 
@@ -1364,6 +1396,7 @@ versions = ["v0.1.0"]
                 main: PathBuf::from("schema.yaml"),
             },
             publishing: None,
+            label_sources: std::collections::BTreeMap::new(),
         };
         let out = tempfile::tempdir().unwrap();
         let err =

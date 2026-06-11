@@ -51,12 +51,9 @@ pub struct TermInfo {
 /// next run — the fail-open path doubles as format migration.
 pub struct LabelStore {
     cache_dir: PathBuf,
-    /// Loaded term maps, in directory-read order. `lookup` returns
-    /// the first hit.
-    sources: Vec<BTreeMap<String, TermInfo>>,
-    /// Cache-file names already present (sha256 hex of source URL),
-    /// so orchestration can skip re-fetching cached sources.
-    cached_keys: Vec<String>,
+    /// Loaded term maps keyed by cache-file stem (sha256 hex of the
+    /// source URL). `lookup` returns the first hit in key order.
+    sources: BTreeMap<String, BTreeMap<String, TermInfo>>,
 }
 
 impl LabelStore {
@@ -70,14 +67,16 @@ impl LabelStore {
             source,
         })?;
 
-        let mut sources = Vec::new();
-        let mut cached_keys = Vec::new();
+        let mut sources = BTreeMap::new();
         if let Ok(entries) = fs::read_dir(&cache_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.extension().is_none_or(|ext| ext != "json") {
                     continue;
                 }
+                let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                    continue;
+                };
                 match fs::read_to_string(&path)
                     .map_err(|e| e.to_string())
                     .and_then(|body| {
@@ -85,10 +84,7 @@ impl LabelStore {
                             .map_err(|e| e.to_string())
                     }) {
                     Ok(labels) => {
-                        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                            cached_keys.push(stem.to_string());
-                        }
-                        sources.push(labels);
+                        sources.insert(stem.to_string(), labels);
                     }
                     Err(err) => {
                         tracing::warn!(
@@ -101,11 +97,7 @@ impl LabelStore {
             }
         }
 
-        Ok(Self {
-            cache_dir,
-            sources,
-            cached_keys,
-        })
+        Ok(Self { cache_dir, sources })
     }
 
     /// Persist a label map for `source_url` and make it available to
@@ -119,21 +111,29 @@ impl LabelStore {
         let path = self.cache_dir.join(format!("{key}.json"));
         let body = serde_json::to_string(&labels)?;
         fs::write(&path, body).map_err(|source| LabelStoreError::Write { path, source })?;
-        self.cached_keys.push(key);
-        self.sources.push(labels);
+        self.sources.insert(key, labels);
         Ok(())
+    }
+
+    /// Drop the cached map for `source_url` (file + memory) so the
+    /// next `ensure_labels` pass re-fetches it. Used by
+    /// `--refresh-labels`. A missing entry is a no-op.
+    pub fn remove_source(&mut self, source_url: &str) {
+        let key = source_key(source_url);
+        let _ = fs::remove_file(self.cache_dir.join(format!("{key}.json")));
+        self.sources.remove(&key);
     }
 
     /// `true` when a label map for `source_url` is already cached —
     /// orchestration uses this to skip re-fetching.
     pub fn has_source(&self, source_url: &str) -> bool {
-        self.cached_keys.contains(&source_key(source_url))
+        self.sources.contains_key(&source_key(source_url))
     }
 
     /// Look an expanded IRI up across all loaded sources; first hit
     /// wins.
     pub fn lookup(&self, iri: &str) -> Option<&TermInfo> {
-        self.sources.iter().find_map(|terms| terms.get(iri))
+        self.sources.values().find_map(|terms| terms.get(iri))
     }
 }
 
@@ -312,6 +312,8 @@ fn collect_first_literal(
 pub fn open_default_store(
     schema: &crate::linkml::SchemaDefinition,
     offline: bool,
+    overrides: &BTreeMap<String, String>,
+    refresh: bool,
 ) -> Option<LabelStore> {
     let labels_dir = match crate::cache::cache_root() {
         Ok(root) => root.join("labels"),
@@ -328,24 +330,42 @@ pub fn open_default_store(
         }
     };
     if !offline {
-        ensure_labels(schema, &mut store, &HttpLabelSource);
+        ensure_labels(schema, &mut store, &HttpLabelSource, overrides, refresh);
     }
     Some(store)
 }
 
 /// Walk the schema's declared prefixes, fetch label maps for every
-/// namespace with a known source (on cache miss only), and populate
-/// the store. Every failure mode is per-source fail-open: a fetch or
-/// parse error is logged and the remaining prefixes still process.
+/// resolvable source (on cache miss only), and populate the store.
+///
+/// Source resolution per prefix: an `overrides` entry keyed by the
+/// prefix *name* wins; otherwise the built-in map is matched by
+/// namespace IRI; otherwise the prefix is skipped. With `refresh`,
+/// each resolvable source's cache entry is dropped first so it
+/// re-fetches. Every failure mode is per-source fail-open: a fetch
+/// or parse error is logged and the remaining prefixes still
+/// process.
 pub fn ensure_labels(
     schema: &crate::linkml::SchemaDefinition,
     store: &mut LabelStore,
     source: &dyn LabelSource,
+    overrides: &BTreeMap<String, String>,
+    refresh: bool,
 ) {
-    for namespace in schema.prefixes.values() {
-        let Some((_, url)) = BUILTIN_LABEL_SOURCES.iter().find(|(ns, _)| ns == namespace) else {
-            continue;
+    for (prefix, namespace) in &schema.prefixes {
+        let url: &str = match overrides.get(prefix) {
+            Some(url) => url,
+            None => {
+                let Some((_, url)) = BUILTIN_LABEL_SOURCES.iter().find(|(ns, _)| ns == namespace)
+                else {
+                    continue;
+                };
+                url
+            }
         };
+        if refresh {
+            store.remove_source(url);
+        }
         if store.has_source(url) {
             continue;
         }
@@ -652,7 +672,13 @@ ex:DefinitionOnly skos:definition "Defined but unlabeled." .
             fetched: Default::default(),
         };
 
-        ensure_labels(&schema_with_cco_prefix(), &mut store, &source);
+        ensure_labels(
+            &schema_with_cco_prefix(),
+            &mut store,
+            &source,
+            &BTreeMap::new(),
+            false,
+        );
 
         assert_eq!(
             source.fetched.borrow().as_slice(),
@@ -678,7 +704,13 @@ ex:DefinitionOnly skos:definition "Defined but unlabeled." .
             fetched: Default::default(),
         };
 
-        ensure_labels(&schema_with_cco_prefix(), &mut store, &source);
+        ensure_labels(
+            &schema_with_cco_prefix(),
+            &mut store,
+            &source,
+            &BTreeMap::new(),
+            false,
+        );
 
         assert!(
             source.fetched.borrow().is_empty(),
@@ -710,7 +742,7 @@ ex:DefinitionOnly skos:definition "Defined but unlabeled." .
             fetched: Default::default(),
         };
 
-        ensure_labels(&schema, &mut store, &source);
+        ensure_labels(&schema, &mut store, &source, &BTreeMap::new(), false);
 
         assert_eq!(
             store
@@ -719,6 +751,136 @@ ex:DefinitionOnly skos:definition "Defined but unlabeled." .
             Some("Activity"),
             "prov labels land despite the CCO failure"
         );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn ensure_labels_override_url_wins_over_builtin() {
+        let dir = temp_cache_dir("ensure_override_builtin");
+        let mut store = LabelStore::open(&dir).unwrap();
+        let custom_url = "https://example.org/pinned-cco.ttl";
+        let source = CountingSource {
+            responses: BTreeMap::from([(custom_url.to_string(), Ok(CCO_TTL.to_string()))]),
+            fetched: Default::default(),
+        };
+        let overrides = BTreeMap::from([("cco".to_string(), custom_url.to_string())]);
+
+        ensure_labels(
+            &schema_with_cco_prefix(),
+            &mut store,
+            &source,
+            &overrides,
+            false,
+        );
+
+        assert_eq!(
+            source.fetched.borrow().as_slice(),
+            &[custom_url.to_string()],
+            "the override URL is fetched instead of the built-in CCO source"
+        );
+        assert_eq!(
+            store
+                .lookup("https://www.commoncoreontologies.org/ont00000958")
+                .and_then(|t| t.label.as_deref()),
+            Some("Process")
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn ensure_labels_override_enables_unknown_prefix() {
+        let dir = temp_cache_dir("ensure_override_unknown");
+        let mut store = LabelStore::open(&dir).unwrap();
+        let local_url = "https://example.org/own/terms.ttl";
+        let local_ttl = r#"
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+<https://example.org/own/Thing> rdfs:label "Own Thing" .
+"#;
+        let source = CountingSource {
+            responses: BTreeMap::from([
+                (cco_source_url().to_string(), Ok(CCO_TTL.to_string())),
+                (local_url.to_string(), Ok(local_ttl.to_string())),
+            ]),
+            fetched: Default::default(),
+        };
+        let overrides = BTreeMap::from([("local".to_string(), local_url.to_string())]);
+
+        ensure_labels(
+            &schema_with_cco_prefix(),
+            &mut store,
+            &source,
+            &overrides,
+            false,
+        );
+
+        assert_eq!(
+            store
+                .lookup("https://example.org/own/Thing")
+                .and_then(|t| t.label.as_deref()),
+            Some("Own Thing"),
+            "a prefix outside the built-in map resolves through its override"
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn ensure_labels_refresh_refetches_cached_source() {
+        let dir = temp_cache_dir("ensure_refresh");
+        let mut store = LabelStore::open(&dir).unwrap();
+        store.insert_source(cco_source_url(), cco_labels()).unwrap();
+        let updated_ttl = r#"
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+<https://www.commoncoreontologies.org/ont00000958> rdfs:label "Process (updated)" .
+"#;
+        let source = CountingSource {
+            responses: BTreeMap::from([(
+                cco_source_url().to_string(),
+                Ok(updated_ttl.to_string()),
+            )]),
+            fetched: Default::default(),
+        };
+
+        ensure_labels(
+            &schema_with_cco_prefix(),
+            &mut store,
+            &source,
+            &BTreeMap::new(),
+            true,
+        );
+
+        assert_eq!(
+            source.fetched.borrow().as_slice(),
+            &[cco_source_url().to_string()],
+            "refresh evicts the cached source so it fetches again"
+        );
+        assert_eq!(
+            store
+                .lookup("https://www.commoncoreontologies.org/ont00000958")
+                .and_then(|t| t.label.as_deref()),
+            Some("Process (updated)"),
+            "the re-fetched map replaces the stale cache entry"
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn remove_source_deletes_cache_file_and_lookups() {
+        let dir = temp_cache_dir("remove_source");
+        let mut store = LabelStore::open(&dir).unwrap();
+        store.insert_source(cco_source_url(), cco_labels()).unwrap();
+        let cache_file = dir.join(format!("{}.json", source_key(cco_source_url())));
+        assert!(cache_file.exists());
+
+        store.remove_source(cco_source_url());
+
+        assert!(!cache_file.exists(), "the on-disk cache file is deleted");
+        assert!(
+            store
+                .lookup("https://www.commoncoreontologies.org/ont00000958")
+                .is_none(),
+            "the in-memory map is dropped too"
+        );
+        assert!(!store.has_source(cco_source_url()));
         let _ = fs::remove_dir_all(dir);
     }
 
