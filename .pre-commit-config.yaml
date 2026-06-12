@@ -44,9 +44,12 @@ repos:
         types: [rust]
         pass_filenames: false
 
+      # `dev` is additive (gates the styleguide/component code and its
+      # snapshot tests), so one pass with it enabled covers everything
+      # CI's two passes (default + --features dev) cover.
       - id: cargo-nextest
         name: cargo nextest
-        entry: cargo nextest run --workspace
+        entry: cargo nextest run --workspace --features panschema/dev
         language: system
         types: [rust]
         pass_filenames: false
