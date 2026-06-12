@@ -22,6 +22,65 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::linkml::{ClassDefinition, SchemaDefinition, SlotDefinition};
 
+/// How a resolved slot reached the class it was resolved for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InheritancePath {
+    /// Chain of `is_a` ancestors walked from the class's parent down
+    /// to the defining class: `["B", "A"]` when `D is_a B is_a A`
+    /// and `A` defines the slot.
+    IsA(Vec<String>),
+    /// Name of the mixin listed on the class (the slot may originate
+    /// deeper — `from` names the definer, this names the hop).
+    Mixin(String),
+}
+
+/// Origin of a resolved slot, from the perspective of the class
+/// passed to [`resolve_effective_slots_with_provenance`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Provenance {
+    /// Defined on the class itself (inline `attributes` or a
+    /// `slots:` reference).
+    Direct,
+    /// Contributed by an ancestor or mixin. `from` is the defining
+    /// class; an ancestor that itself refined the slot counts as the
+    /// definer of what the class actually inherits.
+    Inherited { from: String, via: InheritancePath },
+    /// Overridden at this class — by `slot_usage`, or by an inline
+    /// attribute shadowing an inherited slot. `from` is where the
+    /// overridden base came from (the class itself when the base was
+    /// direct).
+    Refined { from: String, by_slot_usage: bool },
+}
+
+impl Provenance {
+    /// Human-readable origin for display — `"mixin Named"`,
+    /// `"Identifiable via mixin Auditable"`, or just the defining
+    /// class name for `is_a` inheritance. `None` when the slot
+    /// originates at `here` (direct slots, and refinements of the
+    /// class's own slots), so consumers can render nothing for the
+    /// common case.
+    pub fn origin_label(&self, here: &str) -> Option<String> {
+        match self {
+            Provenance::Direct => None,
+            Provenance::Refined { from, .. } => (from != here).then(|| from.clone()),
+            Provenance::Inherited { from, via } => Some(match via {
+                InheritancePath::Mixin(m) if m == from => format!("mixin {m}"),
+                InheritancePath::Mixin(m) => format!("{from} via mixin {m}"),
+                InheritancePath::IsA(_) => from.clone(),
+            }),
+        }
+    }
+}
+
+/// A slot definition paired with where it came from. Output of
+/// [`resolve_effective_slots_with_provenance`]; consumers that don't
+/// care about origin use [`resolve_effective_slots`] instead.
+#[derive(Debug, Clone)]
+pub struct ResolvedSlot {
+    pub definition: SlotDefinition,
+    pub provenance: Provenance,
+}
+
 /// Walk a class's `is_a` chain and `mixins`, then apply the class's own
 /// `attributes`, global `slots:` refs, and `slot_usage` overrides to
 /// produce the effective set of slots that show up as fields on the
@@ -37,6 +96,22 @@ pub fn resolve_effective_slots(
     class: &ClassDefinition,
     schema: &SchemaDefinition,
 ) -> BTreeMap<String, SlotDefinition> {
+    resolve_effective_slots_with_provenance(class, schema)
+        .into_iter()
+        .map(|(name, rs)| (name, rs.definition))
+        .collect()
+}
+
+/// [`resolve_effective_slots`] plus per-slot [`Provenance`]. Same
+/// walk, same precedence; the provenance is rebased at each hop so
+/// every entry answers "where did this come from?" relative to the
+/// class passed in. Diamond shapes (a slot reachable via both the
+/// `is_a` chain and a mixin) deterministically report the `is_a`
+/// path — it is processed first and mixins never overwrite.
+pub fn resolve_effective_slots_with_provenance(
+    class: &ClassDefinition,
+    schema: &SchemaDefinition,
+) -> BTreeMap<String, ResolvedSlot> {
     let mut visited = BTreeSet::new();
     resolve_slots_walk(class, schema, &mut visited)
 }
@@ -49,8 +124,8 @@ fn resolve_slots_walk(
     class: &ClassDefinition,
     schema: &SchemaDefinition,
     visited: &mut BTreeSet<String>,
-) -> BTreeMap<String, SlotDefinition> {
-    let mut slots: BTreeMap<String, SlotDefinition> = BTreeMap::new();
+) -> BTreeMap<String, ResolvedSlot> {
+    let mut slots: BTreeMap<String, ResolvedSlot> = BTreeMap::new();
 
     // Mark this class as in-progress. If insert returns false, we've
     // already visited this class along the current path — stop.
@@ -61,42 +136,135 @@ fn resolve_slots_walk(
     if let Some(parent_name) = &class.is_a
         && let Some(parent) = schema.classes.get(parent_name)
     {
-        for (name, def) in resolve_slots_walk(parent, schema, visited) {
-            slots.insert(name, def);
+        for (name, rs) in resolve_slots_walk(parent, schema, visited) {
+            slots.insert(
+                name,
+                ResolvedSlot {
+                    provenance: rebase_through_is_a(parent_name, rs.provenance),
+                    definition: rs.definition,
+                },
+            );
         }
     }
 
     for mixin_name in &class.mixins {
         if let Some(mixin) = schema.classes.get(mixin_name) {
-            for (name, def) in resolve_slots_walk(mixin, schema, visited) {
-                slots.entry(name).or_insert(def);
+            for (name, rs) in resolve_slots_walk(mixin, schema, visited) {
+                slots.entry(name).or_insert_with(|| ResolvedSlot {
+                    provenance: rebase_through_mixin(mixin_name, rs.provenance),
+                    definition: rs.definition,
+                });
             }
         }
     }
 
     for (name, def) in &class.attributes {
-        slots.insert(name.clone(), def.clone());
+        // An inline attribute shadowing an inherited slot is a
+        // refinement-by-redefinition; a fresh name is a direct slot.
+        let provenance = match slots.get(name) {
+            Some(prev) => Provenance::Refined {
+                from: origin_of(&prev.provenance, &class.name),
+                by_slot_usage: false,
+            },
+            None => Provenance::Direct,
+        };
+        slots.insert(
+            name.clone(),
+            ResolvedSlot {
+                definition: def.clone(),
+                provenance,
+            },
+        );
     }
 
     for slot_name in &class.slots {
         if let Some(def) = schema.slots.get(slot_name) {
             slots
                 .entry(slot_name.clone())
-                .or_insert_with(|| def.clone());
+                .or_insert_with(|| ResolvedSlot {
+                    definition: def.clone(),
+                    provenance: Provenance::Direct,
+                });
         }
     }
 
     for (name, override_def) in &class.slot_usage {
-        let target = slots
-            .entry(name.clone())
-            .or_insert_with(|| override_def.clone());
-        merge_slot_override(target, override_def);
+        match slots.get_mut(name) {
+            Some(target) => {
+                target.provenance = Provenance::Refined {
+                    from: origin_of(&target.provenance, &class.name),
+                    by_slot_usage: true,
+                };
+                merge_slot_override(&mut target.definition, override_def);
+            }
+            // A `slot_usage` with no inherited base acts as the
+            // slot's introduction at this class.
+            None => {
+                slots.insert(
+                    name.clone(),
+                    ResolvedSlot {
+                        definition: override_def.clone(),
+                        provenance: Provenance::Direct,
+                    },
+                );
+            }
+        }
     }
 
     // Pop this class on the way out — sibling/cousin paths to it
     // through different ancestors are NOT cycles.
     visited.remove(&class.name);
     slots
+}
+
+/// The defining class a provenance points back to, with `here` as
+/// the answer for slots that originate at the current class.
+fn origin_of(provenance: &Provenance, here: &str) -> String {
+    match provenance {
+        Provenance::Direct => here.to_string(),
+        Provenance::Inherited { from, .. } | Provenance::Refined { from, .. } => from.clone(),
+    }
+}
+
+/// Rebase a parent-relative provenance to the child inheriting
+/// through `is_a`: the parent's direct (or refined) slots are what
+/// the child inherits from the parent, and deeper `is_a` chains grow
+/// by the parent hop. A mixin path observed at the parent stays a
+/// mixin path — the mixin relationship is the fact worth surfacing.
+fn rebase_through_is_a(parent: &str, provenance: Provenance) -> Provenance {
+    match provenance {
+        Provenance::Direct | Provenance::Refined { .. } => Provenance::Inherited {
+            from: parent.to_string(),
+            via: InheritancePath::IsA(vec![parent.to_string()]),
+        },
+        Provenance::Inherited {
+            from,
+            via: InheritancePath::IsA(chain),
+        } => {
+            let mut full = vec![parent.to_string()];
+            full.extend(chain);
+            Provenance::Inherited {
+                from,
+                via: InheritancePath::IsA(full),
+            }
+        }
+        inherited_via_mixin => inherited_via_mixin,
+    }
+}
+
+/// Rebase a mixin-relative provenance to the consuming class: the
+/// hop is always the mixin named in the class's `mixins:` list, and
+/// `from` stays on the defining class when the mixin itself
+/// inherited the slot.
+fn rebase_through_mixin(mixin: &str, provenance: Provenance) -> Provenance {
+    let from = match provenance {
+        Provenance::Inherited { from, .. } => from,
+        Provenance::Direct | Provenance::Refined { .. } => mixin.to_string(),
+    };
+    Provenance::Inherited {
+        from,
+        via: InheritancePath::Mixin(mixin.to_string()),
+    }
 }
 
 /// Merge a `slot_usage` override into an inherited/base slot definition.
@@ -276,6 +444,230 @@ mod tests {
             Some("integer"),
             "direct attribute should be present"
         );
+    }
+
+    /// Builds: A defines `name`; B is_a A; C is_a A (mixin-usable);
+    /// D is_a B, mixins [C]. The diamond fixture for provenance.
+    fn diamond_schema() -> SchemaDefinition {
+        let mut schema = SchemaDefinition::new("diamond");
+        let mut a = ClassDefinition::new("A");
+        a.attributes
+            .insert("name".into(), SlotDefinition::new("name"));
+        schema.classes.insert("A".into(), a);
+        let mut b = ClassDefinition::new("B");
+        b.is_a = Some("A".into());
+        schema.classes.insert("B".into(), b);
+        let mut c = ClassDefinition::new("C");
+        c.is_a = Some("A".into());
+        schema.classes.insert("C".into(), c);
+        let mut d = ClassDefinition::new("D");
+        d.is_a = Some("B".into());
+        d.mixins = vec!["C".into()];
+        schema.classes.insert("D".into(), d);
+        schema
+    }
+
+    #[test]
+    fn provenance_direct_slot_is_direct() {
+        let schema = diamond_schema();
+        let resolved = resolve_effective_slots_with_provenance(&schema.classes["A"], &schema);
+        assert_eq!(resolved["name"].provenance, Provenance::Direct);
+        assert_eq!(resolved["name"].provenance.origin_label("A"), None);
+    }
+
+    #[test]
+    fn provenance_tracks_is_a_chain_to_definer() {
+        let schema = diamond_schema();
+        let resolved = resolve_effective_slots_with_provenance(&schema.classes["B"], &schema);
+        assert_eq!(
+            resolved["name"].provenance,
+            Provenance::Inherited {
+                from: "A".into(),
+                via: InheritancePath::IsA(vec!["A".into()]),
+            }
+        );
+        assert_eq!(
+            resolved["name"].provenance.origin_label("B").as_deref(),
+            Some("A")
+        );
+    }
+
+    #[test]
+    fn provenance_diamond_reports_is_a_path_deterministically() {
+        // D reaches A.name both via is_a (B → A) and via mixin C.
+        // The is_a path is processed first and mixins never
+        // overwrite, so the reported path is the is_a chain.
+        let schema = diamond_schema();
+        let resolved = resolve_effective_slots_with_provenance(&schema.classes["D"], &schema);
+        assert_eq!(
+            resolved["name"].provenance,
+            Provenance::Inherited {
+                from: "A".into(),
+                via: InheritancePath::IsA(vec!["B".into(), "A".into()]),
+            }
+        );
+    }
+
+    #[test]
+    fn provenance_mixin_slot_names_the_mixin_hop() {
+        let mut schema = SchemaDefinition::new("s");
+        let mut named = ClassDefinition::new("Named");
+        named
+            .attributes
+            .insert("name".into(), SlotDefinition::new("name"));
+        schema.classes.insert("Named".into(), named);
+        let mut person = ClassDefinition::new("Person");
+        person.mixins = vec!["Named".into()];
+        schema.classes.insert("Person".into(), person);
+
+        let resolved = resolve_effective_slots_with_provenance(&schema.classes["Person"], &schema);
+        assert_eq!(
+            resolved["name"].provenance,
+            Provenance::Inherited {
+                from: "Named".into(),
+                via: InheritancePath::Mixin("Named".into()),
+            }
+        );
+        assert_eq!(
+            resolved["name"]
+                .provenance
+                .origin_label("Person")
+                .as_deref(),
+            Some("mixin Named")
+        );
+    }
+
+    #[test]
+    fn provenance_mixin_inherited_slot_keeps_definer_names_hop() {
+        // The mixin itself inherits the slot: from = the definer,
+        // via = the mixin hop the consuming class actually lists.
+        let mut schema = SchemaDefinition::new("s");
+        let mut base = ClassDefinition::new("Identifiable");
+        base.attributes
+            .insert("id".into(), SlotDefinition::new("id"));
+        schema.classes.insert("Identifiable".into(), base);
+        let mut mixin = ClassDefinition::new("Auditable");
+        mixin.is_a = Some("Identifiable".into());
+        schema.classes.insert("Auditable".into(), mixin);
+        let mut doc = ClassDefinition::new("Document");
+        doc.mixins = vec!["Auditable".into()];
+        schema.classes.insert("Document".into(), doc);
+
+        let resolved =
+            resolve_effective_slots_with_provenance(&schema.classes["Document"], &schema);
+        assert_eq!(
+            resolved["id"].provenance,
+            Provenance::Inherited {
+                from: "Identifiable".into(),
+                via: InheritancePath::Mixin("Auditable".into()),
+            }
+        );
+        assert_eq!(
+            resolved["id"]
+                .provenance
+                .origin_label("Document")
+                .as_deref(),
+            Some("Identifiable via mixin Auditable")
+        );
+    }
+
+    #[test]
+    fn provenance_slot_usage_marks_refined_with_origin() {
+        let mut schema = SchemaDefinition::new("s");
+        let mut parent = ClassDefinition::new("Parent");
+        parent
+            .attributes
+            .insert("field".into(), SlotDefinition::new("field"));
+        schema.classes.insert("Parent".into(), parent);
+        let mut child = ClassDefinition::new("Child");
+        child.is_a = Some("Parent".into());
+        let mut tighten = SlotDefinition::new("field");
+        tighten.required = true;
+        child.slot_usage.insert("field".into(), tighten);
+        schema.classes.insert("Child".into(), child);
+
+        let resolved = resolve_effective_slots_with_provenance(&schema.classes["Child"], &schema);
+        assert_eq!(
+            resolved["field"].provenance,
+            Provenance::Refined {
+                from: "Parent".into(),
+                by_slot_usage: true,
+            }
+        );
+        assert!(resolved["field"].definition.required);
+        assert_eq!(
+            resolved["field"]
+                .provenance
+                .origin_label("Child")
+                .as_deref(),
+            Some("Parent"),
+            "a refined inherited slot still points at its origin"
+        );
+    }
+
+    #[test]
+    fn provenance_inline_attribute_shadowing_inherited_is_refined() {
+        let mut schema = SchemaDefinition::new("s");
+        let mut parent = ClassDefinition::new("Parent");
+        parent
+            .attributes
+            .insert("field".into(), SlotDefinition::new("field"));
+        schema.classes.insert("Parent".into(), parent);
+        let mut child = ClassDefinition::new("Child");
+        child.is_a = Some("Parent".into());
+        let mut shadow = SlotDefinition::new("field");
+        shadow.range = Some("integer".into());
+        child.attributes.insert("field".into(), shadow);
+        schema.classes.insert("Child".into(), child);
+
+        let resolved = resolve_effective_slots_with_provenance(&schema.classes["Child"], &schema);
+        assert_eq!(
+            resolved["field"].provenance,
+            Provenance::Refined {
+                from: "Parent".into(),
+                by_slot_usage: false,
+            }
+        );
+    }
+
+    #[test]
+    fn provenance_refinement_of_own_slot_renders_no_origin() {
+        // slot_usage over the class's own attribute: Refined with
+        // from = the class itself, which origin_label suppresses.
+        let mut schema = SchemaDefinition::new("s");
+        let mut thing = ClassDefinition::new("Thing");
+        thing
+            .attributes
+            .insert("field".into(), SlotDefinition::new("field"));
+        let mut tighten = SlotDefinition::new("field");
+        tighten.required = true;
+        thing.slot_usage.insert("field".into(), tighten);
+        schema.classes.insert("Thing".into(), thing);
+
+        let resolved = resolve_effective_slots_with_provenance(&schema.classes["Thing"], &schema);
+        assert_eq!(
+            resolved["field"].provenance,
+            Provenance::Refined {
+                from: "Thing".into(),
+                by_slot_usage: true,
+            }
+        );
+        assert_eq!(resolved["field"].provenance.origin_label("Thing"), None);
+    }
+
+    #[test]
+    fn provenance_variant_keeps_definitions_identical_to_plain_resolution() {
+        // The two public entry points are the same walk; their
+        // definitions must never diverge.
+        let schema = diamond_schema();
+        for class in schema.classes.values() {
+            let plain = resolve_effective_slots(class, &schema);
+            let with_prov = resolve_effective_slots_with_provenance(class, &schema);
+            assert_eq!(plain.len(), with_prov.len());
+            for (name, def) in &plain {
+                assert_eq!(def.name, with_prov[name].definition.name);
+            }
+        }
     }
 
     #[test]

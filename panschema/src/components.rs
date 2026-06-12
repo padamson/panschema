@@ -533,8 +533,10 @@ impl ComponentRenderer {
                 required: true,
                 multivalued: false,
                 any_of: vec![],
-                description: Some("Full legal name.".to_string()),
+                description: None,
                 refined_here: false,
+                origin: Some("mixin Named".to_string()),
+                description_tooltip: Some("Full legal name.".to_string()),
             },
             panschema::html_writer::SlotInClass {
                 name: "age".to_string(),
@@ -547,6 +549,8 @@ impl ComponentRenderer {
                 any_of: vec![],
                 description: None,
                 refined_here: true,
+                origin: None,
+                description_tooltip: None,
             },
         ];
         let class_mappings = vec![

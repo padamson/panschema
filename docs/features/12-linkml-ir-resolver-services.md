@@ -115,18 +115,18 @@ The resolver is a sibling module to `linkml.rs`, not part of `SchemaDefinition` 
 
 ### Slice 12.4: Slot provenance — "where did this come from?"
 
-**Status:** Not Started
+**Status:** ✅ Complete
 
 **Priority:** Nice to Have
 
 **User Value:** Consumers can say "Person.name (inherited from Named via mixin)" instead of a flat slot list. Authors building intuition for inheritance get the answer without manually walking the class hierarchy.
 
 **Acceptance Criteria:**
-- [ ] `ResolvedSlot` (from slice 12.1) already carries origin metadata; this slice promotes it to a typed `Provenance` enum: `Direct`, `Inherited { from: String, via: InheritancePath }`, `Refined { from: String, by_slot_usage: bool }`. `InheritancePath` distinguishes `IsA(chain: Vec<String>)` from `Mixin(via: String)`.
-- [ ] `rust_writer` doc-comments on flattened fields gain an "inherited from `<class>`" line.
-- [ ] HTML class card surfaces a small "from `<class>`" tag on inherited slots (consumed in feature 02 slice 10).
-- [ ] Graph hover card "Slots:" row tags inherited entries (consumed in feature 04 slice 13).
-- [ ] Unit tests covering diamond inheritance (A → B → D, A → C → D) — provenance for D.name follows the first-found path; tests pin which path that is for determinism.
+- [x] `ResolvedSlot` (introduced here — 12.1 deliberately shipped without the wrapper) carries a typed `Provenance` enum: `Direct`, `Inherited { from: String, via: InheritancePath }`, `Refined { from: String, by_slot_usage: bool }`. `InheritancePath` distinguishes `IsA(chain: Vec<String>)` from `Mixin(via: String)`. Exposed via `resolve_effective_slots_with_provenance`; the plain `resolve_effective_slots` delegates to the same walk, so the two can't diverge.
+- [x] `rust_writer` doc-comments on flattened fields gain an "Inherited from `<class>`" line.
+- [x] HTML class card surfaces a small "from `<class>`" tag on inherited slots (consumed in feature 02 slice 10).
+- [x] Graph hover card "Slots:" row tags inherited entries with a `(from <origin>)` suffix (consumed in feature 04 slice 13).
+- [x] Unit tests covering diamond inheritance (A → B → D, A → C → D) — provenance for D.name follows the first-found path; tests pin the `is_a` chain as that path (processed first; mixins never overwrite).
 
 **Notes:**
 - Provenance is purely additive — `ResolvedSlot` consumers that don't care can ignore the metadata.
@@ -141,7 +141,7 @@ The resolver is a sibling module to `linkml.rs`, not part of `SchemaDefinition` 
 | 12.1: Extract `resolve_effective_slots` | Must Have | feature 06 slice 6.3 (the resolver to lift) | ✅ Complete |
 | 12.2: `expand_curie` | Should Have | None | ✅ Complete |
 | 12.3: `effective_cardinality` | Should Have | 12.1 | ✅ Complete |
-| 12.4: Slot provenance | Nice to Have | 12.1 | Not Started |
+| 12.4: Slot provenance | Nice to Have | 12.1 | ✅ Complete |
 
 ---
 

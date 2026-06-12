@@ -453,7 +453,11 @@ fn render_class<W: Write>(
         }
     }
 
-    let resolved = resolve_slots(def, schema);
+    let resolved_p = crate::linkml_resolve::resolve_effective_slots_with_provenance(def, schema);
+    let resolved: BTreeMap<String, SlotDefinition> = resolved_p
+        .iter()
+        .map(|(k, rs)| (k.clone(), rs.definition.clone()))
+        .collect();
     let eq_hash_ok = eq_hash_support.get(name).copied().unwrap_or(false);
     let derives = compute_struct_derives(&resolved, eq_hash_ok);
     writeln!(out, "#[derive({derives})]")?;
@@ -463,6 +467,9 @@ fn render_class<W: Write>(
         let rust_field = snake_case(slot_name);
         let rust_type = field_type_for(name, slot_name, slot, schema, roles, any_of_enums);
         render_doc_comment(out, "    ", slot.description.as_deref())?;
+        if let Some(origin) = resolved_p[slot_name].provenance.origin_label(name) {
+            writeln!(out, "    /// Inherited from {origin}.")?;
+        }
 
         let mut serde_attrs: Vec<String> = Vec::new();
         if rust_field != *slot_name {
@@ -2665,6 +2672,48 @@ mod tests {
         let result = escape_str("\"");
         assert!(matches!(result, std::borrow::Cow::Owned(_)));
         assert_eq!(result, "\\\"");
+    }
+
+    #[test]
+    fn struct_fields_carry_inherited_from_doc_lines() {
+        // A reader of the generated module shouldn't have to walk the
+        // LinkML hierarchy to learn where a flattened field came
+        // from: inherited fields say so, direct fields stay silent.
+        let mut schema = SchemaDefinition::new("demo");
+        let mut parent = ClassDefinition::new("Parent");
+        parent
+            .attributes
+            .insert("name".into(), SlotDefinition::new("name"));
+        schema.classes.insert("Parent".into(), parent);
+        let mut mixin = ClassDefinition::new("Auditable");
+        mixin
+            .attributes
+            .insert("createdAt".into(), SlotDefinition::new("createdAt"));
+        schema.classes.insert("Auditable".into(), mixin);
+        let mut child = ClassDefinition::new("Child");
+        child.is_a = Some("Parent".into());
+        child.mixins = vec!["Auditable".into()];
+        child
+            .attributes
+            .insert("own".into(), SlotDefinition::new("own"));
+        schema.classes.insert("Child".into(), child);
+
+        let out = RustWriter::new().render(&schema);
+        let start = out.find("pub struct Child").expect("Child struct rendered");
+        let end = out[start..].find('}').map(|n| start + n).unwrap();
+        let body = &out[start..end];
+        assert!(
+            body.contains("/// Inherited from Parent."),
+            "inherited is_a field must say where it came from; got: {body}"
+        );
+        assert!(
+            body.contains("/// Inherited from mixin Auditable."),
+            "mixin-flattened field must name the mixin; got: {body}"
+        );
+        assert!(
+            !body.contains("/// Inherited from Child"),
+            "direct fields must not carry an origin line; got: {body}"
+        );
     }
 
     // ----- header + Writer trait surface ------------------------------

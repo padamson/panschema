@@ -171,12 +171,18 @@ pub struct GraphEdge {
 /// natural output. The hover card's "+N more" cap means alphabetical
 /// order is fine for the 5-slot summary; authors who need the full
 /// list and a specific order click-to-pin the persistent panel.
+/// Inherited entries carry a `(from <origin>)` suffix so the hover
+/// card distinguishes a class's own slots from flattened ones.
 fn resolve_class_slots(schema: &SchemaDefinition, class_name: &str) -> Vec<String> {
     let Some(class_def) = schema.classes.get(class_name) else {
         return Vec::new();
     };
-    crate::linkml_resolve::resolve_effective_slots(class_def, schema)
-        .into_keys()
+    crate::linkml_resolve::resolve_effective_slots_with_provenance(class_def, schema)
+        .into_iter()
+        .map(|(name, rs)| match rs.provenance.origin_label(class_name) {
+            Some(origin) => format!("{name} (from {origin})"),
+            None => name,
+        })
         .collect()
 }
 
@@ -1217,7 +1223,11 @@ mod tests {
         let graph = writer.schema_to_graph(&schema);
 
         let (slots, parents, mixins) = class_kind_metadata(&graph, "Dog");
-        assert_eq!(slots, &["breed".to_string(), "name".to_string()]);
+        assert_eq!(
+            slots,
+            &["breed".to_string(), "name (from Animal)".to_string()],
+            "inherited entries carry their origin tag"
+        );
         assert_eq!(parents, &["Animal".to_string()]);
         assert!(mixins.is_empty());
     }
@@ -1250,7 +1260,11 @@ mod tests {
         let graph = writer.schema_to_graph(&schema);
 
         let (slots, _, mixins) = class_kind_metadata(&graph, "Person");
-        assert_eq!(slots, &["age".to_string(), "name".to_string()]);
+        assert_eq!(
+            slots,
+            &["age".to_string(), "name (from mixin Named)".to_string()],
+            "the mixin path wins the dedup, so its origin is reported"
+        );
         assert_eq!(mixins, &["Named".to_string()]);
     }
 
@@ -1287,7 +1301,7 @@ mod tests {
         let (slots, _, _) = class_kind_metadata(&graph, "Question");
         assert_eq!(
             slots,
-            &["wasGeneratedBy".to_string()],
+            &["wasGeneratedBy (from Activity)".to_string()],
             "wasGeneratedBy should appear in Question's resolved slots \
              via the slot_usage overlay even though it was inherited \
              from Activity"

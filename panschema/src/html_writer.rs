@@ -11,7 +11,6 @@ use askama::Template;
 use crate::graph_writer::GraphWriter;
 use crate::io::{IoError, IoResult, Writer};
 use crate::linkml::SchemaDefinition;
-use crate::linkml_resolve::resolve_effective_slots as resolve_slots;
 
 /// Entity reference for sidebar navigation.
 #[derive(Debug, Clone)]
@@ -167,6 +166,15 @@ pub struct SlotInClass {
     pub description: Option<String>,
     /// `true` when this class's `slot_usage` overrides an inherited slot.
     pub refined_here: bool,
+    /// Display label for where an inherited slot came from
+    /// (e.g. `"mixin Named"`); `None` for the class's own slots.
+    pub origin: Option<String>,
+    /// Plain-text description shown as a hover tooltip on inherited
+    /// slots. Inherited entries render compactly — the inline
+    /// description belongs to the defining class's card — so
+    /// `description` and `description_tooltip` are mutually
+    /// exclusive.
+    pub description_tooltip: Option<String>,
 }
 
 /// Range reference for property cards - either a class link or a datatype name.
@@ -601,11 +609,28 @@ impl HtmlWriter {
                 })
                 .collect();
 
-            let resolved = resolve_slots(class_def, schema);
+            let resolved =
+                crate::linkml_resolve::resolve_effective_slots_with_provenance(class_def, schema);
             let slots: Vec<SlotInClass> = resolved
                 .iter()
-                .map(|(slot_name, slot_def)| {
+                .map(|(slot_name, rs)| {
+                    let slot_def = &rs.definition;
                     let cardinality = crate::linkml_resolve::effective_cardinality(slot_def);
+                    let origin = rs.provenance.origin_label(class_id);
+                    // Inline description only where the slot is
+                    // defined or refined; inherited entries carry it
+                    // as a tooltip to keep subclass cards compact.
+                    let (description, description_tooltip) = if origin.is_some() {
+                        (None, slot_def.description.clone())
+                    } else {
+                        (
+                            slot_def
+                                .description
+                                .as_deref()
+                                .map(|d| render_description(d, schema)),
+                            None,
+                        )
+                    };
                     SlotInClass {
                         name: slot_name.clone(),
                         range: slot_def.range.as_deref().map(|r| range_ref_for(r, schema)),
@@ -622,11 +647,10 @@ impl HtmlWriter {
                                     .map(|r| range_ref_for(r, schema))
                             })
                             .collect(),
-                        description: slot_def
-                            .description
-                            .as_deref()
-                            .map(|d| render_description(d, schema)),
+                        description,
                         refined_here: class_def.slot_usage.contains_key(slot_name),
+                        origin,
+                        description_tooltip,
                     }
                 })
                 .collect();
@@ -1524,6 +1548,64 @@ mod tests {
             .find(|e| data.class_data[e.index].id == "Animal")
             .unwrap();
         assert_eq!(animal.close_tags(), "");
+    }
+
+    #[test]
+    fn class_card_slots_carry_origin_for_inherited_entries() {
+        // The card tags inherited slots with where they came from;
+        // the class's own slots carry no tag.
+        use crate::linkml::{ClassDefinition, SchemaDefinition, SlotDefinition};
+        let mut schema = SchemaDefinition::new("s");
+        let mut named = ClassDefinition::new("Named");
+        named
+            .attributes
+            .insert("name".into(), SlotDefinition::new("name"));
+        schema.classes.insert("Named".into(), named);
+        let mut person = ClassDefinition::new("Person");
+        person.mixins = vec!["Named".into()];
+        person
+            .attributes
+            .insert("email".into(), SlotDefinition::new("email"));
+        schema.classes.insert("Person".into(), person);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let card = data.class_data.iter().find(|c| c.id == "Person").unwrap();
+        let name = card.slots.iter().find(|s| s.name == "name").unwrap();
+        assert_eq!(name.origin.as_deref(), Some("mixin Named"));
+        let email = card.slots.iter().find(|s| s.name == "email").unwrap();
+        assert_eq!(email.origin, None);
+    }
+
+    #[test]
+    fn inherited_slot_description_moves_to_tooltip() {
+        // The defining class's card owns the inline description;
+        // inheriting cards render the slot compactly with the
+        // description as a hover tooltip — otherwise every subclass
+        // repeats the parent's prose.
+        use crate::linkml::{ClassDefinition, SchemaDefinition, SlotDefinition};
+        let mut schema = SchemaDefinition::new("s");
+        let mut parent = ClassDefinition::new("Parent");
+        let mut field = SlotDefinition::new("field");
+        field.description = Some("What this field asserts.".into());
+        parent.attributes.insert("field".into(), field);
+        schema.classes.insert("Parent".into(), parent);
+        let mut child = ClassDefinition::new("Child");
+        child.is_a = Some("Parent".into());
+        schema.classes.insert("Child".into(), child);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let on_parent = data.class_data.iter().find(|c| c.id == "Parent").unwrap();
+        let parent_slot = on_parent.slots.iter().find(|s| s.name == "field").unwrap();
+        assert!(parent_slot.description.is_some(), "definer renders inline");
+        assert_eq!(parent_slot.description_tooltip, None);
+
+        let on_child = data.class_data.iter().find(|c| c.id == "Child").unwrap();
+        let child_slot = on_child.slots.iter().find(|s| s.name == "field").unwrap();
+        assert_eq!(child_slot.description, None, "inheritor renders compactly");
+        assert_eq!(
+            child_slot.description_tooltip.as_deref(),
+            Some("What this field asserts.")
+        );
     }
 
     #[test]

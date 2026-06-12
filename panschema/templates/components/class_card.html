@@ -98,7 +98,7 @@
                 <ul class="slot-list">
 {%- for slot in slots %}
                     <li class="slot-entry">
-                        <a href="#prop-{{ slot.name }}" class="slot-name">{{ slot.name }}</a>
+                        <a href="#prop-{{ slot.name }}" class="slot-name"{% if let Some(tip) = slot.description_tooltip.as_deref() %} title="{{ tip }}"{% endif %}>{{ slot.name }}</a>
 {%- if !slot.any_of.is_empty() %}
                         : any of [
 {%- for branch in slot.any_of %}
@@ -116,6 +116,7 @@
 {%- if slot.required %}                        <span class="slot-flag required">required</span>{% endif %}
 {%- if slot.multivalued %}                        <span class="slot-flag multivalued">multivalued</span>{% endif %}
 {%- if slot.refined_here %}                        <span class="slot-flag refined">refined here</span>{% endif %}
+{%- if let Some(origin) = slot.origin.as_deref() %}                        <span class="slot-flag origin">from {{ origin }}</span>{% endif %}
 {%- if let Some(desc) = slot.description.as_deref() %}
                         <div class="slot-description">{{ desc|safe }}</div>
 {%- endif %}
@@ -347,6 +348,12 @@
         background-color: color-mix(in srgb, var(--color-text-muted) 15%, transparent);
         color: var(--color-text-muted);
         font-style: italic;
+    }
+
+    .slot-flag.origin {
+        background-color: transparent;
+        border: 1px solid var(--color-border);
+        color: var(--color-text-muted);
     }
 
     .slot-description {
