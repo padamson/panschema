@@ -150,6 +150,40 @@ fn merge_slot_override(target: &mut SlotDefinition, source: &SlotDefinition) {
     }
 }
 
+/// Effective cardinality of a resolved slot: the answer every writer
+/// should display, after explicit `minimum_cardinality` /
+/// `maximum_cardinality` bounds and the `required` / `multivalued`
+/// flags have been reconciled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cardinality {
+    pub required: bool,
+    pub multivalued: bool,
+    pub min: Option<u32>,
+    pub max: Option<u32>,
+}
+
+/// Compute the effective cardinality of a slot. Pass a slot that has
+/// already been through [`resolve_effective_slots`] — the
+/// `slot_usage` overlay happens there, so this is a pure view with no
+/// resolution logic of its own.
+///
+/// Precedence per bound (highest wins): an explicit
+/// `minimum_cardinality` decides `required` (`min >= 1`); an explicit
+/// `maximum_cardinality` decides `multivalued` (`max > 1`); each flag
+/// is the fallback when its bound is absent.
+pub fn effective_cardinality(slot: &SlotDefinition) -> Cardinality {
+    Cardinality {
+        required: slot
+            .minimum_cardinality
+            .map_or(slot.required, |min| min >= 1),
+        multivalued: slot
+            .maximum_cardinality
+            .map_or(slot.multivalued, |max| max > 1),
+        min: slot.minimum_cardinality,
+        max: slot.maximum_cardinality,
+    }
+}
+
 /// Expand a CURIE-shaped value against the schema's `prefixes:`
 /// table, falling back to `default_prefix` for bare names.
 ///
@@ -242,6 +276,87 @@ mod tests {
             Some("integer"),
             "direct attribute should be present"
         );
+    }
+
+    #[test]
+    fn effective_cardinality_explicit_bounds_override_flags() {
+        // Explicit cardinality fields win over the bool flags: a slot
+        // flagged required+multivalued but bounded 0..1 is effectively
+        // optional and single-valued.
+        let mut slot = SlotDefinition::new("s");
+        slot.required = true;
+        slot.multivalued = true;
+        slot.minimum_cardinality = Some(0);
+        slot.maximum_cardinality = Some(1);
+
+        let card = effective_cardinality(&slot);
+        assert!(!card.required);
+        assert!(!card.multivalued);
+        assert_eq!(card.min, Some(0));
+        assert_eq!(card.max, Some(1));
+    }
+
+    #[test]
+    fn effective_cardinality_min_one_unbounded_max_keeps_multivalued_flag() {
+        // min: 1 forces required; an absent max defers to the
+        // multivalued flag.
+        let mut slot = SlotDefinition::new("s");
+        slot.multivalued = true;
+        slot.minimum_cardinality = Some(1);
+
+        let card = effective_cardinality(&slot);
+        assert!(card.required);
+        assert!(card.multivalued);
+        assert_eq!(card.min, Some(1));
+        assert_eq!(card.max, None);
+    }
+
+    #[test]
+    fn effective_cardinality_max_above_one_forces_multivalued() {
+        let mut slot = SlotDefinition::new("s");
+        slot.maximum_cardinality = Some(5);
+
+        let card = effective_cardinality(&slot);
+        assert!(!card.required);
+        assert!(card.multivalued);
+        assert_eq!(card.max, Some(5));
+    }
+
+    #[test]
+    fn effective_cardinality_falls_back_to_flags_when_bounds_absent() {
+        let mut slot = SlotDefinition::new("s");
+        slot.required = true;
+
+        let card = effective_cardinality(&slot);
+        assert!(card.required);
+        assert!(!card.multivalued);
+        assert_eq!(card.min, None);
+        assert_eq!(card.max, None);
+    }
+
+    #[test]
+    fn effective_cardinality_after_slot_usage_required_preserves_inherited_multivalued() {
+        // A slot_usage that only tightens `required` must not disturb
+        // the inherited multivalued framing once the resolved slot is
+        // viewed through the cardinality lens.
+        let mut schema = SchemaDefinition::new("s");
+        let mut parent = ClassDefinition::new("Parent");
+        let mut tags = SlotDefinition::new("tags");
+        tags.multivalued = true;
+        parent.attributes.insert("tags".into(), tags);
+        schema.classes.insert("Parent".into(), parent);
+
+        let mut child = ClassDefinition::new("Child");
+        child.is_a = Some("Parent".into());
+        let mut tighten = SlotDefinition::new("tags");
+        tighten.required = true;
+        child.slot_usage.insert("tags".into(), tighten);
+        schema.classes.insert("Child".into(), child);
+
+        let resolved = resolve_effective_slots(&schema.classes["Child"], &schema);
+        let card = effective_cardinality(&resolved["tags"]);
+        assert!(card.required, "slot_usage required=true applies");
+        assert!(card.multivalued, "inherited multivalued is preserved");
     }
 
     fn schema_with_prov_default() -> SchemaDefinition {

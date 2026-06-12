@@ -96,16 +96,16 @@ The resolver is a sibling module to `linkml.rs`, not part of `SchemaDefinition` 
 
 ### Slice 12.3: `effective_cardinality` overlay
 
-**Status:** Not Started
+**Status:** ✅ Complete
 
 **Priority:** Should Have
 
 **User Value:** Cardinality displayed in the HTML class card, graph hover card, and codegen comments comes from one place. Adding `minimum_cardinality` / `maximum_cardinality` support to one consumer doesn't require finding and patching three call sites.
 
 **Acceptance Criteria:**
-- [ ] `pub fn effective_cardinality(slot: &SlotDefinition) -> Cardinality` where `Cardinality { required: bool, multivalued: bool, min: Option<u32>, max: Option<u32> }`.
-- [ ] Precedence (highest wins): explicit `minimum_cardinality`/`maximum_cardinality` from `slot_usage` overlay → same fields on the inherited slot → `required` / `multivalued` flags. The function takes a `ResolvedSlot` (post-resolution) so the overlay logic lives in slice 12.1, not here.
-- [ ] Tests covering: explicit `min: 0, max: 1` produces `required=false, multivalued=false`; `min: 1, max: None` produces `required=true, multivalued=true`; `slot_usage` setting only `required: true` preserves inherited `multivalued`.
+- [x] `pub fn effective_cardinality(slot: &SlotDefinition) -> Cardinality` where `Cardinality { required: bool, multivalued: bool, min: Option<u32>, max: Option<u32> }`.
+- [x] Precedence (highest wins): explicit `minimum_cardinality`/`maximum_cardinality` from `slot_usage` overlay → same fields on the inherited slot → `required` / `multivalued` flags. The function takes a `ResolvedSlot` (post-resolution) so the overlay logic lives in slice 12.1, not here.
+- [x] Tests covering: explicit `min: 0, max: 1` produces `required=false, multivalued=false`; `min: 1, max: None` produces `required=true, multivalued=true`; `slot_usage` setting only `required: true` preserves inherited `multivalued`.
 
 **Notes:**
 - Effective cardinality is a *view* over a `ResolvedSlot`, not new state. Keeping it as a pure function lets writers compute it on the fly without caching.
@@ -140,7 +140,7 @@ The resolver is a sibling module to `linkml.rs`, not part of `SchemaDefinition` 
 |-------|----------|------------|--------|
 | 12.1: Extract `resolve_effective_slots` | Must Have | feature 06 slice 6.3 (the resolver to lift) | ✅ Complete |
 | 12.2: `expand_curie` | Should Have | None | ✅ Complete |
-| 12.3: `effective_cardinality` | Should Have | 12.1 | Not Started |
+| 12.3: `effective_cardinality` | Should Have | 12.1 | ✅ Complete |
 | 12.4: Slot provenance | Nice to Have | 12.1 | Not Started |
 
 ---

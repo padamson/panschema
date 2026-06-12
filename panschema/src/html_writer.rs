@@ -604,27 +604,30 @@ impl HtmlWriter {
             let resolved = resolve_slots(class_def, schema);
             let slots: Vec<SlotInClass> = resolved
                 .iter()
-                .map(|(slot_name, slot_def)| SlotInClass {
-                    name: slot_name.clone(),
-                    range: slot_def.range.as_deref().map(|r| range_ref_for(r, schema)),
-                    required: slot_def.required,
-                    multivalued: slot_def.multivalued,
-                    any_of: slot_def
-                        .any_of
-                        .iter()
-                        .filter_map(|branch| {
-                            branch
-                                .range
-                                .as_deref()
-                                .or(slot_def.range.as_deref())
-                                .map(|r| range_ref_for(r, schema))
-                        })
-                        .collect(),
-                    description: slot_def
-                        .description
-                        .as_deref()
-                        .map(|d| render_description(d, schema)),
-                    refined_here: class_def.slot_usage.contains_key(slot_name),
+                .map(|(slot_name, slot_def)| {
+                    let cardinality = crate::linkml_resolve::effective_cardinality(slot_def);
+                    SlotInClass {
+                        name: slot_name.clone(),
+                        range: slot_def.range.as_deref().map(|r| range_ref_for(r, schema)),
+                        required: cardinality.required,
+                        multivalued: cardinality.multivalued,
+                        any_of: slot_def
+                            .any_of
+                            .iter()
+                            .filter_map(|branch| {
+                                branch
+                                    .range
+                                    .as_deref()
+                                    .or(slot_def.range.as_deref())
+                                    .map(|r| range_ref_for(r, schema))
+                            })
+                            .collect(),
+                        description: slot_def
+                            .description
+                            .as_deref()
+                            .map(|d| render_description(d, schema)),
+                        refined_here: class_def.slot_usage.contains_key(slot_name),
+                    }
                 })
                 .collect();
 
@@ -1521,6 +1524,28 @@ mod tests {
             .find(|e| data.class_data[e.index].id == "Animal")
             .unwrap();
         assert_eq!(animal.close_tags(), "");
+    }
+
+    #[test]
+    fn class_card_slot_framing_uses_effective_cardinality() {
+        // Explicit cardinality bounds decide the rendered
+        // required/multivalued framing, not the raw flags: a slot
+        // bounded 1..1 renders as required and single-valued even
+        // with both flags unset.
+        use crate::linkml::{ClassDefinition, SchemaDefinition, SlotDefinition};
+        let mut schema = SchemaDefinition::new("s");
+        let mut thing = ClassDefinition::new("Thing");
+        let mut ident = SlotDefinition::new("ident");
+        ident.minimum_cardinality = Some(1);
+        ident.maximum_cardinality = Some(1);
+        thing.attributes.insert("ident".into(), ident);
+        schema.classes.insert("Thing".into(), thing);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let card = data.class_data.iter().find(|c| c.id == "Thing").unwrap();
+        let slot = card.slots.iter().find(|s| s.name == "ident").unwrap();
+        assert!(slot.required, "min >= 1 renders as required");
+        assert!(!slot.multivalued, "max == 1 renders as single-valued");
     }
 
     #[test]
