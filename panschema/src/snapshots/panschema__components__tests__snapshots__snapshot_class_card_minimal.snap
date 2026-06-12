@@ -1,6 +1,6 @@
 ---
 source: panschema/src/components.rs
-assertion_line: 868
+assertion_line: 880
 expression: html
 ---
 <article class="entity-card class-card" id="class-thing">
@@ -242,6 +242,12 @@ expression: html
         background-color: color-mix(in srgb, var(--color-text-muted) 15%, transparent);
         color: var(--color-text-muted);
         font-style: italic;
+    }
+
+    .slot-flag.origin {
+        background-color: transparent;
+        border: 1px solid var(--color-border);
+        color: var(--color-text-muted);
     }
 
     .slot-description {
