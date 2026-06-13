@@ -736,7 +736,7 @@ fn node_type_string(color: &[f32; 4]) -> &'static str {
 #[cfg(test)]
 mod details_json_tests {
     use super::*;
-    use crate::graph_types::{EdgeType, GraphEdge, GraphNode, KindMetadata, NodeType};
+    use crate::graph_types::{EdgeType, GraphEdge, GraphNode, KindMetadata, NodeType, SlotSummary};
     use crate::simulation::{SimEdge, SimNode};
 
     fn make_class_node(id: &str, label: &str) -> SimNode {
@@ -967,7 +967,26 @@ mod details_json_tests {
             "class:Activity",
             "Activity",
             KindMetadata::Class {
-                slots: vec!["startedAt".into(), "endedAt".into()],
+                slots: vec![
+                    SlotSummary {
+                        name: "startedAt".into(),
+                        range: Some("datetime".into()),
+                        required: true,
+                        multivalued: false,
+                        min: None,
+                        max: None,
+                        origin: None,
+                    },
+                    SlotSummary {
+                        name: "endedAt".into(),
+                        range: None,
+                        required: false,
+                        multivalued: false,
+                        min: None,
+                        max: None,
+                        origin: Some("mixin Auditable".into()),
+                    },
+                ],
                 parents: vec!["Entity".into()],
                 mixins: vec!["Auditable".into()],
             },
@@ -976,8 +995,11 @@ mod details_json_tests {
             serde_json::from_str(&build_node_details_json(&node, false, Vec::new())).unwrap();
         let km = &json["kindMetadata"];
         assert_eq!(km["kind"], "class");
-        assert_eq!(km["slots"][0], "startedAt");
-        assert_eq!(km["slots"][1], "endedAt");
+        assert_eq!(km["slots"][0]["name"], "startedAt");
+        assert_eq!(km["slots"][0]["range"], "datetime");
+        assert_eq!(km["slots"][0]["required"], true);
+        assert_eq!(km["slots"][1]["name"], "endedAt");
+        assert_eq!(km["slots"][1]["origin"], "mixin Auditable");
         assert_eq!(km["parents"][0], "Entity");
         assert_eq!(km["mixins"][0], "Auditable");
     }
@@ -996,6 +1018,8 @@ mod details_json_tests {
                 range: Some("Person".into()),
                 required: true,
                 multivalued: false,
+                min: None,
+                max: None,
             },
         );
         let json: serde_json::Value =

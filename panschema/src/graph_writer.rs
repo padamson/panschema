@@ -121,14 +121,16 @@ pub struct GraphNode {
 pub enum KindMetadata {
     /// Resolved view of a LinkML class: every slot reachable via
     /// direct attributes / `slots:` references / `is_a` chain /
-    /// `mixins:` list, plus the immediate parents and mixins for
-    /// the inheritance view.
+    /// `mixins:` list — each with its effective shape — plus the
+    /// immediate parents and mixins for the inheritance view.
     Class {
-        slots: Vec<String>,
+        slots: Vec<SlotSummary>,
         parents: Vec<String>,
         mixins: Vec<String>,
     },
-    /// Resolved view of a LinkML slot.
+    /// Resolved view of a LinkML slot. `required` / `multivalued`
+    /// are the effective-cardinality reconciliation of the bool
+    /// flags with the explicit `min` / `max` bounds.
     Slot {
         #[serde(skip_serializing_if = "Option::is_none")]
         domain: Option<String>,
@@ -138,9 +140,37 @@ pub enum KindMetadata {
         required: bool,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         multivalued: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        min: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max: Option<u32>,
     },
     /// Permissible values for a LinkML enum, in declaration order.
     Enum { permissible_values: Vec<String> },
+}
+
+/// One slot in a class's resolved view, carrying the effective
+/// shape (post `slot_usage` overlay, bounds reconciled with flags)
+/// so the hover card shows what the class actually has — not the
+/// slot's global, un-refined definition.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SlotSummary {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub multivalued: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<u32>,
+    /// Where an inherited slot came from (e.g. `"mixin Named"`);
+    /// `None` for the class's own slots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
 }
 
 /// An edge connecting two nodes
@@ -171,17 +201,27 @@ pub struct GraphEdge {
 /// natural output. The hover card's "+N more" cap means alphabetical
 /// order is fine for the 5-slot summary; authors who need the full
 /// list and a specific order click-to-pin the persistent panel.
-/// Inherited entries carry a `(from <origin>)` suffix so the hover
-/// card distinguishes a class's own slots from flattened ones.
-fn resolve_class_slots(schema: &SchemaDefinition, class_name: &str) -> Vec<String> {
+/// Inherited entries carry their origin so the hover card
+/// distinguishes a class's own slots from flattened ones; each
+/// entry carries the slot's effective shape, not the global
+/// un-refined definition.
+fn resolve_class_slots(schema: &SchemaDefinition, class_name: &str) -> Vec<SlotSummary> {
     let Some(class_def) = schema.classes.get(class_name) else {
         return Vec::new();
     };
     crate::linkml_resolve::resolve_effective_slots_with_provenance(class_def, schema)
         .into_iter()
-        .map(|(name, rs)| match rs.provenance.origin_label(class_name) {
-            Some(origin) => format!("{name} (from {origin})"),
-            None => name,
+        .map(|(name, rs)| {
+            let cardinality = crate::linkml_resolve::effective_cardinality(&rs.definition);
+            SlotSummary {
+                name,
+                range: rs.definition.range.clone(),
+                required: cardinality.required,
+                multivalued: cardinality.multivalued,
+                min: cardinality.min,
+                max: cardinality.max,
+                origin: rs.provenance.origin_label(class_name),
+            }
         })
         .collect()
 }
@@ -454,11 +494,14 @@ impl GraphWriter {
                 .cloned()
                 .unwrap_or_else(|| name.clone());
 
+            let cardinality = crate::linkml_resolve::effective_cardinality(slot_def);
             let kind_metadata = Some(KindMetadata::Slot {
                 domain: slot_def.domain.clone(),
                 range: slot_def.range.clone(),
-                required: slot_def.required,
-                multivalued: slot_def.multivalued,
+                required: cardinality.required,
+                multivalued: cardinality.multivalued,
+                min: cardinality.min,
+                max: cardinality.max,
             });
 
             graph.nodes.push(GraphNode {
@@ -1177,7 +1220,7 @@ mod tests {
     fn class_kind_metadata<'a>(
         graph: &'a GraphData,
         name: &str,
-    ) -> (&'a [String], &'a [String], &'a [String]) {
+    ) -> (&'a [SlotSummary], &'a [String], &'a [String]) {
         let id = format!("class:{}", name);
         let node = graph
             .nodes
@@ -1223,10 +1266,14 @@ mod tests {
         let graph = writer.schema_to_graph(&schema);
 
         let (slots, parents, mixins) = class_kind_metadata(&graph, "Dog");
+        let summary: Vec<(&str, Option<&str>)> = slots
+            .iter()
+            .map(|s| (s.name.as_str(), s.origin.as_deref()))
+            .collect();
         assert_eq!(
-            slots,
-            &["breed".to_string(), "name (from Animal)".to_string()],
-            "inherited entries carry their origin tag"
+            summary,
+            vec![("breed", None), ("name", Some("Animal"))],
+            "inherited entries carry their origin"
         );
         assert_eq!(parents, &["Animal".to_string()]);
         assert!(mixins.is_empty());
@@ -1260,9 +1307,13 @@ mod tests {
         let graph = writer.schema_to_graph(&schema);
 
         let (slots, _, mixins) = class_kind_metadata(&graph, "Person");
+        let summary: Vec<(&str, Option<&str>)> = slots
+            .iter()
+            .map(|s| (s.name.as_str(), s.origin.as_deref()))
+            .collect();
         assert_eq!(
-            slots,
-            &["age".to_string(), "name (from mixin Named)".to_string()],
+            summary,
+            vec![("age", None), ("name", Some("mixin Named"))],
             "the mixin path wins the dedup, so its origin is reported"
         );
         assert_eq!(mixins, &["Named".to_string()]);
@@ -1299,13 +1350,83 @@ mod tests {
         let graph = writer.schema_to_graph(&schema);
 
         let (slots, _, _) = class_kind_metadata(&graph, "Question");
+        let names: Vec<&str> = slots.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(
-            slots,
-            &["wasGeneratedBy (from Activity)".to_string()],
+            names,
+            vec!["wasGeneratedBy"],
             "wasGeneratedBy should appear in Question's resolved slots \
              via the slot_usage overlay even though it was inherited \
              from Activity"
         );
+        assert_eq!(
+            slots[0].range.as_deref(),
+            Some("QuestionFormation"),
+            "the entry must carry Question's refined range, not the \
+             slot's global un-refined definition"
+        );
+        assert_eq!(
+            slots[0].origin.as_deref(),
+            Some("Activity"),
+            "a refined inherited slot still points at its origin"
+        );
+    }
+
+    #[test]
+    fn slot_summary_carries_effective_cardinality_bounds() {
+        // The class hover's per-slot entry reconciles explicit
+        // cardinality bounds with the bool flags — a 1..3-bounded
+        // slot reads as required and multi-valued with its bounds
+        // on the wire.
+        let mut schema = SchemaDefinition::new("bounds");
+        let mut thing = ClassDefinition::new("Thing");
+        let mut tags = SlotDefinition::new("tags");
+        tags.minimum_cardinality = Some(1);
+        tags.maximum_cardinality = Some(3);
+        thing.attributes.insert("tags".into(), tags);
+        schema.classes.insert("Thing".into(), thing);
+
+        let graph = GraphWriter::new().schema_to_graph(&schema);
+        let (slots, _, _) = class_kind_metadata(&graph, "Thing");
+        assert_eq!(slots.len(), 1);
+        let summary = &slots[0];
+        assert!(summary.required, "min >= 1 reads as required");
+        assert!(summary.multivalued, "max > 1 reads as multi-valued");
+        assert_eq!(summary.min, Some(1));
+        assert_eq!(summary.max, Some(3));
+    }
+
+    #[test]
+    fn slot_node_metadata_carries_cardinality_bounds() {
+        // The slot node's hover renders a Cardinality row; explicit
+        // bounds ride the wire and reconcile the flags.
+        let mut schema = SchemaDefinition::new("slot_bounds");
+        let mut members = SlotDefinition::new("members");
+        members.minimum_cardinality = Some(0);
+        members.maximum_cardinality = Some(5);
+        members.required = true; // bounds win: min 0 → not required
+        schema.slots.insert("members".into(), members);
+
+        let graph = GraphWriter::new().schema_to_graph(&schema);
+        let node = graph
+            .nodes
+            .iter()
+            .find(|n| n.id == "slot:members")
+            .expect("slot node");
+        match node.kind_metadata.as_ref().expect("slot metadata") {
+            KindMetadata::Slot {
+                required,
+                multivalued,
+                min,
+                max,
+                ..
+            } => {
+                assert!(!required, "explicit min 0 overrides the flag");
+                assert!(multivalued, "max > 1 reads as multi-valued");
+                assert_eq!(*min, Some(0));
+                assert_eq!(*max, Some(5));
+            }
+            other => panic!("expected Slot metadata, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1333,11 +1454,15 @@ mod tests {
                 range,
                 required,
                 multivalued,
+                min,
+                max,
             } => {
                 assert_eq!(domain.as_deref(), Some("Animal"));
                 assert_eq!(range.as_deref(), Some("Person"));
                 assert!(*required);
                 assert!(*multivalued);
+                assert_eq!(*min, None, "no explicit bounds declared");
+                assert_eq!(*max, None);
             }
             other => panic!("expected Slot metadata, got {:?}", other),
         }

@@ -115,14 +115,16 @@ pub struct GraphNode {
 pub enum KindMetadata {
     /// Resolved view of a LinkML class: every slot reachable via
     /// direct attributes / `slots:` references / `is_a` chain /
-    /// `mixins:` list, plus the immediate parents and mixins for
-    /// the inheritance view.
+    /// `mixins:` list — each with its effective shape — plus the
+    /// immediate parents and mixins for the inheritance view.
     Class {
-        slots: Vec<String>,
+        slots: Vec<SlotSummary>,
         parents: Vec<String>,
         mixins: Vec<String>,
     },
-    /// Resolved view of a LinkML slot.
+    /// Resolved view of a LinkML slot. `required` / `multivalued`
+    /// are the effective-cardinality reconciliation of the bool
+    /// flags with the explicit `min` / `max` bounds.
     Slot {
         #[serde(skip_serializing_if = "Option::is_none")]
         domain: Option<String>,
@@ -132,9 +134,36 @@ pub enum KindMetadata {
         required: bool,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         multivalued: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        min: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max: Option<u32>,
     },
     /// Permissible values for a LinkML enum, in declaration order.
     Enum { permissible_values: Vec<String> },
+}
+
+/// One slot in a class's resolved view — the effective shape after
+/// `slot_usage` overlay and cardinality reconciliation, mirrored
+/// field-for-field from the writer side so the JSON round-trips.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SlotSummary {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub multivalued: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<u32>,
+    /// Where an inherited slot came from (e.g. `"mixin Named"`);
+    /// `None` for the class's own slots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
 }
 
 /// An edge connecting two nodes

@@ -285,15 +285,15 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 
 ### Slice 11: Class card surfaces slot provenance + cross-writer consistency test
 
-**Status:** Not Started
+**Status:** ✅ Complete
 
 **Priority:** Nice to Have
 
 **User Value:** Once the shared resolver carries provenance metadata, the class card can surface "inherited from `<Parent>`" / "from `<Mixin>` (mixin)" tags on flattened slots — authors building intuition for inheritance get the answer without manually walking the hierarchy. A consistency test then pins that the class card and the graph hover card agree on the effective shape of a `slot_usage`-refined slot.
 
 **Acceptance Criteria:**
-- [ ] Inherited slots in the class card carry a small "from `<class>`" tag sourced from `Provenance::Inherited` (depends on feature 12 slice 12.4). Direct attributes get no tag; `slot_usage`-refined slots get the existing "refined here" tag in addition.
-- [ ] One new integration test builds a fixture where `Question` (extending `Activity`) refines `wasGeneratedBy` via `slot_usage`, runs both `html_writer` and `graph_writer`, and asserts that both surface the same effective range (`QuestionFormation`, not `Activity`). Depends on feature 04 slice 12's slot-side ACs landing so the graph side actually carries the refined view.
+- [x] Inherited slots in the class card carry a small "from `<class>`" tag sourced from `Provenance::Inherited` (shipped with feature 12 slice 12.4). Direct attributes get no tag; `slot_usage`-refined slots get the existing "refined here" tag in addition.
+- [x] One new integration test builds a fixture where `Question` (extending `Activity`) refines `wasGeneratedBy` via `slot_usage`, generates one page, and asserts the class card and the embedded graph hover payload surface the same effective range (`QuestionFormation`, not `Activity`). The graph side carries the refined view via feature 04 slice 14's structured slot payload.
 
 **Notes:**
 - Blocked on feature 12 slice 12.4 and feature 04 slice 12's deferred slot-side completion. Both are tracked as dependencies; this slice can ship as soon as either's payload is available.
@@ -429,7 +429,7 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 | Slice 8: Parent-relative header brand link + absolute-URL audit | Must Have | Slice 4, Feature 11 slice 4 | Completed |
 | Slice 9: Markdown rendering in description fields | Should Have | Slice 5 | Completed |
 | Slice 10: Class card consumes the shared slot resolver | Should Have | Slice 5, Feature 12 slice 12.1 | ✅ Complete |
-| Slice 11: Class card slot provenance + cross-writer consistency test | Nice to Have | Slice 10, Feature 12 slice 12.4, Feature 04 slice 12 | Not Started |
+| Slice 11: Class card slot provenance + cross-writer consistency test | Nice to Have | Slice 10, Feature 12 slice 12.4, Feature 04 slice 12 | ✅ Complete |
 | Slice 12: `*_mappings` round-trip — IR + HTML + RDF | Must Have | Feature 12 slice 12.2 | ✅ Complete |
 | Slice 13: Hyperlink + CURIE-expand `class_uri` / `slot_uri` in HTML | Should Have | Feature 12 slice 12.2 | ✅ Complete |
 | Slice 14: Abstract-class badge on class cards | Should Have | None | ✅ Complete |

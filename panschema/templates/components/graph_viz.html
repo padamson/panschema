@@ -758,6 +758,37 @@
         return shown;
     }
 
+    // One line per slot: "name: range (required, 1..3) — from X".
+    // Structured payload from the Rust side; every field except
+    // `name` is optional on the wire.
+    function slotSummaryText(s) {
+        if (typeof s === 'string') return s;   // pre-structured payloads
+        let line = s.name;
+        if (s.range) line += ': ' + s.range;
+        const bits = [];
+        if (s.required === true) bits.push('required');
+        if (s.multivalued === true) bits.push('multi-valued');
+        if (s.min != null || s.max != null) {
+            bits.push((s.min != null ? s.min : '0') + '..' + (s.max != null ? s.max : '*'));
+        }
+        if (bits.length) line += ' (' + bits.join(', ') + ')';
+        if (s.origin) line += ' \u2014 from ' + s.origin;
+        return line;
+    }
+
+    // Slot entries stack one per line (they're full phrases, not
+    // names), with the same "+N more" cap as the comma-joined lists.
+    function renderHoverSlotList(slots) {
+        if (!Array.isArray(slots) || slots.length === 0) return '';
+        const shown = slots.slice(0, HOVER_LIST_LIMIT)
+            .map(function (s) { return escapeForText(slotSummaryText(s)); })
+            .join('<br>');
+        if (slots.length > HOVER_LIST_LIMIT) {
+            return shown + '<br><span class="graph-hover-more">+' + (slots.length - HOVER_LIST_LIMIT) + ' more</span>';
+        }
+        return shown;
+    }
+
     function renderHoverRow(key, valueHtml) {
         return '<div class="graph-hover-row">'
             + '<span class="graph-hover-key">' + escapeForText(key) + ':</span>'
@@ -780,18 +811,22 @@
                 rows += renderHoverRow('Mixins', renderHoverList(km.mixins));
             }
             if (km.slots && km.slots.length) {
-                rows += renderHoverRow('Slots', renderHoverList(km.slots));
+                rows += renderHoverRow('Slots', renderHoverSlotList(km.slots));
             }
         } else if (km.kind === 'slot') {
             if (km.domain) rows += renderHoverRow('Domain', escapeForText(km.domain));
             if (km.range)  rows += renderHoverRow('Range',  escapeForText(km.range));
-            // Combine the two cardinality flags into one row so the
-            // card stays compact. Absent flags read as false on the
-            // wire (serde skips defaults), so guard with `=== true`.
-            const flagBits = [];
-            if (km.required === true)    flagBits.push('required');
-            if (km.multivalued === true) flagBits.push('multi-valued');
-            if (flagBits.length) rows += renderHoverRow('Flags', escapeForText(flagBits.join(', ')));
+            // Combine the cardinality facts into one row so the card
+            // stays compact. Absent flags read as false on the wire
+            // (serde skips defaults), so guard with `=== true`;
+            // explicit min/max bounds render as a "min..max" range.
+            const cardBits = [];
+            if (km.required === true)    cardBits.push('required');
+            if (km.multivalued === true) cardBits.push('multi-valued');
+            if (km.min != null || km.max != null) {
+                cardBits.push((km.min != null ? km.min : '0') + '..' + (km.max != null ? km.max : '*'));
+            }
+            if (cardBits.length) rows += renderHoverRow('Cardinality', escapeForText(cardBits.join(', ')));
         } else if (km.kind === 'enum') {
             if (km.permissibleValues && km.permissibleValues.length) {
                 rows += renderHoverRow('Values', renderHoverList(km.permissibleValues));

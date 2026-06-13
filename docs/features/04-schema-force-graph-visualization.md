@@ -531,17 +531,17 @@ These are the questions whose answers currently require a click-to-pin, then scr
 
 ### Slice 14: Per-class refined slot views + effective-cardinality row in hover card
 
-**Status:** Not Started
+**Status:** ✅ Complete
 
 **Priority:** Nice to Have
 
 **User Value:** A slot that's been refined via `slot_usage` on a subclass currently shows its global (un-refined) range in hover. After this slice, hovering a slot in the context of a class that refines it (or hovering the class card's slot entry) shows the refined range / cardinality. Closes the loop slice 12 started: the resolver knows the effective shape; this slice makes the hover card actually surface it.
 
 **Acceptance Criteria:**
-- [ ] `KindMetadata::Class` carries each slot's effective `SlotDefinition`, not just the name string. The wire format gains a `slots: Vec<{ name, range?, required?, multivalued?, min?, max? }>` shape. The JS hover-card renderer dispatches on the structured payload to show per-slot range and cardinality inline.
-- [ ] Effective cardinality (feature 12 slice 12.3) replaces the "Flags:" row with a "Cardinality:" row showing `required`, `multivalued`, and `min..max` when explicit cardinality bounds are set on the slot or its `slot_usage` overlay.
-- [ ] Regression test: fixture with `Question` extending `Activity` and refining `wasGeneratedBy` to `range: QuestionFormation`. Assert the JSON `kindMetadata.slots` entry for `wasGeneratedBy` in `Question`'s payload carries `range: "QuestionFormation"`, not `"Activity"`.
-- [ ] Existing class-hover summary still caps at 5 slots; longer payloads keep the "+N more" fallback to the persistent panel.
+- [x] `KindMetadata::Class` carries each slot's effective `SlotDefinition`, not just the name string. The wire format gains a `slots: Vec<{ name, range?, required?, multivalued?, min?, max?, origin? }>` shape (`origin` carries the slot-provenance label from feature 12 slice 12.4, replacing the interim `(from …)` name suffix). The JS hover-card renderer dispatches on the structured payload to show per-slot range and cardinality inline, one slot per line.
+- [x] Effective cardinality (feature 12 slice 12.3) replaces the "Flags:" row with a "Cardinality:" row showing `required`, `multivalued`, and `min..max` when explicit cardinality bounds are set on the slot or its `slot_usage` overlay.
+- [x] Regression test: fixture with `Question` extending `Activity` and refining `wasGeneratedBy` to `range: QuestionFormation`. Assert the JSON `kindMetadata.slots` entry for `wasGeneratedBy` in `Question`'s payload carries `range: "QuestionFormation"`, not `"Activity"`.
+- [x] Existing class-hover summary still caps at 5 slots; longer payloads keep the "+N more" fallback to the persistent panel.
 
 **Notes:**
 - Blocked on feature 12 slice 12.3 (`effective_cardinality` helper) so the JSON contract for cardinality is stable across writers.
@@ -589,7 +589,7 @@ These are the questions whose answers currently require a click-to-pin, then scr
 | Slice 11: Hover card surfaces resolved-schema context | Should Have | Slice 9 | ✅ Complete |
 | Slice 12: Graph layer consumes the shared slot resolver | Should Have | Slice 11, feature 12 slice 12.1 | ✅ Complete |
 | Slice 13: Hover card surfaces richer IR fields | Nice to Have | Slice 12, feature 12 slices 12.2 / 12.4 | Not Started |
-| Slice 14: Per-class refined slot views + effective-cardinality row | Nice to Have | Slice 12, feature 12 slice 12.3 | Not Started |
+| Slice 14: Per-class refined slot views + effective-cardinality row | Nice to Have | Slice 12, feature 12 slice 12.3 | ✅ Complete |
 | Slice 15: Directed-edge arrowheads in the graph | Should Have | Slice 4 | Not Started |
 
 ---

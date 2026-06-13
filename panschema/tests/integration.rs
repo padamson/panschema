@@ -115,6 +115,90 @@ fn extract_class_card<'a>(html: &'a str, class_id: &str) -> &'a str {
 }
 
 #[test]
+fn class_card_and_graph_hover_agree_on_slot_usage_refined_range() {
+    // Cross-writer consistency: a slot refined via `slot_usage` must
+    // show the refined range in BOTH the HTML class card and the
+    // graph hover payload embedded in the same page. Both writers
+    // resolve through the shared resolver, and this pins that
+    // neither regresses to the slot's global un-refined definition.
+    let schema_yaml = r#"
+id: https://example.org/xwriter
+name: xwriter
+prefixes:
+  linkml: https://w3id.org/linkml/
+default_range: string
+classes:
+  Activity:
+    attributes:
+      wasGeneratedBy:
+        range: Activity
+  QuestionFormation:
+    is_a: Activity
+  Question:
+    is_a: Activity
+    slot_usage:
+      wasGeneratedBy:
+        range: QuestionFormation
+"#;
+    let tmp = std::env::temp_dir().join("panschema_xwriter_consistency");
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).unwrap();
+    let schema_path = tmp.join("schema.yaml");
+    fs::write(&schema_path, schema_yaml).unwrap();
+    let output_dir = tmp.join("out");
+
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "--input",
+            schema_path.to_str().unwrap(),
+            "--output",
+            output_dir.to_str().unwrap(),
+        ])
+        .status()
+        .expect("Failed to execute panschema");
+    assert!(status.success(), "panschema exited with error");
+
+    let html = fs::read_to_string(output_dir.join("index.html")).expect("read index.html");
+
+    // HTML side: Question's card lists wasGeneratedBy with the
+    // refined range as the linked class.
+    let question_card = extract_class_card(&html, "Question");
+    assert!(
+        question_card.contains("wasGeneratedBy"),
+        "Question card must list the refined slot; got: {question_card}"
+    );
+    assert!(
+        question_card.contains(r##"href="#class-QuestionFormation""##),
+        "Question card must link the refined range QuestionFormation; got: {question_card}"
+    );
+
+    // Graph side: the embedded graph JSON's kindMetadata for
+    // class:Question carries the same refined range.
+    let marker = "window.__PANSCHEMA_GRAPH_DATA__ = ";
+    let start = html.find(marker).expect("embedded graph JSON") + marker.len();
+    let end = html[start..].find(";\n").map(|n| start + n).unwrap();
+    let graph: serde_json::Value =
+        serde_json::from_str(&html[start..end]).expect("graph JSON parses");
+    let question_node = graph["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["id"] == "class:Question")
+        .expect("class:Question node");
+    let slots = question_node["kind_metadata"]["slots"].as_array().unwrap();
+    let was_generated_by = slots
+        .iter()
+        .find(|s| s["name"] == "wasGeneratedBy")
+        .expect("wasGeneratedBy in hover slots");
+    assert_eq!(
+        was_generated_by["range"], "QuestionFormation",
+        "hover payload must carry the refined range, matching the class card"
+    );
+
+    let _ = fs::remove_dir_all(tmp);
+}
+
+#[test]
 fn generates_documentation_from_reference_ontology() {
     let output_dir = std::env::temp_dir().join("panschema_integration_test");
     let _ = fs::remove_dir_all(&output_dir);
