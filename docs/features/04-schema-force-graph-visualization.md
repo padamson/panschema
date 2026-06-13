@@ -50,7 +50,7 @@ in `src/gpu/`; the browser code was since split into the
 | WebGPU Browser Target | Medium | ✅ Complete |
 | Text/Label Rendering | Medium | ✅ Complete (slice 5) |
 | Node Selection & Dragging | Medium | 🚧 In progress (slice 6); hover details / focus mode shipped (slices 9–10) |
-| Visual notation — node shapes, per-kind edge glyphs, cardinality | Medium | 🚧 Planned ([ADR-005](../adr/005-graph-visualization-conventions.md), slices 15–19) |
+| Visual notation — node shapes, per-kind edge glyphs, cardinality | Medium | 🚧 [ADR-005](../adr/005-graph-visualization-conventions.md): edges, cardinality, node shapes, legibility shipped (slices 15, 16.5, 17, 20); legend + 3D open (slices 18–19) |
 
 ---
 
@@ -602,17 +602,17 @@ These are the questions whose answers currently require a click-to-pin, then scr
 
 ### Slice 17: Node shapes by kind in 2D (ADR-005)
 
-**Status:** Not Started
+**Status:** ✅ Complete
 
 **Priority:** Should Have
 
 **User Value:** Node kind is currently encoded by color alone (not accessible). After this slice shape carries it too, per ADR-005: Class = circle, Type = rectangle, Enum = diamond, Slot = pill, with abstract classes drawn with a dashed outline instead of just reduced alpha. The graph becomes readable in grayscale and the abstract/concrete distinction matches the HTML card's badge.
 
 **Acceptance Criteria:**
-- [ ] The 2D renderer draws each `NodeType` as its ADR-005 shape (circle / rectangle / diamond / pill); colors are unchanged.
-- [ ] Abstract classes render with a dashed outline + lighter fill, replacing the alpha-only cue.
-- [ ] Hit-testing / hover / drag still resolve correctly for non-circular shapes (the interaction layer's node-radius assumption is revisited or the shapes stay within the existing radius).
-- [ ] Labels and the selection ring still position sensibly on each shape.
+- [x] The 2D renderer draws each kind as its ADR-005 shape (Class = circle, Type = rectangle, Enum = diamond, Slot = pill), derived from the node's `KindMetadata` variant (`None` ⟺ Type); colors are unchanged.
+- [x] Abstract classes render with a dashed outline, replacing the alpha-only cue.
+- [x] Shapes stay within the existing node radius, so the circular hit-test / hover / drag is unchanged.
+- [x] Labels and the (circular) selection ring still position sensibly on each shape.
 
 **Notes:**
 - Depends on ADR-005. Larger renderer change than edges (new shape-drawing per kind, hit-test review).
@@ -715,7 +715,7 @@ These are the questions whose answers currently require a click-to-pin, then scr
 | Slice 15: Per-kind directed edges in 2D (ADR-005) | Should Have | Slice 4, ADR-005 | ✅ Complete |
 | Slice 16: Keep the embedded viz bundle fresh in the dogfood loop | Should Have | Slice 4 | ✅ Complete |
 | Slice 16.5: Edge cardinality — crow's-foot on `range` edges (ADR-005) | Should Have | Slice 15, feature 12 slice 12.3 | ✅ Complete |
-| Slice 17: Node shapes by kind in 2D (ADR-005) | Should Have | ADR-005 | Not Started |
+| Slice 17: Node shapes by kind in 2D (ADR-005) | Should Have | ADR-005 | ✅ Complete |
 | Slice 18: Graph legend (ADR-005) | Should Have | Slices 15–17 | Not Started |
 | Slice 19: 3D reduced-form edges (ADR-005) | Nice to Have | Slice 15, Slices 1–2 | Not Started |
 | Slice 20: Graph legibility — zoom range, proportional glyphs/labels, curved parallel edges | Should Have | Slices 15, 16.5 | ✅ Complete |

@@ -52,6 +52,28 @@ fn edge_both_ends(kind: EdgeType) -> bool {
     matches!(kind, EdgeType::Inverse)
 }
 
+/// Outline shape for a node, encoding its kind (ADR-005).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum NodeShape {
+    Circle,
+    Rectangle,
+    Diamond,
+    Pill,
+}
+
+/// Map a node's resolved kind to its ADR-005 shape. `Class` →
+/// circle, `Slot` → pill, `Enum` → diamond; a node with no
+/// `KindMetadata` is a `Type` node → rectangle (the only metadata-less
+/// kind the graph emits).
+fn node_shape(kind: Option<&KindMetadata>) -> NodeShape {
+    match kind {
+        Some(KindMetadata::Class { .. }) => NodeShape::Circle,
+        Some(KindMetadata::Slot { .. }) => NodeShape::Pill,
+        Some(KindMetadata::Enum { .. }) => NodeShape::Diamond,
+        None => NodeShape::Rectangle,
+    }
+}
+
 /// Which ER crow's-foot terminator a slot's effective cardinality
 /// maps to, drawn at the target end of a `range` edge (ADR-005).
 #[derive(Debug, Clone, PartialEq)]
@@ -570,6 +592,42 @@ impl Canvas2DRenderer {
         }
     }
 
+    /// Begin a node's outline path for the given shape, centered at
+    /// `(cx, cy)` and sized to sit within `r` (so the circular
+    /// hit-test still holds). Per ADR-005: class = circle, type =
+    /// rectangle, enum = diamond, slot = pill — shape encodes kind
+    /// redundantly with color so the graph reads in grayscale.
+    fn node_path(&self, cx: f64, cy: f64, r: f64, shape: NodeShape) {
+        use std::f64::consts::{PI, TAU};
+        self.ctx.begin_path();
+        match shape {
+            NodeShape::Circle => {
+                let _ = self.ctx.arc(cx, cy, r, 0.0, TAU);
+            }
+            NodeShape::Rectangle => {
+                let (hw, hh) = (r * 0.8, r * 0.6);
+                self.ctx.rect(cx - hw, cy - hh, hw * 2.0, hh * 2.0);
+            }
+            NodeShape::Diamond => {
+                self.ctx.move_to(cx, cy - r);
+                self.ctx.line_to(cx + r, cy);
+                self.ctx.line_to(cx, cy + r);
+                self.ctx.line_to(cx - r, cy);
+                self.ctx.close_path();
+            }
+            NodeShape::Pill => {
+                let (hw, rr) = (r * 0.9, r * 0.5);
+                let (lx, rx) = (cx - (hw - rr), cx + (hw - rr));
+                self.ctx.move_to(lx, cy - rr);
+                self.ctx.line_to(rx, cy - rr);
+                let _ = self.ctx.arc(rx, cy, rr, -PI / 2.0, PI / 2.0); // right cap
+                self.ctx.line_to(lx, cy + rr);
+                let _ = self.ctx.arc(lx, cy, rr, PI / 2.0, PI * 1.5); // left cap
+                self.ctx.close_path();
+            }
+        }
+    }
+
     /// Render all nodes
     #[allow(clippy::too_many_arguments)]
     fn render_nodes(
@@ -631,31 +689,35 @@ impl Canvas2DRenderer {
                 alpha
             );
 
-            self.ctx.begin_path();
-            self.ctx
-                .arc(
-                    cx as f64,
-                    cy as f64,
-                    radius as f64,
-                    0.0,
-                    std::f64::consts::TAU,
-                )
-                .ok();
+            // Shape encodes the node kind (ADR-005); within `radius`.
+            let shape = node_shape(node.kind_metadata.as_ref());
+            self.node_path(cx as f64, cy as f64, radius as f64, shape);
             self.ctx.set_fill_style_str(&color);
             self.ctx.fill();
 
-            // Draw border - fixed nodes get a thicker orange border
+            // Draw border. Fixed → thick orange, selected → blue,
+            // abstract classes → dashed (the structural "don't
+            // instantiate" cue, replacing the alpha-only hint),
+            // otherwise a thin solid hairline.
             if is_fixed {
                 self.ctx.set_stroke_style_str("rgba(251, 146, 60, 1.0)"); // Orange for fixed
                 self.ctx.set_line_width(3.0);
+                self.set_dash(false);
             } else if is_selected {
                 self.ctx.set_stroke_style_str("rgba(59, 130, 246, 1.0)"); // Blue for selected
                 self.ctx.set_line_width(2.0);
+                self.set_dash(false);
+            } else if node.is_abstract {
+                self.ctx.set_stroke_style_str("rgba(255, 255, 255, 0.55)");
+                self.ctx.set_line_width(1.5);
+                self.set_dash(true);
             } else {
                 self.ctx.set_stroke_style_str("rgba(255, 255, 255, 0.3)");
                 self.ctx.set_line_width(1.0);
+                self.set_dash(false);
             }
             self.ctx.stroke();
+            self.set_dash(false);
 
             // Draw pin indicator for fixed nodes
             if is_fixed {
@@ -922,6 +984,31 @@ mod tests {
         let (ux, uy) = unit(3.0, 4.0);
         assert!((ux - 0.6).abs() < 1e-9 && (uy - 0.8).abs() < 1e-9);
         assert_eq!(unit(0.0, 0.0), (0.0, 0.0), "degenerate → zero vector");
+    }
+
+    #[test]
+    fn node_shape_maps_kind_to_glyph() {
+        use NodeShape::*;
+        let class = KindMetadata::Class {
+            slots: vec![],
+            parents: vec![],
+            mixins: vec![],
+        };
+        let slot = KindMetadata::Slot {
+            domain: None,
+            range: None,
+            required: false,
+            multivalued: false,
+            min: None,
+            max: None,
+        };
+        let enum_kind = KindMetadata::Enum {
+            permissible_values: vec![],
+        };
+        assert_eq!(node_shape(Some(&class)), Circle);
+        assert_eq!(node_shape(Some(&slot)), Pill);
+        assert_eq!(node_shape(Some(&enum_kind)), Diamond);
+        assert_eq!(node_shape(None), Rectangle, "Type nodes have no metadata");
     }
 
     #[test]
