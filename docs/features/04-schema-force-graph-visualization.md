@@ -4,7 +4,7 @@
 
 **User Story:** As a schema author, I want to explore my ontology as an interactive 3D force-directed graph, so that I can understand class relationships, property connections, and overall schema structure with intuitive rotation, zoom, and perspective—even for large ontologies.
 
-**Related ADR (if applicable):** None yet (implementation approach to be determined through prototyping)
+**Related ADR (if applicable):** [ADR-005: Graph Visualization Conventions](../adr/005-graph-visualization-conventions.md) governs node/edge glyphs, color, arrowheads, and cardinality (slices 15–19).
 
 **Approach:** Vertical Slicing with Outside-In TDD
 
@@ -30,7 +30,15 @@ Originally considered contributing to gpui-d3rs, but decided to build directly i
 2. **panschema needs browser-based visualization** via WebGPU
 3. **No shared infrastructure** - the GPU force simulation doesn't depend on gpui
 
-All visualization code lives in `src/gpu/` with a `gpu` feature flag.
+**Code layout (current):** the browser visualization lives in the
+`panschema-viz` WASM crate (`canvas2d.rs`, `camera3d.rs`,
+`simulation.rs`, the WebGPU path, …), compiled to WASM by
+`panschema/build.rs` and embedded into the HTML writer. A separate
+native force-simulation/renderer behind panschema's `gpu` feature
+flag lives in `panschema/src/gpu/`. (The original note placed all viz
+in `src/gpu/`; the browser code was since split into the
+`panschema-viz` crate so the WASM build doesn't drag in the native
+`gpu` dependencies.)
 
 ### What We Need to Build
 
@@ -40,8 +48,9 @@ All visualization code lives in `src/gpu/` with a `gpu` feature flag.
 | 3D Graph Renderer | Medium | ✅ Complete |
 | GraphWriter (JSON output) | Low | ✅ Complete |
 | WebGPU Browser Target | Medium | ✅ Complete |
-| Text/Label Rendering | Medium | Not Started |
-| Node Selection & Dragging | Medium | Not Started |
+| Text/Label Rendering | Medium | ✅ Complete (slice 5) |
+| Node Selection & Dragging | Medium | 🚧 In progress (slice 6); hover details / focus mode shipped (slices 9–10) |
+| Visual notation — node shapes, per-kind edge glyphs, cardinality | Medium | 🚧 Planned ([ADR-005](../adr/005-graph-visualization-conventions.md), slices 15–19) |
 
 ---
 
@@ -549,26 +558,99 @@ These are the questions whose answers currently require a click-to-pin, then scr
 
 ---
 
-### Slice 15: Directed-edge arrowheads in the graph
+### Slice 15: Per-kind directed edges in 2D (ADR-005)
 
 **Status:** Not Started
 
 **Priority:** Should Have
 
-**User Value:** All schema-graph edges are directional (`subclassOf`, `domain`, `range`, `inverseOf`, `typeOf`, `mixin`), but the renderer draws plain lines with text labels — direction is only inferable from reading the label. Authors viewing the graph have to mentally translate "the subclassOf line points from child to parent" instead of reading it off the rendering. After this slice, every edge has an arrowhead at the target end so direction is read at a glance.
+**User Value:** All schema-graph edges are directional and typed (`subclassOf`, `mixin`, `domain`, `range`, `inverse`, `typeOf`), but the renderer draws every one as the same gray line — kind is legible only by reading the text label, and direction is not shown at all. After this slice each edge kind renders with its own line style, arrowhead glyph, and color per [ADR-005](../adr/005-graph-visualization-conventions.md), so an author reads "this is an `is_a` pointing at the parent" at a glance, in grayscale, without parsing the label.
 
 **Acceptance Criteria:**
-- [ ] The 2D Canvas renderer draws an arrowhead at the target end of every edge. Size scales with the node radius so it stays legible at all zoom levels without dominating short edges.
-- [ ] Arrowheads sit *outside* the target node's circle (computed by stepping back along the edge by the node's radius) so they touch the perimeter rather than disappear into the node.
-- [ ] The 3D WebGPU renderer draws an arrowhead via a small instanced triangle / cone primitive at the target end, oriented along the edge direction. (If the 3D shader change is more invasive than expected, this AC may defer to a follow-up slice — the 2D case is the priority since 2D is the default mode.)
-- [ ] Arrowheads inherit the edge's existing color/style (no new palette).
-- [ ] A toggle in the graph controls strip ("Arrows") lets readers turn arrowheads off when edge density makes them visually noisy. Default: on. Preference persists in `localStorage`.
-- [ ] E2E test: a 2-node fixture with one `subclassOf` edge renders an arrowhead at the parent end (the target of the edge).
+- [ ] The 2D Canvas renderer renders each edge kind per ADR-005: `subclassOf` = solid line + **hollow triangle** head at the target (parent); `mixin` = **dashed** line + hollow triangle; `domain` / `range` / `typeOf` = solid line + **filled** arrow; `inverse` = dashed line + filled arrows at **both** ends.
+- [ ] Arrowheads sit on the target node's perimeter (stepped back by the node's rendered radius) and scale with that radius so they stay legible at any zoom without dominating short edges.
+- [ ] Each edge kind has a distinct color from a muted palette keyed to the existing `EDGE_KIND_BLURBS` vocabulary; structural kinds (`is_a`, `mixin`) share a neutral hue. Color is reinforcing only — line style + head shape already distinguish every kind in grayscale.
+- [ ] An "Arrows" toggle in the controls strip hides all heads (direction off) while leaving line style + color; default on, persisted in `localStorage` like the Labels / Focus-on-hover toggles.
+- [ ] Unit test on the arrowhead geometry: the tip lands on the target perimeter and points along the edge (a 2-node `subclassOf` fixture). Plus an E2E test that the Arrows toggle is present, defaults on, and persists.
 
 **Notes:**
-- Source: friction `[2026-06-06] schema graph draws directed relations as undirected lines` (severity: annoyance).
-- The labels already carry the direction semantically ("subclassOf" with a single direction), so the arrowhead is reinforcing visual information that's already in the data — it's an accessibility / scan-ability win, not a new contract.
-- Out of scope: arrowhead-only edge labels (drop the text, keep the arrow direction). Some graph viz tools do this for less clutter; defer until a user asks.
+- Source: friction `[2026-06-06] schema graph draws directed relations as undirected lines`, generalized by ADR-005 from "one uniform arrowhead" to per-kind rendering.
+- 3D is **not** in this slice — the WebGPU renderer's reduced form (per-kind color + cone heads) is slice 19.
+- Out of scope: arrowhead-only edge labels (drop the text, keep the arrow). Defer until a user asks.
+
+---
+
+### Slice 16.5: Edge cardinality — crow's-foot on `range` edges (ADR-005)
+
+**Status:** Not Started
+
+**Priority:** Should Have
+
+**User Value:** A slot's multiplicity (required? multi-valued? `min..max`?) is shown in the hover card and class card but not on the graph. After this slice the graph carries it too: each `range` edge shows ER crow's-foot notation at its target end, so "this slot relates to `0..*` of that class" is readable from the topology.
+
+**Acceptance Criteria:**
+- [ ] The 2D renderer draws crow's-foot glyphs at the `range` edge's target end, mapping `effective_cardinality` (feature 12 slice 12.3) per the ADR-005 table: `1..1` mandatory-one, `0..1` optional-one, `1..*` mandatory-many, `0..*` optional-many; an explicit `min..max` outside those renders as a small text label.
+- [ ] The values come from the resolver's `effective_cardinality`, so the graph and the hover/class-card never disagree.
+- [ ] Documented limitation: the edge shows the slot's **global** cardinality (a slot node is shared across its using classes); per-class `slot_usage` refinements stay in the hover card / class card (slice 14). A short note in the legend or hover conveys this.
+- [ ] Unit test mapping each cardinality case to its glyph; the explicit-bounds case renders the text label.
+
+**Notes:**
+- Depends on slice 15 (edge rendering scaffolding) and feature 12 slice 12.3 (`effective_cardinality`).
+- The fully-native alternative — an ER-projection mode collapsing slot nodes into `Class→Class` cardinality edges — is out of scope per ADR-005; this annotates the current slot-as-node projection.
+
+---
+
+### Slice 17: Node shapes by kind in 2D (ADR-005)
+
+**Status:** Not Started
+
+**Priority:** Should Have
+
+**User Value:** Node kind is currently encoded by color alone (not accessible). After this slice shape carries it too, per ADR-005: Class = circle, Type = rectangle, Enum = diamond, Slot = pill, with abstract classes drawn with a dashed outline instead of just reduced alpha. The graph becomes readable in grayscale and the abstract/concrete distinction matches the HTML card's badge.
+
+**Acceptance Criteria:**
+- [ ] The 2D renderer draws each `NodeType` as its ADR-005 shape (circle / rectangle / diamond / pill); colors are unchanged.
+- [ ] Abstract classes render with a dashed outline + lighter fill, replacing the alpha-only cue.
+- [ ] Hit-testing / hover / drag still resolve correctly for non-circular shapes (the interaction layer's node-radius assumption is revisited or the shapes stay within the existing radius).
+- [ ] Labels and the selection ring still position sensibly on each shape.
+
+**Notes:**
+- Depends on ADR-005. Larger renderer change than edges (new shape-drawing per kind, hit-test review).
+
+---
+
+### Slice 18: Graph legend (ADR-005)
+
+**Status:** Not Started
+
+**Priority:** Should Have
+
+**User Value:** The per-kind edge glyphs, crow's-foot cardinality, and node shapes are a learnable notation — but only if the key is in front of the reader. After this slice a collapsible legend maps every glyph to its meaning, so a first-time viewer doesn't have to guess (the convention WebVOWL ships).
+
+**Acceptance Criteria:**
+- [ ] A collapsible legend in/near the graph controls strip maps node shapes, edge-kind line/head styles, and crow's-foot cardinality glyphs to their meanings.
+- [ ] Collapsed by default on narrow viewports; open/closed state persists in `localStorage`.
+- [ ] The legend's glyphs are rendered the same way the graph renders them (shared drawing code or a faithful static rendition) so it can't drift from the actual notation.
+
+**Notes:**
+- Depends on slices 15–17 (the glyphs it documents).
+
+---
+
+### Slice 19: 3D reduced-form edges (ADR-005)
+
+**Status:** Not Started
+
+**Priority:** Nice to Have
+
+**User Value:** The 3D WebGPU view currently draws all edges as identical plain lines. After this slice it carries the *reduced* form of the ADR-005 notation: per-kind edge color and a single cone head for direction — enough to read kind and direction in 3D without the full 2D glyph set.
+
+**Acceptance Criteria:**
+- [ ] The 3D renderer colors edges by kind (same palette as 2D) and draws a cone head at the target end oriented along the edge.
+- [ ] Hollow-vs-filled heads, dashed lines, crow's-foot cardinality, and per-kind node shapes remain 2D-only (explicitly deferred by ADR-005); 3D nodes stay spheres.
+
+**Notes:**
+- Depends on slice 15 (palette) and the 3D renderer (slices 1–2). Shader/instancing work; lower priority since 2D is the default.
 
 ---
 
@@ -610,8 +692,12 @@ These are the questions whose answers currently require a click-to-pin, then scr
 | Slice 12: Graph layer consumes the shared slot resolver | Should Have | Slice 11, feature 12 slice 12.1 | ✅ Complete |
 | Slice 13: Hover card surfaces richer IR fields | Nice to Have | Slice 12, feature 12 slices 12.2 / 12.4 | Not Started |
 | Slice 14: Per-class refined slot views + effective-cardinality row | Nice to Have | Slice 12, feature 12 slice 12.3 | ✅ Complete |
-| Slice 15: Directed-edge arrowheads in the graph | Should Have | Slice 4 | Not Started |
+| Slice 15: Per-kind directed edges in 2D (ADR-005) | Should Have | Slice 4, ADR-005 | Not Started |
 | Slice 16: Keep the embedded viz bundle fresh in the dogfood loop | Should Have | Slice 4 | ✅ Complete |
+| Slice 16.5: Edge cardinality — crow's-foot on `range` edges (ADR-005) | Should Have | Slice 15, feature 12 slice 12.3 | Not Started |
+| Slice 17: Node shapes by kind in 2D (ADR-005) | Should Have | ADR-005 | Not Started |
+| Slice 18: Graph legend (ADR-005) | Should Have | Slices 15–17 | Not Started |
+| Slice 19: 3D reduced-form edges (ADR-005) | Nice to Have | Slice 15, Slices 1–2 | Not Started |
 
 ---
 
@@ -639,7 +725,7 @@ The feature is complete when ALL of the following are true:
 
 2. ~~**Atomic float operations:**~~ **Resolved:** Avoided by having each thread write only to its own node's velocity (link force writes to both source and target, but race conditions are acceptable for force accumulation).
 
-3. **Edge rendering:** Lines are simple but hard to see. Tubes look better but are expensive. Start with lines, upgrade if needed.
+3. ~~**Edge rendering:**~~ **Resolved by [ADR-005](../adr/005-graph-visualization-conventions.md):** edges stay lines (not tubes), distinguished per-kind by line style + arrowhead glyph + color, with crow's-foot cardinality on `range` edges. Tubes remain out of scope (visual weight, not legibility, is the open lever).
 
 4. **WASM bundle size:** wgpu + wasm can be large. Target < 1MB gzipped. May need aggressive dead code elimination.
 
