@@ -195,20 +195,17 @@ pub struct Mapping {
     pub href: Option<String>,
     /// Upstream `rdfs:label` for the expanded IRI, when cached.
     pub label: Option<String>,
-    /// Upstream definition for the expanded IRI, when cached.
-    pub definition: Option<String>,
+    /// Every upstream definitional annotation for the expanded IRI
+    /// (definition / description / comment / example), when cached.
+    pub definitions: Vec<String>,
 }
 
 impl Mapping {
-    /// Tooltip text: CURIE = IRI identity line, plus the upstream
-    /// definition on its own paragraph when cached. Browsers render
-    /// literal newlines in `title` attributes.
+    /// Tooltip text: CURIE = IRI identity line, plus each upstream
+    /// definitional annotation on its own paragraph when cached.
+    /// Browsers render literal newlines in `title` attributes.
     pub fn tooltip(&self) -> String {
-        tooltip_text(
-            &self.display,
-            self.href.as_deref(),
-            self.definition.as_deref(),
-        )
+        tooltip_text(&self.display, self.href.as_deref(), &self.definitions)
     }
 }
 
@@ -221,29 +218,31 @@ pub struct ExternalLink {
     pub href: Option<String>,
     /// Upstream `rdfs:label` for the expanded IRI, when cached.
     pub label: Option<String>,
-    /// Upstream definition for the expanded IRI, when cached.
-    pub definition: Option<String>,
+    /// Every upstream definitional annotation for the expanded IRI
+    /// (definition / description / comment / example), when cached.
+    pub definitions: Vec<String>,
 }
 
 impl ExternalLink {
     /// See [`Mapping::tooltip`].
     pub fn tooltip(&self) -> String {
-        tooltip_text(
-            &self.display,
-            self.href.as_deref(),
-            self.definition.as_deref(),
-        )
+        tooltip_text(&self.display, self.href.as_deref(), &self.definitions)
     }
 }
 
-fn tooltip_text(display: &str, href: Option<&str>, definition: Option<&str>) -> String {
+/// Tooltip: the `CURIE = IRI` identity line, then each upstream
+/// definitional annotation as its own paragraph (a term may carry a
+/// definition, a description, a comment, and an example — all are
+/// shown for maximum grounding context).
+fn tooltip_text(display: &str, href: Option<&str>, definitions: &[String]) -> String {
     let identity = match href {
         Some(href) => format!("{display} = {href}"),
         None => display.to_string(),
     };
-    match definition {
-        Some(definition) => format!("{identity}\n\n{definition}"),
-        None => identity,
+    if definitions.is_empty() {
+        identity
+    } else {
+        format!("{identity}\n\n{}", definitions.join("\n\n"))
     }
 }
 
@@ -679,12 +678,12 @@ impl HtmlWriter {
                 .as_deref()
                 .map(|raw| {
                     let href = crate::linkml_resolve::expand_curie(schema, raw);
-                    let (label, definition) = lookup_term(labels, href.as_deref());
+                    let (label, definitions) = lookup_term(labels, href.as_deref());
                     ExternalLink {
                         display: raw.to_string(),
                         href,
                         label,
-                        definition,
+                        definitions,
                     }
                 })
                 .into_iter()
@@ -1189,27 +1188,27 @@ fn build_mappings(
     ] {
         for value in values {
             let href = crate::linkml_resolve::expand_curie(schema, value);
-            let (label, definition) = lookup_term(labels, href.as_deref());
+            let (label, definitions) = lookup_term(labels, href.as_deref());
             out.push(Mapping {
                 kind,
                 display: value.clone(),
                 href,
                 label,
-                definition,
+                definitions,
             });
         }
     }
     out
 }
 
-/// `(label, definition)` for an expanded IRI, when the store has it.
+/// `(label, definitions)` for an expanded IRI, when the store has it.
 fn lookup_term(
     labels: Option<&crate::labels::LabelStore>,
     iri: Option<&str>,
-) -> (Option<String>, Option<String>) {
+) -> (Option<String>, Vec<String>) {
     match labels.zip(iri).and_then(|(store, iri)| store.lookup(iri)) {
-        Some(info) => (info.label.clone(), info.definition.clone()),
-        None => (None, None),
+        Some(info) => (info.label.clone(), info.definitions.clone()),
+        None => (None, Vec::new()),
     }
 }
 
@@ -2515,16 +2514,16 @@ mod tests {
                         "http://example.org/cco/ont00000958".to_string(),
                         crate::labels::TermInfo {
                             label: Some("Process".to_string()),
-                            definition: Some(
+                            definitions: vec![
                                 "A series of events that unfold over time.".to_string(),
-                            ),
+                            ],
                         },
                     ),
                     (
                         "http://purl.org/spar/cito/supports".to_string(),
                         crate::labels::TermInfo {
                             label: Some("supports".to_string()),
-                            definition: None,
+                            definitions: Vec::new(),
                         },
                     ),
                 ]),
@@ -2567,18 +2566,33 @@ mod tests {
             display: "cco:ont00000958".to_string(),
             href: Some("https://example.org/cco/ont00000958".to_string()),
             label: Some("Process".to_string()),
-            definition: Some("A series of events.".to_string()),
+            definitions: vec!["A series of events.".to_string()],
         };
         assert_eq!(
             with_definition.tooltip(),
             "cco:ont00000958 = https://example.org/cco/ont00000958\n\nA series of events."
         );
 
+        // Multiple annotations each get their own paragraph.
+        let multi = ExternalLink {
+            display: "cito:disputes".to_string(),
+            href: Some("http://purl.org/spar/cito/disputes".to_string()),
+            label: Some("disputes".to_string()),
+            definitions: vec![
+                "The citing entity disputes the cited entity.".to_string(),
+                "Example: We doubt that Galileo is right.".to_string(),
+            ],
+        };
+        assert_eq!(
+            multi.tooltip(),
+            "cito:disputes = http://purl.org/spar/cito/disputes\n\nThe citing entity disputes the cited entity.\n\nExample: We doubt that Galileo is right."
+        );
+
         let without_definition = ExternalLink {
             display: "cco:ont00000958".to_string(),
             href: Some("https://example.org/cco/ont00000958".to_string()),
             label: None,
-            definition: None,
+            definitions: Vec::new(),
         };
         assert_eq!(
             without_definition.tooltip(),
@@ -2590,7 +2604,7 @@ mod tests {
             display: "cito:supports".to_string(),
             href: Some("http://purl.org/spar/cito/supports".to_string()),
             label: Some("supports".to_string()),
-            definition: Some("One claim bears positively on another.".to_string()),
+            definitions: vec!["One claim bears positively on another.".to_string()],
         };
         assert_eq!(
             mapping.tooltip(),

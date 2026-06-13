@@ -559,14 +559,14 @@ impl ComponentRenderer {
                 display: "foaf:Person".to_string(),
                 href: Some("http://xmlns.com/foaf/0.1/Person".to_string()),
                 label: Some("Person".to_string()),
-                definition: Some("A person.".to_string()),
+                definitions: vec!["A person.".to_string()],
             },
             panschema::html_writer::Mapping {
                 kind: "related",
                 display: "schema:Person".to_string(),
                 href: Some("https://schema.org/Person".to_string()),
                 label: None,
-                definition: None,
+                definitions: Vec::new(),
             },
         ];
         let sample_class = SampleClass {

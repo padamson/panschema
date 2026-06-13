@@ -114,6 +114,22 @@ Design decisions:
 - [x] `panschema generate --refresh-labels` deletes the relevant cache files before the ensure-labels pass.
 - [x] Manifest parse round-trips through `toml_edit` preserving comments (consistent with existing manifest handling).
 
+### Slice 13.6: Collect every definitional annotation, not just one
+
+**Status:** ✅ Complete
+
+**User Value:** A reused upstream term often spreads context across several annotation predicates — CiTO, for instance, puts the actual definition in `rdfs:comment` and an `"Example: …"` in `dc:description`. The original single-pick priority (`skos:definition > IAO:0000115 > dc:description > rdfs:comment`) could surface the *example* as if it were the definition (CiTO `disputes` showed "Example: We doubt that Galileo is right…" and never the real definition). After this slice the tooltip shows *all* distinct definitional annotations a term carries, so the reader gets the full grounding context.
+
+**Acceptance Criteria:**
+- [x] `TermInfo` carries `definitions: Vec<String>` instead of a single `definition`; `extract_terms` collects every distinct `@en`/untagged literal across `skos:definition`, `IAO:0000115`, `rdfs:comment`, `dc:description` (in that order — more definitional predicates first, `dc:description` last as the one most used for examples), de-duplicating exact repeats.
+- [x] The HTML tooltip renders each annotation as its own paragraph after the `CURIE = IRI` identity line (`Mapping` / `ExternalLink` carry `definitions: Vec<String>`).
+- [x] `deny_unknown_fields` on `TermInfo` makes pre-`definitions` cache files (singular `definition`) fail to parse, skip on load, and refetch in the new shape — the existing fail-open migration extended to the value-shape change.
+- [x] Unit tests: extraction collects all annotations (CiTO-shaped fixture: comment-definition before description-example); tooltip joins multiple paragraphs; old-shape cache file is skipped and the source left uncached for refetch.
+
+**Notes:**
+- Source: scimantic-schema dogfood — CiTO mapping tooltips showed the example instead of the definition because `dc:description` (example) outranked `rdfs:comment` (definition) in the single-pick priority.
+- The link target stays the canonical term IRI (the stable linked-data identifier, matching the RDF); making it land on a human doc page isn't generally derivable and is out of scope.
+
 ## Slice Priority and Dependencies
 
 | Slice | Priority | Depends On | Status |
@@ -123,6 +139,7 @@ Design decisions:
 | 13.3: Orchestration + built-in map | Must Have | 13.1, 13.2 | ✅ Complete |
 | 13.4: Render labels in HTML | Must Have | 13.3 | ✅ Complete |
 | 13.5: Manifest override + refresh | Should Have | 13.4 | ✅ Complete |
+| 13.6: Collect every definitional annotation | Should Have | 13.4 | ✅ Complete |
 
 ## Out of Scope (deferred)
 
