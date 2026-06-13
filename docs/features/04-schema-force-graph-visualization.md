@@ -572,6 +572,27 @@ These are the questions whose answers currently require a click-to-pin, then scr
 
 ---
 
+### Slice 16: `build.rs` watches the viz crate so the embedded bundle never goes stale
+
+**Status:** ✅ Complete
+
+**Priority:** Should Have
+
+**User Value:** The HTML writer embeds the `panschema-viz` WASM bundle at compile time. Before this slice, `build.rs` only declared `rerun-if-changed` on the two *output* files (`pkg/panschema_viz.js`, `pkg/panschema_viz_bg.wasm`) and early-returned whenever they existed — it never watched the viz crate's *sources*. So a change to `panschema-viz/src/` (e.g. the `KindMetadata` wire format) did not trigger a bundle rebuild: `cargo build` / `cargo install` happily re-embedded the **stale** WASM. When the wire format changed but the bundle didn't, the new structured JSON hit old deserialization code, the `Visualization` constructor threw, and the schema graph rendered in a degraded state across every layout — a silent, confusing failure with no compile error. After this slice, a viz-source change refreshes the bundle automatically.
+
+**Acceptance Criteria:**
+- [x] `build.rs` declares `cargo:rerun-if-changed` on `../panschema-viz/src` and `../panschema-viz/Cargo.toml`, so Cargo re-runs the script when the viz crate's sources change (in addition to the existing watches on the two `pkg/` outputs).
+- [x] When `wasm-pack` is available, the script (re)builds the bundle whenever it runs, rather than early-returning on `pkg/`-exists. Because Cargo only re-runs `build.rs` when a watched input actually changed, a workspace `cargo build` that doesn't touch the viz crate still skips the rebuild — the cost lands only when viz sources change (or on a fresh-fingerprint `cargo install`).
+- [x] The CI-lint path is preserved: when `wasm-pack` is **absent** and a `pkg/` bundle already exists (the lint runner stubs it), the script uses the existing bundle and returns without error. A missing bundle with no `wasm-pack` still fails with the install-instructions message.
+- [x] Manual verification: touching a file under `panschema-viz/src/` and re-running `cargo build -p panschema` triggers a `wasm-pack` rebuild (bundle content hash changes); a no-op `cargo build` does not.
+
+**Notes:**
+- Source: surfaced by dogfooding slice 14 — the `KindMetadata` change shipped a structured-slot wire format, but `cargo install --debug` re-embedded the old bundle, breaking the rendered graph until a manual `wasm-pack build`.
+- Aligns with the project preference to trust Cargo's `rerun-if-changed` mechanism rather than hand-rolling an mtime/`walkdir` staleness check: the freshness decision is Cargo's, and `build.rs` simply rebuilds when invoked.
+- The trade: a fresh-fingerprint `cargo install` rebuilds the `--dev` bundle (~15s, `wasm-opt` skipped) every time, even when the viz crate didn't change, because `install` doesn't share the workspace build fingerprint. Correctness (never a stale bundle) is worth the cost given the failure mode is silent.
+
+---
+
 ## Slice Priority and Dependencies
 
 | Slice | Priority | Depends On | Status |
@@ -591,6 +612,7 @@ These are the questions whose answers currently require a click-to-pin, then scr
 | Slice 13: Hover card surfaces richer IR fields | Nice to Have | Slice 12, feature 12 slices 12.2 / 12.4 | Not Started |
 | Slice 14: Per-class refined slot views + effective-cardinality row | Nice to Have | Slice 12, feature 12 slice 12.3 | ✅ Complete |
 | Slice 15: Directed-edge arrowheads in the graph | Should Have | Slice 4 | Not Started |
+| Slice 16: `build.rs` watches the viz crate | Should Have | Slice 4 | ✅ Complete |
 
 ---
 
