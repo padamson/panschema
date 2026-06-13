@@ -705,6 +705,7 @@ pub(crate) fn build_node_details_json(
         "type": node_type,
         "isAbstract": node.is_abstract,
         "uri": node.uri,
+        "uriUnresolved": node.uri_unresolved,
         "description": node.description,
         "isFixed": is_fixed,
         "connections": connections,
@@ -781,7 +782,10 @@ fn node_type_string(color: &[f32; 4]) -> &'static str {
 #[cfg(test)]
 mod details_json_tests {
     use super::*;
-    use crate::graph_types::{EdgeType, GraphEdge, GraphNode, KindMetadata, NodeType, SlotSummary};
+    use crate::graph_types::{
+        EdgeType, GraphEdge, GraphNode, KindMetadata, NodeType, PermissibleValueSummary,
+        SlotSummary,
+    };
     use crate::simulation::{SimEdge, SimNode};
 
     fn make_class_node(id: &str, label: &str) -> SimNode {
@@ -793,6 +797,7 @@ mod details_json_tests {
                 color: NodeType::Class.color(),
                 description: None,
                 uri: None,
+                uri_unresolved: false,
                 is_abstract: false,
                 kind_metadata: None,
             },
@@ -816,6 +821,7 @@ mod details_json_tests {
                 color: NodeType::Class.color(),
                 description: description.map(|s| s.to_string()),
                 uri: uri.map(|s| s.to_string()),
+                uri_unresolved: false,
                 is_abstract,
                 kind_metadata: None,
             },
@@ -936,6 +942,7 @@ mod details_json_tests {
                     color: NodeType::Class.color(),
                     description: None,
                     uri: None,
+                    uri_unresolved: false,
                     is_abstract: false,
                     kind_metadata: None,
                 },
@@ -946,6 +953,7 @@ mod details_json_tests {
                     color: NodeType::Class.color(),
                     description: None,
                     uri: None,
+                    uri_unresolved: false,
                     is_abstract: false,
                     kind_metadata: None,
                 },
@@ -974,12 +982,21 @@ mod details_json_tests {
                 color: NodeType::Class.color(),
                 description: None,
                 uri: None,
+                uri_unresolved: false,
                 is_abstract: false,
                 kind_metadata: Some(kind),
             },
             0,
             1,
         )
+    }
+
+    fn pv(text: &str, description: Option<&str>, meaning: Option<&str>) -> PermissibleValueSummary {
+        PermissibleValueSummary {
+            text: text.to_string(),
+            description: description.map(str::to_string),
+            meaning: meaning.map(str::to_string),
+        }
     }
 
     #[test]
@@ -1065,6 +1082,9 @@ mod details_json_tests {
                 multivalued: false,
                 min: None,
                 max: None,
+                pattern: Some("^[A-Z]".into()),
+                identifier: true,
+                any_of: vec!["Person".into(), "Organization".into()],
             },
         );
         let json: serde_json::Value =
@@ -1077,6 +1097,9 @@ mod details_json_tests {
         // `multivalued: false` is skipped by serde to keep the wire
         // small; the JS card treats absent as `false`.
         assert!(km.get("multivalued").is_none());
+        assert_eq!(km["pattern"], "^[A-Z]");
+        assert_eq!(km["identifier"], true);
+        assert_eq!(km["anyOf"], serde_json::json!(["Person", "Organization"]));
     }
 
     #[test]
@@ -1089,7 +1112,11 @@ mod details_json_tests {
             "enum:Severity",
             "Severity",
             KindMetadata::Enum {
-                permissible_values: vec!["low".into(), "medium".into(), "high".into()],
+                permissible_values: vec![
+                    pv("low", None, None),
+                    pv("medium", Some("Moderate severity"), None),
+                    pv("high", None, Some("ex:High")),
+                ],
             },
         );
         let json: serde_json::Value =
@@ -1098,9 +1125,13 @@ mod details_json_tests {
         assert_eq!(km["kind"], "enum");
         let pvs = km["permissibleValues"].as_array().unwrap();
         assert_eq!(pvs.len(), 3);
-        assert_eq!(pvs[0], "low");
-        assert_eq!(pvs[1], "medium");
-        assert_eq!(pvs[2], "high");
+        assert_eq!(pvs[0]["text"], "low");
+        // `description` / `meaning` are omitted when absent.
+        assert!(pvs[0].get("description").is_none());
+        assert_eq!(pvs[1]["text"], "medium");
+        assert_eq!(pvs[1]["description"], "Moderate severity");
+        assert_eq!(pvs[2]["text"], "high");
+        assert_eq!(pvs[2]["meaning"], "ex:High");
     }
 
     #[test]

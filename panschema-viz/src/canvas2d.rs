@@ -1146,6 +1146,9 @@ mod tests {
             multivalued: false,
             min: None,
             max: None,
+            pattern: None,
+            identifier: false,
+            any_of: vec![],
         };
         let enum_kind = KindMetadata::Enum {
             permissible_values: vec![],

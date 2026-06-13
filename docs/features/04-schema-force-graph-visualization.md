@@ -518,19 +518,19 @@ These are the questions whose answers currently require a click-to-pin, then scr
 
 ### Slice 13: Hover card surfaces richer IR fields (patterns, identifiers, expanded IRIs, `any_of`)
 
-**Status:** Not Started
+**Status:** ✅ Complete
 
 **Priority:** Nice to Have
 
 **User Value:** The IR already carries `pattern`, `identifier`, `any_of`, prefixed curies, and `PermissibleValue.description` / `meaning`. The hover card today surfaces almost none of it. For authors building a schema, these are exactly the fields they edit most — surfacing them shaves a click-to-pin off every iteration.
 
 **Acceptance Criteria:**
-- [ ] **Slot hover** gains: a `Pattern:` row when `slot.pattern` is set (truncated at 40 chars with a tooltip showing the full regex); an `(identifier)` badge in the type row when `slot.identifier = true`; an `Any of:` row listing element ranges when `slot.any_of` is non-empty (replaces or supplements the single `Range:` row).
-- [ ] **Enum hover** shows per-value descriptions when present. Tooltip on each permissible-value chip surfaces `PermissibleValue.description`; the chip's `data-meaning` attribute holds the curie-expanded `meaning` IRI for future click-to-jump affordances.
-- [ ] **Class / slot hover IRI row** uses `expand_curie` (slice 12.2 of feature 12) so the IRI displayed is always fully expanded, regardless of whether the source schema wrote `prov:Entity` or the full URI. If the value can't be expanded (unknown prefix), surface it verbatim with a `?` indicator that the prefix is unrecognised.
-- [ ] **Slot provenance** (slice 12.4 of feature 12) renders as a small "from `<class>`" tag on inherited slot chips in class-node hover. Direct slots have no tag.
-- [ ] Native unit tests for `build_node_details_json` cover the new fields: pattern present / absent, identifier present / absent, any_of present / absent, permissible value with description.
-- [ ] CSS: 30-line bump to support tooltip on hover-card chips (native `title=` attribute is fine — no JS tooltip framework).
+- [x] **Slot hover** gains: a `Pattern:` row when `slot.pattern` is set (truncated at 40 chars with a tooltip showing the full regex); an `identifier` flag in the Cardinality row when `slot.identifier = true`; an `Any of:` row listing element ranges when `slot.any_of` is non-empty (supplements the single `Range:` row).
+- [x] **Enum hover** shows per-value descriptions when present. Tooltip on each permissible-value chip surfaces `PermissibleValue.description`; the chip's `data-meaning` attribute holds the curie-expanded `meaning` IRI for future click-to-jump affordances.
+- [x] **Class / slot / type hover IRI row** is expanded by the writer via `expand_curie` so the IRI displayed is always fully expanded, regardless of whether the source schema wrote `prov:Entity` or the full URI. An unknown prefix is surfaced verbatim with a `?` indicator (carried as `uriUnresolved` on the wire).
+- [x] **Slot provenance** renders as a small "from `<class>`" tag on inherited slot chips in class-node hover (already shipped via `slotSummaryText`'s `origin`); direct slots have no tag.
+- [x] Native unit tests for `build_node_details_json` cover the new fields (pattern, identifier, any_of present/absent; permissible value with description / meaning), plus writer-side tests for `resolve_node_uri` (expanded / unknown-prefix / full-IRI) and the slot constraint fields.
+- [x] CSS: small bump for the value-chip tooltip affordance and the `?` marker (native `title=` attribute — no JS tooltip framework).
 
 **Notes:**
 - Out of scope: clickable jump-to-class on the `from <class>` tag. Routing affordance is its own slice (filed as a follow-up under feature 06's authoring tools, not here).
@@ -711,7 +711,7 @@ These are the questions whose answers currently require a click-to-pin, then scr
 | Slice 10: Hover focus-mode highlight (1-hop + 2-hop neighbors) | Should Have | Slice 6 | ✅ Complete |
 | Slice 11: Hover card surfaces resolved-schema context | Should Have | Slice 9 | ✅ Complete |
 | Slice 12: Graph layer consumes the shared slot resolver | Should Have | Slice 11, feature 12 slice 12.1 | ✅ Complete |
-| Slice 13: Hover card surfaces richer IR fields | Nice to Have | Slice 12, feature 12 slices 12.2 / 12.4 | Not Started |
+| Slice 13: Hover card surfaces richer IR fields | Nice to Have | Slice 12, feature 12 slices 12.2 / 12.4 | ✅ Complete |
 | Slice 14: Per-class refined slot views + effective-cardinality row | Nice to Have | Slice 12, feature 12 slice 12.3 | ✅ Complete |
 | Slice 15: Per-kind directed edges in 2D (ADR-005) | Should Have | Slice 4, ADR-005 | ✅ Complete |
 | Slice 16: Keep the embedded viz bundle fresh in the dogfood loop | Should Have | Slice 4 | ✅ Complete |

@@ -622,6 +622,21 @@
     font-style: italic;
 }
 
+/* Permissible-value chips with a description carry a tooltip; the
+   dotted underline signals there's more on hover. */
+.graph-hover-pv[title] {
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+    cursor: help;
+}
+
+/* The `?` next to an unexpanded IRI — a muted, help-cursored marker. */
+.graph-hover-unresolved {
+    color: var(--color-text-muted, #9ca3af);
+    font-weight: 700;
+    cursor: help;
+}
+
 /* Hide the hover card on coarse-pointer (touch) inputs — there's no
    hover concept; the slice-6 tap-to-select flow still works. */
 @media (pointer: coarse) {
@@ -801,6 +816,13 @@
         return tmp.innerHTML;
     }
 
+    // Attribute-safe escape: like escapeForText but also escapes the
+    // quote characters, so values (regex patterns, descriptions) can
+    // sit inside double-quoted HTML attributes without breaking out.
+    function escapeForAttr(s) {
+        return escapeForText(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
     // Cap how many items we show before collapsing to "+N more"; longer
     // lists would push the card past the 280px max-width and turn the
     // hover surface into a wall of text.
@@ -879,6 +901,11 @@
         } else if (km.kind === 'slot') {
             if (km.domain) rows += renderHoverRow('Domain', escapeForText(km.domain));
             if (km.range)  rows += renderHoverRow('Range',  escapeForText(km.range));
+            // A polymorphic range lists its member ranges; supplements
+            // the single Range row above.
+            if (Array.isArray(km.anyOf) && km.anyOf.length) {
+                rows += renderHoverRow('Any of', renderHoverList(km.anyOf));
+            }
             // Combine the cardinality facts into one row so the card
             // stays compact. Absent flags read as false on the wire
             // (serde skips defaults), so guard with `=== true`;
@@ -886,16 +913,44 @@
             const cardBits = [];
             if (km.required === true)    cardBits.push('required');
             if (km.multivalued === true) cardBits.push('multi-valued');
+            if (km.identifier === true)  cardBits.push('identifier');
             if (km.min != null || km.max != null) {
                 cardBits.push((km.min != null ? km.min : '0') + '..' + (km.max != null ? km.max : '*'));
             }
             if (cardBits.length) rows += renderHoverRow('Cardinality', escapeForText(cardBits.join(', ')));
+            // The full regex can be long; truncate with the complete
+            // value in a native tooltip.
+            if (km.pattern) {
+                const full = km.pattern;
+                const shown = full.length > 40 ? full.slice(0, 40) + '…' : full;
+                rows += renderHoverRow('Pattern',
+                    '<span title="' + escapeForAttr(full) + '">' + escapeForText(shown) + '</span>');
+            }
         } else if (km.kind === 'enum') {
             if (km.permissibleValues && km.permissibleValues.length) {
-                rows += renderHoverRow('Values', renderHoverList(km.permissibleValues));
+                rows += renderHoverRow('Values', renderHoverEnumValues(km.permissibleValues));
             }
         }
         return rows;
+    }
+
+    // Enum permissible values: each value's text, with its description
+    // (when present) in a native tooltip and the curie-expanded meaning
+    // IRI on a `data-meaning` attribute for future click-to-jump. Same
+    // "+N more" overflow cap as the other lists.
+    function renderHoverEnumValues(values) {
+        if (!Array.isArray(values) || values.length === 0) return '';
+        const shown = values.slice(0, HOVER_LIST_LIMIT).map(function (v) {
+            if (typeof v === 'string') return escapeForText(v);   // legacy payloads
+            let attrs = '';
+            if (v.description) attrs += ' title="' + escapeForAttr(v.description) + '"';
+            if (v.meaning) attrs += ' data-meaning="' + escapeForAttr(v.meaning) + '"';
+            return '<span class="graph-hover-pv"' + attrs + '>' + escapeForText(v.text) + '</span>';
+        }).join(', ');
+        if (values.length > HOVER_LIST_LIMIT) {
+            return shown + ' <span class="graph-hover-more">+' + (values.length - HOVER_LIST_LIMIT) + ' more</span>';
+        }
+        return shown;
     }
 
     // Short, author-readable gloss for each LinkML edge kind. Looked
@@ -961,8 +1016,14 @@
                     // schema-internal ID is often the only thing
                     // we have.
                     if (d.uri) {
+                        // A `?` flags a curie whose prefix the schema
+                        // didn't declare, so it couldn't be expanded to
+                        // a full IRI.
+                        const unresolved = d.uriUnresolved
+                            ? ' <span class="graph-hover-unresolved" title="Prefix not declared in the schema — IRI could not be expanded">?</span>'
+                            : '';
                         rows += '<div class="graph-hover-row"><span class="graph-hover-key">IRI:</span>'
-                            + '<span class="graph-hover-value graph-hover-value-id">' + escapeForText(d.uri) + '</span></div>';
+                            + '<span class="graph-hover-value graph-hover-value-id">' + escapeForText(d.uri) + unresolved + '</span></div>';
                     }
                     rows += '<div class="graph-hover-row"><span class="graph-hover-key">Connections:</span>'
                         + '<span class="graph-hover-value">' + connCount + '</span></div>';

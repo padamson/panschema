@@ -1007,6 +1007,7 @@ mod tests {
                 color: [1.0, 0.0, 0.0, 1.0],
                 description: None,
                 uri: None,
+                uri_unresolved: false,
                 is_abstract: false,
                 kind_metadata: None,
             })
@@ -1064,6 +1065,7 @@ mod tests {
                 color: [1.0, 0.0, 0.0, 1.0],
                 description: None,
                 uri: None,
+                uri_unresolved: false,
                 is_abstract: false,
                 kind_metadata: None,
             })
@@ -1095,6 +1097,7 @@ mod tests {
                 color: [1.0, 0.0, 0.0, 1.0],
                 description: None,
                 uri: None,
+                uri_unresolved: false,
                 is_abstract: false,
                 kind_metadata: None,
             })
@@ -1222,6 +1225,7 @@ mod tests {
                 color: [1.0, 1.0, 1.0, 1.0],
                 description: None,
                 uri: None,
+                uri_unresolved: false,
                 is_abstract: false,
                 kind_metadata: None,
             });
@@ -1348,6 +1352,7 @@ mod tests {
                 color: [1.0, 1.0, 1.0, 1.0],
                 description: None,
                 uri: None,
+                uri_unresolved: false,
                 is_abstract: false,
                 kind_metadata: None,
             });
@@ -1429,6 +1434,7 @@ mod tests {
                 color: [1.0, 1.0, 1.0, 1.0],
                 description: None,
                 uri: None,
+                uri_unresolved: false,
                 is_abstract: false,
                 kind_metadata: None,
             });
@@ -1671,6 +1677,7 @@ mod tests {
                 color: [1.0, 0.0, 0.0, 1.0],
                 description: None,
                 uri: None,
+                uri_unresolved: false,
                 is_abstract: false,
                 kind_metadata: None,
             })
@@ -1754,6 +1761,7 @@ mod tests {
                 color: [1.0, 0.0, 0.0, 1.0],
                 description: None,
                 uri: None,
+                uri_unresolved: false,
                 is_abstract: false,
                 kind_metadata: None,
             })
@@ -1916,6 +1924,7 @@ mod tests {
                 color: [1.0, 0.0, 0.0, 1.0],
                 description: None,
                 uri: None,
+                uri_unresolved: false,
                 is_abstract: false,
                 kind_metadata: None,
             });
