@@ -572,24 +572,23 @@ These are the questions whose answers currently require a click-to-pin, then scr
 
 ---
 
-### Slice 16: `build.rs` watches the viz crate so the embedded bundle never goes stale
+### Slice 16: Keep the embedded viz bundle fresh in the dogfood loop
 
 **Status:** ✅ Complete
 
 **Priority:** Should Have
 
-**User Value:** The HTML writer embeds the `panschema-viz` WASM bundle at compile time. Before this slice, `build.rs` only declared `rerun-if-changed` on the two *output* files (`pkg/panschema_viz.js`, `pkg/panschema_viz_bg.wasm`) and early-returned whenever they existed — it never watched the viz crate's *sources*. So a change to `panschema-viz/src/` (e.g. the `KindMetadata` wire format) did not trigger a bundle rebuild: `cargo build` / `cargo install` happily re-embedded the **stale** WASM. When the wire format changed but the bundle didn't, the new structured JSON hit old deserialization code, the `Visualization` constructor threw, and the schema graph rendered in a degraded state across every layout — a silent, confusing failure with no compile error. After this slice, a viz-source change refreshes the bundle automatically.
+**User Value:** The HTML writer embeds the `panschema-viz` WASM bundle at compile time, and `build.rs` is a one-time bootstrap: once `pkg/` exists it does nothing. So after a change to `panschema-viz/src/` (e.g. the `KindMetadata` wire format), a bare `cargo install` re-embeds the **stale** WASM — the new structured JSON then hits old deserialization code, the `Visualization` constructor throws, and the schema graph renders in a degraded state across every layout, a silent failure with no compile error. After this slice the dogfood loop rebuilds the bundle first via `scripts/dev-install.sh`, so the embedded WASM always matches the current viz sources.
 
 **Acceptance Criteria:**
-- [x] `build.rs` declares `cargo:rerun-if-changed` on `../panschema-viz/src` and `../panschema-viz/Cargo.toml`, so Cargo re-runs the script when the viz crate's sources change (in addition to the existing watches on the two `pkg/` outputs).
-- [x] When `wasm-pack` is available, the script rebuilds the bundle only when it is **missing or older than the viz sources** (an mtime comparison of the newest file under `panschema-viz/src` + `Cargo.toml` against the older of the two `pkg/` outputs), rather than early-returning on `pkg/`-exists. An unreadable mtime is treated as stale so a rebuild is the safe default.
-- [x] The CI-lint path is preserved: when `wasm-pack` is **absent** and a `pkg/` bundle already exists (the lint runner stubs it), the script uses the existing bundle and returns without error. A missing bundle with no `wasm-pack` still fails with the install-instructions message.
-- [x] Manual verification: touching a file under `panschema-viz/src/` and re-running `cargo build -p panschema` triggers a `wasm-pack` rebuild; a `cargo build` against an up-to-date bundle does not.
+- [x] `scripts/dev-install.sh` rebuilds the `panschema-viz` bundle (`wasm-pack build … --features webgpu`) and then `cargo install`s the CLI, matching the bundle profile to the install profile (`--dev` bundle for the default `--debug` install, `--release` for an optimized install).
+- [x] `build.rs` stays a simple bootstrap: build the bundle if `pkg/` is missing and `wasm-pack` is available, early-return if it exists, and use the stubbed bundle (no rebuild) when `wasm-pack` is absent (the CI lint path).
+- [x] `build.rs` does **not** try to auto-detect staleness — the dogfood loop owns freshness explicitly via the script, and CI owns it via its cached `wasm-pack` build step.
 
 **Notes:**
 - Source: surfaced by dogfooding slice 14 — the `KindMetadata` change shipped a structured-slot wire format, but `cargo install --debug` re-embedded the old bundle, breaking the rendered graph until a manual `wasm-pack build`.
-- The mtime staleness check is deliberate, not a `rerun-if-changed` purist's choice. `rerun-if-changed` alone only controls *when Cargo re-runs the script*; it can't tell "a developer just edited a viz source" from "the bundle was already produced for this build." A script that rebuilds unconditionally whenever it runs caused a regression: CI's Test job builds the bundle in an explicit `wasm-pack` step (cached on the viz source hash) before `cargo test`, so `build.rs` then ran a **second, redundant** `wasm-pack` build into the same target dir with a different profile — which fails on the Windows wasm+wgpu toolchain. The mtime check makes `build.rs` *defer* to a bundle that is already current: CI's freshly-built (or cache-restored) `pkg/` is newer than the sources → skipped; a local source edit is newer than `pkg/` → rebuilt.
-- The trade: mtime is a lossy freshness signal (same-second ties, `touch` without edits, mtime-preserving copies can fool it), and the recursive walk re-derives freshness that build systems normally own. The failure modes are benign here — a missed rebuild is the stale-bundle case a dogfood catches, a spurious rebuild costs ~15s (`--dev`, `wasm-opt` skipped) — and the alternative (`build.rs` as the sole bundle owner, dropping CI's explicit step) would still need a freshness check to honor the CI cache and would trade a Windows-proven build path for an unverified one.
+- An earlier attempt made `build.rs` auto-rebuild when viz sources changed (first unconditionally, then gated on an mtime staleness check). Both broke Windows CI. The bundle is produced by two uncoordinated paths — `build.rs` for fresh checkouts and CI's explicit `wasm-pack` step (cached on the viz-source hash) — and any freshness signal they'd have to share is fragile across the CI cache boundary: `actions/cache` restores `pkg/` via tar with the *original* (older) mtime, while `git checkout` stamps the sources as "now", so an mtime check always reads the cache-restored bundle as stale and runs a redundant rebuild that fails on the Windows wasm+wgpu toolchain. mtime can't distinguish "cache restored an older-stamped bundle" from "a dev just edited a source."
+- The chosen design sidesteps the coordination entirely: CI builds the bundle its own (Windows-proven) way; the dogfood loop rebuilds it explicitly via the script; `build.rs` never has to decide whether an existing bundle is current. The cost is one explicit command (`scripts/dev-install.sh` instead of bare `cargo install`) in exchange for no CI fragility.
 
 ---
 
@@ -612,7 +611,7 @@ These are the questions whose answers currently require a click-to-pin, then scr
 | Slice 13: Hover card surfaces richer IR fields | Nice to Have | Slice 12, feature 12 slices 12.2 / 12.4 | Not Started |
 | Slice 14: Per-class refined slot views + effective-cardinality row | Nice to Have | Slice 12, feature 12 slice 12.3 | ✅ Complete |
 | Slice 15: Directed-edge arrowheads in the graph | Should Have | Slice 4 | Not Started |
-| Slice 16: `build.rs` watches the viz crate | Should Have | Slice 4 | ✅ Complete |
+| Slice 16: Keep the embedded viz bundle fresh in the dogfood loop | Should Have | Slice 4 | ✅ Complete |
 
 ---
 
