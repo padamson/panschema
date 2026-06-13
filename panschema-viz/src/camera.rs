@@ -3,6 +3,13 @@
 //! This module contains pure calculation logic that can be unit tested
 //! without browser dependencies.
 
+/// Zoom bounds. The max is generous (40×) so an author can zoom right
+/// into one cluster of a multi-component schema to read edge glyphs
+/// (arrowheads, crow's-feet) and labels; the min lets a widely-spread
+/// graph fit-to-bounds without clipping.
+const MIN_SCALE: f32 = 0.05;
+const MAX_SCALE: f32 = 40.0;
+
 /// Camera state for 2D view transformations
 #[derive(Debug, Clone)]
 pub struct Camera2D {
@@ -106,7 +113,7 @@ impl Camera2D {
     /// Zoom the view by factor (1.1 = zoom in 10%, 0.9 = zoom out 10%)
     pub fn zoom(&mut self, factor: f32) {
         self.scale *= factor;
-        self.scale = self.scale.clamp(0.1, 10.0);
+        self.scale = self.scale.clamp(MIN_SCALE, MAX_SCALE);
         // Also update target to prevent animation fighting
         self.target_scale = self.scale;
     }
@@ -138,7 +145,7 @@ impl Camera2D {
         // Calculate scale to fit the graph
         let scale_x = available_width / graph_width;
         let scale_y = available_height / graph_height;
-        self.target_scale = scale_x.min(scale_y).clamp(0.1, 10.0);
+        self.target_scale = scale_x.min(scale_y).clamp(MIN_SCALE, MAX_SCALE);
 
         // Set target offset to center the graph
         self.target_offset_x = -bounds.center_x();
@@ -309,10 +316,10 @@ mod tests {
     #[test]
     fn zoom_clamps_to_bounds() {
         let mut cam = Camera2D::new(800.0, 600.0);
-        cam.zoom(0.01); // Try to zoom out too far
-        assert_eq!(cam.scale, 0.1); // Clamped to minimum
-        cam.zoom(1000.0); // Try to zoom in too far: 0.1 * 1000 = 100
-        assert_eq!(cam.scale, 10.0); // Clamped to maximum
+        cam.zoom(0.001); // Try to zoom out too far
+        assert_eq!(cam.scale, MIN_SCALE); // Clamped to minimum (0.05)
+        cam.zoom(100000.0); // Try to zoom in too far
+        assert_eq!(cam.scale, MAX_SCALE); // Clamped to maximum (40×)
     }
 
     #[test]

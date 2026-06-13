@@ -264,6 +264,7 @@ pub fn stress_majorization(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> V
 
     let (pg, _) = to_petgraph(graph);
     let components = connected_components_of(&pg);
+    let num_components = components.len();
     let id_to_node_idx: BTreeMap<&str, usize> = graph
         .nodes
         .iter()
@@ -356,15 +357,18 @@ pub fn stress_majorization(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> V
         row_height = row_height.max(c.height);
     }
 
-    // The shelf-packer already targets aspect_w : aspect_h via the row-
-    // width formula, so the post-process `√(w/h)` aspect bias is what
-    // pushes the rendered bbox the rest of the way toward the requested
-    // aspect, matching the convention of the other static layouts.
-    let sx = (aspect_w / aspect_h).sqrt();
-    let sy = (aspect_h / aspect_w).sqrt();
-    for p in positions.iter_mut() {
-        p.0 *= sx;
-        p.1 *= sy;
+    // Bias the aspect ratio exactly once: with multiple components the
+    // shelf-packer above already arranged them into an aspect-shaped
+    // rectangle, so the extra `√(w/h)` stretch would double-apply it
+    // and smear the graph horizontally. Only stretch a single
+    // component, which carried no packing-stage aspect bias.
+    if num_components <= 1 {
+        let sx = (aspect_w / aspect_h).sqrt();
+        let sy = (aspect_h / aspect_w).sqrt();
+        for p in positions.iter_mut() {
+            p.0 *= sx;
+            p.1 *= sy;
+        }
     }
 
     positions
@@ -500,6 +504,7 @@ pub fn sgd(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> Vec<(f32, f32)> {
 
     let (pg, _) = to_petgraph(graph);
     let components = connected_components_of(&pg);
+    let num_components = components.len();
     let id_to_node_idx: BTreeMap<&str, usize> = graph
         .nodes
         .iter()
@@ -579,11 +584,18 @@ pub fn sgd(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> Vec<(f32, f32)> {
         row_height = row_height.max(c.height);
     }
 
-    let sx = (aspect_w / aspect_h).sqrt();
-    let sy = (aspect_h / aspect_w).sqrt();
-    for p in positions.iter_mut() {
-        p.0 *= sx;
-        p.1 *= sy;
+    // Bias the aspect ratio exactly once. With multiple components the
+    // shelf-packer above already arranged them into an aspect-shaped
+    // rectangle, so the extra `√(w/h)` stretch would double-apply it
+    // and smear the graph horizontally; only stretch when a single
+    // component carried no packing-stage aspect bias.
+    if num_components <= 1 {
+        let sx = (aspect_w / aspect_h).sqrt();
+        let sy = (aspect_h / aspect_w).sqrt();
+        for p in positions.iter_mut() {
+            p.0 *= sx;
+            p.1 *= sy;
+        }
     }
 
     positions

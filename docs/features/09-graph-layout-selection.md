@@ -325,6 +325,24 @@ Existing in-tree CPU force simulation (slice 7 work in [Feature 02](02-core-onto
 
 ---
 
+### Slice 10: Compact multi-component packing
+
+**Status:** ✅ Complete
+
+**Priority:** Should Have
+
+**User Value:** A schema with several disconnected components (e.g. scimantic's `Act` / `State` / `Claim` `is_a` trees plus isolated classes) rendered as a wide horizontal smear that wasted the vertical space and left each cluster too small to read. The SGD and Stress layouts shelf-pack components into an aspect-shaped rectangle *and then* applied a `√(w/h)` post-stretch — double-applying the aspect bias and over-stretching multi-component graphs horizontally. After this slice the clusters sit compactly and use the vertical space.
+
+**Acceptance Criteria:**
+- [x] In `sgd` and `stress_majorization`, the post-layout `√(w/h)` aspect stretch is applied only for a **single** component; with multiple components the shelf-packer has already biased the arrangement toward the aspect, so the redundant stretch is skipped.
+- [x] Single-component graphs are unchanged (the stretch is their only aspect bias).
+- [x] Existing per-component packing tests (disjoint bounding boxes) still pass.
+
+**Notes:**
+- Source: scimantic-schema dogfood — the three `is_a` trees smeared horizontally with empty vertical space, and clusters were too small to inspect (compounded the zoom/glyph legibility issues fixed in feature 04 slice 20).
+
+---
+
 ## Slice Priority and Dependencies
 
 | Slice | Priority | Depends On | Status |
@@ -338,6 +356,7 @@ Existing in-tree CPU force simulation (slice 7 work in [Feature 02](02-core-onto
 | Slice 7: Circular | Could Have | Slice 1 | Not Started |
 | Slice 8: Radial tree | Could Have | Slice 1 | Not Started |
 | Slice 9: Auto-default to Hierarchical for `is_a`-heavy schemas | Should Have | Slice 6 | Not Started |
+| Slice 10: Compact multi-component packing | Should Have | Slices 4, 5 | ✅ Complete |
 
 **Prerequisite (✓ cleared):** Feature 02 [slice 7](02-core-ontology-documentation.md#slice-7-improve-force-directed-default-so-the-graph-fills-its-viewport) — the force-directed default fills the viewport with legible labels at all 3 scales. The picker can now expose the existing force-directed implementation as the "Force-directed" option without that option spreading a bad reputation across the others.
 

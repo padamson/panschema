@@ -582,17 +582,17 @@ These are the questions whose answers currently require a click-to-pin, then scr
 
 ### Slice 16.5: Edge cardinality — crow's-foot on `range` edges (ADR-005)
 
-**Status:** Not Started
+**Status:** ✅ Complete
 
 **Priority:** Should Have
 
 **User Value:** A slot's multiplicity (required? multi-valued? `min..max`?) is shown in the hover card and class card but not on the graph. After this slice the graph carries it too: each `range` edge shows ER crow's-foot notation at its target end, so "this slot relates to `0..*` of that class" is readable from the topology.
 
 **Acceptance Criteria:**
-- [ ] The 2D renderer draws crow's-foot glyphs at the `range` edge's target end, mapping `effective_cardinality` (feature 12 slice 12.3) per the ADR-005 table: `1..1` mandatory-one, `0..1` optional-one, `1..*` mandatory-many, `0..*` optional-many; an explicit `min..max` outside those renders as a small text label.
-- [ ] The values come from the resolver's `effective_cardinality`, so the graph and the hover/class-card never disagree.
-- [ ] Documented limitation: the edge shows the slot's **global** cardinality (a slot node is shared across its using classes); per-class `slot_usage` refinements stay in the hover card / class card (slice 14). A short note in the legend or hover conveys this.
-- [ ] Unit test mapping each cardinality case to its glyph; the explicit-bounds case renders the text label.
+- [x] The 2D renderer draws crow's-foot glyphs at the `range` edge's target end, mapping `effective_cardinality` (feature 12 slice 12.3) per the ADR-005 table: `1..1` mandatory-one, `0..1` optional-one, `1..*` mandatory-many, `0..*` optional-many; an explicit `min..max` outside those renders as a small text label. The crow's-foot **replaces** the filled arrow on `range` edges (it's the terminator) and is always drawn — the Arrows toggle doesn't hide it.
+- [x] The values come from the slot node's `KindMetadata::Slot` cardinality (sourced from `effective_cardinality`, feature 12 slice 12.3), so the graph and the hover/class-card never disagree.
+- [x] Documented limitation: the edge shows the slot's **global** cardinality (a slot node is shared across its using classes); per-class `slot_usage` refinements stay in the hover card / class card (slice 14).
+- [x] Unit test mapping each cardinality case to its glyph; the explicit-bounds case renders the text label.
 
 **Notes:**
 - Depends on slice 15 (edge rendering scaffolding) and feature 12 slice 12.3 (`effective_cardinality`).
@@ -674,6 +674,26 @@ These are the questions whose answers currently require a click-to-pin, then scr
 
 ---
 
+### Slice 20: Graph legibility — zoom range, zoom-proportional glyphs/labels, curved parallel edges
+
+**Status:** ✅ Complete
+
+**Priority:** Should Have
+
+**User Value:** Surfaced by dogfooding the per-kind edges + crow's-feet (slices 15, 16.5): on a multi-component schema the clusters render small and the edge glyphs/labels couldn't be inspected — the max zoom was 10× and glyphs/labels were clamped to a fixed pixel size, so zooming in didn't enlarge them. And parallel edges (a slot's `domain` and `range` both pointing at the same class) drew their terminators on top of each other. After this slice an author can zoom into a cluster and read every glyph and label, and parallel edges read as distinct relations.
+
+**Acceptance Criteria:**
+- [x] Max zoom raised (10× → 40×) so a single cluster of a multi-component graph can be inspected closely.
+- [x] Edge glyphs (arrowheads, crow's-feet) scale proportionally to the node radius (≈0.8×) rather than a fixed pixel cap, so they enlarge with zoom and stay proportional to the node at any scale; a small floor keeps them visible zoomed out.
+- [x] Node and edge labels scale with zoom (font clamps raised) so they grow alongside the nodes instead of capping at ~16/12px.
+- [x] Parallel edges sharing a node pair render as quadratic béziers that share endpoints but bow apart, terminators oriented along the curve tangent; a lone edge has zero bow and renders straight. Bow scales with node radius.
+
+**Notes:**
+- The straight perpendicular-offset first tried for parallel edges read as two separate connections; curves sharing endpoints (Graphviz/Mermaid/Cytoscape convention) read as two relations between the same pair and were the accepted design.
+- Edge-label positioning for parallel pairs still uses the straight midpoint (labels can overlap when toggled on); deferred as a small follow-up.
+
+---
+
 ## Slice Priority and Dependencies
 
 | Slice | Priority | Depends On | Status |
@@ -694,10 +714,11 @@ These are the questions whose answers currently require a click-to-pin, then scr
 | Slice 14: Per-class refined slot views + effective-cardinality row | Nice to Have | Slice 12, feature 12 slice 12.3 | ✅ Complete |
 | Slice 15: Per-kind directed edges in 2D (ADR-005) | Should Have | Slice 4, ADR-005 | ✅ Complete |
 | Slice 16: Keep the embedded viz bundle fresh in the dogfood loop | Should Have | Slice 4 | ✅ Complete |
-| Slice 16.5: Edge cardinality — crow's-foot on `range` edges (ADR-005) | Should Have | Slice 15, feature 12 slice 12.3 | Not Started |
+| Slice 16.5: Edge cardinality — crow's-foot on `range` edges (ADR-005) | Should Have | Slice 15, feature 12 slice 12.3 | ✅ Complete |
 | Slice 17: Node shapes by kind in 2D (ADR-005) | Should Have | ADR-005 | Not Started |
 | Slice 18: Graph legend (ADR-005) | Should Have | Slices 15–17 | Not Started |
 | Slice 19: 3D reduced-form edges (ADR-005) | Nice to Have | Slice 15, Slices 1–2 | Not Started |
+| Slice 20: Graph legibility — zoom range, proportional glyphs/labels, curved parallel edges | Should Have | Slices 15, 16.5 | ✅ Complete |
 
 ---
 

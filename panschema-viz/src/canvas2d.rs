@@ -9,7 +9,7 @@ use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
 use std::collections::HashSet;
 
 use crate::camera::{BoundingBox, Camera2D};
-use crate::graph_types::EdgeType;
+use crate::graph_types::{EdgeType, KindMetadata};
 use crate::labels::LabelOptions;
 use crate::simulation::{CpuSimulation, SimEdge, SimNode};
 
@@ -52,34 +52,58 @@ fn edge_both_ends(kind: EdgeType) -> bool {
     matches!(kind, EdgeType::Inverse)
 }
 
-/// The visible span of an edge in canvas space: from the source
-/// node's rim to the target node's rim, inset by each node's rendered
-/// radius along the edge direction so the line touches the discs
-/// rather than running center-to-center into them.
-///
-/// Returns `None` when the rims meet or overlap (`src_r + tgt_r >=
-/// distance`) — the case for short hub edges (e.g. a class with many
-/// tightly-packed spokes), where an inset segment would invert. The
-/// caller skips the connecting line and lets the arrowhead alone mark
-/// the relation.
-pub(crate) fn edge_segment(
-    x1: f64,
-    y1: f64,
-    x2: f64,
-    y2: f64,
-    src_r: f64,
-    tgt_r: f64,
-) -> Option<((f64, f64), (f64, f64))> {
-    let (dx, dy) = (x2 - x1, y2 - y1);
-    let len = (dx * dx + dy * dy).sqrt();
-    if len <= src_r + tgt_r {
-        return None;
+/// Which ER crow's-foot terminator a slot's effective cardinality
+/// maps to, drawn at the target end of a `range` edge (ADR-005).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum CardinalityGlyph {
+    /// `1..1` — mandatory-one (two bars).
+    MandatoryOne,
+    /// `0..1` — optional-one (circle + bar).
+    OptionalOne,
+    /// `1..*` — mandatory-many (bar + crow's foot).
+    MandatoryMany,
+    /// `0..*` — optional-many (circle + crow's foot).
+    OptionalMany,
+    /// An explicit bound the crow's-foot vocabulary can't express
+    /// (e.g. `2..5`) — shown as a `min..max` text label.
+    Text(String),
+}
+
+/// Map a slot's effective cardinality to its terminator glyph.
+/// `required` / `multivalued` are the reconciled flags;
+/// `min` / `max` are the explicit bounds when set. A bound outside
+/// the `{0,1,*}` crow's-foot vocabulary (min > 1, or a finite
+/// max > 1) renders as text instead of a foot.
+pub(crate) fn cardinality_glyph(
+    required: bool,
+    multivalued: bool,
+    min: Option<u32>,
+    max: Option<u32>,
+) -> CardinalityGlyph {
+    let exotic = min.is_some_and(|m| m > 1) || max.is_some_and(|x| x > 1);
+    if exotic {
+        let lo = min.map_or_else(|| "0".to_string(), |m| m.to_string());
+        let hi = max.map_or_else(|| "*".to_string(), |x| x.to_string());
+        return CardinalityGlyph::Text(format!("{lo}..{hi}"));
     }
-    let (ux, uy) = (dx / len, dy / len);
-    Some((
-        (x1 + ux * src_r, y1 + uy * src_r),
-        (x2 - ux * tgt_r, y2 - uy * tgt_r),
-    ))
+    match (required, multivalued) {
+        (true, false) => CardinalityGlyph::MandatoryOne,
+        (false, false) => CardinalityGlyph::OptionalOne,
+        (true, true) => CardinalityGlyph::MandatoryMany,
+        (false, true) => CardinalityGlyph::OptionalMany,
+    }
+}
+
+/// Unit vector for `(dx, dy)`, or `(0, 0)` when the input is
+/// degenerate (zero length). Used to inset edge endpoints to node
+/// rims along the curve tangent.
+pub(crate) fn unit(dx: f64, dy: f64) -> (f64, f64) {
+    let len = (dx * dx + dy * dy).sqrt();
+    if len < f64::EPSILON {
+        (0.0, 0.0)
+    } else {
+        (dx / len, dy / len)
+    }
 }
 
 /// The three canvas-space points of a directed-edge arrowhead: the
@@ -110,10 +134,12 @@ pub(crate) fn arrowhead_points(
     let tip_x = x2 - ux * target_radius;
     let tip_y = y2 - uy * target_radius;
 
-    // Scale with the node radius; cap so the head can't swallow the
-    // visible (post-radius) span of a short edge.
+    // Proportional to the node radius, so it scales with zoom (zoom
+    // in to inspect, out without it vanishing — `max(4)` floor). Still
+    // capped at a fraction of the visible (post-radius) span so it
+    // can't swallow a short edge.
     let visible = (len - target_radius).max(0.0);
-    let head_len = (target_radius * 1.4).clamp(5.0, 14.0).min(visible * 0.6);
+    let head_len = (target_radius * 0.8).max(4.0).min(visible * 0.6);
     let half_w = head_len * 0.5;
 
     // Base centre, stepped back from the tip along the edge.
@@ -238,7 +264,18 @@ impl Canvas2DRenderer {
         hidden_nodes: &HashSet<usize>,
         show_arrows: bool,
     ) {
-        for edge in edges {
+        // Group edges by unordered node pair so parallel edges (e.g. a
+        // slot's `domain` and `range` both pointing at the same class)
+        // can be fanned apart — otherwise their distinct terminators
+        // (arrow vs crow's-foot) draw on top of each other.
+        let mut parallel: std::collections::HashMap<(usize, usize), Vec<usize>> =
+            std::collections::HashMap::new();
+        for (i, e) in edges.iter().enumerate() {
+            let key = (e.source.min(e.target), e.source.max(e.target));
+            parallel.entry(key).or_default().push(i);
+        }
+
+        for (edge_idx, edge) in edges.iter().enumerate() {
             // Skip edges connected to hidden nodes
             if hidden_nodes.contains(&edge.source) || hidden_nodes.contains(&edge.target) {
                 continue;
@@ -250,7 +287,8 @@ impl Canvas2DRenderer {
             let (x1, y1) = self.camera.world_to_canvas(source.x, source.y);
             let (x2, y2) = self.camera.world_to_canvas(target.x, target.y);
 
-            // Determine if this edge should be dimmed (focus mode active but edge not connected to focused node)
+            // Determine if this edge should be dimmed (focus mode active
+            // but edge not connected to the focused node).
             let is_connected = if let Some(focused) = focused_node {
                 edge.source == focused
                     || edge.target == focused
@@ -265,36 +303,118 @@ impl Canvas2DRenderer {
             let alpha = if is_connected { 0.85 } else { 0.25 };
             let stroke = format!("rgba({r}, {g}, {b}, {alpha})");
 
+            let src = (x1 as f64, y1 as f64);
+            let tgt = (x2 as f64, y2 as f64);
+            let source_radius = (source.radius * self.camera.scale) as f64;
+            let target_radius = (target.radius * self.camera.scale) as f64;
+
+            let (dx, dy) = (tgt.0 - src.0, tgt.1 - src.1);
+            let straight_len = (dx * dx + dy * dy).sqrt();
+            if straight_len < f64::EPSILON {
+                continue;
+            }
+
+            // Parallel edges (e.g. a slot's `domain` and `range` both
+            // pointing at the same class) share endpoints but bow apart
+            // as quadratic béziers so each keeps a distinct terminator.
+            // A lone edge has zero bow → its control sits at the straight
+            // midpoint, i.e. it renders straight. The bow scales with the
+            // node radius so the fan stays proportional at any zoom.
+            let key = (edge.source.min(edge.target), edge.source.max(edge.target));
+            let group = &parallel[&key];
+            let bow = if group.len() > 1 {
+                let pos = group.iter().position(|&i| i == edge_idx).unwrap_or(0) as f64;
+                let centered = pos - (group.len() as f64 - 1.0) / 2.0;
+                centered * (target_radius * 2.5).max(20.0)
+            } else {
+                0.0
+            };
+            let mid = ((src.0 + tgt.0) / 2.0, (src.1 + tgt.1) / 2.0);
+            let (perp_x, perp_y) = (-dy / straight_len, dx / straight_len);
+            let control = (mid.0 + perp_x * bow, mid.1 + perp_y * bow);
+
+            // Inset each end to the node rim along the curve's tangent
+            // (the bézier leaves the source toward `control` and arrives
+            // at the target from `control`).
+            let src_tan = unit(control.0 - src.0, control.1 - src.1);
+            let tgt_tan = unit(tgt.0 - control.0, tgt.1 - control.1);
+            let source_rim = (
+                src.0 + src_tan.0 * source_radius,
+                src.1 + src_tan.1 * source_radius,
+            );
+            let target_rim = (
+                tgt.0 - tgt_tan.0 * target_radius,
+                tgt.1 - tgt_tan.1 * target_radius,
+            );
+
             self.ctx.set_stroke_style_str(&stroke);
             self.ctx.set_line_width(1.5);
             self.set_dash(edge_dashed(edge.edge_type));
 
-            let (sx1, sy1, sx2, sy2) = (x1 as f64, y1 as f64, x2 as f64, y2 as f64);
-            let source_radius = (source.radius * self.camera.scale) as f64;
-            let target_radius = (target.radius * self.camera.scale) as f64;
-
-            // Inset the line to the node rims so it touches the discs
-            // instead of running center-to-center into them. Short hub
-            // edges whose rims overlap skip the line — the arrowhead
-            // alone marks the relation.
-            if let Some(((lx1, ly1), (lx2, ly2))) =
-                edge_segment(sx1, sy1, sx2, sy2, source_radius, target_radius)
-            {
+            // Skip the connecting curve when the rims meet/overlap (short
+            // hub edges); the terminator alone marks the relation.
+            if straight_len > source_radius + target_radius {
                 self.ctx.begin_path();
-                self.ctx.move_to(lx1, ly1);
-                self.ctx.line_to(lx2, ly2);
+                self.ctx.move_to(source_rim.0, source_rim.1);
+                self.ctx
+                    .quadratic_curve_to(control.0, control.1, target_rim.0, target_rim.1);
                 self.ctx.stroke();
             }
 
-            // Heads read direction at a glance: hollow triangle for
-            // inheritance (UML generalization), filled arrow for
-            // referential kinds; `inverse` gets one at each end.
-            // Heads are always solid-outlined even on a dashed edge.
-            if show_arrows {
+            // Terminators orient along the curve tangent: passing
+            // `control` as the glyph's "from" point makes its direction
+            // the bézier tangent at the rim, not the straight chord. A
+            // `range` edge's terminator is an ER crow's-foot showing the
+            // slot's cardinality (always drawn — cardinality is data,
+            // not a direction decoration, so the Arrows toggle doesn't
+            // hide it); the slot is the edge source.
+            let range_cardinality = (edge.edge_type == EdgeType::Range)
+                .then(|| match source.kind_metadata.as_ref() {
+                    Some(KindMetadata::Slot {
+                        required,
+                        multivalued,
+                        min,
+                        max,
+                        ..
+                    }) => Some(cardinality_glyph(*required, *multivalued, *min, *max)),
+                    _ => None,
+                })
+                .flatten();
+
+            if let Some(glyph) = range_cardinality {
+                self.draw_cardinality(
+                    control.0,
+                    control.1,
+                    tgt.0,
+                    tgt.1,
+                    target_radius,
+                    &glyph,
+                    &stroke,
+                );
+            } else if show_arrows {
+                // Hollow triangle for inheritance (UML generalization),
+                // filled arrow for referential kinds; `inverse` gets one
+                // at each end. Always solid-outlined even on a dashed edge.
                 let hollow = edge_hollow_head(edge.edge_type);
-                self.draw_head(sx1, sy1, sx2, sy2, target_radius, &stroke, hollow);
+                self.draw_head(
+                    control.0,
+                    control.1,
+                    tgt.0,
+                    tgt.1,
+                    target_radius,
+                    &stroke,
+                    hollow,
+                );
                 if edge_both_ends(edge.edge_type) {
-                    self.draw_head(sx2, sy2, sx1, sy1, source_radius, &stroke, hollow);
+                    self.draw_head(
+                        control.0,
+                        control.1,
+                        src.0,
+                        src.1,
+                        source_radius,
+                        &stroke,
+                        hollow,
+                    );
                 }
             }
         }
@@ -351,6 +471,102 @@ impl Canvas2DRenderer {
         } else {
             self.ctx.set_fill_style_str(color);
             self.ctx.fill();
+        }
+    }
+
+    /// Draw the ER crow's-foot terminator for a `range` edge's
+    /// cardinality at the target end. Elements are laid out back from
+    /// the target rim toward the source: the cardinality marker (a bar
+    /// for "one", a splayed foot for "many") nearest the node, then
+    /// the optionality marker further out (a second bar for mandatory,
+    /// an open circle for optional). Exotic bounds fall back to text.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_cardinality(
+        &self,
+        x1: f64,
+        y1: f64,
+        x2: f64,
+        y2: f64,
+        target_radius: f64,
+        glyph: &CardinalityGlyph,
+        color: &str,
+    ) {
+        let (dx, dy) = (x2 - x1, y2 - y1);
+        let len = (dx * dx + dy * dy).sqrt();
+        if len < f64::EPSILON {
+            return;
+        }
+        let (ux, uy) = (dx / len, dy / len);
+        let (px, py) = (-uy, ux);
+        let tip = (x2 - ux * target_radius, y2 - uy * target_radius);
+        // Proportional to the node radius so it scales with zoom; a
+        // small floor keeps it visible when zoomed out.
+        let size = (target_radius * 0.8).max(5.0);
+        let hw = size * 0.5;
+        let at = |d: f64| (tip.0 - ux * d, tip.1 - uy * d);
+
+        if let CardinalityGlyph::Text(text) = glyph {
+            self.ctx.set_fill_style_str(color);
+            self.ctx.set_font("10px sans-serif");
+            let (tx, ty) = at(size + 2.0);
+            let _ = self.ctx.fill_text(text, tx + px * 8.0, ty + py * 8.0);
+            return;
+        }
+
+        self.set_dash(false);
+        self.ctx.set_stroke_style_str(color);
+        self.ctx.set_line_width(1.5);
+        match glyph {
+            CardinalityGlyph::MandatoryOne => {
+                self.card_bar(at(size * 0.7), (px, py), hw);
+                self.card_bar(at(size * 1.4), (px, py), hw);
+            }
+            CardinalityGlyph::OptionalOne => {
+                self.card_bar(at(size * 0.7), (px, py), hw);
+                self.card_circle(at(size * 1.6), size * 0.32, color);
+            }
+            CardinalityGlyph::MandatoryMany => {
+                self.card_foot(tip, at(size), (px, py), hw);
+                self.card_bar(at(size * 1.5), (px, py), hw);
+            }
+            CardinalityGlyph::OptionalMany => {
+                self.card_foot(tip, at(size), (px, py), hw);
+                self.card_circle(at(size * 1.9), size * 0.32, color);
+            }
+            CardinalityGlyph::Text(_) => unreachable!("handled above"),
+        }
+    }
+
+    /// A perpendicular tick centered at `c`, half-width `hw`.
+    fn card_bar(&self, c: (f64, f64), perp: (f64, f64), hw: f64) {
+        self.ctx.begin_path();
+        self.ctx.move_to(c.0 + perp.0 * hw, c.1 + perp.1 * hw);
+        self.ctx.line_to(c.0 - perp.0 * hw, c.1 - perp.1 * hw);
+        self.ctx.stroke();
+    }
+
+    /// An open circle (bg-filled, then stroked) centered at `c`.
+    fn card_circle(&self, c: (f64, f64), r: f64, color: &str) {
+        self.ctx.begin_path();
+        let _ = self.ctx.arc(c.0, c.1, r, 0.0, std::f64::consts::TAU);
+        self.ctx.set_fill_style_str(CANVAS_BG);
+        self.ctx.fill();
+        self.ctx.set_stroke_style_str(color);
+        self.ctx.stroke();
+    }
+
+    /// A splayed three-prong foot: prongs fan from `apex` (back toward
+    /// the source) out to the target rim around `tip`.
+    fn card_foot(&self, tip: (f64, f64), apex: (f64, f64), perp: (f64, f64), hw: f64) {
+        for end in [
+            tip,
+            (tip.0 + perp.0 * hw, tip.1 + perp.1 * hw),
+            (tip.0 - perp.0 * hw, tip.1 - perp.1 * hw),
+        ] {
+            self.ctx.begin_path();
+            self.ctx.move_to(apex.0, apex.1);
+            self.ctx.line_to(end.0, end.1);
+            self.ctx.stroke();
         }
     }
 
@@ -463,7 +679,10 @@ impl Canvas2DRenderer {
     /// Render node labels
     /// If `only_index` is Some, only render that specific node's label (for hover)
     fn render_node_labels(&self, nodes: &[SimNode], only_index: Option<usize>) {
-        let font_size = (12.0 * self.camera.scale).clamp(8.0, 16.0);
+        // Scale with zoom (clamped so it neither vanishes when zoomed
+        // out nor grows absurd when zoomed way in) — the high cap lets
+        // labels stay readable alongside the nodes at close zoom.
+        let font_size = (12.0 * self.camera.scale).clamp(8.0, 48.0);
         let font = format!(
             "{}px -apple-system, BlinkMacSystemFont, sans-serif",
             font_size
@@ -512,7 +731,9 @@ impl Canvas2DRenderer {
     /// Render edge labels at midpoints
     /// If `only_index` is Some, only render that specific edge's label (for hover)
     fn render_edge_labels(&self, edges: &[SimEdge], nodes: &[SimNode], only_index: Option<usize>) {
-        let font_size = (10.0 * self.camera.scale).clamp(6.0, 12.0);
+        // Scale with zoom like node labels (raised cap so the relation
+        // name stays readable when zoomed into a cluster).
+        let font_size = (10.0 * self.camera.scale).clamp(6.0, 40.0);
         let font = format!(
             "{}px -apple-system, BlinkMacSystemFont, sans-serif",
             font_size
@@ -694,29 +915,39 @@ mod tests {
         assert!(arrowhead_points(10.0, 10.0, 10.0, 10.0, 5.0).is_none());
     }
 
-    // The connecting line spans rim to rim, inset by each node's
-    // radius, so it touches the discs instead of running to center.
+    // Endpoints inset to node rims along the (unit) tangent so the
+    // curve touches the discs instead of running to center.
     #[test]
-    fn edge_segment_insets_to_both_rims() {
-        let ((a, b), (c, d)) = edge_segment(0.0, 0.0, 100.0, 0.0, 10.0, 10.0).unwrap();
-        assert!(
-            (a - 10.0).abs() < 1e-9 && b.abs() < 1e-9,
-            "source rim at +r"
-        );
-        assert!(
-            (c - 90.0).abs() < 1e-9 && d.abs() < 1e-9,
-            "target rim at -r"
-        );
+    fn unit_normalizes_and_handles_degenerate() {
+        let (ux, uy) = unit(3.0, 4.0);
+        assert!((ux - 0.6).abs() < 1e-9 && (uy - 0.8).abs() < 1e-9);
+        assert_eq!(unit(0.0, 0.0), (0.0, 0.0), "degenerate → zero vector");
     }
 
-    // Short hub edges whose rims meet or overlap get no line (the
-    // arrowhead alone marks the relation), so the inset can't invert.
     #[test]
-    fn edge_segment_none_when_rims_overlap() {
-        // len 15 < src_r + tgt_r = 20.
-        assert!(edge_segment(0.0, 0.0, 15.0, 0.0, 10.0, 10.0).is_none());
-        // Exactly touching (len == sum) is also skipped.
-        assert!(edge_segment(0.0, 0.0, 20.0, 0.0, 10.0, 10.0).is_none());
+    fn cardinality_glyph_maps_flag_combinations() {
+        use CardinalityGlyph::*;
+        assert_eq!(cardinality_glyph(true, false, None, None), MandatoryOne);
+        assert_eq!(cardinality_glyph(false, false, None, None), OptionalOne);
+        assert_eq!(cardinality_glyph(true, true, None, None), MandatoryMany);
+        assert_eq!(cardinality_glyph(false, true, None, None), OptionalMany);
+        // Unbounded many (max None) stays a foot, not text.
+        assert_eq!(cardinality_glyph(true, true, Some(1), None), MandatoryMany);
+    }
+
+    #[test]
+    fn cardinality_glyph_falls_back_to_text_for_exotic_bounds() {
+        use CardinalityGlyph::*;
+        assert_eq!(
+            cardinality_glyph(true, true, Some(1), Some(3)),
+            Text("1..3".to_string()),
+            "a finite max > 1 can't be a foot"
+        );
+        assert_eq!(
+            cardinality_glyph(true, true, Some(2), None),
+            Text("2..*".to_string()),
+            "a min > 1 can't be a foot"
+        );
     }
 
     // The head can't swallow a short edge: it's capped at a fraction

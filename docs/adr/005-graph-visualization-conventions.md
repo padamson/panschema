@@ -126,11 +126,16 @@ The values come from the resolver's `effective_cardinality`
   (its `SlotDefinition` flags/bounds). Per-class `slot_usage`
   refinements are not reflected at the edge — they remain in the hover
   card / class card (slice 14), which are per-class views.
+- On a `range` edge the crow's-foot **replaces** the filled
+  arrowhead and is the edge's terminator: it sits at the target rim,
+  so direction still reads (the slot is the source), and a single
+  glyph carries both "points here" and multiplicity rather than
+  stacking two terminators. Consequently the "Arrows" toggle does not
+  affect `range` edges — their crow's-foot is always shown (it's
+  cardinality, not a direction decoration). Other edge kinds keep
+  their arrow/triangle heads, which the toggle still hides.
 - The crow's-foot glyphs get a legend entry alongside the edge-kind
-  glyphs. Cardinality (multiplicity) and direction (the head) are
-  independent: the "Arrows" toggle hides heads but leaves crow's-foot
-  in place; a separate toggle can hide cardinality later if dense
-  graphs need it.
+  glyphs.
 
 ### Controls & discoverability
 
