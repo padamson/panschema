@@ -601,6 +601,40 @@ pub fn sgd(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> Vec<(f32, f32)> {
     positions
 }
 
+/// Recommend the 2D default layout from the graph's inheritance
+/// density: the fraction of edges that are `subclass_of` or `mixin`.
+/// When at least half the edges are inheritance, the graph is a tree
+/// at heart and the Hierarchical (Sugiyama) layout shows that
+/// structure far more legibly than SGD's force-like placement; below
+/// the threshold SGD stays the general-purpose default.
+///
+/// The 0.5 threshold is tuned against the two ends of the corpus:
+/// scimantic's `is_a`-heavy claim spine (≈0.7 inheritance → wants
+/// Hierarchical) versus the mixed-edge reference fixture (≈0.3 → wants
+/// SGD). It's a heuristic, not a contract — `html_default_layout` (and
+/// a persisted user choice) override it.
+pub fn recommend_default_layout(graph: &GraphData) -> LayoutAlgorithm {
+    let total = graph.edges.len();
+    if total == 0 {
+        return LayoutAlgorithm::Sgd;
+    }
+    let inheritance = graph
+        .edges
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.edge_type,
+                crate::graph_types::EdgeType::SubclassOf | crate::graph_types::EdgeType::Mixin
+            )
+        })
+        .count();
+    if inheritance as f32 / total as f32 >= 0.5 {
+        LayoutAlgorithm::Hierarchical
+    } else {
+        LayoutAlgorithm::Sgd
+    }
+}
+
 /// Run SGD on a single connected component. Returns
 /// (positions in `component` order, bbox width).
 ///
@@ -959,6 +993,67 @@ mod tests {
     // ---------------------------------------------------------------
 
     use crate::graph_types::{EdgeType, GraphEdge, GraphNode, NodeType};
+
+    /// Build a graph with `is_a` (subclass_of) and `range` edges in the
+    /// given counts (nodes are placeholders) to exercise the layout
+    /// recommendation's inheritance-density threshold.
+    fn graph_with_edge_mix(is_a: usize, range: usize) -> GraphData {
+        let n = is_a + range + 1;
+        let nodes = (0..n)
+            .map(|i| GraphNode {
+                id: format!("n{i}"),
+                label: format!("N{i}"),
+                node_type: NodeType::Class,
+                color: [1.0, 0.0, 0.0, 1.0],
+                description: None,
+                uri: None,
+                is_abstract: false,
+                kind_metadata: None,
+            })
+            .collect();
+        let mut edges = Vec::new();
+        for i in 0..is_a {
+            edges.push(GraphEdge {
+                source: format!("n{}", i + 1),
+                target: "n0".to_string(),
+                edge_type: EdgeType::SubclassOf,
+                label: None,
+            });
+        }
+        for i in 0..range {
+            edges.push(GraphEdge {
+                source: format!("n{}", is_a + i + 1),
+                target: "n0".to_string(),
+                edge_type: EdgeType::Range,
+                label: None,
+            });
+        }
+        GraphData {
+            schema_name: "mix".to_string(),
+            schema_title: None,
+            nodes,
+            edges,
+            format_version: "1.0".to_string(),
+        }
+    }
+
+    #[test]
+    fn recommends_hierarchical_for_is_a_heavy_graph() {
+        // 8 subclass_of + 2 range → 0.8 inheritance → Hierarchical.
+        let g = graph_with_edge_mix(8, 2);
+        assert_eq!(recommend_default_layout(&g), LayoutAlgorithm::Hierarchical);
+    }
+
+    #[test]
+    fn recommends_sgd_for_reference_heavy_graph() {
+        // 2 subclass_of + 8 range → 0.2 inheritance → SGD.
+        let g = graph_with_edge_mix(2, 8);
+        assert_eq!(recommend_default_layout(&g), LayoutAlgorithm::Sgd);
+        // Edgeless graph also defaults to SGD (no signal).
+        let mut empty = graph_with_edge_mix(0, 0);
+        empty.edges.clear();
+        assert_eq!(recommend_default_layout(&empty), LayoutAlgorithm::Sgd);
+    }
 
     fn make_ring(n: usize) -> GraphData {
         let nodes = (0..n)

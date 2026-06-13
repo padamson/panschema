@@ -1163,15 +1163,18 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         "[{}] Layout picker <select> should exist",
         browser_name
     );
-    // Default selection from html_writer should be `force-directed`,
-    // which is also the only currently-implemented option.
+    // The writer emits the `auto` not-pinned default, so the picker's
+    // initial value is the density-based recommendation. The reference
+    // fixture is mixed-edge (subclass_of + domain/range/inverse), below
+    // the inheritance threshold, so it auto-detects to `sgd` (feature
+    // 09 slice 9). An `is_a`-heavy schema would recommend hierarchical.
     let initial_value = layout_select
         .input_value(None)
         .await
         .expect("Failed to read layout select value");
     assert_eq!(
-        initial_value, "force-directed",
-        "[{}] Layout picker initial value should be force-directed; got `{}`",
+        initial_value, "sgd",
+        "[{}] mixed-edge reference fixture should auto-detect to sgd; got `{}`",
         browser_name, initial_value
     );
     // Implemented options are present and selectable; the rest are
@@ -1417,6 +1420,54 @@ fn e2e_happy_path() {
         }
 
         // Cleanup
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
+// Proves the layout auto-default end-to-end (feature 09 slice 9): an
+// is_a-heavy schema, with no layout pinned and no persisted choice,
+// must initialize the picker to `hierarchical` via the wasm density
+// recommendation. The reference-fixture happy-path asserts the SGD
+// side; this asserts the Hierarchical side, so SGD-for-a-real-schema
+// is known to be a real recommendation, not a silent fallback.
+#[test]
+fn e2e_is_a_heavy_schema_auto_defaults_to_hierarchical() {
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
+    rt.block_on(async {
+        let output_dir = generate_docs_for("tests/fixtures/taxonomy.ttl");
+        let port = find_available_port();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch()
+            .await
+            .expect("Failed to initialize Playwright");
+        let browser = playwright
+            .chromium()
+            .launch()
+            .await
+            .expect("Failed to launch Chromium");
+        let page = browser.new_page().await.expect("Failed to create page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("navigate");
+        // Give the wasm module time to load and the picker to settle.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let select = page.locator("#graph-layout-select").await;
+        let value = select
+            .input_value(None)
+            .await
+            .expect("read layout select value");
+        assert_eq!(
+            value, "hierarchical",
+            "an is_a-heavy schema should auto-detect to hierarchical; got `{}`",
+            value
+        );
+        browser.close().await.expect("close browser");
         let _ = shutdown_tx.send(());
         let _ = server_handle.await;
         let _ = fs::remove_dir_all(output_dir);

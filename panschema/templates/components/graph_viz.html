@@ -1396,13 +1396,24 @@
             && IMPLEMENTED_LAYOUTS.has(fromAttr) && layoutSupportsMode(fromAttr, is3D)) {
             return fromAttr;
         }
-        // When the user hasn't picked a layout and the manifest didn't
-        // set `html_default_layout`, fall back to SGD — visibly the
-        // best quality-per-time for typical schema graphs (cleaner
-        // cluster separation than force-directed, comparable to
-        // stress at lower init cost). In 3D mode the picker upstream
-        // routes to force-directed since SGD is 2D-only.
-        return is3D ? 'force-directed' : 'sgd';
+        // Not pinned (manifest emits `auto`) and no persisted choice:
+        // auto-detect from the graph's inheritance density. The viz
+        // recommends Hierarchical for `is_a`-heavy schemas, SGD
+        // otherwise. 3D is force-directed only (static layouts are
+        // 2D-only). Falls back to SGD if the recommendation is
+        // unavailable (wasm not ready / parse error).
+        if (is3D) {
+            return 'force-directed';
+        }
+        if (wasmModule && typeof wasmModule.recommend_default_layout === 'function' && graphData) {
+            try {
+                const rec = wasmModule.recommend_default_layout(JSON.stringify(graphData));
+                if (IMPLEMENTED_LAYOUTS.has(rec) && layoutSupportsMode(rec, is3D)) {
+                    return rec;
+                }
+            } catch (e) { /* fall through to sgd */ }
+        }
+        return 'sgd';
     }
 
     function applyLayoutPickerMode(is3D) {

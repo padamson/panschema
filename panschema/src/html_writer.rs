@@ -385,11 +385,12 @@ pub struct HtmlWriter {
     pub graph_aspect: (u32, u32),
     /// Layout-algorithm identifier (e.g. `"sgd"` / `"force-directed"`)
     /// for the initial value of the graph-viz layout picker. Consumers
-    /// override per-schema via the manifest's `html_default_layout`
-    /// field. Defaults to `"sgd"` — visibly the best quality-per-time
-    /// for typical schema graphs (cleaner cluster separation than
-    /// force-directed at lower init cost than stress). The JS picker
-    /// falls back to force-directed in 3D mode since SGD is 2D-only.
+    /// pin one per-schema via the manifest's `html_default_layout`
+    /// field. Defaults to `"auto"` — the not-pinned sentinel: the viz
+    /// picks a default from the graph's inheritance density at render
+    /// time (Hierarchical for `is_a`-heavy schemas, SGD otherwise). The
+    /// JS picker falls back to force-directed in 3D mode since SGD and
+    /// the static layouts are 2D-only.
     pub graph_default_layout: String,
     /// Optional multi-version cohort context. Set by `panschema publish`;
     /// `None` for the single-version `panschema generate` path. When
@@ -449,7 +450,7 @@ impl HtmlWriter {
         Self {
             include_graph: true,
             graph_aspect: (16, 8),
-            graph_default_layout: "sgd".to_string(),
+            graph_default_layout: "auto".to_string(),
             version_context: None,
             site_root_href: None,
             label_store: None,
@@ -461,7 +462,7 @@ impl HtmlWriter {
         Self {
             include_graph,
             graph_aspect: (16, 8),
-            graph_default_layout: "sgd".to_string(),
+            graph_default_layout: "auto".to_string(),
             version_context: None,
             site_root_href: None,
             label_store: None,
@@ -1245,16 +1246,16 @@ mod tests {
     }
 
     #[test]
-    fn html_writer_default_layout_is_sgd() {
-        // SGD is the picker default — visibly better cluster
-        // separation than force-directed on schema graphs. The
-        // manifest's `html_default_layout` field still overrides at
-        // generate time; this test pins the in-tree fallback so a
-        // future regression that flips it back to "force-directed"
-        // without a deliberate decision will fail loudly.
-        assert_eq!(HtmlWriter::new().graph_default_layout, "sgd");
-        assert_eq!(HtmlWriter::with_options(true).graph_default_layout, "sgd");
-        assert_eq!(HtmlWriter::with_options(false).graph_default_layout, "sgd");
+    fn html_writer_default_layout_is_auto() {
+        // `auto` is the not-pinned sentinel: the viz picks a default
+        // from the graph's inheritance density at render time
+        // (Hierarchical for `is_a`-heavy schemas, SGD otherwise). The
+        // manifest's `html_default_layout` field still overrides. This
+        // pins the in-tree fallback so a regression that hard-codes a
+        // concrete default (defeating the auto-detect) fails loudly.
+        assert_eq!(HtmlWriter::new().graph_default_layout, "auto");
+        assert_eq!(HtmlWriter::with_options(true).graph_default_layout, "auto");
+        assert_eq!(HtmlWriter::with_options(false).graph_default_layout, "auto");
     }
 
     #[test]

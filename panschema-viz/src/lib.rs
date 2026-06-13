@@ -47,6 +47,23 @@ pub fn init() {
     console_error_panic_hook::set_once();
 }
 
+/// Recommend the 2D default layout for a graph (canonical identifier
+/// string) from its inheritance density — `is_a`-heavy schemas get
+/// `hierarchical`, mixed-edge schemas `sgd`. The JS layer calls this
+/// when neither a persisted user choice nor a manifest
+/// `html_default_layout` pins the layout. Malformed JSON falls back to
+/// `sgd`.
+#[wasm_bindgen]
+pub fn recommend_default_layout(graph_json: &str) -> String {
+    serde_json::from_str::<GraphData>(graph_json)
+        .map(|graph| {
+            layout::recommend_default_layout(&graph)
+                .as_str()
+                .to_string()
+        })
+        .unwrap_or_else(|_| layout::LayoutAlgorithm::Sgd.as_str().to_string())
+}
+
 /// Check if WebGPU is supported in the current browser
 #[wasm_bindgen]
 pub async fn check_webgpu_support() -> bool {
