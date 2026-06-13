@@ -81,6 +81,11 @@ pub struct Visualization {
     /// force-directed → yes (so other nodes adjust); static → no
     /// (only the dragged node moves; rest of layout is preserved).
     is_static_layout: bool,
+    /// Draw an arrowhead at each edge's target end. Every schema-graph
+    /// edge is directional; the arrowheads make direction readable
+    /// without parsing the label. Toggleable (edge-dense graphs read
+    /// cleaner without them); defaults on.
+    show_arrows: bool,
 }
 
 #[wasm_bindgen]
@@ -171,6 +176,7 @@ impl Visualization {
             hovered_node: None,
             hovered_edge: None,
             is_static_layout,
+            show_arrows: true,
         })
     }
 
@@ -207,6 +213,7 @@ impl Visualization {
             self.interaction.focused_node,
             &focused_connected,
             &hidden_nodes,
+            self.show_arrows,
         );
     }
 
@@ -347,6 +354,16 @@ impl Visualization {
     /// Check if edge labels are visible
     pub fn show_edge_labels(&self) -> bool {
         self.labels.show_edge_labels()
+    }
+
+    /// Toggle directed-edge arrowheads on/off.
+    pub fn set_arrows(&mut self, visible: bool) {
+        self.show_arrows = visible;
+    }
+
+    /// Whether directed-edge arrowheads are drawn.
+    pub fn show_arrows(&self) -> bool {
+        self.show_arrows
     }
 
     /// Check if all labels are enabled (master toggle)

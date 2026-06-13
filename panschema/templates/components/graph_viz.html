@@ -53,6 +53,9 @@
             <button id="graph-focus-on-hover" class="graph-btn graph-toggle active" title="Hover a node to highlight it plus its 1-hop and 2-hop neighbors; the rest of the graph dims. Click to toggle.">
                 Focus on hover
             </button>
+            <button id="graph-arrows" class="graph-btn graph-toggle active" title="Show directed arrowheads on edges (hollow triangle = is_a, filled = domain/range). Turn off when edge density makes them noisy. Click to toggle.">
+                Arrows
+            </button>
             <span class="graph-help" id="graph-help-2d">Drag to pan • Scroll to zoom</span>
             <span class="graph-help" id="graph-help-3d" style="display: none;">Drag to orbit • Shift+drag to pan • Scroll to zoom</span>
         </div>
@@ -672,6 +675,36 @@
                 lastFocusedNodeIdx = -1;
             }
         });
+    }
+
+    // Directed-edge arrowheads (ADR-005): the toggle hides all heads
+    // for dense graphs; line style + color still distinguish kinds.
+    // State lives in the WASM viz (defaults on); the pref is pushed to
+    // it on init via applyArrowsPref().
+    const arrowsBtn = document.getElementById('graph-arrows');
+    const ARROWS_PREF_KEY = 'panschema-arrows';
+    let arrowsEnabled = true;
+    try {
+        const stored = localStorage.getItem(ARROWS_PREF_KEY);
+        if (stored !== null) arrowsEnabled = stored === '1';
+    } catch (e) { /* localStorage may be unavailable */ }
+    if (arrowsBtn) {
+        arrowsBtn.classList.toggle('active', arrowsEnabled);
+        arrowsBtn.addEventListener('click', () => {
+            arrowsEnabled = !arrowsEnabled;
+            arrowsBtn.classList.toggle('active', arrowsEnabled);
+            try { localStorage.setItem(ARROWS_PREF_KEY, arrowsEnabled ? '1' : '0'); }
+            catch (e) { /* ignore */ }
+            if (viz && typeof viz.set_arrows === 'function') {
+                viz.set_arrows(arrowsEnabled);
+            }
+        });
+    }
+    // Push the persisted arrows pref into a freshly-created viz.
+    function applyArrowsPref() {
+        if (viz && typeof viz.set_arrows === 'function') {
+            viz.set_arrows(arrowsEnabled);
+        }
     }
 
     // Apply focus state given the currently-hovered node. Skips
@@ -1721,6 +1754,9 @@
 
         // Apply saved label preferences
         applyLabelPrefs();
+
+        // Apply saved arrowheads preference
+        applyArrowsPref();
 
         // Update label button states
         updateLabelButtonStates();

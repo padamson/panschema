@@ -811,6 +811,60 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         hover_card_classes
     );
 
+    // 9c. The Arrows toggle (slice 15 / ADR-005) ships in the
+    // controls strip, defaults on, and persists its off-state to
+    // localStorage. Direction is drawn on the WASM canvas, which a
+    // DOM test can't pixel-assert; this verifies the control contract.
+    let arrows_btn = page.locator("#graph-arrows").await;
+    assert_eq!(
+        arrows_btn.count().await.expect("count arrows toggle"),
+        1,
+        "[{}] Arrows toggle (#graph-arrows) should render exactly once",
+        browser_name
+    );
+    let arrows_default_active = arrows_btn
+        .get_attribute("class")
+        .await
+        .expect("read arrows class")
+        .unwrap_or_default()
+        .contains("active");
+    assert!(
+        arrows_default_active,
+        "[{}] Arrows toggle should default to active (arrowheads on)",
+        browser_name
+    );
+    // Click programmatically: the strip sits over the WASM canvas, so
+    // pointer-actionability is flaky in headless; the handler + the
+    // persisted pref are the contract this verifies.
+    page.evaluate::<(), ()>("document.getElementById('graph-arrows').click()", None)
+        .await
+        .expect("click arrows toggle");
+    let arrows_after = arrows_btn
+        .get_attribute("class")
+        .await
+        .expect("read arrows class after click")
+        .unwrap_or_default();
+    assert!(
+        !arrows_after.contains("active"),
+        "[{}] clicking Arrows should toggle it off; class still active: {}",
+        browser_name,
+        arrows_after
+    );
+    let persisted = page
+        .evaluate_value("localStorage.getItem('panschema-arrows')")
+        .await
+        .unwrap_or_default();
+    assert!(
+        persisted.contains('0'),
+        "[{}] arrows-off should persist to localStorage as '0'; got: {}",
+        browser_name,
+        persisted
+    );
+    // Restore the default so later steps see the shipped state.
+    page.evaluate::<(), ()>("document.getElementById('graph-arrows').click()", None)
+        .await
+        .expect("restore arrows toggle");
+
     // 10. Verify canvas is present and visible
     let canvas = page.locator("#graph-canvas").await;
     let canvas_count = canvas.count().await.expect("Failed to count canvas");

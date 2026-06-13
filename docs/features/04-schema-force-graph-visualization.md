@@ -560,18 +560,18 @@ These are the questions whose answers currently require a click-to-pin, then scr
 
 ### Slice 15: Per-kind directed edges in 2D (ADR-005)
 
-**Status:** Not Started
+**Status:** ✅ Complete
 
 **Priority:** Should Have
 
 **User Value:** All schema-graph edges are directional and typed (`subclassOf`, `mixin`, `domain`, `range`, `inverse`, `typeOf`), but the renderer draws every one as the same gray line — kind is legible only by reading the text label, and direction is not shown at all. After this slice each edge kind renders with its own line style, arrowhead glyph, and color per [ADR-005](../adr/005-graph-visualization-conventions.md), so an author reads "this is an `is_a` pointing at the parent" at a glance, in grayscale, without parsing the label.
 
 **Acceptance Criteria:**
-- [ ] The 2D Canvas renderer renders each edge kind per ADR-005: `subclassOf` = solid line + **hollow triangle** head at the target (parent); `mixin` = **dashed** line + hollow triangle; `domain` / `range` / `typeOf` = solid line + **filled** arrow; `inverse` = dashed line + filled arrows at **both** ends.
-- [ ] Arrowheads sit on the target node's perimeter (stepped back by the node's rendered radius) and scale with that radius so they stay legible at any zoom without dominating short edges.
-- [ ] Each edge kind has a distinct color from a muted palette keyed to the existing `EDGE_KIND_BLURBS` vocabulary; structural kinds (`is_a`, `mixin`) share a neutral hue. Color is reinforcing only — line style + head shape already distinguish every kind in grayscale.
-- [ ] An "Arrows" toggle in the controls strip hides all heads (direction off) while leaving line style + color; default on, persisted in `localStorage` like the Labels / Focus-on-hover toggles.
-- [ ] Unit test on the arrowhead geometry: the tip lands on the target perimeter and points along the edge (a 2-node `subclassOf` fixture). Plus an E2E test that the Arrows toggle is present, defaults on, and persists.
+- [x] The 2D Canvas renderer renders each edge kind per ADR-005: `subclassOf` = solid line + **hollow triangle** head at the target (parent); `mixin` = **dashed** line + hollow triangle; `domain` / `range` / `typeOf` = solid line + **filled** arrow; `inverse` = dashed line + filled arrows at **both** ends.
+- [x] Arrowheads sit on the target node's perimeter (stepped back by the node's rendered radius) and scale with that radius so they stay legible at any zoom without dominating short edges.
+- [x] Each edge kind has a distinct color from a muted palette keyed to the existing `EDGE_KIND_BLURBS` vocabulary; structural kinds (`is_a`, `mixin`) share a neutral hue. Color is reinforcing only — line style + head shape already distinguish every kind in grayscale.
+- [x] An "Arrows" toggle in the controls strip hides all heads (direction off) while leaving line style + color; default on, persisted in `localStorage` like the Labels / Focus-on-hover toggles.
+- [x] Unit test on the arrowhead geometry: the tip lands on the target perimeter and points along the edge (a 2-node `subclassOf` fixture). Plus an E2E test that the Arrows toggle is present, defaults on, and persists.
 
 **Notes:**
 - Source: friction `[2026-06-06] schema graph draws directed relations as undirected lines`, generalized by ADR-005 from "one uniform arrowhead" to per-kind rendering.
@@ -692,7 +692,7 @@ These are the questions whose answers currently require a click-to-pin, then scr
 | Slice 12: Graph layer consumes the shared slot resolver | Should Have | Slice 11, feature 12 slice 12.1 | ✅ Complete |
 | Slice 13: Hover card surfaces richer IR fields | Nice to Have | Slice 12, feature 12 slices 12.2 / 12.4 | Not Started |
 | Slice 14: Per-class refined slot views + effective-cardinality row | Nice to Have | Slice 12, feature 12 slice 12.3 | ✅ Complete |
-| Slice 15: Per-kind directed edges in 2D (ADR-005) | Should Have | Slice 4, ADR-005 | Not Started |
+| Slice 15: Per-kind directed edges in 2D (ADR-005) | Should Have | Slice 4, ADR-005 | ✅ Complete |
 | Slice 16: Keep the embedded viz bundle fresh in the dogfood loop | Should Have | Slice 4 | ✅ Complete |
 | Slice 16.5: Edge cardinality — crow's-foot on `range` edges (ADR-005) | Should Have | Slice 15, feature 12 slice 12.3 | Not Started |
 | Slice 17: Node shapes by kind in 2D (ADR-005) | Should Have | ADR-005 | Not Started |
