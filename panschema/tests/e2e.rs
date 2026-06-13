@@ -865,6 +865,74 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         .await
         .expect("restore arrows toggle");
 
+    // 9b. Notation legend: the Legend control renders the key onto a
+    // standalone canvas (proving the wasm `render_legend` export ran —
+    // a non-zero backing-store width means it sized and drew), defaults
+    // open on this roomy viewport, and toggles + persists. The glyph
+    // pixels can't be DOM-asserted; this verifies the control contract.
+    let legend_toggle = page.locator("#graph-legend-toggle").await;
+    assert_eq!(
+        legend_toggle.count().await.expect("count legend toggle"),
+        1,
+        "[{}] Legend toggle (#graph-legend-toggle) should render exactly once",
+        browser_name
+    );
+    let legend_canvas_width = page
+        .evaluate_value("document.getElementById('graph-legend-canvas').width")
+        .await
+        .unwrap_or_default();
+    let legend_width: i64 = legend_canvas_width
+        .trim()
+        .trim_matches('"')
+        .parse()
+        .unwrap_or(0);
+    assert!(
+        legend_width > 0,
+        "[{}] legend canvas should be sized by render_legend; width was {}",
+        browser_name,
+        legend_canvas_width
+    );
+    let legend_visible = || async {
+        page.evaluate_value(
+            "getComputedStyle(document.getElementById('graph-legend')).display !== 'none'",
+        )
+        .await
+        .unwrap_or_default()
+        .contains("true")
+    };
+    assert!(
+        legend_visible().await,
+        "[{}] legend should default open on a roomy viewport",
+        browser_name
+    );
+    page.evaluate::<(), ()>(
+        "document.getElementById('graph-legend-toggle').click()",
+        None,
+    )
+    .await
+    .expect("click legend toggle off");
+    assert!(
+        !legend_visible().await,
+        "[{}] clicking Legend should hide the key",
+        browser_name
+    );
+    let legend_persisted = page
+        .evaluate_value("localStorage.getItem('panschema-graph-legend-open')")
+        .await
+        .unwrap_or_default();
+    assert!(
+        legend_persisted.contains("false"),
+        "[{}] legend-closed should persist as 'false'; got: {}",
+        browser_name,
+        legend_persisted
+    );
+    page.evaluate::<(), ()>(
+        "document.getElementById('graph-legend-toggle').click()",
+        None,
+    )
+    .await
+    .expect("restore legend toggle");
+
     // 10. Verify canvas is present and visible
     let canvas = page.locator("#graph-canvas").await;
     let canvas_count = canvas.count().await.expect("Failed to count canvas");

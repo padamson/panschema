@@ -56,6 +56,9 @@
             <button id="graph-arrows" class="graph-btn graph-toggle active" title="Show directed arrowheads on edges (hollow triangle = is_a, filled = domain/range). Turn off when edge density makes them noisy. Click to toggle.">
                 Arrows
             </button>
+            <button id="graph-legend-toggle" class="graph-btn graph-toggle" title="Show the notation key: what each node shape, edge style, and crow's-foot terminator means. Click to toggle." aria-pressed="false">
+                Legend
+            </button>
             <span class="graph-help" id="graph-help-2d">Drag to pan • Scroll to zoom</span>
             <span class="graph-help" id="graph-help-3d" style="display: none;">Drag to orbit • Shift+drag to pan • Scroll to zoom</span>
         </div>
@@ -80,6 +83,13 @@
                 <option value="circular" disabled title="Not yet implemented">Circular (coming soon)</option>
                 <option value="radial-tree" disabled title="Not yet implemented">Radial tree (coming soon)</option>
             </select>
+        </div>
+
+        {# Notation key. Rendered by panschema-viz's own drawing helpers
+           onto this canvas, so the glyphs can't drift from the graph
+           (ADR-005). Toggled via the Legend control. #}
+        <div class="graph-legend" id="graph-legend" style="display: none;" role="img" aria-label="Graph notation key">
+            <canvas id="graph-legend-canvas"></canvas>
         </div>
 
         {# Info overlay #}
@@ -385,6 +395,26 @@
 
 .graph-layout-select option:disabled {
     color: var(--color-text-muted, #9ca3af);
+}
+
+/* Notation key. Pinned bottom-right, out of the way of the top-left
+   controls; scrolls if the graph is shorter than the key. */
+.graph-legend {
+    position: absolute;
+    bottom: var(--spacing-md, 12px);
+    right: var(--spacing-md, 12px);
+    z-index: 10;
+    background: var(--color-bg-secondary, #2d2d44);
+    border: 1px solid var(--color-border, #374151);
+    border-radius: var(--radius-sm, 4px);
+    padding: 4px;
+    max-height: calc(100% - 24px);
+    overflow-y: auto;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.graph-legend canvas {
+    display: block;
 }
 
 /* 3D Labels overlay */
@@ -1683,6 +1713,7 @@
             setupInteraction();
             setupModeToggle();
             setupLayoutPicker();
+            setupLegend();
         } catch (e) {
             // wasm panics arrive as JsValue (often a string), not a JS
             // Error object, so `e.message` is `undefined` for them.
@@ -1850,6 +1881,55 @@
             // already reads the layout via readGraphLayout() at construction.
             await createVisualization(is3D);
             updateModeUI();
+        });
+    }
+
+    // The notation key is rendered once by the wasm helper onto a
+    // standalone canvas (so the glyphs match the graph exactly), then
+    // shown/hidden via the Legend control. Open/closed state persists;
+    // it defaults open on roomy viewports and collapsed on narrow ones.
+    function setupLegend() {
+        const toggle = document.getElementById('graph-legend-toggle');
+        const panel = document.getElementById('graph-legend');
+        const lc = document.getElementById('graph-legend-canvas');
+        // Older bundles predate render_legend — hide the control rather
+        // than expose a button that throws.
+        if (!toggle || !panel || !lc || typeof wasmModule.render_legend !== 'function') {
+            if (toggle) toggle.style.display = 'none';
+            return;
+        }
+
+        const LW = 240, LH = 430;
+        const dpr = window.devicePixelRatio || 1;
+        lc.width = LW * dpr;
+        lc.height = LH * dpr;
+        lc.style.width = LW + 'px';
+        lc.style.height = LH + 'px';
+        // Pre-scale the shared 2d context so the wasm renderer's fixed
+        // logical coordinates come out crisp on HiDPI displays.
+        lc.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
+        try {
+            wasmModule.render_legend(lc);
+        } catch (e) {
+            console.warn('Legend render failed:', e?.message ?? e);
+            toggle.style.display = 'none';
+            return;
+        }
+
+        const KEY = 'panschema-graph-legend-open';
+        const stored = localStorage.getItem(KEY);
+        const narrow = window.matchMedia('(max-width: 640px)').matches;
+        let open = stored === null ? !narrow : stored === 'true';
+        const apply = () => {
+            panel.style.display = open ? 'block' : 'none';
+            toggle.classList.toggle('active', open);
+            toggle.setAttribute('aria-pressed', String(open));
+        };
+        apply();
+        toggle.addEventListener('click', () => {
+            open = !open;
+            localStorage.setItem(KEY, String(open));
+            apply();
         });
     }
 

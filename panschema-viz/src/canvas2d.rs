@@ -52,6 +52,17 @@ fn edge_both_ends(kind: EdgeType) -> bool {
     matches!(kind, EdgeType::Inverse)
 }
 
+/// CSS `rgba(...)` string from a normalized `[r, g, b, a]` color.
+fn rgba(c: [f32; 4]) -> String {
+    format!(
+        "rgba({}, {}, {}, {})",
+        (c[0] * 255.0) as u8,
+        (c[1] * 255.0) as u8,
+        (c[2] * 255.0) as u8,
+        c[3]
+    )
+}
+
 /// Outline shape for a node, encoding its kind (ADR-005).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum NodeShape {
@@ -625,6 +636,140 @@ impl Canvas2DRenderer {
                 let _ = self.ctx.arc(lx, cy, rr, PI / 2.0, PI * 1.5); // left cap
                 self.ctx.close_path();
             }
+        }
+    }
+
+    /// Render the notation key onto a dedicated (small) canvas, using
+    /// the very same helpers the graph uses — `node_path`, `draw_head`,
+    /// `draw_cardinality` — so the legend can't drift from the glyphs it
+    /// documents (ADR-005). Drawn at fixed canvas coordinates with no
+    /// camera transform and no simulation. The caller sizes the canvas
+    /// tall enough to hold every row.
+    pub fn render_legend(&self) {
+        use crate::graph_types::colors;
+        const TEXT: &str = "rgba(232, 232, 244, 0.95)";
+        const HEADER: &str = "rgba(150, 150, 178, 0.95)";
+        const BORDER: &str = "rgba(255, 255, 255, 0.6)";
+        const BODY_FONT: &str = "12px system-ui, -apple-system, sans-serif";
+        const HEADER_FONT: &str = "bold 11px system-ui, -apple-system, sans-serif";
+        let label_x = 64.0;
+        let glyph_x = 26.0;
+        let radius = 9.0;
+        let row = 21.0;
+        let mut y = 18.0;
+
+        self.ctx.set_fill_style_str(CANVAS_BG);
+        self.ctx.fill_rect(
+            0.0,
+            0.0,
+            self.camera.width as f64,
+            self.camera.height as f64,
+        );
+        self.ctx.set_text_baseline("middle");
+
+        // --- Nodes (shape encodes kind) ---
+        self.ctx.set_font(HEADER_FONT);
+        self.ctx.set_fill_style_str(HEADER);
+        let _ = self.ctx.fill_text("Nodes", 12.0, y);
+        y += row;
+        self.ctx.set_font(BODY_FONT);
+        let abstract_class = [
+            colors::CLASS[0],
+            colors::CLASS[1],
+            colors::CLASS[2],
+            colors::ABSTRACT_ALPHA,
+        ];
+        let nodes = [
+            (NodeShape::Circle, rgba(colors::CLASS), "Class", false),
+            (NodeShape::Pill, rgba(colors::SLOT), "Slot", false),
+            (NodeShape::Diamond, rgba(colors::ENUM), "Enum", false),
+            (NodeShape::Rectangle, rgba(colors::TYPE), "Type", false),
+            (
+                NodeShape::Circle,
+                rgba(abstract_class),
+                "Abstract class",
+                true,
+            ),
+        ];
+        for (shape, fill, label, dashed) in &nodes {
+            self.node_path(glyph_x, y, radius, *shape);
+            self.ctx.set_fill_style_str(fill);
+            self.ctx.fill();
+            self.set_dash(*dashed);
+            self.ctx.set_stroke_style_str(BORDER);
+            self.ctx.set_line_width(if *dashed { 1.5 } else { 1.0 });
+            self.ctx.stroke();
+            self.set_dash(false);
+            self.ctx.set_fill_style_str(TEXT);
+            let _ = self.ctx.fill_text(label, label_x, y);
+            y += row;
+        }
+
+        // --- Edges (line style + arrowhead encode the relation) ---
+        y += 6.0;
+        self.ctx.set_font(HEADER_FONT);
+        self.ctx.set_fill_style_str(HEADER);
+        let _ = self.ctx.fill_text("Edges", 12.0, y);
+        y += row;
+        self.ctx.set_font(BODY_FONT);
+        let edges = [
+            (EdgeType::SubclassOf, "is_a (subclass of)"),
+            (EdgeType::Mixin, "mixin"),
+            (EdgeType::Domain, "domain"),
+            (EdgeType::Range, "range"),
+            (EdgeType::Inverse, "inverse of"),
+            (EdgeType::TypeOf, "type of"),
+        ];
+        let (x1, x2) = (12.0, 46.0);
+        for (kind, label) in &edges {
+            let (r, g, b) = edge_rgb(*kind);
+            let color = format!("rgba({r}, {g}, {b}, 0.95)");
+            self.set_dash(edge_dashed(*kind));
+            self.ctx.set_stroke_style_str(&color);
+            self.ctx.set_line_width(1.5);
+            self.ctx.begin_path();
+            self.ctx.move_to(x1, y);
+            self.ctx.line_to(x2, y);
+            self.ctx.stroke();
+            self.set_dash(false);
+            let hollow = edge_hollow_head(*kind);
+            self.draw_head(x1, y, x2 + 6.0, y, 6.0, &color, hollow);
+            if edge_both_ends(*kind) {
+                self.draw_head(x2, y, x1 - 6.0, y, 6.0, &color, hollow);
+            }
+            self.ctx.set_fill_style_str(TEXT);
+            let _ = self.ctx.fill_text(label, label_x, y);
+            y += row;
+        }
+
+        // --- Cardinality (crow's-foot terminators on range edges) ---
+        y += 6.0;
+        self.ctx.set_font(HEADER_FONT);
+        self.ctx.set_fill_style_str(HEADER);
+        let _ = self.ctx.fill_text("Cardinality (range edges)", 12.0, y);
+        y += row;
+        self.ctx.set_font(BODY_FONT);
+        let (cr, cg, cb) = edge_rgb(EdgeType::Range);
+        let ccolor = format!("rgba({cr}, {cg}, {cb}, 0.95)");
+        let cards = [
+            (CardinalityGlyph::MandatoryOne, "1..1  exactly one"),
+            (CardinalityGlyph::OptionalOne, "0..1  at most one"),
+            (CardinalityGlyph::MandatoryMany, "1..*  one or more"),
+            (CardinalityGlyph::OptionalMany, "0..*  any number"),
+        ];
+        let (cx1, tip_x, tr) = (12.0, 40.0, 8.0);
+        for (glyph, label) in &cards {
+            self.set_dash(false);
+            self.ctx.set_stroke_style_str(&ccolor);
+            self.ctx.set_line_width(1.5);
+            self.ctx.begin_path();
+            self.ctx.move_to(cx1, y);
+            self.ctx.line_to(tip_x, y);
+            self.ctx.stroke();
+            self.draw_cardinality(cx1, y, tip_x + tr, y, tr, glyph, &ccolor);
+            self.ctx.set_fill_style_str(TEXT);
+            let _ = self.ctx.fill_text(label, label_x, y);
+            y += row;
         }
     }
 

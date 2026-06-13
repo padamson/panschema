@@ -64,6 +64,17 @@ pub fn recommend_default_layout(graph_json: &str) -> String {
         .unwrap_or_else(|_| layout::LayoutAlgorithm::Sgd.as_str().to_string())
 }
 
+/// Render the notation legend onto a standalone canvas, reusing the
+/// graph's own drawing helpers so the key stays faithful to the
+/// glyphs it documents (ADR-005). The caller sizes the canvas tall
+/// enough for every row.
+#[wasm_bindgen]
+pub fn render_legend(canvas: HtmlCanvasElement) -> Result<(), JsValue> {
+    let renderer = Canvas2DRenderer::new(canvas).map_err(|e| JsValue::from_str(&e))?;
+    renderer.render_legend();
+    Ok(())
+}
+
 /// Check if WebGPU is supported in the current browser
 #[wasm_bindgen]
 pub async fn check_webgpu_support() -> bool {

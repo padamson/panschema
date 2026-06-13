@@ -50,7 +50,7 @@ in `src/gpu/`; the browser code was since split into the
 | WebGPU Browser Target | Medium | ✅ Complete |
 | Text/Label Rendering | Medium | ✅ Complete (slice 5) |
 | Node Selection & Dragging | Medium | 🚧 In progress (slice 6); hover details / focus mode shipped (slices 9–10) |
-| Visual notation — node shapes, per-kind edge glyphs, cardinality | Medium | 🚧 [ADR-005](../adr/005-graph-visualization-conventions.md): edges, cardinality, node shapes, legibility shipped (slices 15, 16.5, 17, 20); legend + 3D open (slices 18–19) |
+| Visual notation — node shapes, per-kind edge glyphs, cardinality | Medium | 🚧 [ADR-005](../adr/005-graph-visualization-conventions.md): edges, cardinality, node shapes, legibility shipped (slices 15, 16.5, 17, 20); legend shipped (slice 18); 3D reduced-form open (slice 19) |
 
 ---
 
@@ -621,19 +621,20 @@ These are the questions whose answers currently require a click-to-pin, then scr
 
 ### Slice 18: Graph legend (ADR-005)
 
-**Status:** Not Started
+**Status:** ✅ Complete
 
 **Priority:** Should Have
 
 **User Value:** The per-kind edge glyphs, crow's-foot cardinality, and node shapes are a learnable notation — but only if the key is in front of the reader. After this slice a collapsible legend maps every glyph to its meaning, so a first-time viewer doesn't have to guess (the convention WebVOWL ships).
 
 **Acceptance Criteria:**
-- [ ] A collapsible legend in/near the graph controls strip maps node shapes, edge-kind line/head styles, and crow's-foot cardinality glyphs to their meanings.
-- [ ] Collapsed by default on narrow viewports; open/closed state persists in `localStorage`.
-- [ ] The legend's glyphs are rendered the same way the graph renders them (shared drawing code or a faithful static rendition) so it can't drift from the actual notation.
+- [x] A `Legend` control in the graph controls strip toggles a key that maps node shapes (Class/Slot/Enum/Type/Abstract), edge-kind line/head styles (is_a, mixin, domain, range, inverse, type-of), and the four crow's-foot cardinality terminators to their meanings.
+- [x] Open/closed state persists in `localStorage` (`panschema-graph-legend-open`); defaults open on roomy viewports and collapsed under 640px.
+- [x] The legend is drawn by the wasm `render_legend` export reusing the graph's own `node_path` / `draw_head` / `draw_cardinality` helpers, so the glyphs can't drift from the actual notation (shared drawing code, not a re-implementation).
 
 **Notes:**
 - Depends on slices 15–17 (the glyphs it documents).
+- The key renders onto a standalone canvas, DPI-scaled for crispness; the e2e asserts the control contract (toggle, persist, non-zero render) since glyph pixels aren't DOM-assertable.
 
 ---
 
@@ -716,7 +717,7 @@ These are the questions whose answers currently require a click-to-pin, then scr
 | Slice 16: Keep the embedded viz bundle fresh in the dogfood loop | Should Have | Slice 4 | ✅ Complete |
 | Slice 16.5: Edge cardinality — crow's-foot on `range` edges (ADR-005) | Should Have | Slice 15, feature 12 slice 12.3 | ✅ Complete |
 | Slice 17: Node shapes by kind in 2D (ADR-005) | Should Have | ADR-005 | ✅ Complete |
-| Slice 18: Graph legend (ADR-005) | Should Have | Slices 15–17 | Not Started |
+| Slice 18: Graph legend (ADR-005) | Should Have | Slices 15–17 | ✅ Complete |
 | Slice 19: 3D reduced-form edges (ADR-005) | Nice to Have | Slice 15, Slices 1–2 | Not Started |
 | Slice 20: Graph legibility — zoom range, proportional glyphs/labels, curved parallel edges | Should Have | Slices 15, 16.5 | ✅ Complete |
 
