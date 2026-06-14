@@ -305,23 +305,41 @@ Existing in-tree CPU force simulation (slice 7 work in [Feature 02](02-core-onto
 
 ### Slice 9: Auto-default to Hierarchical layout for `is_a`-heavy schemas
 
-**Status:** Not Started
+**Status:** ✅ Complete
 
 **Priority:** Should Have
 
 **User Value:** SGD is the right default for general schema topologies, but for schemas dominated by an `is_a` tree (taxonomies, BFO/CCO-grounded ontologies, scimantic-schema's claim spine) the Hierarchical layout shows the inheritance structure much more legibly. Authors of `is_a`-heavy schemas currently have to know to click the picker and select Hierarchical; first impressions go to SGD's force-like splatter. After this slice, panschema computes the schema's `is_a` density at render time and picks the appropriate default — Hierarchical when the tree dominates, SGD otherwise.
 
 **Acceptance Criteria:**
-- [ ] `panschema-viz`'s 2D constructor computes an `is_a` density score: the fraction of edges in the graph whose `edge_type` is `SubclassOf` (or `Mixin`, if mixins should count — decide during impl). Threshold tuning: roughly `≥ 0.5` (half the edges are inheritance) flips the default; below that, SGD stays default. Threshold is a constant with a one-line comment explaining the tuning corpus (scimantic spine vs. mixed-topology examples).
-- [ ] When the threshold flips and the user has not explicitly selected a layout in `localStorage`, panschema-viz initializes the layout to `Hierarchical` instead of `SGD`. The picker reflects the choice as the selected option.
-- [ ] An explicit `html_default_layout` in the manifest overrides the auto-detection — authors who pin their default get exactly what they pinned.
-- [ ] A persisted user choice in `localStorage` overrides the auto-detection — users who picked Force-directed once don't get bumped to Hierarchical when they reload.
-- [ ] Unit test on a synthetic graph with 8 `is_a` edges + 2 range edges: the picker initializes to Hierarchical. Another test on a graph with 2 `is_a` + 8 range: initializes to SGD.
-- [ ] Manual test: scimantic-schema's spine (lots of `is_a`) defaults to Hierarchical; the reference fixture (mixed edges) defaults to SGD.
+- [x] `panschema-viz::layout::recommend_default_layout` computes an inheritance-density score — the fraction of edges whose `edge_type` is `SubclassOf` or `Mixin`. At `≥ 0.5` it returns `Hierarchical`; below, `SGD`. The threshold is a constant with a comment naming the tuning corpus (scimantic spine ≈0.7 vs. the mixed reference fixture ≈0.3). Exposed to JS via the `recommend_default_layout(json)` wasm export.
+- [x] The not-pinned default is the `auto` sentinel (`html_writer` default; `panschema generate` emits it when `--input` has no manifest layout). With no `localStorage` choice and no pinned layout, the JS picker resolves `auto` via the wasm recommendation and selects the result.
+- [x] An explicit `html_default_layout` in the manifest overrides the auto-detection (the picker's `data-default-layout` wins over `auto`).
+- [x] A persisted `localStorage` choice overrides the auto-detection (checked first in `readGraphLayout`).
+- [x] Unit tests: 8 `is_a` + 2 range → Hierarchical; 2 `is_a` + 8 range (and an edgeless graph) → SGD. E2E both directions: the mixed reference fixture auto-detects to SGD, and an `is_a`-heavy `taxonomy.ttl` fixture auto-detects to Hierarchical (proving the recommendation runs end-to-end, not a silent SGD fallback).
+- [x] Manual test (scimantic dogfood): the `is_a`-heavy spine defaults to Hierarchical; the reference fixture defaults to SGD.
 
 **Notes:**
 - Source: friction `[2026-06-06] schema graph does not depict the is_a hierarchy legibly` (severity: annoyance). The note's "Routes to" suggests "consider defaulting [Hierarchical] for `is_a`-heavy schemas" — that's exactly this slice.
 - The threshold is a heuristic, not a contract. If it consistently picks wrong for some schema shape, the manifest's `html_default_layout` override is the escape hatch.
+
+---
+
+### Slice 10: Compact multi-component packing
+
+**Status:** ✅ Complete
+
+**Priority:** Should Have
+
+**User Value:** A schema with several disconnected components (e.g. scimantic's `Act` / `State` / `Claim` `is_a` trees plus isolated classes) rendered as a wide horizontal smear that wasted the vertical space and left each cluster too small to read. The SGD and Stress layouts shelf-pack components into an aspect-shaped rectangle *and then* applied a `√(w/h)` post-stretch — double-applying the aspect bias and over-stretching multi-component graphs horizontally. After this slice the clusters sit compactly and use the vertical space.
+
+**Acceptance Criteria:**
+- [x] In `sgd` and `stress_majorization`, the post-layout `√(w/h)` aspect stretch is applied only for a **single** component; with multiple components the shelf-packer has already biased the arrangement toward the aspect, so the redundant stretch is skipped.
+- [x] Single-component graphs are unchanged (the stretch is their only aspect bias).
+- [x] Existing per-component packing tests (disjoint bounding boxes) still pass.
+
+**Notes:**
+- Source: scimantic-schema dogfood — the three `is_a` trees smeared horizontally with empty vertical space, and clusters were too small to inspect (compounded the zoom/glyph legibility issues fixed in feature 04 slice 20).
 
 ---
 
@@ -337,7 +355,8 @@ Existing in-tree CPU force simulation (slice 7 work in [Feature 02](02-core-onto
 | Slice 6: Hierarchical (Sugiyama) | Should Have | Slice 1 | ✅ Complete |
 | Slice 7: Circular | Could Have | Slice 1 | Not Started |
 | Slice 8: Radial tree | Could Have | Slice 1 | Not Started |
-| Slice 9: Auto-default to Hierarchical for `is_a`-heavy schemas | Should Have | Slice 6 | Not Started |
+| Slice 9: Auto-default to Hierarchical for `is_a`-heavy schemas | Should Have | Slice 6 | ✅ Complete |
+| Slice 10: Compact multi-component packing | Should Have | Slices 4, 5 | ✅ Complete |
 
 **Prerequisite (✓ cleared):** Feature 02 [slice 7](02-core-ontology-documentation.md#slice-7-improve-force-directed-default-so-the-graph-fills-its-viewport) — the force-directed default fills the viewport with legible labels at all 3 scales. The picker can now expose the existing force-directed implementation as the "Force-directed" option without that option spreading a bad reputation across the others.
 

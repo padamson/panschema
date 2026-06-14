@@ -287,8 +287,13 @@ fn generate(
             Some(s) => parse_graph_aspect(s).map_err(|e| anyhow::anyhow!("{}", e))?,
             None => (16, 8),
         };
-        let layout = html_default_layout.unwrap_or("force-directed");
-        validate_layout_name(layout).map_err(|e| anyhow::anyhow!("{}", e))?;
+        // `auto` is the not-pinned sentinel: the viz picks a default
+        // from the graph's inheritance density at render time. An
+        // explicit manifest layout still validates and pins.
+        let layout = html_default_layout.unwrap_or("auto");
+        if layout != "auto" {
+            validate_layout_name(layout).map_err(|e| anyhow::anyhow!("{}", e))?;
+        }
         let mut writer = HtmlWriter::with_options(include_graph)
             .with_graph_aspect(aw, ah)
             .with_default_layout(layout);

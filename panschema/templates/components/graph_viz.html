@@ -53,6 +53,12 @@
             <button id="graph-focus-on-hover" class="graph-btn graph-toggle active" title="Hover a node to highlight it plus its 1-hop and 2-hop neighbors; the rest of the graph dims. Click to toggle.">
                 Focus on hover
             </button>
+            <button id="graph-arrows" class="graph-btn graph-toggle active" title="Show directed arrowheads on edges (hollow triangle = is_a, filled = domain/range). Turn off when edge density makes them noisy. Click to toggle.">
+                Arrows
+            </button>
+            <button id="graph-legend-toggle" class="graph-btn graph-toggle" title="Show the notation key: what each node shape, edge style, and crow's-foot terminator means. Click to toggle." aria-pressed="false">
+                Legend
+            </button>
             <span class="graph-help" id="graph-help-2d">Drag to pan • Scroll to zoom</span>
             <span class="graph-help" id="graph-help-3d" style="display: none;">Drag to orbit • Shift+drag to pan • Scroll to zoom</span>
         </div>
@@ -77,6 +83,13 @@
                 <option value="circular" disabled title="Not yet implemented">Circular (coming soon)</option>
                 <option value="radial-tree" disabled title="Not yet implemented">Radial tree (coming soon)</option>
             </select>
+        </div>
+
+        {# Notation key. Rendered by panschema-viz's own drawing helpers
+           onto this canvas, so the glyphs can't drift from the graph
+           (ADR-005). Toggled via the Legend control. #}
+        <div class="graph-legend" id="graph-legend" style="display: none;" role="img" aria-label="Graph notation key">
+            <canvas id="graph-legend-canvas"></canvas>
         </div>
 
         {# Info overlay #}
@@ -384,6 +397,26 @@
     color: var(--color-text-muted, #9ca3af);
 }
 
+/* Notation key. Pinned bottom-right, out of the way of the top-left
+   controls; scrolls if the graph is shorter than the key. */
+.graph-legend {
+    position: absolute;
+    bottom: var(--spacing-md, 12px);
+    right: var(--spacing-md, 12px);
+    z-index: 10;
+    background: var(--color-bg-secondary, #2d2d44);
+    border: 1px solid var(--color-border, #374151);
+    border-radius: var(--radius-sm, 4px);
+    padding: 4px;
+    max-height: calc(100% - 24px);
+    overflow-y: auto;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.graph-legend canvas {
+    display: block;
+}
+
 /* 3D Labels overlay */
 .graph-labels-overlay {
     position: absolute;
@@ -589,6 +622,21 @@
     font-style: italic;
 }
 
+/* Permissible-value chips with a description carry a tooltip; the
+   dotted underline signals there's more on hover. */
+.graph-hover-pv[title] {
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+    cursor: help;
+}
+
+/* The `?` next to an unexpanded IRI — a muted, help-cursored marker. */
+.graph-hover-unresolved {
+    color: var(--color-text-muted, #9ca3af);
+    font-weight: 700;
+    cursor: help;
+}
+
 /* Hide the hover card on coarse-pointer (touch) inputs — there's no
    hover concept; the slice-6 tap-to-select flow still works. */
 @media (pointer: coarse) {
@@ -674,6 +722,36 @@
         });
     }
 
+    // Directed-edge arrowheads (ADR-005): the toggle hides all heads
+    // for dense graphs; line style + color still distinguish kinds.
+    // State lives in the WASM viz (defaults on); the pref is pushed to
+    // it on init via applyArrowsPref().
+    const arrowsBtn = document.getElementById('graph-arrows');
+    const ARROWS_PREF_KEY = 'panschema-arrows';
+    let arrowsEnabled = true;
+    try {
+        const stored = localStorage.getItem(ARROWS_PREF_KEY);
+        if (stored !== null) arrowsEnabled = stored === '1';
+    } catch (e) { /* localStorage may be unavailable */ }
+    if (arrowsBtn) {
+        arrowsBtn.classList.toggle('active', arrowsEnabled);
+        arrowsBtn.addEventListener('click', () => {
+            arrowsEnabled = !arrowsEnabled;
+            arrowsBtn.classList.toggle('active', arrowsEnabled);
+            try { localStorage.setItem(ARROWS_PREF_KEY, arrowsEnabled ? '1' : '0'); }
+            catch (e) { /* ignore */ }
+            if (viz && typeof viz.set_arrows === 'function') {
+                viz.set_arrows(arrowsEnabled);
+            }
+        });
+    }
+    // Push the persisted arrows pref into a freshly-created viz.
+    function applyArrowsPref() {
+        if (viz && typeof viz.set_arrows === 'function') {
+            viz.set_arrows(arrowsEnabled);
+        }
+    }
+
     // Apply focus state given the currently-hovered node. Skips
     // redundant WASM calls when the hover target hasn't changed
     // since the last frame. The 2D path uses viz.hovered_node_index;
@@ -736,6 +814,13 @@
         const tmp = document.createElement('span');
         tmp.textContent = String(s ?? '');
         return tmp.innerHTML;
+    }
+
+    // Attribute-safe escape: like escapeForText but also escapes the
+    // quote characters, so values (regex patterns, descriptions) can
+    // sit inside double-quoted HTML attributes without breaking out.
+    function escapeForAttr(s) {
+        return escapeForText(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
     // Cap how many items we show before collapsing to "+N more"; longer
@@ -816,6 +901,11 @@
         } else if (km.kind === 'slot') {
             if (km.domain) rows += renderHoverRow('Domain', escapeForText(km.domain));
             if (km.range)  rows += renderHoverRow('Range',  escapeForText(km.range));
+            // A polymorphic range lists its member ranges; supplements
+            // the single Range row above.
+            if (Array.isArray(km.anyOf) && km.anyOf.length) {
+                rows += renderHoverRow('Any of', renderHoverList(km.anyOf));
+            }
             // Combine the cardinality facts into one row so the card
             // stays compact. Absent flags read as false on the wire
             // (serde skips defaults), so guard with `=== true`;
@@ -823,16 +913,44 @@
             const cardBits = [];
             if (km.required === true)    cardBits.push('required');
             if (km.multivalued === true) cardBits.push('multi-valued');
+            if (km.identifier === true)  cardBits.push('identifier');
             if (km.min != null || km.max != null) {
                 cardBits.push((km.min != null ? km.min : '0') + '..' + (km.max != null ? km.max : '*'));
             }
             if (cardBits.length) rows += renderHoverRow('Cardinality', escapeForText(cardBits.join(', ')));
+            // The full regex can be long; truncate with the complete
+            // value in a native tooltip.
+            if (km.pattern) {
+                const full = km.pattern;
+                const shown = full.length > 40 ? full.slice(0, 40) + '…' : full;
+                rows += renderHoverRow('Pattern',
+                    '<span title="' + escapeForAttr(full) + '">' + escapeForText(shown) + '</span>');
+            }
         } else if (km.kind === 'enum') {
             if (km.permissibleValues && km.permissibleValues.length) {
-                rows += renderHoverRow('Values', renderHoverList(km.permissibleValues));
+                rows += renderHoverRow('Values', renderHoverEnumValues(km.permissibleValues));
             }
         }
         return rows;
+    }
+
+    // Enum permissible values: each value's text, with its description
+    // (when present) in a native tooltip and the curie-expanded meaning
+    // IRI on a `data-meaning` attribute for future click-to-jump. Same
+    // "+N more" overflow cap as the other lists.
+    function renderHoverEnumValues(values) {
+        if (!Array.isArray(values) || values.length === 0) return '';
+        const shown = values.slice(0, HOVER_LIST_LIMIT).map(function (v) {
+            if (typeof v === 'string') return escapeForText(v);   // legacy payloads
+            let attrs = '';
+            if (v.description) attrs += ' title="' + escapeForAttr(v.description) + '"';
+            if (v.meaning) attrs += ' data-meaning="' + escapeForAttr(v.meaning) + '"';
+            return '<span class="graph-hover-pv"' + attrs + '>' + escapeForText(v.text) + '</span>';
+        }).join(', ');
+        if (values.length > HOVER_LIST_LIMIT) {
+            return shown + ' <span class="graph-hover-more">+' + (values.length - HOVER_LIST_LIMIT) + ' more</span>';
+        }
+        return shown;
     }
 
     // Short, author-readable gloss for each LinkML edge kind. Looked
@@ -898,8 +1016,14 @@
                     // schema-internal ID is often the only thing
                     // we have.
                     if (d.uri) {
+                        // A `?` flags a curie whose prefix the schema
+                        // didn't declare, so it couldn't be expanded to
+                        // a full IRI.
+                        const unresolved = d.uriUnresolved
+                            ? ' <span class="graph-hover-unresolved" title="Prefix not declared in the schema — IRI could not be expanded">?</span>'
+                            : '';
                         rows += '<div class="graph-hover-row"><span class="graph-hover-key">IRI:</span>'
-                            + '<span class="graph-hover-value graph-hover-value-id">' + escapeForText(d.uri) + '</span></div>';
+                            + '<span class="graph-hover-value graph-hover-value-id">' + escapeForText(d.uri) + unresolved + '</span></div>';
                     }
                     rows += '<div class="graph-hover-row"><span class="graph-hover-key">Connections:</span>'
                         + '<span class="graph-hover-value">' + connCount + '</span></div>';
@@ -1363,13 +1487,24 @@
             && IMPLEMENTED_LAYOUTS.has(fromAttr) && layoutSupportsMode(fromAttr, is3D)) {
             return fromAttr;
         }
-        // When the user hasn't picked a layout and the manifest didn't
-        // set `html_default_layout`, fall back to SGD — visibly the
-        // best quality-per-time for typical schema graphs (cleaner
-        // cluster separation than force-directed, comparable to
-        // stress at lower init cost). In 3D mode the picker upstream
-        // routes to force-directed since SGD is 2D-only.
-        return is3D ? 'force-directed' : 'sgd';
+        // Not pinned (manifest emits `auto`) and no persisted choice:
+        // auto-detect from the graph's inheritance density. The viz
+        // recommends Hierarchical for `is_a`-heavy schemas, SGD
+        // otherwise. 3D is force-directed only (static layouts are
+        // 2D-only). Falls back to SGD if the recommendation is
+        // unavailable (wasm not ready / parse error).
+        if (is3D) {
+            return 'force-directed';
+        }
+        if (wasmModule && typeof wasmModule.recommend_default_layout === 'function' && graphData) {
+            try {
+                const rec = wasmModule.recommend_default_layout(JSON.stringify(graphData));
+                if (IMPLEMENTED_LAYOUTS.has(rec) && layoutSupportsMode(rec, is3D)) {
+                    return rec;
+                }
+            } catch (e) { /* fall through to sgd */ }
+        }
+        return 'sgd';
     }
 
     function applyLayoutPickerMode(is3D) {
@@ -1639,6 +1774,7 @@
             setupInteraction();
             setupModeToggle();
             setupLayoutPicker();
+            setupLegend();
         } catch (e) {
             // wasm panics arrive as JsValue (often a string), not a JS
             // Error object, so `e.message` is `undefined` for them.
@@ -1722,6 +1858,9 @@
         // Apply saved label preferences
         applyLabelPrefs();
 
+        // Apply saved arrowheads preference
+        applyArrowsPref();
+
         // Update label button states
         updateLabelButtonStates();
 
@@ -1803,6 +1942,55 @@
             // already reads the layout via readGraphLayout() at construction.
             await createVisualization(is3D);
             updateModeUI();
+        });
+    }
+
+    // The notation key is rendered once by the wasm helper onto a
+    // standalone canvas (so the glyphs match the graph exactly), then
+    // shown/hidden via the Legend control. Open/closed state persists;
+    // it defaults open on roomy viewports and collapsed on narrow ones.
+    function setupLegend() {
+        const toggle = document.getElementById('graph-legend-toggle');
+        const panel = document.getElementById('graph-legend');
+        const lc = document.getElementById('graph-legend-canvas');
+        // Older bundles predate render_legend — hide the control rather
+        // than expose a button that throws.
+        if (!toggle || !panel || !lc || typeof wasmModule.render_legend !== 'function') {
+            if (toggle) toggle.style.display = 'none';
+            return;
+        }
+
+        const LW = 240, LH = 430;
+        const dpr = window.devicePixelRatio || 1;
+        lc.width = LW * dpr;
+        lc.height = LH * dpr;
+        lc.style.width = LW + 'px';
+        lc.style.height = LH + 'px';
+        // Pre-scale the shared 2d context so the wasm renderer's fixed
+        // logical coordinates come out crisp on HiDPI displays.
+        lc.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
+        try {
+            wasmModule.render_legend(lc);
+        } catch (e) {
+            console.warn('Legend render failed:', e?.message ?? e);
+            toggle.style.display = 'none';
+            return;
+        }
+
+        const KEY = 'panschema-graph-legend-open';
+        const stored = localStorage.getItem(KEY);
+        const narrow = window.matchMedia('(max-width: 640px)').matches;
+        let open = stored === null ? !narrow : stored === 'true';
+        const apply = () => {
+            panel.style.display = open ? 'block' : 'none';
+            toggle.classList.toggle('active', open);
+            toggle.setAttribute('aria-pressed', String(open));
+        };
+        apply();
+        toggle.addEventListener('click', () => {
+            open = !open;
+            localStorage.setItem(KEY, String(open));
+            apply();
         });
     }
 

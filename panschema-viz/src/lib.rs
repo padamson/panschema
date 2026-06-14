@@ -47,6 +47,34 @@ pub fn init() {
     console_error_panic_hook::set_once();
 }
 
+/// Recommend the 2D default layout for a graph (canonical identifier
+/// string) from its inheritance density — `is_a`-heavy schemas get
+/// `hierarchical`, mixed-edge schemas `sgd`. The JS layer calls this
+/// when neither a persisted user choice nor a manifest
+/// `html_default_layout` pins the layout. Malformed JSON falls back to
+/// `sgd`.
+#[wasm_bindgen]
+pub fn recommend_default_layout(graph_json: &str) -> String {
+    serde_json::from_str::<GraphData>(graph_json)
+        .map(|graph| {
+            layout::recommend_default_layout(&graph)
+                .as_str()
+                .to_string()
+        })
+        .unwrap_or_else(|_| layout::LayoutAlgorithm::Sgd.as_str().to_string())
+}
+
+/// Render the notation legend onto a standalone canvas, reusing the
+/// graph's own drawing helpers so the key stays faithful to the
+/// glyphs it documents (ADR-005). The caller sizes the canvas tall
+/// enough for every row.
+#[wasm_bindgen]
+pub fn render_legend(canvas: HtmlCanvasElement) -> Result<(), JsValue> {
+    let renderer = Canvas2DRenderer::new(canvas).map_err(|e| JsValue::from_str(&e))?;
+    renderer.render_legend();
+    Ok(())
+}
+
 /// Check if WebGPU is supported in the current browser
 #[wasm_bindgen]
 pub async fn check_webgpu_support() -> bool {
@@ -81,6 +109,11 @@ pub struct Visualization {
     /// force-directed → yes (so other nodes adjust); static → no
     /// (only the dragged node moves; rest of layout is preserved).
     is_static_layout: bool,
+    /// Draw an arrowhead at each edge's target end. Every schema-graph
+    /// edge is directional; the arrowheads make direction readable
+    /// without parsing the label. Toggleable (edge-dense graphs read
+    /// cleaner without them); defaults on.
+    show_arrows: bool,
 }
 
 #[wasm_bindgen]
@@ -171,6 +204,7 @@ impl Visualization {
             hovered_node: None,
             hovered_edge: None,
             is_static_layout,
+            show_arrows: true,
         })
     }
 
@@ -207,6 +241,7 @@ impl Visualization {
             self.interaction.focused_node,
             &focused_connected,
             &hidden_nodes,
+            self.show_arrows,
         );
     }
 
@@ -347,6 +382,16 @@ impl Visualization {
     /// Check if edge labels are visible
     pub fn show_edge_labels(&self) -> bool {
         self.labels.show_edge_labels()
+    }
+
+    /// Toggle directed-edge arrowheads on/off.
+    pub fn set_arrows(&mut self, visible: bool) {
+        self.show_arrows = visible;
+    }
+
+    /// Whether directed-edge arrowheads are drawn.
+    pub fn show_arrows(&self) -> bool {
+        self.show_arrows
     }
 
     /// Check if all labels are enabled (master toggle)
@@ -660,6 +705,7 @@ pub(crate) fn build_node_details_json(
         "type": node_type,
         "isAbstract": node.is_abstract,
         "uri": node.uri,
+        "uriUnresolved": node.uri_unresolved,
         "description": node.description,
         "isFixed": is_fixed,
         "connections": connections,
@@ -736,7 +782,10 @@ fn node_type_string(color: &[f32; 4]) -> &'static str {
 #[cfg(test)]
 mod details_json_tests {
     use super::*;
-    use crate::graph_types::{EdgeType, GraphEdge, GraphNode, KindMetadata, NodeType, SlotSummary};
+    use crate::graph_types::{
+        EdgeType, GraphEdge, GraphNode, KindMetadata, NodeType, PermissibleValueSummary,
+        SlotSummary,
+    };
     use crate::simulation::{SimEdge, SimNode};
 
     fn make_class_node(id: &str, label: &str) -> SimNode {
@@ -748,6 +797,7 @@ mod details_json_tests {
                 color: NodeType::Class.color(),
                 description: None,
                 uri: None,
+                uri_unresolved: false,
                 is_abstract: false,
                 kind_metadata: None,
             },
@@ -771,6 +821,7 @@ mod details_json_tests {
                 color: NodeType::Class.color(),
                 description: description.map(|s| s.to_string()),
                 uri: uri.map(|s| s.to_string()),
+                uri_unresolved: false,
                 is_abstract,
                 kind_metadata: None,
             },
@@ -891,6 +942,7 @@ mod details_json_tests {
                     color: NodeType::Class.color(),
                     description: None,
                     uri: None,
+                    uri_unresolved: false,
                     is_abstract: false,
                     kind_metadata: None,
                 },
@@ -901,6 +953,7 @@ mod details_json_tests {
                     color: NodeType::Class.color(),
                     description: None,
                     uri: None,
+                    uri_unresolved: false,
                     is_abstract: false,
                     kind_metadata: None,
                 },
@@ -929,12 +982,21 @@ mod details_json_tests {
                 color: NodeType::Class.color(),
                 description: None,
                 uri: None,
+                uri_unresolved: false,
                 is_abstract: false,
                 kind_metadata: Some(kind),
             },
             0,
             1,
         )
+    }
+
+    fn pv(text: &str, description: Option<&str>, meaning: Option<&str>) -> PermissibleValueSummary {
+        PermissibleValueSummary {
+            text: text.to_string(),
+            description: description.map(str::to_string),
+            meaning: meaning.map(str::to_string),
+        }
     }
 
     #[test]
@@ -1020,6 +1082,9 @@ mod details_json_tests {
                 multivalued: false,
                 min: None,
                 max: None,
+                pattern: Some("^[A-Z]".into()),
+                identifier: true,
+                any_of: vec!["Person".into(), "Organization".into()],
             },
         );
         let json: serde_json::Value =
@@ -1032,6 +1097,9 @@ mod details_json_tests {
         // `multivalued: false` is skipped by serde to keep the wire
         // small; the JS card treats absent as `false`.
         assert!(km.get("multivalued").is_none());
+        assert_eq!(km["pattern"], "^[A-Z]");
+        assert_eq!(km["identifier"], true);
+        assert_eq!(km["anyOf"], serde_json::json!(["Person", "Organization"]));
     }
 
     #[test]
@@ -1044,7 +1112,11 @@ mod details_json_tests {
             "enum:Severity",
             "Severity",
             KindMetadata::Enum {
-                permissible_values: vec!["low".into(), "medium".into(), "high".into()],
+                permissible_values: vec![
+                    pv("low", None, None),
+                    pv("medium", Some("Moderate severity"), None),
+                    pv("high", None, Some("ex:High")),
+                ],
             },
         );
         let json: serde_json::Value =
@@ -1053,9 +1125,13 @@ mod details_json_tests {
         assert_eq!(km["kind"], "enum");
         let pvs = km["permissibleValues"].as_array().unwrap();
         assert_eq!(pvs.len(), 3);
-        assert_eq!(pvs[0], "low");
-        assert_eq!(pvs[1], "medium");
-        assert_eq!(pvs[2], "high");
+        assert_eq!(pvs[0]["text"], "low");
+        // `description` / `meaning` are omitted when absent.
+        assert!(pvs[0].get("description").is_none());
+        assert_eq!(pvs[1]["text"], "medium");
+        assert_eq!(pvs[1]["description"], "Moderate severity");
+        assert_eq!(pvs[2]["text"], "high");
+        assert_eq!(pvs[2]["meaning"], "ex:High");
     }
 
     #[test]

@@ -330,41 +330,77 @@ pub fn stress_majorization(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> V
         .map(|c| c.width.max(c.height))
         .fold(0.0_f32, f32::max);
     let component_gap = (max_dim * 0.05).max(1.0);
+    // Singletons (and 2-node lines) have a ~0×0 — or zero-height — bbox.
+    // Without a floor the shelf-packer strings them into a single
+    // zero-height row that wastes all the vertical space (a thin
+    // horizontal smear). Give every component a minimum *square* cell so
+    // isolated nodes grid up into a compact 2D block instead of a line.
+    let min_cell = (max_dim * 0.12).max(component_gap * 2.0);
+    let cell = |c: &LaidOut| (c.width.max(min_cell), c.height.max(min_cell));
     let total_area: f32 = laid
         .iter()
-        .map(|c| c.width.max(1.0) * c.height.max(1.0))
+        .map(|c| {
+            let (w, h) = cell(c);
+            w * h
+        })
         .sum();
-    let target_row_width = (total_area * aspect_w / aspect_h).sqrt().max(100.0);
+    // Floor the row width at the widest component (not an absolute
+    // constant) so the target tracks the layout's own coordinate scale —
+    // a fixed floor that exceeds the content forces everything onto one
+    // row and re-creates the horizontal smear.
+    let target_row_width = (total_area * aspect_w / aspect_h).sqrt().max(max_dim);
 
     let mut positions: Vec<(f32, f32)> = vec![(0.0, 0.0); graph.nodes.len()];
     let mut row_x = 0.0_f32;
     let mut row_y = 0.0_f32;
     let mut row_height = 0.0_f32;
     for c in &laid {
-        if row_x > 0.0 && row_x + c.width > target_row_width {
+        let (cw, ch) = cell(c);
+        if row_x > 0.0 && row_x + cw > target_row_width {
             row_y += row_height + component_gap;
             row_x = 0.0;
             row_height = 0.0;
         }
+        // Center each component's own bbox within its (possibly larger)
+        // cell so a singleton sits in the middle of its grid slot.
+        let off_x = row_x + (cw - c.width) / 2.0;
+        let off_y = row_y + (ch - c.height) / 2.0;
         for (sub_pos, &node_index) in c.positions.iter().zip(c.component.iter()) {
             let id = pg[node_index].as_str();
             if let Some(&out_idx) = id_to_node_idx.get(id) {
-                positions[out_idx] = (sub_pos.0 + row_x, sub_pos.1 + row_y);
+                positions[out_idx] = (sub_pos.0 + off_x, sub_pos.1 + off_y);
             }
         }
-        row_x += c.width + component_gap;
-        row_height = row_height.max(c.height);
+        row_x += cw + component_gap;
+        row_height = row_height.max(ch);
     }
 
-    // The shelf-packer already targets aspect_w : aspect_h via the row-
-    // width formula, so the post-process `√(w/h)` aspect bias is what
-    // pushes the rendered bbox the rest of the way toward the requested
-    // aspect, matching the convention of the other static layouts.
-    let sx = (aspect_w / aspect_h).sqrt();
-    let sy = (aspect_h / aspect_w).sqrt();
-    for p in positions.iter_mut() {
-        p.0 *= sx;
-        p.1 *= sy;
+    // Correct the *realized* bounding-box aspect toward the target,
+    // area-preserving — see the matching note in `sgd`. The shelf-packer
+    // tends to come out near-square; measuring the realized aspect and
+    // stretching by `√(target / realized)` lands it on the target
+    // without the double-apply smear a blind `√(target)` stretch caused.
+    let (mut min_x, mut max_x, mut min_y, mut max_y) = (
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+    );
+    for &(x, y) in &positions {
+        min_x = min_x.min(x);
+        max_x = max_x.max(x);
+        min_y = min_y.min(y);
+        max_y = max_y.max(y);
+    }
+    let (bw, bh) = (max_x - min_x, max_y - min_y);
+    if bw > f32::EPSILON && bh > f32::EPSILON && aspect_w > 0.0 && aspect_h > 0.0 {
+        let realized = bw / bh;
+        let target = aspect_w / aspect_h;
+        let s = (target / realized).sqrt();
+        for p in positions.iter_mut() {
+            p.0 *= s;
+            p.1 /= s;
+        }
     }
 
     positions
@@ -553,40 +589,118 @@ pub fn sgd(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> Vec<(f32, f32)> {
         .map(|c| c.width.max(c.height))
         .fold(0.0_f32, f32::max);
     let component_gap = (max_dim * 0.05).max(1.0);
+    // Singletons (and 2-node lines) have a ~0×0 — or zero-height — bbox.
+    // Without a floor the shelf-packer strings them into a single
+    // zero-height row that wastes all the vertical space (a thin
+    // horizontal smear). Give every component a minimum *square* cell so
+    // isolated nodes grid up into a compact 2D block instead of a line.
+    let min_cell = (max_dim * 0.12).max(component_gap * 2.0);
+    let cell = |c: &LaidOut| (c.width.max(min_cell), c.height.max(min_cell));
     let total_area: f32 = laid
         .iter()
-        .map(|c| c.width.max(1.0) * c.height.max(1.0))
+        .map(|c| {
+            let (w, h) = cell(c);
+            w * h
+        })
         .sum();
-    let target_row_width = (total_area * aspect_w / aspect_h).sqrt().max(100.0);
+    // Floor the row width at the widest component (not an absolute
+    // constant) so the target tracks the layout's own coordinate scale —
+    // a fixed floor that exceeds the content forces everything onto one
+    // row and re-creates the horizontal smear.
+    let target_row_width = (total_area * aspect_w / aspect_h).sqrt().max(max_dim);
 
     let mut positions: Vec<(f32, f32)> = vec![(0.0, 0.0); graph.nodes.len()];
     let mut row_x = 0.0_f32;
     let mut row_y = 0.0_f32;
     let mut row_height = 0.0_f32;
     for c in &laid {
-        if row_x > 0.0 && row_x + c.width > target_row_width {
+        let (cw, ch) = cell(c);
+        if row_x > 0.0 && row_x + cw > target_row_width {
             row_y += row_height + component_gap;
             row_x = 0.0;
             row_height = 0.0;
         }
+        // Center each component's own bbox within its (possibly larger)
+        // cell so a singleton sits in the middle of its grid slot.
+        let off_x = row_x + (cw - c.width) / 2.0;
+        let off_y = row_y + (ch - c.height) / 2.0;
         for (sub_pos, &node_index) in c.positions.iter().zip(c.component.iter()) {
             let id = pg[node_index].as_str();
             if let Some(&out_idx) = id_to_node_idx.get(id) {
-                positions[out_idx] = (sub_pos.0 + row_x, sub_pos.1 + row_y);
+                positions[out_idx] = (sub_pos.0 + off_x, sub_pos.1 + off_y);
             }
         }
-        row_x += c.width + component_gap;
-        row_height = row_height.max(c.height);
+        row_x += cw + component_gap;
+        row_height = row_height.max(ch);
     }
 
-    let sx = (aspect_w / aspect_h).sqrt();
-    let sy = (aspect_h / aspect_w).sqrt();
-    for p in positions.iter_mut() {
-        p.0 *= sx;
-        p.1 *= sy;
+    // Correct the *realized* bounding-box aspect toward the target,
+    // area-preserving. The shelf-packer gets the arrangement roughly
+    // right, but with a big component plus many singletons it tends to
+    // come out near-square (narrower than the target), leaving the wide
+    // canvas mostly empty. Measuring the realized aspect and stretching
+    // by `√(target / realized)` lands it on the target for both single-
+    // and multi-component graphs — and is a no-op when already on
+    // target, so it can't double-apply into a horizontal smear the way a
+    // blind `√(target)` stretch did.
+    let (mut min_x, mut max_x, mut min_y, mut max_y) = (
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+    );
+    for &(x, y) in &positions {
+        min_x = min_x.min(x);
+        max_x = max_x.max(x);
+        min_y = min_y.min(y);
+        max_y = max_y.max(y);
+    }
+    let (bw, bh) = (max_x - min_x, max_y - min_y);
+    if bw > f32::EPSILON && bh > f32::EPSILON && aspect_w > 0.0 && aspect_h > 0.0 {
+        let realized = bw / bh;
+        let target = aspect_w / aspect_h;
+        let s = (target / realized).sqrt();
+        for p in positions.iter_mut() {
+            p.0 *= s;
+            p.1 /= s;
+        }
     }
 
     positions
+}
+
+/// Recommend the 2D default layout from the graph's inheritance
+/// density: the fraction of edges that are `subclass_of` or `mixin`.
+/// When at least half the edges are inheritance, the graph is a tree
+/// at heart and the Hierarchical (Sugiyama) layout shows that
+/// structure far more legibly than SGD's force-like placement; below
+/// the threshold SGD stays the general-purpose default.
+///
+/// The 0.5 threshold is tuned against the two ends of the corpus:
+/// scimantic's `is_a`-heavy claim spine (≈0.7 inheritance → wants
+/// Hierarchical) versus the mixed-edge reference fixture (≈0.3 → wants
+/// SGD). It's a heuristic, not a contract — `html_default_layout` (and
+/// a persisted user choice) override it.
+pub fn recommend_default_layout(graph: &GraphData) -> LayoutAlgorithm {
+    let total = graph.edges.len();
+    if total == 0 {
+        return LayoutAlgorithm::Sgd;
+    }
+    let inheritance = graph
+        .edges
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.edge_type,
+                crate::graph_types::EdgeType::SubclassOf | crate::graph_types::EdgeType::Mixin
+            )
+        })
+        .count();
+    if inheritance as f32 / total as f32 >= 0.5 {
+        LayoutAlgorithm::Hierarchical
+    } else {
+        LayoutAlgorithm::Sgd
+    }
 }
 
 /// Run SGD on a single connected component. Returns
@@ -948,6 +1062,68 @@ mod tests {
 
     use crate::graph_types::{EdgeType, GraphEdge, GraphNode, NodeType};
 
+    /// Build a graph with `is_a` (subclass_of) and `range` edges in the
+    /// given counts (nodes are placeholders) to exercise the layout
+    /// recommendation's inheritance-density threshold.
+    fn graph_with_edge_mix(is_a: usize, range: usize) -> GraphData {
+        let n = is_a + range + 1;
+        let nodes = (0..n)
+            .map(|i| GraphNode {
+                id: format!("n{i}"),
+                label: format!("N{i}"),
+                node_type: NodeType::Class,
+                color: [1.0, 0.0, 0.0, 1.0],
+                description: None,
+                uri: None,
+                uri_unresolved: false,
+                is_abstract: false,
+                kind_metadata: None,
+            })
+            .collect();
+        let mut edges = Vec::new();
+        for i in 0..is_a {
+            edges.push(GraphEdge {
+                source: format!("n{}", i + 1),
+                target: "n0".to_string(),
+                edge_type: EdgeType::SubclassOf,
+                label: None,
+            });
+        }
+        for i in 0..range {
+            edges.push(GraphEdge {
+                source: format!("n{}", is_a + i + 1),
+                target: "n0".to_string(),
+                edge_type: EdgeType::Range,
+                label: None,
+            });
+        }
+        GraphData {
+            schema_name: "mix".to_string(),
+            schema_title: None,
+            nodes,
+            edges,
+            format_version: "1.0".to_string(),
+        }
+    }
+
+    #[test]
+    fn recommends_hierarchical_for_is_a_heavy_graph() {
+        // 8 subclass_of + 2 range → 0.8 inheritance → Hierarchical.
+        let g = graph_with_edge_mix(8, 2);
+        assert_eq!(recommend_default_layout(&g), LayoutAlgorithm::Hierarchical);
+    }
+
+    #[test]
+    fn recommends_sgd_for_reference_heavy_graph() {
+        // 2 subclass_of + 8 range → 0.2 inheritance → SGD.
+        let g = graph_with_edge_mix(2, 8);
+        assert_eq!(recommend_default_layout(&g), LayoutAlgorithm::Sgd);
+        // Edgeless graph also defaults to SGD (no signal).
+        let mut empty = graph_with_edge_mix(0, 0);
+        empty.edges.clear();
+        assert_eq!(recommend_default_layout(&empty), LayoutAlgorithm::Sgd);
+    }
+
     fn make_ring(n: usize) -> GraphData {
         let nodes = (0..n)
             .map(|i| GraphNode {
@@ -957,6 +1133,7 @@ mod tests {
                 color: [1.0, 0.0, 0.0, 1.0],
                 description: None,
                 uri: None,
+                uri_unresolved: false,
                 is_abstract: false,
                 kind_metadata: None,
             })
@@ -988,6 +1165,7 @@ mod tests {
                 color: [1.0, 0.0, 0.0, 1.0],
                 description: None,
                 uri: None,
+                uri_unresolved: false,
                 is_abstract: false,
                 kind_metadata: None,
             })
@@ -1115,6 +1293,7 @@ mod tests {
                 color: [1.0, 1.0, 1.0, 1.0],
                 description: None,
                 uri: None,
+                uri_unresolved: false,
                 is_abstract: false,
                 kind_metadata: None,
             });
@@ -1241,6 +1420,7 @@ mod tests {
                 color: [1.0, 1.0, 1.0, 1.0],
                 description: None,
                 uri: None,
+                uri_unresolved: false,
                 is_abstract: false,
                 kind_metadata: None,
             });
@@ -1322,6 +1502,7 @@ mod tests {
                 color: [1.0, 1.0, 1.0, 1.0],
                 description: None,
                 uri: None,
+                uri_unresolved: false,
                 is_abstract: false,
                 kind_metadata: None,
             });
@@ -1342,6 +1523,46 @@ mod tests {
         assert!(
             dist > 0.5,
             "2-node orphan component must separate; got distance {dist} between n4 and n5"
+        );
+    }
+
+    #[test]
+    fn sgd_grids_isolated_nodes_into_a_2d_block() {
+        // The shape scimantic hits mid-build: a sizeable connected
+        // component plus many isolated class nodes. The singletons must
+        // grid into a 2D block that uses vertical space — not smear into
+        // a single zero-height row (which is what a 0×0 packing footprint
+        // produced before the min-cell floor). Regression guard.
+        let graph = make_lopsided(20, 16);
+        let positions = sgd(&graph, 1.0, 1.0);
+        assert_eq!(positions.len(), 36);
+
+        // Isolated nodes are appended after the connected ring, so they
+        // are indices 20..36.
+        let iso = &positions[20..];
+        let (mut min_x, mut max_x, mut min_y, mut max_y) = (
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+        );
+        for &(x, y) in iso {
+            min_x = min_x.min(x);
+            max_x = max_x.max(x);
+            min_y = min_y.min(y);
+            max_y = max_y.max(y);
+        }
+        let (w, h) = (max_x - min_x, max_y - min_y);
+        assert!(
+            h > 0.0,
+            "isolated nodes must span vertical space, not a flat row (w={w}, h={h})"
+        );
+        // A block, not a 1-D line: the 16 singletons wrap across multiple
+        // rows so the spread isn't lopsidedly horizontal.
+        assert!(
+            w / h < 8.0,
+            "isolated block should be roughly 2D, got {w}x{h} (ratio {})",
+            w / h
         );
     }
 
@@ -1564,6 +1785,7 @@ mod tests {
                 color: [1.0, 0.0, 0.0, 1.0],
                 description: None,
                 uri: None,
+                uri_unresolved: false,
                 is_abstract: false,
                 kind_metadata: None,
             })
@@ -1647,6 +1869,7 @@ mod tests {
                 color: [1.0, 0.0, 0.0, 1.0],
                 description: None,
                 uri: None,
+                uri_unresolved: false,
                 is_abstract: false,
                 kind_metadata: None,
             })
@@ -1809,6 +2032,7 @@ mod tests {
                 color: [1.0, 0.0, 0.0, 1.0],
                 description: None,
                 uri: None,
+                uri_unresolved: false,
                 is_abstract: false,
                 kind_metadata: None,
             });

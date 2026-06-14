@@ -811,6 +811,128 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         hover_card_classes
     );
 
+    // 9c. The Arrows toggle (slice 15 / ADR-005) ships in the
+    // controls strip, defaults on, and persists its off-state to
+    // localStorage. Direction is drawn on the WASM canvas, which a
+    // DOM test can't pixel-assert; this verifies the control contract.
+    let arrows_btn = page.locator("#graph-arrows").await;
+    assert_eq!(
+        arrows_btn.count().await.expect("count arrows toggle"),
+        1,
+        "[{}] Arrows toggle (#graph-arrows) should render exactly once",
+        browser_name
+    );
+    let arrows_default_active = arrows_btn
+        .get_attribute("class")
+        .await
+        .expect("read arrows class")
+        .unwrap_or_default()
+        .contains("active");
+    assert!(
+        arrows_default_active,
+        "[{}] Arrows toggle should default to active (arrowheads on)",
+        browser_name
+    );
+    // Click programmatically: the strip sits over the WASM canvas, so
+    // pointer-actionability is flaky in headless; the handler + the
+    // persisted pref are the contract this verifies.
+    page.evaluate::<(), ()>("document.getElementById('graph-arrows').click()", None)
+        .await
+        .expect("click arrows toggle");
+    let arrows_after = arrows_btn
+        .get_attribute("class")
+        .await
+        .expect("read arrows class after click")
+        .unwrap_or_default();
+    assert!(
+        !arrows_after.contains("active"),
+        "[{}] clicking Arrows should toggle it off; class still active: {}",
+        browser_name,
+        arrows_after
+    );
+    let persisted = page
+        .evaluate_value("localStorage.getItem('panschema-arrows')")
+        .await
+        .unwrap_or_default();
+    assert!(
+        persisted.contains('0'),
+        "[{}] arrows-off should persist to localStorage as '0'; got: {}",
+        browser_name,
+        persisted
+    );
+    // Restore the default so later steps see the shipped state.
+    page.evaluate::<(), ()>("document.getElementById('graph-arrows').click()", None)
+        .await
+        .expect("restore arrows toggle");
+
+    // 9b. Notation legend: the Legend control renders the key onto a
+    // standalone canvas (proving the wasm `render_legend` export ran —
+    // a non-zero backing-store width means it sized and drew), defaults
+    // open on this roomy viewport, and toggles + persists. The glyph
+    // pixels can't be DOM-asserted; this verifies the control contract.
+    let legend_toggle = page.locator("#graph-legend-toggle").await;
+    assert_eq!(
+        legend_toggle.count().await.expect("count legend toggle"),
+        1,
+        "[{}] Legend toggle (#graph-legend-toggle) should render exactly once",
+        browser_name
+    );
+    let legend_canvas_width = page
+        .evaluate_value("document.getElementById('graph-legend-canvas').width")
+        .await
+        .unwrap_or_default();
+    let legend_width: i64 = legend_canvas_width
+        .trim()
+        .trim_matches('"')
+        .parse()
+        .unwrap_or(0);
+    assert!(
+        legend_width > 0,
+        "[{}] legend canvas should be sized by render_legend; width was {}",
+        browser_name,
+        legend_canvas_width
+    );
+    let legend_visible = || async {
+        page.evaluate_value(
+            "getComputedStyle(document.getElementById('graph-legend')).display !== 'none'",
+        )
+        .await
+        .unwrap_or_default()
+        .contains("true")
+    };
+    assert!(
+        legend_visible().await,
+        "[{}] legend should default open on a roomy viewport",
+        browser_name
+    );
+    page.evaluate::<(), ()>(
+        "document.getElementById('graph-legend-toggle').click()",
+        None,
+    )
+    .await
+    .expect("click legend toggle off");
+    assert!(
+        !legend_visible().await,
+        "[{}] clicking Legend should hide the key",
+        browser_name
+    );
+    let legend_persisted = page
+        .evaluate_value("localStorage.getItem('panschema-graph-legend-open')")
+        .await
+        .unwrap_or_default();
+    assert!(
+        legend_persisted.contains("false"),
+        "[{}] legend-closed should persist as 'false'; got: {}",
+        browser_name,
+        legend_persisted
+    );
+    page.evaluate::<(), ()>(
+        "document.getElementById('graph-legend-toggle').click()",
+        None,
+    )
+    .await
+    .expect("restore legend toggle");
+
     // 10. Verify canvas is present and visible
     let canvas = page.locator("#graph-canvas").await;
     let canvas_count = canvas.count().await.expect("Failed to count canvas");
@@ -1109,15 +1231,18 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         "[{}] Layout picker <select> should exist",
         browser_name
     );
-    // Default selection from html_writer should be `force-directed`,
-    // which is also the only currently-implemented option.
+    // The writer emits the `auto` not-pinned default, so the picker's
+    // initial value is the density-based recommendation. The reference
+    // fixture is mixed-edge (subclass_of + domain/range/inverse), below
+    // the inheritance threshold, so it auto-detects to `sgd` (feature
+    // 09 slice 9). An `is_a`-heavy schema would recommend hierarchical.
     let initial_value = layout_select
         .input_value(None)
         .await
         .expect("Failed to read layout select value");
     assert_eq!(
-        initial_value, "force-directed",
-        "[{}] Layout picker initial value should be force-directed; got `{}`",
+        initial_value, "sgd",
+        "[{}] mixed-edge reference fixture should auto-detect to sgd; got `{}`",
         browser_name, initial_value
     );
     // Implemented options are present and selectable; the rest are
@@ -1363,6 +1488,54 @@ fn e2e_happy_path() {
         }
 
         // Cleanup
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
+// Proves the layout auto-default end-to-end (feature 09 slice 9): an
+// is_a-heavy schema, with no layout pinned and no persisted choice,
+// must initialize the picker to `hierarchical` via the wasm density
+// recommendation. The reference-fixture happy-path asserts the SGD
+// side; this asserts the Hierarchical side, so SGD-for-a-real-schema
+// is known to be a real recommendation, not a silent fallback.
+#[test]
+fn e2e_is_a_heavy_schema_auto_defaults_to_hierarchical() {
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
+    rt.block_on(async {
+        let output_dir = generate_docs_for("tests/fixtures/taxonomy.ttl");
+        let port = find_available_port();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch()
+            .await
+            .expect("Failed to initialize Playwright");
+        let browser = playwright
+            .chromium()
+            .launch()
+            .await
+            .expect("Failed to launch Chromium");
+        let page = browser.new_page().await.expect("Failed to create page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("navigate");
+        // Give the wasm module time to load and the picker to settle.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let select = page.locator("#graph-layout-select").await;
+        let value = select
+            .input_value(None)
+            .await
+            .expect("read layout select value");
+        assert_eq!(
+            value, "hierarchical",
+            "an is_a-heavy schema should auto-detect to hierarchical; got `{}`",
+            value
+        );
+        browser.close().await.expect("close browser");
         let _ = shutdown_tx.send(());
         let _ = server_handle.await;
         let _ = fs::remove_dir_all(output_dir);

@@ -34,21 +34,33 @@ pub enum LabelStoreError {
     Serialize(#[from] serde_json::Error),
 }
 
-/// Label + definition for one upstream term. Either field may be
-/// absent — an ontology can label a term without defining it and
-/// vice versa.
+/// Label + definitional annotations for one upstream term. Both may
+/// be absent — an ontology can label a term without defining it and
+/// vice versa. `definitions` collects *every* distinct definitional
+/// annotation the term carries (a definition, a description, a
+/// comment, an example), not just one: upstream terms often spread
+/// useful context across several predicates (e.g. CiTO puts the
+/// definition in `rdfs:comment` and an example in `dc:description`),
+/// and a reader grounding against the term wants all of it.
+// `deny_unknown_fields` makes the fail-open migration work across
+// value-shape changes: a cache file from before this field was
+// `definitions` (it had a singular `definition`) now fails to parse,
+// is skipped on load, and refetches in the new shape — the same
+// self-heal that covers pre-definition flat `{iri: label}` files.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TermInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub definition: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub definitions: Vec<String>,
 }
 
-/// On-disk term cache: one JSON `{iri: {label, definition}}` map per
-/// upstream source URL. Pre-definition cache files (flat
-/// `{iri: label}`) fail to parse, get skipped, and refetch on the
-/// next run — the fail-open path doubles as format migration.
+/// On-disk term cache: one JSON `{iri: {label, definitions}}` map per
+/// upstream source URL. Cache files in any older value shape (flat
+/// `{iri: label}`, or the singular `{iri: {label, definition}}`) fail
+/// to parse, get skipped, and refetch on the next run — the fail-open
+/// path doubles as format migration.
 pub struct LabelStore {
     cache_dir: PathBuf,
     /// Loaded term maps keyed by cache-file stem (sha256 hex of the
@@ -226,11 +238,16 @@ pub const BUILTIN_LABEL_SOURCES: &[(&str, &str)] = &[
 /// Extract `{subject IRI → TermInfo}` from an RDF document — Turtle
 /// first, falling back to RDF/XML (OBO PURLs serve the latter).
 ///
-/// Labels: `rdfs:label` wins over `skos:prefLabel`. Definitions:
-/// `skos:definition` (CCO) > `IAO:0000115` (OBO/BFO) >
-/// `dc:description` > `rdfs:comment` (CiTO / W3C vocabularies).
-/// Within each predicate, `@en` or untagged literals win and other
-/// languages are ignored.
+/// Labels: `rdfs:label` wins over `skos:prefLabel` (single value).
+/// Definitions: *every* distinct `@en`-or-untagged literal across
+/// `skos:definition`, `IAO:0000115`, `rdfs:comment`, and
+/// `dc:description` is collected, in that order — not just the
+/// first. Ontologies spread context across these predicates (CiTO,
+/// for one, puts the definition in `rdfs:comment` and an `"Example:
+/// …"` in `dc:description`), so showing all of them gives the reader
+/// the full picture instead of an arbitrary single pick. The order
+/// puts the more definitional predicates first; `dc:description`
+/// trails because it's the one most often used for examples.
 pub fn extract_terms(rdf: &str) -> Result<BTreeMap<String, TermInfo>, LabelExtractError> {
     use sophia::api::prelude::TripleSource;
     use sophia::inmem::graph::FastGraph;
@@ -251,16 +268,14 @@ pub fn extract_terms(rdf: &str) -> Result<BTreeMap<String, TermInfo>, LabelExtra
     const DEFINITION_PREDICATES: &[&str] = &[
         "http://www.w3.org/2004/02/skos/core#definition",
         "http://purl.obolibrary.org/obo/IAO_0000115",
-        "http://purl.org/dc/elements/1.1/description",
         "http://www.w3.org/2000/01/rdf-schema#comment",
+        "http://purl.org/dc/elements/1.1/description",
     ];
 
     let mut out: BTreeMap<String, TermInfo> = BTreeMap::new();
     collect_first_literal(&graph, LABEL_PREDICATES, &mut out, |info| &mut info.label);
-    collect_first_literal(&graph, DEFINITION_PREDICATES, &mut out, |info| {
-        &mut info.definition
-    });
-    out.retain(|_, info| info.label.is_some() || info.definition.is_some());
+    collect_all_literals(&graph, DEFINITION_PREDICATES, &mut out);
+    out.retain(|_, info| info.label.is_some() || !info.definitions.is_empty());
     Ok(out)
 }
 
@@ -294,6 +309,46 @@ fn collect_first_literal(
                 let slot = field(info);
                 if slot.is_none() {
                     *slot = Some(value.to_string());
+                }
+            }
+        }
+    }
+}
+
+/// For each subject, collect *every* distinct `@en`-or-untagged
+/// literal across `predicates` into `TermInfo::definitions`, in
+/// predicate order (then graph order within a predicate). Exact
+/// duplicates are dropped so a value asserted under two predicates
+/// appears once.
+fn collect_all_literals(
+    graph: &sophia::inmem::graph::FastGraph,
+    predicates: &[&str],
+    out: &mut BTreeMap<String, TermInfo>,
+) {
+    use sophia::api::graph::Graph;
+    use sophia::api::term::Term;
+    use sophia::api::triple::Triple;
+
+    for predicate in predicates {
+        for triple in graph.triples().flatten() {
+            if triple.p().iri().is_none_or(|i| i.as_str() != *predicate) {
+                continue;
+            }
+            let english_or_untagged = triple
+                .o()
+                .language_tag()
+                .is_none_or(|tag| tag.as_str().eq_ignore_ascii_case("en"));
+            if !english_or_untagged {
+                continue;
+            }
+            if let (Some(subject), Some(value)) = (triple.s().iri(), triple.o().lexical_form()) {
+                let defs = &mut out
+                    .entry(subject.as_str().to_string())
+                    .or_default()
+                    .definitions;
+                let value = value.to_string();
+                if !defs.contains(&value) {
+                    defs.push(value);
                 }
             }
         }
@@ -399,7 +454,7 @@ mod tests {
     fn term(label: &str) -> TermInfo {
         TermInfo {
             label: Some(label.to_string()),
-            definition: None,
+            definitions: Vec::new(),
         }
     }
 
@@ -490,6 +545,32 @@ mod tests {
     }
 
     #[test]
+    fn old_singular_definition_cache_file_is_skipped_and_refetches() {
+        // A cache file from before `definitions` (singular `definition`
+        // key) must fail to parse via `deny_unknown_fields`, be skipped
+        // on load, and leave the source uncached so it re-fetches in
+        // the new shape — not load with the definition silently lost.
+        let dir = temp_cache_dir("old_def_shape");
+        fs::create_dir_all(&dir).unwrap();
+        let url = "https://example.org/cco.ttl";
+        let old_format = r#"{"https://www.commoncoreontologies.org/ont00000958":{"label":"Process","definition":"old singular"}}"#;
+        fs::write(dir.join(format!("{}.json", source_key(url))), old_format).unwrap();
+
+        let store = LabelStore::open(&dir).unwrap();
+        assert!(
+            !store.has_source(url),
+            "old-shape file skipped on load, so the source is uncached and will refetch"
+        );
+        assert!(
+            store
+                .lookup("https://www.commoncoreontologies.org/ont00000958")
+                .is_none(),
+            "no partial load of the stale shape"
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn extract_terms_prefers_rdfs_label_and_falls_back_to_skos() {
         let ttl = r#"
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
@@ -559,11 +640,12 @@ ex:Untagged rdfs:label "Entity" .
     }
 
     #[test]
-    fn extract_terms_collects_definitions_with_skos_priority() {
+    fn extract_terms_collects_all_definitional_annotations() {
         let ttl = r#"
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix skos: <http://www.w3.org/2004/02/skos/core#> .
 @prefix obo: <http://purl.obolibrary.org/obo/> .
+@prefix dc: <http://purl.org/dc/elements/1.1/> .
 @prefix ex: <http://example.org/> .
 
 ex:CcoStyle rdfs:label "Process" ;
@@ -571,32 +653,50 @@ ex:CcoStyle rdfs:label "Process" ;
     rdfs:comment "Lower-priority gloss." .
 ex:OboStyle rdfs:label "continuant" ;
     obo:IAO_0000115 "An entity that persists through time." .
-ex:CitoStyle rdfs:label "supports" ;
-    rdfs:comment "One claim bears positively on another." .
+ex:CitoStyle rdfs:label "disputes" ;
+    dc:description "Example: We doubt that Galileo is right." ;
+    rdfs:comment "The citing entity disputes the cited entity." .
 ex:DefinitionOnly skos:definition "Defined but unlabeled." .
 "#;
         let terms = extract_terms(ttl).unwrap();
-        let def_of = |iri: &str| terms.get(iri).and_then(|t| t.definition.as_deref());
+        let defs_of = |iri: &str| {
+            terms
+                .get(iri)
+                .map(|t| t.definitions.clone())
+                .unwrap_or_default()
+        };
+
+        // Every distinct annotation is collected, not just the first.
         assert_eq!(
-            def_of("http://example.org/CcoStyle"),
-            Some("A series of events."),
-            "skos:definition wins over rdfs:comment"
+            defs_of("http://example.org/CcoStyle"),
+            vec![
+                "A series of events.".to_string(),
+                "Lower-priority gloss.".to_string()
+            ],
+            "skos:definition and rdfs:comment both kept, definition first"
         );
         assert_eq!(
-            def_of("http://example.org/OboStyle"),
-            Some("An entity that persists through time.")
+            defs_of("http://example.org/OboStyle"),
+            vec!["An entity that persists through time.".to_string()]
         );
+        // The CiTO shape: dc:description holds an example, rdfs:comment
+        // the real definition. Both are shown, comment (definition)
+        // before description (example) per the predicate order.
         assert_eq!(
-            def_of("http://example.org/CitoStyle"),
-            Some("One claim bears positively on another.")
+            defs_of("http://example.org/CitoStyle"),
+            vec![
+                "The citing entity disputes the cited entity.".to_string(),
+                "Example: We doubt that Galileo is right.".to_string()
+            ],
+            "rdfs:comment (definition) ordered before dc:description (example)"
         );
         // A definition without a label still produces an entry —
         // the tooltip is useful even when the link text stays a CURIE.
         let unlabeled = terms.get("http://example.org/DefinitionOnly").unwrap();
         assert!(unlabeled.label.is_none());
         assert_eq!(
-            unlabeled.definition.as_deref(),
-            Some("Defined but unlabeled.")
+            unlabeled.definitions,
+            vec!["Defined but unlabeled.".to_string()]
         );
     }
 

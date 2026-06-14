@@ -3,6 +3,20 @@
 //! This module contains pure calculation logic that can be unit tested
 //! without browser dependencies.
 
+/// Zoom bounds. The max is generous (40×) so an author can zoom right
+/// into one cluster of a multi-component schema to read edge glyphs
+/// (arrowheads, crow's-feet) and labels; the min lets a widely-spread
+/// graph fit-to-bounds without clipping.
+const MIN_SCALE: f32 = 0.05;
+const MAX_SCALE: f32 = 40.0;
+
+/// Fraction of the canvas height kept clear (split between top and
+/// bottom) when fitting the graph, so the control bars overlaid on the
+/// canvas — the 2D/3D + Layout selector along the top and the
+/// Reset / zoom / toggle strip along the bottom — don't sit on top of
+/// nodes and labels.
+const CONTROL_BAR_RESERVE_FRAC: f32 = 0.14;
+
 /// Camera state for 2D view transformations
 #[derive(Debug, Clone)]
 pub struct Camera2D {
@@ -106,7 +120,7 @@ impl Camera2D {
     /// Zoom the view by factor (1.1 = zoom in 10%, 0.9 = zoom out 10%)
     pub fn zoom(&mut self, factor: f32) {
         self.scale *= factor;
-        self.scale = self.scale.clamp(0.1, 10.0);
+        self.scale = self.scale.clamp(MIN_SCALE, MAX_SCALE);
         // Also update target to prevent animation fighting
         self.target_scale = self.scale;
     }
@@ -131,14 +145,17 @@ impl Camera2D {
         let graph_width = bounds.width();
         let graph_height = bounds.height();
 
-        // Calculate the available canvas area (with padding)
-        let available_width = self.width - 2.0 * padding;
-        let available_height = self.height - 2.0 * padding;
+        // Calculate the available canvas area (with padding). Vertically,
+        // also reserve room for the overlaid top/bottom control bars so
+        // the graph never renders underneath them.
+        let available_width = (self.width - 2.0 * padding).max(1.0);
+        let available_height =
+            (self.height - 2.0 * padding - self.height * CONTROL_BAR_RESERVE_FRAC).max(1.0);
 
         // Calculate scale to fit the graph
         let scale_x = available_width / graph_width;
         let scale_y = available_height / graph_height;
-        self.target_scale = scale_x.min(scale_y).clamp(0.1, 10.0);
+        self.target_scale = scale_x.min(scale_y).clamp(MIN_SCALE, MAX_SCALE);
 
         // Set target offset to center the graph
         self.target_offset_x = -bounds.center_x();
@@ -309,10 +326,10 @@ mod tests {
     #[test]
     fn zoom_clamps_to_bounds() {
         let mut cam = Camera2D::new(800.0, 600.0);
-        cam.zoom(0.01); // Try to zoom out too far
-        assert_eq!(cam.scale, 0.1); // Clamped to minimum
-        cam.zoom(1000.0); // Try to zoom in too far: 0.1 * 1000 = 100
-        assert_eq!(cam.scale, 10.0); // Clamped to maximum
+        cam.zoom(0.001); // Try to zoom out too far
+        assert_eq!(cam.scale, MIN_SCALE); // Clamped to minimum (0.05)
+        cam.zoom(100000.0); // Try to zoom in too far
+        assert_eq!(cam.scale, MAX_SCALE); // Clamped to maximum (40×)
     }
 
     #[test]
@@ -422,6 +439,36 @@ mod tests {
         // Available area is (800-100)x(600-100) = 700x500
         // Scale should be min(700/200, 500/100) = min(3.5, 5) = 3.5
         assert_eq!(cam.target_scale, 3.5);
+    }
+
+    #[test]
+    fn fit_to_bounds_reserves_vertical_room_for_control_bars() {
+        // A tall (height-constrained) graph must be scaled to leave a
+        // margin for the overlaid top/bottom control bars, not fit
+        // edge-to-edge. Portrait canvas so the vertical axis constrains.
+        let mut cam = Camera2D::new(600.0, 800.0);
+        let bounds = BoundingBox {
+            min_x: 0.0,
+            max_x: 100.0,
+            min_y: 0.0,
+            max_y: 700.0,
+        };
+        cam.fit_to_bounds(&bounds, 0.0);
+
+        // Naive height-fit (no reserve) would be 800/700; the reserve
+        // shrinks the available height, so the chosen scale is smaller.
+        let naive_scale_y = 800.0 / 700.0;
+        assert!(
+            cam.target_scale < naive_scale_y,
+            "reserve should shrink the fit scale below naive height-fit; got {}",
+            cam.target_scale
+        );
+        // The rendered graph height fits within the reserved area.
+        let rendered_h = 700.0 * cam.target_scale;
+        assert!(
+            rendered_h <= 800.0 * (1.0 - CONTROL_BAR_RESERVE_FRAC) + 1.0,
+            "rendered height {rendered_h} must fit within the control-reserved area"
+        );
     }
 
     #[test]

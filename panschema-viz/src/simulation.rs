@@ -22,6 +22,9 @@ pub struct SimNode {
     /// the hover card so the IRI under which the entity is
     /// canonically known is visible without click-to-pin.
     pub uri: Option<String>,
+    /// `true` when `uri` is a curie whose prefix wasn't declared, so it
+    /// couldn't be expanded; the hover card marks it with a `?`.
+    pub uri_unresolved: bool,
     /// `true` for LinkML classes with `abstract: true`. The hover
     /// card surfaces this with an "abstract" badge so authors can see
     /// at a glance which classes are meant as intermediates and
@@ -60,6 +63,7 @@ impl SimNode {
             label: node.label.clone(),
             description: node.description.clone(),
             uri: node.uri.clone(),
+            uri_unresolved: node.uri_unresolved,
             is_abstract: node.is_abstract,
             kind_metadata: node.kind_metadata.clone(),
             x: radius * angle.cos(),
@@ -652,6 +656,7 @@ mod tests {
                     color: [1.0, 0.0, 0.0, 1.0],
                     description: None,
                     uri: None,
+                    uri_unresolved: false,
                     is_abstract: false,
                     kind_metadata: None,
                 },
@@ -662,6 +667,7 @@ mod tests {
                     color: [0.0, 1.0, 0.0, 1.0],
                     description: None,
                     uri: None,
+                    uri_unresolved: false,
                     is_abstract: false,
                     kind_metadata: None,
                 },
@@ -737,6 +743,7 @@ mod tests {
                 color: [1.0, 0.0, 0.0, 1.0],
                 description: None,
                 uri: None,
+                uri_unresolved: false,
                 is_abstract: false,
                 kind_metadata: None,
             }],
@@ -777,6 +784,7 @@ mod tests {
                     color: [1.0, 0.0, 0.0, 1.0],
                     description: None,
                     uri: None,
+                    uri_unresolved: false,
                     is_abstract: false,
                     kind_metadata: None,
                 },
@@ -787,6 +795,7 @@ mod tests {
                     color: [0.0, 1.0, 0.0, 1.0],
                     description: None,
                     uri: None,
+                    uri_unresolved: false,
                     is_abstract: false,
                     kind_metadata: None,
                 },
@@ -836,6 +845,7 @@ mod tests {
                     color: [1.0, 0.0, 0.0, 1.0],
                     description: None,
                     uri: None,
+                    uri_unresolved: false,
                     is_abstract: false,
                     kind_metadata: None,
                 },
@@ -846,6 +856,7 @@ mod tests {
                     color: [0.0, 1.0, 0.0, 1.0],
                     description: None,
                     uri: None,
+                    uri_unresolved: false,
                     is_abstract: false,
                     kind_metadata: None,
                 },
@@ -892,6 +903,7 @@ mod tests {
                     color: [1.0, 0.0, 0.0, 1.0],
                     description: None,
                     uri: None,
+                    uri_unresolved: false,
                     is_abstract: false,
                     kind_metadata: None,
                 },
@@ -902,6 +914,7 @@ mod tests {
                     color: [0.0, 1.0, 0.0, 1.0],
                     description: None,
                     uri: None,
+                    uri_unresolved: false,
                     is_abstract: false,
                     kind_metadata: None,
                 },
@@ -939,6 +952,7 @@ mod tests {
                     color: [1.0, 0.0, 0.0, 1.0],
                     description: None,
                     uri: None,
+                    uri_unresolved: false,
                     is_abstract: false,
                     kind_metadata: None,
                 },
@@ -949,6 +963,7 @@ mod tests {
                     color: [0.0, 1.0, 0.0, 1.0],
                     description: None,
                     uri: None,
+                    uri_unresolved: false,
                     is_abstract: false,
                     kind_metadata: None,
                 },
@@ -987,6 +1002,7 @@ mod tests {
                 color: [1.0, 0.0, 0.0, 1.0],
                 description: None,
                 uri: None,
+                uri_unresolved: false,
                 is_abstract: false,
                 kind_metadata: None,
             }],
@@ -1022,6 +1038,7 @@ mod tests {
                     color: [1.0, 0.0, 0.0, 1.0],
                     description: None,
                     uri: None,
+                    uri_unresolved: false,
                     is_abstract: false,
                     kind_metadata: None,
                 })
@@ -1063,6 +1080,7 @@ mod tests {
                 color: [1.0, 0.0, 0.0, 1.0],
                 description: None,
                 uri: None,
+                uri_unresolved: false,
                 is_abstract: false,
                 kind_metadata: None,
             })
@@ -1097,6 +1115,7 @@ mod tests {
                 color: [1.0, 0.0, 0.0, 1.0],
                 description: None,
                 uri: None,
+                uri_unresolved: false,
                 is_abstract: false,
                 kind_metadata: None,
             })

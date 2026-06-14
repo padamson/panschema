@@ -88,9 +88,16 @@ pub struct GraphNode {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 
-    /// Optional URI for linking
+    /// Optional URI for linking. A curie with a declared prefix is
+    /// expanded to the full IRI here; see [`GraphNode::uri_unresolved`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uri: Option<String>,
+
+    /// True when `uri` is a curie whose prefix isn't declared in the
+    /// schema, so it couldn't be expanded — the hover card surfaces it
+    /// verbatim with a `?` indicator.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub uri_unresolved: bool,
 
     /// Whether this is an abstract class (visual indicator)
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -130,7 +137,10 @@ pub enum KindMetadata {
     },
     /// Resolved view of a LinkML slot. `required` / `multivalued`
     /// are the effective-cardinality reconciliation of the bool
-    /// flags with the explicit `min` / `max` bounds.
+    /// flags with the explicit `min` / `max` bounds. `pattern`,
+    /// `identifier`, and `any_of` (the element ranges of a
+    /// polymorphic range) surface the constraint fields authors
+    /// edit most.
     Slot {
         #[serde(skip_serializing_if = "Option::is_none")]
         domain: Option<String>,
@@ -144,9 +154,32 @@ pub enum KindMetadata {
         min: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pattern: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        identifier: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        any_of: Vec<String>,
     },
-    /// Permissible values for a LinkML enum, in declaration order.
-    Enum { permissible_values: Vec<String> },
+    /// Permissible values for a LinkML enum, in declaration order —
+    /// each with its optional description and curie-expanded
+    /// `meaning` IRI.
+    Enum {
+        permissible_values: Vec<PermissibleValueSummary>,
+    },
+}
+
+/// One permissible value of an enum in the hover card: the value
+/// text plus the optional `description` (tooltip) and curie-expanded
+/// `meaning` IRI (for future click-to-jump affordances).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissibleValueSummary {
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meaning: Option<String>,
 }
 
 /// One slot in a class's resolved view, carrying the effective
@@ -205,6 +238,25 @@ pub struct GraphEdge {
 /// distinguishes a class's own slots from flattened ones; each
 /// entry carries the slot's effective shape, not the global
 /// un-refined definition.
+/// Resolve a node's URI for display via [`expand_curie`], which keeps
+/// full IRIs (`http(s)://`, `urn:`) verbatim, expands a known
+/// `prefix:local` curie against the schema's prefixes, and expands a
+/// bare name against the default prefix. When it can't resolve — an
+/// unrecognised prefix, or a bare name with no default prefix — the
+/// value is surfaced verbatim and flagged so the hover marks it `?`.
+/// Returns `(display_uri, unresolved)`.
+///
+/// [`expand_curie`]: crate::linkml_resolve::expand_curie
+fn resolve_node_uri(schema: &SchemaDefinition, uri: Option<&str>) -> (Option<String>, bool) {
+    match uri {
+        None => (None, false),
+        Some(v) => match crate::linkml_resolve::expand_curie(schema, v) {
+            Some(full) => (Some(full), false),
+            None => (Some(v.to_string()), true),
+        },
+    }
+}
+
 fn resolve_class_slots(schema: &SchemaDefinition, class_name: &str) -> Vec<SlotSummary> {
     let Some(class_def) = schema.classes.get(class_name) else {
         return Vec::new();
@@ -452,13 +504,15 @@ impl GraphWriter {
                 mixins: class_def.mixins.clone(),
             });
 
+            let (uri, uri_unresolved) = resolve_node_uri(schema, class_def.class_uri.as_deref());
             graph.nodes.push(GraphNode {
                 id: format!("class:{}", name),
                 label,
                 node_type: NodeType::Class,
                 color,
                 description: class_def.description.clone(),
-                uri: class_def.class_uri.clone(),
+                uri,
+                uri_unresolved,
                 is_abstract: class_def.r#abstract,
                 kind_metadata,
             });
@@ -502,15 +556,24 @@ impl GraphWriter {
                 multivalued: cardinality.multivalued,
                 min: cardinality.min,
                 max: cardinality.max,
+                pattern: slot_def.pattern.clone(),
+                identifier: slot_def.identifier,
+                any_of: slot_def
+                    .any_of
+                    .iter()
+                    .filter_map(|s| s.range.clone())
+                    .collect(),
             });
 
+            let (uri, uri_unresolved) = resolve_node_uri(schema, slot_def.slot_uri.as_deref());
             graph.nodes.push(GraphNode {
                 id: format!("slot:{}", name),
                 label,
                 node_type: NodeType::Slot,
                 color: NodeType::Slot.color(),
                 description: slot_def.description.clone(),
-                uri: slot_def.slot_uri.clone(),
+                uri,
+                uri_unresolved,
                 is_abstract: false,
                 kind_metadata,
             });
@@ -575,9 +638,19 @@ impl GraphWriter {
     /// Add enum nodes
     fn add_enums(&self, schema: &SchemaDefinition, graph: &mut GraphData) {
         for (name, enum_def) in &schema.enums {
-            let kind_metadata = Some(KindMetadata::Enum {
-                permissible_values: enum_def.permissible_values.keys().cloned().collect(),
-            });
+            let permissible_values = enum_def
+                .permissible_values
+                .iter()
+                .map(|(text, pv)| PermissibleValueSummary {
+                    text: text.clone(),
+                    description: pv.description.clone(),
+                    meaning: pv.meaning.as_deref().map(|m| {
+                        crate::linkml_resolve::expand_curie(schema, m)
+                            .unwrap_or_else(|| m.to_string())
+                    }),
+                })
+                .collect();
+            let kind_metadata = Some(KindMetadata::Enum { permissible_values });
 
             graph.nodes.push(GraphNode {
                 id: format!("enum:{}", name),
@@ -586,6 +659,7 @@ impl GraphWriter {
                 color: NodeType::Enum.color(),
                 description: enum_def.description.clone(),
                 uri: None,
+                uri_unresolved: false,
                 is_abstract: false,
                 kind_metadata,
             });
@@ -595,13 +669,15 @@ impl GraphWriter {
     /// Add type nodes and typeof edges
     fn add_types(&self, schema: &SchemaDefinition, graph: &mut GraphData) {
         for (name, type_def) in &schema.types {
+            let (uri, uri_unresolved) = resolve_node_uri(schema, type_def.uri.as_deref());
             graph.nodes.push(GraphNode {
                 id: format!("type:{}", name),
                 label: name.clone(),
                 node_type: NodeType::Type,
                 color: NodeType::Type.color(),
                 description: type_def.description.clone(),
-                uri: type_def.uri.clone(),
+                uri,
+                uri_unresolved,
                 is_abstract: false,
                 kind_metadata: None,
             });
@@ -1171,6 +1247,7 @@ mod tests {
             color: NodeType::Class.color(),
             description: Some("A living thing".to_string()),
             uri: Some("http://example.org#Animal".to_string()),
+            uri_unresolved: false,
             is_abstract: false,
             kind_metadata: None,
         });
@@ -1430,6 +1507,85 @@ mod tests {
     }
 
     #[test]
+    fn slot_kind_metadata_captures_pattern_identifier_and_any_of() {
+        // pattern / identifier / any_of are the constraint fields
+        // authors edit most; the hover card surfaces them, so the
+        // writer must carry them. any_of contributes its element
+        // ranges (the polymorphic-range members), not the slots.
+        let mut schema = SchemaDefinition::new("slot_constraints");
+        let mut id_slot = SlotDefinition::new("identifier_slot");
+        id_slot.pattern = Some("^ID:[0-9]+$".to_string());
+        id_slot.identifier = true;
+        let mut member_a = SlotDefinition::new("a");
+        member_a.range = Some("Person".to_string());
+        let mut member_b = SlotDefinition::new("b");
+        member_b.range = Some("Organization".to_string());
+        id_slot.any_of = vec![member_a, member_b];
+        schema.slots.insert("identifier_slot".to_string(), id_slot);
+
+        let writer = GraphWriter::new();
+        let graph = writer.schema_to_graph(&schema);
+        let node = graph
+            .nodes
+            .iter()
+            .find(|n| n.id == "slot:identifier_slot")
+            .unwrap();
+        match node.kind_metadata.as_ref().unwrap() {
+            KindMetadata::Slot {
+                pattern,
+                identifier,
+                any_of,
+                ..
+            } => {
+                assert_eq!(pattern.as_deref(), Some("^ID:[0-9]+$"));
+                assert!(*identifier);
+                assert_eq!(
+                    any_of,
+                    &vec!["Person".to_string(), "Organization".to_string()]
+                );
+            }
+            other => panic!("expected Slot metadata, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn node_uri_is_expanded_or_flagged_unresolved() {
+        // A curie with a declared prefix expands to the full IRI; a
+        // curie with an unknown prefix stays verbatim and is flagged so
+        // the hover can mark it `?`; a value already a full IRI is left
+        // untouched.
+        let mut schema = SchemaDefinition::new("uri_expansion");
+        schema
+            .prefixes
+            .insert("prov".to_string(), "http://www.w3.org/ns/prov#".to_string());
+        let mut expanded = ClassDefinition::new("Expanded");
+        expanded.class_uri = Some("prov:Entity".to_string());
+        schema.classes.insert("Expanded".to_string(), expanded);
+        let mut unknown = ClassDefinition::new("Unknown");
+        unknown.class_uri = Some("mystery:Thing".to_string());
+        schema.classes.insert("Unknown".to_string(), unknown);
+        let mut full = ClassDefinition::new("Full");
+        full.class_uri = Some("http://example.org/Direct".to_string());
+        schema.classes.insert("Full".to_string(), full);
+
+        let writer = GraphWriter::new();
+        let graph = writer.schema_to_graph(&schema);
+        let node = |id: &str| graph.nodes.iter().find(|n| n.id == id).unwrap();
+
+        let e = node("class:Expanded");
+        assert_eq!(e.uri.as_deref(), Some("http://www.w3.org/ns/prov#Entity"));
+        assert!(!e.uri_unresolved);
+
+        let u = node("class:Unknown");
+        assert_eq!(u.uri.as_deref(), Some("mystery:Thing"));
+        assert!(u.uri_unresolved, "unknown prefix should be flagged");
+
+        let f = node("class:Full");
+        assert_eq!(f.uri.as_deref(), Some("http://example.org/Direct"));
+        assert!(!f.uri_unresolved);
+    }
+
+    #[test]
     fn slot_kind_metadata_captures_domain_range_and_flags() {
         // Required + multivalued ride along on every slot so the
         // hover card can render a "required, multi-valued" line
@@ -1456,6 +1612,7 @@ mod tests {
                 multivalued,
                 min,
                 max,
+                ..
             } => {
                 assert_eq!(domain.as_deref(), Some("Animal"));
                 assert_eq!(range.as_deref(), Some("Person"));
@@ -1476,13 +1633,16 @@ mod tests {
         // hover-card display since the card chunks long lists with
         // "+N more" anyway.
         let mut schema = SchemaDefinition::new("enum_meta");
+        schema
+            .prefixes
+            .insert("ex".to_string(), "http://example.org/".to_string());
         let mut severity = EnumDefinition::new("Severity");
-        severity
-            .permissible_values
-            .insert("low".to_string(), PermissibleValue::new("low"));
-        severity
-            .permissible_values
-            .insert("high".to_string(), PermissibleValue::new("high"));
+        let mut low = PermissibleValue::new("low");
+        low.description = Some("Low severity".to_string());
+        severity.permissible_values.insert("low".to_string(), low);
+        let mut high = PermissibleValue::new("high");
+        high.meaning = Some("ex:High".to_string());
+        severity.permissible_values.insert("high".to_string(), high);
         schema.enums.insert("Severity".to_string(), severity);
 
         let writer = GraphWriter::new();
@@ -1495,8 +1655,14 @@ mod tests {
             .unwrap();
         match node.kind_metadata.as_ref().unwrap() {
             KindMetadata::Enum { permissible_values } => {
-                assert!(permissible_values.contains(&"low".to_string()));
-                assert!(permissible_values.contains(&"high".to_string()));
+                let low = permissible_values.iter().find(|p| p.text == "low").unwrap();
+                assert_eq!(low.description.as_deref(), Some("Low severity"));
+                let high = permissible_values
+                    .iter()
+                    .find(|p| p.text == "high")
+                    .unwrap();
+                // `meaning` is curie-expanded against the schema prefixes.
+                assert_eq!(high.meaning.as_deref(), Some("http://example.org/High"));
             }
             other => panic!("expected Enum metadata, got {:?}", other),
         }

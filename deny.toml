@@ -15,7 +15,6 @@ ignore = [
     # when upstream consumers (wgpu/naga, proc-macro libs) migrate off them.
     "RUSTSEC-2024-0388", # derivative unmaintained (via wgpu/naga)
     "RUSTSEC-2024-0370", # proc-macro-error unmaintained
-    "RUSTSEC-2024-0436", # paste unmaintained
 ]
 
 [licenses]

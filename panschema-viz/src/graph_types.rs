@@ -84,9 +84,15 @@ pub struct GraphNode {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 
-    /// Optional URI for linking
+    /// Optional URI for linking (a curie with a known prefix arrives
+    /// already expanded; see [`GraphNode::uri_unresolved`]).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uri: Option<String>,
+
+    /// True when `uri` is a curie whose prefix wasn't declared and so
+    /// couldn't be expanded — the hover card marks it with a `?`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub uri_unresolved: bool,
 
     /// Whether this is an abstract class (visual indicator)
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -138,9 +144,30 @@ pub enum KindMetadata {
         min: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pattern: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        identifier: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        any_of: Vec<String>,
     },
-    /// Permissible values for a LinkML enum, in declaration order.
-    Enum { permissible_values: Vec<String> },
+    /// Permissible values for a LinkML enum, in declaration order —
+    /// each with its optional description and curie-expanded meaning.
+    Enum {
+        permissible_values: Vec<PermissibleValueSummary>,
+    },
+}
+
+/// One permissible value of an enum in the hover card. Mirrors the
+/// writer-side struct so the JSON round-trips.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissibleValueSummary {
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meaning: Option<String>,
 }
 
 /// One slot in a class's resolved view — the effective shape after
