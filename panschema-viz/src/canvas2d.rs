@@ -52,6 +52,38 @@ fn edge_both_ends(kind: EdgeType) -> bool {
     matches!(kind, EdgeType::Inverse)
 }
 
+/// Font size (px) for a graph label at the given zoom `scale`, or
+/// `None` when the bulk all-labels pass should skip drawing it.
+///
+/// Labels are *world-space*: the size tracks the zoom transform with no
+/// upper cap, so a label grows with its node when you zoom into a dense
+/// cluster and shrinks when you zoom out — instead of pinning to a fixed
+/// screen size. Below `min_readable` px the bulk pass returns `None`, so
+/// a zoomed-out overview drops its labels rather than becoming a wall of
+/// overlapping micro-text. A `hovered` label is always drawn, floored to
+/// `min_readable` so the one label the user asked for stays legible at
+/// any zoom.
+fn label_font_size(base: f64, scale: f64, hovered: bool, min_readable: f64) -> Option<f64> {
+    let scaled = base * scale;
+    if hovered {
+        Some(scaled.max(min_readable))
+    } else if scaled < min_readable {
+        None
+    } else {
+        Some(scaled)
+    }
+}
+
+/// Node-label font as a multiple of the node's *world* radius — the
+/// `base` fed to [`label_font_size`], so the on-screen font is
+/// `node.radius * mult * scale` and the label stays proportional to the
+/// rendered node (small at the fit view, growing as you zoom in) rather
+/// than an arbitrary multiple of the zoom alone.
+const NODE_LABEL_RADIUS_MULT: f64 = 1.3;
+/// Edge-label multiple of an endpoint node's world radius — a touch
+/// smaller than node labels so relation names don't dominate.
+const EDGE_LABEL_RADIUS_MULT: f64 = 1.1;
+
 /// CSS `rgba(...)` string from a normalized `[r, g, b, a]` color.
 fn rgba(c: [f32; 4]) -> String {
     format!(
@@ -886,15 +918,12 @@ impl Canvas2DRenderer {
     /// Render node labels
     /// If `only_index` is Some, only render that specific node's label (for hover)
     fn render_node_labels(&self, nodes: &[SimNode], only_index: Option<usize>) {
-        // Scale with zoom (clamped so it neither vanishes when zoomed
-        // out nor grows absurd when zoomed way in) — the high cap lets
-        // labels stay readable alongside the nodes at close zoom.
-        let font_size = (12.0 * self.camera.scale).clamp(8.0, 48.0);
-        let font = format!(
-            "{}px -apple-system, BlinkMacSystemFont, sans-serif",
-            font_size
-        );
-        self.ctx.set_font(&font);
+        // Labels are sized from each node's on-screen radius (see the
+        // per-node `label_font_size` call below), so they stay
+        // proportional to the nodes: modest at the fit view, growing as
+        // you zoom into a cluster, shrinking and then dropping out when
+        // zoomed out. A hovered label always renders.
+        let hovered = only_index.is_some();
         self.ctx.set_text_align("left");
         self.ctx.set_text_baseline("middle");
 
@@ -906,6 +935,22 @@ impl Canvas2DRenderer {
                 continue;
             }
 
+            // Font is a multiple of this node's on-screen radius, so the
+            // label is proportional to the node at any zoom. The bulk pass
+            // drops labels too small to read; a hovered label always draws.
+            let Some(font_size) = label_font_size(
+                node.radius as f64 * NODE_LABEL_RADIUS_MULT,
+                self.camera.scale as f64,
+                hovered,
+                8.0,
+            ) else {
+                continue;
+            };
+            self.ctx.set_font(&format!(
+                "{}px -apple-system, BlinkMacSystemFont, sans-serif",
+                font_size
+            ));
+
             let (cx, cy) = self.camera.world_to_canvas(node.x, node.y);
             let radius = node.radius * self.camera.scale;
 
@@ -915,14 +960,14 @@ impl Canvas2DRenderer {
 
             // Draw highlight background for hovered label
             if only_index.is_some() {
-                let text_width = node.label.len() as f64 * font_size as f64 * 0.6;
+                let text_width = node.label.len() as f64 * font_size * 0.6;
                 let padding = 4.0;
                 self.ctx.set_fill_style_str("rgba(59, 130, 246, 0.9)");
                 self.ctx.fill_rect(
                     label_x as f64 - padding / 2.0,
-                    label_y as f64 - font_size as f64 / 2.0 - padding / 2.0,
+                    label_y as f64 - font_size / 2.0 - padding / 2.0,
                     text_width + padding,
-                    font_size as f64 + padding,
+                    font_size + padding,
                 );
                 self.ctx.set_fill_style_str("white");
             } else {
@@ -938,14 +983,10 @@ impl Canvas2DRenderer {
     /// Render edge labels at midpoints
     /// If `only_index` is Some, only render that specific edge's label (for hover)
     fn render_edge_labels(&self, edges: &[SimEdge], nodes: &[SimNode], only_index: Option<usize>) {
-        // Scale with zoom like node labels (raised cap so the relation
-        // name stays readable when zoomed into a cluster).
-        let font_size = (10.0 * self.camera.scale).clamp(6.0, 40.0);
-        let font = format!(
-            "{}px -apple-system, BlinkMacSystemFont, sans-serif",
-            font_size
-        );
-        self.ctx.set_font(&font);
+        // Sized like node labels — a multiple of an endpoint node's
+        // on-screen radius (computed per edge below) so relation names
+        // stay proportional to the graph at any zoom.
+        let hovered = only_index.is_some();
         self.ctx.set_text_align("center");
         self.ctx.set_text_baseline("middle");
 
@@ -960,6 +1001,19 @@ impl Canvas2DRenderer {
             let source = &nodes[edge.source];
             let target = &nodes[edge.target];
 
+            let Some(font_size) = label_font_size(
+                source.radius as f64 * EDGE_LABEL_RADIUS_MULT,
+                self.camera.scale as f64,
+                hovered,
+                7.0,
+            ) else {
+                continue;
+            };
+            self.ctx.set_font(&format!(
+                "{}px -apple-system, BlinkMacSystemFont, sans-serif",
+                font_size
+            ));
+
             let (x1, y1) = self.camera.world_to_canvas(source.x, source.y);
             let (x2, y2) = self.camera.world_to_canvas(target.x, target.y);
 
@@ -969,9 +1023,9 @@ impl Canvas2DRenderer {
 
             // Draw background for label
             let padding = 2.0;
-            let text_width = edge.label.len() as f64 * font_size as f64 * 0.6;
+            let text_width = edge.label.len() as f64 * font_size * 0.6;
             let bg_width = text_width + padding * 2.0;
-            let bg_height = font_size as f64 + padding * 2.0;
+            let bg_height = font_size + padding * 2.0;
 
             // Use highlight color for hovered label
             if only_index.is_some() {
@@ -1086,6 +1140,38 @@ impl Canvas2DRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Labels track the zoom transform with no upper cap, so a label
+    // grows without bound as you zoom in (it doesn't pin to a fixed
+    // screen size the way the old clamp did).
+    #[test]
+    fn label_font_grows_with_zoom_without_a_ceiling() {
+        // base 12 at 1× → 12px; at 10× → 120px (old clamp capped at 48).
+        assert_eq!(label_font_size(12.0, 1.0, false, 8.0), Some(12.0));
+        assert_eq!(label_font_size(12.0, 10.0, false, 8.0), Some(120.0));
+        // Far zoom keeps growing — no cap.
+        assert_eq!(label_font_size(12.0, 40.0, false, 8.0), Some(480.0));
+    }
+
+    // The bulk pass drops labels once they'd be too small to read, so a
+    // zoomed-out overview doesn't crowd with overlapping micro-text.
+    #[test]
+    fn bulk_label_pass_skips_when_below_readable_size() {
+        // 12 × 0.5 = 6px < 8px floor → skipped.
+        assert_eq!(label_font_size(12.0, 0.5, false, 8.0), None);
+        // Right at the threshold it still draws.
+        assert_eq!(label_font_size(12.0, 8.0 / 12.0, false, 8.0), Some(8.0));
+    }
+
+    // A hovered label always renders, floored to the readable minimum so
+    // the one label the user asked for stays legible even zoomed out.
+    #[test]
+    fn hovered_label_is_floored_never_skipped() {
+        // Would be 3px in the bulk pass (skipped) — hovered floors to 8.
+        assert_eq!(label_font_size(12.0, 0.25, true, 8.0), Some(8.0));
+        // Above the floor a hovered label still scales up.
+        assert_eq!(label_font_size(12.0, 5.0, true, 8.0), Some(60.0));
+    }
 
     // Tip sits on the target node's perimeter, on the line from
     // source to target, pointing at the target.

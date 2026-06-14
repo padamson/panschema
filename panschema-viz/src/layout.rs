@@ -264,7 +264,6 @@ pub fn stress_majorization(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> V
 
     let (pg, _) = to_petgraph(graph);
     let components = connected_components_of(&pg);
-    let num_components = components.len();
     let id_to_node_idx: BTreeMap<&str, usize> = graph
         .nodes
         .iter()
@@ -331,43 +330,76 @@ pub fn stress_majorization(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> V
         .map(|c| c.width.max(c.height))
         .fold(0.0_f32, f32::max);
     let component_gap = (max_dim * 0.05).max(1.0);
+    // Singletons (and 2-node lines) have a ~0×0 — or zero-height — bbox.
+    // Without a floor the shelf-packer strings them into a single
+    // zero-height row that wastes all the vertical space (a thin
+    // horizontal smear). Give every component a minimum *square* cell so
+    // isolated nodes grid up into a compact 2D block instead of a line.
+    let min_cell = (max_dim * 0.12).max(component_gap * 2.0);
+    let cell = |c: &LaidOut| (c.width.max(min_cell), c.height.max(min_cell));
     let total_area: f32 = laid
         .iter()
-        .map(|c| c.width.max(1.0) * c.height.max(1.0))
+        .map(|c| {
+            let (w, h) = cell(c);
+            w * h
+        })
         .sum();
-    let target_row_width = (total_area * aspect_w / aspect_h).sqrt().max(100.0);
+    // Floor the row width at the widest component (not an absolute
+    // constant) so the target tracks the layout's own coordinate scale —
+    // a fixed floor that exceeds the content forces everything onto one
+    // row and re-creates the horizontal smear.
+    let target_row_width = (total_area * aspect_w / aspect_h).sqrt().max(max_dim);
 
     let mut positions: Vec<(f32, f32)> = vec![(0.0, 0.0); graph.nodes.len()];
     let mut row_x = 0.0_f32;
     let mut row_y = 0.0_f32;
     let mut row_height = 0.0_f32;
     for c in &laid {
-        if row_x > 0.0 && row_x + c.width > target_row_width {
+        let (cw, ch) = cell(c);
+        if row_x > 0.0 && row_x + cw > target_row_width {
             row_y += row_height + component_gap;
             row_x = 0.0;
             row_height = 0.0;
         }
+        // Center each component's own bbox within its (possibly larger)
+        // cell so a singleton sits in the middle of its grid slot.
+        let off_x = row_x + (cw - c.width) / 2.0;
+        let off_y = row_y + (ch - c.height) / 2.0;
         for (sub_pos, &node_index) in c.positions.iter().zip(c.component.iter()) {
             let id = pg[node_index].as_str();
             if let Some(&out_idx) = id_to_node_idx.get(id) {
-                positions[out_idx] = (sub_pos.0 + row_x, sub_pos.1 + row_y);
+                positions[out_idx] = (sub_pos.0 + off_x, sub_pos.1 + off_y);
             }
         }
-        row_x += c.width + component_gap;
-        row_height = row_height.max(c.height);
+        row_x += cw + component_gap;
+        row_height = row_height.max(ch);
     }
 
-    // Bias the aspect ratio exactly once: with multiple components the
-    // shelf-packer above already arranged them into an aspect-shaped
-    // rectangle, so the extra `√(w/h)` stretch would double-apply it
-    // and smear the graph horizontally. Only stretch a single
-    // component, which carried no packing-stage aspect bias.
-    if num_components <= 1 {
-        let sx = (aspect_w / aspect_h).sqrt();
-        let sy = (aspect_h / aspect_w).sqrt();
+    // Correct the *realized* bounding-box aspect toward the target,
+    // area-preserving — see the matching note in `sgd`. The shelf-packer
+    // tends to come out near-square; measuring the realized aspect and
+    // stretching by `√(target / realized)` lands it on the target
+    // without the double-apply smear a blind `√(target)` stretch caused.
+    let (mut min_x, mut max_x, mut min_y, mut max_y) = (
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+    );
+    for &(x, y) in &positions {
+        min_x = min_x.min(x);
+        max_x = max_x.max(x);
+        min_y = min_y.min(y);
+        max_y = max_y.max(y);
+    }
+    let (bw, bh) = (max_x - min_x, max_y - min_y);
+    if bw > f32::EPSILON && bh > f32::EPSILON && aspect_w > 0.0 && aspect_h > 0.0 {
+        let realized = bw / bh;
+        let target = aspect_w / aspect_h;
+        let s = (target / realized).sqrt();
         for p in positions.iter_mut() {
-            p.0 *= sx;
-            p.1 *= sy;
+            p.0 *= s;
+            p.1 /= s;
         }
     }
 
@@ -504,7 +536,6 @@ pub fn sgd(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> Vec<(f32, f32)> {
 
     let (pg, _) = to_petgraph(graph);
     let components = connected_components_of(&pg);
-    let num_components = components.len();
     let id_to_node_idx: BTreeMap<&str, usize> = graph
         .nodes
         .iter()
@@ -558,43 +589,80 @@ pub fn sgd(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> Vec<(f32, f32)> {
         .map(|c| c.width.max(c.height))
         .fold(0.0_f32, f32::max);
     let component_gap = (max_dim * 0.05).max(1.0);
+    // Singletons (and 2-node lines) have a ~0×0 — or zero-height — bbox.
+    // Without a floor the shelf-packer strings them into a single
+    // zero-height row that wastes all the vertical space (a thin
+    // horizontal smear). Give every component a minimum *square* cell so
+    // isolated nodes grid up into a compact 2D block instead of a line.
+    let min_cell = (max_dim * 0.12).max(component_gap * 2.0);
+    let cell = |c: &LaidOut| (c.width.max(min_cell), c.height.max(min_cell));
     let total_area: f32 = laid
         .iter()
-        .map(|c| c.width.max(1.0) * c.height.max(1.0))
+        .map(|c| {
+            let (w, h) = cell(c);
+            w * h
+        })
         .sum();
-    let target_row_width = (total_area * aspect_w / aspect_h).sqrt().max(100.0);
+    // Floor the row width at the widest component (not an absolute
+    // constant) so the target tracks the layout's own coordinate scale —
+    // a fixed floor that exceeds the content forces everything onto one
+    // row and re-creates the horizontal smear.
+    let target_row_width = (total_area * aspect_w / aspect_h).sqrt().max(max_dim);
 
     let mut positions: Vec<(f32, f32)> = vec![(0.0, 0.0); graph.nodes.len()];
     let mut row_x = 0.0_f32;
     let mut row_y = 0.0_f32;
     let mut row_height = 0.0_f32;
     for c in &laid {
-        if row_x > 0.0 && row_x + c.width > target_row_width {
+        let (cw, ch) = cell(c);
+        if row_x > 0.0 && row_x + cw > target_row_width {
             row_y += row_height + component_gap;
             row_x = 0.0;
             row_height = 0.0;
         }
+        // Center each component's own bbox within its (possibly larger)
+        // cell so a singleton sits in the middle of its grid slot.
+        let off_x = row_x + (cw - c.width) / 2.0;
+        let off_y = row_y + (ch - c.height) / 2.0;
         for (sub_pos, &node_index) in c.positions.iter().zip(c.component.iter()) {
             let id = pg[node_index].as_str();
             if let Some(&out_idx) = id_to_node_idx.get(id) {
-                positions[out_idx] = (sub_pos.0 + row_x, sub_pos.1 + row_y);
+                positions[out_idx] = (sub_pos.0 + off_x, sub_pos.1 + off_y);
             }
         }
-        row_x += c.width + component_gap;
-        row_height = row_height.max(c.height);
+        row_x += cw + component_gap;
+        row_height = row_height.max(ch);
     }
 
-    // Bias the aspect ratio exactly once. With multiple components the
-    // shelf-packer above already arranged them into an aspect-shaped
-    // rectangle, so the extra `√(w/h)` stretch would double-apply it
-    // and smear the graph horizontally; only stretch when a single
-    // component carried no packing-stage aspect bias.
-    if num_components <= 1 {
-        let sx = (aspect_w / aspect_h).sqrt();
-        let sy = (aspect_h / aspect_w).sqrt();
+    // Correct the *realized* bounding-box aspect toward the target,
+    // area-preserving. The shelf-packer gets the arrangement roughly
+    // right, but with a big component plus many singletons it tends to
+    // come out near-square (narrower than the target), leaving the wide
+    // canvas mostly empty. Measuring the realized aspect and stretching
+    // by `√(target / realized)` lands it on the target for both single-
+    // and multi-component graphs — and is a no-op when already on
+    // target, so it can't double-apply into a horizontal smear the way a
+    // blind `√(target)` stretch did.
+    let (mut min_x, mut max_x, mut min_y, mut max_y) = (
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+    );
+    for &(x, y) in &positions {
+        min_x = min_x.min(x);
+        max_x = max_x.max(x);
+        min_y = min_y.min(y);
+        max_y = max_y.max(y);
+    }
+    let (bw, bh) = (max_x - min_x, max_y - min_y);
+    if bw > f32::EPSILON && bh > f32::EPSILON && aspect_w > 0.0 && aspect_h > 0.0 {
+        let realized = bw / bh;
+        let target = aspect_w / aspect_h;
+        let s = (target / realized).sqrt();
         for p in positions.iter_mut() {
-            p.0 *= sx;
-            p.1 *= sy;
+            p.0 *= s;
+            p.1 /= s;
         }
     }
 
@@ -1455,6 +1523,46 @@ mod tests {
         assert!(
             dist > 0.5,
             "2-node orphan component must separate; got distance {dist} between n4 and n5"
+        );
+    }
+
+    #[test]
+    fn sgd_grids_isolated_nodes_into_a_2d_block() {
+        // The shape scimantic hits mid-build: a sizeable connected
+        // component plus many isolated class nodes. The singletons must
+        // grid into a 2D block that uses vertical space — not smear into
+        // a single zero-height row (which is what a 0×0 packing footprint
+        // produced before the min-cell floor). Regression guard.
+        let graph = make_lopsided(20, 16);
+        let positions = sgd(&graph, 1.0, 1.0);
+        assert_eq!(positions.len(), 36);
+
+        // Isolated nodes are appended after the connected ring, so they
+        // are indices 20..36.
+        let iso = &positions[20..];
+        let (mut min_x, mut max_x, mut min_y, mut max_y) = (
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+        );
+        for &(x, y) in iso {
+            min_x = min_x.min(x);
+            max_x = max_x.max(x);
+            min_y = min_y.min(y);
+            max_y = max_y.max(y);
+        }
+        let (w, h) = (max_x - min_x, max_y - min_y);
+        assert!(
+            h > 0.0,
+            "isolated nodes must span vertical space, not a flat row (w={w}, h={h})"
+        );
+        // A block, not a 1-D line: the 16 singletons wrap across multiple
+        // rows so the spread isn't lopsidedly horizontal.
+        assert!(
+            w / h < 8.0,
+            "isolated block should be roughly 2D, got {w}x{h} (ratio {})",
+            w / h
         );
     }
 
