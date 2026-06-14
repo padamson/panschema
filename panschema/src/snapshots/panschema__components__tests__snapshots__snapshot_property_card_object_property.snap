@@ -23,7 +23,9 @@ expression: html
     <div class="entity-details">
         <div class="detail-row">
             <dt>Domain</dt>
-            <dd><a href="#class-person" class="entity-ref class-ref">Person</a></dd>
+            <dd>
+                <a href="#class-person" class="entity-ref class-ref">Person</a>
+            </dd>
         </div>
         <div class="detail-row">
             <dt>Range</dt>
@@ -47,6 +49,12 @@ expression: html
 
     .datatype-ref {
         color: var(--color-datatype);
+    }
+
+    .any-of-sep {
+        color: var(--color-text-muted);
+        font-size: var(--text-xs);
+        font-style: italic;
     }
 
     .datatype-ref:hover {

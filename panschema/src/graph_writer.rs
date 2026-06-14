@@ -142,8 +142,11 @@ pub enum KindMetadata {
     /// polymorphic range) surface the constraint fields authors
     /// edit most.
     Slot {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        domain: Option<String>,
+        /// Every class this slot is a domain of (explicit `domain:`, or
+        /// the classes that list it in `slots:`). A slot can belong to
+        /// several classes, so this is a list, not a single value.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        domains: Vec<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         range: Option<String>,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -550,7 +553,11 @@ impl GraphWriter {
 
             let cardinality = crate::linkml_resolve::effective_cardinality(slot_def);
             let kind_metadata = Some(KindMetadata::Slot {
-                domain: slot_def.domain.clone(),
+                // Effective domains: the slot's own `domain:` or, the
+                // common case, every class that lists it in `slots:` — so
+                // the hover names all the slot's owning classes (its
+                // domain connections), not just its range.
+                domains: crate::linkml_resolve::resolve_slot_domains(schema, name, slot_def),
                 range: slot_def.range.clone(),
                 required: cardinality.required,
                 multivalued: cardinality.multivalued,
@@ -591,18 +598,28 @@ impl GraphWriter {
                 });
             }
 
-            // Add range edge (slot -> class/enum/type)
-            if self.options.include_range_edges
-                && let Some(range) = &slot_def.range
-            {
-                let target_id = self.resolve_range_target(schema, range);
-                if let Some(target) = target_id {
-                    graph.edges.push(GraphEdge {
-                        source: format!("slot:{}", name),
-                        target,
-                        edge_type: EdgeType::Range,
-                        label: Some("range".to_string()),
-                    });
+            // Add range edges (slot -> class/enum/type). A slot's range
+            // can be a single `range:` or a polymorphic `any_of` union of
+            // member ranges; draw one edge per distinct target so the
+            // union members aren't left disconnected (a missing edge here
+            // makes panschema's docs misrepresent the schema).
+            if self.options.include_range_edges {
+                let mut seen = std::collections::HashSet::new();
+                let ranges = slot_def
+                    .range
+                    .iter()
+                    .chain(slot_def.any_of.iter().filter_map(|s| s.range.as_ref()));
+                for range in ranges {
+                    if let Some(target) = self.resolve_range_target(schema, range)
+                        && seen.insert(target.clone())
+                    {
+                        graph.edges.push(GraphEdge {
+                            source: format!("slot:{}", name),
+                            target,
+                            edge_type: EdgeType::Range,
+                            label: Some("range".to_string()),
+                        });
+                    }
                 }
             }
 
@@ -1549,6 +1566,43 @@ mod tests {
     }
 
     #[test]
+    fn any_of_range_draws_an_edge_per_union_member() {
+        // A slot whose range is an `any_of` union must draw a range edge
+        // to each member class, so union members aren't left disconnected
+        // — the silent-correctness bug where panschema dropped `any_of`
+        // ranges and the docs misrepresented the schema.
+        let mut schema = SchemaDefinition::new("any_of_edges");
+        schema
+            .classes
+            .insert("Dataset".to_string(), ClassDefinition::new("Dataset"));
+        schema
+            .classes
+            .insert("Question".to_string(), ClassDefinition::new("Question"));
+        let mut has_input = SlotDefinition::new("hasInput");
+        let mut a = SlotDefinition::new("a");
+        a.range = Some("Dataset".to_string());
+        let mut b = SlotDefinition::new("b");
+        b.range = Some("Question".to_string());
+        has_input.any_of = vec![a, b];
+        schema.slots.insert("hasInput".to_string(), has_input);
+
+        let writer = GraphWriter::new();
+        let graph = writer.schema_to_graph(&schema);
+        let mut range_targets: Vec<&str> = graph
+            .edges
+            .iter()
+            .filter(|e| e.source == "slot:hasInput" && e.edge_type == EdgeType::Range)
+            .map(|e| e.target.as_str())
+            .collect();
+        range_targets.sort_unstable();
+        assert_eq!(
+            range_targets,
+            vec!["class:Dataset", "class:Question"],
+            "one range edge per any_of member, no dupes"
+        );
+    }
+
+    #[test]
     fn node_uri_is_expanded_or_flagged_unresolved() {
         // A curie with a declared prefix expands to the full IRI; a
         // curie with an unknown prefix stays verbatim and is flagged so
@@ -1606,7 +1660,7 @@ mod tests {
         let node = graph.nodes.iter().find(|n| n.id == "slot:owners").unwrap();
         match node.kind_metadata.as_ref().unwrap() {
             KindMetadata::Slot {
-                domain,
+                domains,
                 range,
                 required,
                 multivalued,
@@ -1614,7 +1668,7 @@ mod tests {
                 max,
                 ..
             } => {
-                assert_eq!(domain.as_deref(), Some("Animal"));
+                assert_eq!(domains, &vec!["Animal".to_string()]);
                 assert_eq!(range.as_deref(), Some("Person"));
                 assert!(*required);
                 assert!(*multivalued);

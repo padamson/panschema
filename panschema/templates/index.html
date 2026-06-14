@@ -121,8 +121,10 @@
         {%- let iri_href = prop.iri_href.as_deref() %}
         {%- let property_type = prop.property_type.as_str() %}
         {%- let description = prop.description.as_deref() %}
-        {%- let domain = prop.domain.as_ref() %}
+        {%- let domains = prop.domains.as_slice() %}
         {%- let range = prop.range.as_ref() %}
+        {%- let any_of = prop.any_of.as_slice() %}
+        {%- let pattern = prop.pattern.as_deref() %}
         {%- let characteristics = prop.characteristics.as_slice() %}
         {%- let mappings = prop.mappings.as_slice() %}
         {% include "components/property_card.html" %}

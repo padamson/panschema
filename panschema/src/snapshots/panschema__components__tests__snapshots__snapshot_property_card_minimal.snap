@@ -1,5 +1,5 @@
 ---
-source: src/components.rs
+source: panschema/src/components.rs
 expression: html
 ---
 <article class="entity-card property-card" id="prop-relates-to">
@@ -29,6 +29,12 @@ expression: html
 
     .datatype-ref {
         color: var(--color-datatype);
+    }
+
+    .any-of-sep {
+        color: var(--color-text-muted);
+        font-size: var(--text-xs);
+        font-style: italic;
     }
 
     .datatype-ref:hover {

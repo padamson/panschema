@@ -252,7 +252,7 @@ impl Visualization {
             return hidden;
         }
         for (i, node) in self.simulation.nodes.iter().enumerate() {
-            let node_type = node_type_string(&node.color);
+            let node_type = node_kind_label(node.kind_metadata.as_ref());
             if self.interaction.hidden_types.contains(node_type) {
                 hidden.insert(i);
             }
@@ -684,7 +684,7 @@ impl Visualization {
         if index >= self.simulation.nodes.len() {
             return "Unknown".to_string();
         }
-        node_type_string(&self.simulation.nodes[index].color).to_string()
+        node_kind_label(self.simulation.nodes[index].kind_metadata.as_ref()).to_string()
     }
 }
 
@@ -698,7 +698,7 @@ pub(crate) fn build_node_details_json(
     is_fixed: bool,
     connections: Vec<String>,
 ) -> String {
-    let node_type = node_type_string(&node.color);
+    let node_type = node_kind_label(node.kind_metadata.as_ref());
     serde_json::json!({
         "id": node.id,
         "label": node.label,
@@ -758,8 +758,28 @@ fn edge_type_tag(edge_type: crate::graph_types::EdgeType) -> &'static str {
 }
 
 /// Helper to determine node type from color
-fn node_type_string(color: &[f32; 4]) -> &'static str {
-    // Match colors defined in graph_types::colors
+/// Human-readable kind label for a node's hover/detail `Type:` row and
+/// the hide-by-type filter. Derived from `kind_metadata` (the same field
+/// that drives node color and shape), not inferred from the color
+/// channel: the Class (`0.290`) and Slot (`0.314`) reds are within the
+/// old `0.1` tolerance, so the color match misread every slot as a
+/// "Class". A node with no kind metadata is a `Type` node.
+fn node_kind_label(kind: Option<&crate::graph_types::KindMetadata>) -> &'static str {
+    use crate::graph_types::KindMetadata;
+    match kind {
+        Some(KindMetadata::Class { .. }) => "Class",
+        Some(KindMetadata::Slot { .. }) => "Slot",
+        Some(KindMetadata::Enum { .. }) => "Enum",
+        None => "Type",
+    }
+}
+
+/// Color-based node label for the 3D detail card. The 3D sim node
+/// doesn't carry `kind_metadata`, so this still infers the kind from the
+/// red channel and inherits the Class/Slot ambiguity the 2D path shed —
+/// acceptable for the deferred secondary renderer.
+#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
+fn node_type_string_3d(color: &[f32; 4]) -> &'static str {
     const BLUE_R: f32 = 0.290;
     const GREEN_R: f32 = 0.314;
     const PURPLE_R: f32 = 0.608;
@@ -799,7 +819,11 @@ mod details_json_tests {
                 uri: None,
                 uri_unresolved: false,
                 is_abstract: false,
-                kind_metadata: None,
+                kind_metadata: Some(KindMetadata::Class {
+                    slots: vec![],
+                    parents: vec![],
+                    mixins: vec![],
+                }),
             },
             0,
             1,
@@ -1008,7 +1032,24 @@ mod details_json_tests {
         // hasn't shipped" (key missing) — keeping the key present
         // means the JS branch reads `details.kindMetadata == null`
         // rather than `'kindMetadata' in details`.
-        let node = make_class_node("class:Foo", "Foo");
+        // A bare node with no resolved kind metadata — the `Type` node
+        // case — distinct from `make_class_node` (which now carries
+        // `Class` metadata).
+        let node = SimNode::from_graph_node(
+            &GraphNode {
+                id: "type:Foo".to_string(),
+                label: "Foo".to_string(),
+                node_type: NodeType::Type,
+                color: NodeType::Type.color(),
+                description: None,
+                uri: None,
+                uri_unresolved: false,
+                is_abstract: false,
+                kind_metadata: None,
+            },
+            0,
+            1,
+        );
         let json: serde_json::Value =
             serde_json::from_str(&build_node_details_json(&node, false, Vec::new())).unwrap();
         assert!(
@@ -1016,6 +1057,8 @@ mod details_json_tests {
             "kindMetadata key must be present"
         );
         assert!(json["kindMetadata"].is_null());
+        // No metadata → `Type` node.
+        assert_eq!(json["type"], "Type");
     }
 
     #[test]
@@ -1057,6 +1100,7 @@ mod details_json_tests {
             serde_json::from_str(&build_node_details_json(&node, false, Vec::new())).unwrap();
         let km = &json["kindMetadata"];
         assert_eq!(km["kind"], "class");
+        assert_eq!(json["type"], "Class");
         assert_eq!(km["slots"][0]["name"], "startedAt");
         assert_eq!(km["slots"][0]["range"], "datetime");
         assert_eq!(km["slots"][0]["required"], true);
@@ -1076,7 +1120,7 @@ mod details_json_tests {
             "slot:hasOwner",
             "hasOwner",
             KindMetadata::Slot {
-                domain: Some("Animal".into()),
+                domains: vec!["Animal".into()],
                 range: Some("Person".into()),
                 required: true,
                 multivalued: false,
@@ -1091,7 +1135,10 @@ mod details_json_tests {
             serde_json::from_str(&build_node_details_json(&node, false, Vec::new())).unwrap();
         let km = &json["kindMetadata"];
         assert_eq!(km["kind"], "slot");
-        assert_eq!(km["domain"], "Animal");
+        // #3 regression: the detail `Type:` label comes from kind, not
+        // color — a slot must read "Slot", not "Class".
+        assert_eq!(json["type"], "Slot");
+        assert_eq!(km["domains"], serde_json::json!(["Animal"]));
         assert_eq!(km["range"], "Person");
         assert_eq!(km["required"], true);
         // `multivalued: false` is skipped by serde to keep the wire
@@ -1123,6 +1170,7 @@ mod details_json_tests {
             serde_json::from_str(&build_node_details_json(&node, false, Vec::new())).unwrap();
         let km = &json["kindMetadata"];
         assert_eq!(km["kind"], "enum");
+        assert_eq!(json["type"], "Enum");
         let pvs = km["permissibleValues"].as_array().unwrap();
         assert_eq!(pvs.len(), 3);
         assert_eq!(pvs[0]["text"], "low");
@@ -1556,6 +1604,12 @@ impl Visualization3D {
         }
 
         let node = &self.simulation.nodes[index];
+        // The 3D sim node doesn't carry kind_metadata (unlike the 2D
+        // `SimNode`), so the 3D detail card still infers the label from
+        // color. It inherits the same Class/Slot ambiguity the 2D path
+        // had — acceptable for now since 3D is the deferred secondary
+        // renderer; fix by plumbing kind_metadata through SimNode3D when
+        // 3D work resumes.
         let node_type = node_type_string_3d(&node.color);
         let is_fixed = self.interaction.is_fixed(index);
 
@@ -1648,29 +1702,6 @@ impl Visualization3D {
         connected.sort();
         connected.dedup();
         connected
-    }
-}
-
-/// Helper to determine node type from color (3D version)
-#[cfg(all(feature = "webgpu", target_arch = "wasm32"))]
-fn node_type_string_3d(color: &[f32; 4]) -> &'static str {
-    // Match colors defined in graph_types::colors
-    const BLUE_R: f32 = 0.290;
-    const GREEN_R: f32 = 0.314;
-    const PURPLE_R: f32 = 0.608;
-    const ORANGE_R: f32 = 0.902;
-
-    let r = color[0];
-    if (r - BLUE_R).abs() < 0.1 {
-        "Class"
-    } else if (r - GREEN_R).abs() < 0.1 {
-        "Slot"
-    } else if (r - PURPLE_R).abs() < 0.1 {
-        "Enum"
-    } else if (r - ORANGE_R).abs() < 0.1 {
-        "Type"
-    } else {
-        "Unknown"
     }
 }
 
