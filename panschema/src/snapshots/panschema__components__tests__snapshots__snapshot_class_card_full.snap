@@ -1,6 +1,5 @@
 ---
 source: panschema/src/components.rs
-assertion_line: 863
 expression: html
 ---
 <article class="entity-card class-card" id="class-person">
@@ -223,15 +222,23 @@ expression: html
         list-style: none;
         padding: 0;
         margin: 0;
-        display: grid;
-        gap: var(--space-2);
     }
 
     .slot-entry {
         display: flex;
         flex-wrap: wrap;
         align-items: baseline;
+        /* Tight within a slot (name, range, flags, description hug
+           together) so each slot reads as one group. */
         gap: var(--space-1) var(--space-2);
+    }
+
+    /* Separate consecutive slots with extra space and a subtle divider,
+       so it's clear which description belongs to which slot. */
+    .slot-entry + .slot-entry {
+        margin-top: var(--space-3);
+        padding-top: var(--space-3);
+        border-top: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
     }
 
     .slot-name {

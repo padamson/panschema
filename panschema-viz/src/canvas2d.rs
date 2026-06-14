@@ -1226,7 +1226,7 @@ mod tests {
             mixins: vec![],
         };
         let slot = KindMetadata::Slot {
-            domain: None,
+            domains: vec![],
             range: None,
             required: false,
             multivalued: false,

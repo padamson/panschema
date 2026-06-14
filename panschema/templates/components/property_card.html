@@ -24,10 +24,14 @@
 {%- endif %}
 
     <div class="entity-details">
-{%- if let Some(dom) = domain %}
+{%- if !domains.is_empty() %}
         <div class="detail-row">
             <dt>Domain</dt>
-            <dd><a href="#class-{{ dom.id }}" class="entity-ref class-ref">{{ dom.label }}</a></dd>
+            <dd>
+{%- for dom in domains %}
+                <a href="#class-{{ dom.id }}" class="entity-ref class-ref">{{ dom.label }}</a>{%- if !loop.last %}, {% endif %}
+{%- endfor %}
+            </dd>
         </div>
 {%- endif %}
 {%- if let Some(rng) = range %}
@@ -40,6 +44,27 @@
                 <span class="entity-ref datatype-ref">{{ rng.datatype }}</span>
 {%- endif %}
             </dd>
+        </div>
+{%- endif %}
+{%- if !any_of.is_empty() %}
+        <div class="detail-row">
+            <dt>Range</dt>
+            <dd class="any-of-range">
+{%- for rng in any_of %}
+{%- if let Some(class_ref) = rng.class_ref %}
+                <a href="#class-{{ class_ref.id }}" class="entity-ref class-ref">{{ class_ref.label }}</a>
+{%- else %}
+                <span class="entity-ref datatype-ref">{{ rng.datatype }}</span>
+{%- endif %}
+{%- if !loop.last %} <span class="any-of-sep">or</span> {% endif %}
+{%- endfor %}
+            </dd>
+        </div>
+{%- endif %}
+{%- if let Some(pat) = pattern %}
+        <div class="detail-row">
+            <dt>Pattern</dt>
+            <dd><code class="mono pattern-value" title="{{ pat }}">{{ pat }}</code></dd>
         </div>
 {%- endif %}
 {%- if !characteristics.is_empty() %}
@@ -78,6 +103,12 @@
 
     .datatype-ref {
         color: var(--color-datatype);
+    }
+
+    .any-of-sep {
+        color: var(--color-text-muted);
+        font-size: var(--text-xs);
+        font-style: italic;
     }
 
     .datatype-ref:hover {

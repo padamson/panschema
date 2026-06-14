@@ -352,6 +352,30 @@ pub fn effective_cardinality(slot: &SlotDefinition) -> Cardinality {
     }
 }
 
+/// Resolve a slot's effective domain class names. LinkML lets the
+/// domain be expressed two ways: the slot's own `domain:`, or — the
+/// common case — one or more classes listing the slot in their `slots:`
+/// (the computed `domain_of` inverse). A slot can therefore have
+/// *several* domains (e.g. `executes` used by both `Analysis` and
+/// `Experimentation`). Prefer the slot's explicit `domain:` (a single
+/// entry); otherwise return every class (in deterministic `BTreeMap`
+/// order) that references the slot. Empty when no class uses it.
+pub fn resolve_slot_domains(
+    schema: &SchemaDefinition,
+    slot_name: &str,
+    slot: &SlotDefinition,
+) -> Vec<String> {
+    if let Some(domain) = &slot.domain {
+        return vec![domain.clone()];
+    }
+    schema
+        .classes
+        .iter()
+        .filter(|(_, c)| c.slots.iter().any(|s| s == slot_name))
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
 /// Expand a CURIE-shaped value against the schema's `prefixes:`
 /// table, falling back to `default_prefix` for bare names.
 ///
@@ -380,6 +404,37 @@ pub fn expand_curie(schema: &SchemaDefinition, value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_slot_domain_prefers_explicit_then_class_membership() {
+        let mut schema = SchemaDefinition::new("dom");
+
+        // An explicit `domain:` on the slot wins (single entry).
+        let mut explicit = SlotDefinition::new("explicit");
+        explicit.domain = Some("DeclaredDomain".to_string());
+        assert_eq!(
+            resolve_slot_domains(&schema, "explicit", &explicit),
+            vec!["DeclaredDomain".to_string()]
+        );
+
+        // No explicit domain → *every* class listing the slot in
+        // `slots:`, in deterministic order.
+        let used = SlotDefinition::new("used");
+        let mut act = ClassDefinition::new("Act");
+        act.slots = vec!["used".to_string()];
+        schema.classes.insert("Act".to_string(), act);
+        let mut exp = ClassDefinition::new("Experiment");
+        exp.slots = vec!["used".to_string()];
+        schema.classes.insert("Experiment".to_string(), exp);
+        assert_eq!(
+            resolve_slot_domains(&schema, "used", &used),
+            vec!["Act".to_string(), "Experiment".to_string()]
+        );
+
+        // A slot no class references has no resolvable domain.
+        let orphan = SlotDefinition::new("orphan");
+        assert!(resolve_slot_domains(&schema, "orphan", &orphan).is_empty());
+    }
 
     /// A schema exercising `is_a`, mixins, and `slot_usage` overlay all
     /// at once. Pins the public surface of [`resolve_effective_slots`] —

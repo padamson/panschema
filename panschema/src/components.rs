@@ -259,8 +259,11 @@ pub struct PropertyCardComponent<'a> {
     pub iri_href: Option<&'a str>,
     pub property_type: &'a str,
     pub description: Option<&'a str>,
-    pub domain: Option<&'a EntityRef>,
+    pub domains: &'a [EntityRef],
     pub range: Option<&'a RangeSpec>,
+    /// Members of an `any_of` union range; empty for single-range slots.
+    pub any_of: &'a [RangeSpec],
+    pub pattern: Option<&'a str>,
     pub characteristics: &'a [String],
     pub mappings: &'a [panschema::html_writer::Mapping],
 }
@@ -302,8 +305,11 @@ pub struct SampleProperty<'a> {
     pub iri_href: Option<&'a str>,
     pub property_type: &'a str,
     pub description: Option<&'a str>,
-    pub domain: Option<&'a EntityRef>,
+    pub domains: &'a [EntityRef],
     pub range: Option<&'a RangeSpec>,
+    /// Members of an `any_of` union range; empty for single-range slots.
+    pub any_of: &'a [RangeSpec],
+    pub pattern: Option<&'a str>,
     pub characteristics: &'a [String],
     pub mappings: &'a [panschema::html_writer::Mapping],
 }
@@ -480,8 +486,10 @@ impl ComponentRenderer {
             iri_href: None,
             property_type,
             description,
-            domain,
+            domains: domain.map(std::slice::from_ref).unwrap_or(&[]),
             range,
+            any_of: &[],
+            pattern: None,
             characteristics,
             mappings: &[],
         };
@@ -597,8 +605,10 @@ impl ComponentRenderer {
             iri_href: Some("https://example.org/ontology#memberOf"),
             property_type: "Object Property",
             description: Some("Relates a person to their organization."),
-            domain: Some(&domain),
+            domains: std::slice::from_ref(&domain),
             range: Some(&range),
+            any_of: &[],
+            pattern: None,
             characteristics: &characteristics,
             mappings: &property_mappings,
         };
@@ -614,8 +624,10 @@ impl ComponentRenderer {
             iri_href: Some("https://example.org/ontology#name"),
             property_type: "Data Property",
             description: Some("The name of an entity."),
-            domain: Some(&domain2),
+            domains: std::slice::from_ref(&domain2),
             range: Some(&range2),
+            any_of: &[],
+            pattern: Some("^[A-Z][a-z]+$"),
             characteristics: &empty_characteristics,
             mappings: &property_mappings,
         };

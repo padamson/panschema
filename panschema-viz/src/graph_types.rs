@@ -132,8 +132,10 @@ pub enum KindMetadata {
     /// are the effective-cardinality reconciliation of the bool
     /// flags with the explicit `min` / `max` bounds.
     Slot {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        domain: Option<String>,
+        /// Every class this slot is a domain of; a slot can belong to
+        /// several classes. Mirrors the writer side.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        domains: Vec<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         range: Option<String>,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]

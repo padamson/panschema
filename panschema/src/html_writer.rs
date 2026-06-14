@@ -255,8 +255,17 @@ pub struct PropertyData {
     pub iri_href: Option<String>,
     pub property_type: String,
     pub description: Option<String>,
-    pub domain: Option<EntityRef>,
+    /// Every class this slot is a domain of (a slot can belong to
+    /// several classes). Rendered as the Domain row.
+    pub domains: Vec<EntityRef>,
     pub range: Option<RangeRef>,
+    /// Members of an `any_of` union range; empty for single-range slots.
+    /// Rendered as the Range row when `range` itself is absent (the
+    /// common `any_of` case), so a polymorphic range isn't dropped.
+    pub any_of: Vec<RangeRef>,
+    /// Validation `pattern` (regex), if any — rendered truncated with the
+    /// full value on a tooltip.
+    pub pattern: Option<String>,
     pub characteristics: Vec<String>,
     pub mappings: Vec<Mapping>,
 }
@@ -749,20 +758,27 @@ impl HtmlWriter {
                 })
                 .unwrap_or_else(|| "Property".to_string());
 
-            // Resolve domain to class EntityRef
-            let domain = slot_def.domain.as_ref().and_then(|domain_id| {
-                schema.classes.get(domain_id).map(|c| {
-                    let domain_label = c
-                        .annotations
-                        .get("panschema:label")
-                        .cloned()
-                        .unwrap_or_else(|| domain_id.clone());
-                    EntityRef {
-                        id: domain_id.clone(),
-                        label: domain_label,
-                    }
-                })
-            });
+            // Resolve every effective domain class to an EntityRef — the
+            // slot's own `domain:` or all classes that list it in
+            // `slots:` — so the card names every owning class, matching
+            // the graph hover.
+            let domains: Vec<EntityRef> =
+                crate::linkml_resolve::resolve_slot_domains(schema, slot_id, slot_def)
+                    .into_iter()
+                    .filter_map(|domain_id| {
+                        schema.classes.get(&domain_id).map(|c| {
+                            let domain_label = c
+                                .annotations
+                                .get("panschema:label")
+                                .cloned()
+                                .unwrap_or_else(|| domain_id.clone());
+                            EntityRef {
+                                id: domain_id.clone(),
+                                label: domain_label,
+                            }
+                        })
+                    })
+                    .collect();
 
             // Resolve range
             let range = slot_def.range.as_ref().map(|range_id| {
@@ -784,8 +800,43 @@ impl HtmlWriter {
                 }
             });
 
-            // Build characteristics
+            // Members of an `any_of` union range, resolved to refs (each
+            // member's own range, or the slot's range as a fallback).
+            let any_of: Vec<RangeRef> = slot_def
+                .any_of
+                .iter()
+                .filter_map(|branch| {
+                    branch
+                        .range
+                        .as_deref()
+                        .or(slot_def.range.as_deref())
+                        .map(|r| range_ref_for(r, schema))
+                })
+                .collect();
+
+            // Build characteristics. Surface effective cardinality
+            // (required / multivalued / explicit bounds), identifier, and
+            // inverse — the same slot facts the graph hover shows.
+            let cardinality = crate::linkml_resolve::effective_cardinality(slot_def);
             let mut characteristics = Vec::new();
+            if cardinality.required {
+                characteristics.push("Required".to_string());
+            }
+            if cardinality.multivalued {
+                characteristics.push("Multivalued".to_string());
+            }
+            if slot_def.identifier {
+                characteristics.push("Identifier".to_string());
+            }
+            if cardinality.min.is_some() || cardinality.max.is_some() {
+                let lo = cardinality
+                    .min
+                    .map_or_else(|| "0".to_string(), |m| m.to_string());
+                let hi = cardinality
+                    .max
+                    .map_or_else(|| "*".to_string(), |x| x.to_string());
+                characteristics.push(format!("{lo}..{hi}"));
+            }
             if let Some(inverse_id) = &slot_def.inverse {
                 let inverse_label = schema
                     .slots
@@ -825,8 +876,10 @@ impl HtmlWriter {
                     .description
                     .as_deref()
                     .map(|d| render_description(d, schema)),
-                domain,
+                domains,
                 range,
+                any_of,
+                pattern: slot_def.pattern.clone(),
                 characteristics,
                 mappings,
             });
@@ -2081,6 +2134,31 @@ mod tests {
     }
 
     #[test]
+    fn property_card_shows_bounds_badge_when_only_one_bound_is_set() {
+        use crate::linkml::{SchemaDefinition, SlotDefinition};
+        // A slot with only `minimum_cardinality` (no max) must still get
+        // a `min..*` bounds badge. Guards the
+        // `min.is_some() || max.is_some()` gate against collapsing to
+        // `&&`, which would hide bounds unless *both* ends are declared.
+        let mut schema = SchemaDefinition::new("bounds");
+        let mut members = SlotDefinition::new("members");
+        members.minimum_cardinality = Some(2);
+        schema.slots.insert("members".to_string(), members);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let prop = data
+            .property_data
+            .iter()
+            .find(|p| p.id == "members")
+            .unwrap();
+        assert!(
+            prop.characteristics.iter().any(|c| c == "2..*"),
+            "expected a `2..*` bounds badge; got {:?}",
+            prop.characteristics
+        );
+    }
+
+    #[test]
     fn html_writer_builds_property_data() {
         let reader = OwlReader::new();
         let schema = reader.read(&reference_ontology_path()).unwrap();
@@ -2098,7 +2176,7 @@ mod tests {
             .find(|p| p.id == "hasOwner")
             .unwrap();
         assert_eq!(has_owner.property_type, "Object Property");
-        assert!(has_owner.domain.is_some());
+        assert!(!has_owner.domains.is_empty());
         assert!(has_owner.range.is_some());
     }
 
