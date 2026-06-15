@@ -134,6 +134,26 @@ The resolver is a sibling module to `linkml.rs`, not part of `SchemaDefinition` 
 
 ---
 
+### Slice 12.5: Induced effective-slot range — apply `slot_usage` to compute the per-class slot
+
+**Status:** 📋 Planned
+
+**Priority:** Should Have
+
+**User Value:** A class that narrows an inherited slot via `slot_usage` — a smaller `any_of`, a single `range`, or `maximum_cardinality: 0` to say "this class produces no value here" — currently has that narrowing *ignored* by every consumer: the rendered card and graph show the wide inherited range, not the per-class one. Slices 12.1/12.3/12.4 overlay scalar `slot_usage` fields (cardinality, required), but not the *range* narrowing, and not the `range ∩ any_of` intersection that LinkML's induced-slot semantics require. This slice computes the induced effective range so the HTML card (feature 02 slice 19) and the graph (feature 04 slice 22) can show each class's actual I/O. Mirrors `linkml_runtime`'s `SchemaView.induced_slot()`.
+
+**Acceptance Criteria:**
+- [ ] `ResolvedSlot` carries the induced *range view*: the effective `range`, the effective `any_of` member list, and whether the slot is suppressed for this class (`maximum_cardinality: 0`).
+- [ ] Override vs. intersection semantics: a `slot_usage` `any_of` **replaces** the inherited `any_of`; a `slot_usage` `range` **intersects** the inherited `any_of` (so a base `any_of[7]` narrowed to a single `range: Dataset` induces `[Dataset]`, not the lingering 7-member union). A `slot_usage` `range` with no inherited `any_of` simply replaces the range.
+- [ ] `maximum_cardinality: 0` marks the induced slot suppressed for that class (renderers show "produces no value" / draw no edge), without dropping the slot from the class's declared set.
+- [ ] Unit tests against the verified scimantic reference: `Analysis.hasInput → [Dataset]`, `Analysis.hasOutput → [Result]`, `EvidenceExtraction.hasInput → any_of[Annotation, SourceDocument]`, `QuestionFormation.hasInput → any_of[Question, Result]`, `EvidenceAssessment.hasOutput → suppressed (max_card 0)`, `DesignOfExperiment.hasInput → suppressed`. A fixture pins both the `range ∩ any_of` intersection and the max-card-0 suppression.
+
+**Notes:**
+- Source: friction `[2026-06-14] slot_usage / per-class facets not rendered` (severity: dead-end) — the per-act provenance DAG in scimantic's facets chapter is invisible because every Act still renders the base `any_of[7]` envelope.
+- This is the IR half of a two-layer fix; the rendering halves are feature 02 slice 19 (cards) and feature 04 slice 22 (graph edges). Until it lands, the existing "refined here" badge (feature 02 slice 5) and per-class refined hover (feature 04 slice 14) surface scalar `slot_usage` overrides but not range narrowing.
+
+---
+
 ## Slice Priority and Dependencies
 
 | Slice | Priority | Depends On | Status |
@@ -142,6 +162,7 @@ The resolver is a sibling module to `linkml.rs`, not part of `SchemaDefinition` 
 | 12.2: `expand_curie` | Should Have | None | ✅ Complete |
 | 12.3: `effective_cardinality` | Should Have | 12.1 | ✅ Complete |
 | 12.4: Slot provenance | Nice to Have | 12.1 | ✅ Complete |
+| 12.5: Induced effective-slot range (`slot_usage` applied) | Should Have | 12.1, 12.3 | 📋 Planned |
 
 ---
 
