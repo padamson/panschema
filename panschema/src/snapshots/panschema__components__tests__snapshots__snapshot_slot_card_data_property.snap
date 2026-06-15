@@ -2,9 +2,9 @@
 source: panschema/src/components.rs
 expression: html
 ---
-<article class="entity-card property-card" id="prop-name">
+<article class="entity-card slot-card" id="slot-name">
     <header class="entity-header">
-        <div class="entity-badge property-badge">Data Property</div>
+        <div class="entity-badge slot-badge">Slot</div>
         <h3 class="entity-title">name</h3>
         <button class="copy-btn" data-copy="https://example.org/ontology#name" title="Copy IRI">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -36,7 +36,7 @@ expression: html
     </div>
 </article>
 <style>
-    .property-badge {
+    .slot-badge {
         background-color: color-mix(in srgb, var(--color-property) 15%, transparent);
         color: var(--color-property);
     }

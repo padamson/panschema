@@ -29,13 +29,13 @@ expression: html
         </div>
         <div class="detail-row">
             <dt>
-                <a href="#prop-name" class="entity-ref prop-ref">name</a>
+                <a href="#slot-name" class="entity-ref slot-ref">name</a>
             </dt>
             <dd>John Doe</dd>
         </div>
         <div class="detail-row">
             <dt>
-                <a href="#prop-member-of" class="entity-ref prop-ref">memberOf</a>
+                <a href="#slot-member-of" class="entity-ref slot-ref">memberOf</a>
             </dt>
             <dd>Acme Corp</dd>
         </div>

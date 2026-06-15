@@ -65,16 +65,6 @@
             </dd>
         </div>
 {%- endif %}
-{%- if !properties.is_empty() %}
-        <div class="detail-row">
-            <dt>Properties</dt>
-            <dd>
-{%- for prop in properties %}
-                <a href="#prop-{{ prop.id }}" class="entity-ref prop-ref">{{ prop.label }}</a>{%- if !loop.last %},{% endif %}
-{%- endfor %}
-            </dd>
-        </div>
-{%- endif %}
 {%- if !mappings.is_empty() %}
         <div class="detail-row">
             <dt>Mappings</dt>
@@ -98,7 +88,7 @@
                 <ul class="slot-list">
 {%- for slot in slots %}
                     <li class="slot-entry">
-                        <a href="#prop-{{ slot.name }}" class="slot-name"{% if let Some(tip) = slot.description_tooltip.as_deref() %} title="{{ tip }}"{% endif %}>{{ slot.name }}</a>
+                        <a href="#slot-{{ slot.name }}" class="slot-name"{% if let Some(tip) = slot.description_tooltip.as_deref() %} title="{{ tip }}"{% endif %}>{{ slot.name }}</a>
 {%- if !slot.any_of.is_empty() %}
                         : any of [
 {%- for branch in slot.any_of %}
@@ -292,11 +282,11 @@
         background-color: color-mix(in srgb, var(--color-class) 10%, transparent);
     }
 
-    .prop-ref {
+    .slot-ref {
         color: var(--color-property);
     }
 
-    .prop-ref:hover {
+    .slot-ref:hover {
         background-color: color-mix(in srgb, var(--color-property) 10%, transparent);
     }
 

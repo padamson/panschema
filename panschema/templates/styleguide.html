@@ -287,7 +287,7 @@
         <section class="component-section">
             <h2 class="component-name">Sidebar Navigation</h2>
             <p class="component-description">
-                Collapsible navigation tree showing ontology structure. Displays classes and properties with counts.
+                Collapsible navigation tree showing ontology structure. Displays classes and slots with counts.
             </p>
             <div class="component-preview">
                 <div class="preview-label">Preview</div>
@@ -344,7 +344,7 @@
         <section class="component-section">
             <h2 class="component-name">Class Card</h2>
             <p class="component-description">
-                Displays a single class with its IRI, description, superclass, subclasses, and associated properties.
+                Displays a single class with its IRI, description, superclass, subclasses, and associated slots.
             </p>
             <div class="component-preview">
                 <div class="preview-label">Preview</div>
@@ -355,7 +355,7 @@
                     {%- let description = sample_class.description %}
                     {%- let superclass = sample_class.superclass %}
                     {%- let subclasses = sample_class.subclasses %}
-                    {%- let properties = sample_class.properties %}
+                    {%- let slots = sample_class.slots %}
                     {%- let mixins = sample_class.mixins %}
                     {%- let slots = sample_class.slots %}
                     {%- let mappings = sample_class.mappings %}
@@ -375,42 +375,42 @@
                 Displays a property with its IRI, type (object/data), domain, range, and characteristics.
             </p>
             <div class="component-preview">
-                <div class="preview-label">Preview - Object Property</div>
+                <div class="preview-label">Preview - Slot (class range)</div>
                 <div class="preview-content preview-padded">
-                    {%- let id = sample_property.id %}
-                    {%- let label = sample_property.label %}
-                    {%- let iri = sample_property.iri %}
-                    {%- let property_type = sample_property.property_type %}
-                    {%- let description = sample_property.description %}
-                    {%- let domains = sample_property.domains %}
-                    {%- let range = sample_property.range %}
-                    {%- let any_of = sample_property.any_of %}
-                    {%- let pattern = sample_property.pattern %}
-                    {%- let characteristics = sample_property.characteristics %}
-                    {%- let mappings = sample_property.mappings %}
-                    {%- let iri_href = sample_property.iri_href %}
-                    {% include "components/property_card.html" %}
+                    {%- let id = sample_slot.id %}
+                    {%- let label = sample_slot.label %}
+                    {%- let iri = sample_slot.iri %}
+                    {%- let slot_type = sample_slot.slot_type %}
+                    {%- let description = sample_slot.description %}
+                    {%- let domains = sample_slot.domains %}
+                    {%- let range = sample_slot.range %}
+                    {%- let any_of = sample_slot.any_of %}
+                    {%- let pattern = sample_slot.pattern %}
+                    {%- let characteristics = sample_slot.characteristics %}
+                    {%- let mappings = sample_slot.mappings %}
+                    {%- let iri_href = sample_slot.iri_href %}
+                    {% include "components/slot_card.html" %}
                 </div>
             </div>
             <div class="component-preview" style="margin-top: 1rem;">
-                <div class="preview-label">Preview - Data Property</div>
+                <div class="preview-label">Preview - Slot (datatype range)</div>
                 <div class="preview-content preview-padded">
-                    {%- let id = sample_data_property.id %}
-                    {%- let label = sample_data_property.label %}
-                    {%- let iri = sample_data_property.iri %}
-                    {%- let property_type = sample_data_property.property_type %}
-                    {%- let description = sample_data_property.description %}
-                    {%- let domains = sample_data_property.domains %}
-                    {%- let range = sample_data_property.range %}
-                    {%- let any_of = sample_data_property.any_of %}
-                    {%- let pattern = sample_data_property.pattern %}
-                    {%- let characteristics = sample_data_property.characteristics %}
-                    {%- let mappings = sample_data_property.mappings %}
-                    {%- let iri_href = sample_data_property.iri_href %}
-                    {% include "components/property_card.html" %}
+                    {%- let id = sample_data_slot.id %}
+                    {%- let label = sample_data_slot.label %}
+                    {%- let iri = sample_data_slot.iri %}
+                    {%- let slot_type = sample_data_slot.slot_type %}
+                    {%- let description = sample_data_slot.description %}
+                    {%- let domains = sample_data_slot.domains %}
+                    {%- let range = sample_data_slot.range %}
+                    {%- let any_of = sample_data_slot.any_of %}
+                    {%- let pattern = sample_data_slot.pattern %}
+                    {%- let characteristics = sample_data_slot.characteristics %}
+                    {%- let mappings = sample_data_slot.mappings %}
+                    {%- let iri_href = sample_data_slot.iri_href %}
+                    {% include "components/slot_card.html" %}
                 </div>
             </div>
-            <p class="component-file">Template: <code>templates/components/property_card.html</code></p>
+            <p class="component-file">Template: <code>templates/components/slot_card.html</code></p>
         </section>
 
         <!-- Individual Card Component -->
@@ -453,7 +453,7 @@
         <section class="component-section">
             <h2 class="component-name">Design Tokens</h2>
             <p class="component-description">
-                CSS custom properties for colors, typography, and spacing used throughout the documentation.
+                CSS custom slots for colors, typography, and spacing used throughout the documentation.
             </p>
 
             <h3 style="font-size: 1.125rem; margin: 1.5rem 0 1rem;">Colors</h3>
@@ -467,7 +467,7 @@
                     </div>
                     <div>
                         <div style="width: 100%; height: 48px; background-color: var(--color-property); border-radius: var(--radius-sm);"></div>
-                        <p style="margin: 0.5rem 0 0; font-size: var(--text-sm);">Property</p>
+                        <p style="margin: 0.5rem 0 0; font-size: var(--text-sm);">Slot</p>
                         <code style="font-size: var(--text-xs); color: var(--color-text-muted);">--color-property</code>
                     </div>
                     <div>

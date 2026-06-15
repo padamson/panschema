@@ -248,12 +248,12 @@ fn tooltip_text(display: &str, href: Option<&str>, definitions: &[String]) -> St
 
 /// Full property data for rendering property cards.
 #[derive(Debug, Clone)]
-pub struct PropertyData {
+pub struct SlotData {
     pub id: String,
     pub label: String,
     pub iri: String,
     pub iri_href: Option<String>,
-    pub property_type: String,
+    pub slot_type: String,
     pub description: Option<String>,
     /// Every class this slot is a domain of (a slot can belong to
     /// several classes). Rendered as the Domain row.
@@ -300,13 +300,12 @@ struct IndexTemplate<'a> {
     classes: &'a [EntityRef],
     class_data: &'a [ClassData],
     class_tree: &'a [ClassTreeEntry],
-    properties: &'a [EntityRef],
-    property_data: &'a [PropertyData],
+    slots: &'a [EntityRef],
+    slot_data: &'a [SlotData],
     individuals: &'a [EntityRef],
     individual_data: &'a [IndividualData],
     namespaces: &'a [Namespace],
-    /// Empty slice for class cards that don't have properties yet
-    empty_properties: &'a [EntityRef],
+    /// Empty slice for class cards that don't have slots yet
     /// Graph data JSON for visualization (None = no graph)
     graph_json: Option<&'a str>,
     /// Number of nodes in the graph (for sidebar badge)
@@ -722,8 +721,8 @@ impl HtmlWriter {
         }
 
         // Build property (slot) data
-        let mut property_refs = Vec::new();
-        let mut property_data_list = Vec::new();
+        let mut slot_refs = Vec::new();
+        let mut slot_data_list = Vec::new();
 
         // Sort slots by label for consistent ordering
         let mut sorted_slots: Vec<_> = schema.slots.iter().collect();
@@ -740,23 +739,15 @@ impl HtmlWriter {
                 .cloned()
                 .unwrap_or_else(|| (*slot_id).clone());
 
-            property_refs.push(EntityRef {
+            slot_refs.push(EntityRef {
                 id: (*slot_id).clone(),
                 label: label.clone(),
             });
 
-            // Determine property type from annotation
-            let property_type = slot_def
-                .annotations
-                .get("panschema:owl_property_type")
-                .map(|t| {
-                    if t == "ObjectProperty" {
-                        "Object Property".to_string()
-                    } else {
-                        "Datatype Property".to_string()
-                    }
-                })
-                .unwrap_or_else(|| "Property".to_string());
+            // Every relation renders under the single LinkML term. The
+            // object-vs-datatype distinction lives in the card's Range row
+            // (a class link vs a datatype name), so the badge stays "Slot".
+            let slot_type = "Slot".to_string();
 
             // Resolve every effective domain class to an EntityRef — the
             // slot's own `domain:` or all classes that list it in
@@ -863,7 +854,7 @@ impl HtmlWriter {
                 .and_then(|s| crate::linkml_resolve::expand_curie(schema, s))
                 .or_else(|| crate::linkml_resolve::expand_curie(schema, slot_id));
 
-            property_data_list.push(PropertyData {
+            slot_data_list.push(SlotData {
                 id: (*slot_id).clone(),
                 label,
                 iri: slot_def
@@ -871,7 +862,7 @@ impl HtmlWriter {
                     .clone()
                     .unwrap_or_else(|| (*slot_id).clone()),
                 iri_href,
-                property_type,
+                slot_type,
                 description: slot_def
                     .description
                     .as_deref()
@@ -996,8 +987,8 @@ impl HtmlWriter {
             class_refs,
             class_tree: build_class_tree(&class_data_list),
             class_data: class_data_list,
-            property_refs,
-            property_data: property_data_list,
+            slot_refs,
+            slot_data: slot_data_list,
             individual_refs,
             individual_data: individual_data_list,
         }
@@ -1020,8 +1011,8 @@ struct TemplateData {
     class_refs: Vec<EntityRef>,
     class_data: Vec<ClassData>,
     class_tree: Vec<ClassTreeEntry>,
-    property_refs: Vec<EntityRef>,
-    property_data: Vec<PropertyData>,
+    slot_refs: Vec<EntityRef>,
+    slot_data: Vec<SlotData>,
     individual_refs: Vec<EntityRef>,
     individual_data: Vec<IndividualData>,
 }
@@ -1054,12 +1045,11 @@ impl Writer for HtmlWriter {
             classes: &data.class_refs,
             class_data: &data.class_data,
             class_tree: &data.class_tree,
-            properties: &data.property_refs,
-            property_data: &data.property_data,
+            slots: &data.slot_refs,
+            slot_data: &data.slot_data,
             individuals: &data.individual_refs,
             individual_data: &data.individual_data,
             namespaces: &data.namespaces,
-            empty_properties: &[],
             graph_json: graph_json_string.as_deref(),
             graph_node_count,
             graph_edge_count,
@@ -1272,7 +1262,7 @@ fn render_xref(name: &str, schema: &SchemaDefinition) -> String {
     } else if schema.enums.contains_key(name) {
         format!(r##"<a href="#enum-{name}" class="entity-ref enum-ref">{name}</a>"##)
     } else if schema.slots.contains_key(name) {
-        format!(r##"<a href="#prop-{name}" class="entity-ref prop-ref">{name}</a>"##)
+        format!(r##"<a href="#slot-{name}" class="entity-ref slot-ref">{name}</a>"##)
     } else {
         format!(
             "[[{name}]]<!-- WARNING: [[{name}]] does not resolve to a class, \
@@ -1766,7 +1756,7 @@ mod tests {
             .insert("status".to_string(), SlotDefinition::new("status"));
         let html = render_description("the [[status]] slot", &schema);
         assert!(
-            html.contains(r##"<a href="#prop-status" class="entity-ref prop-ref">status</a>"##),
+            html.contains(r##"<a href="#slot-status" class="entity-ref slot-ref">status</a>"##),
             "expected slot anchor; got: {html}"
         );
     }
@@ -2134,7 +2124,7 @@ mod tests {
     }
 
     #[test]
-    fn property_card_shows_bounds_badge_when_only_one_bound_is_set() {
+    fn slot_card_shows_bounds_badge_when_only_one_bound_is_set() {
         use crate::linkml::{SchemaDefinition, SlotDefinition};
         // A slot with only `minimum_cardinality` (no max) must still get
         // a `min..*` bounds badge. Guards the
@@ -2146,11 +2136,7 @@ mod tests {
         schema.slots.insert("members".to_string(), members);
 
         let data = HtmlWriter::build_template_data(&schema);
-        let prop = data
-            .property_data
-            .iter()
-            .find(|p| p.id == "members")
-            .unwrap();
+        let prop = data.slot_data.iter().find(|p| p.id == "members").unwrap();
         assert!(
             prop.characteristics.iter().any(|c| c == "2..*"),
             "expected a `2..*` bounds badge; got {:?}",
@@ -2159,23 +2145,19 @@ mod tests {
     }
 
     #[test]
-    fn html_writer_builds_property_data() {
+    fn html_writer_builds_slot_data() {
         let reader = OwlReader::new();
         let schema = reader.read(&reference_ontology_path()).unwrap();
 
         let data = HtmlWriter::build_template_data(&schema);
 
-        // Should have 4 properties
-        assert_eq!(data.property_refs.len(), 4);
-        assert_eq!(data.property_data.len(), 4);
+        // Should have 4 slots
+        assert_eq!(data.slot_refs.len(), 4);
+        assert_eq!(data.slot_data.len(), 4);
 
         // Find hasOwner property
-        let has_owner = data
-            .property_data
-            .iter()
-            .find(|p| p.id == "hasOwner")
-            .unwrap();
-        assert_eq!(has_owner.property_type, "Object Property");
+        let has_owner = data.slot_data.iter().find(|p| p.id == "hasOwner").unwrap();
+        assert_eq!(has_owner.slot_type, "Slot");
         assert!(!has_owner.domains.is_empty());
         assert!(has_owner.range.is_some());
     }
@@ -2239,7 +2221,7 @@ mod tests {
         assert!(html.contains("0.2.0"));
         assert!(html.contains("class-Animal"));
         assert!(html.contains("class-Dog"));
-        assert!(html.contains("prop-hasOwner"));
+        assert!(html.contains("slot-hasOwner"));
         assert!(html.contains("ind-fido"));
 
         // Cleanup
@@ -2364,7 +2346,7 @@ mod tests {
         );
 
         // Verify the badge contains node/edge counts (format: "X / Y")
-        // Reference ontology has 5 classes + 4 properties + 1 individual = nodes
+        // Reference ontology has 5 classes + 4 slots + 1 individual = nodes
         // and corresponding edges for subclass relationships, domain/range, etc.
         assert!(
             html.contains("<span class=\"badge\">"),
@@ -2455,7 +2437,7 @@ mod tests {
     }
 
     #[test]
-    fn property_data_surfaces_mappings_with_expanded_iris() {
+    fn slot_data_surfaces_mappings_with_expanded_iris() {
         use crate::linkml::{SchemaDefinition, SlotDefinition};
         let mut schema = SchemaDefinition::new("s");
         schema
@@ -2466,11 +2448,7 @@ mod tests {
         schema.slots.insert("supports".to_string(), supports);
 
         let data = HtmlWriter::build_template_data(&schema);
-        let card = data
-            .property_data
-            .iter()
-            .find(|p| p.id == "supports")
-            .unwrap();
+        let card = data.slot_data.iter().find(|p| p.id == "supports").unwrap();
 
         assert_eq!(card.mappings.len(), 1);
         assert_eq!(card.mappings[0].kind, "exact");
@@ -2732,7 +2710,7 @@ mod tests {
     }
 
     #[test]
-    fn property_data_expands_slot_uri_to_iri_href() {
+    fn slot_data_expands_slot_uri_to_iri_href() {
         use crate::linkml::{SchemaDefinition, SlotDefinition};
         let mut schema = SchemaDefinition::new("s");
         schema
@@ -2743,11 +2721,7 @@ mod tests {
         schema.slots.insert("supports".to_string(), supports);
 
         let data = HtmlWriter::build_template_data(&schema);
-        let card = data
-            .property_data
-            .iter()
-            .find(|p| p.id == "supports")
-            .unwrap();
+        let card = data.slot_data.iter().find(|p| p.id == "supports").unwrap();
         assert_eq!(
             card.iri_href.as_deref(),
             Some("http://purl.org/spar/cito/supports")

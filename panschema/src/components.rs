@@ -106,7 +106,7 @@ pub struct SampleData {
     pub version: Option<String>,
     pub comment: Option<String>,
     pub classes: Vec<EntityRef>,
-    pub properties: Vec<EntityRef>,
+    pub slots: Vec<EntityRef>,
     pub individuals: Vec<EntityRef>,
     pub namespaces: Vec<Namespace>,
 }
@@ -125,7 +125,7 @@ impl Default for SampleData {
                 EntityRef::new("organization", "Organization"),
                 EntityRef::new("event", "Event"),
             ],
-            properties: vec![
+            slots: vec![
                 EntityRef::new("name", "name"),
                 EntityRef::new("member-of", "memberOf"),
                 EntityRef::new("participates-in", "participatesIn"),
@@ -154,7 +154,7 @@ impl SampleData {
             version: None,
             comment: None,
             classes: vec![],
-            properties: vec![],
+            slots: vec![],
             individuals: vec![],
             namespaces: vec![Namespace::new("", "https://example.org/minimal#")],
         }
@@ -202,7 +202,7 @@ pub struct MetadataCardComponent<'a> {
 pub struct SidebarComponent<'a> {
     pub active_section: &'a str,
     pub classes: &'a [EntityRef],
-    pub properties: &'a [EntityRef],
+    pub slots: &'a [EntityRef],
     pub individuals: &'a [EntityRef],
     pub namespaces: &'a [Namespace],
     /// Graph data JSON for visualization (None = no graph link in sidebar)
@@ -241,7 +241,6 @@ pub struct ClassCardComponent<'a> {
     pub description: Option<&'a str>,
     pub superclass: Option<&'a EntityRef>,
     pub subclasses: &'a [EntityRef],
-    pub properties: &'a [EntityRef],
     pub mixins: &'a [EntityRef],
     pub slots: &'a [panschema::html_writer::SlotInClass],
     pub mappings: &'a [panschema::html_writer::Mapping],
@@ -251,13 +250,13 @@ pub struct ClassCardComponent<'a> {
 
 /// Property card component template.
 #[derive(Template)]
-#[template(path = "components/property_card.html")]
-pub struct PropertyCardComponent<'a> {
+#[template(path = "components/slot_card.html")]
+pub struct SlotCardComponent<'a> {
     pub id: &'a str,
     pub label: &'a str,
     pub iri: &'a str,
     pub iri_href: Option<&'a str>,
-    pub property_type: &'a str,
+    pub slot_type: &'a str,
     pub description: Option<&'a str>,
     pub domains: &'a [EntityRef],
     pub range: Option<&'a RangeSpec>,
@@ -289,7 +288,6 @@ pub struct SampleClass<'a> {
     pub description: Option<&'a str>,
     pub superclass: Option<&'a EntityRef>,
     pub subclasses: &'a [EntityRef],
-    pub properties: &'a [EntityRef],
     pub mixins: &'a [EntityRef],
     pub slots: &'a [panschema::html_writer::SlotInClass],
     pub mappings: &'a [panschema::html_writer::Mapping],
@@ -298,12 +296,12 @@ pub struct SampleClass<'a> {
 }
 
 /// Sample property data for styleguide previews.
-pub struct SampleProperty<'a> {
+pub struct SampleSlot<'a> {
     pub id: &'a str,
     pub label: &'a str,
     pub iri: &'a str,
     pub iri_href: Option<&'a str>,
-    pub property_type: &'a str,
+    pub slot_type: &'a str,
     pub description: Option<&'a str>,
     pub domains: &'a [EntityRef],
     pub range: Option<&'a RangeSpec>,
@@ -333,7 +331,7 @@ pub struct StyleGuideTemplate<'a> {
     pub version: Option<&'a str>,
     pub comment: Option<&'a str>,
     pub classes: &'a [EntityRef],
-    pub properties: &'a [EntityRef],
+    pub slots: &'a [EntityRef],
     pub individuals: &'a [EntityRef],
     pub namespaces: &'a [Namespace],
     /// Graph data JSON (None = no graph link in sidebar)
@@ -344,8 +342,8 @@ pub struct StyleGuideTemplate<'a> {
     pub graph_edge_count: usize,
     // Sample data for component previews
     pub sample_class: SampleClass<'a>,
-    pub sample_property: SampleProperty<'a>,
-    pub sample_data_property: SampleProperty<'a>,
+    pub sample_slot: SampleSlot<'a>,
+    pub sample_data_slot: SampleSlot<'a>,
     pub sample_individual: SampleIndividual<'a>,
     /// Matches IndexTemplate. Always `None` for the styleguide page.
     pub version_context: Option<&'a panschema::html_writer::VersionContext>,
@@ -397,14 +395,14 @@ impl ComponentRenderer {
     pub fn sidebar(
         active_section: &str,
         classes: &[EntityRef],
-        properties: &[EntityRef],
+        slots: &[EntityRef],
         individuals: &[EntityRef],
         namespaces: &[Namespace],
     ) -> anyhow::Result<String> {
         let template = SidebarComponent {
             active_section,
             classes,
-            properties,
+            slots,
             individuals,
             namespaces,
             graph_json: None, // No graph in component preview
@@ -445,7 +443,6 @@ impl ComponentRenderer {
         description: Option<&str>,
         superclass: Option<&EntityRef>,
         subclasses: &[EntityRef],
-        properties: &[EntityRef],
         mixins: &[EntityRef],
         slots: &[panschema::html_writer::SlotInClass],
     ) -> anyhow::Result<String> {
@@ -457,7 +454,6 @@ impl ComponentRenderer {
             description,
             superclass,
             subclasses,
-            properties,
             mixins,
             slots,
             mappings: &[],
@@ -469,22 +465,22 @@ impl ComponentRenderer {
 
     /// Render a property card component.
     #[allow(clippy::too_many_arguments)]
-    pub fn property_card(
+    pub fn slot_card(
         id: &str,
         label: &str,
         iri: &str,
-        property_type: &str,
+        slot_type: &str,
         description: Option<&str>,
         domain: Option<&EntityRef>,
         range: Option<&RangeSpec>,
         characteristics: &[String],
     ) -> anyhow::Result<String> {
-        let template = PropertyCardComponent {
+        let template = SlotCardComponent {
             id,
             label,
             iri,
             iri_href: None,
-            property_type,
+            slot_type,
             description,
             domains: domain.map(std::slice::from_ref).unwrap_or(&[]),
             range,
@@ -525,7 +521,6 @@ impl ComponentRenderer {
             EntityRef::new("employee", "Employee"),
             EntityRef::new("customer", "Customer"),
         ];
-        let class_properties = vec![EntityRef::new("name", "name"), EntityRef::new("age", "age")];
 
         let class_mixins = vec![
             EntityRef::new("auditable", "Auditable"),
@@ -585,7 +580,6 @@ impl ComponentRenderer {
             description: Some("Represents a human being."),
             superclass: Some(&superclass),
             subclasses: &subclasses,
-            properties: &class_properties,
             mixins: &class_mixins,
             slots: &class_slots,
             mappings: &class_mappings,
@@ -596,40 +590,40 @@ impl ComponentRenderer {
         let domain = EntityRef::new("person", "Person");
         let range = RangeSpec::class(EntityRef::new("organization", "Organization"));
         let characteristics = vec!["Functional".to_string()];
-        let property_mappings: Vec<panschema::html_writer::Mapping> = vec![];
+        let slot_mappings: Vec<panschema::html_writer::Mapping> = vec![];
 
-        let sample_property = SampleProperty {
+        let sample_slot = SampleSlot {
             id: "member-of",
             label: "memberOf",
             iri: "https://example.org/ontology#memberOf",
             iri_href: Some("https://example.org/ontology#memberOf"),
-            property_type: "Object Property",
+            slot_type: "Slot",
             description: Some("Relates a person to their organization."),
             domains: std::slice::from_ref(&domain),
             range: Some(&range),
             any_of: &[],
             pattern: None,
             characteristics: &characteristics,
-            mappings: &property_mappings,
+            mappings: &slot_mappings,
         };
 
         let domain2 = EntityRef::new("person", "Person");
         let range2 = RangeSpec::datatype("xsd:string");
         let empty_characteristics: Vec<String> = vec![];
 
-        let sample_data_property = SampleProperty {
+        let sample_data_slot = SampleSlot {
             id: "name",
             label: "name",
             iri: "https://example.org/ontology#name",
             iri_href: Some("https://example.org/ontology#name"),
-            property_type: "Data Property",
+            slot_type: "Slot",
             description: Some("The name of an entity."),
             domains: std::slice::from_ref(&domain2),
             range: Some(&range2),
             any_of: &[],
             pattern: Some("^[A-Z][a-z]+$"),
             characteristics: &empty_characteristics,
-            mappings: &property_mappings,
+            mappings: &slot_mappings,
         };
 
         let ind_types = vec![EntityRef::new("person", "Person")];
@@ -657,15 +651,15 @@ impl ComponentRenderer {
             version: data.version.as_deref(),
             comment: data.comment.as_deref(),
             classes: &data.classes,
-            properties: &data.properties,
+            slots: &data.slots,
             individuals: &data.individuals,
             namespaces: &data.namespaces,
             graph_json: None, // No graph in styleguide
             graph_node_count: 0,
             graph_edge_count: 0,
             sample_class,
-            sample_property,
-            sample_data_property,
+            sample_slot,
+            sample_data_slot,
             sample_individual,
             version_context: None,
             site_root_href: "./",
@@ -795,7 +789,7 @@ mod tests {
                 EntityRef::new("person", "Person"),
                 EntityRef::new("organization", "Organization"),
             ];
-            let properties = vec![
+            let slots = vec![
                 EntityRef::new("name", "name"),
                 EntityRef::new("member-of", "memberOf"),
             ];
@@ -804,14 +798,9 @@ mod tests {
                 Namespace::new("ex", "https://example.org/ontology#"),
                 Namespace::new("rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#"),
             ];
-            let html = ComponentRenderer::sidebar(
-                "metadata",
-                &classes,
-                &properties,
-                &individuals,
-                &namespaces,
-            )
-            .unwrap();
+            let html =
+                ComponentRenderer::sidebar("metadata", &classes, &slots, &individuals, &namespaces)
+                    .unwrap();
             insta::assert_snapshot!(html);
         }
 
@@ -859,7 +848,6 @@ mod tests {
                 EntityRef::new("employee", "Employee"),
                 EntityRef::new("customer", "Customer"),
             ];
-            let properties = vec![EntityRef::new("name", "name"), EntityRef::new("age", "age")];
             let html = ComponentRenderer::class_card(
                 "person",
                 "Person",
@@ -867,7 +855,6 @@ mod tests {
                 Some("Represents a human being."),
                 Some(&superclass),
                 &subclasses,
-                &properties,
                 &[],
                 &[],
             )
@@ -883,7 +870,6 @@ mod tests {
                 "https://example.org/ontology#Thing",
                 None,
                 None,
-                &[],
                 &[],
                 &[],
                 &[],
@@ -905,7 +891,6 @@ mod tests {
                 description: Some("Foundation class — not meant to be instantiated."),
                 superclass: None,
                 subclasses: &[],
-                properties: &[],
                 mixins: &[],
                 slots: &[],
                 mappings: &[],
@@ -932,7 +917,6 @@ mod tests {
                 "https://example.org/ontology#Document",
                 None,
                 None,
-                &[],
                 &[],
                 &mixins,
                 &[],
@@ -963,7 +947,6 @@ mod tests {
                 &[],
                 &[],
                 &[],
-                &[],
             )
             .unwrap();
             assert!(
@@ -973,14 +956,14 @@ mod tests {
         }
 
         #[test]
-        fn snapshot_property_card_object_property() {
+        fn snapshot_slot_card_object_property() {
             let domain = EntityRef::new("person", "Person");
             let range = RangeSpec::class(EntityRef::new("organization", "Organization"));
-            let html = ComponentRenderer::property_card(
+            let html = ComponentRenderer::slot_card(
                 "member-of",
                 "memberOf",
                 "https://example.org/ontology#memberOf",
-                "Object Property",
+                "Slot",
                 Some("Relates a person to their organization."),
                 Some(&domain),
                 Some(&range),
@@ -991,14 +974,14 @@ mod tests {
         }
 
         #[test]
-        fn snapshot_property_card_data_property() {
+        fn snapshot_slot_card_data_property() {
             let domain = EntityRef::new("person", "Person");
             let range = RangeSpec::datatype("xsd:string");
-            let html = ComponentRenderer::property_card(
+            let html = ComponentRenderer::slot_card(
                 "name",
                 "name",
                 "https://example.org/ontology#name",
-                "Data Property",
+                "Slot",
                 Some("The name of a person."),
                 Some(&domain),
                 Some(&range),
@@ -1009,12 +992,12 @@ mod tests {
         }
 
         #[test]
-        fn snapshot_property_card_minimal() {
-            let html = ComponentRenderer::property_card(
+        fn snapshot_slot_card_minimal() {
+            let html = ComponentRenderer::slot_card(
                 "relates-to",
                 "relatesTo",
                 "https://example.org/ontology#relatesTo",
-                "Object Property",
+                "Slot",
                 None,
                 None,
                 None,

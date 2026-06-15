@@ -9,8 +9,8 @@
 {%- if !classes.is_empty() %}
         <li><a href="#classes" class="sidebar-link{% if active_section == "classes" %} active{% endif %}">Classes <span class="badge">{{ classes.len() }}</span></a></li>
 {%- endif %}
-{%- if !properties.is_empty() %}
-        <li><a href="#properties" class="sidebar-link{% if active_section == "properties" %} active{% endif %}">Properties <span class="badge">{{ properties.len() }}</span></a></li>
+{%- if !slots.is_empty() %}
+        <li><a href="#slots" class="sidebar-link{% if active_section == "slots" %} active{% endif %}">Slots <span class="badge">{{ slots.len() }}</span></a></li>
 {%- endif %}
 {%- if !individuals.is_empty() %}
         <li><a href="#individuals" class="sidebar-link{% if active_section == "individuals" %} active{% endif %}">Individuals <span class="badge">{{ individuals.len() }}</span></a></li>

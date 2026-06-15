@@ -33,7 +33,7 @@
         <div class="detail-row">
             <dt>
 {%- if let Some(pr) = pv.property_ref.as_ref() %}
-                <a href="#prop-{{ pr.id }}" class="entity-ref prop-ref">{{ pv.property_label }}</a>
+                <a href="#slot-{{ pr.id }}" class="entity-ref slot-ref">{{ pv.property_label }}</a>
 {%- else %}
                 {{ pv.property_label }}
 {%- endif %}

@@ -286,52 +286,52 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         browser_name
     );
 
-    // 6d. Verify properties are extracted and displayed
-    let prop_section = page.locator("#properties").await;
-    let prop_section_html = prop_section
+    // 6d. Verify slots are extracted and displayed
+    let slot_section = page.locator("#slots").await;
+    let slot_section_html = slot_section
         .inner_html()
         .await
-        .expect("Failed to get properties section");
+        .expect("Failed to get slots section");
     assert!(
-        prop_section_html.contains(">4<"),
-        "[{}] Properties section should show count of 4, got: {}",
+        slot_section_html.contains(">4<"),
+        "[{}] Slots section should show count of 4, got: {}",
         browser_name,
-        prop_section_html
+        slot_section_html
     );
 
-    // Verify property links are present
-    let prop_links = page.locator(".prop-link").await;
-    let prop_link_count = prop_links
+    // Verify slot links are present
+    let slot_links = page.locator(".slot-link").await;
+    let slot_link_count = slot_links
         .count()
         .await
-        .expect("Failed to count property links");
+        .expect("Failed to count slot links");
     assert_eq!(
-        prop_link_count, 4,
-        "[{}] Should have 4 property links",
+        slot_link_count, 4,
+        "[{}] Should have 4 slot links",
         browser_name
     );
 
-    // 6e. Verify property cards are rendered with full content
-    let prop_cards = page.locator(".property-card").await;
-    let prop_card_count = prop_cards
+    // 6e. Verify slot cards are rendered with full content
+    let slot_cards = page.locator(".slot-card").await;
+    let slot_card_count = slot_cards
         .count()
         .await
-        .expect("Failed to count property cards");
+        .expect("Failed to count slot cards");
     assert_eq!(
-        prop_card_count, 4,
-        "[{}] Should have 4 property cards",
+        slot_card_count, 4,
+        "[{}] Should have 4 slot cards",
         browser_name
     );
 
-    // Verify object property card: hasOwner
-    let has_owner_card = page.locator("#prop-hasOwner").await;
+    // Verify object-ranged slot card: hasOwner
+    let has_owner_card = page.locator("#slot-hasOwner").await;
     let has_owner_html = has_owner_card
         .inner_html()
         .await
         .expect("Failed to get hasOwner card");
     assert!(
-        has_owner_html.contains("Object Property"),
-        "[{}] hasOwner should show Object Property badge",
+        has_owner_html.contains("Slot"),
+        "[{}] hasOwner should show Slot badge",
         browser_name
     );
     assert!(
@@ -360,15 +360,15 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         browser_name
     );
 
-    // Verify datatype property card: hasAge
-    let has_age_card = page.locator("#prop-hasAge").await;
+    // Verify datatype-ranged slot card: hasAge
+    let has_age_card = page.locator("#slot-hasAge").await;
     let has_age_html = has_age_card
         .inner_html()
         .await
         .expect("Failed to get hasAge card");
     assert!(
-        has_age_html.contains("Datatype Property"),
-        "[{}] hasAge should show Datatype Property badge",
+        has_age_html.contains("Slot"),
+        "[{}] hasAge should show Slot badge",
         browser_name
     );
     assert!(
@@ -377,8 +377,8 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         browser_name
     );
 
-    // Verify inverse property: owns shows inverseOf characteristic
-    let owns_card = page.locator("#prop-owns").await;
+    // Verify inverse slot: owns shows inverseOf characteristic
+    let owns_card = page.locator("#slot-owns").await;
     let owns_html = owns_card
         .inner_html()
         .await

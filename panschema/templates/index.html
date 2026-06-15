@@ -59,7 +59,6 @@
         {%- let mappings = class.mappings.as_slice() %}
         {%- let external_superclasses = class.external_superclasses.as_slice() %}
         {%- let is_abstract = class.is_abstract %}
-        {%- let properties = empty_properties %}
         {% include "components/class_card.html" %}
         {%- if entry.has_children %}
         <ul class="class-tree-children">
@@ -99,35 +98,35 @@
 {%- endif %}
 </section>
 
-<section id="properties">
-    {%- let id = "properties" %}
-    {%- let title = "Properties" %}
-    {%- let count = Some(properties.len()) %}
-    {%- let description = Some("Properties defined in this ontology.") %}
+<section id="slots">
+    {%- let id = "slots" %}
+    {%- let title = "Slots" %}
+    {%- let count = Some(slots.len()) %}
+    {%- let description = Some("Slots defined in this ontology.") %}
     {% include "components/section_header.html" %}
-{%- if properties.is_empty() %}
-    <p class="placeholder-text">No properties defined in this ontology.</p>
+{%- if slots.is_empty() %}
+    <p class="placeholder-text">No slots defined in this ontology.</p>
 {%- else %}
     <div class="entity-list">
-{%- for prop in properties %}
-        <a href="#prop-{{ prop.id }}" class="entity-link prop-link">{{ prop.label }}</a>
+{%- for slot in slots %}
+        <a href="#slot-{{ slot.id }}" class="entity-link slot-link">{{ slot.label }}</a>
 {%- endfor %}
     </div>
-    <div class="property-cards">
-{%- for prop in property_data %}
-        {%- let id = prop.id.as_str() %}
-        {%- let label = prop.label.as_str() %}
-        {%- let iri = prop.iri.as_str() %}
-        {%- let iri_href = prop.iri_href.as_deref() %}
-        {%- let property_type = prop.property_type.as_str() %}
-        {%- let description = prop.description.as_deref() %}
-        {%- let domains = prop.domains.as_slice() %}
-        {%- let range = prop.range.as_ref() %}
-        {%- let any_of = prop.any_of.as_slice() %}
-        {%- let pattern = prop.pattern.as_deref() %}
-        {%- let characteristics = prop.characteristics.as_slice() %}
-        {%- let mappings = prop.mappings.as_slice() %}
-        {% include "components/property_card.html" %}
+    <div class="slot-cards">
+{%- for slot in slot_data %}
+        {%- let id = slot.id.as_str() %}
+        {%- let label = slot.label.as_str() %}
+        {%- let iri = slot.iri.as_str() %}
+        {%- let iri_href = slot.iri_href.as_deref() %}
+        {%- let slot_type = slot.slot_type.as_str() %}
+        {%- let description = slot.description.as_deref() %}
+        {%- let domains = slot.domains.as_slice() %}
+        {%- let range = slot.range.as_ref() %}
+        {%- let any_of = slot.any_of.as_slice() %}
+        {%- let pattern = slot.pattern.as_deref() %}
+        {%- let characteristics = slot.characteristics.as_slice() %}
+        {%- let mappings = slot.mappings.as_slice() %}
+        {% include "components/slot_card.html" %}
 {%- endfor %}
     </div>
 {%- endif %}
@@ -181,7 +180,7 @@
 
     /* Card grids tile to multiple columns on wide viewports; collapse to
        a single column when the minimum card width can't fit twice. */
-    .property-cards,
+    .slot-cards,
     .individual-cards {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
@@ -190,7 +189,7 @@
     }
 
     .class-cards .entity-card,
-    .property-cards .entity-card,
+    .slot-cards .entity-card,
     .individual-cards .entity-card {
         margin-bottom: 0;
     }
@@ -301,11 +300,11 @@
         background-color: color-mix(in srgb, var(--color-class) 10%, transparent);
     }
 
-    .prop-link {
+    .slot-link {
         color: var(--color-property);
     }
 
-    .prop-link:hover {
+    .slot-link:hover {
         background-color: color-mix(in srgb, var(--color-property) 10%, transparent);
     }
 
@@ -317,7 +316,7 @@
         background-color: color-mix(in srgb, var(--color-individual) 10%, transparent);
     }
 
-    .property-cards {
+    .slot-cards {
         margin-top: var(--space-6);
     }
 

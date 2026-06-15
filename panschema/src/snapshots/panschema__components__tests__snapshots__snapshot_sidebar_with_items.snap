@@ -1,5 +1,5 @@
 ---
-source: src/components.rs
+source: panschema/src/components.rs
 expression: html
 ---
 <nav class="sidebar-section">
@@ -8,7 +8,7 @@ expression: html
         <li><a href="#metadata" class="sidebar-link active">Metadata</a></li>
         <li><a href="#namespaces" class="sidebar-link">Namespaces <span class="badge">2</span></a></li>
         <li><a href="#classes" class="sidebar-link">Classes <span class="badge">2</span></a></li>
-        <li><a href="#properties" class="sidebar-link">Properties <span class="badge">2</span></a></li>
+        <li><a href="#slots" class="sidebar-link">Slots <span class="badge">2</span></a></li>
         <li><a href="#individuals" class="sidebar-link">Individuals <span class="badge">1</span></a></li>
     </ul>
 </nav>

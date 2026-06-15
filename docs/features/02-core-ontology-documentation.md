@@ -415,6 +415,70 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 
 ---
 
+### Slice 17: Unify on "slot" terminology + slot-card parity
+
+**Status:** ✅ Complete
+
+**Priority:** Should Have
+
+**User Value:** The rendered doc and the schema graph called the same entity two different things — the graph said "slot" (matching LinkML and the YAML the author writes), while the HTML doc said "property" (a "Properties" section, sidebar entry, and `Object Property` / `Datatype Property` badge, inherited from the OWL/RDF side). A reader moving between the graph and the doc body had to translate between two vocabularies for one concept. After this slice the doc says **"slot" everywhere**, and the per-relation card carries everything the graph hover used to show on its own, so the two views can't drift. See [ADR-006](../adr/006-slot-terminology.md).
+
+**Acceptance Criteria:**
+- [x] The HTML "Properties" section, sidebar entry, and heading become **"Slots"** (`id="slots"`, `#slots` anchor); each card id becomes `#slot-<name>` and the `[[Name]]` xref output for a slot resolves to `#slot-<name>` (superseding slice 5's `#prop-<name>`). The per-card badge reads a single **"Slot"** instead of `Object Property` / `Datatype Property` — the object-vs-datatype distinction is carried by the card's Range row (a class link vs a datatype name), so no information is lost.
+- [x] The rename holds regardless of source format: an OWL-imported schema reads as "slot" because the reader normalizes to the LinkML IR before rendering. The OWL reader/writer/RDF layer keeps "property" internally (OWL spec terms: `owl:ObjectProperty`, `owl:DatatypeProperty`).
+- [x] Internal identifiers are renamed so the code carries one vocabulary: `PropertyData` → `SlotData`, `property_card.html` → `slot_card.html`, `PropertyCardComponent` → `SlotCardComponent`, `property_type` → `slot_type`, the `.property-badge` / `.prop-ref` CSS classes → `.slot-badge` / `.slot-ref`.
+- [x] The slot card is brought up to parity with the graph hover: it lists every class the slot is a domain of (a slot can belong to several — resolved via `linkml_resolve::resolve_slot_domains`), its validation `pattern`, an `identifier` flag, and explicit `minimum_cardinality` / `maximum_cardinality` bounds (`min..max`), alongside required / multivalued / inverse and mappings.
+- [x] A polymorphic `any_of` range renders on the slot card as `any of [A, B, C]` with each branch anchor-linked when it names a declared class (previously the Range row was blank for union-ranged slots).
+- [x] Snapshot tests for the renamed `slot_card` component and the `render_xref` slot branch pin the new anchors and badge; the `#slots`/`#slot-<name>` anchors are exercised by the e2e happy-path test.
+
+**Notes:**
+- Source: friction surfaced by the scimantic-schema dogfood — the graph↔doc vocabulary split, plus `any_of` ranges silently dropping from the slot card.
+- The `#properties` → `#slots` and `#prop-<name>` → `#slot-<name>` anchor changes break external deep links; acceptable pre-1.0 and recorded in ADR-006.
+- The `any of [A, B, C]` row shows the slot's *global* union. A class that narrows it via `slot_usage` renders the same global union here; the per-class induced range is slice 19 (pending), built on feature 12 slice 12.5.
+
+---
+
+### Slice 18: Enumerations and Types HTML card sections
+
+**Status:** 📋 Planned
+
+**Priority:** Should Have
+
+**User Value:** The schema graph renders enum nodes (diamonds) and type nodes (rectangles), but the HTML doc has only Classes / Slots / Individuals sections — so enums and types are graph-only. Enums especially carry information worth reading: permissible values, each value's description, and a `meaning` IRI grounding the value in an upstream vocabulary. An author inspecting the rendered docs can't review an enum's allowed values without opening the YAML or the graph. This slice adds **Enumerations** and **Types** sections for parity with every node kind the graph draws, and lets the graph hover reuse those cards (closing the enum/type gap left by feature 04 slice 21).
+
+**Acceptance Criteria:**
+- [ ] `EnumData` and `TypeData` view-models built from the IR's `EnumDefinition` (permissible values + per-value description + CURIE-expanded `meaning`) and `TypeDefinition` (base type, `uri`, pattern/constraints where present).
+- [ ] An **Enumerations** section (`id="enums"`, `#enum-<name>` card ids) renders one card per enum: its description, and a list of permissible values each showing its text, description, and a hyperlinked `meaning` IRI (reusing the upstream-label cache from feature 13 so the link reads as a label, not a CURIE).
+- [ ] A **Types** section (`id="types"`, `#type-<name>` card ids) renders one card per declared type: base/parent type, `uri`, and any pattern/min/max constraints.
+- [ ] Sidebar gains "Enumerations" and "Types" entries with count badges; the `render_xref` `#enum-<name>` branch (already emitted for `[[Name]]` enum refs) now resolves to a real card.
+- [ ] The graph hover (feature 04 slice 21) reuses the rendered `#enum-<name>` / `#type-<name>` card for enum and type nodes instead of the compact built-in fallback.
+- [ ] Snapshot tests for the new `enum_card` / `type_card` components; e2e asserts the sections render with the reference fixture's enums/types.
+
+**Notes:**
+- Source: friction `[2026-06-14] enums (and types) render in the graph but have no HTML card section` (severity: annoyance / completeness gap). The IR data already exists; only the HTML surface is missing.
+- Graph↔HTML parity check: every node kind the graph renders should have a corresponding HTML card section.
+
+---
+
+### Slice 19: Render the induced per-class slot range on class and slot cards
+
+**Status:** 📋 Planned
+
+**Priority:** Should Have
+
+**User Value:** A class that narrows an inherited slot via `slot_usage` — a single `range`, a smaller `any_of`, or `maximum_cardinality: 0` — should show its *narrowed* I/O on the card, not the wide inherited union. Today the card shows the global range even where a subclass refined it, so the per-class story (e.g. `Analysis` takes a `Dataset` and produces a `Result`; `EvidenceAssessment` produces no artifact) is invisible. This slice consumes the induced effective-slot range (feature 12 slice 12.5) so each class card reflects what that class actually declares.
+
+**Acceptance Criteria:**
+- [ ] The class card's slot row shows the induced effective range for the current class: a `slot_usage` `range` narrowing renders the narrowed single range; a narrowed `any_of` renders the smaller union; the `range ∩ any_of` intersection is reflected (no lingering base union masking a single-range narrowing).
+- [ ] A slot suppressed for the class via `maximum_cardinality: 0` renders as "produces no value" (or equivalent) rather than showing the inherited range, and keeps its "refined here" badge.
+- [ ] The standalone slot card continues to show the slot's global range/union (slice 17); the per-class narrowing appears on the *class* card where the refinement is declared.
+- [ ] Integration test against a fixture with a `slot_usage` range narrowing of an `any_of` and a `maximum_cardinality: 0`, asserting the class card shows the narrowed range and the suppressed slot.
+
+**Notes:**
+- Source: same friction as feature 12 slice 12.5 (`[2026-06-14] slot_usage / per-class facets not rendered`). This is the HTML-card half; feature 04 slice 22 is the graph-edge half; feature 12 slice 12.5 is the IR foundation both consume.
+
+---
+
 ## Slice Priority and Dependencies
 
 | Slice | Priority | Depends On | Status |
@@ -435,3 +499,6 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 | Slice 14: Abstract-class badge on class cards | Should Have | None | ✅ Complete |
 | Slice 15: Hierarchy view in the Classes section | Should Have | None | ✅ Complete |
 | Slice 16: External `subclass_of` grounding — IR + HTML + RDF | Must Have | Feature 12 slice 12.2 | ✅ Complete |
+| Slice 17: Unify on "slot" terminology + slot-card parity | Should Have | Slice 5, ADR-006, Feature 04 | ✅ Complete |
+| Slice 18: Enumerations and Types HTML card sections | Should Have | Slice 1, Feature 13, Feature 04 slice 21 | 📋 Planned |
+| Slice 19: Induced per-class slot range on cards | Should Have | Feature 12 slice 12.5 | 📋 Planned |

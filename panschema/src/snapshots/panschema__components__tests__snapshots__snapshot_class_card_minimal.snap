@@ -185,11 +185,11 @@ expression: html
         background-color: color-mix(in srgb, var(--color-class) 10%, transparent);
     }
 
-    .prop-ref {
+    .slot-ref {
         color: var(--color-property);
     }
 
-    .prop-ref:hover {
+    .slot-ref:hover {
         background-color: color-mix(in srgb, var(--color-property) 10%, transparent);
     }
 

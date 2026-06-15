@@ -695,6 +695,46 @@ These are the questions whose answers currently require a click-to-pin, then scr
 
 ---
 
+### Slice 21: Hover reuses the rendered HTML card + `any_of` range edges + correct slot-node label
+
+**Status:** ✅ Complete
+
+**User Value:** Three frictions surfaced dogfooding scimantic-schema, all about the graph and the doc telling different stories. (1) The graph hover was a bespoke compact card (slices 9, 11, 13) maintained separately from the doc-body card, so the two could drift as either grew. (2) A slot node's detail card mislabeled it `Type: Class` because the kind was inferred from a color channel that collided between the class and slot palettes. (3) A slot whose range was a polymorphic `any_of` had its range silently dropped from the graph — the member classes rendered as disconnected nodes even though the slot clearly connected them. After this slice the hover *is* the doc card, slot nodes label correctly, and union ranges connect.
+
+**Priority:** Should Have
+
+**Acceptance Criteria:**
+- [x] Hovering a class or slot node shows that entity's actual rendered HTML card (the same `#class-<name>` / `#slot-<name>` card from the doc body, cloned into the hover container), so the hover and the page share one source of truth and can't drift. Enum and type nodes — which have no card section yet — keep the compact built-in hover.
+- [x] A slot node's detail/hover card reads `Type: Slot` (and `Enum` / `Type` for those kinds) read from the node's kind metadata, not inferred from a color channel.
+- [x] A slot whose `range` is an `any_of` union draws one graph range edge per distinct member class (deduped), so the members connect instead of rendering as orphan nodes. Idempotent with a direct single `range`.
+- [x] Native tests: one range edge per union member (`any_of_range_draws_an_edge_per_union_member`); the kind-label mapping (`node_kind_label`) returns `Slot` / `Enum` / `Type` / `Class` per kind; node URI expansion flags unresolved prefixes (`node_uri_is_expanded_or_flagged_unresolved`).
+
+**Notes:**
+- Source: frictions surfaced by the scimantic-schema dogfood — graph↔doc card drift, slot nodes mislabeled `Class`, and `any_of` ranges dropped from the graph.
+- The hover-card reuse depends on the HTML slot card reaching parity with the old bespoke hover (feature 02 slice 17), and on slot terminology unifying so the cloned card's `#slot-<name>` anchor matches the node id mapping.
+- The `any_of` range edges drawn here use the slot's *global* union. A class that narrows the union via `slot_usage` still draws the full set of member edges; per-class induced-range edges are slice 22 (pending), built on feature 12 slice 12.5.
+
+---
+
+### Slice 22: Graph edges from induced per-class slot ranges
+
+**Status:** 📋 Planned
+
+**Priority:** Should Have
+
+**User Value:** The graph draws range edges from a slot's *global* range, so a class that narrows an inherited slot via `slot_usage` shows the wide inherited union, not its actual I/O. For scimantic's facets chapter this means every Act renders the base `any_of[7]` envelope instead of its narrowed inputs/outputs, hiding the per-act provenance DAG. This slice draws range edges from the induced effective range (feature 12 slice 12.5) so each class connects to exactly the artifacts it actually takes and produces — and a slot suppressed for a class (`maximum_cardinality: 0`) draws no edge.
+
+**Acceptance Criteria:**
+- [ ] When a class narrows a slot's range via `slot_usage`, the graph draws range edges from that class to the *induced* members (the narrowed range or smaller `any_of`), not the inherited union.
+- [ ] A slot suppressed for a class (`maximum_cardinality: 0`) draws no range edge from that class.
+- [ ] Classes that don't refine the slot continue to draw edges from the global range (no regression to slice 21's `any_of` edges).
+- [ ] Native test against a fixture where one subclass narrows an `any_of` to a single range and another suppresses the slot: the graph emits the narrowed edge for the first and no edge for the second.
+
+**Notes:**
+- Source: same friction as feature 12 slice 12.5 (`[2026-06-14] slot_usage / per-class facets not rendered`). The graph-edge half; feature 02 slice 19 is the card half; feature 12 slice 12.5 is the shared IR foundation.
+
+---
+
 ## Slice Priority and Dependencies
 
 | Slice | Priority | Depends On | Status |
@@ -720,6 +760,8 @@ These are the questions whose answers currently require a click-to-pin, then scr
 | Slice 18: Graph legend (ADR-005) | Should Have | Slices 15–17 | ✅ Complete |
 | Slice 19: 3D reduced-form edges (ADR-005) | Nice to Have | Slice 15, Slices 1–2 | Not Started |
 | Slice 20: Graph legibility — zoom range, proportional glyphs/labels, curved parallel edges | Should Have | Slices 15, 16.5 | ✅ Complete |
+| Slice 21: Hover reuses HTML card + `any_of` range edges + correct slot-node label | Should Have | Slices 9, 13, feature 02 slice 17 | ✅ Complete |
+| Slice 22: Graph edges from induced per-class slot ranges | Should Have | Slice 21, feature 12 slice 12.5 | 📋 Planned |
 
 ---
 

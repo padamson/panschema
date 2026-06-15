@@ -32,13 +32,6 @@ expression: html
                 <a href="#class-customer" class="entity-ref class-ref">Customer</a>
             </dd>
         </div>
-        <div class="detail-row">
-            <dt>Properties</dt>
-            <dd>
-                <a href="#prop-name" class="entity-ref prop-ref">name</a>,
-                <a href="#prop-age" class="entity-ref prop-ref">age</a>
-            </dd>
-        </div>
     </div>
 </article>
 <style>
@@ -205,11 +198,11 @@ expression: html
         background-color: color-mix(in srgb, var(--color-class) 10%, transparent);
     }
 
-    .prop-ref {
+    .slot-ref {
         color: var(--color-property);
     }
 
-    .prop-ref:hover {
+    .slot-ref:hover {
         background-color: color-mix(in srgb, var(--color-property) 10%, transparent);
     }
 

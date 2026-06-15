@@ -964,7 +964,7 @@
     // position.
     // The already-rendered HTML card for a graph node, or null. Graph
     // node ids are `<kind>:<name>` (`slot:executes`, `class:Act`); the
-    // doc body renders `#prop-<name>` for slots and `#class-<name>` for
+    // doc body renders `#slot-<name>` for slots and `#class-<name>` for
     // classes. Enum and type nodes have no card yet, so they return null
     // and the hover falls back to the compact rows.
     function nodeCardElement(nodeId) {
@@ -972,7 +972,7 @@
         if (colon < 0) return null;
         const kind = nodeId.slice(0, colon);
         const name = nodeId.slice(colon + 1);
-        const prefix = kind === 'slot' ? 'prop-' : kind === 'class' ? 'class-' : null;
+        const prefix = kind === 'slot' ? 'slot-' : kind === 'class' ? 'class-' : null;
         return prefix ? document.getElementById(prefix + name) : null;
     }
 
