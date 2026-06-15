@@ -409,6 +409,10 @@ impl GraphWriter {
         // Must run after enum/type nodes exist so resolve_range_target can find them.
         self.add_inline_attribute_edges(schema, &mut graph);
 
+        // Per-class induced range edges (slot_usage narrowing). Also needs
+        // enum/type nodes present.
+        self.add_induced_range_edges(schema, &mut graph);
+
         // Must run after `add_slots` so the slot-side `domain` edges are
         // present for dedup. LinkML treats `slot.domain` and `class.slots`
         // as the same relation — `domain_of` is the computed inverse of
@@ -480,6 +484,67 @@ impl GraphWriter {
                         edge_type: EdgeType::Range,
                         label: Some(attr_name.clone()),
                     });
+                }
+            }
+        }
+    }
+
+    /// Emit per-class range edges for slots a class narrows via
+    /// `slot_usage`. The shared slot node carries the slot's *global*
+    /// range (its union edges, from [`add_slots`]); a class that narrows
+    /// the range for itself needs its actual I/O drawn directly, the same
+    /// way inline attributes connect a class to its range. So when a class
+    /// refines a slot's range — a single `range`, a smaller `any_of`, or
+    /// `maximum_cardinality: 0` — draw `class -> induced target` edges for
+    /// the induced members (and none at all when the slot is suppressed).
+    /// Classes that don't narrow the range rely on the global slot-side
+    /// edges, so this pass only fires on a range-affecting `slot_usage`.
+    fn add_induced_range_edges(&self, schema: &SchemaDefinition, graph: &mut GraphData) {
+        if !self.options.include_range_edges {
+            return;
+        }
+        let mut seen: std::collections::HashSet<(String, String, String)> =
+            std::collections::HashSet::new();
+        for (class_name, class_def) in &schema.classes {
+            if class_def.slot_usage.is_empty() {
+                continue;
+            }
+            let resolved =
+                crate::linkml_resolve::resolve_effective_slots_with_provenance(class_def, schema);
+            for (slot_name, override_def) in &class_def.slot_usage {
+                // Only a refinement that names a range draws per-class
+                // edges; a `slot_usage` that just tightens `required`
+                // leaves the range inherited and rides the global
+                // slot-side edges. (A pure `maximum_cardinality: 0`
+                // refinement names no range and is suppressed downstream
+                // regardless, so it correctly draws nothing.)
+                let narrows_range = override_def.range.is_some() || !override_def.any_of.is_empty();
+                if !narrows_range {
+                    continue;
+                }
+                let Some(rs) = resolved.get(slot_name) else {
+                    continue;
+                };
+                // A suppressed slot (`maximum_cardinality: 0`) draws no edge.
+                if rs.induced.suppressed {
+                    continue;
+                }
+                for range in &rs.induced.ranges {
+                    if let Some(target) = self.resolve_range_target(schema, range) {
+                        let key = (
+                            format!("class:{}", class_name),
+                            target.clone(),
+                            slot_name.clone(),
+                        );
+                        if seen.insert(key.clone()) {
+                            graph.edges.push(GraphEdge {
+                                source: key.0,
+                                target,
+                                edge_type: EdgeType::Range,
+                                label: Some(slot_name.clone()),
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -1599,6 +1664,146 @@ mod tests {
             range_targets,
             vec!["class:Dataset", "class:Question"],
             "one range edge per any_of member, no dupes"
+        );
+    }
+
+    #[test]
+    fn induced_range_draws_per_class_edges_and_skips_suppressed() {
+        // A class that narrows an inherited `any_of` via `slot_usage`
+        // gets range edges from itself to the induced members; a class
+        // that suppresses the slot (`maximum_cardinality: 0`) gets none.
+        // The global slot-side union edges stay (no regression).
+        let mut schema = SchemaDefinition::new("induced_edges");
+        for c in ["Dataset", "Question", "Result"] {
+            schema
+                .classes
+                .insert(c.to_string(), ClassDefinition::new(c));
+        }
+        let mut has_input = SlotDefinition::new("hasInput");
+        has_input.any_of = ["Dataset", "Question", "Result"]
+            .iter()
+            .map(|r| {
+                let mut b = SlotDefinition::new("b");
+                b.range = Some((*r).to_string());
+                b
+            })
+            .collect();
+        schema.slots.insert("hasInput".to_string(), has_input);
+
+        let mut act = ClassDefinition::new("Act");
+        act.slots = vec!["hasInput".to_string()];
+        schema.classes.insert("Act".to_string(), act);
+
+        // Analysis narrows to a single range; the graph draws Analysis -> Dataset.
+        let mut analysis = ClassDefinition::new("Analysis");
+        analysis.is_a = Some("Act".to_string());
+        let mut narrow = SlotDefinition::new("hasInput");
+        narrow.range = Some("Dataset".to_string());
+        analysis.slot_usage.insert("hasInput".to_string(), narrow);
+        schema.classes.insert("Analysis".to_string(), analysis);
+
+        // DesignOfExperiment suppresses the slot; no edge from it.
+        let mut design = ClassDefinition::new("DesignOfExperiment");
+        design.is_a = Some("Act".to_string());
+        let mut suppress = SlotDefinition::new("hasInput");
+        suppress.maximum_cardinality = Some(0);
+        design.slot_usage.insert("hasInput".to_string(), suppress);
+        schema
+            .classes
+            .insert("DesignOfExperiment".to_string(), design);
+
+        // Extraction narrows to a smaller union; two induced edges.
+        let mut extraction = ClassDefinition::new("Extraction");
+        extraction.is_a = Some("Act".to_string());
+        let mut narrow_union = SlotDefinition::new("hasInput");
+        narrow_union.any_of = ["Question", "Result"]
+            .iter()
+            .map(|r| {
+                let mut b = SlotDefinition::new("b");
+                b.range = Some((*r).to_string());
+                b
+            })
+            .collect();
+        extraction
+            .slot_usage
+            .insert("hasInput".to_string(), narrow_union);
+        schema.classes.insert("Extraction".to_string(), extraction);
+
+        // Tightened refines only `required` — no range change, so it
+        // adds no per-class edge and rides the global slot-side edges.
+        let mut tightened = ClassDefinition::new("Tightened");
+        tightened.is_a = Some("Act".to_string());
+        let mut req_only = SlotDefinition::new("hasInput");
+        req_only.required = true;
+        tightened
+            .slot_usage
+            .insert("hasInput".to_string(), req_only);
+        schema.classes.insert("Tightened".to_string(), tightened);
+
+        let graph = GraphWriter::new().schema_to_graph(&schema);
+        let range_edge = |source: &str, target: &str| {
+            graph
+                .edges
+                .iter()
+                .any(|e| e.edge_type == EdgeType::Range && e.source == source && e.target == target)
+        };
+
+        // Induced edge for the narrowing class, only to its one member.
+        assert!(
+            range_edge("class:Analysis", "class:Dataset"),
+            "narrowing class draws an edge to its induced range"
+        );
+        assert!(
+            !range_edge("class:Analysis", "class:Question")
+                && !range_edge("class:Analysis", "class:Result"),
+            "narrowing class does NOT draw edges to the dropped union members"
+        );
+
+        // Union narrowing: two induced edges, only to the named members.
+        let mut extraction_targets: Vec<&str> = graph
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Range && e.source == "class:Extraction")
+            .map(|e| e.target.as_str())
+            .collect();
+        extraction_targets.sort_unstable();
+        assert_eq!(
+            extraction_targets,
+            vec!["class:Question", "class:Result"],
+            "a narrowed union draws an edge per induced member"
+        );
+
+        // The suppressing class draws no induced range edge at all.
+        assert!(
+            !graph
+                .edges
+                .iter()
+                .any(|e| e.edge_type == EdgeType::Range && e.source == "class:DesignOfExperiment"),
+            "a suppressed slot draws no range edge from the class"
+        );
+
+        // A refinement that only tightens `required` names no range, so
+        // it adds no per-class edge (it rides the global slot-side edges).
+        assert!(
+            !graph
+                .edges
+                .iter()
+                .any(|e| e.edge_type == EdgeType::Range && e.source == "class:Tightened"),
+            "a non-range refinement draws no per-class range edge"
+        );
+
+        // No regression: the global slot-side union edges are still there.
+        let mut slot_targets: Vec<&str> = graph
+            .edges
+            .iter()
+            .filter(|e| e.source == "slot:hasInput" && e.edge_type == EdgeType::Range)
+            .map(|e| e.target.as_str())
+            .collect();
+        slot_targets.sort_unstable();
+        assert_eq!(
+            slot_targets,
+            vec!["class:Dataset", "class:Question", "class:Result"],
+            "the slot node keeps its global union edges"
         );
     }
 

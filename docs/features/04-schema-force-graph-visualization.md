@@ -718,20 +718,21 @@ These are the questions whose answers currently require a click-to-pin, then scr
 
 ### Slice 22: Graph edges from induced per-class slot ranges
 
-**Status:** 📋 Planned
+**Status:** ✅ Complete
 
 **Priority:** Should Have
 
 **User Value:** The graph draws range edges from a slot's *global* range, so a class that narrows an inherited slot via `slot_usage` shows the wide inherited union, not its actual I/O. For scimantic's facets chapter this means every Act renders the base `any_of[7]` envelope instead of its narrowed inputs/outputs, hiding the per-act provenance DAG. This slice draws range edges from the induced effective range (feature 12 slice 12.5) so each class connects to exactly the artifacts it actually takes and produces — and a slot suppressed for a class (`maximum_cardinality: 0`) draws no edge.
 
 **Acceptance Criteria:**
-- [ ] When a class narrows a slot's range via `slot_usage`, the graph draws range edges from that class to the *induced* members (the narrowed range or smaller `any_of`), not the inherited union.
-- [ ] A slot suppressed for a class (`maximum_cardinality: 0`) draws no range edge from that class.
-- [ ] Classes that don't refine the slot continue to draw edges from the global range (no regression to slice 21's `any_of` edges).
-- [ ] Native test against a fixture where one subclass narrows an `any_of` to a single range and another suppresses the slot: the graph emits the narrowed edge for the first and no edge for the second.
+- [x] When a class narrows a slot's range via `slot_usage`, the graph draws range edges from that class node directly to the *induced* members (the narrowed range or smaller `any_of`), labelled with the slot — paralleling how inline attributes already connect a class to its range — not the inherited union.
+- [x] A slot suppressed for a class (`maximum_cardinality: 0`) draws no range edge from that class.
+- [x] Classes that don't refine the slot's range continue to ride the global slot-side edges (no regression to slice 21's `any_of` edges); a range-affecting `slot_usage` is the only trigger, so a refinement that just tightens `required` adds no edge.
+- [x] Native test (`induced_range_draws_per_class_edges_and_skips_suppressed`) against a fixture where one subclass narrows an `any_of` to a single range and another suppresses the slot: the graph emits the narrowed edge for the first, no edge for the second, and keeps the global slot-side union edges. Dogfood-verified against the generated graph JSON.
 
 **Notes:**
 - Source: same friction as feature 12 slice 12.5 (`[2026-06-14] slot_usage / per-class facets not rendered`). The graph-edge half; feature 02 slice 19 is the card half; feature 12 slice 12.5 is the shared IR foundation.
+- The shared slot node carries the slot's global range, so the per-class narrowing is drawn as a `class → induced-target` edge rather than mutating the slot node's edges; the global slot-side union edges stay for classes that don't narrow.
 
 ---
 
@@ -761,7 +762,7 @@ These are the questions whose answers currently require a click-to-pin, then scr
 | Slice 19: 3D reduced-form edges (ADR-005) | Nice to Have | Slice 15, Slices 1–2 | Not Started |
 | Slice 20: Graph legibility — zoom range, proportional glyphs/labels, curved parallel edges | Should Have | Slices 15, 16.5 | ✅ Complete |
 | Slice 21: Hover reuses HTML card + `any_of` range edges + correct slot-node label | Should Have | Slices 9, 13, feature 02 slice 17 | ✅ Complete |
-| Slice 22: Graph edges from induced per-class slot ranges | Should Have | Slice 21, feature 12 slice 12.5 | 📋 Planned |
+| Slice 22: Graph edges from induced per-class slot ranges | Should Have | Slice 21, feature 12 slice 12.5 | ✅ Complete |
 
 ---
 

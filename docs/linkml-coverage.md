@@ -82,7 +82,7 @@ slot, enum, type, and permissible-value alike. panschema models only a few:
 | `abstract` | ● | ● | ● | ○ | ◐ | badge; dashed node; codegen doc-comment only |
 | `slots` | ● | ● | ● | ○ | ● | resolved effective set (HTML/graph/Rust); RDF emits via slot side |
 | `attributes` | ● | ◐ | ● | ○ | ● | folded into the resolved slot set |
-| `slot_usage` | ● | ● | ◐ | ○ | ◐ | scalar overrides + "refined here"; induced per-class range computed in the resolver (slice 12.5) and rendered on the class card (slice 19); the graph still draws the inherited union — see Priority gaps |
+| `slot_usage` | ● | ● | ● | ○ | ◐ | scalar overrides + "refined here"; induced per-class range computed in the resolver (slice 12.5), rendered on the class card (slice 19) and as per-class graph range edges (slice 22). Rust codegen still flattens scalar overrides only |
 | `class_uri` | ● | ● | ● | ● | ✗ | card IRI; node URI; subject IRI |
 | `subclass_of` (external) | ● | ● | ○ | ● | ✗ | "Subclass of (external)"; `rdfs:subClassOf <external>`; graph ignores |
 | `*_mappings` (5) | ● | ● | ○ | ● | ○ | see Common metadata |
@@ -152,14 +152,16 @@ Types also produce no RDF.
 
 Ordered by impact, with the slices already filed against each:
 
-1. **`slot_usage` induced ranges** (IR + card done; graph pending).
-   Per-class range narrowing (`range ∩ any_of`, `maximum_cardinality: 0`) is
-   computed by the resolver as an `InducedRange` view
-   ([feature 12 slice 12.5](features/12-linkml-ir-resolver-services.md) ✅) and
+1. ~~**`slot_usage` induced ranges**~~ **(done).** Per-class range narrowing
+   (`range ∩ any_of`, `maximum_cardinality: 0`) is computed by the resolver as
+   an `InducedRange` view
+   ([feature 12 slice 12.5](features/12-linkml-ir-resolver-services.md) ✅),
    rendered on the class card
-   ([feature 02 slice 19](features/02-core-ontology-documentation.md) ✅).
-   Remaining: the graph still draws the inherited union — wire the view into
-   [feature 04 slice 22](features/04-schema-force-graph-visualization.md).
+   ([feature 02 slice 19](features/02-core-ontology-documentation.md) ✅), and
+   drawn as per-class graph range edges
+   ([feature 04 slice 22](features/04-schema-force-graph-visualization.md) ✅).
+   Remaining tail: Rust codegen still applies only scalar `slot_usage`
+   overrides, not the induced-range narrowing.
 2. **Enum + Type HTML sections** (modeled, inert in HTML). Graph-only today.
    → [feature 02 slice 18](features/02-core-ontology-documentation.md).
 3. **Schema metadata in HTML** (`license`, `contributors`, `created`,
