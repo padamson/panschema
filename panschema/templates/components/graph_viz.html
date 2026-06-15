@@ -563,6 +563,16 @@
     color: var(--color-text, #e5e7eb);
 }
 
+/* When the hover reuses an entity's full HTML card (class / slot
+   nodes), give it room: wider, scrollable, and a touch more padding
+   since we clone the card's inner content (not its padded wrapper). */
+.graph-hover-card.graph-hover-full {
+    max-width: min(460px, calc(100vw - 24px));
+    max-height: 80vh;
+    overflow-y: auto;
+    padding: 12px 14px;
+}
+
 .graph-hover-content {
     display: flex;
     flex-direction: column;
@@ -952,6 +962,52 @@
     // The card auto-flips when it would clip the viewport's right or
     // bottom edge so it stays fully visible regardless of cursor
     // position.
+    // The already-rendered HTML card for a graph node, or null. Graph
+    // node ids are `<kind>:<name>` (`slot:executes`, `class:Act`); the
+    // doc body renders `#prop-<name>` for slots and `#class-<name>` for
+    // classes. Enum and type nodes have no card yet, so they return null
+    // and the hover falls back to the compact rows.
+    function nodeCardElement(nodeId) {
+        const colon = nodeId.indexOf(':');
+        if (colon < 0) return null;
+        const kind = nodeId.slice(0, colon);
+        const name = nodeId.slice(colon + 1);
+        const prefix = kind === 'slot' ? 'prop-' : kind === 'class' ? 'class-' : null;
+        return prefix ? document.getElementById(prefix + name) : null;
+    }
+
+    // Compact JS-built hover rows — the fallback for nodes without an
+    // HTML card (enum / type) and the original layout. Class and slot
+    // nodes reuse their rendered card instead (see `nodeCardElement`).
+    function buildCompactNodeHover(d) {
+        const connCount = Array.isArray(d.connections) ? d.connections.length : 0;
+        // Type row carries an "(abstract)" suffix when the LinkML class
+        // is declared abstract — the visual "don't instantiate me" signal.
+        const typeText = (d.type || '—') + (d.isAbstract ? ' (abstract)' : '');
+        let rows = ''
+            + '<div class="graph-hover-row"><span class="graph-hover-key">Label:</span>'
+            + '<span class="graph-hover-value">' + escapeForText(d.label || '—') + '</span></div>'
+            + '<div class="graph-hover-row"><span class="graph-hover-key">Type:</span>'
+            + '<span class="graph-hover-value">' + escapeForText(typeText) + '</span></div>'
+            + '<div class="graph-hover-row"><span class="graph-hover-key">ID:</span>'
+            + '<span class="graph-hover-value graph-hover-value-id">' + escapeForText(d.id) + '</span></div>';
+        if (d.uri) {
+            // A `?` flags a curie whose prefix the schema didn't declare.
+            const unresolved = d.uriUnresolved
+                ? ' <span class="graph-hover-unresolved" title="Prefix not declared in the schema — IRI could not be expanded">?</span>'
+                : '';
+            rows += '<div class="graph-hover-row"><span class="graph-hover-key">IRI:</span>'
+                + '<span class="graph-hover-value graph-hover-value-id">' + escapeForText(d.uri) + unresolved + '</span></div>';
+        }
+        rows += '<div class="graph-hover-row"><span class="graph-hover-key">Connections:</span>'
+            + '<span class="graph-hover-value">' + connCount + '</span></div>';
+        rows += renderKindMetadata(d.kindMetadata);
+        if (d.description) {
+            rows += '<div class="graph-hover-description">' + escapeForText(d.description) + '</div>';
+        }
+        return rows;
+    }
+
     function updateHoverCard(clientX, clientY) {
         if (!hoverCard || !viz) return;
         // Only the 2D path has WASM-side edge hit-test today; 3D mode
@@ -978,51 +1034,22 @@
         if (key !== lastHoverKey) {
             try {
                 let html = '';
+                let isFullCard = false;
                 if (kind === 'node') {
                     const d = JSON.parse(viz.get_node_details(idx));
                     if (!d.id) { hideHoverCard(); return; }
-                    const connCount = Array.isArray(d.connections) ? d.connections.length : 0;
-                    // Type row carries an "(abstract)" suffix when
-                    // the LinkML class is declared abstract — the
-                    // visual "don't instantiate me" signal authors
-                    // want at a glance.
-                    const typeText = (d.type || '—') + (d.isAbstract ? ' (abstract)' : '');
-                    let rows = ''
-                        + '<div class="graph-hover-row"><span class="graph-hover-key">Label:</span>'
-                        + '<span class="graph-hover-value">' + escapeForText(d.label || '—') + '</span></div>'
-                        + '<div class="graph-hover-row"><span class="graph-hover-key">Type:</span>'
-                        + '<span class="graph-hover-value">' + escapeForText(typeText) + '</span></div>'
-                        + '<div class="graph-hover-row"><span class="graph-hover-key">ID:</span>'
-                        + '<span class="graph-hover-value graph-hover-value-id">' + escapeForText(d.id) + '</span></div>';
-                    // The IRI row only appears when the entity
-                    // declares one — for slot/enum/type nodes the
-                    // schema-internal ID is often the only thing
-                    // we have.
-                    if (d.uri) {
-                        // A `?` flags a curie whose prefix the schema
-                        // didn't declare, so it couldn't be expanded to
-                        // a full IRI.
-                        const unresolved = d.uriUnresolved
-                            ? ' <span class="graph-hover-unresolved" title="Prefix not declared in the schema — IRI could not be expanded">?</span>'
-                            : '';
-                        rows += '<div class="graph-hover-row"><span class="graph-hover-key">IRI:</span>'
-                            + '<span class="graph-hover-value graph-hover-value-id">' + escapeForText(d.uri) + unresolved + '</span></div>';
+                    const cardEl = nodeCardElement(d.id);
+                    if (cardEl) {
+                        // Reuse the entity's already-rendered HTML card so
+                        // the graph hover and the doc body show identical
+                        // content — one source of truth, no drift. Class
+                        // and slot nodes have cards; enum/type nodes fall
+                        // through to the compact rows.
+                        html = cardEl.innerHTML;
+                        isFullCard = true;
+                    } else {
+                        html = buildCompactNodeHover(d);
                     }
-                    rows += '<div class="graph-hover-row"><span class="graph-hover-key">Connections:</span>'
-                        + '<span class="graph-hover-value">' + connCount + '</span></div>';
-                    // Resolved-schema context for the entity: slots /
-                    // parents / mixins for classes; domain / range /
-                    // flags for slots; permissible values for enums.
-                    // Comes off the wire pre-resolved so the card
-                    // doesn't have to walk the schema itself.
-                    rows += renderKindMetadata(d.kindMetadata);
-                    // Description spans a row of its own (no
-                    // key/value columns) so longer prose wraps
-                    // naturally inside the 280px card max-width.
-                    if (d.description) {
-                        rows += '<div class="graph-hover-description">' + escapeForText(d.description) + '</div>';
-                    }
-                    html = rows;
                 } else {
                     // edge
                     if (typeof viz.get_edge_details !== 'function') { hideHoverCard(); return; }
@@ -1046,6 +1073,9 @@
                     }
                 }
                 hoverContent.innerHTML = html;
+                // A cloned full card needs more room than the compact
+                // rows; widen and allow scroll via a modifier class.
+                hoverCard.classList.toggle('graph-hover-full', isFullCard);
                 hoverCard.style.display = 'block';
                 hoverCard.setAttribute('aria-hidden', 'false');
                 lastHoverKey = key;
