@@ -89,7 +89,9 @@
 {%- for slot in slots %}
                     <li class="slot-entry">
                         <a href="#slot-{{ slot.name }}" class="slot-name"{% if let Some(tip) = slot.description_tooltip.as_deref() %} title="{{ tip }}"{% endif %}>{{ slot.name }}</a>
-{%- if !slot.any_of.is_empty() %}
+{%- if slot.suppressed %}
+                        : <span class="slot-suppressed">produces no value</span>
+{%- else if !slot.any_of.is_empty() %}
                         : any of [
 {%- for branch in slot.any_of %}
 {%- if let Some(class_ref) = branch.class_ref.as_ref() %}<a href="#class-{{ class_ref.id }}" class="entity-ref class-ref">{{ class_ref.label }}</a>{% else %}<span class="entity-ref datatype-ref">{{ branch.datatype }}</span>{% endif %}{% if !loop.last %}, {% endif %}
@@ -352,6 +354,11 @@
         background-color: transparent;
         border: 1px solid var(--color-border);
         color: var(--color-text-muted);
+    }
+
+    .slot-suppressed {
+        color: var(--color-text-muted);
+        font-style: italic;
     }
 
     .slot-description {

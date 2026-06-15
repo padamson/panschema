@@ -163,6 +163,10 @@ pub struct SlotInClass {
     pub multivalued: bool,
     /// Members of an `any_of` union; empty for single-range slots.
     pub any_of: Vec<RangeRef>,
+    /// `true` when this class suppresses the slot via
+    /// `maximum_cardinality: 0` — it declares the slot but permits no
+    /// value. The card shows "produces no value" instead of a range.
+    pub suppressed: bool,
     pub description: Option<String>,
     /// `true` when this class's `slot_usage` overrides an inherited slot.
     pub refined_here: bool,
@@ -639,22 +643,30 @@ impl HtmlWriter {
                             None,
                         )
                     };
+                    // Render the induced per-class range (slot_usage
+                    // applied), not the raw inherited definition: a
+                    // single induced range fills `range`, several fill
+                    // `any_of`, and a suppressed slot shows neither.
+                    let induced = &rs.induced;
+                    let (range, any_of) = if induced.ranges.len() == 1 {
+                        (Some(range_ref_for(&induced.ranges[0], schema)), Vec::new())
+                    } else {
+                        (
+                            None,
+                            induced
+                                .ranges
+                                .iter()
+                                .map(|r| range_ref_for(r, schema))
+                                .collect(),
+                        )
+                    };
                     SlotInClass {
                         name: slot_name.clone(),
-                        range: slot_def.range.as_deref().map(|r| range_ref_for(r, schema)),
+                        range,
                         required: cardinality.required,
                         multivalued: cardinality.multivalued,
-                        any_of: slot_def
-                            .any_of
-                            .iter()
-                            .filter_map(|branch| {
-                                branch
-                                    .range
-                                    .as_deref()
-                                    .or(slot_def.range.as_deref())
-                                    .map(|r| range_ref_for(r, schema))
-                            })
-                            .collect(),
+                        any_of,
+                        suppressed: induced.suppressed,
                         description,
                         refined_here: class_def.slot_usage.contains_key(slot_name),
                         origin,
@@ -1671,6 +1683,116 @@ mod tests {
         let slot = card.slots.iter().find(|s| s.name == "ident").unwrap();
         assert!(slot.required, "min >= 1 renders as required");
         assert!(!slot.multivalued, "max == 1 renders as single-valued");
+    }
+
+    #[test]
+    fn class_card_renders_induced_per_class_slot_range() {
+        // A subclass narrowing an inherited `any_of` union via
+        // `slot_usage` shows its induced range on the card, not the
+        // wide inherited union: a scalar narrows to a single range, a
+        // smaller union replaces, and `maximum_cardinality: 0` reads
+        // as "produces no value".
+        use crate::linkml::{ClassDefinition, SchemaDefinition, SlotDefinition};
+
+        let union = |members: &[&str]| {
+            let mut s = SlotDefinition::new("u");
+            s.any_of = members
+                .iter()
+                .map(|m| {
+                    let mut b = SlotDefinition::new("u");
+                    b.range = Some((*m).to_string());
+                    b
+                })
+                .collect();
+            s
+        };
+
+        let mut schema = SchemaDefinition::new("acts");
+        for artifact in ["Question", "Result", "Dataset", "Annotation"] {
+            schema
+                .classes
+                .insert(artifact.into(), ClassDefinition::new(artifact));
+        }
+        let mut has_input = union(&["Question", "Result", "Dataset", "Annotation"]);
+        has_input.name = "hasInput".into();
+        schema.slots.insert("hasInput".into(), has_input);
+        let mut has_output = union(&["Result", "Dataset"]);
+        has_output.name = "hasOutput".into();
+        schema.slots.insert("hasOutput".into(), has_output);
+
+        let mut act = ClassDefinition::new("Act");
+        act.slots = vec!["hasInput".into(), "hasOutput".into()];
+        schema.classes.insert("Act".into(), act);
+
+        // Analysis: scalar narrows hasInput to a single Dataset range.
+        let mut analysis = ClassDefinition::new("Analysis");
+        analysis.is_a = Some("Act".into());
+        let mut in_narrow = SlotDefinition::new("hasInput");
+        in_narrow.range = Some("Dataset".into());
+        analysis.slot_usage.insert("hasInput".into(), in_narrow);
+        schema.classes.insert("Analysis".into(), analysis);
+
+        // EvidenceExtraction: a smaller (2-member) union replaces the
+        // inherited 4-member union on hasInput.
+        let mut extraction = ClassDefinition::new("EvidenceExtraction");
+        extraction.is_a = Some("Act".into());
+        extraction
+            .slot_usage
+            .insert("hasInput".into(), union(&["Annotation", "Result"]));
+        schema
+            .classes
+            .insert("EvidenceExtraction".into(), extraction);
+
+        // EvidenceAssessment: suppresses hasOutput.
+        let mut assessment = ClassDefinition::new("EvidenceAssessment");
+        assessment.is_a = Some("Act".into());
+        let mut no_output = SlotDefinition::new("hasOutput");
+        no_output.maximum_cardinality = Some(0);
+        assessment.slot_usage.insert("hasOutput".into(), no_output);
+        schema
+            .classes
+            .insert("EvidenceAssessment".into(), assessment);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let card = |name: &str| data.class_data.iter().find(|c| c.id == name).unwrap();
+        let slot = |c: &ClassData, n: &str| c.slots.iter().find(|s| s.name == n).unwrap().clone();
+
+        // Scalar narrowing: single induced range, no lingering union.
+        let analysis_in = slot(card("Analysis"), "hasInput");
+        assert!(
+            analysis_in.any_of.is_empty(),
+            "lingering union must not survive"
+        );
+        assert_eq!(
+            analysis_in
+                .range
+                .as_ref()
+                .and_then(|r| r.class_ref.as_ref())
+                .map(|c| c.id.as_str()),
+            Some("Dataset")
+        );
+
+        // Union narrowing: the smaller union replaces the inherited one.
+        let extraction_in = slot(card("EvidenceExtraction"), "hasInput");
+        let in_members: Vec<&str> = extraction_in
+            .any_of
+            .iter()
+            .filter_map(|r| r.class_ref.as_ref().map(|c| c.id.as_str()))
+            .collect();
+        assert_eq!(in_members, vec!["Annotation", "Result"]);
+
+        // Suppression: no range, the suppressed flag is set.
+        let suppressed = slot(card("EvidenceAssessment"), "hasOutput");
+        assert!(suppressed.suppressed);
+        assert!(suppressed.range.is_none() && suppressed.any_of.is_empty());
+
+        // The base class still shows the full union.
+        let act_in = slot(card("Act"), "hasInput");
+        assert_eq!(
+            act_in.any_of.len(),
+            4,
+            "unrefined class keeps the full union"
+        );
     }
 
     #[test]

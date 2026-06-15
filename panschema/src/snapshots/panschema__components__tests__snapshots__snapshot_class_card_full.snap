@@ -270,6 +270,11 @@ expression: html
         color: var(--color-text-muted);
     }
 
+    .slot-suppressed {
+        color: var(--color-text-muted);
+        font-style: italic;
+    }
+
     .slot-description {
         flex-basis: 100%;
         margin: var(--space-1) 0 0 0;

@@ -462,20 +462,21 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 
 ### Slice 19: Render the induced per-class slot range on class and slot cards
 
-**Status:** 📋 Planned
+**Status:** ✅ Complete
 
 **Priority:** Should Have
 
 **User Value:** A class that narrows an inherited slot via `slot_usage` — a single `range`, a smaller `any_of`, or `maximum_cardinality: 0` — should show its *narrowed* I/O on the card, not the wide inherited union. Today the card shows the global range even where a subclass refined it, so the per-class story (e.g. `Analysis` takes a `Dataset` and produces a `Result`; `EvidenceAssessment` produces no artifact) is invisible. This slice consumes the induced effective-slot range (feature 12 slice 12.5) so each class card reflects what that class actually declares.
 
 **Acceptance Criteria:**
-- [ ] The class card's slot row shows the induced effective range for the current class: a `slot_usage` `range` narrowing renders the narrowed single range; a narrowed `any_of` renders the smaller union; the `range ∩ any_of` intersection is reflected (no lingering base union masking a single-range narrowing).
-- [ ] A slot suppressed for the class via `maximum_cardinality: 0` renders as "produces no value" (or equivalent) rather than showing the inherited range, and keeps its "refined here" badge.
-- [ ] The standalone slot card continues to show the slot's global range/union (slice 17); the per-class narrowing appears on the *class* card where the refinement is declared.
-- [ ] Integration test against a fixture with a `slot_usage` range narrowing of an `any_of` and a `maximum_cardinality: 0`, asserting the class card shows the narrowed range and the suppressed slot.
+- [x] The class card's slot row shows the induced effective range for the current class: a `slot_usage` `range` narrowing renders the narrowed single range; a narrowed `any_of` renders the smaller union; the `range ∩ any_of` intersection is reflected (no lingering base union masking a single-range narrowing). A single-member induced union collapses to a single range row.
+- [x] A slot suppressed for the class via `maximum_cardinality: 0` renders as "produces no value" rather than showing the inherited range, and keeps its "refined here" badge.
+- [x] The standalone slot card continues to show the slot's global range/union (slice 17); the per-class narrowing appears on the *class* card where the refinement is declared (the slot card reads the global `schema.slots`, the class card the resolved per-class view).
+- [x] Integration test (`class_card_renders_induced_per_class_slot_range`) against a fixture with a scalar narrowing, a smaller-`any_of` replacement, and a `maximum_cardinality: 0`, asserting the class card shows the narrowed range, the replaced union, and the suppressed slot. Dogfood-verified end-to-end render.
 
 **Notes:**
 - Source: same friction as feature 12 slice 12.5 (`[2026-06-14] slot_usage / per-class facets not rendered`). This is the HTML-card half; feature 04 slice 22 is the graph-edge half; feature 12 slice 12.5 is the IR foundation both consume.
+- `SlotInClass` gained a `suppressed` flag; the build maps `InducedRange.ranges` to a single `range` (one member) or `any_of` (several), keeping the template's existing range/union rendering.
 
 ---
 
@@ -501,4 +502,4 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 | Slice 16: External `subclass_of` grounding — IR + HTML + RDF | Must Have | Feature 12 slice 12.2 | ✅ Complete |
 | Slice 17: Unify on "slot" terminology + slot-card parity | Should Have | Slice 5, ADR-006, Feature 04 | ✅ Complete |
 | Slice 18: Enumerations and Types HTML card sections | Should Have | Slice 1, Feature 13, Feature 04 slice 21 | 📋 Planned |
-| Slice 19: Induced per-class slot range on cards | Should Have | Feature 12 slice 12.5 | 📋 Planned |
+| Slice 19: Induced per-class slot range on cards | Should Have | Feature 12 slice 12.5 | ✅ Complete |
