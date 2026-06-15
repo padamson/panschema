@@ -82,7 +82,7 @@ slot, enum, type, and permissible-value alike. panschema models only a few:
 | `abstract` | ● | ● | ● | ○ | ◐ | badge; dashed node; codegen doc-comment only |
 | `slots` | ● | ● | ● | ○ | ● | resolved effective set (HTML/graph/Rust); RDF emits via slot side |
 | `attributes` | ● | ◐ | ● | ○ | ● | folded into the resolved slot set |
-| `slot_usage` | ● | ◐ | ◐ | ○ | ◐ | scalar overrides + "refined here"; **induced range narrowing not computed** — see Priority gaps |
+| `slot_usage` | ● | ◐ | ◐ | ○ | ◐ | scalar overrides + "refined here"; induced per-class range now computed in the resolver (slice 12.5), **not yet rendered** — see Priority gaps |
 | `class_uri` | ● | ● | ● | ● | ✗ | card IRI; node URI; subject IRI |
 | `subclass_of` (external) | ● | ● | ○ | ● | ✗ | "Subclass of (external)"; `rdfs:subClassOf <external>`; graph ignores |
 | `*_mappings` (5) | ● | ● | ○ | ● | ○ | see Common metadata |
@@ -152,13 +152,14 @@ Types also produce no RDF.
 
 Ordered by impact, with the slices already filed against each:
 
-1. **`slot_usage` induced ranges** (modeled but mis-rendered). The field
-   exists and scalar overrides apply, but per-class range narrowing
-   (`range ∩ any_of`, `maximum_cardinality: 0`) is never computed, so cards
-   and the graph show the inherited union, not the class's actual shape. →
-   [feature 12 slice 12.5](features/12-linkml-ir-resolver-services.md) (IR)
-   + [feature 02 slice 19](features/02-core-ontology-documentation.md) (card)
-   + [feature 04 slice 22](features/04-schema-force-graph-visualization.md) (graph).
+1. **`slot_usage` induced ranges** (computed in the IR, not yet rendered).
+   Per-class range narrowing (`range ∩ any_of`, `maximum_cardinality: 0`) is
+   now computed by the resolver as an `InducedRange` view
+   ([feature 12 slice 12.5](features/12-linkml-ir-resolver-services.md) ✅),
+   but cards and the graph still render the inherited union. Remaining: wire
+   the view into [feature 02 slice 19](features/02-core-ontology-documentation.md)
+   (card) + [feature 04 slice 22](features/04-schema-force-graph-visualization.md)
+   (graph).
 2. **Enum + Type HTML sections** (modeled, inert in HTML). Graph-only today.
    → [feature 02 slice 18](features/02-core-ontology-documentation.md).
 3. **Schema metadata in HTML** (`license`, `contributors`, `created`,

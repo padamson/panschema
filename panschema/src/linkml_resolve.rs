@@ -72,13 +72,38 @@ impl Provenance {
     }
 }
 
-/// A slot definition paired with where it came from. Output of
-/// [`resolve_effective_slots_with_provenance`]; consumers that don't
-/// care about origin use [`resolve_effective_slots`] instead.
+/// The range a slot resolves to *for a specific class*, after that
+/// class's `slot_usage` has been applied — LinkML's induced-slot view.
+///
+/// `slot_usage` can narrow an inherited range three ways, all captured
+/// here: replace an inherited `any_of` union with a smaller one,
+/// intersect the union down to a single `range` (so the wide inherited
+/// union no longer lingers), or set `maximum_cardinality: 0` to say
+/// "this class permits no value." Without this view a consumer reading
+/// the raw `definition` sees the inherited union even where the class
+/// narrowed it (the scalar-`range`-over-`any_of` case leaves both
+/// populated on the definition).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct InducedRange {
+    /// The effective range targets for this class: one entry for a
+    /// scalar range, several for an `any_of` union, empty when the
+    /// slot is suppressed or names no resolvable range.
+    pub ranges: Vec<String>,
+    /// `maximum_cardinality: 0` — the class declares the slot but
+    /// permits no value. Renderers show "produces no value" and draw
+    /// no range edge; `ranges` is empty in this case.
+    pub suppressed: bool,
+}
+
+/// A slot definition paired with where it came from and its induced
+/// per-class range. Output of [`resolve_effective_slots_with_provenance`];
+/// consumers that don't care about origin use [`resolve_effective_slots`]
+/// instead.
 #[derive(Debug, Clone)]
 pub struct ResolvedSlot {
     pub definition: SlotDefinition,
     pub provenance: Provenance,
+    pub induced: InducedRange,
 }
 
 /// Walk a class's `is_a` chain and `mixins`, then apply the class's own
@@ -141,6 +166,11 @@ fn resolve_slots_walk(
                 name,
                 ResolvedSlot {
                     provenance: rebase_through_is_a(parent_name, rs.provenance),
+                    // The parent's induced range carries through — a
+                    // narrowing the parent applied via `slot_usage` is
+                    // what the child inherits; recomputing from the
+                    // definition would resurrect the lingering union.
+                    induced: rs.induced,
                     definition: rs.definition,
                 },
             );
@@ -152,6 +182,7 @@ fn resolve_slots_walk(
             for (name, rs) in resolve_slots_walk(mixin, schema, visited) {
                 slots.entry(name).or_insert_with(|| ResolvedSlot {
                     provenance: rebase_through_mixin(mixin_name, rs.provenance),
+                    induced: rs.induced,
                     definition: rs.definition,
                 });
             }
@@ -171,6 +202,7 @@ fn resolve_slots_walk(
         slots.insert(
             name.clone(),
             ResolvedSlot {
+                induced: base_induced(def),
                 definition: def.clone(),
                 provenance,
             },
@@ -182,6 +214,7 @@ fn resolve_slots_walk(
             slots
                 .entry(slot_name.clone())
                 .or_insert_with(|| ResolvedSlot {
+                    induced: base_induced(def),
                     definition: def.clone(),
                     provenance: Provenance::Direct,
                 });
@@ -196,6 +229,7 @@ fn resolve_slots_walk(
                     by_slot_usage: true,
                 };
                 merge_slot_override(&mut target.definition, override_def);
+                target.induced = induced_after_override(&target.definition, override_def);
             }
             // A `slot_usage` with no inherited base acts as the
             // slot's introduction at this class.
@@ -203,6 +237,7 @@ fn resolve_slots_walk(
                 slots.insert(
                     name.clone(),
                     ResolvedSlot {
+                        induced: base_induced(override_def),
                         definition: override_def.clone(),
                         provenance: Provenance::Direct,
                     },
@@ -315,6 +350,62 @@ fn merge_slot_override(target: &mut SlotDefinition, source: &SlotDefinition) {
     }
     if source.identifier {
         target.identifier = true;
+    }
+}
+
+/// The induced range of a slot from its own definition, before any
+/// `slot_usage` narrowing — an `any_of` union's member ranges, or the
+/// single `range`. `maximum_cardinality: 0` suppresses it (the class
+/// permits no value), which empties `ranges`.
+fn base_induced(def: &SlotDefinition) -> InducedRange {
+    if def.maximum_cardinality == Some(0) {
+        return InducedRange {
+            ranges: Vec::new(),
+            suppressed: true,
+        };
+    }
+    let ranges = if !def.any_of.is_empty() {
+        def.any_of.iter().filter_map(|m| m.range.clone()).collect()
+    } else {
+        def.range.iter().cloned().collect()
+    };
+    InducedRange {
+        ranges,
+        suppressed: false,
+    }
+}
+
+/// The induced range after a class refines a slot via `slot_usage`,
+/// per LinkML induced-slot semantics. The decision keys off the
+/// *override* (not the merged definition), so the inherited union
+/// can't leak through:
+/// - `maximum_cardinality: 0` → suppressed, no ranges.
+/// - override `any_of` → replaces the inherited union with its members.
+/// - override scalar `range` → intersects the inherited union down to
+///   that single range (the wide union no longer applies).
+/// - override touches neither (e.g. only tightens `required`) → the
+///   merged definition's base induced range stands.
+fn induced_after_override(merged: &SlotDefinition, override_def: &SlotDefinition) -> InducedRange {
+    if merged.maximum_cardinality == Some(0) {
+        return InducedRange {
+            ranges: Vec::new(),
+            suppressed: true,
+        };
+    }
+    let ranges = if !override_def.any_of.is_empty() {
+        override_def
+            .any_of
+            .iter()
+            .filter_map(|m| m.range.clone())
+            .collect()
+    } else if let Some(range) = &override_def.range {
+        vec![range.clone()]
+    } else {
+        return base_induced(merged);
+    };
+    InducedRange {
+        ranges,
+        suppressed: false,
     }
 }
 
@@ -723,6 +814,202 @@ mod tests {
                 assert_eq!(def.name, with_prov[name].definition.name);
             }
         }
+    }
+
+    /// Helper: a global slot whose range is an `any_of` union over the
+    /// given member class names.
+    fn union_slot(name: &str, members: &[&str]) -> SlotDefinition {
+        let mut slot = SlotDefinition::new(name);
+        slot.any_of = members
+            .iter()
+            .map(|m| {
+                let mut branch = SlotDefinition::new(name);
+                branch.range = Some((*m).to_string());
+                branch
+            })
+            .collect();
+        slot
+    }
+
+    /// A scimantic-shaped fixture: abstract `Act` carries `hasInput` /
+    /// `hasOutput` as wide `any_of` unions; subclasses narrow them via
+    /// `slot_usage` (single range, smaller union, or `max_cardinality: 0`).
+    fn act_facets_schema() -> SchemaDefinition {
+        let mut schema = SchemaDefinition::new("acts");
+        schema.slots.insert(
+            "hasInput".into(),
+            union_slot(
+                "hasInput",
+                &[
+                    "Question",
+                    "Result",
+                    "Dataset",
+                    "Annotation",
+                    "SourceDocument",
+                ],
+            ),
+        );
+        schema.slots.insert(
+            "hasOutput".into(),
+            union_slot("hasOutput", &["Result", "Dataset", "Annotation"]),
+        );
+
+        let mut act = ClassDefinition::new("Act");
+        act.slots = vec!["hasInput".into(), "hasOutput".into()];
+        schema.classes.insert("Act".into(), act);
+
+        // Helper to add a subclass with slot_usage overrides.
+        let mut add_subclass = |name: &str, usage: Vec<(&str, SlotDefinition)>| {
+            let mut c = ClassDefinition::new(name);
+            c.is_a = Some("Act".into());
+            for (slot, def) in usage {
+                c.slot_usage.insert(slot.into(), def);
+            }
+            schema.classes.insert(name.into(), c);
+        };
+
+        // Analysis: scalar range narrows each union to one member.
+        let mut analysis_in = SlotDefinition::new("hasInput");
+        analysis_in.range = Some("Dataset".into());
+        let mut analysis_out = SlotDefinition::new("hasOutput");
+        analysis_out.range = Some("Result".into());
+        add_subclass(
+            "Analysis",
+            vec![("hasInput", analysis_in), ("hasOutput", analysis_out)],
+        );
+
+        // EvidenceExtraction: a smaller any_of replaces the inherited union.
+        add_subclass(
+            "EvidenceExtraction",
+            vec![(
+                "hasInput",
+                union_slot("hasInput", &["Annotation", "SourceDocument"]),
+            )],
+        );
+
+        // QuestionFormation: a different narrowed union.
+        add_subclass(
+            "QuestionFormation",
+            vec![("hasInput", union_slot("hasInput", &["Question", "Result"]))],
+        );
+
+        // EvidenceAssessment: max_cardinality 0 suppresses the output.
+        let mut no_output = SlotDefinition::new("hasOutput");
+        no_output.maximum_cardinality = Some(0);
+        add_subclass("EvidenceAssessment", vec![("hasOutput", no_output)]);
+
+        // DesignOfExperiment: max_cardinality 0 suppresses the input.
+        let mut no_input = SlotDefinition::new("hasInput");
+        no_input.maximum_cardinality = Some(0);
+        add_subclass("DesignOfExperiment", vec![("hasInput", no_input)]);
+
+        schema
+    }
+
+    fn induced_of(schema: &SchemaDefinition, class: &str, slot: &str) -> InducedRange {
+        resolve_effective_slots_with_provenance(&schema.classes[class], schema)[slot]
+            .induced
+            .clone()
+    }
+
+    #[test]
+    fn induced_base_union_passes_through_unrefined_class() {
+        let schema = act_facets_schema();
+        // Act itself doesn't narrow — the full union is induced.
+        assert_eq!(
+            induced_of(&schema, "Act", "hasInput").ranges,
+            vec![
+                "Question".to_string(),
+                "Result".into(),
+                "Dataset".into(),
+                "Annotation".into(),
+                "SourceDocument".into()
+            ]
+        );
+    }
+
+    #[test]
+    fn induced_scalar_slot_usage_intersects_inherited_union() {
+        let schema = act_facets_schema();
+        // The lingering inherited union must NOT survive — the scalar
+        // range narrows it to a single member.
+        assert_eq!(
+            induced_of(&schema, "Analysis", "hasInput").ranges,
+            vec!["Dataset".to_string()]
+        );
+        assert_eq!(
+            induced_of(&schema, "Analysis", "hasOutput").ranges,
+            vec!["Result".to_string()]
+        );
+    }
+
+    #[test]
+    fn induced_slot_usage_any_of_replaces_inherited_union() {
+        let schema = act_facets_schema();
+        assert_eq!(
+            induced_of(&schema, "EvidenceExtraction", "hasInput").ranges,
+            vec!["Annotation".to_string(), "SourceDocument".into()]
+        );
+        assert_eq!(
+            induced_of(&schema, "QuestionFormation", "hasInput").ranges,
+            vec!["Question".to_string(), "Result".into()]
+        );
+    }
+
+    #[test]
+    fn induced_max_cardinality_zero_suppresses_without_dropping_slot() {
+        let schema = act_facets_schema();
+
+        let assessment = induced_of(&schema, "EvidenceAssessment", "hasOutput");
+        assert!(assessment.suppressed, "max_cardinality 0 marks suppressed");
+        assert!(
+            assessment.ranges.is_empty(),
+            "a suppressed slot has no ranges"
+        );
+
+        let design = induced_of(&schema, "DesignOfExperiment", "hasInput");
+        assert!(design.suppressed);
+        assert!(design.ranges.is_empty());
+
+        // The suppressed slot is still part of the class's declared set —
+        // suppression hides its value, it doesn't drop the slot.
+        let resolved = resolve_effective_slots(&schema.classes["EvidenceAssessment"], &schema);
+        assert!(
+            resolved.contains_key("hasOutput"),
+            "suppressed slot stays in the resolved set"
+        );
+    }
+
+    #[test]
+    fn induced_scalar_range_slot_has_single_member() {
+        // A plain scalar-range slot (no any_of, no slot_usage) induces
+        // a one-member range list.
+        let mut schema = SchemaDefinition::new("s");
+        let mut c = ClassDefinition::new("C");
+        let mut field = SlotDefinition::new("field");
+        field.range = Some("string".into());
+        c.attributes.insert("field".into(), field);
+        schema.classes.insert("C".into(), c);
+
+        assert_eq!(
+            induced_of(&schema, "C", "field").ranges,
+            vec!["string".to_string()]
+        );
+    }
+
+    #[test]
+    fn induced_narrowing_inherited_through_a_second_is_a_hop() {
+        // Analysis narrows hasInput; a class is_a Analysis without
+        // re-refining inherits the narrowed [Dataset], not the union.
+        let mut schema = act_facets_schema();
+        let mut sub = ClassDefinition::new("SubAnalysis");
+        sub.is_a = Some("Analysis".into());
+        schema.classes.insert("SubAnalysis".into(), sub);
+        assert_eq!(
+            induced_of(&schema, "SubAnalysis", "hasInput").ranges,
+            vec!["Dataset".to_string()],
+            "the parent's narrowing carries through the second is_a hop"
+        );
     }
 
     #[test]
