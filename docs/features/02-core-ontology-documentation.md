@@ -440,23 +440,24 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 
 ### Slice 18: Enumerations and Types HTML card sections
 
-**Status:** 📋 Planned
+**Status:** ✅ Complete
 
 **Priority:** Should Have
 
 **User Value:** The schema graph renders enum nodes (diamonds) and type nodes (rectangles), but the HTML doc has only Classes / Slots / Individuals sections — so enums and types are graph-only. Enums especially carry information worth reading: permissible values, each value's description, and a `meaning` IRI grounding the value in an upstream vocabulary. An author inspecting the rendered docs can't review an enum's allowed values without opening the YAML or the graph. This slice adds **Enumerations** and **Types** sections for parity with every node kind the graph draws, and lets the graph hover reuse those cards (closing the enum/type gap left by feature 04 slice 21).
 
 **Acceptance Criteria:**
-- [ ] `EnumData` and `TypeData` view-models built from the IR's `EnumDefinition` (permissible values + per-value description + CURIE-expanded `meaning`) and `TypeDefinition` (base type, `uri`, pattern/constraints where present).
-- [ ] An **Enumerations** section (`id="enums"`, `#enum-<name>` card ids) renders one card per enum: its description, and a list of permissible values each showing its text, description, and a hyperlinked `meaning` IRI (reusing the upstream-label cache from feature 13 so the link reads as a label, not a CURIE).
-- [ ] A **Types** section (`id="types"`, `#type-<name>` card ids) renders one card per declared type: base/parent type, `uri`, and any pattern/min/max constraints.
-- [ ] Sidebar gains "Enumerations" and "Types" entries with count badges; the `render_xref` `#enum-<name>` branch (already emitted for `[[Name]]` enum refs) now resolves to a real card.
-- [ ] The graph hover (feature 04 slice 21) reuses the rendered `#enum-<name>` / `#type-<name>` card for enum and type nodes instead of the compact built-in fallback.
-- [ ] Snapshot tests for the new `enum_card` / `type_card` components; e2e asserts the sections render with the reference fixture's enums/types.
+- [x] `EnumData` and `TypeData` view-models built from the IR's `EnumDefinition` (permissible values + per-value description + CURIE-expanded `meaning`) and `TypeDefinition` (base type, `uri`, pattern where present).
+- [x] An **Enumerations** section (`id="enums"`, `#enum-<name>` card ids) renders one card per enum: its description, and a list of permissible values each showing its text, description, and a hyperlinked `meaning` IRI (reusing the upstream-label cache so the link reads as a label when cached).
+- [x] A **Types** section (`id="types"`, `#type-<name>` card ids) renders one card per declared type: parent type (`typeof`, linked to its own card when declared here), `uri`, and `pattern`.
+- [x] Sidebar gains "Enumerations" and "Types" entries with count badges; the `render_xref` `#enum-<name>` branch now resolves to a real card, and a new `#type-<name>` branch links type references. Both sections are omitted when the schema declares none.
+- [x] The graph hover (feature 04 slice 21) reuses the rendered `#enum-<name>` / `#type-<name>` card for enum and type nodes — `nodeCardElement` now maps every node kind to its card.
+- [x] Snapshot tests for the new `enum_card` / `type_card` components; an integration test renders the full sections from an in-memory schema, and an e2e (`e2e_renders_enum_and_type_sections`) asserts both sections, cards, and the sidebar entries render in a browser from a LinkML fixture (the OWL reference fixture carries no enums/types, so a dedicated `enum_type.yaml` fixture is used).
 
 **Notes:**
-- Source: friction `[2026-06-14] enums (and types) render in the graph but have no HTML card section` (severity: annoyance / completeness gap). The IR data already exists; only the HTML surface is missing.
-- Graph↔HTML parity check: every node kind the graph renders should have a corresponding HTML card section.
+- Source: friction `[2026-06-14] enums (and types) render in the graph but have no HTML card section` (severity: annoyance / completeness gap). The IR data already exists; only the HTML surface was missing.
+- Graph↔HTML parity check: every node kind the graph renders now has a corresponding HTML card section.
+- New `--color-enum` / `--color-type` theme vars match the graph's purple-diamond / orange-rectangle node palette.
 
 ---
 
@@ -501,5 +502,5 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 | Slice 15: Hierarchy view in the Classes section | Should Have | None | ✅ Complete |
 | Slice 16: External `subclass_of` grounding — IR + HTML + RDF | Must Have | Feature 12 slice 12.2 | ✅ Complete |
 | Slice 17: Unify on "slot" terminology + slot-card parity | Should Have | Slice 5, ADR-006, Feature 04 | ✅ Complete |
-| Slice 18: Enumerations and Types HTML card sections | Should Have | Slice 1, Feature 13, Feature 04 slice 21 | 📋 Planned |
+| Slice 18: Enumerations and Types HTML card sections | Should Have | Slice 1, Feature 13, Feature 04 slice 21 | ✅ Complete |
 | Slice 19: Induced per-class slot range on cards | Should Have | Feature 12 slice 12.5 | ✅ Complete |

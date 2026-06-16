@@ -964,21 +964,23 @@
     // position.
     // The already-rendered HTML card for a graph node, or null. Graph
     // node ids are `<kind>:<name>` (`slot:executes`, `class:Act`); the
-    // doc body renders `#slot-<name>` for slots and `#class-<name>` for
-    // classes. Enum and type nodes have no card yet, so they return null
-    // and the hover falls back to the compact rows.
+    // doc body renders `#<kind>-<name>` for every kind. Each node kind
+    // now has a card section, so the hover reuses the rendered card and
+    // can't drift from the doc body. (A schema with no enums/types still
+    // returns null for those — the section is omitted — and the hover
+    // falls back to the compact rows.)
+    const NODE_CARD_PREFIX = { slot: 'slot-', class: 'class-', enum: 'enum-', type: 'type-' };
     function nodeCardElement(nodeId) {
         const colon = nodeId.indexOf(':');
         if (colon < 0) return null;
-        const kind = nodeId.slice(0, colon);
-        const name = nodeId.slice(colon + 1);
-        const prefix = kind === 'slot' ? 'slot-' : kind === 'class' ? 'class-' : null;
-        return prefix ? document.getElementById(prefix + name) : null;
+        const prefix = NODE_CARD_PREFIX[nodeId.slice(0, colon)];
+        return prefix ? document.getElementById(prefix + nodeId.slice(colon + 1)) : null;
     }
 
-    // Compact JS-built hover rows — the fallback for nodes without an
-    // HTML card (enum / type) and the original layout. Class and slot
-    // nodes reuse their rendered card instead (see `nodeCardElement`).
+    // Compact JS-built hover rows — the fallback for a node whose card
+    // isn't in this page (e.g. an enum/type when the schema declares
+    // none) and the original layout. Nodes with a rendered card reuse it
+    // instead (see `nodeCardElement`).
     function buildCompactNodeHover(d) {
         const connCount = Array.isArray(d.connections) ? d.connections.length : 0;
         // Type row carries an "(abstract)" suffix when the LinkML class
@@ -1042,9 +1044,10 @@
                     if (cardEl) {
                         // Reuse the entity's already-rendered HTML card so
                         // the graph hover and the doc body show identical
-                        // content — one source of truth, no drift. Class
-                        // and slot nodes have cards; enum/type nodes fall
-                        // through to the compact rows.
+                        // content — one source of truth, no drift. Every
+                        // node kind (class/slot/enum/type) has a card; a
+                        // node whose card isn't on this page falls through
+                        // to the compact rows.
                         html = cardEl.innerHTML;
                         isFullCard = true;
                     } else {

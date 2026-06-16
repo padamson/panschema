@@ -1,0 +1,76 @@
+<article class="entity-card enum-card" id="enum-{{ id }}">
+    <header class="entity-header">
+        <div class="entity-badge enum-badge">Enum</div>
+        <h3 class="entity-title">{{ label }}</h3>
+    </header>
+{%- if let Some(desc) = description %}
+
+    <div class="entity-description">{{ desc|safe }}</div>
+{%- endif %}
+
+    <div class="entity-details">
+{%- if !permissible_values.is_empty() %}
+        <div class="detail-row">
+            <dt>Permissible values</dt>
+            <dd>
+                <ul class="pv-list">
+{%- for pv in permissible_values %}
+                    <li class="pv-entry">
+                        <span class="pv-text">{{ pv.text }}</span>
+{%- if let Some(m) = pv.meaning.as_ref() %}
+{%- match m.href %}
+{%- when Some with (href) %}
+                        <a href="{{ href }}" class="entity-ref enum-meaning" target="_blank" rel="noopener" title="{{ m.tooltip() }}">{% match m.label %}{% when Some with (label) %}{{ label }}{% when None %}{{ m.display }}{% endmatch %}</a>
+{%- when None %}
+                        <span class="entity-ref mapping-unresolved" title="prefix not declared in schema.prefixes">{{ m.display }}</span>
+{%- endmatch %}
+{%- endif %}
+{%- if let Some(d) = pv.description.as_deref() %}
+                        <div class="pv-description">{{ d }}</div>
+{%- endif %}
+                    </li>
+{%- endfor %}
+                </ul>
+            </dd>
+        </div>
+{%- endif %}
+    </div>
+</article>
+<style>
+    .enum-badge {
+        background-color: color-mix(in srgb, var(--color-enum) 15%, transparent);
+        color: var(--color-enum);
+    }
+
+    .pv-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-2);
+    }
+
+    .pv-entry {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: var(--space-2);
+    }
+
+    .pv-text {
+        font-family: var(--font-mono);
+        font-size: var(--text-sm);
+        font-weight: 600;
+    }
+
+    .enum-meaning {
+        color: var(--color-enum);
+    }
+
+    .pv-description {
+        flex-basis: 100%;
+        font-size: var(--text-sm);
+        color: var(--color-text-muted);
+    }
+</style>

@@ -203,6 +203,8 @@ pub struct SidebarComponent<'a> {
     pub active_section: &'a str,
     pub classes: &'a [EntityRef],
     pub slots: &'a [EntityRef],
+    pub enums: &'a [EntityRef],
+    pub types: &'a [EntityRef],
     pub individuals: &'a [EntityRef],
     pub namespaces: &'a [Namespace],
     /// Graph data JSON for visualization (None = no graph link in sidebar)
@@ -279,6 +281,28 @@ pub struct IndividualCardComponent<'a> {
     pub property_values: &'a [PropertyValueSpec],
 }
 
+/// Enum card component template.
+#[derive(Template)]
+#[template(path = "components/enum_card.html")]
+pub struct EnumCardComponent<'a> {
+    pub id: &'a str,
+    pub label: &'a str,
+    pub description: Option<&'a str>,
+    pub permissible_values: &'a [panschema::html_writer::PermissibleValueData],
+}
+
+/// Type card component template.
+#[derive(Template)]
+#[template(path = "components/type_card.html")]
+pub struct TypeCardComponent<'a> {
+    pub id: &'a str,
+    pub label: &'a str,
+    pub uri: Option<&'a panschema::html_writer::ExternalLink>,
+    pub description: Option<&'a str>,
+    pub base_type: Option<&'a EntityRef>,
+    pub pattern: Option<&'a str>,
+}
+
 /// Sample class data for styleguide previews.
 pub struct SampleClass<'a> {
     pub id: &'a str,
@@ -332,6 +356,8 @@ pub struct StyleGuideTemplate<'a> {
     pub comment: Option<&'a str>,
     pub classes: &'a [EntityRef],
     pub slots: &'a [EntityRef],
+    pub enums: &'a [EntityRef],
+    pub types: &'a [EntityRef],
     pub individuals: &'a [EntityRef],
     pub namespaces: &'a [Namespace],
     /// Graph data JSON (None = no graph link in sidebar)
@@ -403,6 +429,9 @@ impl ComponentRenderer {
             active_section,
             classes,
             slots,
+            // Styleguide preview doesn't exercise enum/type nav entries.
+            enums: &[],
+            types: &[],
             individuals,
             namespaces,
             graph_json: None, // No graph in component preview
@@ -509,6 +538,42 @@ impl ComponentRenderer {
             description,
             types,
             property_values,
+        };
+        Ok(template.render()?)
+    }
+
+    /// Render an enum card component.
+    pub fn enum_card(
+        id: &str,
+        label: &str,
+        description: Option<&str>,
+        permissible_values: &[panschema::html_writer::PermissibleValueData],
+    ) -> anyhow::Result<String> {
+        let template = EnumCardComponent {
+            id,
+            label,
+            description,
+            permissible_values,
+        };
+        Ok(template.render()?)
+    }
+
+    /// Render a type card component.
+    pub fn type_card(
+        id: &str,
+        label: &str,
+        uri: Option<&panschema::html_writer::ExternalLink>,
+        description: Option<&str>,
+        base_type: Option<&EntityRef>,
+        pattern: Option<&str>,
+    ) -> anyhow::Result<String> {
+        let template = TypeCardComponent {
+            id,
+            label,
+            uri,
+            description,
+            base_type,
+            pattern,
         };
         Ok(template.render()?)
     }
@@ -654,6 +719,8 @@ impl ComponentRenderer {
             comment: data.comment.as_deref(),
             classes: &data.classes,
             slots: &data.slots,
+            enums: &[],
+            types: &[],
             individuals: &data.individuals,
             namespaces: &data.namespaces,
             graph_json: None, // No graph in styleguide
@@ -1041,6 +1108,58 @@ mod tests {
                 None,
                 &[],
                 &[],
+            )
+            .unwrap();
+            insta::assert_snapshot!(html);
+        }
+
+        #[test]
+        fn snapshot_enum_card_full() {
+            use panschema::html_writer::{ExternalLink, PermissibleValueData};
+            let permissible_values = vec![
+                PermissibleValueData {
+                    text: "open".to_string(),
+                    description: Some("The item is open for changes.".to_string()),
+                    meaning: Some(ExternalLink {
+                        display: "ex:OpenStatus".to_string(),
+                        href: Some("https://example.org/ontology#OpenStatus".to_string()),
+                        label: Some("Open Status".to_string()),
+                        definitions: vec![],
+                    }),
+                },
+                PermissibleValueData {
+                    text: "closed".to_string(),
+                    description: None,
+                    meaning: None,
+                },
+            ];
+            let html = ComponentRenderer::enum_card(
+                "status",
+                "Status",
+                Some("The lifecycle status of an item."),
+                &permissible_values,
+            )
+            .unwrap();
+            insta::assert_snapshot!(html);
+        }
+
+        #[test]
+        fn snapshot_type_card_full() {
+            use panschema::html_writer::ExternalLink;
+            let uri = ExternalLink {
+                display: "xsd:string".to_string(),
+                href: Some("http://www.w3.org/2001/XMLSchema#string".to_string()),
+                label: None,
+                definitions: vec![],
+            };
+            let base = EntityRef::new("string", "string");
+            let html = ComponentRenderer::type_card(
+                "phone-number",
+                "PhoneNumber",
+                Some(&uri),
+                Some("A phone number in E.164 form."),
+                Some(&base),
+                Some(r"^\+[1-9]\d{1,14}$"),
             )
             .unwrap();
             insta::assert_snapshot!(html);

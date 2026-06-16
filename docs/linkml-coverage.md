@@ -117,33 +117,33 @@ focused subset of the structural ones.
 
 ## EnumDefinition + PermissibleValue
 
-**No HTML section exists yet** — enums and types render in the graph (and
-codegen) but have no doc-body card. Filed as [feature 02 slice 18](features/02-core-ontology-documentation.md).
+The HTML **Enumerations** section ([feature 02 slice 18](features/02-core-ontology-documentation.md))
+renders an enum card per enum; the graph hover reuses it.
 
 | Metaslot | IR | HTML | Graph | RDF | Rust | Notes |
 |---|:--:|:--:|:--:|:--:|:--:|---|
-| `EnumDefinition.name` | ● | ○ | ● | ✗ | ● | `[[xref]]` resolves to `#enum-` but no card target; node; Rust enum |
-| `EnumDefinition.description` | ● | ○ | ● | ✗ | ● | tooltip; doc-comment |
-| `permissible_values` | ● | ○ | ● | ✗ | ● | graph hover list; Rust variants. No RDF representation |
-| `PermissibleValue.text` | ● | ○ | ● | ✗ | ● | variant ident |
-| `PermissibleValue.description` | ● | ○ | ● | ✗ | ● | |
-| `PermissibleValue.meaning` | ● | ○ | ● | ✗ | ○ | CURIE-expanded in graph; Rust ignores |
+| `EnumDefinition.name` | ● | ● | ● | ✗ | ● | `#enum-` card; node; Rust enum |
+| `EnumDefinition.description` | ● | ● | ● | ✗ | ● | card; tooltip; doc-comment |
+| `permissible_values` | ● | ● | ● | ✗ | ● | card list; graph hover; Rust variants. No RDF representation |
+| `PermissibleValue.text` | ● | ● | ● | ✗ | ● | card; variant ident |
+| `PermissibleValue.description` | ● | ● | ● | ✗ | ● | |
+| `PermissibleValue.meaning` | ● | ● | ● | ✗ | ○ | CURIE-expanded hyperlink on the card + graph; Rust ignores |
 | `enum_uri` `code_set` `pv_formula` `include` `minus` `inherits` `reachable_from` `matches` `concepts` | ✗ | — | — | — | — | not modeled. Dynamic/derived enums |
 
 ---
 
 ## TypeDefinition
 
-**No HTML section exists yet** — same gap as enums (feature 02 slice 18).
-Types also produce no RDF.
+The HTML **Types** section ([feature 02 slice 18](features/02-core-ontology-documentation.md))
+renders a type card per type; the graph hover reuses it. Types still produce no RDF.
 
 | Metaslot | IR | HTML | Graph | RDF | Rust | Notes |
 |---|:--:|:--:|:--:|:--:|:--:|---|
-| `name` | ● | ○ | ● | ✗ | ◐ | node; primitives handled by hardcoded range mapping, not type defs |
-| `description` | ● | ○ | ● | ✗ | ○ | tooltip |
-| `typeof` | ● | ○ | ● | ✗ | ○ | `type_of` edge in graph |
-| `uri` | ● | ○ | ● | ✗ | ○ | node URI |
-| `pattern` | ● | ○ | ○ | ✗ | ○ | modeled, surfaced nowhere |
+| `name` | ● | ● | ● | ✗ | ◐ | `#type-` card; node; primitives handled by hardcoded range mapping, not type defs |
+| `description` | ● | ● | ● | ✗ | ○ | card; tooltip |
+| `typeof` | ● | ● | ● | ✗ | ○ | "Type of" row; `type_of` edge in graph |
+| `uri` | ● | ● | ● | ✗ | ○ | card URI row; node URI |
+| `pattern` | ● | ● | ○ | ✗ | ○ | card Pattern row |
 | `base` `repr` `type_uri` `minimum_value` `maximum_value` `union_of` | ✗ | — | — | — | — | not modeled |
 
 ---
@@ -162,8 +162,10 @@ Ordered by impact, with the slices already filed against each:
    ([feature 04 slice 22](features/04-schema-force-graph-visualization.md) ✅).
    Remaining tail: Rust codegen still applies only scalar `slot_usage`
    overrides, not the induced-range narrowing.
-2. **Enum + Type HTML sections** (modeled, inert in HTML). Graph-only today.
-   → [feature 02 slice 18](features/02-core-ontology-documentation.md).
+2. ~~**Enum + Type HTML sections**~~ **(done).** Enumerations and Types now
+   render as doc-body card sections, and the graph hover reuses them
+   ([feature 02 slice 18](features/02-core-ontology-documentation.md) ✅) —
+   every node kind the graph draws has a matching HTML card.
 3. **Schema metadata in HTML** (`license`, `contributors`, `created`,
    `modified` render in RDF but not the doc body). Unfiled — a "Schema info"
    card would close it.

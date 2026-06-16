@@ -1542,6 +1542,72 @@ fn e2e_is_a_heavy_schema_auto_defaults_to_hierarchical() {
     });
 }
 
+// Proves the Enumerations and Types HTML sections render in a browser
+// (feature 02 slice 18). The reference fixture is OWL and carries no
+// enums/types, so this uses a small LinkML fixture that declares one of
+// each, then asserts both sections, their cards, and the enum's
+// permissible values are present in the rendered DOM.
+#[test]
+fn e2e_renders_enum_and_type_sections() {
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
+    rt.block_on(async {
+        let output_dir = generate_docs_for("tests/fixtures/enum_type.yaml");
+        let port = find_available_port();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch()
+            .await
+            .expect("Failed to initialize Playwright");
+        let browser = playwright
+            .chromium()
+            .launch()
+            .await
+            .expect("Failed to launch Chromium");
+        let page = browser.new_page().await.expect("Failed to create page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("navigate");
+
+        // Enumerations section + card + permissible values.
+        let enum_card = page.locator("#enum-Status").await;
+        let enum_html = enum_card
+            .inner_html()
+            .await
+            .expect("Status enum card should be present");
+        assert!(
+            enum_html.contains("open") && enum_html.contains("closed"),
+            "enum card lists its permissible values; got: {enum_html}"
+        );
+
+        // Types section + card with its pattern constraint.
+        let type_card = page.locator("#type-PhoneNumber").await;
+        let type_html = type_card
+            .inner_html()
+            .await
+            .expect("PhoneNumber type card should be present");
+        assert!(
+            type_html.contains(r"\+[1-9]"),
+            "type card shows its pattern; got: {type_html}"
+        );
+
+        // Sidebar gained the two nav entries.
+        let nav = page.locator(".sidebar-nav").await;
+        let nav_html = nav.inner_html().await.expect("sidebar nav present");
+        assert!(
+            nav_html.contains("Enumerations") && nav_html.contains("Types"),
+            "sidebar lists Enumerations and Types; got: {nav_html}"
+        );
+
+        browser.close().await.expect("close browser");
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
 /// A target viewport + graph size for the multi-scale screenshot
 /// iteration harness. We pin three configurations that cover the device
 /// spectrum we care about visually.

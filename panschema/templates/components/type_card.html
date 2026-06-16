@@ -1,0 +1,54 @@
+<article class="entity-card type-card" id="type-{{ id }}">
+    <header class="entity-header">
+        <div class="entity-badge type-badge">Type</div>
+        <h3 class="entity-title">{{ label }}</h3>
+    </header>
+{%- if let Some(desc) = description %}
+
+    <div class="entity-description">{{ desc|safe }}</div>
+{%- endif %}
+
+    <div class="entity-details">
+{%- if let Some(base) = base_type.as_ref() %}
+        <div class="detail-row">
+            <dt>Type of</dt>
+            <dd>
+{%- if !base.id.is_empty() %}
+                <a href="#type-{{ base.id }}" class="entity-ref type-ref">{{ base.label }}</a>
+{%- else %}
+                <span class="entity-ref datatype-ref">{{ base.label }}</span>
+{%- endif %}
+            </dd>
+        </div>
+{%- endif %}
+{%- if let Some(u) = uri.as_ref() %}
+        <div class="detail-row">
+            <dt>URI</dt>
+            <dd>
+{%- match u.href %}
+{%- when Some with (href) %}
+                <a href="{{ href }}" class="entity-iri-link" target="_blank" rel="noopener" title="{{ u.tooltip() }}"><code class="mono">{{ u.display }}</code></a>
+{%- when None %}
+                <code class="mono">{{ u.display }}</code>
+{%- endmatch %}
+            </dd>
+        </div>
+{%- endif %}
+{%- if let Some(pat) = pattern %}
+        <div class="detail-row">
+            <dt>Pattern</dt>
+            <dd><code class="mono pattern-value" title="{{ pat }}">{{ pat }}</code></dd>
+        </div>
+{%- endif %}
+    </div>
+</article>
+<style>
+    .type-badge {
+        background-color: color-mix(in srgb, var(--color-type) 15%, transparent);
+        color: var(--color-type);
+    }
+
+    .type-ref {
+        color: var(--color-type);
+    }
+</style>

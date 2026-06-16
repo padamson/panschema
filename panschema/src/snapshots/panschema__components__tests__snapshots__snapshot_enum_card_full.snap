@@ -1,0 +1,68 @@
+---
+source: panschema/src/components.rs
+expression: html
+---
+<article class="entity-card enum-card" id="enum-status">
+    <header class="entity-header">
+        <div class="entity-badge enum-badge">Enum</div>
+        <h3 class="entity-title">Status</h3>
+    </header>
+
+    <div class="entity-description">The lifecycle status of an item.</div>
+
+    <div class="entity-details">
+        <div class="detail-row">
+            <dt>Permissible values</dt>
+            <dd>
+                <ul class="pv-list">
+                    <li class="pv-entry">
+                        <span class="pv-text">open</span>
+                        <a href="https://example.org/ontology#OpenStatus" class="entity-ref enum-meaning" target="_blank" rel="noopener" title="ex:OpenStatus = https://example.org/ontology#OpenStatus">Open Status</a>
+                        <div class="pv-description">The item is open for changes.</div>
+                    </li>
+                    <li class="pv-entry">
+                        <span class="pv-text">closed</span>
+                    </li>
+                </ul>
+            </dd>
+        </div>
+    </div>
+</article>
+<style>
+    .enum-badge {
+        background-color: color-mix(in srgb, var(--color-enum) 15%, transparent);
+        color: var(--color-enum);
+    }
+
+    .pv-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-2);
+    }
+
+    .pv-entry {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: var(--space-2);
+    }
+
+    .pv-text {
+        font-family: var(--font-mono);
+        font-size: var(--text-sm);
+        font-weight: 600;
+    }
+
+    .enum-meaning {
+        color: var(--color-enum);
+    }
+
+    .pv-description {
+        flex-basis: 100%;
+        font-size: var(--text-sm);
+        color: var(--color-text-muted);
+    }
+</style>

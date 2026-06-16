@@ -132,6 +132,56 @@
 {%- endif %}
 </section>
 
+{%- if !enums.is_empty() %}
+<section id="enums">
+    {%- let id = "enums" %}
+    {%- let title = "Enumerations" %}
+    {%- let count = Some(enums.len()) %}
+    {%- let description = Some("Enumerations defined in this ontology.") %}
+    {% include "components/section_header.html" %}
+    <div class="entity-list">
+{%- for en in enums %}
+        <a href="#enum-{{ en.id }}" class="entity-link enum-link">{{ en.label }}</a>
+{%- endfor %}
+    </div>
+    <div class="enum-cards">
+{%- for en in enum_data %}
+        {%- let id = en.id.as_str() %}
+        {%- let label = en.label.as_str() %}
+        {%- let description = en.description.as_deref() %}
+        {%- let permissible_values = en.permissible_values.as_slice() %}
+        {% include "components/enum_card.html" %}
+{%- endfor %}
+    </div>
+</section>
+{%- endif %}
+
+{%- if !types.is_empty() %}
+<section id="types">
+    {%- let id = "types" %}
+    {%- let title = "Types" %}
+    {%- let count = Some(types.len()) %}
+    {%- let description = Some("Types defined in this ontology.") %}
+    {% include "components/section_header.html" %}
+    <div class="entity-list">
+{%- for ty in types %}
+        <a href="#type-{{ ty.id }}" class="entity-link type-link">{{ ty.label }}</a>
+{%- endfor %}
+    </div>
+    <div class="type-cards">
+{%- for ty in type_data %}
+        {%- let id = ty.id.as_str() %}
+        {%- let label = ty.label.as_str() %}
+        {%- let description = ty.description.as_deref() %}
+        {%- let base_type = ty.base_type.as_ref() %}
+        {%- let uri = ty.uri.as_ref() %}
+        {%- let pattern = ty.pattern.as_deref() %}
+        {% include "components/type_card.html" %}
+{%- endfor %}
+    </div>
+</section>
+{%- endif %}
+
 <section id="individuals">
     {%- let id = "individuals" %}
     {%- let title = "Individuals" %}

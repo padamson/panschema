@@ -188,6 +188,41 @@ pub struct RangeRef {
     pub datatype: String,
 }
 
+/// A single permissible value rendered on an enum card.
+#[derive(Debug, Clone)]
+pub struct PermissibleValueData {
+    pub text: String,
+    pub description: Option<String>,
+    /// The value's `meaning` — a concept IRI grounding it in an
+    /// upstream vocabulary — as a hyperlink with its cached label, or
+    /// `None` when the value declares no meaning.
+    pub meaning: Option<ExternalLink>,
+}
+
+/// Enumeration data for rendering an enum card.
+#[derive(Debug, Clone)]
+pub struct EnumData {
+    pub id: String,
+    pub label: String,
+    pub description: Option<String>,
+    pub permissible_values: Vec<PermissibleValueData>,
+}
+
+/// Type data for rendering a type card.
+#[derive(Debug, Clone)]
+pub struct TypeData {
+    pub id: String,
+    pub label: String,
+    /// The type's `uri` as a hyperlink, when declared.
+    pub uri: Option<ExternalLink>,
+    pub description: Option<String>,
+    /// The parent type (`typeof`) this derives from — a link to its
+    /// own `#type-` card when that parent is declared in the schema,
+    /// else plain text.
+    pub base_type: Option<EntityRef>,
+    pub pattern: Option<String>,
+}
+
 /// A cross-ontology mapping rendered on class / property cards.
 /// `kind` is one of "exact" / "close" / "related" / "narrow" /
 /// "broad" — hence the `&'static str`. `href` is `None` for values
@@ -306,6 +341,10 @@ struct IndexTemplate<'a> {
     class_tree: &'a [ClassTreeEntry],
     slots: &'a [EntityRef],
     slot_data: &'a [SlotData],
+    enums: &'a [EntityRef],
+    enum_data: &'a [EnumData],
+    types: &'a [EntityRef],
+    type_data: &'a [TypeData],
     individuals: &'a [EntityRef],
     individual_data: &'a [IndividualData],
     namespaces: &'a [Namespace],
@@ -987,6 +1026,83 @@ impl HtmlWriter {
             }
         }
 
+        // Build enumeration data, sorted by name for stable output.
+        let mut enum_refs = Vec::new();
+        let mut enum_data_list = Vec::new();
+        let mut sorted_enums: Vec<_> = schema.enums.iter().collect();
+        sorted_enums.sort_by(|a, b| a.0.cmp(b.0));
+        for (enum_id, enum_def) in sorted_enums {
+            enum_refs.push(EntityRef {
+                id: enum_id.clone(),
+                label: enum_id.clone(),
+            });
+            let permissible_values = enum_def
+                .permissible_values
+                .iter()
+                .map(|(text, pv)| PermissibleValueData {
+                    text: text.clone(),
+                    description: pv.description.clone(),
+                    meaning: pv.meaning.as_deref().map(|raw| {
+                        let href = crate::linkml_resolve::expand_curie(schema, raw);
+                        let (label, definitions) = lookup_term(labels, href.as_deref());
+                        ExternalLink {
+                            display: raw.to_string(),
+                            href,
+                            label,
+                            definitions,
+                        }
+                    }),
+                })
+                .collect();
+            enum_data_list.push(EnumData {
+                id: enum_id.clone(),
+                label: enum_id.clone(),
+                description: enum_def
+                    .description
+                    .as_deref()
+                    .map(|d| render_description(d, schema)),
+                permissible_values,
+            });
+        }
+
+        // Build type data, sorted by name for stable output.
+        let mut type_refs = Vec::new();
+        let mut type_data_list = Vec::new();
+        let mut sorted_types: Vec<_> = schema.types.iter().collect();
+        sorted_types.sort_by(|a, b| a.0.cmp(b.0));
+        for (type_id, type_def) in sorted_types {
+            type_refs.push(EntityRef {
+                id: type_id.clone(),
+                label: type_id.clone(),
+            });
+            let uri = type_def.uri.as_deref().map(|raw| {
+                let href = crate::linkml_resolve::expand_curie(schema, raw);
+                let (label, definitions) = lookup_term(labels, href.as_deref());
+                ExternalLink {
+                    display: raw.to_string(),
+                    href,
+                    label,
+                    definitions,
+                }
+            });
+            // A parent type links to its own card when declared here.
+            let base_type = type_def.typeof_.as_deref().map(|parent| EntityRef {
+                id: parent.to_string(),
+                label: parent.to_string(),
+            });
+            type_data_list.push(TypeData {
+                id: type_id.clone(),
+                label: type_id.clone(),
+                uri,
+                description: type_def
+                    .description
+                    .as_deref()
+                    .map(|d| render_description(d, schema)),
+                base_type,
+                pattern: type_def.pattern.clone(),
+            });
+        }
+
         TemplateData {
             title,
             iri,
@@ -1001,6 +1117,10 @@ impl HtmlWriter {
             class_data: class_data_list,
             slot_refs,
             slot_data: slot_data_list,
+            enum_refs,
+            enum_data: enum_data_list,
+            type_refs,
+            type_data: type_data_list,
             individual_refs,
             individual_data: individual_data_list,
         }
@@ -1025,6 +1145,10 @@ struct TemplateData {
     class_tree: Vec<ClassTreeEntry>,
     slot_refs: Vec<EntityRef>,
     slot_data: Vec<SlotData>,
+    enum_refs: Vec<EntityRef>,
+    enum_data: Vec<EnumData>,
+    type_refs: Vec<EntityRef>,
+    type_data: Vec<TypeData>,
     individual_refs: Vec<EntityRef>,
     individual_data: Vec<IndividualData>,
 }
@@ -1059,6 +1183,10 @@ impl Writer for HtmlWriter {
             class_tree: &data.class_tree,
             slots: &data.slot_refs,
             slot_data: &data.slot_data,
+            enums: &data.enum_refs,
+            enum_data: &data.enum_data,
+            types: &data.type_refs,
+            type_data: &data.type_data,
             individuals: &data.individual_refs,
             individual_data: &data.individual_data,
             namespaces: &data.namespaces,
@@ -1275,10 +1403,12 @@ fn render_xref(name: &str, schema: &SchemaDefinition) -> String {
         format!(r##"<a href="#enum-{name}" class="entity-ref enum-ref">{name}</a>"##)
     } else if schema.slots.contains_key(name) {
         format!(r##"<a href="#slot-{name}" class="entity-ref slot-ref">{name}</a>"##)
+    } else if schema.types.contains_key(name) {
+        format!(r##"<a href="#type-{name}" class="entity-ref type-ref">{name}</a>"##)
     } else {
         format!(
             "[[{name}]]<!-- WARNING: [[{name}]] does not resolve to a class, \
-             enum, or slot in this schema -->"
+             enum, slot, or type in this schema -->"
         )
     }
 }
@@ -1793,6 +1923,65 @@ mod tests {
             4,
             "unrefined class keeps the full union"
         );
+    }
+
+    #[test]
+    fn html_writer_renders_enum_and_type_sections() {
+        // Enums and types each get their own HTML section, card, and
+        // sidebar entry — parity with every node kind the graph draws.
+        use crate::linkml::{EnumDefinition, PermissibleValue, SchemaDefinition, TypeDefinition};
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .prefixes
+            .insert("xsd".into(), "http://www.w3.org/2001/XMLSchema#".into());
+
+        let mut status = EnumDefinition::new("Status");
+        status.description = Some("Lifecycle status.".into());
+        let mut open = PermissibleValue::new("open");
+        open.description = Some("Open for changes.".into());
+        open.meaning = Some("xsd:string".into());
+        status.permissible_values.insert("open".into(), open);
+        status
+            .permissible_values
+            .insert("closed".into(), PermissibleValue::new("closed"));
+        schema.enums.insert("Status".into(), status);
+
+        let mut phone = TypeDefinition::new("PhoneNumber");
+        phone.description = Some("An E.164 phone number.".into());
+        phone.typeof_ = Some("string".into());
+        phone.uri = Some("xsd:string".into());
+        phone.pattern = Some(r"^\+[1-9]\d{1,14}$".into());
+        schema.types.insert("PhoneNumber".into(), phone);
+
+        let writer = HtmlWriter::new();
+        let temp_dir = std::env::temp_dir().join("panschema_enum_type_sections_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        writer.write(&schema, &temp_dir).expect("write failed");
+        let html =
+            fs::read_to_string(temp_dir.join("index.html")).expect("failed to read index.html");
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        // Enumerations section + card + permissible values.
+        assert!(html.contains(r#"id="enums""#), "enums section present");
+        assert!(html.contains(r#"id="enum-Status""#), "enum card present");
+        assert!(html.contains("Permissible values"));
+        assert!(html.contains(">open<") && html.contains(">closed<"));
+        assert!(
+            html.contains("http://www.w3.org/2001/XMLSchema#string"),
+            "the value's expanded meaning IRI is hyperlinked"
+        );
+
+        // Types section + card + constraints.
+        assert!(html.contains(r#"id="types""#), "types section present");
+        assert!(
+            html.contains(r#"id="type-PhoneNumber""#),
+            "type card present"
+        );
+        assert!(html.contains(r"^\+[1-9]\d{1,14}$"), "type pattern rendered");
+
+        // Sidebar nav entries.
+        assert!(html.contains(r##"href="#enums""##) && html.contains("Enumerations"));
+        assert!(html.contains(r##"href="#types""##));
     }
 
     #[test]
