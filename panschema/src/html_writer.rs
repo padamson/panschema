@@ -165,7 +165,7 @@ pub struct SlotInClass {
     pub any_of: Vec<RangeRef>,
     /// `true` when this class suppresses the slot via
     /// `maximum_cardinality: 0` — it declares the slot but permits no
-    /// value. The card shows "produces no value" instead of a range.
+    /// value. The card shows "has no value" instead of a range.
     pub suppressed: bool,
     pub description: Option<String>,
     /// `true` when this class's `slot_usage` overrides an inherited slot.
@@ -1842,7 +1842,7 @@ mod tests {
         // `slot_usage` shows its induced range on the card, not the
         // wide inherited union: a scalar narrows to a single range, a
         // smaller union replaces, and `maximum_cardinality: 0` reads
-        // as "produces no value".
+        // as "has no value".
         use crate::linkml::{ClassDefinition, SchemaDefinition, SlotDefinition};
 
         let union = |members: &[&str]| {

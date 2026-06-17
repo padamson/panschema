@@ -471,7 +471,7 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 
 **Acceptance Criteria:**
 - [x] The class card's slot row shows the induced effective range for the current class: a `slot_usage` `range` narrowing renders the narrowed single range; a narrowed `any_of` renders the smaller union; the `range ∩ any_of` intersection is reflected (no lingering base union masking a single-range narrowing). A single-member induced union collapses to a single range row.
-- [x] A slot suppressed for the class via `maximum_cardinality: 0` renders as "produces no value" rather than showing the inherited range, and keeps its "refined here" badge.
+- [x] A slot suppressed for the class via `maximum_cardinality: 0` renders as "has no value" rather than showing the inherited range, and keeps its "refined here" badge.
 - [x] The standalone slot card continues to show the slot's global range/union (slice 17); the per-class narrowing appears on the *class* card where the refinement is declared (the slot card reads the global `schema.slots`, the class card the resolved per-class view).
 - [x] Integration test (`class_card_renders_induced_per_class_slot_range`) against a fixture with a scalar narrowing, a smaller-`any_of` replacement, and a `maximum_cardinality: 0`, asserting the class card shows the narrowed range, the replaced union, and the suppressed slot. Dogfood-verified end-to-end render.
 

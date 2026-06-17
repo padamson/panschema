@@ -90,7 +90,7 @@ pub struct InducedRange {
     /// slot is suppressed or names no resolvable range.
     pub ranges: Vec<String>,
     /// `maximum_cardinality: 0` — the class declares the slot but
-    /// permits no value. Renderers show "produces no value" and draw
+    /// permits no value. Renderers show "has no value" and draw
     /// no range edge; `ranges` is empty in this case.
     pub suppressed: bool,
 }
