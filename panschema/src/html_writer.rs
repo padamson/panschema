@@ -870,6 +870,18 @@ impl HtmlWriter {
             if slot_def.identifier {
                 characteristics.push("Identifier".to_string());
             }
+            // OWL relationship characteristics, surfaced as badges.
+            for (set, label) in [
+                (slot_def.symmetric, "Symmetric"),
+                (slot_def.asymmetric, "Asymmetric"),
+                (slot_def.reflexive, "Reflexive"),
+                (slot_def.irreflexive, "Irreflexive"),
+                (slot_def.transitive, "Transitive"),
+            ] {
+                if set {
+                    characteristics.push(label.to_string());
+                }
+            }
             if cardinality.min.is_some() || cardinality.max.is_some() {
                 let lo = cardinality
                     .min
@@ -2451,6 +2463,28 @@ mod tests {
         assert!(
             prop.characteristics.iter().any(|c| c == "2..*"),
             "expected a `2..*` bounds badge; got {:?}",
+            prop.characteristics
+        );
+    }
+
+    #[test]
+    fn slot_card_shows_owl_characteristic_badges() {
+        use crate::linkml::{SchemaDefinition, SlotDefinition};
+        // A slot declaring OWL relationship characteristics gets a badge
+        // per set flag, and none for the unset ones.
+        let mut schema = SchemaDefinition::new("characteristics");
+        let mut refines = SlotDefinition::new("refines");
+        refines.transitive = true;
+        refines.symmetric = true;
+        schema.slots.insert("refines".to_string(), refines);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let prop = data.slot_data.iter().find(|p| p.id == "refines").unwrap();
+        assert!(prop.characteristics.iter().any(|c| c == "Transitive"));
+        assert!(prop.characteristics.iter().any(|c| c == "Symmetric"));
+        assert!(
+            !prop.characteristics.iter().any(|c| c == "Reflexive"),
+            "unset characteristics must not render; got {:?}",
             prop.characteristics
         );
     }

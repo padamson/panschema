@@ -270,6 +270,19 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
     let owl_inverse_of = owl
         .get("inverseOf")
         .map_err(|e| IoError::Parse(e.to_string()))?;
+    // OWL relationship-characteristic classes, in the same order as the
+    // slot's bool flags below.
+    let owl_characteristic_types = [
+        owl.get("SymmetricProperty"),
+        owl.get("AsymmetricProperty"),
+        owl.get("ReflexiveProperty"),
+        owl.get("IrreflexiveProperty"),
+        owl.get("TransitiveProperty"),
+    ];
+    let owl_characteristic_types: Vec<_> = owl_characteristic_types
+        .into_iter()
+        .map(|t| t.map_err(|e| IoError::Parse(e.to_string())))
+        .collect::<Result<_, _>>()?;
 
     for (name, slot_def) in &schema.slots {
         let prop_iri_str = slot_def
@@ -301,6 +314,24 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
             graph
                 .insert(&prop_iri, rdf::type_, owl_datatype_property)
                 .map_err(|e| IoError::Write(e.to_string()))?;
+        }
+
+        // OWL relationship characteristics → `rdf:type owl:<Name>Property`.
+        for (set, characteristic_type) in [
+            slot_def.symmetric,
+            slot_def.asymmetric,
+            slot_def.reflexive,
+            slot_def.irreflexive,
+            slot_def.transitive,
+        ]
+        .into_iter()
+        .zip(&owl_characteristic_types)
+        {
+            if set {
+                graph
+                    .insert(&prop_iri, rdf::type_, characteristic_type)
+                    .map_err(|e| IoError::Write(e.to_string()))?;
+            }
         }
 
         // rdfs:label
@@ -917,6 +948,47 @@ mod tests {
         assert!(
             has_exact,
             "expected skos:exactMatch triple for slot mapping"
+        );
+    }
+
+    #[test]
+    fn build_rdf_graph_emits_owl_characteristic_axioms_for_slots() {
+        // OWL relationship characteristics are the semantic payoff: a slot
+        // declared `transitive`/`symmetric` must emit the corresponding
+        // `owl:<Name>Property` type axiom so a reasoner can use it.
+        use sophia::api::term::Term;
+        use sophia::api::triple::Triple;
+
+        let mut schema = schema_with_prefixes();
+        schema
+            .classes
+            .insert("Claim".to_string(), ClassDefinition::new("Claim"));
+        let mut refines = SlotDefinition::new("refines");
+        refines.range = Some("Claim".into()); // object property
+        refines.transitive = true;
+        refines.symmetric = true;
+        schema.slots.insert("refines".to_string(), refines);
+
+        let graph = build_rdf_graph(&schema).unwrap();
+        let rdf_type = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+        let has_type = |obj: String| {
+            graph.triples().any(|t| {
+                let tr = t.unwrap();
+                tr.p().iri().is_some_and(|i| i.as_str() == rdf_type)
+                    && tr.o().iri().is_some_and(|i| i.as_str() == obj)
+            })
+        };
+        assert!(
+            has_type(format!("{OWL_NS}TransitiveProperty")),
+            "expected owl:TransitiveProperty axiom"
+        );
+        assert!(
+            has_type(format!("{OWL_NS}SymmetricProperty")),
+            "expected owl:SymmetricProperty axiom"
+        );
+        assert!(
+            !has_type(format!("{OWL_NS}ReflexiveProperty")),
+            "unset characteristics must not be emitted"
         );
     }
 

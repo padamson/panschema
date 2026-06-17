@@ -280,6 +280,21 @@ pub struct SlotDefinition {
     /// Inverse slot (for bidirectional relationships)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inverse: Option<String>,
+    /// OWL object-property characteristics. Each, when set, maps to an
+    /// `owl:<Name>Property` `rdf:type` axiom in the RDF output and a
+    /// characteristic badge on the slot card. These are LinkML's
+    /// `symmetric` / `asymmetric` / `reflexive` / `irreflexive` /
+    /// `transitive` relationship metaslots.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub symmetric: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub asymmetric: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub reflexive: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub irreflexive: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub transitive: bool,
     /// Polymorphic range alternatives. A value of this slot matches any
     /// one of the branches; each branch is itself a partial slot
     /// definition that can override `range`, `required`, `multivalued`,
@@ -319,6 +334,11 @@ impl SlotDefinition {
             identifier: false,
             slot_uri: None,
             inverse: None,
+            symmetric: false,
+            asymmetric: false,
+            reflexive: false,
+            irreflexive: false,
+            transitive: false,
             any_of: Vec::new(),
             exact_mappings: Vec::new(),
             close_mappings: Vec::new(),
@@ -768,6 +788,37 @@ imports:
         slot.inverse = Some("owns".to_string());
 
         assert_eq!(slot.inverse, Some("owns".to_string()));
+    }
+
+    #[test]
+    fn slot_definition_deserializes_owl_characteristics() {
+        // The five OWL relationship metaslots parse from LinkML YAML into
+        // their bool fields (serde-derived) and default to false when
+        // absent — the IR-level contract the HTML badge and RDF axiom
+        // tests build on but don't exercise (they construct in-memory).
+        let yaml = "
+name: refines
+range: Claim
+transitive: true
+symmetric: true
+";
+        let slot: SlotDefinition = serde_yaml::from_str(yaml).unwrap();
+        assert!(slot.transitive);
+        assert!(slot.symmetric);
+        assert!(!slot.asymmetric);
+        assert!(!slot.reflexive);
+        assert!(!slot.irreflexive);
+
+        // default-false characteristics are skipped on serialize; set ones survive.
+        let out = serde_yaml::to_string(&slot).unwrap();
+        assert!(
+            out.contains("transitive: true"),
+            "set flag must serialize:\n{out}"
+        );
+        assert!(
+            !out.contains("reflexive:"),
+            "default-false flags must be skipped:\n{out}"
+        );
     }
 
     // ========== EnumDefinition Tests ==========

@@ -110,7 +110,8 @@ focused subset of the structural ones.
 | `slot_uri` | ● | ● | ● | ● | ✗ | card IRI; node URI; subject IRI |
 | `any_of` | ● | ● | ● | ○ | ● | union on card; one range edge per member; `#[serde(untagged)]` enum |
 | `*_mappings` (5) | ● | ● | ○ | ● | ○ | see Common metadata |
-| `key` `designates_type` `subproperty_of` `symmetric` `transitive` `reflexive` `asymmetric` `irreflexive` `singular_name` `ifabsent` `recommended` `slot_group` `unit` `implicit_prefix` `readonly` `shared` `list_elements_unique`/`_ordered` | ✗ | — | — | — | — | not modeled. Property characteristics (`symmetric`/`transitive`/…) would enrich RDF/OWL |
+| `symmetric` `asymmetric` `reflexive` `irreflexive` `transitive` | ● | ● | — | ● | — | OWL relationship characteristics: card badge + `owl:<Name>Property` axiom (feature 14 slice 1) |
+| `key` `designates_type` `subproperty_of` `singular_name` `ifabsent` `recommended` `slot_group` `unit` `implicit_prefix` `readonly` `shared` `list_elements_unique`/`_ordered` | ✗ | — | — | — | — | not modeled. `subproperty_of` (`rdfs:subPropertyOf`) would further enrich RDF/OWL |
 | `minimum_value` `maximum_value` `equals_string` `equals_string_in` `equals_number` `equals_expression` `exact_cardinality` `has_member` `all_members` `structured_pattern` `range_expression` `all_of` `exactly_one_of` `none_of` `array` | ✗ | — | — | — | — | not modeled. Value/boolean-expression constraints (a validation-feature family) |
 
 ---
@@ -176,8 +177,11 @@ Ordered by impact, with the slices already filed against each:
 5. **Editorial/provenance metadata** (not modeled): `aliases`, `see_also`,
    `deprecated`, `comments`, `examples`, `in_subset`. Documentation
    completeness; low individual cost, high collective coverage.
-6. **Property characteristics** (not modeled): `symmetric`, `transitive`,
-   `subproperty_of`, etc. — would enrich the RDF/OWL output specifically.
+6. ~~**Property characteristics**~~ **(mostly done).** The five OWL
+   relationship characteristics — `symmetric`, `asymmetric`, `reflexive`,
+   `irreflexive`, `transitive` — are modeled and emit `owl:<Name>Property`
+   axioms + card badges ([feature 14 slice 1](features/14-slot-constraints.md) ✅).
+   Remaining tail: `subproperty_of` (`rdfs:subPropertyOf`).
 7. **Dynamic enums / imports resolution**: `reachable_from`, `code_set`;
    `imports` is tracked but never followed.
 8. **Subsets** (not modeled): `subsets` on the schema + `in_subset` per
