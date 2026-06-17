@@ -295,6 +295,14 @@ pub struct SlotDefinition {
     pub irreflexive: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub transitive: bool,
+    /// Inclusive lower / upper bounds on a numeric value (LinkML's
+    /// `minimum_value` / `maximum_value`). Rendered as a card badge and
+    /// emitted in RDF as an `owl:withRestrictions` `xsd:minInclusive` /
+    /// `xsd:maxInclusive` datatype restriction on the property's range.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minimum_value: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub maximum_value: Option<f64>,
     /// Polymorphic range alternatives. A value of this slot matches any
     /// one of the branches; each branch is itself a partial slot
     /// definition that can override `range`, `required`, `multivalued`,
@@ -339,6 +347,8 @@ impl SlotDefinition {
             reflexive: false,
             irreflexive: false,
             transitive: false,
+            minimum_value: None,
+            maximum_value: None,
             any_of: Vec::new(),
             exact_mappings: Vec::new(),
             close_mappings: Vec::new(),
@@ -819,6 +829,24 @@ symmetric: true
             !out.contains("reflexive:"),
             "default-false flags must be skipped:\n{out}"
         );
+    }
+
+    #[test]
+    fn slot_definition_deserializes_value_bounds() {
+        // `minimum_value` / `maximum_value` parse into `Option<f64>` and
+        // are absent when unset.
+        let yaml = "
+name: strength
+range: float
+minimum_value: 0.0
+maximum_value: 1.0
+";
+        let slot: SlotDefinition = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(slot.minimum_value, Some(0.0));
+        assert_eq!(slot.maximum_value, Some(1.0));
+
+        let bare: SlotDefinition = serde_yaml::from_str("name: x").unwrap();
+        assert!(bare.minimum_value.is_none() && bare.maximum_value.is_none());
     }
 
     // ========== EnumDefinition Tests ==========

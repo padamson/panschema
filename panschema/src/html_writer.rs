@@ -882,6 +882,15 @@ impl HtmlWriter {
                     characteristics.push(label.to_string());
                 }
             }
+            // Numeric value bounds, shown with ≥ / ≤ so they read distinctly
+            // from the `min..max` *cardinality* badge below. `f64` Display
+            // already drops a trailing `.0` (1.0 → "1", 0.5 → "0.5").
+            if let Some(min) = slot_def.minimum_value {
+                characteristics.push(format!("≥ {min}"));
+            }
+            if let Some(max) = slot_def.maximum_value {
+                characteristics.push(format!("≤ {max}"));
+            }
             if cardinality.min.is_some() || cardinality.max.is_some() {
                 let lo = cardinality
                     .min
@@ -2486,6 +2495,46 @@ mod tests {
             !prop.characteristics.iter().any(|c| c == "Reflexive"),
             "unset characteristics must not render; got {:?}",
             prop.characteristics
+        );
+    }
+
+    #[test]
+    fn slot_card_shows_value_bound_badges() {
+        use crate::linkml::{SchemaDefinition, SlotDefinition};
+        // Numeric value bounds render as `≥`/`≤` badges (whole numbers
+        // without a trailing `.0`), distinct from the `min..max`
+        // cardinality badge.
+        let mut schema = SchemaDefinition::new("bounds");
+        let mut strength = SlotDefinition::new("strength");
+        strength.minimum_value = Some(0.0);
+        strength.maximum_value = Some(1.0);
+        schema.slots.insert("strength".to_string(), strength);
+        // A fractional bound keeps its decimals; a whole one drops `.0`.
+        let mut ratio = SlotDefinition::new("ratio");
+        ratio.minimum_value = Some(0.5);
+        schema.slots.insert("ratio".to_string(), ratio);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let strength_c = &data
+            .slot_data
+            .iter()
+            .find(|p| p.id == "strength")
+            .unwrap()
+            .characteristics;
+        assert!(
+            strength_c.iter().any(|c| c == "≥ 0"),
+            "expected `≥ 0` (no trailing .0); got {strength_c:?}"
+        );
+        assert!(strength_c.iter().any(|c| c == "≤ 1"));
+        let ratio_c = &data
+            .slot_data
+            .iter()
+            .find(|p| p.id == "ratio")
+            .unwrap()
+            .characteristics;
+        assert!(
+            ratio_c.iter().any(|c| c == "≥ 0.5"),
+            "fractional bound keeps decimals; got {ratio_c:?}"
         );
     }
 

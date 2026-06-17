@@ -41,25 +41,48 @@ reasoner can use `owl:TransitiveProperty` to infer the transitive closure.
 
 ---
 
-## Slice 2: Numeric value bounds
+## Slice 2: Numeric value bounds (IR + card)
 
-**Status:** 📋 Planned
+**Status:** ✅ Complete
 
 **Priority:** Should Have
 
 **User Value:** A numeric slot with `minimum_value` / `maximum_value` (e.g.
-`strength`, `confidenceLevel` bounded `0.0..1.0`) should show the bound on its
-card and emit it as an OWL datatype restriction, so the range constraint is
-both visible and reasoner-checkable.
+`strength`, `confidenceLevel` bounded `0.0..1.0`) shows the bound on its card,
+so the constraint the author declared is visible while reading the docs
+instead of being silently dropped.
 
 **Acceptance Criteria:**
-- [ ] `SlotDefinition` gains `minimum_value` / `maximum_value` (`Option<f64>`), auto-parsed from YAML.
-- [ ] The slot card shows the bounds (reusing a card row / badge), distinct from the `min..max` *cardinality* badge.
-- [ ] The RDF serializers emit an `owl:withRestrictions` datatype restriction on the property's range — a blank `rdfs:Datatype` with `owl:onDatatype` and an `owl:withRestrictions` list of `xsd:minInclusive` / `xsd:maxInclusive` facets.
-- [ ] Tests cover the IR parse, the card render, and the RDF facet emission.
+- [x] `SlotDefinition` gains `minimum_value` / `maximum_value` (`Option<f64>`), auto-parsed from YAML (`slot_definition_deserializes_value_bounds`).
+- [x] The slot card shows the bounds as `≥ {min}` / `≤ {max}` badges — whole numbers without a trailing `.0` — read distinctly from the `min..max` *cardinality* badge (`slot_card_shows_value_bound_badges`).
 
 **Notes:**
-- Source: friction roadmap Gap #4 (ch07 cluster 2). Under feature 07's validation family conceptually, but the work here is *rendering/emission*, not validation. Rust codegen is deferrable.
+- Source: friction roadmap Gap #4 (ch07 cluster 2). Rust codegen is deferrable.
+
+---
+
+## Slice 2b: Value bounds as an OWL datatype restriction (RDF) — deferred
+
+**Status:** 📋 Deferred
+
+**Priority:** Could Have
+
+**User Value:** Emit the bounds as an `owl:withRestrictions` datatype
+restriction on the property's range — a blank `rdfs:Datatype` with
+`owl:onDatatype` and an `owl:withRestrictions` list of `xsd:minInclusive` /
+`xsd:maxInclusive` facets — so the constraint is reasoner-checkable, not just
+visible.
+
+**Why deferred:** The OWL facet is a T-box reasoner constraint. scimantic's
+real-study dogfood validates instances with `linkml-validate` (against the
+LinkML schema, not the OWL projection) and queries instance RDF with SPARQL,
+so the facet isn't on its critical path. The RDF construction is also the
+involved part (sophia blank nodes + an `rdf:List` + explicit `xsd:decimal`
+literals — patterns not yet used in the serializers). Picked up when a
+reasoning consumer actually needs it.
+
+**Acceptance Criteria:**
+- [ ] RDF serializers emit the `owl:withRestrictions` datatype restriction described above, with a test pinning the `xsd:minInclusive` / `xsd:maxInclusive` facet triples.
 
 ---
 
@@ -68,4 +91,5 @@ both visible and reasoner-checkable.
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | Slice 1: OWL relationship characteristics | Should Have | None | ✅ Complete |
-| Slice 2: Numeric value bounds | Should Have | None | 📋 Planned |
+| Slice 2: Numeric value bounds (IR + card) | Should Have | None | ✅ Complete |
+| Slice 2b: Value bounds OWL restriction (RDF) | Could Have | Slice 2 | 📋 Deferred |

@@ -112,7 +112,8 @@ focused subset of the structural ones.
 | `*_mappings` (5) | ● | ● | ○ | ● | ○ | see Common metadata |
 | `symmetric` `asymmetric` `reflexive` `irreflexive` `transitive` | ● | ● | — | ● | — | OWL relationship characteristics: card badge + `owl:<Name>Property` axiom (feature 14 slice 1) |
 | `key` `designates_type` `subproperty_of` `singular_name` `ifabsent` `recommended` `slot_group` `unit` `implicit_prefix` `readonly` `shared` `list_elements_unique`/`_ordered` | ✗ | — | — | — | — | not modeled. `subproperty_of` (`rdfs:subPropertyOf`) would further enrich RDF/OWL |
-| `minimum_value` `maximum_value` `equals_string` `equals_string_in` `equals_number` `equals_expression` `exact_cardinality` `has_member` `all_members` `structured_pattern` `range_expression` `all_of` `exactly_one_of` `none_of` `array` | ✗ | — | — | — | — | not modeled. Value/boolean-expression constraints (a validation-feature family) |
+| `minimum_value` `maximum_value` | ● | ● | — | ○ | — | numeric value bounds: `≥`/`≤` card badge (feature 14 slice 2); RDF `owl:withRestrictions` facet deferred (slice 2b) |
+| `equals_string` `equals_string_in` `equals_number` `equals_expression` `exact_cardinality` `has_member` `all_members` `structured_pattern` `range_expression` `all_of` `exactly_one_of` `none_of` `array` | ✗ | — | — | — | — | not modeled. Value/boolean-expression constraints (a validation-feature family) |
 
 ---
 
@@ -170,10 +171,13 @@ Ordered by impact, with the slices already filed against each:
 3. **Schema metadata in HTML** (`license`, `contributors`, `created`,
    `modified` render in RDF but not the doc body). Unfiled — a "Schema info"
    card would close it.
-4. **Validation-feature families** (not modeled): class `rules` /
-   `unique_keys`; slot value constraints (`minimum_value` / `maximum_value` /
-   `equals_*`) and boolean expressions (`all_of` / `exactly_one_of` /
-   `none_of`). Route to [feature 07](features/07-schema-validation.md).
+4. **Validation-feature families** (mostly not modeled): slot value bounds
+   `minimum_value` / `maximum_value` are modeled + rendered as card badges
+   ([feature 14 slice 2](features/14-slot-constraints.md) ✅; their RDF
+   `owl:withRestrictions` facet is deferred, slice 2b). Still not modeled:
+   class `rules` / `unique_keys`, `equals_*`, and boolean expressions
+   (`all_of` / `exactly_one_of` / `none_of`). Route to
+   [feature 07](features/07-schema-validation.md).
 5. **Editorial/provenance metadata** (not modeled): `aliases`, `see_also`,
    `deprecated`, `comments`, `examples`, `in_subset`. Documentation
    completeness; low individual cost, high collective coverage.
