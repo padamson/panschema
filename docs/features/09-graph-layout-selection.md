@@ -343,23 +343,22 @@ Existing in-tree CPU force simulation (slice 7 work in [Feature 02](02-core-onto
 
 ---
 
-### Slice 11: Variable edge length so force-directed clusters (LinLog / ForceAtlas2)
+### Slice 11: Variable edge length so force-directed clusters (LinLog / ForceAtlas2) — Won't Do
 
-**Status:** 📋 Planned
+**Status:** ❌ Won't Do
 
 **Priority:** Could Have
 
-**User Value:** On a multi-cluster schema (scimantic's ~47 nodes: `Act` + its acts, the `Claim` spine, the `Method` tree, `State` + its standings), the Force-directed and Kamada-Kawai options spread nodes near-uniformly with heavy edge crossings and no visible clustering — every edge behaves as if it wants the same ideal length, so a dense group can't contract and separate groups can't push apart. Structure that should read at a glance doesn't. SGD (the current default) already reads better here, so this slice targets the FD/KK options specifically: let edge lengths vary so densely-connected groups tighten and sparse ones repel.
+**User Value (original):** On a multi-cluster schema (scimantic's ~47 nodes: `Act` + its acts, the `Claim` spine, the `Method` tree, `State` + its standings), the Force-directed and Kamada-Kawai options spread nodes near-uniformly with heavy edge crossings and no visible clustering. The slice aimed to make the Force-directed layout cluster by swapping its Fruchterman-Reingold spring for a LinLog / ForceAtlas2 energy.
 
-**Acceptance Criteria:**
-- [ ] The Force-directed layout uses a **LinLog / ForceAtlas2-style** energy (logarithmic attraction + strong gravity), or weights the ideal link distance by degree/community, so dense groups contract and clusters separate — replacing the uniform Fruchterman-Reingold spring's single ideal length.
-- [ ] A layout-quality check on a multi-cluster fixture: intra-cluster edges end up shorter than inter-cluster ones (or the edge-crossing count is bounded below the uniform-spring baseline).
-- [ ] Determinism preserved (seeded RNG) so `panschema publish`'s idempotent-republish guarantee holds, matching the SGD contract.
-- [ ] Kamada-Kawai is left as shortest-path spacing (inherently not cluster-tightening); the picker/docs steer users wanting a clustered look to the FD/LinLog mode rather than tuning KK.
+**Why Won't Do:** Prototyped the full LinLog model — constant (rest-length-free) attraction, `1/d` long-range degree-weighted repulsion, and ForceAtlas2 "dissuade hubs" — and it still does **not** reliably untangle clusters. A parametric test matrix (dense/sparse clusters of varying sizes, started *interleaved* so the test measures the simulation actually separating them) measured inter-cluster edge crossings after settling: every topology kept 50–1200 crossings. This isn't a tuning miss — it's fundamental to force-directed layout. FD has only local spring/repulsion forces and no global distance objective, so it settles into tangled local minima.
+
+**The right tool is the stress family, already shipped.** Kamada-Kawai, stress majorization, and SGD all minimize the same stress energy (Euclidean distance ≈ graph-theoretic distance), which separates clusters *by construction* — two clusters joined by a long bridge are graph-distant, so they're placed far apart. panschema already offers all three: **SGD** (the default — slice 5), **Stress majorization** (slice 4, whose picker label literally reads "cluster separation"), and **Kamada-Kawai** (slice 3). Force-directed stays the *interactive* layout (drag a node, pin it, relax the rest), which is what it's genuinely good at.
+
+**Outcome:** No code change to the FD simulation. The picker is reordered (SGD first, marked default; cluster-separation-friendly stress layouts next) so users seeking a clustered look land on the right option without tuning FD. The LinLog experiment was reverted.
 
 **Notes:**
-- Source: friction `[2026-06-14] force-directed & Kamada-Kawai don't cluster` (severity: annoyance). Prior art: Gephi ForceAtlas2 (LinLog mode + strong gravity), OpenOrd, d3-force with variable `linkDistance` + charge.
-- The force simulation lives in `panschema-viz` (`simulation.rs` / `sim_common.rs`); this is an energy-model change to that sim, surfaced through the existing "Force-directed" picker option — no new picker entry.
+- Source: friction `[2026-06-14] force-directed & Kamada-Kawai don't cluster` (severity: annoyance). The investigation produced a conclusive negative result explaining *why* SGD/Stress are the right defaults.
 
 ---
 
@@ -377,7 +376,7 @@ Existing in-tree CPU force simulation (slice 7 work in [Feature 02](02-core-onto
 | Slice 8: Radial tree | Could Have | Slice 1 | Not Started |
 | Slice 9: Auto-default to Hierarchical for `is_a`-heavy schemas | Should Have | Slice 6 | ✅ Complete |
 | Slice 10: Compact multi-component packing | Should Have | Slices 4, 5 | ✅ Complete |
-| Slice 11: Variable edge length so FD clusters (LinLog / ForceAtlas2) | Could Have | Slice 2 | 📋 Planned |
+| Slice 11: Variable edge length so FD clusters (LinLog / ForceAtlas2) | Could Have | Slice 2 | ❌ Won't Do (use SGD/Stress; picker reordered) |
 
 **Prerequisite (✓ cleared):** Feature 02 [slice 7](02-core-ontology-documentation.md#slice-7-improve-force-directed-default-so-the-graph-fills-its-viewport) — the force-directed default fills the viewport with legible labels at all 3 scales. The picker can now expose the existing force-directed implementation as the "Force-directed" option without that option spreading a bad reputation across the others.
 

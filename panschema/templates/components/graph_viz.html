@@ -75,11 +75,16 @@
         <div class="graph-layout-picker" id="graph-layout-picker">
             <label for="graph-layout-select" class="graph-layout-label">Layout</label>
             <select id="graph-layout-select" class="graph-layout-select">
-                <option value="force-directed" title="Iterative physics simulation: connected nodes attract, all nodes repel, the layout converges to a balanced spread. Continuously animated so the user can drag a node and watch the rest of the graph adjust. The all-purpose default; in 3D mode it's the only available algorithm.">Force-directed</option>
-                <option value="kamada-kawai" title="Energy-minimization layout; slower init than force-directed, often produces nicer node spacing for medium graphs">Kamada-Kawai (slower init)</option>
-                <option value="hierarchical" title="Sugiyama layered layout over the is_a / mixin sub-DAG; best for class hierarchies">Hierarchical (best for class hierarchies)</option>
-                <option value="stress" title="Stress majorization; converges on a layout that minimizes the squared difference between Euclidean and graph-theoretic distances. Produces cleaner cluster separation than force-directed at moderate init cost">Stress majorization (cluster separation)</option>
-                <option value="sgd" title="Stochastic Gradient Descent variant of stress majorization; typically the best quality-per-time for medium-to-large graphs. Converges in O(N · iters) vs stress's O(N² · iters) at comparable visible quality">SGD (fast quality)</option>
+                {# Ordered best-default → specialized. The stress family (SGD,
+                   Stress, Kamada-Kawai) minimizes Euclidean-vs-graph distance,
+                   so it separates clusters by construction — SGD leads as the
+                   default. Force-directed is the interactive layout, not the
+                   one to reach for when you want clusters to read. #}
+                <option value="sgd" title="Stochastic Gradient Descent on the stress objective (Euclidean distance ≈ graph distance). The default for most schemas: best quality-per-time and clean cluster separation. Converges in O(N · iters) vs stress's O(N² · iters) at comparable visible quality.">SGD (default · fast quality)</option>
+                <option value="stress" title="Stress majorization: minimizes the squared difference between Euclidean and graph-theoretic distances. Cleanest cluster separation, at moderate init cost.">Stress majorization (cluster separation)</option>
+                <option value="hierarchical" title="Sugiyama layered layout over the is_a / mixin sub-DAG; best for class hierarchies. Auto-selected as the default for is_a-heavy schemas.">Hierarchical (best for class hierarchies)</option>
+                <option value="force-directed" title="Iterative physics simulation: connected nodes attract, all nodes repel, continuously animated. The interactive layout — drag a node and watch the rest relax. Doesn't separate clusters as cleanly as SGD/Stress; in 3D mode it's the only available algorithm.">Force-directed (interactive)</option>
+                <option value="kamada-kawai" title="Kamada-Kawai: the classic stress-minimization layout. Same objective as SGD/Stress (so it separates clusters) but a slower per-node optimizer.">Kamada-Kawai (slower init)</option>
                 <option value="circular" disabled title="Not yet implemented">Circular (coming soon)</option>
                 <option value="radial-tree" disabled title="Not yet implemented">Radial tree (coming soon)</option>
             </select>
