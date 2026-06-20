@@ -48,7 +48,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 notify = "8"
-tower-http = { version = "0.6", features = ["fs"] }
+tower-http = { version = "0.7", features = ["fs"] }
 tower-livereload = "0.10"
 
 # Schema manager — github: source fetch + cache
