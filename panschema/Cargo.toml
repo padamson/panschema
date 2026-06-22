@@ -97,6 +97,6 @@ syn = { version = "2", features = ["full"] }
 # `.github/workflows/{test,security}.yml` and `.pre-commit-config.yaml`
 # must match `playwright_rs::PLAYWRIGHT_VERSION` exactly — wire-protocol
 # mismatches silently break the harness.
-playwright-rs = "0.13"
+playwright-rs = "0.14"
 
 # Profile settings are in workspace root Cargo.toml
