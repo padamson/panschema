@@ -238,13 +238,6 @@ when = "2022-10-16"
 user-id = 52553
 user-login = "embark-studios"
 
-[[publisher.prettyplease]]
-version = "0.2.37"
-when = "2025-08-19"
-user-id = 3618
-user-login = "dtolnay"
-user-name = "David Tolnay"
-
 [[publisher.proc-macro2]]
 version = "1.0.106"
 when = "2026-01-21"
@@ -351,8 +344,8 @@ user-login = "dtolnay"
 user-name = "David Tolnay"
 
 [[publisher.syn]]
-version = "2.0.117"
-when = "2026-02-20"
+version = "2.0.118"
+when = "2026-06-16"
 user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
@@ -435,8 +428,8 @@ user-login = "seanmonstar"
 user-name = "Sean McArthur"
 
 [[publisher.tower-http]]
-version = "0.6.11"
-when = "2026-05-18"
+version = "0.7.0"
+when = "2026-06-15"
 user-id = 359
 user-login = "seanmonstar"
 user-name = "Sean McArthur"
@@ -458,13 +451,6 @@ user-name = "David Tolnay"
 [[publisher.unicode-width]]
 version = "0.2.2"
 when = "2025-10-06"
-user-id = 1139
-user-login = "Manishearth"
-user-name = "Manish Goregaokar"
-
-[[publisher.unicode-xid]]
-version = "0.2.6"
-when = "2024-09-19"
 user-id = 1139
 user-login = "Manishearth"
 user-name = "Manish Goregaokar"
@@ -503,29 +489,6 @@ when = "2026-04-17"
 user-id = 1
 user-login = "alexcrichton"
 user-name = "Alex Crichton"
-
-[[publisher.wasip3]]
-version = "0.4.0+wasi-0.3.0-rc-2026-01-06"
-when = "2026-01-15"
-user-id = 1
-user-login = "alexcrichton"
-user-name = "Alex Crichton"
-
-[[publisher.wasm-encoder]]
-version = "0.244.0"
-when = "2026-01-06"
-trusted-publisher = "github:bytecodealliance/wasm-tools"
-
-[[publisher.wasm-metadata]]
-version = "0.236.0"
-when = "2025-07-28"
-user-id = 73222
-user-login = "wasmtime-publish"
-
-[[publisher.wasmparser]]
-version = "0.244.0"
-when = "2026-01-06"
-trusted-publisher = "github:bytecodealliance/wasm-tools"
 
 [[publisher.winapi-util]]
 version = "0.1.11"
@@ -740,31 +703,6 @@ version = "0.57.1"
 when = "2026-04-17"
 trusted-publisher = "github:bytecodealliance/wit-bindgen"
 
-[[publisher.wit-bindgen-core]]
-version = "0.51.0"
-when = "2026-01-12"
-trusted-publisher = "github:bytecodealliance/wit-bindgen"
-
-[[publisher.wit-bindgen-rust]]
-version = "0.51.0"
-when = "2026-01-12"
-trusted-publisher = "github:bytecodealliance/wit-bindgen"
-
-[[publisher.wit-bindgen-rust-macro]]
-version = "0.51.0"
-when = "2026-01-12"
-trusted-publisher = "github:bytecodealliance/wit-bindgen"
-
-[[publisher.wit-component]]
-version = "0.244.0"
-when = "2026-01-06"
-trusted-publisher = "github:bytecodealliance/wasm-tools"
-
-[[publisher.wit-parser]]
-version = "0.244.0"
-when = "2026-01-06"
-trusted-publisher = "github:bytecodealliance/wasm-tools"
-
 [[publisher.zmij]]
 version = "1.0.21"
 when = "2026-02-12"
@@ -810,7 +748,7 @@ notes = "The Bytecode Alliance is the author of this crate"
 [[audits.bytecode-alliance.wildcard-audits.wasm-metadata]]
 who = "Alex Crichton <alex@alexcrichton.com>"
 criteria = "safe-to-deploy"
-user-id = 73222 # wasmtime-publish
+user-id = 73222
 start = "2023-01-01"
 end = "2026-06-03"
 notes = """
