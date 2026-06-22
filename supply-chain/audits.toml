@@ -1,6 +1,12 @@
 
 # cargo-vet audits file
 
+[[audits.getrandom]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.4.2 -> 0.4.3"
+notes = 'Patch release. WASI p2/p3 backend swaps the wasip2/wasip3 crate deps for a manual `unsafe extern "C"` binding to the `get-random-u64` host import (declared `safe fn`, forwarding to the platform RNG exactly as the dropped crates did). The wasm cfgs widen from target_arch = "wasm32" to target_family = "wasm" to add wasm64 support. Remainder is CHANGELOG/README docs and import reordering. No randomness logic changes and no new ambient capabilities.'
+
 [[audits.rand_core]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-deploy"
