@@ -60,7 +60,7 @@ instead of looking current.
 
 ### Slice 2: `aliases` + `see_also`
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Should Have
 
@@ -68,9 +68,9 @@ instead of looking current.
 and round-trip to RDF, so synonyms and cross-references are discoverable.
 
 **Acceptance Criteria:**
-- [ ] Structs gain `aliases: Vec<String>` and `see_also: Vec<String>` (URIorCURIE), serde-default empty.
-- [ ] The card shows an "Aliases" row (comma-joined) and a "See also" row of links — CURIE-expanded, reusing the existing mapping-link path (`class_card_shows_aliases_and_see_also`).
-- [ ] RDF emits `skos:altLabel` per alias and `rdfs:seeAlso` per `see_also` entry.
+- [x] Structs gain `aliases: Vec<String>` and `see_also: Vec<String>` (URIorCURIE), serde-default empty (`class_definition_deserializes_aliases_and_see_also`).
+- [x] The card shows an "Aliases" row (comma-joined) and a "See also" row of links — CURIE-expanded, reusing the existing mapping-link path (`class_card_shows_aliases_and_see_also`).
+- [x] RDF emits `skos:altLabel` per alias and `rdfs:seeAlso` per `see_also` entry (`build_rdf_graph_emits_alt_label_and_see_also`).
 
 ---
 
@@ -116,7 +116,7 @@ documentation completeness.
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | Slice 1: `deprecated` | Should Have | None | Complete |
-| Slice 2: `aliases` + `see_also` | Should Have | None | Not Started |
+| Slice 2: `aliases` + `see_also` | Should Have | None | Complete |
 | Slice 3: `examples` | Should Have | None | Not Started |
 | Slice 4: `comments` + `notes` | Could Have | None | Not Started |
 

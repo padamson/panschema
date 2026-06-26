@@ -54,6 +54,12 @@ pub struct ClassData {
     /// "Deprecated" badge in the heading plus the note text on the card;
     /// `None` renders nothing.
     pub deprecated: Option<String>,
+    /// Alternative names from `aliases:`. Rendered as a comma-joined
+    /// "Aliases" row; empty renders nothing.
+    pub aliases: Vec<String>,
+    /// Related-resource references from `see_also:`, CURIE-expanded into
+    /// links. Rendered as a "See also" row; empty renders nothing.
+    pub see_also: Vec<ExternalLink>,
 }
 
 /// One pre-order entry in the Classes hierarchy view. The template
@@ -212,6 +218,10 @@ pub struct EnumData {
     pub permissible_values: Vec<PermissibleValueData>,
     /// Deprecation note; see [`ClassData::deprecated`].
     pub deprecated: Option<String>,
+    /// Alternative names; see [`ClassData::aliases`].
+    pub aliases: Vec<String>,
+    /// Related-resource links; see [`ClassData::see_also`].
+    pub see_also: Vec<ExternalLink>,
 }
 
 /// Type data for rendering a type card.
@@ -229,6 +239,10 @@ pub struct TypeData {
     pub pattern: Option<String>,
     /// Deprecation note; see [`ClassData::deprecated`].
     pub deprecated: Option<String>,
+    /// Alternative names; see [`ClassData::aliases`].
+    pub aliases: Vec<String>,
+    /// Related-resource links; see [`ClassData::see_also`].
+    pub see_also: Vec<ExternalLink>,
 }
 
 /// A cross-ontology mapping rendered on class / property cards.
@@ -319,6 +333,10 @@ pub struct SlotData {
     /// "Deprecated" badge rides the `characteristics` list; this carries
     /// the note text rendered alongside it. `None` renders nothing.
     pub deprecated: Option<String>,
+    /// Alternative names; see [`ClassData::aliases`].
+    pub aliases: Vec<String>,
+    /// Related-resource links; see [`ClassData::see_also`].
+    pub see_also: Vec<ExternalLink>,
 }
 
 /// A resolved property value for rendering individual cards.
@@ -781,6 +799,8 @@ impl HtmlWriter {
                 external_superclasses,
                 is_abstract: class_def.r#abstract,
                 deprecated: class_def.deprecated.clone(),
+                aliases: class_def.aliases.clone(),
+                see_also: build_see_also(&class_def.see_also, schema, labels),
             });
         }
 
@@ -962,6 +982,8 @@ impl HtmlWriter {
                 characteristics,
                 mappings,
                 deprecated: slot_def.deprecated.clone(),
+                aliases: slot_def.aliases.clone(),
+                see_also: build_see_also(&slot_def.see_also, schema, labels),
             });
         }
 
@@ -1101,6 +1123,8 @@ impl HtmlWriter {
                     .map(|d| render_description(d, schema)),
                 permissible_values,
                 deprecated: enum_def.deprecated.clone(),
+                aliases: enum_def.aliases.clone(),
+                see_also: build_see_also(&enum_def.see_also, schema, labels),
             });
         }
 
@@ -1140,6 +1164,8 @@ impl HtmlWriter {
                 base_type,
                 pattern: type_def.pattern.clone(),
                 deprecated: type_def.deprecated.clone(),
+                aliases: type_def.aliases.clone(),
+                see_also: build_see_also(&type_def.see_also, schema, labels),
             });
         }
 
@@ -1423,6 +1449,29 @@ fn build_mappings(
         }
     }
     out
+}
+
+/// Build the rendered `see_also` link list. Each URIorCURIE entry is
+/// CURIE-expanded the same way mappings are, so a declared prefix
+/// becomes a hyperlink and an undeclared one falls back to plain text.
+fn build_see_also(
+    see_also: &[String],
+    schema: &SchemaDefinition,
+    labels: Option<&crate::labels::LabelStore>,
+) -> Vec<ExternalLink> {
+    see_also
+        .iter()
+        .map(|raw| {
+            let href = crate::linkml_resolve::expand_curie(schema, raw);
+            let (label, definitions) = lookup_term(labels, href.as_deref());
+            ExternalLink {
+                display: raw.clone(),
+                href,
+                label,
+                definitions,
+            }
+        })
+        .collect()
 }
 
 /// `(label, definitions)` for an expanded IRI, when the store has it.
@@ -2545,6 +2594,83 @@ mod tests {
         assert!(
             !name_card.characteristics.iter().any(|c| c == "Deprecated"),
             "undeprecated slot must not get a Deprecated badge"
+        );
+    }
+
+    #[test]
+    fn class_card_shows_aliases_and_see_also() {
+        use crate::linkml::{ClassDefinition, SchemaDefinition, SlotDefinition};
+        // A class or slot with `aliases:` carries them through verbatim as
+        // the comma-joined "Aliases" row, and `see_also:` URIorCURIEs
+        // become CURIE-expanded `ExternalLink`s for the "See also" row (a
+        // declared prefix becomes an `href`; an absolute IRI is its own
+        // href). An element with neither carries empty lists, so no row
+        // renders.
+        let mut schema = SchemaDefinition::new("editorial");
+        schema
+            .prefixes
+            .insert("schema".to_string(), "http://schema.org/".to_string());
+
+        let mut person = ClassDefinition::new("Person");
+        person.aliases = vec!["Human".to_string(), "Individual".to_string()];
+        person.see_also = vec![
+            "schema:Person".to_string(),
+            "https://example.org/person".to_string(),
+        ];
+        schema.classes.insert("Person".to_string(), person);
+        schema
+            .classes
+            .insert("Bare".to_string(), ClassDefinition::new("Bare"));
+
+        let mut named = SlotDefinition::new("full_name");
+        named.aliases = vec!["label".to_string()];
+        named.see_also = vec!["schema:name".to_string()];
+        schema.slots.insert("full_name".to_string(), named);
+        schema
+            .slots
+            .insert("plain".to_string(), SlotDefinition::new("plain"));
+
+        let data = HtmlWriter::build_template_data(&schema);
+
+        let person_card = data.class_data.iter().find(|c| c.id == "Person").unwrap();
+        assert_eq!(person_card.aliases, vec!["Human", "Individual"]);
+        assert_eq!(person_card.see_also.len(), 2);
+        let schema_link = person_card
+            .see_also
+            .iter()
+            .find(|l| l.display == "schema:Person")
+            .unwrap();
+        assert_eq!(
+            schema_link.href.as_deref(),
+            Some("http://schema.org/Person")
+        );
+        let absolute_link = person_card
+            .see_also
+            .iter()
+            .find(|l| l.display == "https://example.org/person")
+            .unwrap();
+        assert_eq!(
+            absolute_link.href.as_deref(),
+            Some("https://example.org/person")
+        );
+
+        let bare_card = data.class_data.iter().find(|c| c.id == "Bare").unwrap();
+        assert!(
+            bare_card.aliases.is_empty() && bare_card.see_also.is_empty(),
+            "a class with neither field renders no aliases/see-also row"
+        );
+
+        let named_card = data.slot_data.iter().find(|s| s.id == "full_name").unwrap();
+        assert_eq!(named_card.aliases, vec!["label"]);
+        assert_eq!(named_card.see_also.len(), 1);
+        assert_eq!(
+            named_card.see_also[0].href.as_deref(),
+            Some("http://schema.org/name")
+        );
+        let plain_card = data.slot_data.iter().find(|s| s.id == "plain").unwrap();
+        assert!(
+            plain_card.aliases.is_empty() && plain_card.see_also.is_empty(),
+            "a slot with neither field renders no aliases/see-also row"
         );
     }
 

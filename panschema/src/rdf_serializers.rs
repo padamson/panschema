@@ -86,6 +86,34 @@ fn emit_mappings(
     Ok(())
 }
 
+/// Emit the editorial cross-references for a subject IRI: one
+/// `skos:altLabel` literal per alias and one `rdfs:seeAlso` IRI per
+/// `see_also` reference (CURIE-expanded against the schema's prefixes).
+fn emit_aliases_and_see_also(
+    graph: &mut FastGraph,
+    subject_iri: &Iri<String>,
+    schema: &SchemaDefinition,
+    aliases: &[String],
+    see_also: &[String],
+) -> IoResult<()> {
+    let skos = Namespace::new_unchecked(SKOS_NS);
+    let skos_alt_label = skos
+        .get("altLabel")
+        .map_err(|e| IoError::Parse(e.to_string()))?;
+    for alias in aliases {
+        graph
+            .insert(subject_iri, skos_alt_label, alias.as_str())
+            .map_err(|e| IoError::Write(e.to_string()))?;
+    }
+    for reference in see_also {
+        let object_iri = make_iri(&expand_curie(reference, schema))?;
+        graph
+            .insert(subject_iri, rdfs::seeAlso, &object_iri)
+            .map_err(|e| IoError::Write(e.to_string()))?;
+    }
+    Ok(())
+}
+
 /// Build an RDF graph from a SchemaDefinition
 pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
     let mut graph = FastGraph::new();
@@ -269,6 +297,14 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
             &class_def.narrow_mappings,
             &class_def.broad_mappings,
         )?;
+
+        emit_aliases_and_see_also(
+            &mut graph,
+            &class_iri,
+            schema,
+            &class_def.aliases,
+            &class_def.see_also,
+        )?;
     }
 
     // Properties (slots)
@@ -424,6 +460,14 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
             &slot_def.related_mappings,
             &slot_def.narrow_mappings,
             &slot_def.broad_mappings,
+        )?;
+
+        emit_aliases_and_see_also(
+            &mut graph,
+            &prop_iri,
+            schema,
+            &slot_def.aliases,
+            &slot_def.see_also,
         )?;
     }
 
@@ -1078,6 +1122,108 @@ mod tests {
         assert!(
             has_true_object,
             "owl:deprecated object must be the literal `true`"
+        );
+    }
+
+    #[test]
+    fn build_rdf_graph_emits_alt_label_and_see_also() {
+        // A class or slot with `aliases:` emits one `skos:altLabel`
+        // literal per alias on its IRI, and `see_also:` emits one
+        // `rdfs:seeAlso` IRI per reference (CURIE-expanded against the
+        // schema's prefixes). Elements with neither emit no such triples.
+        use sophia::api::term::Term;
+        use sophia::api::triple::Triple;
+
+        let mut schema = schema_with_prefixes();
+        let mut claim = ClassDefinition::new("Claim");
+        claim.aliases = vec!["Assertion".to_string(), "Statement".to_string()];
+        claim.see_also = vec!["cco:ont00000005".to_string()];
+        schema.classes.insert("Claim".to_string(), claim);
+        schema
+            .classes
+            .insert("Bare".to_string(), ClassDefinition::new("Bare"));
+        let mut refines = SlotDefinition::new("refines");
+        refines.aliases = vec!["sharpens".to_string()];
+        refines.see_also = vec!["obo:BFO_0000015".to_string()];
+        schema.slots.insert("refines".to_string(), refines);
+        schema
+            .slots
+            .insert("plain".to_string(), SlotDefinition::new("plain"));
+
+        let graph = build_rdf_graph(&schema).unwrap();
+        let alt_label = format!("{SKOS_NS}altLabel");
+        let see_also_iri = "http://www.w3.org/2000/01/rdf-schema#seeAlso";
+
+        // `(subject, object-lexical)` pairs for skos:altLabel triples.
+        let alt_labels: Vec<(String, String)> = graph
+            .triples()
+            .filter_map(|t| {
+                let tr = t.unwrap();
+                if tr.p().iri().is_some_and(|i| i.as_str() == alt_label) {
+                    Some((
+                        tr.s().iri()?.as_str().to_string(),
+                        tr.o().lexical_form()?.to_string(),
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(
+            alt_labels
+                .iter()
+                .any(|(s, o)| s.ends_with("#Claim") && o == "Assertion"),
+            "expected skos:altLabel `Assertion` on the class; got {alt_labels:?}"
+        );
+        assert!(
+            alt_labels
+                .iter()
+                .any(|(s, o)| s.ends_with("#Claim") && o == "Statement"),
+            "expected both class aliases as skos:altLabel; got {alt_labels:?}"
+        );
+        assert!(
+            alt_labels
+                .iter()
+                .any(|(s, o)| s.ends_with("#refines") && o == "sharpens"),
+            "expected skos:altLabel `sharpens` on the slot; got {alt_labels:?}"
+        );
+
+        // `(subject, object-IRI)` pairs for rdfs:seeAlso triples.
+        let see_also_links: Vec<(String, String)> = graph
+            .triples()
+            .filter_map(|t| {
+                let tr = t.unwrap();
+                if tr.p().iri().is_some_and(|i| i.as_str() == see_also_iri) {
+                    Some((
+                        tr.s().iri()?.as_str().to_string(),
+                        tr.o().iri()?.as_str().to_string(),
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(
+            see_also_links.iter().any(|(s, o)| s.ends_with("#Claim")
+                && o == "https://www.commoncoreontologies.org/ont00000005"),
+            "expected rdfs:seeAlso with the expanded CURIE on the class; got {see_also_links:?}"
+        );
+        assert!(
+            see_also_links.iter().any(|(s, o)| s.ends_with("#refines")
+                && o == "http://purl.obolibrary.org/obo/BFO_0000015"),
+            "expected rdfs:seeAlso with the expanded CURIE on the slot; got {see_also_links:?}"
+        );
+
+        // Elements with neither field emit no editorial cross-references.
+        assert!(
+            !alt_labels.iter().any(|(s, _)| s.ends_with("#Bare"))
+                && !see_also_links.iter().any(|(s, _)| s.ends_with("#Bare")),
+            "a class with neither field must emit no altLabel/seeAlso"
+        );
+        assert!(
+            !alt_labels.iter().any(|(s, _)| s.ends_with("#plain"))
+                && !see_also_links.iter().any(|(s, _)| s.ends_with("#plain")),
+            "a slot with neither field must emit no altLabel/seeAlso"
         );
     }
 

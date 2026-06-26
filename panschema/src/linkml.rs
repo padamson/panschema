@@ -79,6 +79,16 @@ pub struct SchemaDefinition {
     /// `owl:deprecated true` on the element IRI.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deprecated: Option<String>,
+    /// Alternative names for the element. Rendered as a comma-joined
+    /// "Aliases" row on the card; RDF emits one `skos:altLabel` per
+    /// entry on the element IRI.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    /// Related-resource references (URIorCURIE). Rendered as a "See
+    /// also" row of CURIE-expanded links on the card; RDF emits one
+    /// `rdfs:seeAlso` per entry on the element IRI.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub see_also: Vec<String>,
     /// Schema version
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
@@ -132,6 +142,8 @@ impl SchemaDefinition {
             title: None,
             description: None,
             deprecated: None,
+            aliases: Vec::new(),
+            see_also: Vec::new(),
             version: None,
             license: None,
             contributors: Vec::new(),
@@ -172,6 +184,12 @@ pub struct ClassDefinition {
     /// Deprecation note; see [`SchemaDefinition::deprecated`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deprecated: Option<String>,
+    /// Alternative names; see [`SchemaDefinition::aliases`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    /// Related-resource references; see [`SchemaDefinition::see_also`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub see_also: Vec<String>,
     /// Primary parent class (single inheritance)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_a: Option<String>,
@@ -224,6 +242,8 @@ impl ClassDefinition {
             name: name.into(),
             description: None,
             deprecated: None,
+            aliases: Vec::new(),
+            see_also: Vec::new(),
             is_a: None,
             mixins: Vec::new(),
             r#abstract: false,
@@ -263,6 +283,12 @@ pub struct SlotDefinition {
     /// Deprecation note; see [`SchemaDefinition::deprecated`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deprecated: Option<String>,
+    /// Alternative names; see [`SchemaDefinition::aliases`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    /// Related-resource references; see [`SchemaDefinition::see_also`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub see_also: Vec<String>,
     /// The type of values this slot holds (class name, type name, or enum name)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub range: Option<String>,
@@ -346,6 +372,8 @@ impl SlotDefinition {
             name: name.into(),
             description: None,
             deprecated: None,
+            aliases: Vec::new(),
+            see_also: Vec::new(),
             range: None,
             domain: None,
             required: false,
@@ -395,6 +423,12 @@ pub struct EnumDefinition {
     /// Deprecation note; see [`SchemaDefinition::deprecated`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deprecated: Option<String>,
+    /// Alternative names; see [`SchemaDefinition::aliases`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    /// Related-resource references; see [`SchemaDefinition::see_also`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub see_also: Vec<String>,
     /// The allowed values for this enum
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub permissible_values: BTreeMap<String, PermissibleValue>,
@@ -410,6 +444,8 @@ impl EnumDefinition {
             name: name.into(),
             description: None,
             deprecated: None,
+            aliases: Vec::new(),
+            see_also: Vec::new(),
             permissible_values: BTreeMap::new(),
             annotations: BTreeMap::new(),
         }
@@ -458,6 +494,12 @@ pub struct TypeDefinition {
     /// Deprecation note; see [`SchemaDefinition::deprecated`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deprecated: Option<String>,
+    /// Alternative names; see [`SchemaDefinition::aliases`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    /// Related-resource references; see [`SchemaDefinition::see_also`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub see_also: Vec<String>,
     /// Parent type (for type inheritance)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub typeof_: Option<String>,
@@ -479,6 +521,8 @@ impl TypeDefinition {
             name: name.into(),
             description: None,
             deprecated: None,
+            aliases: Vec::new(),
+            see_also: Vec::new(),
             typeof_: None,
             uri: None,
             pattern: None,
@@ -772,6 +816,42 @@ deprecated: use Person instead
         );
         let bare_out = serde_yaml::to_string(&bare).unwrap();
         assert!(!bare_out.contains("deprecated:"), "got:\n{bare_out}");
+    }
+
+    #[test]
+    fn class_definition_deserializes_aliases_and_see_also() {
+        // The `aliases` and `see_also` common-metadata lists parse from
+        // LinkML YAML into their `Vec<String>` fields and are empty when
+        // unset. `aliases` carries alternative names shown on the card;
+        // `see_also` carries URIorCURIE references rendered as links and
+        // emitted to RDF as `rdfs:seeAlso`.
+        let yaml = "
+name: Person
+aliases:
+  - Human
+  - Individual
+see_also:
+  - schema:Person
+  - https://example.org/person
+";
+        let class: ClassDefinition = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(class.aliases, vec!["Human", "Individual"]);
+        assert_eq!(
+            class.see_also,
+            vec!["schema:Person", "https://example.org/person"]
+        );
+
+        let bare: ClassDefinition = serde_yaml::from_str("name: Person").unwrap();
+        assert!(bare.aliases.is_empty());
+        assert!(bare.see_also.is_empty());
+
+        // Populated lists serialize; empty ones are skipped.
+        let out = serde_yaml::to_string(&class).unwrap();
+        assert!(out.contains("aliases:"), "got:\n{out}");
+        assert!(out.contains("see_also:"), "got:\n{out}");
+        let bare_out = serde_yaml::to_string(&bare).unwrap();
+        assert!(!bare_out.contains("aliases:"), "got:\n{bare_out}");
+        assert!(!bare_out.contains("see_also:"), "got:\n{bare_out}");
     }
 
     #[test]

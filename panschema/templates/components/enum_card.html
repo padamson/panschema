@@ -38,6 +38,27 @@
             </dd>
         </div>
 {%- endif %}
+{%- if !aliases.is_empty() %}
+        <div class="detail-row">
+            <dt>Aliases</dt>
+            <dd>{{ aliases|join(", ") }}</dd>
+        </div>
+{%- endif %}
+{%- if !see_also.is_empty() %}
+        <div class="detail-row">
+            <dt>See also</dt>
+            <dd>
+{%- for link in see_also %}
+{%- match link.href %}
+{%- when Some with (href) %}
+                <a href="{{ href }}" class="entity-ref" target="_blank" rel="noopener" title="{{ link.tooltip() }}">{% match link.label %}{% when Some with (label) %}{{ label }}{% when None %}{{ link.display }}{% endmatch %}</a>{%- if !loop.last %},{% endif %}
+{%- when None %}
+                <span class="entity-ref mapping-unresolved" title="prefix not declared in schema.prefixes">{{ link.display }}</span>{%- if !loop.last %},{% endif %}
+{%- endmatch %}
+{%- endfor %}
+            </dd>
+        </div>
+{%- endif %}
     </div>
 </article>
 <style>

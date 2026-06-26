@@ -249,6 +249,8 @@ pub struct ClassCardComponent<'a> {
     pub external_superclasses: &'a [panschema::html_writer::ExternalLink],
     pub is_abstract: bool,
     pub deprecated: Option<&'a str>,
+    pub aliases: &'a [String],
+    pub see_also: &'a [panschema::html_writer::ExternalLink],
 }
 
 /// Property card component template.
@@ -269,6 +271,8 @@ pub struct SlotCardComponent<'a> {
     pub characteristics: &'a [String],
     pub mappings: &'a [panschema::html_writer::Mapping],
     pub deprecated: Option<&'a str>,
+    pub aliases: &'a [String],
+    pub see_also: &'a [panschema::html_writer::ExternalLink],
 }
 
 /// Individual card component template.
@@ -292,6 +296,8 @@ pub struct EnumCardComponent<'a> {
     pub description: Option<&'a str>,
     pub permissible_values: &'a [panschema::html_writer::PermissibleValueData],
     pub deprecated: Option<&'a str>,
+    pub aliases: &'a [String],
+    pub see_also: &'a [panschema::html_writer::ExternalLink],
 }
 
 /// Type card component template.
@@ -305,6 +311,8 @@ pub struct TypeCardComponent<'a> {
     pub base_type: Option<&'a EntityRef>,
     pub pattern: Option<&'a str>,
     pub deprecated: Option<&'a str>,
+    pub aliases: &'a [String],
+    pub see_also: &'a [panschema::html_writer::ExternalLink],
 }
 
 /// Sample class data for styleguide previews.
@@ -322,6 +330,8 @@ pub struct SampleClass<'a> {
     pub external_superclasses: &'a [panschema::html_writer::ExternalLink],
     pub is_abstract: bool,
     pub deprecated: Option<&'a str>,
+    pub aliases: &'a [String],
+    pub see_also: &'a [panschema::html_writer::ExternalLink],
 }
 
 /// Sample property data for styleguide previews.
@@ -340,6 +350,8 @@ pub struct SampleSlot<'a> {
     pub characteristics: &'a [String],
     pub mappings: &'a [panschema::html_writer::Mapping],
     pub deprecated: Option<&'a str>,
+    pub aliases: &'a [String],
+    pub see_also: &'a [panschema::html_writer::ExternalLink],
 }
 
 /// Sample individual data for styleguide previews.
@@ -495,6 +507,8 @@ impl ComponentRenderer {
             external_superclasses: &[],
             is_abstract: false,
             deprecated: None,
+            aliases: &[],
+            see_also: &[],
         };
         Ok(template.render()?)
     }
@@ -525,6 +539,8 @@ impl ComponentRenderer {
             characteristics,
             mappings: &[],
             deprecated: None,
+            aliases: &[],
+            see_also: &[],
         };
         Ok(template.render()?)
     }
@@ -563,6 +579,8 @@ impl ComponentRenderer {
             description,
             permissible_values,
             deprecated: None,
+            aliases: &[],
+            see_also: &[],
         };
         Ok(template.render()?)
     }
@@ -584,6 +602,8 @@ impl ComponentRenderer {
             base_type,
             pattern,
             deprecated: None,
+            aliases: &[],
+            see_also: &[],
         };
         Ok(template.render()?)
     }
@@ -649,6 +669,13 @@ impl ComponentRenderer {
                 definitions: Vec::new(),
             },
         ];
+        let class_aliases = vec!["Human".to_string(), "Individual".to_string()];
+        let class_see_also = vec![panschema::html_writer::ExternalLink {
+            display: "schema:Person".to_string(),
+            href: Some("http://schema.org/Person".to_string()),
+            label: None,
+            definitions: Vec::new(),
+        }];
         let sample_class = SampleClass {
             id: "person",
             label: "Person",
@@ -663,6 +690,8 @@ impl ComponentRenderer {
             external_superclasses: &[],
             is_abstract: false,
             deprecated: None,
+            aliases: &class_aliases,
+            see_also: &class_see_also,
         };
 
         let domain = EntityRef::new("person", "Person");
@@ -684,6 +713,8 @@ impl ComponentRenderer {
             characteristics: &characteristics,
             mappings: &slot_mappings,
             deprecated: None,
+            aliases: &[],
+            see_also: &[],
         };
 
         let domain2 = EntityRef::new("person", "Person");
@@ -704,6 +735,8 @@ impl ComponentRenderer {
             characteristics: &empty_characteristics,
             mappings: &slot_mappings,
             deprecated: None,
+            aliases: &[],
+            see_also: &[],
         };
 
         let ind_types = vec![EntityRef::new("person", "Person")];
@@ -979,6 +1012,8 @@ mod tests {
                 external_superclasses: &[],
                 is_abstract: true,
                 deprecated: None,
+                aliases: &[],
+                see_also: &[],
             };
             let html = template.render().unwrap();
             assert!(
@@ -1007,6 +1042,8 @@ mod tests {
                 external_superclasses: &[],
                 is_abstract: false,
                 deprecated: Some("use Person instead"),
+                aliases: &[],
+                see_also: &[],
             };
             let html = deprecated.render().unwrap();
             assert!(
@@ -1032,6 +1069,70 @@ mod tests {
             assert!(
                 !html.contains(r#"<div class="deprecated-note""#),
                 "undeprecated class must render no note; got:\n{html}"
+            );
+        }
+
+        #[test]
+        fn class_card_renders_aliases_and_see_also_rows() {
+            // A class with `aliases:` renders an "Aliases" row of
+            // comma-joined plain text, and `see_also:` renders a "See
+            // also" row whose resolved entries are hyperlinks. A class
+            // with neither renders no such rows.
+            let see_also = vec![panschema::html_writer::ExternalLink {
+                display: "schema:Person".to_string(),
+                href: Some("http://schema.org/Person".to_string()),
+                label: None,
+                definitions: Vec::new(),
+            }];
+            let aliases = vec!["Human".to_string(), "Individual".to_string()];
+            let editorial = ClassCardComponent {
+                id: "person",
+                label: "Person",
+                iri: "https://example.org/ontology#Person",
+                iri_href: None,
+                description: None,
+                superclass: None,
+                subclasses: &[],
+                mixins: &[],
+                slots: &[],
+                mappings: &[],
+                external_superclasses: &[],
+                is_abstract: false,
+                deprecated: None,
+                aliases: &aliases,
+                see_also: &see_also,
+            };
+            let html = editorial.render().unwrap();
+            assert!(
+                html.contains("<dt>Aliases</dt>"),
+                "aliases row should render; got:\n{html}"
+            );
+            assert!(
+                html.contains("Human, Individual"),
+                "aliases should be comma-joined; got:\n{html}"
+            );
+            assert!(
+                html.contains("<dt>See also</dt>"),
+                "see-also row should render; got:\n{html}"
+            );
+            assert!(
+                html.contains(r#"href="http://schema.org/Person""#),
+                "see-also entry should be a hyperlink to the expanded IRI; got:\n{html}"
+            );
+
+            let plain = ClassCardComponent {
+                aliases: &[],
+                see_also: &[],
+                ..editorial
+            };
+            let html = plain.render().unwrap();
+            assert!(
+                !html.contains("<dt>Aliases</dt>"),
+                "a class with no aliases renders no Aliases row; got:\n{html}"
+            );
+            assert!(
+                !html.contains("<dt>See also</dt>"),
+                "a class with no see_also renders no See also row; got:\n{html}"
             );
         }
 
