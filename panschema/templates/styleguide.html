@@ -362,6 +362,7 @@
                     {%- let iri_href = sample_class.iri_href %}
                     {%- let external_superclasses = sample_class.external_superclasses %}
                     {%- let is_abstract = sample_class.is_abstract %}
+                    {%- let deprecated = sample_class.deprecated %}
                     {% include "components/class_card.html" %}
                 </div>
             </div>
@@ -389,6 +390,7 @@
                     {%- let characteristics = sample_slot.characteristics %}
                     {%- let mappings = sample_slot.mappings %}
                     {%- let iri_href = sample_slot.iri_href %}
+                    {%- let deprecated = sample_slot.deprecated %}
                     {% include "components/slot_card.html" %}
                 </div>
             </div>
@@ -407,6 +409,7 @@
                     {%- let characteristics = sample_data_slot.characteristics %}
                     {%- let mappings = sample_data_slot.mappings %}
                     {%- let iri_href = sample_data_slot.iri_href %}
+                    {%- let deprecated = sample_data_slot.deprecated %}
                     {% include "components/slot_card.html" %}
                 </div>
             </div>

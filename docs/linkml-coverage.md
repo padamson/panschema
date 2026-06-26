@@ -46,7 +46,8 @@ slot, enum, type, and permissible-value alike. panschema models only a few:
 | `annotations` | ● | ◐ | ◐ | ◐ | ○ | generic map; only `panschema:*` keys consumed (label, individuals, owl_property_type) |
 | `title` | ◐ | ● | ◐ | ● | ✗ | modeled on schema only; `rdfs:label` on the ontology |
 | `exact_mappings` `close_mappings` `related_mappings` `narrow_mappings` `broad_mappings` | ● | ● | ○ | ● | ○ | modeled on class + slot; HTML "Mappings" row; RDF `skos:*Match`; graph/Rust ignore |
-| `aliases` `see_also` `deprecated` `comments` `notes` `todos` `examples` `in_subset` `rank` `status` `keywords` `categories` `created_by` `modified_by` `source` `structured_aliases` `alt_descriptions` `contributors` `created_on` `last_updated_on` … | ✗ | — | — | — | — | not modeled (except `contributors`/`created`/`modified` on schema, RDF-only — see below). Editorial/provenance long tail; biggest doc-completeness gap |
+| `deprecated` | ● | ● | — | ● | — | modeled on schema/class/slot/enum/type; HTML "Deprecated" badge + note; `owl:deprecated true` on class/slot IRI; graph/Rust ignore |
+| `aliases` `see_also` `comments` `notes` `todos` `examples` `in_subset` `rank` `status` `keywords` `categories` `created_by` `modified_by` `source` `structured_aliases` `alt_descriptions` `contributors` `created_on` `last_updated_on` … | ✗ | — | — | — | — | not modeled (except `contributors`/`created`/`modified` on schema, RDF-only — see below). Editorial/provenance long tail; biggest doc-completeness gap |
 
 ---
 

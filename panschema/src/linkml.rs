@@ -74,6 +74,11 @@ pub struct SchemaDefinition {
     /// Schema description/documentation
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Deprecation note. When set, the element is marked deprecated:
+    /// the card shows a "Deprecated" badge with this text, and RDF emits
+    /// `owl:deprecated true` on the element IRI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deprecated: Option<String>,
     /// Schema version
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
@@ -126,6 +131,7 @@ impl SchemaDefinition {
             id: None,
             title: None,
             description: None,
+            deprecated: None,
             version: None,
             license: None,
             contributors: Vec::new(),
@@ -163,6 +169,9 @@ pub struct ClassDefinition {
     /// Human-readable description
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Deprecation note; see [`SchemaDefinition::deprecated`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deprecated: Option<String>,
     /// Primary parent class (single inheritance)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_a: Option<String>,
@@ -214,6 +223,7 @@ impl ClassDefinition {
         Self {
             name: name.into(),
             description: None,
+            deprecated: None,
             is_a: None,
             mixins: Vec::new(),
             r#abstract: false,
@@ -250,6 +260,9 @@ pub struct SlotDefinition {
     /// Human-readable description
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Deprecation note; see [`SchemaDefinition::deprecated`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deprecated: Option<String>,
     /// The type of values this slot holds (class name, type name, or enum name)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub range: Option<String>,
@@ -332,6 +345,7 @@ impl SlotDefinition {
         Self {
             name: name.into(),
             description: None,
+            deprecated: None,
             range: None,
             domain: None,
             required: false,
@@ -378,6 +392,9 @@ pub struct EnumDefinition {
     /// Human-readable description
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Deprecation note; see [`SchemaDefinition::deprecated`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deprecated: Option<String>,
     /// The allowed values for this enum
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub permissible_values: BTreeMap<String, PermissibleValue>,
@@ -392,6 +409,7 @@ impl EnumDefinition {
         Self {
             name: name.into(),
             description: None,
+            deprecated: None,
             permissible_values: BTreeMap::new(),
             annotations: BTreeMap::new(),
         }
@@ -437,6 +455,9 @@ pub struct TypeDefinition {
     /// Human-readable description
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Deprecation note; see [`SchemaDefinition::deprecated`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deprecated: Option<String>,
     /// Parent type (for type inheritance)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub typeof_: Option<String>,
@@ -457,6 +478,7 @@ impl TypeDefinition {
         Self {
             name: name.into(),
             description: None,
+            deprecated: None,
             typeof_: None,
             uri: None,
             pattern: None,
@@ -724,6 +746,32 @@ imports:
         assert!(class.is_a.is_none());
         assert!(class.mixins.is_empty());
         assert!(!class.r#abstract);
+    }
+
+    #[test]
+    fn class_definition_deserializes_deprecated() {
+        // The `deprecated` common-metadata note parses from LinkML YAML
+        // into its `Option<String>` field and is absent when unset. The
+        // payload is the migration guidance shown on the card and the
+        // signal that drives the RDF `owl:deprecated` axiom.
+        let yaml = "
+name: LegacyPerson
+deprecated: use Person instead
+";
+        let class: ClassDefinition = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(class.deprecated.as_deref(), Some("use Person instead"));
+
+        let bare: ClassDefinition = serde_yaml::from_str("name: Person").unwrap();
+        assert!(bare.deprecated.is_none());
+
+        // Set notes serialize; unset ones are skipped.
+        let out = serde_yaml::to_string(&class).unwrap();
+        assert!(
+            out.contains("deprecated: use Person instead"),
+            "got:\n{out}"
+        );
+        let bare_out = serde_yaml::to_string(&bare).unwrap();
+        assert!(!bare_out.contains("deprecated:"), "got:\n{bare_out}");
     }
 
     #[test]

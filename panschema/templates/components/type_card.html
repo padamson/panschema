@@ -1,11 +1,15 @@
 <article class="entity-card type-card" id="type-{{ id }}">
     <header class="entity-header">
         <div class="entity-badge type-badge">Type</div>
-        <h3 class="entity-title">{{ label }}</h3>
+        <h3 class="entity-title">{{ label }}{% if let Some(note) = deprecated %} <span class="deprecated-badge" title="{{ note }}">Deprecated</span>{% endif %}</h3>
     </header>
 {%- if let Some(desc) = description %}
 
     <div class="entity-description">{{ desc|safe }}</div>
+{%- endif %}
+{%- if let Some(note) = deprecated %}
+
+    <div class="deprecated-note"><strong>Deprecated.</strong> {{ note }}</div>
 {%- endif %}
 
     <div class="entity-details">

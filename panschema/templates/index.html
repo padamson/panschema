@@ -59,6 +59,7 @@
         {%- let mappings = class.mappings.as_slice() %}
         {%- let external_superclasses = class.external_superclasses.as_slice() %}
         {%- let is_abstract = class.is_abstract %}
+        {%- let deprecated = class.deprecated.as_deref() %}
         {% include "components/class_card.html" %}
         {%- if entry.has_children %}
         <ul class="class-tree-children">
@@ -126,6 +127,7 @@
         {%- let pattern = slot.pattern.as_deref() %}
         {%- let characteristics = slot.characteristics.as_slice() %}
         {%- let mappings = slot.mappings.as_slice() %}
+        {%- let deprecated = slot.deprecated.as_deref() %}
         {% include "components/slot_card.html" %}
 {%- endfor %}
     </div>
@@ -150,6 +152,7 @@
         {%- let label = en.label.as_str() %}
         {%- let description = en.description.as_deref() %}
         {%- let permissible_values = en.permissible_values.as_slice() %}
+        {%- let deprecated = en.deprecated.as_deref() %}
         {% include "components/enum_card.html" %}
 {%- endfor %}
     </div>
@@ -176,6 +179,7 @@
         {%- let base_type = ty.base_type.as_ref() %}
         {%- let uri = ty.uri.as_ref() %}
         {%- let pattern = ty.pattern.as_deref() %}
+        {%- let deprecated = ty.deprecated.as_deref() %}
         {% include "components/type_card.html" %}
 {%- endfor %}
     </div>

@@ -188,6 +188,9 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
     let owl_class = owl
         .get("Class")
         .map_err(|e| IoError::Parse(e.to_string()))?;
+    let owl_deprecated = owl
+        .get("deprecated")
+        .map_err(|e| IoError::Parse(e.to_string()))?;
     let rdfs_subclass_of = rdfs::subClassOf;
 
     for (name, class_def) in &schema.classes {
@@ -202,6 +205,14 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
         graph
             .insert(&class_iri, rdf::type_, owl_class)
             .map_err(|e| IoError::Write(e.to_string()))?;
+
+        // owl:deprecated true — a Rust bool serializes as an
+        // `xsd:boolean`-typed literal.
+        if class_def.deprecated.is_some() {
+            graph
+                .insert(&class_iri, owl_deprecated, true)
+                .map_err(|e| IoError::Write(e.to_string()))?;
+        }
 
         // rdfs:label
         let label = class_def
@@ -313,6 +324,13 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
         } else {
             graph
                 .insert(&prop_iri, rdf::type_, owl_datatype_property)
+                .map_err(|e| IoError::Write(e.to_string()))?;
+        }
+
+        // owl:deprecated true — see the class emission above.
+        if slot_def.deprecated.is_some() {
+            graph
+                .insert(&prop_iri, owl_deprecated, true)
                 .map_err(|e| IoError::Write(e.to_string()))?;
         }
 
@@ -989,6 +1007,77 @@ mod tests {
         assert!(
             !has_type(format!("{OWL_NS}ReflexiveProperty")),
             "unset characteristics must not be emitted"
+        );
+    }
+
+    #[test]
+    fn build_rdf_graph_emits_owl_deprecated() {
+        // A class or slot marked `deprecated:` emits `owl:deprecated true`
+        // on its IRI (a Rust bool serializes as an `xsd:boolean` literal),
+        // so downstream consumers see the element is sunset. Undeprecated
+        // elements emit no such triple.
+        use sophia::api::term::Term;
+        use sophia::api::triple::Triple;
+
+        let mut schema = schema_with_prefixes();
+        let mut legacy = ClassDefinition::new("LegacyClaim");
+        legacy.deprecated = Some("use Claim instead".to_string());
+        schema.classes.insert("LegacyClaim".to_string(), legacy);
+        schema
+            .classes
+            .insert("Claim".to_string(), ClassDefinition::new("Claim"));
+        let mut old_slot = SlotDefinition::new("old_refines");
+        old_slot.deprecated = Some("use refines instead".to_string());
+        schema.slots.insert("old_refines".to_string(), old_slot);
+        schema
+            .slots
+            .insert("refines".to_string(), SlotDefinition::new("refines"));
+
+        let graph = build_rdf_graph(&schema).unwrap();
+        let owl_deprecated = format!("{OWL_NS}deprecated");
+
+        // Collect the subjects carrying an `owl:deprecated` predicate.
+        let deprecated_subjects: Vec<String> = graph
+            .triples()
+            .filter_map(|t| {
+                let tr = t.unwrap();
+                tr.p()
+                    .iri()
+                    .filter(|i| i.as_str() == owl_deprecated)
+                    .and_then(|_| tr.s().iri().map(|i| i.as_str().to_string()))
+            })
+            .collect();
+
+        assert!(
+            deprecated_subjects
+                .iter()
+                .any(|s| s.ends_with("#LegacyClaim")),
+            "expected owl:deprecated on the deprecated class; got {deprecated_subjects:?}"
+        );
+        assert!(
+            deprecated_subjects
+                .iter()
+                .any(|s| s.ends_with("#old_refines")),
+            "expected owl:deprecated on the deprecated slot; got {deprecated_subjects:?}"
+        );
+        assert!(
+            !deprecated_subjects.iter().any(|s| s.ends_with("#Claim")),
+            "undeprecated class must not be marked owl:deprecated; got {deprecated_subjects:?}"
+        );
+        assert!(
+            !deprecated_subjects.iter().any(|s| s.ends_with("#refines")),
+            "undeprecated slot must not be marked owl:deprecated; got {deprecated_subjects:?}"
+        );
+
+        // The object is the boolean literal `true` typed xsd:boolean.
+        let has_true_object = graph.triples().any(|t| {
+            let tr = t.unwrap();
+            tr.p().iri().is_some_and(|i| i.as_str() == owl_deprecated)
+                && tr.o().lexical_form().is_some_and(|l| l == "true")
+        });
+        assert!(
+            has_true_object,
+            "owl:deprecated object must be the literal `true`"
         );
     }
 

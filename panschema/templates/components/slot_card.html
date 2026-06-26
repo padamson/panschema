@@ -22,6 +22,10 @@
 
     <div class="entity-description">{{ desc|safe }}</div>
 {%- endif %}
+{%- if let Some(note) = deprecated %}
+
+    <div class="deprecated-note"><strong>Deprecated.</strong> {{ note }}</div>
+{%- endif %}
 
     <div class="entity-details">
 {%- if !domains.is_empty() %}

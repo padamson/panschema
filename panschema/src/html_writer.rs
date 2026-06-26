@@ -50,6 +50,10 @@ pub struct ClassData {
     /// a small badge in the card heading so readers can tell
     /// foundation classes from instantiable ones at a glance.
     pub is_abstract: bool,
+    /// Deprecation note when the class is marked `deprecated:`. Drives a
+    /// "Deprecated" badge in the heading plus the note text on the card;
+    /// `None` renders nothing.
+    pub deprecated: Option<String>,
 }
 
 /// One pre-order entry in the Classes hierarchy view. The template
@@ -206,6 +210,8 @@ pub struct EnumData {
     pub label: String,
     pub description: Option<String>,
     pub permissible_values: Vec<PermissibleValueData>,
+    /// Deprecation note; see [`ClassData::deprecated`].
+    pub deprecated: Option<String>,
 }
 
 /// Type data for rendering a type card.
@@ -221,6 +227,8 @@ pub struct TypeData {
     /// else plain text.
     pub base_type: Option<EntityRef>,
     pub pattern: Option<String>,
+    /// Deprecation note; see [`ClassData::deprecated`].
+    pub deprecated: Option<String>,
 }
 
 /// A cross-ontology mapping rendered on class / property cards.
@@ -307,6 +315,10 @@ pub struct SlotData {
     pub pattern: Option<String>,
     pub characteristics: Vec<String>,
     pub mappings: Vec<Mapping>,
+    /// Deprecation note when the slot is marked `deprecated:`. The
+    /// "Deprecated" badge rides the `characteristics` list; this carries
+    /// the note text rendered alongside it. `None` renders nothing.
+    pub deprecated: Option<String>,
 }
 
 /// A resolved property value for rendering individual cards.
@@ -768,6 +780,7 @@ impl HtmlWriter {
                 mappings,
                 external_superclasses,
                 is_abstract: class_def.r#abstract,
+                deprecated: class_def.deprecated.clone(),
             });
         }
 
@@ -882,6 +895,9 @@ impl HtmlWriter {
                     characteristics.push(label.to_string());
                 }
             }
+            if slot_def.deprecated.is_some() {
+                characteristics.push("Deprecated".to_string());
+            }
             // Numeric value bounds, shown with ≥ / ≤ so they read distinctly
             // from the `min..max` *cardinality* badge below. `f64` Display
             // already drops a trailing `.0` (1.0 → "1", 0.5 → "0.5").
@@ -945,6 +961,7 @@ impl HtmlWriter {
                 pattern: slot_def.pattern.clone(),
                 characteristics,
                 mappings,
+                deprecated: slot_def.deprecated.clone(),
             });
         }
 
@@ -1083,6 +1100,7 @@ impl HtmlWriter {
                     .as_deref()
                     .map(|d| render_description(d, schema)),
                 permissible_values,
+                deprecated: enum_def.deprecated.clone(),
             });
         }
 
@@ -1121,6 +1139,7 @@ impl HtmlWriter {
                     .map(|d| render_description(d, schema)),
                 base_type,
                 pattern: type_def.pattern.clone(),
+                deprecated: type_def.deprecated.clone(),
             });
         }
 
@@ -2473,6 +2492,59 @@ mod tests {
             prop.characteristics.iter().any(|c| c == "2..*"),
             "expected a `2..*` bounds badge; got {:?}",
             prop.characteristics
+        );
+    }
+
+    #[test]
+    fn class_card_shows_deprecated_badge() {
+        use crate::linkml::{ClassDefinition, SchemaDefinition, SlotDefinition};
+        // A class or slot marked `deprecated:` carries its note through to
+        // the card data: classes expose the note on `ClassData::deprecated`,
+        // slots surface a "Deprecated" characteristic badge alongside the
+        // note on `SlotData::deprecated`. An undeprecated element carries
+        // neither.
+        let mut schema = SchemaDefinition::new("lifecycle");
+        let mut legacy = ClassDefinition::new("LegacyPerson");
+        legacy.deprecated = Some("use Person instead".to_string());
+        schema.classes.insert("LegacyPerson".to_string(), legacy);
+        schema
+            .classes
+            .insert("Person".to_string(), ClassDefinition::new("Person"));
+        let mut old_slot = SlotDefinition::new("old_name");
+        old_slot.deprecated = Some("use name instead".to_string());
+        schema.slots.insert("old_name".to_string(), old_slot);
+        schema
+            .slots
+            .insert("name".to_string(), SlotDefinition::new("name"));
+
+        let data = HtmlWriter::build_template_data(&schema);
+
+        let legacy_card = data
+            .class_data
+            .iter()
+            .find(|c| c.id == "LegacyPerson")
+            .unwrap();
+        assert_eq!(
+            legacy_card.deprecated.as_deref(),
+            Some("use Person instead")
+        );
+        let person_card = data.class_data.iter().find(|c| c.id == "Person").unwrap();
+        assert!(
+            person_card.deprecated.is_none(),
+            "undeprecated class must carry no note"
+        );
+
+        let old_card = data.slot_data.iter().find(|s| s.id == "old_name").unwrap();
+        assert!(
+            old_card.characteristics.iter().any(|c| c == "Deprecated"),
+            "deprecated slot must get a Deprecated badge; got {:?}",
+            old_card.characteristics
+        );
+        assert_eq!(old_card.deprecated.as_deref(), Some("use name instead"));
+        let name_card = data.slot_data.iter().find(|s| s.id == "name").unwrap();
+        assert!(
+            !name_card.characteristics.iter().any(|c| c == "Deprecated"),
+            "undeprecated slot must not get a Deprecated badge"
         );
     }
 

@@ -1,7 +1,7 @@
 <article class="entity-card class-card" id="class-{{ id }}">
     <header class="entity-header">
         <div class="entity-badge class-badge">Class</div>
-        <h3 class="entity-title">{{ label }}{% if is_abstract %} <span class="abstract-badge" title="Abstract class: not meant to be instantiated directly">abstract</span>{% endif %}</h3>
+        <h3 class="entity-title">{{ label }}{% if is_abstract %} <span class="abstract-badge" title="Abstract class: not meant to be instantiated directly">abstract</span>{% endif %}{% if let Some(note) = deprecated %} <span class="deprecated-badge" title="{{ note }}">Deprecated</span>{% endif %}</h3>
         <button class="copy-btn" data-copy="{% match iri_href %}{% when Some with (href) %}{{ href }}{% when None %}{{ iri }}{% endmatch %}" title="Copy IRI">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
@@ -21,6 +21,10 @@
 {%- if let Some(desc) = description %}
 
     <div class="entity-description">{{ desc|safe }}</div>
+{%- endif %}
+{%- if let Some(note) = deprecated %}
+
+    <div class="deprecated-note"><strong>Deprecated.</strong> {{ note }}</div>
 {%- endif %}
 
     <div class="entity-details">
@@ -210,6 +214,34 @@
         background-color: var(--color-bg-tertiary);
         border-radius: var(--radius-sm);
         vertical-align: middle;
+    }
+
+    /* "Deprecated" badge next to the card title — a warning accent so a
+       sunset element reads as sunset at a glance, distinct from the muted
+       "abstract" tag. */
+    .deprecated-badge {
+        margin-left: var(--space-2);
+        padding: 2px var(--space-2);
+        font-size: var(--text-xs);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--color-warning, #b45309);
+        background-color: color-mix(in srgb, var(--color-warning, #b45309) 15%, transparent);
+        border-radius: var(--radius-sm);
+        vertical-align: middle;
+    }
+
+    /* The deprecation note: the migration guidance shown under the
+       description so readers see what to use instead. */
+    .deprecated-note {
+        margin: 0 0 var(--space-4) 0;
+        padding: var(--space-2) var(--space-3);
+        font-size: var(--text-sm);
+        color: var(--color-text);
+        background-color: color-mix(in srgb, var(--color-warning, #b45309) 8%, transparent);
+        border-left: 3px solid var(--color-warning, #b45309);
+        border-radius: var(--radius-sm);
     }
 
     .entity-iri {

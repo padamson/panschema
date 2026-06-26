@@ -248,6 +248,7 @@ pub struct ClassCardComponent<'a> {
     pub mappings: &'a [panschema::html_writer::Mapping],
     pub external_superclasses: &'a [panschema::html_writer::ExternalLink],
     pub is_abstract: bool,
+    pub deprecated: Option<&'a str>,
 }
 
 /// Property card component template.
@@ -267,6 +268,7 @@ pub struct SlotCardComponent<'a> {
     pub pattern: Option<&'a str>,
     pub characteristics: &'a [String],
     pub mappings: &'a [panschema::html_writer::Mapping],
+    pub deprecated: Option<&'a str>,
 }
 
 /// Individual card component template.
@@ -289,6 +291,7 @@ pub struct EnumCardComponent<'a> {
     pub label: &'a str,
     pub description: Option<&'a str>,
     pub permissible_values: &'a [panschema::html_writer::PermissibleValueData],
+    pub deprecated: Option<&'a str>,
 }
 
 /// Type card component template.
@@ -301,6 +304,7 @@ pub struct TypeCardComponent<'a> {
     pub description: Option<&'a str>,
     pub base_type: Option<&'a EntityRef>,
     pub pattern: Option<&'a str>,
+    pub deprecated: Option<&'a str>,
 }
 
 /// Sample class data for styleguide previews.
@@ -317,6 +321,7 @@ pub struct SampleClass<'a> {
     pub mappings: &'a [panschema::html_writer::Mapping],
     pub external_superclasses: &'a [panschema::html_writer::ExternalLink],
     pub is_abstract: bool,
+    pub deprecated: Option<&'a str>,
 }
 
 /// Sample property data for styleguide previews.
@@ -334,6 +339,7 @@ pub struct SampleSlot<'a> {
     pub pattern: Option<&'a str>,
     pub characteristics: &'a [String],
     pub mappings: &'a [panschema::html_writer::Mapping],
+    pub deprecated: Option<&'a str>,
 }
 
 /// Sample individual data for styleguide previews.
@@ -488,6 +494,7 @@ impl ComponentRenderer {
             mappings: &[],
             external_superclasses: &[],
             is_abstract: false,
+            deprecated: None,
         };
         Ok(template.render()?)
     }
@@ -517,6 +524,7 @@ impl ComponentRenderer {
             pattern: None,
             characteristics,
             mappings: &[],
+            deprecated: None,
         };
         Ok(template.render()?)
     }
@@ -554,6 +562,7 @@ impl ComponentRenderer {
             label,
             description,
             permissible_values,
+            deprecated: None,
         };
         Ok(template.render()?)
     }
@@ -574,6 +583,7 @@ impl ComponentRenderer {
             description,
             base_type,
             pattern,
+            deprecated: None,
         };
         Ok(template.render()?)
     }
@@ -652,6 +662,7 @@ impl ComponentRenderer {
             mappings: &class_mappings,
             external_superclasses: &[],
             is_abstract: false,
+            deprecated: None,
         };
 
         let domain = EntityRef::new("person", "Person");
@@ -672,6 +683,7 @@ impl ComponentRenderer {
             pattern: None,
             characteristics: &characteristics,
             mappings: &slot_mappings,
+            deprecated: None,
         };
 
         let domain2 = EntityRef::new("person", "Person");
@@ -691,6 +703,7 @@ impl ComponentRenderer {
             pattern: Some("^[A-Z][a-z]+$"),
             characteristics: &empty_characteristics,
             mappings: &slot_mappings,
+            deprecated: None,
         };
 
         let ind_types = vec![EntityRef::new("person", "Person")];
@@ -965,6 +978,7 @@ mod tests {
                 mappings: &[],
                 external_superclasses: &[],
                 is_abstract: true,
+                deprecated: None,
             };
             let html = template.render().unwrap();
             assert!(
@@ -972,6 +986,53 @@ mod tests {
                 "abstract badge should be present when is_abstract = true"
             );
             insta::assert_snapshot!(html);
+        }
+
+        #[test]
+        fn class_card_renders_deprecated_badge_and_note() {
+            // A class marked `deprecated:` renders a "Deprecated" badge in
+            // the heading and the deprecation note on the card; an
+            // undeprecated class renders neither.
+            let deprecated = ClassCardComponent {
+                id: "legacy",
+                label: "LegacyPerson",
+                iri: "https://example.org/ontology#LegacyPerson",
+                iri_href: None,
+                description: None,
+                superclass: None,
+                subclasses: &[],
+                mixins: &[],
+                slots: &[],
+                mappings: &[],
+                external_superclasses: &[],
+                is_abstract: false,
+                deprecated: Some("use Person instead"),
+            };
+            let html = deprecated.render().unwrap();
+            assert!(
+                html.contains(r#"<span class="deprecated-badge""#),
+                "deprecated badge should be present; got:\n{html}"
+            );
+            assert!(
+                html.contains("use Person instead"),
+                "deprecation note text should render; got:\n{html}"
+            );
+
+            let current = ClassCardComponent {
+                deprecated: None,
+                ..deprecated
+            };
+            let html = current.render().unwrap();
+            // The `.deprecated-badge` CSS rule is always in the card's
+            // <style> block; the badge itself is the `<span>` markup.
+            assert!(
+                !html.contains(r#"<span class="deprecated-badge""#),
+                "undeprecated class must render no badge; got:\n{html}"
+            );
+            assert!(
+                !html.contains(r#"<div class="deprecated-note""#),
+                "undeprecated class must render no note; got:\n{html}"
+            );
         }
 
         #[test]

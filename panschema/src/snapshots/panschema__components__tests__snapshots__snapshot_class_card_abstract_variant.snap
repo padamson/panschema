@@ -115,6 +115,34 @@ expression: html
         vertical-align: middle;
     }
 
+    /* "Deprecated" badge next to the card title — a warning accent so a
+       sunset element reads as sunset at a glance, distinct from the muted
+       "abstract" tag. */
+    .deprecated-badge {
+        margin-left: var(--space-2);
+        padding: 2px var(--space-2);
+        font-size: var(--text-xs);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--color-warning, #b45309);
+        background-color: color-mix(in srgb, var(--color-warning, #b45309) 15%, transparent);
+        border-radius: var(--radius-sm);
+        vertical-align: middle;
+    }
+
+    /* The deprecation note: the migration guidance shown under the
+       description so readers see what to use instead. */
+    .deprecated-note {
+        margin: 0 0 var(--space-4) 0;
+        padding: var(--space-2) var(--space-3);
+        font-size: var(--text-sm);
+        color: var(--color-text);
+        background-color: color-mix(in srgb, var(--color-warning, #b45309) 8%, transparent);
+        border-left: 3px solid var(--color-warning, #b45309);
+        border-radius: var(--radius-sm);
+    }
+
     .entity-iri {
         margin-bottom: var(--space-4);
     }
