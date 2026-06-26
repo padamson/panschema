@@ -76,7 +76,7 @@ and round-trip to RDF, so synonyms and cross-references are discoverable.
 
 ### Slice 3: `examples`
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Should Have
 
@@ -84,8 +84,8 @@ and round-trip to RDF, so synonyms and cross-references are discoverable.
 valid value looks like.
 
 **Acceptance Criteria:**
-- [ ] New `Example { value: String, description: Option<String> }`; structs gain `examples: Vec<Example>`, auto-parsed (LinkML `examples` is a list of structured `example` objects).
-- [ ] The card renders an "Examples" section listing each value with its optional description (`slot_card_shows_examples`).
+- [x] New `Example { value: String, description: Option<String> }`; structs gain `examples: Vec<Example>`, auto-parsed (LinkML `examples` is a list of structured `example` objects) (`class_definition_deserializes_examples`).
+- [x] The card renders an "Examples" section listing each value with its optional description (`slot_card_shows_examples`, `class_card_renders_examples_section`).
 
 **Notes:**
 - RDF has no standard predicate for `examples`; RDF emission is out of scope.
@@ -117,7 +117,7 @@ documentation completeness.
 |-------|----------|------------|--------|
 | Slice 1: `deprecated` | Should Have | None | Complete |
 | Slice 2: `aliases` + `see_also` | Should Have | None | Complete |
-| Slice 3: `examples` | Should Have | None | Not Started |
+| Slice 3: `examples` | Should Have | None | Complete |
 | Slice 4: `comments` + `notes` | Could Have | None | Not Started |
 
 ---

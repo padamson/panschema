@@ -106,6 +106,18 @@
             </dd>
         </div>
 {%- endif %}
+{%- if !examples.is_empty() %}
+        <div class="detail-row">
+            <dt>Examples</dt>
+            <dd>
+                <ul class="example-list">
+{%- for example in examples %}
+                    <li><code class="mono">{{ example.value }}</code>{% match example.description %}{% when Some with (desc) %} — {{ desc }}{% when None %}{% endmatch %}</li>
+{%- endfor %}
+                </ul>
+            </dd>
+        </div>
+{%- endif %}
 {%- if !slots.is_empty() %}
         <div class="detail-row">
             <dt>Slots</dt>

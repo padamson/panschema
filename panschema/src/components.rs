@@ -251,6 +251,7 @@ pub struct ClassCardComponent<'a> {
     pub deprecated: Option<&'a str>,
     pub aliases: &'a [String],
     pub see_also: &'a [panschema::html_writer::ExternalLink],
+    pub examples: &'a [panschema::linkml::Example],
 }
 
 /// Property card component template.
@@ -273,6 +274,7 @@ pub struct SlotCardComponent<'a> {
     pub deprecated: Option<&'a str>,
     pub aliases: &'a [String],
     pub see_also: &'a [panschema::html_writer::ExternalLink],
+    pub examples: &'a [panschema::linkml::Example],
 }
 
 /// Individual card component template.
@@ -298,6 +300,7 @@ pub struct EnumCardComponent<'a> {
     pub deprecated: Option<&'a str>,
     pub aliases: &'a [String],
     pub see_also: &'a [panschema::html_writer::ExternalLink],
+    pub examples: &'a [panschema::linkml::Example],
 }
 
 /// Type card component template.
@@ -313,6 +316,7 @@ pub struct TypeCardComponent<'a> {
     pub deprecated: Option<&'a str>,
     pub aliases: &'a [String],
     pub see_also: &'a [panschema::html_writer::ExternalLink],
+    pub examples: &'a [panschema::linkml::Example],
 }
 
 /// Sample class data for styleguide previews.
@@ -332,6 +336,7 @@ pub struct SampleClass<'a> {
     pub deprecated: Option<&'a str>,
     pub aliases: &'a [String],
     pub see_also: &'a [panschema::html_writer::ExternalLink],
+    pub examples: &'a [panschema::linkml::Example],
 }
 
 /// Sample property data for styleguide previews.
@@ -352,6 +357,7 @@ pub struct SampleSlot<'a> {
     pub deprecated: Option<&'a str>,
     pub aliases: &'a [String],
     pub see_also: &'a [panschema::html_writer::ExternalLink],
+    pub examples: &'a [panschema::linkml::Example],
 }
 
 /// Sample individual data for styleguide previews.
@@ -509,6 +515,7 @@ impl ComponentRenderer {
             deprecated: None,
             aliases: &[],
             see_also: &[],
+            examples: &[],
         };
         Ok(template.render()?)
     }
@@ -541,6 +548,7 @@ impl ComponentRenderer {
             deprecated: None,
             aliases: &[],
             see_also: &[],
+            examples: &[],
         };
         Ok(template.render()?)
     }
@@ -581,6 +589,7 @@ impl ComponentRenderer {
             deprecated: None,
             aliases: &[],
             see_also: &[],
+            examples: &[],
         };
         Ok(template.render()?)
     }
@@ -604,6 +613,7 @@ impl ComponentRenderer {
             deprecated: None,
             aliases: &[],
             see_also: &[],
+            examples: &[],
         };
         Ok(template.render()?)
     }
@@ -676,6 +686,16 @@ impl ComponentRenderer {
             label: None,
             definitions: Vec::new(),
         }];
+        let class_examples = vec![
+            panschema::linkml::Example {
+                value: "Ada Lovelace".to_string(),
+                description: Some("a person with a full name".to_string()),
+            },
+            panschema::linkml::Example {
+                value: "Anonymous".to_string(),
+                description: None,
+            },
+        ];
         let sample_class = SampleClass {
             id: "person",
             label: "Person",
@@ -692,6 +712,7 @@ impl ComponentRenderer {
             deprecated: None,
             aliases: &class_aliases,
             see_also: &class_see_also,
+            examples: &class_examples,
         };
 
         let domain = EntityRef::new("person", "Person");
@@ -715,11 +736,16 @@ impl ComponentRenderer {
             deprecated: None,
             aliases: &[],
             see_also: &[],
+            examples: &[],
         };
 
         let domain2 = EntityRef::new("person", "Person");
         let range2 = RangeSpec::datatype("xsd:string");
         let empty_characteristics: Vec<String> = vec![];
+        let data_slot_examples = vec![panschema::linkml::Example {
+            value: "Ada Lovelace".to_string(),
+            description: None,
+        }];
 
         let sample_data_slot = SampleSlot {
             id: "name",
@@ -737,6 +763,7 @@ impl ComponentRenderer {
             deprecated: None,
             aliases: &[],
             see_also: &[],
+            examples: &data_slot_examples,
         };
 
         let ind_types = vec![EntityRef::new("person", "Person")];
@@ -1014,6 +1041,7 @@ mod tests {
                 deprecated: None,
                 aliases: &[],
                 see_also: &[],
+                examples: &[],
             };
             let html = template.render().unwrap();
             assert!(
@@ -1044,6 +1072,7 @@ mod tests {
                 deprecated: Some("use Person instead"),
                 aliases: &[],
                 see_also: &[],
+                examples: &[],
             };
             let html = deprecated.render().unwrap();
             assert!(
@@ -1101,6 +1130,7 @@ mod tests {
                 deprecated: None,
                 aliases: &aliases,
                 see_also: &see_also,
+                examples: &[],
             };
             let html = editorial.render().unwrap();
             assert!(
@@ -1133,6 +1163,65 @@ mod tests {
             assert!(
                 !html.contains("<dt>See also</dt>"),
                 "a class with no see_also renders no See also row; got:\n{html}"
+            );
+        }
+
+        #[test]
+        fn class_card_renders_examples_section() {
+            // A class with `examples:` renders an "Examples" section
+            // listing each value, with its description appended when
+            // present and omitted when absent. A class with no examples
+            // renders no such section.
+            let examples = vec![
+                panschema::linkml::Example {
+                    value: "us-east-1".to_string(),
+                    description: Some("an AWS region".to_string()),
+                },
+                panschema::linkml::Example {
+                    value: "eastus".to_string(),
+                    description: None,
+                },
+            ];
+            let with_examples = ClassCardComponent {
+                id: "region",
+                label: "Region",
+                iri: "https://example.org/ontology#Region",
+                iri_href: None,
+                description: None,
+                superclass: None,
+                subclasses: &[],
+                mixins: &[],
+                slots: &[],
+                mappings: &[],
+                external_superclasses: &[],
+                is_abstract: false,
+                deprecated: None,
+                aliases: &[],
+                see_also: &[],
+                examples: &examples,
+            };
+            let html = with_examples.render().unwrap();
+            assert!(
+                html.contains("<dt>Examples</dt>"),
+                "examples section should render; got:\n{html}"
+            );
+            assert!(
+                html.contains("us-east-1") && html.contains("an AWS region"),
+                "an example with a description renders both; got:\n{html}"
+            );
+            assert!(
+                html.contains("eastus"),
+                "an example without a description still renders its value; got:\n{html}"
+            );
+
+            let plain = ClassCardComponent {
+                examples: &[],
+                ..with_examples
+            };
+            let html = plain.render().unwrap();
+            assert!(
+                !html.contains("<dt>Examples</dt>"),
+                "a class with no examples renders no Examples section; got:\n{html}"
             );
         }
 

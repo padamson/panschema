@@ -10,7 +10,7 @@ use askama::Template;
 
 use crate::graph_writer::GraphWriter;
 use crate::io::{IoError, IoResult, Writer};
-use crate::linkml::SchemaDefinition;
+use crate::linkml::{Example, SchemaDefinition};
 
 /// Entity reference for sidebar navigation.
 #[derive(Debug, Clone)]
@@ -60,6 +60,10 @@ pub struct ClassData {
     /// Related-resource references from `see_also:`, CURIE-expanded into
     /// links. Rendered as a "See also" row; empty renders nothing.
     pub see_also: Vec<ExternalLink>,
+    /// Worked examples from `examples:`. Rendered as an "Examples"
+    /// section listing each value with its optional description; empty
+    /// renders nothing.
+    pub examples: Vec<Example>,
 }
 
 /// One pre-order entry in the Classes hierarchy view. The template
@@ -222,6 +226,8 @@ pub struct EnumData {
     pub aliases: Vec<String>,
     /// Related-resource links; see [`ClassData::see_also`].
     pub see_also: Vec<ExternalLink>,
+    /// Worked examples; see [`ClassData::examples`].
+    pub examples: Vec<Example>,
 }
 
 /// Type data for rendering a type card.
@@ -243,6 +249,8 @@ pub struct TypeData {
     pub aliases: Vec<String>,
     /// Related-resource links; see [`ClassData::see_also`].
     pub see_also: Vec<ExternalLink>,
+    /// Worked examples; see [`ClassData::examples`].
+    pub examples: Vec<Example>,
 }
 
 /// A cross-ontology mapping rendered on class / property cards.
@@ -337,6 +345,8 @@ pub struct SlotData {
     pub aliases: Vec<String>,
     /// Related-resource links; see [`ClassData::see_also`].
     pub see_also: Vec<ExternalLink>,
+    /// Worked examples; see [`ClassData::examples`].
+    pub examples: Vec<Example>,
 }
 
 /// A resolved property value for rendering individual cards.
@@ -801,6 +811,7 @@ impl HtmlWriter {
                 deprecated: class_def.deprecated.clone(),
                 aliases: class_def.aliases.clone(),
                 see_also: build_see_also(&class_def.see_also, schema, labels),
+                examples: class_def.examples.clone(),
             });
         }
 
@@ -984,6 +995,7 @@ impl HtmlWriter {
                 deprecated: slot_def.deprecated.clone(),
                 aliases: slot_def.aliases.clone(),
                 see_also: build_see_also(&slot_def.see_also, schema, labels),
+                examples: slot_def.examples.clone(),
             });
         }
 
@@ -1125,6 +1137,7 @@ impl HtmlWriter {
                 deprecated: enum_def.deprecated.clone(),
                 aliases: enum_def.aliases.clone(),
                 see_also: build_see_also(&enum_def.see_also, schema, labels),
+                examples: enum_def.examples.clone(),
             });
         }
 
@@ -1166,6 +1179,7 @@ impl HtmlWriter {
                 deprecated: type_def.deprecated.clone(),
                 aliases: type_def.aliases.clone(),
                 see_also: build_see_also(&type_def.see_also, schema, labels),
+                examples: type_def.examples.clone(),
             });
         }
 
@@ -2671,6 +2685,75 @@ mod tests {
         assert!(
             plain_card.aliases.is_empty() && plain_card.see_also.is_empty(),
             "a slot with neither field renders no aliases/see-also row"
+        );
+    }
+
+    #[test]
+    fn slot_card_shows_examples() {
+        use crate::linkml::{ClassDefinition, Example, SchemaDefinition, SlotDefinition};
+        // A class or slot with `examples:` carries each `value` and its
+        // optional `description` through to the card-data `examples`
+        // list, ready for the "Examples" section. An element with no
+        // examples carries an empty list, so no section renders.
+        let mut schema = SchemaDefinition::new("editorial");
+
+        let mut region = ClassDefinition::new("Region");
+        region.examples = vec![
+            Example {
+                value: "us-east-1".to_string(),
+                description: Some("an AWS region".to_string()),
+            },
+            Example {
+                value: "eastus".to_string(),
+                description: None,
+            },
+        ];
+        schema.classes.insert("Region".to_string(), region);
+        schema
+            .classes
+            .insert("Bare".to_string(), ClassDefinition::new("Bare"));
+
+        let mut code = SlotDefinition::new("region_code");
+        code.examples = vec![Example {
+            value: "eu-west-2".to_string(),
+            description: None,
+        }];
+        schema.slots.insert("region_code".to_string(), code);
+        schema
+            .slots
+            .insert("plain".to_string(), SlotDefinition::new("plain"));
+
+        let data = HtmlWriter::build_template_data(&schema);
+
+        let region_card = data.class_data.iter().find(|c| c.id == "Region").unwrap();
+        assert_eq!(region_card.examples.len(), 2);
+        assert_eq!(region_card.examples[0].value, "us-east-1");
+        assert_eq!(
+            region_card.examples[0].description.as_deref(),
+            Some("an AWS region")
+        );
+        assert_eq!(region_card.examples[1].value, "eastus");
+        assert!(region_card.examples[1].description.is_none());
+
+        let bare_card = data.class_data.iter().find(|c| c.id == "Bare").unwrap();
+        assert!(
+            bare_card.examples.is_empty(),
+            "a class with no examples renders no Examples section"
+        );
+
+        let code_card = data
+            .slot_data
+            .iter()
+            .find(|s| s.id == "region_code")
+            .unwrap();
+        assert_eq!(code_card.examples.len(), 1);
+        assert_eq!(code_card.examples[0].value, "eu-west-2");
+        assert!(code_card.examples[0].description.is_none());
+
+        let plain_card = data.slot_data.iter().find(|s| s.id == "plain").unwrap();
+        assert!(
+            plain_card.examples.is_empty(),
+            "a slot with no examples renders no Examples section"
         );
     }
 

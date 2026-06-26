@@ -365,6 +365,7 @@
                     {%- let deprecated = sample_class.deprecated %}
                     {%- let aliases = sample_class.aliases %}
                     {%- let see_also = sample_class.see_also %}
+                    {%- let examples = sample_class.examples %}
                     {% include "components/class_card.html" %}
                 </div>
             </div>
@@ -395,6 +396,7 @@
                     {%- let deprecated = sample_slot.deprecated %}
                     {%- let aliases = sample_slot.aliases %}
                     {%- let see_also = sample_slot.see_also %}
+                    {%- let examples = sample_slot.examples %}
                     {% include "components/slot_card.html" %}
                 </div>
             </div>
@@ -416,6 +418,7 @@
                     {%- let deprecated = sample_data_slot.deprecated %}
                     {%- let aliases = sample_data_slot.aliases %}
                     {%- let see_also = sample_data_slot.see_also %}
+                    {%- let examples = sample_data_slot.examples %}
                     {% include "components/slot_card.html" %}
                 </div>
             </div>

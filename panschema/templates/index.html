@@ -62,6 +62,7 @@
         {%- let deprecated = class.deprecated.as_deref() %}
         {%- let aliases = class.aliases.as_slice() %}
         {%- let see_also = class.see_also.as_slice() %}
+        {%- let examples = class.examples.as_slice() %}
         {% include "components/class_card.html" %}
         {%- if entry.has_children %}
         <ul class="class-tree-children">
@@ -132,6 +133,7 @@
         {%- let deprecated = slot.deprecated.as_deref() %}
         {%- let aliases = slot.aliases.as_slice() %}
         {%- let see_also = slot.see_also.as_slice() %}
+        {%- let examples = slot.examples.as_slice() %}
         {% include "components/slot_card.html" %}
 {%- endfor %}
     </div>
@@ -159,6 +161,7 @@
         {%- let deprecated = en.deprecated.as_deref() %}
         {%- let aliases = en.aliases.as_slice() %}
         {%- let see_also = en.see_also.as_slice() %}
+        {%- let examples = en.examples.as_slice() %}
         {% include "components/enum_card.html" %}
 {%- endfor %}
     </div>
@@ -188,6 +191,7 @@
         {%- let deprecated = ty.deprecated.as_deref() %}
         {%- let aliases = ty.aliases.as_slice() %}
         {%- let see_also = ty.see_also.as_slice() %}
+        {%- let examples = ty.examples.as_slice() %}
         {% include "components/type_card.html" %}
 {%- endfor %}
     </div>

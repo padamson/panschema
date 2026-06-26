@@ -57,6 +57,20 @@ impl Contributor {
     }
 }
 
+/// A worked example value for an element.
+///
+/// Corresponds to one entry in LinkML's `examples` metaslot (a list of
+/// structured `example` objects). Rendered as an item in the card's
+/// "Examples" section.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Example {
+    /// The example value, shown verbatim.
+    pub value: String,
+    /// Optional explanation of what the value illustrates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
 /// Root container for a LinkML schema
 ///
 /// Corresponds to LinkML SchemaDefinition.
@@ -89,6 +103,11 @@ pub struct SchemaDefinition {
     /// `rdfs:seeAlso` per entry on the element IRI.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub see_also: Vec<String>,
+    /// Worked examples for the element. Rendered as an "Examples"
+    /// section on the card; LinkML `examples` has no standard RDF
+    /// predicate, so it is not emitted to RDF.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub examples: Vec<Example>,
     /// Schema version
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
@@ -144,6 +163,7 @@ impl SchemaDefinition {
             deprecated: None,
             aliases: Vec::new(),
             see_also: Vec::new(),
+            examples: Vec::new(),
             version: None,
             license: None,
             contributors: Vec::new(),
@@ -190,6 +210,9 @@ pub struct ClassDefinition {
     /// Related-resource references; see [`SchemaDefinition::see_also`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub see_also: Vec<String>,
+    /// Worked examples; see [`SchemaDefinition::examples`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub examples: Vec<Example>,
     /// Primary parent class (single inheritance)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_a: Option<String>,
@@ -244,6 +267,7 @@ impl ClassDefinition {
             deprecated: None,
             aliases: Vec::new(),
             see_also: Vec::new(),
+            examples: Vec::new(),
             is_a: None,
             mixins: Vec::new(),
             r#abstract: false,
@@ -289,6 +313,9 @@ pub struct SlotDefinition {
     /// Related-resource references; see [`SchemaDefinition::see_also`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub see_also: Vec<String>,
+    /// Worked examples; see [`SchemaDefinition::examples`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub examples: Vec<Example>,
     /// The type of values this slot holds (class name, type name, or enum name)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub range: Option<String>,
@@ -374,6 +401,7 @@ impl SlotDefinition {
             deprecated: None,
             aliases: Vec::new(),
             see_also: Vec::new(),
+            examples: Vec::new(),
             range: None,
             domain: None,
             required: false,
@@ -429,6 +457,9 @@ pub struct EnumDefinition {
     /// Related-resource references; see [`SchemaDefinition::see_also`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub see_also: Vec<String>,
+    /// Worked examples; see [`SchemaDefinition::examples`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub examples: Vec<Example>,
     /// The allowed values for this enum
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub permissible_values: BTreeMap<String, PermissibleValue>,
@@ -446,6 +477,7 @@ impl EnumDefinition {
             deprecated: None,
             aliases: Vec::new(),
             see_also: Vec::new(),
+            examples: Vec::new(),
             permissible_values: BTreeMap::new(),
             annotations: BTreeMap::new(),
         }
@@ -500,6 +532,9 @@ pub struct TypeDefinition {
     /// Related-resource references; see [`SchemaDefinition::see_also`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub see_also: Vec<String>,
+    /// Worked examples; see [`SchemaDefinition::examples`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub examples: Vec<Example>,
     /// Parent type (for type inheritance)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub typeof_: Option<String>,
@@ -523,6 +558,7 @@ impl TypeDefinition {
             deprecated: None,
             aliases: Vec::new(),
             see_also: Vec::new(),
+            examples: Vec::new(),
             typeof_: None,
             uri: None,
             pattern: None,
@@ -852,6 +888,39 @@ see_also:
         let bare_out = serde_yaml::to_string(&bare).unwrap();
         assert!(!bare_out.contains("aliases:"), "got:\n{bare_out}");
         assert!(!bare_out.contains("see_also:"), "got:\n{bare_out}");
+    }
+
+    #[test]
+    fn class_definition_deserializes_examples() {
+        // The `examples` common-metadata list parses from LinkML YAML
+        // into `Vec<Example>`. Each entry carries a `value` and an
+        // optional `description`; an entry with no `description` parses
+        // to `None`. The list is empty when unset, and an empty list is
+        // skipped on serialization.
+        let yaml = "
+name: Region
+examples:
+  - value: us-east-1
+    description: an AWS region
+  - value: eastus
+";
+        let class: ClassDefinition = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(class.examples.len(), 2);
+        assert_eq!(class.examples[0].value, "us-east-1");
+        assert_eq!(
+            class.examples[0].description.as_deref(),
+            Some("an AWS region")
+        );
+        assert_eq!(class.examples[1].value, "eastus");
+        assert!(class.examples[1].description.is_none());
+
+        let bare: ClassDefinition = serde_yaml::from_str("name: Region").unwrap();
+        assert!(bare.examples.is_empty());
+
+        let out = serde_yaml::to_string(&class).unwrap();
+        assert!(out.contains("examples:"), "got:\n{out}");
+        let bare_out = serde_yaml::to_string(&bare).unwrap();
+        assert!(!bare_out.contains("examples:"), "got:\n{bare_out}");
     }
 
     #[test]
