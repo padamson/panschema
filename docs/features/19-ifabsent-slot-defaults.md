@@ -38,7 +38,7 @@ default. Start with the forms slp needs (enum + scalars); defer the long tail.
 
 ### Slice 1: `ifabsent` in the IR + enum-valued default in Rust codegen
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Should Have
 
@@ -47,9 +47,9 @@ generates a field that deserializes to that enum variant when absent — the slp
 `status` → `planned` case.
 
 **Acceptance Criteria:**
-- [ ] `SlotDefinition` gains `ifabsent: Option<String>`, `#[serde(default, skip_serializing_if = "Option::is_none")]`, auto-parsed from YAML (`slot_definition_deserializes_ifabsent`).
-- [ ] For a non-multivalued slot whose `range` is an enum and whose `ifabsent` parses as `<EnumName>(<permissible_value>)`, the Rust writer emits the field as the bare enum type (not `Option`) with `#[serde(default = "<fn>")]`, and a generated default fn returning the matching variant (resolved via `variant_ident_for`) (`render_class_emits_ifabsent_enum_default`).
-- [ ] An `ifabsent` whose enum/variant doesn't resolve falls back to the existing `Option<T>` rendering with a `// WARNING:` comment (consistent with the writer's other unresolved-reference handling), rather than emitting a broken default.
+- [x] `SlotDefinition` gains `ifabsent: Option<String>`, `#[serde(default, skip_serializing_if = "Option::is_none")]`, auto-parsed from YAML (`slot_definition_deserializes_ifabsent`).
+- [x] For a non-multivalued slot whose `range` is an enum and whose `ifabsent` parses as `<EnumName>(<permissible_value>)`, the Rust writer emits the field as the bare enum type (not `Option`) with `#[serde(default = "<fn>")]`, and a generated default fn returning the matching variant (resolved via `variant_ident_for`) (`render_class_emits_ifabsent_enum_default`).
+- [x] An `ifabsent` whose enum/variant doesn't resolve falls back to the existing `Option<T>` rendering with a `// WARNING:` comment (consistent with the writer's other unresolved-reference handling), rather than emitting a broken default.
 
 **Notes:**
 - A defaulted slot always has a value, so the non-`Option` field is the faithful shape. This interacts with the required/optional logic — keep the change localized to "non-multivalued + resolvable `ifabsent`."
@@ -116,7 +116,7 @@ default list falls here. Pick any of these up when a consumer actually needs it.
 
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
-| Slice 1: IR + enum default (codegen) | Should Have | Feature 06 | Not Started |
+| Slice 1: IR + enum default (codegen) | Should Have | Feature 06 | Complete |
 | Slice 2: Scalar defaults (codegen) | Should Have | Slice 1 | Not Started |
 | Slice 3: Default on slot card (HTML) | Should Have | Slice 1 (IR field) | Not Started |
 | Slice 4: Long-tail forms (rare) | Could Have | Slice 1 | 📋 Deferred |

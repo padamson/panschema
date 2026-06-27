@@ -322,6 +322,12 @@ pub struct SlotDefinition {
     /// The class that owns this slot (domain)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub domain: Option<String>,
+    /// Default value applied when the slot is absent (LinkML `ifabsent`).
+    /// Carries a LinkML `ifabsent` expression verbatim (e.g.
+    /// `"ItemStatus(planned)"`); consumers parse the form. Absent when
+    /// unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ifabsent: Option<String>,
     /// Whether this slot must be present
     #[serde(default, skip_serializing_if = "is_false")]
     pub required: bool,
@@ -404,6 +410,7 @@ impl SlotDefinition {
             examples: Vec::new(),
             range: None,
             domain: None,
+            ifabsent: None,
             required: false,
             multivalued: false,
             minimum_cardinality: None,
@@ -1044,6 +1051,30 @@ maximum_value: 1.0
 
         let bare: SlotDefinition = serde_yaml::from_str("name: x").unwrap();
         assert!(bare.minimum_value.is_none() && bare.maximum_value.is_none());
+    }
+
+    #[test]
+    fn slot_definition_deserializes_ifabsent() {
+        // `ifabsent` parses from LinkML YAML into its `Option<String>`
+        // field, carrying the expression verbatim, and is absent when
+        // unset. The Rust codegen parses the form to emit a default; the
+        // IR stores it unchanged.
+        let yaml = "
+name: status
+range: ItemStatus
+ifabsent: ItemStatus(planned)
+";
+        let slot: SlotDefinition = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(slot.ifabsent.as_deref(), Some("ItemStatus(planned)"));
+
+        let bare: SlotDefinition = serde_yaml::from_str("name: x").unwrap();
+        assert!(bare.ifabsent.is_none());
+
+        // Set values serialize; unset ones are skipped.
+        let out = serde_yaml::to_string(&slot).unwrap();
+        assert!(out.contains("ifabsent: ItemStatus(planned)"), "got:\n{out}");
+        let bare_out = serde_yaml::to_string(&bare).unwrap();
+        assert!(!bare_out.contains("ifabsent:"), "got:\n{bare_out}");
     }
 
     // ========== EnumDefinition Tests ==========
