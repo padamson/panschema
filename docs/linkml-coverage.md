@@ -100,7 +100,7 @@ focused subset of the structural ones.
 
 | Metaslot | IR | HTML | Graph | RDF | Rust | Notes |
 |---|:--:|:--:|:--:|:--:|:--:|---|
-| `name` | ● | ● | ● | ● | ● | field name (snake_case) in codegen |
+| `name` | ● | ● | ● | ● | ● | field name (snake_case) in codegen; Rust keyword names emitted as raw identifiers |
 | `description` | ● | ● | ● | ● | ● | |
 | `range` | ● | ● | ● | ● | ● | "Range" row; edge; `rdfs:range`; field type |
 | `domain` | ● | ◐ | ● | ● | ○ | HTML infers from class membership; `rdfs:domain`; Rust uses class-side `slots:` |
@@ -129,7 +129,7 @@ renders an enum card per enum; the graph hover reuses it.
 |---|:--:|:--:|:--:|:--:|:--:|---|
 | `EnumDefinition.name` | ● | ● | ● | ✗ | ● | `#enum-` card; node; Rust enum |
 | `EnumDefinition.description` | ● | ● | ● | ✗ | ● | card; tooltip; doc-comment |
-| `permissible_values` | ● | ● | ● | ✗ | ● | card list; graph hover; Rust variants. No RDF representation |
+| `permissible_values` | ● | ● | ● | ✗ | ● | card list; graph hover; Rust variants (keyword names → raw identifiers). No RDF representation |
 | `PermissibleValue.text` | ● | ● | ● | ✗ | ● | card; variant ident |
 | `PermissibleValue.description` | ● | ● | ● | ✗ | ● | |
 | `PermissibleValue.meaning` | ● | ● | ● | ✗ | ○ | CURIE-expanded hyperlink on the card + graph; Rust ignores |

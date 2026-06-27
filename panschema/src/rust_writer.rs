@@ -377,13 +377,16 @@ fn render_enum<W: Write>(out: &mut W, name: &str, def: &EnumDefinition) -> fmt::
             &value.text
         };
         render_doc_comment(out, "    ", value.description.as_deref())?;
-        let variant_ident = variant_ident_for(text);
-        if variant_ident == *text {
-            writeln!(out, "    {variant_ident},")?;
-        } else {
+        let sanitized = variant_ident_for(text);
+        let variant_ident = raw_if_keyword(&sanitized);
+        // A rename is needed when sanitizing changed the text OR when the
+        // ident had to be keyword-escaped, so the wire format keeps the
+        // original permissible value.
+        let needs_rename = sanitized != *text || variant_ident != sanitized;
+        if needs_rename {
             writeln!(out, "    #[serde(rename = \"{}\")]", escape_str(text))?;
-            writeln!(out, "    {variant_ident},")?;
         }
+        writeln!(out, "    {variant_ident},")?;
     }
     out.write_str("}\n\n")
 }
@@ -464,7 +467,8 @@ fn render_class<W: Write>(
     writeln!(out, "pub struct {name} {{")?;
 
     for (slot_name, slot) in &resolved {
-        let rust_field = snake_case(slot_name);
+        let snake = snake_case(slot_name);
+        let rust_field = raw_if_keyword(&snake);
         let rust_type = field_type_for(name, slot_name, slot, schema, roles, any_of_enums);
         render_doc_comment(out, "    ", slot.description.as_deref())?;
         if let Some(origin) = resolved_p[slot_name].provenance.origin_label(name) {
@@ -472,7 +476,9 @@ fn render_class<W: Write>(
         }
 
         let mut serde_attrs: Vec<String> = Vec::new();
-        if rust_field != *slot_name {
+        // Rename when snake_case changed the name OR the ident had to be
+        // keyword-escaped, so the wire format keeps the original slot name.
+        if snake != *slot_name || rust_field != snake {
             serde_attrs.push(format!("rename = \"{}\"", escape_str(slot_name)));
         }
         if !slot.required && !slot.multivalued {
@@ -553,7 +559,7 @@ fn render_constructor<W: Write>(
         .filter(|(_, slot)| slot.required && !slot.multivalued)
         .map(|(slot_name, slot)| {
             (
-                snake_case(slot_name),
+                raw_if_keyword(&snake_case(slot_name)).into_owned(),
                 field_type_for(name, slot_name, slot, schema, roles, any_of_enums),
             )
         })
@@ -568,7 +574,8 @@ fn render_constructor<W: Write>(
     writeln!(out, "    pub fn new({param_list}) -> Self {{")?;
     writeln!(out, "        Self {{")?;
     for (slot_name, slot) in resolved {
-        let field = snake_case(slot_name);
+        let snake = snake_case(slot_name);
+        let field = raw_if_keyword(&snake);
         if slot.multivalued {
             writeln!(out, "            {field}: Vec::new(),")?;
         } else if slot.required {
@@ -995,6 +1002,44 @@ fn escape_str(s: &str) -> std::borrow::Cow<'_, str> {
 /// `_` if the result starts with a digit. If the input is already a
 /// valid identifier, returns it unchanged so the serde `rename`
 /// attribute can be skipped.
+/// Set of Rust reserved words — strict keywords plus reserved keywords
+/// across the 2015/2018/2021 editions. Names landing on any of these
+/// cannot be used as bare identifiers in generated code.
+const RUST_KEYWORDS: &[&str] = &[
+    // Strict keywords (2015 + 2018).
+    "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
+    "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub",
+    "ref", "return", "self", "Self", "static", "struct", "super", "trait", "true", "type",
+    "unsafe", "use", "where", "while",
+    // Reserved keywords (not yet used, but illegal as bare idents).
+    "abstract", "become", "box", "do", "final", "gen", "macro", "override", "priv", "try", "typeof",
+    "unsized", "virtual", "yield",
+];
+
+/// Reserved words that cannot be expressed as raw identifiers
+/// (`r#crate`, `r#self`, etc. are themselves illegal). For these we fall
+/// back to a trailing-underscore mangle so the generated ident is valid.
+const NON_RAW_KEYWORDS: &[&str] = &["crate", "self", "Self", "super", "_"];
+
+/// Escape an identifier that collides with a Rust reserved word so it is
+/// usable in generated code. Most keywords become raw identifiers
+/// (`type` → `r#type`); the handful that are illegal even as raw
+/// identifiers (`crate`, `self`, `Self`, `super`, `_`) are mangled with a
+/// trailing underscore (`self` → `self_`). Non-keyword idents pass
+/// through unchanged. Callers that escape an ident must also emit a
+/// `#[serde(rename = "<original>")]` so the wire format keeps the
+/// original LinkML name (required for the mangled cases; harmless but
+/// explicit for raw idents, which serde unraws automatically).
+fn raw_if_keyword(ident: &str) -> std::borrow::Cow<'_, str> {
+    if NON_RAW_KEYWORDS.contains(&ident) {
+        std::borrow::Cow::Owned(format!("{ident}_"))
+    } else if RUST_KEYWORDS.contains(&ident) {
+        std::borrow::Cow::Owned(format!("r#{ident}"))
+    } else {
+        std::borrow::Cow::Borrowed(ident)
+    }
+}
+
 fn variant_ident_for(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
@@ -1651,6 +1696,31 @@ mod tests {
     }
 
     #[test]
+    fn render_enum_escapes_reserved_keyword_variant() {
+        // A permissible value that is a Rust reserved word (`virtual`)
+        // must be emitted as a raw identifier (`r#virtual`) with a serde
+        // rename preserving the original wire text, never as a bare
+        // `virtual,` which would not compile.
+        let mut def = EnumDefinition::new("ItemStatus");
+        def.permissible_values
+            .insert("virtual".to_string(), PermissibleValue::new("virtual"));
+        let mut out = String::new();
+        render_enum(&mut out, "ItemStatus", &def).unwrap();
+        assert!(
+            out.contains("r#virtual,"),
+            "reserved keyword variant must be a raw ident; got: {out}"
+        );
+        assert!(
+            out.contains(r#"rename = "virtual""#),
+            "escaped variant must keep wire text via serde rename; got: {out}"
+        );
+        assert!(
+            !out.contains("    virtual,"),
+            "must not emit a bare reserved-keyword variant; got: {out}"
+        );
+    }
+
+    #[test]
     fn render_enum_marks_non_exhaustive() {
         let mut def = EnumDefinition::new("Color");
         def.permissible_values
@@ -1967,6 +2037,125 @@ mod tests {
         assert!(
             !label_block.contains("#[serde("),
             "required + same-name field should emit no #[serde] attrs; got block:\n{label_block}"
+        );
+    }
+
+    #[test]
+    fn render_class_escapes_reserved_keyword_field() {
+        // A slot named `type` collides with a Rust keyword. The struct
+        // field must be a raw identifier (`r#type`) with a serde rename
+        // keeping the wire name, and never a bare `pub type:`.
+        let mut def = ClassDefinition::new("Item");
+        let mut slot = SlotDefinition::new("type");
+        slot.range = Some("string".to_string());
+        slot.required = true;
+        def.attributes.insert("type".to_string(), slot);
+
+        let schema = SchemaDefinition::new("s");
+        let roles = compute_class_roles(&schema);
+        let mut any_of_enums = BTreeMap::new();
+        let mut out = String::new();
+        render_class(
+            &mut out,
+            "Item",
+            &def,
+            &schema,
+            &roles,
+            &BTreeMap::new(),
+            &mut any_of_enums,
+        )
+        .unwrap();
+        assert!(
+            out.contains("pub r#type: String,"),
+            "reserved keyword field must be a raw ident; got: {out}"
+        );
+        assert!(
+            out.contains(r#"rename = "type""#),
+            "escaped field must keep wire name via serde rename; got: {out}"
+        );
+        assert!(
+            !out.contains("pub type:"),
+            "must not emit a bare reserved-keyword field; got: {out}"
+        );
+    }
+
+    #[test]
+    fn render_constructor_escapes_reserved_keyword_field() {
+        // For a required slot named `move` (a Rust keyword), the
+        // constructor's parameter and the `Self { .. }` init must both
+        // use the same raw identifier so the generated code compiles.
+        let mut def = ClassDefinition::new("Action");
+        let mut slot = SlotDefinition::new("move");
+        slot.range = Some("string".to_string());
+        slot.required = true;
+        def.attributes.insert("move".to_string(), slot);
+
+        let schema = SchemaDefinition::new("s");
+        let roles = compute_class_roles(&schema);
+        let mut any_of_enums = BTreeMap::new();
+        let mut out = String::new();
+        render_constructor(
+            &mut out,
+            "Action",
+            &def.attributes
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            &schema,
+            &roles,
+            &mut any_of_enums,
+        )
+        .unwrap();
+        assert!(
+            out.contains("pub fn new(r#move: String) -> Self"),
+            "constructor param must be a raw ident; got: {out}"
+        );
+        assert!(
+            out.contains("r#move,"),
+            "Self init must use the same raw ident as the param; got: {out}"
+        );
+        assert!(
+            !out.contains("(move:") && !out.contains("            move,"),
+            "must not emit a bare reserved-keyword ident; got: {out}"
+        );
+    }
+
+    #[test]
+    fn render_class_mangles_non_raw_keyword_field() {
+        // `self` cannot be a raw identifier, so a slot named `self` is
+        // mangled to `self_` and the serde rename (required here) keeps
+        // the wire name. The output must be valid Rust.
+        let mut def = ClassDefinition::new("Node");
+        let mut slot = SlotDefinition::new("self");
+        slot.range = Some("string".to_string());
+        slot.required = true;
+        def.attributes.insert("self".to_string(), slot);
+
+        let schema = SchemaDefinition::new("s");
+        let roles = compute_class_roles(&schema);
+        let mut any_of_enums = BTreeMap::new();
+        let mut out = String::new();
+        render_class(
+            &mut out,
+            "Node",
+            &def,
+            &schema,
+            &roles,
+            &BTreeMap::new(),
+            &mut any_of_enums,
+        )
+        .unwrap();
+        assert!(
+            out.contains("pub self_: String,"),
+            "non-raw keyword field must be underscore-mangled; got: {out}"
+        );
+        assert!(
+            out.contains(r#"rename = "self""#),
+            "mangled field requires serde rename to keep wire name; got: {out}"
+        );
+        assert!(
+            !out.contains("r#self"),
+            "`self` is illegal as a raw ident and must not be emitted; got: {out}"
         );
     }
 
