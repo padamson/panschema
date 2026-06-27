@@ -2,6 +2,7 @@
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 
 # Ontology metadata
@@ -28,7 +29,15 @@
 :Cat a owl:Class ;
     rdfs:subClassOf :Mammal ;
     rdfs:label "Cat" ;
-    rdfs:comment "A small domesticated carnivorous mammal." .
+    rdfs:comment "A small domesticated carnivorous mammal." ;
+    skos:closeMatch <http://dbpedia.org/resource/Cat> .
+
+# Deprecated class, kept for back-compatibility documentation.
+:Pet a owl:Class ;
+    rdfs:subClassOf :Animal ;
+    rdfs:label "Pet" ;
+    rdfs:comment "A domesticated animal kept for companionship." ;
+    owl:deprecated true .
 
 # Object Properties
 :hasOwner a owl:ObjectProperty ;
@@ -40,7 +49,14 @@
 :owns a owl:ObjectProperty ;
     rdfs:label "owns" ;
     rdfs:comment "Relates a person to an animal they own." ;
-    owl:inverseOf :hasOwner .
+    owl:inverseOf :hasOwner ;
+    skos:exactMatch <http://purl.org/dc/terms/relation> .
+
+:relatedTo a owl:ObjectProperty , owl:SymmetricProperty , owl:TransitiveProperty ;
+    rdfs:label "related to" ;
+    rdfs:comment "Relates an animal to another animal it is related to." ;
+    rdfs:domain :Animal ;
+    rdfs:range :Animal .
 
 # Data Properties
 :hasName a owl:DatatypeProperty ;
@@ -57,7 +73,11 @@
 # Additional class for property range
 :Person a owl:Class ;
     rdfs:label "Person" ;
-    rdfs:comment "A human being." .
+    rdfs:comment "A human being." ;
+    skos:altLabel "Human" ;
+    skos:altLabel "Individual" ;
+    rdfs:seeAlso <http://xmlns.com/foaf/0.1/Person> ;
+    skos:exactMatch <http://schema.org/Person> .
 
 # Example individual
 :fido a owl:NamedIndividual , :Dog ;

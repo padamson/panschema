@@ -45,9 +45,9 @@ slot, enum, type, and permissible-value alike. panschema models only a few:
 | `description` | ● | ● | ● | ● | ● | markdown + `[[xref]]` in HTML; tooltip in graph; `rdfs:comment`; doc-comment |
 | `annotations` | ● | ◐ | ◐ | ◐ | ○ | generic map; only `panschema:*` keys consumed (label, individuals, owl_property_type) |
 | `title` | ◐ | ● | ◐ | ● | ✗ | modeled on schema only; `rdfs:label` on the ontology |
-| `exact_mappings` `close_mappings` `related_mappings` `narrow_mappings` `broad_mappings` | ● | ● | ○ | ● | ○ | modeled on class + slot; HTML "Mappings" row; RDF `skos:*Match`; graph/Rust ignore |
-| `deprecated` | ● | ● | — | ● | — | modeled on schema/class/slot/enum/type; HTML "Deprecated" badge + note; `owl:deprecated true` on class/slot IRI; graph/Rust ignore |
-| `aliases` `see_also` | ● | ● | — | ● | — | modeled on schema/class/slot/enum/type; HTML "Aliases" row + "See also" CURIE-expanded links; RDF `skos:altLabel` + `rdfs:seeAlso` on class/slot IRI; graph/Rust ignore |
+| `exact_mappings` `close_mappings` `related_mappings` `narrow_mappings` `broad_mappings` | ● | ● | ○ | ● | ○ | modeled on class + slot; HTML "Mappings" row; RDF `skos:*Match` (round-trips: OWL reader reads them back); graph/Rust ignore |
+| `deprecated` | ● | ● | — | ● | — | modeled on schema/class/slot/enum/type; HTML "Deprecated" badge + note; `owl:deprecated true` on class/slot IRI (round-trips as a boolean — OWL reader reads it back into the flag; the note text is RDF-lossy); graph/Rust ignore |
+| `aliases` `see_also` | ● | ● | — | ● | — | modeled on schema/class/slot/enum/type; HTML "Aliases" row + "See also" CURIE-expanded links; RDF `skos:altLabel` + `rdfs:seeAlso` on class/slot IRI (round-trips: OWL reader reads them back); graph/Rust ignore |
 | `examples` | ● | ● | — | n/a | — | modeled on schema/class/slot/enum/type; HTML "Examples" section listing each `value` + optional `description`; no standard RDF predicate; graph/Rust ignore |
 | `comments` `notes` `todos` `in_subset` `rank` `status` `keywords` `categories` `created_by` `modified_by` `source` `structured_aliases` `alt_descriptions` `contributors` `created_on` `last_updated_on` … | ✗ | — | — | — | — | not modeled (except `contributors`/`created`/`modified` on schema, RDF-only — see below). Editorial/provenance long tail; biggest doc-completeness gap |
 
@@ -113,7 +113,7 @@ focused subset of the structural ones.
 | `slot_uri` | ● | ● | ● | ● | ✗ | card IRI; node URI; subject IRI |
 | `any_of` | ● | ● | ● | ○ | ● | union on card; one range edge per member; `#[serde(untagged)]` enum |
 | `*_mappings` (5) | ● | ● | ○ | ● | ○ | see Common metadata |
-| `symmetric` `asymmetric` `reflexive` `irreflexive` `transitive` | ● | ● | — | ● | — | OWL relationship characteristics: card badge + `owl:<Name>Property` axiom (feature 14 slice 1) |
+| `symmetric` `asymmetric` `reflexive` `irreflexive` `transitive` | ● | ● | — | ● | — | OWL relationship characteristics: card badge + `owl:<Name>Property` axiom; round-trips (OWL reader reads the axioms back into the flags) |
 | `ifabsent` | ● | ○ | — | — | ● | schema-encoded default. Rust: enum-valued form generates a non-`Option` field with `#[serde(default)]` + default fn; scalar forms and the slot-card "Default" row are later slices |
 | `key` `designates_type` `subproperty_of` `singular_name` `recommended` `slot_group` `unit` `implicit_prefix` `readonly` `shared` `list_elements_unique`/`_ordered` | ✗ | — | — | — | — | not modeled. `subproperty_of` (`rdfs:subPropertyOf`) would further enrich RDF/OWL |
 | `minimum_value` `maximum_value` | ● | ● | — | ○ | — | numeric value bounds: `≥`/`≤` card badge (feature 14 slice 2); RDF `owl:withRestrictions` facet deferred (slice 2b) |
@@ -182,9 +182,11 @@ Ordered by impact, with the slices already filed against each:
    class `rules` / `unique_keys`, `equals_*`, and boolean expressions
    (`all_of` / `exactly_one_of` / `none_of`). Route to
    [feature 07](features/07-schema-validation.md).
-5. **Editorial/provenance metadata** (not modeled): `aliases`, `see_also`,
-   `deprecated`, `comments`, `examples`, `in_subset`. Documentation
-   completeness; low individual cost, high collective coverage.
+5. **Editorial/provenance metadata** (not modeled): `comments`,
+   `in_subset`. Documentation completeness; low individual cost, high
+   collective coverage. (`aliases`, `see_also`, `deprecated`, and
+   `examples` are now modeled — see Common metadata; the first three also
+   round-trip through RDF.)
 6. ~~**Property characteristics**~~ **(mostly done).** The five OWL
    relationship characteristics — `symmetric`, `asymmetric`, `reflexive`,
    `irreflexive`, `transitive` — are modeled and emit `owl:<Name>Property`

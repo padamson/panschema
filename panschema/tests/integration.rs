@@ -308,7 +308,7 @@ fn classes_section_renders_is_a_hierarchy_with_flat_toggle() {
 
     // Each class renders exactly one card, so #class-Foo anchors keep
     // working in both views.
-    for id in ["Animal", "Mammal", "Dog", "Cat", "Person"] {
+    for id in ["Animal", "Mammal", "Dog", "Cat", "Pet", "Person"] {
         let anchor = format!(r##"id="class-{id}""##);
         assert_eq!(
             html.matches(&anchor).count(),
@@ -317,22 +317,30 @@ fn classes_section_renders_is_a_hierarchy_with_flat_toggle() {
         );
     }
 
-    // Disconnected root: Person sits at the tree's top level — its
-    // <li> opens after the chain's nesting has fully closed.
+    // Disconnected root: Person sits at the tree's top level. The Animal
+    // subtree (Mammal → {Cat, Dog}, then Pet) fully closes before
+    // Person's top-level <li>; Pet, Animal's last child, emits the final
+    // `</ul></li>` that closes Animal's level.
+    let pet = html.find(r##"id="class-Pet""##).expect("Pet card");
     let person = html.find(r##"id="class-Person""##).expect("Person card");
     assert!(
-        html[dog..person].contains("</ul></li></ul></li>"),
+        dog < pet && pet < person,
+        "Pet nests under Animal before Person"
+    );
+    assert!(
+        html[pet..person].contains("</ul></li>"),
         "the Animal subtree must close before Person's top-level entry"
     );
 
     // Flat view sorts by --flat-order rank; ranks follow alphabetical
-    // order: Animal, Cat, Dog, Mammal, Person.
+    // order: Animal, Cat, Dog, Mammal, Person, Pet.
     for (id, rank) in [
         ("Animal", 0),
         ("Cat", 1),
         ("Dog", 2),
         ("Mammal", 3),
         ("Person", 4),
+        ("Pet", 5),
     ] {
         let card = html.find(&format!(r##"id="class-{id}""##)).unwrap();
         let node_start = html[..card].rfind("<li class=\"class-tree-node\"").unwrap();
@@ -447,6 +455,68 @@ fn owl_roundtrip_preserves_schema() {
     assert_eq!(schema.version, schema2.version);
     assert_eq!(schema.classes.len(), schema2.classes.len());
     assert_eq!(schema.slots.len(), schema2.slots.len());
+
+    // Enriched constructs must survive Turtle → IR → Turtle → IR. Without
+    // the reader parsing each construct back, the writer's output would be
+    // silently dropped on read-back and these assertions would fail.
+
+    // owl:deprecated → deprecated flag (RDF carries only the boolean, so
+    // the note is empty but present).
+    let pet = schema2.classes.get("Pet").expect("Pet class preserved");
+    assert!(
+        pet.deprecated.is_some(),
+        "owl:deprecated must survive round-trip"
+    );
+
+    // skos:altLabel → aliases; rdfs:seeAlso → see_also.
+    let person = schema2.classes.get("Person").expect("Person preserved");
+    let mut aliases = person.aliases.clone();
+    aliases.sort();
+    assert_eq!(
+        aliases,
+        vec!["Human", "Individual"],
+        "skos:altLabel must survive round-trip"
+    );
+    assert_eq!(
+        person.see_also,
+        vec!["http://xmlns.com/foaf/0.1/Person"],
+        "rdfs:seeAlso must survive round-trip"
+    );
+
+    // skos:exactMatch → exact_mappings (on a class and a slot).
+    assert_eq!(
+        person.exact_mappings,
+        vec!["http://schema.org/Person"],
+        "class skos:exactMatch must survive round-trip"
+    );
+    let owns = schema2.slots.get("owns").expect("owns slot preserved");
+    assert_eq!(
+        owns.exact_mappings,
+        vec!["http://purl.org/dc/terms/relation"],
+        "slot skos:exactMatch must survive round-trip"
+    );
+
+    // skos:closeMatch → close_mappings.
+    let cat = schema2.classes.get("Cat").expect("Cat class preserved");
+    assert_eq!(
+        cat.close_mappings,
+        vec!["http://dbpedia.org/resource/Cat"],
+        "skos:closeMatch must survive round-trip"
+    );
+
+    // owl:SymmetricProperty / owl:TransitiveProperty → characteristic bools.
+    let related = schema2.slots.get("relatedTo").expect("relatedTo preserved");
+    assert!(
+        related.symmetric && related.transitive,
+        "OWL property characteristics must survive round-trip"
+    );
+
+    // owl:inverseOf → inverse.
+    assert_eq!(
+        owns.inverse.as_deref(),
+        Some("hasOwner"),
+        "owl:inverseOf must survive round-trip"
+    );
 
     // Cleanup
     let _ = fs::remove_dir_all(output_dir);

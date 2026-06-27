@@ -1681,9 +1681,9 @@ mod tests {
 
         let data = HtmlWriter::build_template_data(&schema);
 
-        // Should have 5 classes
-        assert_eq!(data.class_refs.len(), 5);
-        assert_eq!(data.class_data.len(), 5);
+        // Should have 6 classes
+        assert_eq!(data.class_refs.len(), 6);
+        assert_eq!(data.class_data.len(), 6);
 
         // Find Dog class
         let dog = data.class_data.iter().find(|c| c.id == "Dog").unwrap();
@@ -1694,10 +1694,10 @@ mod tests {
 
     #[test]
     fn class_tree_nests_reference_hierarchy_preorder() {
-        // Animal → Mammal → {Cat, Dog}, plus Person as a disconnected
-        // root rendered flat alongside the tree. `closes` counts the
-        // ancestor levels a leaf is the last descendant of, so the
-        // template can emit matching `</ul></li>` pairs.
+        // Animal → {Mammal → {Cat, Dog}, Pet}, plus Person as a
+        // disconnected root rendered flat alongside the tree. `closes`
+        // counts the ancestor levels a leaf is the last descendant of, so
+        // the template can emit matching `</ul></li>` pairs.
         let reader = OwlReader::new();
         let schema = reader.read(&reference_ontology_path()).unwrap();
         let data = HtmlWriter::build_template_data(&schema);
@@ -1720,7 +1720,8 @@ mod tests {
                 ("Animal", 0, true, 0),
                 ("Mammal", 1, true, 0),
                 ("Cat", 2, false, 0),
-                ("Dog", 2, false, 2),
+                ("Dog", 2, false, 1),
+                ("Pet", 1, false, 1),
                 ("Person", 0, false, 0),
             ]
         );
@@ -1824,12 +1825,21 @@ mod tests {
         let schema = reader.read(&reference_ontology_path()).unwrap();
         let data = HtmlWriter::build_template_data(&schema);
 
+        // Dog is the last child of Mammal but not of Animal (Pet follows
+        // Mammal under Animal), so Dog closes only Mammal's level.
         let dog = data
             .class_tree
             .iter()
             .find(|e| data.class_data[e.index].id == "Dog")
             .unwrap();
-        assert_eq!(dog.close_tags(), "</ul></li></ul></li>");
+        assert_eq!(dog.close_tags(), "</ul></li>");
+        // Pet, the last child of Animal, closes Animal's level.
+        let pet = data
+            .class_tree
+            .iter()
+            .find(|e| data.class_data[e.index].id == "Pet")
+            .unwrap();
+        assert_eq!(pet.close_tags(), "</ul></li>");
         let animal = data
             .class_tree
             .iter()
@@ -2826,9 +2836,9 @@ mod tests {
 
         let data = HtmlWriter::build_template_data(&schema);
 
-        // Should have 4 slots
-        assert_eq!(data.slot_refs.len(), 4);
-        assert_eq!(data.slot_data.len(), 4);
+        // Should have 5 slots
+        assert_eq!(data.slot_refs.len(), 5);
+        assert_eq!(data.slot_data.len(), 5);
 
         // Find hasOwner property
         let has_owner = data.slot_data.iter().find(|p| p.id == "hasOwner").unwrap();

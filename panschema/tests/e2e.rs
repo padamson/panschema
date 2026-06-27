@@ -166,15 +166,16 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
 
     // 6. Verify classes are extracted and displayed (not empty)
-    // The section header should show count of 5 (Animal, Cat, Dog, Mammal, Person)
+    // The section header should show count of 6 (Animal, Cat, Dog, Mammal,
+    // Person, Pet)
     let class_section = page.locator("#classes").await;
     let class_section_html = class_section
         .inner_html()
         .await
         .expect("Failed to get classes section");
     assert!(
-        class_section_html.contains(">5<"),
-        "[{}] Classes section should show count of 5, got: {}",
+        class_section_html.contains(">6<"),
+        "[{}] Classes section should show count of 6, got: {}",
         browser_name,
         class_section_html
     );
@@ -186,8 +187,8 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         .await
         .expect("Failed to count class links");
     assert_eq!(
-        class_link_count, 5,
-        "[{}] Should have 5 class links",
+        class_link_count, 6,
+        "[{}] Should have 6 class links",
         browser_name
     );
 
@@ -210,8 +211,8 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         .await
         .expect("Failed to count class cards");
     assert_eq!(
-        class_card_count, 5,
-        "[{}] Should have 5 class cards",
+        class_card_count, 6,
+        "[{}] Should have 6 class cards",
         browser_name
     );
 
@@ -293,8 +294,8 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         .await
         .expect("Failed to get slots section");
     assert!(
-        slot_section_html.contains(">4<"),
-        "[{}] Slots section should show count of 4, got: {}",
+        slot_section_html.contains(">5<"),
+        "[{}] Slots section should show count of 5, got: {}",
         browser_name,
         slot_section_html
     );
@@ -306,8 +307,8 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         .await
         .expect("Failed to count slot links");
     assert_eq!(
-        slot_link_count, 4,
-        "[{}] Should have 4 slot links",
+        slot_link_count, 5,
+        "[{}] Should have 5 slot links",
         browser_name
     );
 
@@ -318,8 +319,8 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         .await
         .expect("Failed to count slot cards");
     assert_eq!(
-        slot_card_count, 4,
-        "[{}] Should have 4 slot cards",
+        slot_card_count, 5,
+        "[{}] Should have 5 slot cards",
         browser_name
     );
 
