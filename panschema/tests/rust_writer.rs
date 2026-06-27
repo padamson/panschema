@@ -1,11 +1,15 @@
-//! End-to-end integration tests for the Rust codegen writer against
-//! the scimantic-schema v0.1.0 LinkML schema — the real-world target
-//! the writer is built for.
+//! End-to-end integration tests for the Rust codegen writer.
 //!
-//! The fixture is fetched via `panschema add github:padamson/scimantic-schema@0.1.0`
-//! into a workspace-local cache (`CARGO_TARGET_TMPDIR/scimantic-fixture-cache/`).
-//! The first invocation in a fresh workspace requires network access;
-//! warm runs short-circuit through the cache.
+//! The default-run backstop is the checked-in `tests/fixtures/codegen.yaml`
+//! schema: it exercises every codegen construct and is rendered, parsed,
+//! and compiled in a scratch crate with no network access. Any codegen
+//! branch that regresses fails this test at `cargo build` time rather
+//! than slipping through a text assertion.
+//!
+//! The `scimantic_*` tests provide real-world dogfood against the
+//! scimantic-schema v0.1.0 LinkML schema. The schema is a frozen vendored
+//! snapshot checked in at `tests/fixtures/scimantic-0.1.0.yaml`, so these
+//! tests also run by default with no network access.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -15,46 +19,30 @@ use panschema::linkml::SchemaDefinition;
 use panschema::rust_writer::RustWriter;
 use panschema::yaml_reader::YamlReader;
 
-/// Ensure scimantic-schema v0.1.0 is present in a workspace-local cache,
-/// fetching it via `panschema add` if not. Returns the absolute path to
-/// `schema/scimantic.yaml` inside the cache.
-fn ensure_scimantic_cached() -> PathBuf {
-    let cache_root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("scimantic-fixture-cache");
-    let schema_path = cache_root.join(
-        "github/padamson/scimantic-schema/0.1.0/scimantic-schema-0.1.0/schema/scimantic.yaml",
-    );
-    if schema_path.exists() {
-        return schema_path;
-    }
-
-    let consumer = tempfile::tempdir().expect("tempdir for fixture consumer");
-    std::fs::write(consumer.path().join("panschema.toml"), "[schemas]\n")
-        .expect("write fixture manifest");
-
-    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .args(["add", "github:padamson/scimantic-schema@0.1.0"])
-        .current_dir(consumer.path())
-        .env("PANSCHEMA_CACHE_ROOT", &cache_root)
-        .status()
-        .expect("invoke `panschema add` to populate fixture cache");
-    assert!(
-        status.success(),
-        "`panschema add github:padamson/scimantic-schema@0.1.0` failed; \
-         verify network access or that the tag exists upstream"
-    );
-
-    assert!(
-        schema_path.exists(),
-        "expected scimantic schema at {} after fetch; cache layout may have changed",
-        schema_path.display()
-    );
-    schema_path
+/// Read the checked-in self-contained codegen fixture through the same
+/// reader path the CLI uses. No network: the schema lives in-tree at
+/// `tests/fixtures/codegen.yaml` and has no `imports` or external refs.
+fn read_codegen_fixture() -> SchemaDefinition {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("codegen.yaml");
+    YamlReader::new()
+        .read(&path)
+        .expect("parse local codegen fixture")
 }
 
+/// Read the frozen vendored scimantic-schema v0.1.0 snapshot through the
+/// same reader path the CLI uses. No network: the schema lives in-tree at
+/// `tests/fixtures/scimantic-0.1.0.yaml`.
 fn read_scimantic() -> SchemaDefinition {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("scimantic-0.1.0.yaml");
     YamlReader::new()
-        .read(&ensure_scimantic_cached())
-        .expect("parse scimantic schema")
+        .read(&path)
+        .expect("parse vendored scimantic schema")
 }
 
 /// Extract the body of `pub struct <name> { ... }` from a render output.
@@ -68,6 +56,39 @@ fn extract_struct<'a>(body: &'a str, name: &str) -> &'a str {
         .find("\n}")
         .unwrap_or_else(|| panic!("unterminated `pub struct {name}` block"));
     &after[..end]
+}
+
+// ---------------------------------------------------------------------------
+// Local-fixture compile backstop (default run, no network)
+// ---------------------------------------------------------------------------
+
+/// The self-contained `codegen.yaml` fixture renders to Rust that parses,
+/// compiles in a downstream crate, and behaves correctly under a serde
+/// JSON round-trip. This is the compiled backstop for the writer: every
+/// codegen construct in the fixture is exercised by `cargo build`, so a
+/// regression in any of them (keyword escaping, `ifabsent` defaults,
+/// `Box` recursion, `any_of` unions, derive selection, …) fails here
+/// rather than slipping past a text assertion.
+///
+/// The consumer source (`CODEGEN_CONSUMER`) constructs instances using
+/// the keyword-escaped fields (`r#type`, `r#move`) and the
+/// `ifabsent`-defaulted field (`status`), then round-trips through JSON:
+/// an absent `status` must deserialize to its `ItemStatus::planned`
+/// default, and the keyword permissible value `virtual` must serialize
+/// back to its original wire name `"virtual"`.
+#[test]
+fn codegen_fixture_compiles_and_round_trips_in_downstream_crate() {
+    let schema = read_codegen_fixture();
+    let body = RustWriter::new().render(&schema);
+
+    syn::parse_file(&body).unwrap_or_else(|e| {
+        let preview = body.chars().take(2000).collect::<String>();
+        panic!("generated Rust failed to parse: {e}\n--- preview (first 2k chars) ---\n{preview}")
+    });
+
+    let tmp = tempfile::tempdir().expect("tempdir for codegen scratch crate");
+    write_codegen_scratch_crate(tmp.path(), &body);
+    cargo_run_scratch(tmp.path());
 }
 
 // ---------------------------------------------------------------------------
@@ -161,24 +182,7 @@ fn scimantic_question_can_be_constructed_in_downstream_crate() {
 
     let tmp = tempfile::tempdir().expect("tempdir for scratch crate");
     write_scratch_crate(tmp.path(), &body);
-
-    let status = Command::new("cargo")
-        .args(["build", "--quiet"])
-        .current_dir(tmp.path())
-        // Override CARGO_TARGET_DIR so the scratch crate's build artifacts
-        // land inside CARGO_TARGET_TMPDIR rather than polluting the
-        // workspace target dir. CARGO_HOME is inherited so registry
-        // downloads (serde, chrono) are cached across runs.
-        .env(
-            "CARGO_TARGET_DIR",
-            PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("scratch-crate-target"),
-        )
-        .status()
-        .expect("invoke `cargo build` on scratch crate");
-    assert!(
-        status.success(),
-        "scratch crate failed to compile against the generated module"
-    );
+    cargo_build_scratch(tmp.path());
 }
 
 /// Re-running the writer over the same schema produces byte-identical
@@ -196,6 +200,173 @@ fn scimantic_renders_idempotently() {
         "writer output should be deterministic across runs"
     );
 }
+
+/// Invoke `cargo build --quiet` on a scratch crate rooted at `root`.
+///
+/// `CARGO_TARGET_DIR` is overridden so the scratch crate's build
+/// artifacts land inside `CARGO_TARGET_TMPDIR` rather than polluting the
+/// workspace target dir. `CARGO_HOME` is inherited so registry downloads
+/// (serde, chrono) are cached across runs.
+fn cargo_build_scratch(root: &Path) {
+    let status = Command::new("cargo")
+        .args(["build", "--quiet"])
+        .current_dir(root)
+        .env(
+            "CARGO_TARGET_DIR",
+            PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("scratch-crate-target"),
+        )
+        .status()
+        .expect("invoke `cargo build` on scratch crate");
+    assert!(
+        status.success(),
+        "scratch crate failed to compile against the generated module"
+    );
+}
+
+/// Invoke `cargo run --quiet` on a scratch binary crate rooted at `root`,
+/// asserting the program exits successfully. Used when the consumer's
+/// runtime assertions (serde round-trips) must actually execute, not just
+/// type-check. Shares the out-of-tree target dir with [`cargo_build_scratch`].
+fn cargo_run_scratch(root: &Path) {
+    let status = Command::new("cargo")
+        .args(["run", "--quiet"])
+        .current_dir(root)
+        .env(
+            "CARGO_TARGET_DIR",
+            PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("scratch-crate-target"),
+        )
+        .status()
+        .expect("invoke `cargo run` on scratch crate");
+    assert!(
+        status.success(),
+        "scratch crate's runtime assertions failed (or it didn't compile)"
+    );
+}
+
+/// Build a self-contained binary Cargo project around the codegen
+/// fixture's generated module. `src/codegen.rs` holds the generated
+/// code; `src/main.rs` exercises the public API and serde round-trips at
+/// runtime (see [`CODEGEN_CONSUMER`]). The crate is a binary so
+/// [`cargo_run_scratch`] can execute the assertions rather than merely
+/// compile them.
+fn write_codegen_scratch_crate(root: &Path, generated_module_body: &str) {
+    std::fs::write(
+        root.join("Cargo.toml"),
+        r#"[package]
+name = "codegen-fixture-test"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+"#,
+    )
+    .expect("write Cargo.toml");
+    std::fs::create_dir_all(root.join("src")).expect("mkdir src/");
+    std::fs::write(root.join("src/codegen.rs"), generated_module_body).expect("write codegen.rs");
+    std::fs::write(root.join("src/main.rs"), CODEGEN_CONSUMER).expect("write main.rs");
+}
+
+/// Consumer-side program that constructs and round-trips the generated
+/// codegen-fixture types. Lives outside the generated module so the
+/// writer's output stays purely schema-derived. Asserts at runtime so a
+/// behavioral codegen regression (wrong `ifabsent` default, dropped
+/// `#[serde(rename)]` on a keyword variant/field) fails the test even
+/// though the code still compiles.
+const CODEGEN_CONSUMER: &str = r##"
+#![allow(dead_code, unused_variables)]
+
+mod codegen;
+
+fn main() {
+    // Constructor: required `label` only; optional/multivalued fields
+    // default, and the `ifabsent` field initializes to its enum default.
+    let q = codegen::Question::new("Why is the sky blue?".to_string());
+    assert!(q.was_generated_by.is_none(), "optional class field defaults to None");
+    assert!(q.was_derived_from.is_empty(), "multivalued field defaults to empty");
+    assert_eq!(q.status, codegen::ItemStatus::planned, "ifabsent default applied by ctor");
+
+    // Keyword-escaped fields construct via their raw idents and rename to
+    // the original wire names under serde.
+    let kw = codegen::Keyworded {
+        id: "k1".to_string(),
+        r#type: Some("scalar".to_string()),
+        r#move: Some("castle".to_string()),
+        r#virtual: None,
+        noted: None,
+    };
+    let kw_json = serde_json::to_string(&kw).expect("serialize Keyworded");
+    assert!(kw_json.contains("\"type\""), "field `r#type` renames to wire `type`");
+    assert!(kw_json.contains("\"move\""), "field `r#move` renames to wire `move`");
+    let kw_back: codegen::Keyworded =
+        serde_json::from_str(&kw_json).expect("deserialize Keyworded");
+    assert_eq!(kw_back.r#type.as_deref(), Some("scalar"), "keyword field round-trips");
+
+    // ifabsent default: an absent `status` deserializes to the default.
+    let q_default: codegen::Question =
+        serde_json::from_str(r#"{"label":"x"}"#).expect("deserialize Question without status");
+    assert_eq!(
+        q_default.status,
+        codegen::ItemStatus::planned,
+        "absent `status` deserializes to the `ifabsent` enum default"
+    );
+
+    // Keyword permissible value serializes back to its original wire name.
+    let v = codegen::ItemStatus::r#virtual;
+    assert_eq!(
+        serde_json::to_string(&v).expect("serialize variant"),
+        "\"virtual\"",
+        "keyword enum variant renames to wire `virtual`"
+    );
+
+    // Space-sanitized permissible value round-trips through its wire name.
+    let dirty: codegen::ItemStatus =
+        serde_json::from_str("\"in progress\"").expect("deserialize dirty variant");
+    assert_eq!(
+        dirty,
+        codegen::ItemStatus::in_progress,
+        "`in progress` wire value maps to the sanitized variant"
+    );
+
+    // any_of union: a `wasDerivedFrom` entry round-trips untagged.
+    let mut q2 = codegen::Question::new("derived".to_string());
+    q2.was_derived_from
+        .push(codegen::QuestionWasDerivedFrom::Question(Box::new(
+            codegen::Question::new("source".to_string()),
+        )));
+    let q2_json = serde_json::to_string(&q2).expect("serialize Question with union");
+    let q2_back: codegen::Question =
+        serde_json::from_str(&q2_json).expect("deserialize Question with union");
+    assert_eq!(q2_back.was_derived_from.len(), 1, "any_of union round-trips");
+
+    // Keyword-named type: the class `move` is `pub struct r#move` and the
+    // enum `type` is `pub enum r#type`. Constructing them here proves the
+    // type-name escaping is consistent across definition and references.
+    let m = codegen::r#move {
+        caption: "castle short".to_string(),
+        kind: Some(codegen::r#type::tactical),
+    };
+    let m_json = serde_json::to_string(&m).expect("serialize keyword-named type");
+    let m_back: codegen::r#move =
+        serde_json::from_str(&m_json).expect("deserialize keyword-named type");
+    assert_eq!(m_back.caption, "castle short", "keyword-named struct round-trips");
+
+    // The keyword-named class is referenced as a field range on
+    // `Keyworded.noted` -> `Option<Box<r#move>>`. Construct through that
+    // reference site to prove the escaped ident matches the definition.
+    let kw2 = codegen::Keyworded {
+        id: "k2".to_string(),
+        r#type: None,
+        r#move: None,
+        r#virtual: None,
+        noted: Some(Box::new(m)),
+    };
+    assert!(kw2.noted.is_some(), "keyword-named class usable as a field range");
+}
+"##;
 
 /// Build a self-contained Cargo project around the generated module.
 /// `src/scimantic.rs` holds the generated code; `src/lib.rs` exercises

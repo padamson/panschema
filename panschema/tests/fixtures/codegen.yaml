@@ -1,0 +1,234 @@
+name: codegen_fixture
+id: https://example.org/codegen-fixture
+description: >-
+  Self-contained LinkML schema that exercises every Rust codegen
+  construct so the generated module can be compiled end-to-end with no
+  network access. Each class/slot/enum below maps to a specific branch
+  of the Rust writer; see panschema/tests/rust_writer.rs for the map.
+
+prefixes:
+  linkml: https://w3id.org/linkml/
+  ex: https://example.org/codegen-fixture/
+
+default_range: string
+
+enums:
+  # Clean variant (`planned`), a dirty value with a space (`in progress`
+  # -> space-sanitized ident + `#[serde(rename)]`), and a Rust-keyword
+  # value (`virtual` -> raw ident `r#virtual` + rename).
+  ItemStatus:
+    name: ItemStatus
+    description: Lifecycle status of an item.
+    permissible_values:
+      planned:
+        text: planned
+        description: Not yet started.
+      in progress:
+        text: in progress
+        description: Underway.
+      virtual:
+        text: virtual
+        description: Exists only conceptually.
+
+  # Enum NAME is itself a Rust keyword (`type`) -> renders as
+  # `pub enum r#type`, referenced as `r#type` at every field site.
+  type:
+    name: type
+    description: A keyword-named enum.
+    permissible_values:
+      tactical:
+        text: tactical
+        description: A tactical move.
+      strategic:
+        text: strategic
+        description: A strategic move.
+
+classes:
+  # ---------------------------------------------------------------
+  # Inheritance: `Activity` is named as an is_a parent, so it renders
+  # as a marker trait. `QuestionFormation` (its concrete child) gets
+  # `impl Activity for QuestionFormation`. The narrowed `slot_usage`
+  # range on `Question.wasGeneratedBy` points at this leaf struct.
+  # ---------------------------------------------------------------
+  Activity:
+    name: Activity
+    description: Something that occurs over time.
+    abstract: true
+    attributes:
+      startedAt:
+        name: startedAt
+        description: When the activity began.
+        range: datetime
+
+  QuestionFormation:
+    name: QuestionFormation
+    description: The act of forming a question.
+    is_a: Activity
+    attributes:
+      prompt:
+        name: prompt
+        description: Free-text prompt that triggered the question.
+        range: string
+        required: true
+      # Required `datetime` -> bare `chrono::DateTime<Utc>`, which is not
+      # `Default`. This disqualifies `QuestionFormation` from deriving
+      # `Default` (the datetime-blocks-Default path).
+      completedAt:
+        name: completedAt
+        description: When the question was finalized.
+        range: datetime
+        required: true
+      # `float` -> `f64`, which is neither `Eq` nor `Hash`. This drops
+      # `Eq`/`Hash` from `QuestionFormation` and, transitively, from
+      # every enum/struct that contains it (the `<Name>Kind` and any_of
+      # unions, and `Question` via its `Box<QuestionFormation>` field) -
+      # exercising the `enum_derive_line(false)` and no-Eq/Hash struct
+      # branches.
+      confidence:
+        name: confidence
+        description: Confidence score in [0, 1].
+        range: float
+
+  # ---------------------------------------------------------------
+  # Mixin trait: `Provenanced` is used as a mixin, so it renders as a
+  # trait; `Question` gets `impl Provenanced for Question`.
+  # ---------------------------------------------------------------
+  Provenanced:
+    name: Provenanced
+    description: Marker for entities that carry provenance.
+    attributes:
+      wasAttributedTo:
+        name: wasAttributedTo
+        description: Agent the entity is attributed to.
+        range: string
+
+  # ---------------------------------------------------------------
+  # The central struct. `is_a: Entity` is omitted to keep the graph
+  # small; instead `Question` mixes in `Provenanced` (mixin trait impl)
+  # and refines an inherited-style slot via `slot_usage`.
+  #
+  # Fields exercise:
+  #   - required single  -> bare `String`            (`label`)
+  #   - optional single  -> `Option<chrono::...>`    (`recordedAt`)
+  #   - multivalued      -> `Vec<...>`               (`wasDerivedFrom`)
+  #   - self-reference   -> `Box` recursion          (`follows`)
+  #   - any_of union     -> `#[serde(untagged)]` enum (`wasDerivedFrom`)
+  #   - ifabsent enum    -> bare enum + default fn   (`status`)
+  #   - mixin trait impl -> `impl Provenanced ...`   (via `mixins`)
+  # ---------------------------------------------------------------
+  Question:
+    name: Question
+    description: A question with provenance.
+    mixins:
+      - Provenanced
+    slots:
+      - label
+    attributes:
+      # slot_usage refines the `wasGeneratedBy` range from the abstract
+      # `Activity` trait down to the `QuestionFormation` leaf struct.
+      wasGeneratedBy:
+        name: wasGeneratedBy
+        description: Activity that generated this question.
+        range: Activity
+      # Optional single-valued datetime -> `Option<chrono::DateTime>`.
+      recordedAt:
+        name: recordedAt
+        description: When the question was recorded.
+        range: datetime
+      # Self-referential single-valued class field -> `Box` recursion.
+      follows:
+        name: follows
+        description: Another question this one follows up on.
+        range: Question
+      # ifabsent enum default -> bare `ItemStatus` field + generated
+      # default fn + `#[serde(default = "...")]`.
+      status:
+        name: status
+        description: Lifecycle status, defaulting to `planned`.
+        range: ItemStatus
+        ifabsent: ItemStatus(planned)
+      # any_of union, multivalued. One branch omits `range:` and
+      # inherits the slot's outer `range: Question`.
+      wasDerivedFrom:
+        name: wasDerivedFrom
+        description: Sources this question was derived from.
+        multivalued: true
+        range: Question
+        any_of:
+          - range: QuestionFormation
+          - {}
+    slot_usage:
+      wasGeneratedBy:
+        name: wasGeneratedBy
+        range: QuestionFormation
+
+  # ---------------------------------------------------------------
+  # Keyword-escaping coverage at the field level: slots named with Rust
+  # keywords (`type`, `move`, `virtual`) snake_case to themselves and
+  # then escape via `raw_if_keyword` to `r#type`/`r#move`/`r#virtual`,
+  # each paired with `#[serde(rename = "<original>")]`. `identifier:
+  # true` on `id` lands on this rendered, compiled struct.
+  #
+  # `noted` ranges over the keyword-named class `move`, exercising
+  # reference-site type-name escaping: the field type and its `Box<...>`
+  # inner must use the same `r#move` ident the struct is defined under.
+  # ---------------------------------------------------------------
+  Keyworded:
+    name: Keyworded
+    description: Struct whose fields collide with Rust keywords.
+    attributes:
+      id:
+        name: id
+        description: Identifier slot on a compiled struct.
+        identifier: true
+        range: string
+        required: true
+      type:
+        name: type
+        description: Field named with the `type` keyword.
+        range: string
+      move:
+        name: move
+        description: Field named with the `move` keyword.
+        range: string
+      virtual:
+        name: virtual
+        description: Field named with the `virtual` keyword.
+        range: string
+      # Field whose *range* is the keyword-named class `move` -> the
+      # generated field type is `Option<Box<r#move>>`, exercising
+      # reference-site type-name escaping (the def is `pub struct r#move`).
+      noted:
+        name: noted
+        description: A reference to a keyword-named class.
+        range: move
+
+  # ---------------------------------------------------------------
+  # Type-NAME escaping: a class literally named with a Rust keyword
+  # (`move`) renders as `pub struct r#move`, and every reference to it
+  # (field types, `Box<...>` inners, ctor params) uses the same escaped
+  # ident. Type names are not serialized by serde, so no rename pairs
+  # with the type name itself.
+  # ---------------------------------------------------------------
+  move:
+    name: move
+    description: A class whose name collides with a Rust keyword.
+    attributes:
+      caption:
+        name: caption
+        description: A human-readable caption.
+        range: string
+        required: true
+      # Enum-ranged field whose enum is also keyword-named (`type`),
+      # exercising keyword-enum type-name escaping at a reference site.
+      kind:
+        name: kind
+        description: The kind of move, from a keyword-named enum.
+        range: type
+
+slots:
+  label:
+    name: label
+    description: Human-readable label.
+    range: string
+    required: true

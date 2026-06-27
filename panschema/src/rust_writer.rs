@@ -369,7 +369,7 @@ fn render_enum<W: Write>(out: &mut W, name: &str, def: &EnumDefinition) -> fmt::
         "#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]\n",
     )?;
     out.write_str("#[non_exhaustive]\n")?;
-    writeln!(out, "pub enum {name} {{")?;
+    writeln!(out, "pub enum {} {{", type_ident(name))?;
     for (key, value) in &def.permissible_values {
         let text = if value.text.is_empty() {
             key
@@ -418,9 +418,14 @@ fn render_trait<W: Write>(
         }
     }
     if supertraits.is_empty() {
-        writeln!(out, "pub trait {name} {{}}\n")
+        writeln!(out, "pub trait {} {{}}\n", type_ident(name))
     } else {
-        writeln!(out, "pub trait {name}: {} {{}}\n", supertraits.join(" + "))
+        let bounds = supertraits
+            .iter()
+            .map(|s| type_ident(s).into_owned())
+            .collect::<Vec<_>>()
+            .join(" + ");
+        writeln!(out, "pub trait {}: {bounds} {{}}\n", type_ident(name))
     }
 }
 
@@ -464,7 +469,7 @@ fn render_class<W: Write>(
     let eq_hash_ok = eq_hash_support.get(name).copied().unwrap_or(false);
     let derives = compute_struct_derives(&resolved, schema, eq_hash_ok);
     writeln!(out, "#[derive({derives})]")?;
-    writeln!(out, "pub struct {name} {{")?;
+    writeln!(out, "pub struct {} {{", type_ident(name))?;
 
     // Module-level default fns for enum-valued `ifabsent` slots, emitted
     // after the struct so `#[serde(default = "<fn>")]` can resolve them.
@@ -491,7 +496,7 @@ fn render_class<W: Write>(
         let rust_type = match &ifabsent_default {
             // A resolved enum default is always present, so the faithful
             // shape is the bare enum type, not `Option<EnumType>`.
-            Some(d) => d.enum_name.clone(),
+            Some(d) => type_ident(&d.enum_name).into_owned(),
             None => field_type_for(name, slot_name, slot, schema, roles, any_of_enums),
         };
         render_doc_comment(out, "    ", slot.description.as_deref())?;
@@ -525,9 +530,10 @@ fn render_class<W: Write>(
     out.write_str("}\n\n")?;
 
     for (fn_name, enum_name, variant_path) in &ifabsent_default_fns {
+        let enum_ty = type_ident(enum_name);
         writeln!(
             out,
-            "fn {fn_name}() -> {enum_name} {{ {enum_name}::{variant_path} }}\n"
+            "fn {fn_name}() -> {enum_ty} {{ {enum_ty}::{variant_path} }}\n"
         )?;
     }
 
@@ -560,7 +566,12 @@ fn render_class<W: Write>(
     impl_targets.sort();
     impl_targets.dedup();
     for trait_name in &impl_targets {
-        writeln!(out, "impl {trait_name} for {name} {{}}")?;
+        writeln!(
+            out,
+            "impl {} for {} {{}}",
+            type_ident(trait_name),
+            type_ident(name)
+        )?;
     }
     if !impl_targets.is_empty() {
         out.write_char('\n')?;
@@ -613,14 +624,14 @@ fn render_constructor<W: Write>(
         .collect::<Vec<_>>()
         .join(", ");
 
-    writeln!(out, "impl {name} {{")?;
+    writeln!(out, "impl {} {{", type_ident(name))?;
     writeln!(out, "    pub fn new({param_list}) -> Self {{")?;
     writeln!(out, "        Self {{")?;
     for (slot_name, slot) in resolved {
         let snake = snake_case(slot_name);
         let field = raw_if_keyword(&snake);
         if let Some(d) = resolve_ifabsent_enum_default(slot, schema) {
-            let enum_name = &d.enum_name;
+            let enum_name = type_ident(&d.enum_name);
             let variant = &d.variant_path;
             writeln!(out, "            {field}: {enum_name}::{variant},")?;
         } else if slot.multivalued {
@@ -676,9 +687,10 @@ fn render_kind_enum<W: Write>(
     writeln!(out, "#[derive({})]", enum_derive_line(eq_hash_ok))?;
     out.write_str("#[serde(untagged)]\n")?;
     out.write_str("#[non_exhaustive]\n")?;
-    writeln!(out, "pub enum {name}Kind {{")?;
+    writeln!(out, "pub enum {} {{", type_ident(&format!("{name}Kind")))?;
     for desc in &descendants {
-        writeln!(out, "    {desc}(Box<{desc}>),")?;
+        let ty = type_ident(desc);
+        writeln!(out, "    {ty}(Box<{ty}>),")?;
     }
     out.write_str("}\n\n")
 }
@@ -693,10 +705,11 @@ fn render_any_of_enum<W: Write>(
     writeln!(out, "#[derive({})]", enum_derive_line(eq_hash_ok))?;
     out.write_str("#[serde(untagged)]\n")?;
     out.write_str("#[non_exhaustive]\n")?;
-    writeln!(out, "pub enum {name} {{")?;
+    writeln!(out, "pub enum {} {{", type_ident(name))?;
     for member in members {
-        let variant = pascal_case(member);
-        writeln!(out, "    {variant}(Box<{member}>),")?;
+        let variant = type_ident(&pascal_case(member)).into_owned();
+        let member_ty = type_ident(member);
+        writeln!(out, "    {variant}(Box<{member_ty}>),")?;
     }
     out.write_str("}\n\n")
 }
@@ -825,7 +838,10 @@ fn field_type_for(
             .collect();
         any_of_enums.insert(enum_name.clone(), members);
         // any_of enums Box their variants internally → field stays sized.
-        return framed_sized(&enum_name, slot);
+        // The map key stays the raw synthesized name; `render_any_of_enum`
+        // applies the same `type_ident` escaping to it, so the field
+        // reference here and the enum definition agree.
+        return framed_sized(&type_ident(&enum_name), slot);
     }
 
     let Some(range) = &slot.range else {
@@ -907,7 +923,7 @@ fn type_for_range(
                 // `String` (URI/identifier). Mirrors the breadcrumb
                 // comment `render_kind_enum` emits.
                 if has_concrete_descendants(other, schema, roles) {
-                    format!("{other}Kind")
+                    type_ident(&format!("{other}Kind")).into_owned()
                 } else {
                     "String".to_string()
                 }
@@ -915,12 +931,13 @@ fn type_for_range(
                 || schema.enums.contains_key(other)
                 || schema.types.contains_key(other)
             {
-                other.to_string()
+                type_ident(other).into_owned()
             } else {
                 // Unresolved ref. Preserve verbatim — could be defined in
                 // an imported schema (a future writer pass would surface
-                // a warning).
-                other.to_string()
+                // a warning). Keyword names are still escaped so the
+                // reference is a valid Rust identifier.
+                type_ident(other).into_owned()
             }
         }
     }
@@ -1096,6 +1113,18 @@ fn raw_if_keyword(ident: &str) -> std::borrow::Cow<'_, str> {
     } else {
         std::borrow::Cow::Borrowed(ident)
     }
+}
+
+/// Escape a struct/enum/trait type name that collides with a Rust
+/// reserved word so it is usable as a type identifier in generated code.
+/// A LinkML class named `move` becomes `r#move`; one named `Self` becomes
+/// `Self_`. Unlike field/variant names, a type name is never serialized
+/// by serde, so no `#[serde(rename)]` is paired with it — but every
+/// reference site (field types, `Box`/`Vec`/`Option` inners, trait
+/// bounds, `impl` targets, enum variant payloads) must apply the same
+/// escaping so definition and use agree.
+fn type_ident(name: &str) -> std::borrow::Cow<'_, str> {
+    raw_if_keyword(name)
 }
 
 /// A resolved enum-valued `ifabsent` default: the slot's range enum and
@@ -2213,6 +2242,41 @@ mod tests {
         assert!(
             !out.contains("pub type:"),
             "must not emit a bare reserved-keyword field; got: {out}"
+        );
+    }
+
+    #[test]
+    fn render_class_escapes_keyword_struct_name() {
+        // A class literally named `move` (a Rust keyword) must be defined
+        // as `pub struct r#move`, and every reference to it — here a field
+        // on another class whose range is `move` — must use the same
+        // escaped ident inside its `Box<...>` framing. A bare `struct move`
+        // or `Box<move>` would fail to compile.
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .classes
+            .insert("move".to_string(), ClassDefinition::new("move"));
+
+        let mut holder = ClassDefinition::new("Holder");
+        let mut slot = SlotDefinition::new("noted");
+        slot.range = Some("move".to_string());
+        slot.required = true;
+        holder.attributes.insert("noted".to_string(), slot);
+        schema.classes.insert("Holder".to_string(), holder);
+
+        let body = RustWriter::new().render(&schema);
+
+        assert!(
+            body.contains("pub struct r#move {"),
+            "keyword class name must be defined as a raw ident; got:\n{body}"
+        );
+        assert!(
+            body.contains("pub noted: Box<r#move>,"),
+            "reference to a keyword-named class must use the same raw ident; got:\n{body}"
+        );
+        assert!(
+            !body.contains("pub struct move ") && !body.contains("Box<move>"),
+            "must not emit a bare keyword type name; got:\n{body}"
         );
     }
 

@@ -78,7 +78,7 @@ slot, enum, type, and permissible-value alike. panschema models only a few:
 
 | Metaslot | IR | HTML | Graph | RDF | Rust | Notes |
 |---|:--:|:--:|:--:|:--:|:--:|---|
-| `name` | ● | ● | ● | ● | ● | struct/trait name in codegen |
+| `name` | ● | ● | ● | ● | ● | struct/trait name in codegen; Rust keyword names emitted as raw identifiers |
 | `description` | ● | ● | ● | ● | ● | |
 | `is_a` | ● | ● | ● | ● | ● | "Subclass of"; edge; `rdfs:subClassOf`; trait + impl |
 | `mixins` | ● | ● | ● | ● | ● | "Mixes in"; edges; per-mixin `rdfs:subClassOf`; supertraits |
@@ -128,7 +128,7 @@ renders an enum card per enum; the graph hover reuses it.
 
 | Metaslot | IR | HTML | Graph | RDF | Rust | Notes |
 |---|:--:|:--:|:--:|:--:|:--:|---|
-| `EnumDefinition.name` | ● | ● | ● | ✗ | ● | `#enum-` card; node; Rust enum |
+| `EnumDefinition.name` | ● | ● | ● | ✗ | ● | `#enum-` card; node; Rust enum (keyword names → raw identifiers) |
 | `EnumDefinition.description` | ● | ● | ● | ✗ | ● | card; tooltip; doc-comment |
 | `permissible_values` | ● | ● | ● | ✗ | ● | card list; graph hover; Rust variants (keyword names → raw identifiers). No RDF representation |
 | `PermissibleValue.text` | ● | ● | ● | ✗ | ● | card; variant ident |
