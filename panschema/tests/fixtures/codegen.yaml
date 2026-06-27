@@ -163,6 +163,52 @@ classes:
         range: QuestionFormation
 
   # ---------------------------------------------------------------
+  # Scalar `ifabsent` defaults: each non-multivalued slot below carries a
+  # scalar default, so its field renders as the bare Rust type (not
+  # `Option`) with a generated default fn and `#[serde(default = "...")]`.
+  # An absent field deserializes to the declared literal; the mix of
+  # non-`Default` literals also disqualifies the struct's `Default` derive.
+  #   - int(N)            -> `i64`     (`port`)
+  #   - float(F)/double(F)-> `f64`     (`ratio`, `scale`)
+  #   - string(S)         -> `String`  (`prefix`)
+  #   - boolean true/false-> `bool`    (`enabled`, `verbose`)
+  # ---------------------------------------------------------------
+  ServiceConfig:
+    name: ServiceConfig
+    description: Configuration whose slots carry scalar `ifabsent` defaults.
+    attributes:
+      port:
+        name: port
+        description: TCP port, defaulting to 8080.
+        range: integer
+        ifabsent: int(8080)
+      ratio:
+        name: ratio
+        description: A float ratio, defaulting to 1.0.
+        range: float
+        ifabsent: float(1.0)
+      scale:
+        name: scale
+        description: A whole-number double default, suffixed to type as f64.
+        range: double
+        ifabsent: double(2)
+      prefix:
+        name: prefix
+        description: A string prefix, defaulting to "svc".
+        range: string
+        ifabsent: string(svc)
+      enabled:
+        name: enabled
+        description: Boolean flag, defaulting to true.
+        range: boolean
+        ifabsent: "true"
+      verbose:
+        name: verbose
+        description: Boolean flag, defaulting to false.
+        range: boolean
+        ifabsent: "False"
+
+  # ---------------------------------------------------------------
   # Keyword-escaping coverage at the field level: slots named with Rust
   # keywords (`type`, `move`, `virtual`) snake_case to themselves and
   # then escape via `raw_if_keyword` to `r#type`/`r#move`/`r#virtual`,

@@ -1747,6 +1747,18 @@ fn e2e_renders_linkml_card_features() {
             "slot card shows value-bound badges; got: {age_html}"
         );
 
+        // ifabsent default: the membership slot card surfaces a Default row
+        // rendering the readable value (`"basic"`).
+        let membership_card = page.locator("#slot-membership").await;
+        let membership_html = membership_card
+            .inner_html()
+            .await
+            .expect("membership slot card should be present");
+        assert!(
+            membership_html.contains("<dt>Default</dt>") && membership_html.contains("basic"),
+            "slot card shows a Default row with the ifabsent value; got: {membership_html}"
+        );
+
         browser.close().await.expect("close browser");
         let _ = shutdown_tx.send(());
         let _ = server_handle.await;

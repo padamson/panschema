@@ -318,6 +318,29 @@ fn main() {
         "absent `status` deserializes to the `ifabsent` enum default"
     );
 
+    // Scalar ifabsent defaults: each field renders as the bare Rust type
+    // and is constructed here so every scalar default is actually compiled.
+    let cfg = codegen::ServiceConfig {
+        port: 9090,
+        ratio: 0.5,
+        scale: 4.0,
+        prefix: "db".to_string(),
+        enabled: false,
+        verbose: true,
+    };
+    let cfg_json = serde_json::to_string(&cfg).expect("serialize ServiceConfig");
+    let _cfg_back: codegen::ServiceConfig =
+        serde_json::from_str(&cfg_json).expect("ServiceConfig round-trips");
+    // An empty object deserializes every field to its `ifabsent` literal.
+    let cfg_default: codegen::ServiceConfig =
+        serde_json::from_str("{}").expect("deserialize ServiceConfig with no fields");
+    assert_eq!(cfg_default.port, 8080, "int ifabsent default");
+    assert_eq!(cfg_default.ratio, 1.0, "float ifabsent default");
+    assert_eq!(cfg_default.scale, 2.0, "whole-number double ifabsent default");
+    assert_eq!(cfg_default.prefix, "svc", "string ifabsent default");
+    assert!(cfg_default.enabled, "boolean true ifabsent default");
+    assert!(!cfg_default.verbose, "boolean false ifabsent default");
+
     // Keyword permissible value serializes back to its original wire name.
     let v = codegen::ItemStatus::r#virtual;
     assert_eq!(

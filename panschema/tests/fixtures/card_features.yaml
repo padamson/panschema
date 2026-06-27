@@ -19,6 +19,12 @@ slots:
       - value: "36"
         description: A typical adult age.
 
+  membership:
+    name: membership
+    description: Membership tier, defaulting when omitted via `ifabsent`.
+    range: string
+    ifabsent: string(basic)
+
 classes:
   NamedThing:
     name: NamedThing
@@ -39,6 +45,7 @@ classes:
         description: A fully populated person record.
     slots:
       - age
+      - membership
     attributes:
       name:
         name: name

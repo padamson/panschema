@@ -114,7 +114,7 @@ focused subset of the structural ones.
 | `any_of` | ● | ● | ● | ○ | ● | union on card; one range edge per member; `#[serde(untagged)]` enum |
 | `*_mappings` (5) | ● | ● | ○ | ● | ○ | see Common metadata |
 | `symmetric` `asymmetric` `reflexive` `irreflexive` `transitive` | ● | ● | — | ● | — | OWL relationship characteristics: card badge + `owl:<Name>Property` axiom; round-trips (OWL reader reads the axioms back into the flags) |
-| `ifabsent` | ● | ○ | — | — | ● | schema-encoded default. Rust: enum-valued form generates a non-`Option` field with `#[serde(default)]` + default fn; scalar forms and the slot-card "Default" row are later slices |
+| `ifabsent` | ● | ● | — | — | ● | schema-encoded default. Rust: enum and scalar (`int`/`float`/`double`/`string`/boolean) forms generate a non-`Option` field with `#[serde(default)]` + default fn; HTML "Default" row shows the value |
 | `key` `designates_type` `subproperty_of` `singular_name` `recommended` `slot_group` `unit` `implicit_prefix` `readonly` `shared` `list_elements_unique`/`_ordered` | ✗ | — | — | — | — | not modeled. `subproperty_of` (`rdfs:subPropertyOf`) would further enrich RDF/OWL |
 | `minimum_value` `maximum_value` | ● | ● | — | ○ | — | numeric value bounds: `≥`/`≤` card badge (feature 14 slice 2); RDF `owl:withRestrictions` facet deferred (slice 2b) |
 | `equals_string` `equals_string_in` `equals_number` `equals_expression` `exact_cardinality` `has_member` `all_members` `structured_pattern` `range_expression` `all_of` `exactly_one_of` `none_of` `array` | ✗ | — | — | — | — | not modeled. Value/boolean-expression constraints (a validation-feature family) |

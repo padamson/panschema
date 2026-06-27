@@ -134,6 +134,7 @@
         {%- let aliases = slot.aliases.as_slice() %}
         {%- let see_also = slot.see_also.as_slice() %}
         {%- let examples = slot.examples.as_slice() %}
+        {%- let default = slot.default.as_deref() %}
         {% include "components/slot_card.html" %}
 {%- endfor %}
     </div>
