@@ -8,8 +8,10 @@
 //!
 //! The `scimantic_*` tests provide real-world dogfood against the
 //! scimantic-schema v0.1.0 LinkML schema. The schema is a frozen vendored
-//! snapshot checked in at `tests/fixtures/scimantic-0.1.0.yaml`, so these
-//! tests also run by default with no network access.
+//! snapshot checked in at `tests/fixtures/dogfood/scimantic-schema/v0.1.0.yaml`,
+//! so these tests also run by default with no network access. Broader
+//! render/compile coverage across every vendored dogfood release lives in
+//! `tests/dogfood.rs`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -34,12 +36,14 @@ fn read_codegen_fixture() -> SchemaDefinition {
 
 /// Read the frozen vendored scimantic-schema v0.1.0 snapshot through the
 /// same reader path the CLI uses. No network: the schema lives in-tree at
-/// `tests/fixtures/scimantic-0.1.0.yaml`.
+/// `tests/fixtures/dogfood/scimantic-schema/v0.1.0.yaml`.
 fn read_scimantic() -> SchemaDefinition {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures")
-        .join("scimantic-0.1.0.yaml");
+        .join("dogfood")
+        .join("scimantic-schema")
+        .join("v0.1.0.yaml");
     YamlReader::new()
         .read(&path)
         .expect("parse vendored scimantic schema")

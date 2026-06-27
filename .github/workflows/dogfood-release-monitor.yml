@@ -1,0 +1,138 @@
+name: Dogfood Release Monitor
+
+# Weekly check that every released (tagged) version of the real dogfood
+# schemas has a vendored regression fixture under
+# tests/fixtures/dogfood/<repo>/<tag>.yaml. When a tag has no snapshot, a
+# single tracking issue is opened (or updated) listing the missing
+# repo@tags — the prompt to run scripts/vendor-dogfood-schemas.sh and commit
+# the result. It opens an issue, not a PR: a new release can use a construct
+# panschema doesn't support yet, so a human vendors it after any needed work.
+
+on:
+  schedule:
+    # Mondays at 07:00 UTC.
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check-vendored-releases:
+    name: Check vendored dogfood releases
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ISSUE_TITLE: "Dogfood: vendor missing schema releases"
+      ISSUE_LABEL: dogfood-vendoring
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Find missing vendored releases
+        id: scan
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner=padamson
+          # Only public dogfood repos are listed: the default GITHUB_TOKEN
+          # cannot read a private sibling repo's tags (the API 404s, and gh
+          # writes the error body to stdout). Add a repo here once it is
+          # public, or wire in a PAT with cross-repo read.
+          repos=(scimantic-schema scidatica-schema)
+          missing_file="$(mktemp)"
+
+          for repo in "${repos[@]}"; do
+            # List tags; a repo with no tags (or that 404s) contributes nothing.
+            tags="$(gh api "repos/$owner/$repo/tags" --paginate --jq '.[].name' 2>/dev/null || true)"
+            [ -n "$tags" ] || continue
+            while IFS= read -r tag; do
+              [ -n "$tag" ] || continue
+              if [ ! -f "panschema/tests/fixtures/dogfood/$repo/$tag.yaml" ]; then
+                echo "- \`$repo@$tag\`" >> "$missing_file"
+              fi
+            done <<< "$tags"
+          done
+
+          if [ -s "$missing_file" ]; then
+            {
+              echo "missing<<EOF"
+              sort "$missing_file"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            echo "has_missing=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_missing=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or update tracking issue
+        if: steps.scan.outputs.has_missing == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          body="$(cat <<EOF
+          The following released (tagged) dogfood schema versions have no vendored
+          regression fixture under \`panschema/tests/fixtures/dogfood/<repo>/<tag>.yaml\`:
+
+          ${{ steps.scan.outputs.missing }}
+
+          To vendor each, run from the repo root and commit the result:
+
+          \`\`\`sh
+          scripts/vendor-dogfood-schemas.sh <repo> <tag>
+          \`\`\`
+
+          A new release may use a LinkML construct panschema does not support yet —
+          do any needed panschema work first, then vendor and commit.
+
+          _Maintained automatically by the Dogfood Release Monitor workflow._
+          EOF
+          )"
+
+          # Find an existing open tracking issue by exact title (scoped by label)
+          # so re-runs update in place rather than opening duplicates.
+          existing="$(gh issue list \
+            --state open \
+            --label "$ISSUE_LABEL" \
+            --search "in:title \"$ISSUE_TITLE\"" \
+            --json number,title \
+            --jq ".[] | select(.title == \"$ISSUE_TITLE\") | .number" \
+            | head -1)"
+
+          if [ -n "$existing" ]; then
+            echo "Updating existing tracking issue #$existing"
+            gh issue edit "$existing" --body "$body"
+          else
+            echo "Opening new tracking issue"
+            # Create the label if it doesn't exist yet (ignore failure if it does).
+            gh label create "$ISSUE_LABEL" \
+              --description "Tracks dogfood schema releases awaiting vendoring" \
+              --color FBCA04 2>/dev/null || true
+            gh issue create \
+              --title "$ISSUE_TITLE" \
+              --label "$ISSUE_LABEL" \
+              --body "$body"
+          fi
+
+      - name: Close stale tracking issue
+        if: steps.scan.outputs.has_missing == 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Everything is vendored: close any open tracking issue so the board
+          # reflects reality. Opens nothing when there was none.
+          existing="$(gh issue list \
+            --state open \
+            --label "$ISSUE_LABEL" \
+            --search "in:title \"$ISSUE_TITLE\"" \
+            --json number,title \
+            --jq ".[] | select(.title == \"$ISSUE_TITLE\") | .number" \
+            | head -1)"
+          if [ -n "$existing" ]; then
+            echo "All releases vendored; closing tracking issue #$existing"
+            gh issue close "$existing" \
+              --comment "All released dogfood schema versions are now vendored. Closing automatically."
+          else
+            echo "All releases vendored; no tracking issue to close."
+          fi

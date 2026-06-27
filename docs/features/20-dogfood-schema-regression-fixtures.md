@@ -33,9 +33,10 @@ is stale the moment it lands, and the live "does panschema `main` handle the
 schema's `main`" signal belongs in each schema repo's own CI (build against
 panschema `main`), not in a frozen fixture here.
 
-The dogfood schemas: `scimantic-schema`, `scidatica-schema`, and
-`nimbus-schema`. nimbus has no releases yet — it joins automatically once it
-does.
+The dogfood schemas the monitor covers are the public ones — `scimantic-schema`
+and `scidatica-schema`. A private repo is excluded: the default `GITHUB_TOKEN`
+can't read a private sibling repo's tags, so it joins once it's public or a PAT
+is wired in.
 
 ---
 
@@ -131,7 +132,7 @@ extending real-schema coverage past codegen.
 The feature is complete when ALL of the following are true:
 
 - [ ] Slices 1–3 acceptance criteria met (slice 4 optional)
-- [ ] Every current release of `scimantic-schema` and `scidatica-schema` is vendored and green (nimbus when it has releases)
+- [ ] Every current release of `scimantic-schema` and `scidatica-schema` is vendored and green
 - [ ] The default `cargo nextest run` needs no network
 - [ ] All tests passing: `cargo nextest run`
 - [ ] Code formatted + clippy clean: `cargo fmt --check` + `cargo clippy --all-targets --all-features -- -D warnings`
