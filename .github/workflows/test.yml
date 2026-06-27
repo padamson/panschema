@@ -50,7 +50,7 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Cache Cargo
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/bin/
@@ -107,7 +107,7 @@ jobs:
       uses: taiki-e/install-action@wasm-pack
 
     - name: Cache Cargo
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: |
           ~/.cargo/bin/
@@ -121,7 +121,7 @@ jobs:
           ${{ runner.os }}-cargo-
 
     - name: Cache WASM build
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       id: wasm-cache
       with:
         path: panschema-viz/pkg/
@@ -145,7 +145,7 @@ jobs:
       run: echo "version=1.60.0" >> $GITHUB_OUTPUT
 
     - name: Cache Playwright browsers and driver
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       id: playwright-cache
       with:
         path: |
