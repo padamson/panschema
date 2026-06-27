@@ -390,6 +390,71 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         browser_name
     );
 
+    // 6e-1. Card metadata rows that render only through the full
+    // OWL → IR → HTML path. The reference ontology carries a deprecated
+    // class, a class with aliases + see_also + a SKOS mapping, and a
+    // symmetric+transitive object property; each must surface in the
+    // browser DOM.
+
+    // Pet is `owl:deprecated true`: its card shows the "Deprecated"
+    // badge and the deprecation note.
+    let pet_card = page.locator("#class-Pet").await;
+    let pet_html = pet_card.inner_html().await.expect("Failed to get Pet card");
+    assert!(
+        pet_html.contains(r#"class="deprecated-badge""#),
+        "[{}] Pet card should show the Deprecated badge; got: {}",
+        browser_name,
+        pet_html
+    );
+    assert!(
+        pet_html.contains(r#"class="deprecated-note""#),
+        "[{}] Pet card should show the deprecation note; got: {}",
+        browser_name,
+        pet_html
+    );
+
+    // Person carries skos:altLabel (aliases), rdfs:seeAlso (see also),
+    // and skos:exactMatch (a mapping). The person_card_html captured
+    // above for the root-class check is reused here.
+    assert!(
+        person_card_html.contains("<dt>Aliases</dt>")
+            && person_card_html.contains("Human")
+            && person_card_html.contains("Individual"),
+        "[{}] Person card should show an Aliases row listing Human and Individual; got: {}",
+        browser_name,
+        person_card_html
+    );
+    assert!(
+        person_card_html.contains("<dt>See also</dt>")
+            && person_card_html.contains("xmlns.com/foaf/0.1/Person"),
+        "[{}] Person card should show a See also row linking to foaf:Person; got: {}",
+        browser_name,
+        person_card_html
+    );
+    assert!(
+        person_card_html.contains("<dt>Mappings</dt>")
+            && person_card_html.contains("schema.org/Person"),
+        "[{}] Person card should show a Mappings row linking to schema.org/Person; got: {}",
+        browser_name,
+        person_card_html
+    );
+
+    // relatedTo is owl:SymmetricProperty + owl:TransitiveProperty: its
+    // slot card shows both characteristic badges.
+    let related_card = page.locator("#slot-relatedTo").await;
+    let related_html = related_card
+        .inner_html()
+        .await
+        .expect("Failed to get relatedTo card");
+    assert!(
+        related_html.contains(r#"class="characteristic-badge""#)
+            && related_html.contains("Symmetric")
+            && related_html.contains("Transitive"),
+        "[{}] relatedTo card should show Symmetric and Transitive characteristic badges; got: {}",
+        browser_name,
+        related_html
+    );
+
     // 6f. Verify individuals are extracted and displayed
     let ind_section = page.locator("#individuals").await;
     let ind_section_html = ind_section
@@ -1600,6 +1665,86 @@ fn e2e_renders_enum_and_type_sections() {
         assert!(
             nav_html.contains("Enumerations") && nav_html.contains("Types"),
             "sidebar lists Enumerations and Types; got: {nav_html}"
+        );
+
+        browser.close().await.expect("close browser");
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
+// Proves the LinkML-only card features render in a browser. These have
+// no OWL form, so the reference fixture can't exercise them: an abstract
+// class, a class with `mixins:` and worked `examples:`, and a slot with
+// numeric `minimum_value` / `maximum_value`. This renders a small LinkML
+// fixture declaring each and asserts the abstract badge, the "Mixes in"
+// mixin links, the Examples section, and the ≥ / ≤ value-bound badges
+// are present in the rendered DOM.
+#[test]
+fn e2e_renders_linkml_card_features() {
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
+    rt.block_on(async {
+        let output_dir = generate_docs_for("tests/fixtures/card_features.yaml");
+        let port = find_available_port();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch()
+            .await
+            .expect("Failed to initialize Playwright");
+        let browser = playwright
+            .chromium()
+            .launch()
+            .await
+            .expect("Failed to launch Chromium");
+        let page = browser.new_page().await.expect("Failed to create page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("navigate");
+
+        // Abstract class: NamedThing carries the abstract badge.
+        let abstract_card = page.locator("#class-NamedThing").await;
+        let abstract_html = abstract_card
+            .inner_html()
+            .await
+            .expect("NamedThing card should be present");
+        assert!(
+            abstract_html.contains(r#"class="abstract-badge""#),
+            "abstract class card shows the abstract badge; got: {abstract_html}"
+        );
+
+        // Mixins + examples: Person mixes in HasIdentifier and lists a
+        // worked example.
+        let person_card = page.locator("#class-Person").await;
+        let person_html = person_card
+            .inner_html()
+            .await
+            .expect("Person card should be present");
+        assert!(
+            person_html.contains("<dt>Mixes in</dt>")
+                && person_html.contains(r##"href="#class-HasIdentifier""##),
+            "class card shows a Mixes in row linking to the mixin; got: {person_html}"
+        );
+        assert!(
+            person_html.contains("<dt>Examples</dt>") && person_html.contains("Ada Lovelace"),
+            "class card shows an Examples section with the worked value; got: {person_html}"
+        );
+
+        // Value bounds: the age slot card surfaces ≥ / ≤ characteristic
+        // badges from minimum_value / maximum_value.
+        let age_card = page.locator("#slot-age").await;
+        let age_html = age_card
+            .inner_html()
+            .await
+            .expect("age slot card should be present");
+        assert!(
+            age_html.contains(r#"class="characteristic-badge""#)
+                && age_html.contains("≥ 0")
+                && age_html.contains("≤ 130"),
+            "slot card shows value-bound badges; got: {age_html}"
         );
 
         browser.close().await.expect("close browser");

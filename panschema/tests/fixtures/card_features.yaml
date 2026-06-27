@@ -1,0 +1,45 @@
+id: https://example.org/card-features
+name: card_features
+description: >-
+  A fixture exercising LinkML-only card features that have no OWL form:
+  abstract classes, mixins, worked examples, and numeric value bounds.
+prefixes:
+  ex: https://example.org/card-features/
+default_prefix: ex
+default_range: string
+
+slots:
+  age:
+    name: age
+    description: Age in years, constrained to a plausible human range.
+    range: integer
+    minimum_value: 0
+    maximum_value: 130
+    examples:
+      - value: "36"
+        description: A typical adult age.
+
+classes:
+  NamedThing:
+    name: NamedThing
+    description: An abstract base class not meant to be instantiated directly.
+    abstract: true
+
+  HasIdentifier:
+    name: HasIdentifier
+    description: A mixin contributing an identifier slot.
+
+  Person:
+    name: Person
+    description: A human being, demonstrating mixins and worked examples.
+    mixins:
+      - HasIdentifier
+    examples:
+      - value: '{"name": "Ada Lovelace", "age": 36}'
+        description: A fully populated person record.
+    slots:
+      - age
+    attributes:
+      name:
+        name: name
+        range: string
