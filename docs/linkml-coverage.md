@@ -68,7 +68,7 @@ slot, enum, type, and permissible-value alike. panschema models only a few:
 | `prefixes` | ● | ● | ◐ | ● | ✗ | namespace table; CURIE expansion; `@prefix` |
 | `default_prefix` | ● | ● | ◐ | ◐ | ✗ | bare-name CURIE resolution |
 | `default_range` | ● | ○ | ○ | ○ | ○ | modeled, but no writer applies it |
-| `imports` | ● | ○ | ○ | ○ | ○ | tracked, never resolved or rendered |
+| `imports` | ● | ◐ | ◐ | ◐ | ◐ | local file imports resolved + merged at load time (every writer sees one schema); CURIE/remote/builtin imports + provenance rendering still pending |
 | `classes` `slots` `enums` `types` | ● | ● | ● | ● | ● | the indexes the writers walk |
 | `subsets` `settings` `bindings` `emit_prefixes` `source_file` `metamodel_version` `generation_date` … | ✗ | — | — | — | — | not modeled |
 
@@ -193,7 +193,9 @@ Ordered by impact, with the slices already filed against each:
    axioms + card badges ([feature 14 slice 1](features/14-slot-constraints.md) ✅).
    Remaining tail: `subproperty_of` (`rdfs:subPropertyOf`).
 7. **Dynamic enums / imports resolution**: `reachable_from`, `code_set`;
-   `imports` is tracked but never followed.
+   `imports` of local files now resolve + merge at load time, so a schema
+   split across files renders as one. CURIE/remote/builtin (`linkml:*`)
+   imports and import provenance in the rendered docs are still pending.
 8. **Subsets** (not modeled): `subsets` on the schema + `in_subset` per
    element would enable subset-scoped documentation (render only the terms in
    a named profile). Self-contained, additive.

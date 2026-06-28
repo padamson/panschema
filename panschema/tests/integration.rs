@@ -2623,3 +2623,40 @@ fn init_output_shows_from_provenance_when_from_used() {
         "stdout should label version as `from --from`: {stdout}"
     );
 }
+
+/// `panschema generate` on a root schema that `imports:` a local file
+/// merges the import in before any writer runs: the generated HTML
+/// renders a class card for a class defined only in the imported file,
+/// alongside the root's own class.
+#[test]
+fn generate_merges_single_import() {
+    let out_dir = std::env::temp_dir().join("panschema_generate_merges_single_import");
+    let _ = fs::remove_dir_all(&out_dir);
+
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--input",
+            "tests/fixtures/imports/app.yaml",
+            "--format",
+            "html",
+            "--no-graph",
+            "--offline",
+            "--output",
+            out_dir.to_str().unwrap(),
+        ])
+        .status()
+        .expect("run panschema generate");
+    assert!(status.success(), "generate should succeed");
+
+    let html = fs::read_to_string(out_dir.join("index.html")).expect("read index.html");
+    assert!(
+        html.contains(r##"id="class-Address""##),
+        "class defined only in the import should render a card in the merged HTML"
+    );
+    assert!(
+        html.contains(r##"id="class-Customer""##),
+        "the root's own class should still render"
+    );
+    let _ = fs::remove_dir_all(&out_dir);
+}

@@ -6,6 +6,7 @@
 pub mod cache;
 pub mod graph_writer;
 pub mod html_writer;
+pub mod import_resolve;
 pub mod io;
 pub mod labels;
 pub mod linkml;

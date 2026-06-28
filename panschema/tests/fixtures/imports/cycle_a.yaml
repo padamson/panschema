@@ -1,0 +1,12 @@
+name: cycle_a
+id: https://example.org/cycle_a
+title: Cycle A
+description: Imports cycle_b, which imports back — a cycle the resolver must reject
+
+imports:
+  - cycle_b
+
+classes:
+  AThing:
+    name: AThing
+    description: A class in cycle_a
