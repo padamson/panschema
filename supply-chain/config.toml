@@ -28,20 +28,12 @@ url = "https://raw.githubusercontent.com/zcash/rust-ecosystem/main/supply-chain/
 [policy.panschema]
 audit-as-crates-io = true
 
-[[exemptions.aes]]
-version = "0.9.0"
-criteria = "safe-to-run"
-
 [[exemptions.ahash]]
 version = "0.7.8"
 criteria = "safe-to-deploy"
 
 [[exemptions.ahash]]
 version = "0.8.12"
-criteria = "safe-to-deploy"
-
-[[exemptions.anyhow]]
-version = "1.0.102"
 criteria = "safe-to-deploy"
 
 [[exemptions.askama]]
@@ -68,20 +60,8 @@ criteria = "safe-to-deploy"
 version = "0.12.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.bzip2]]
-version = "0.6.1"
-criteria = "safe-to-run"
-
 [[exemptions.cc]]
 version = "1.2.62"
-criteria = "safe-to-deploy"
-
-[[exemptions.cipher]]
-version = "0.5.1"
-criteria = "safe-to-run"
-
-[[exemptions.cmov]]
-version = "0.5.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.console]]
@@ -96,20 +76,12 @@ criteria = "safe-to-deploy"
 version = "0.10.2"
 criteria = "safe-to-deploy"
 
-[[exemptions.constant_time_eq]]
-version = "0.4.2"
-criteria = "safe-to-run"
-
 [[exemptions.contextual]]
 version = "0.1.6"
 criteria = "safe-to-deploy"
 
 [[exemptions.core-foundation]]
 version = "0.10.1"
-criteria = "safe-to-run"
-
-[[exemptions.cpubits]]
-version = "0.1.1"
 criteria = "safe-to-run"
 
 [[exemptions.cpufeatures]]
@@ -128,10 +100,6 @@ criteria = "safe-to-run"
 version = "0.2.1"
 criteria = "safe-to-deploy"
 
-[[exemptions.ctutils]]
-version = "0.4.2"
-criteria = "safe-to-deploy"
-
 [[exemptions.data-encoding]]
 version = "2.11.0"
 criteria = "safe-to-run"
@@ -139,10 +107,6 @@ criteria = "safe-to-run"
 [[exemptions.decoded-char]]
 version = "0.1.1"
 criteria = "safe-to-deploy"
-
-[[exemptions.deflate64]]
-version = "0.1.12"
-criteria = "safe-to-run"
 
 [[exemptions.derivative]]
 version = "2.2.0"
@@ -276,10 +240,6 @@ criteria = "safe-to-deploy"
 version = "0.2.1"
 criteria = "safe-to-deploy"
 
-[[exemptions.hmac]]
-version = "0.13.0"
-criteria = "safe-to-run"
-
 [[exemptions.http-range-header]]
 version = "0.4.2"
 criteria = "safe-to-deploy"
@@ -314,10 +274,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.icu_provider]]
 version = "2.2.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.id-arena]]
-version = "2.3.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.idna_adapter]]
@@ -358,10 +314,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.jni-sys-macros]]
 version = "0.4.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.jobserver]]
-version = "0.1.34"
 criteria = "safe-to-deploy"
 
 [[exemptions.js-sys]]
@@ -448,10 +400,6 @@ criteria = "safe-to-deploy"
 version = "1.0.6"
 criteria = "safe-to-deploy"
 
-[[exemptions.libbz2-rs-sys]]
-version = "0.2.5"
-criteria = "safe-to-run"
-
 [[exemptions.libc]]
 version = "0.2.186"
 criteria = "safe-to-deploy"
@@ -487,10 +435,6 @@ criteria = "safe-to-deploy"
 [[exemptions.locspan-derive]]
 version = "0.6.0"
 criteria = "safe-to-deploy"
-
-[[exemptions.lzma-rust2]]
-version = "0.16.2"
-criteria = "safe-to-run"
 
 [[exemptions.matchit]]
 version = "0.8.4"
@@ -596,10 +540,6 @@ criteria = "safe-to-deploy"
 version = "0.2.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.pbkdf2]]
-version = "0.13.0"
-criteria = "safe-to-run"
-
 [[exemptions.pct-str]]
 version = "1.2.0"
 criteria = "safe-to-deploy"
@@ -643,10 +583,6 @@ criteria = "safe-to-deploy"
 [[exemptions.potential_utf]]
 version = "0.1.5"
 criteria = "safe-to-deploy"
-
-[[exemptions.ppmd-rust]]
-version = "1.4.0"
-criteria = "safe-to-run"
 
 [[exemptions.ppv-lite86]]
 version = "0.2.21"
@@ -760,10 +696,6 @@ criteria = "safe-to-run"
 version = "0.7.1"
 criteria = "safe-to-deploy"
 
-[[exemptions.sha1]]
-version = "0.11.0"
-criteria = "safe-to-run"
-
 [[exemptions.sha2]]
 version = "0.11.0"
 criteria = "safe-to-deploy"
@@ -855,10 +787,6 @@ criteria = "safe-to-deploy"
 [[exemptions.tempfile]]
 version = "3.27.0"
 criteria = "safe-to-deploy"
-
-[[exemptions.time]]
-version = "0.3.47"
-criteria = "safe-to-run"
 
 [[exemptions.tinystr]]
 version = "0.8.3"
@@ -1098,16 +1026,4 @@ criteria = "safe-to-run"
 
 [[exemptions.zopfli]]
 version = "0.8.3"
-criteria = "safe-to-run"
-
-[[exemptions.zstd]]
-version = "0.13.3"
-criteria = "safe-to-run"
-
-[[exemptions.zstd-safe]]
-version = "7.2.4"
-criteria = "safe-to-run"
-
-[[exemptions.zstd-sys]]
-version = "2.0.16+zstd.1.5.7"
 criteria = "safe-to-run"
