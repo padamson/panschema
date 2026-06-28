@@ -36,10 +36,17 @@ repos:
         types: [rust]
         pass_filenames: false
 
+      # Feature set is aligned with cargo-nextest and cargo-doctest
+      # below (all three use `panschema/dev`) so the Rust build hooks
+      # share one dependency compilation instead of each forcing a
+      # rebuild under a different feature unification. `--all-features`
+      # is deliberately avoided: it pulls in the `gpu`/wgpu tree that
+      # neither the tests nor CI's clippy (default + `dev`) exercise, so
+      # linting it here only bought a long recompile.
       - id: cargo-clippy
         name: cargo clippy
         description: Run clippy linter
-        entry: cargo clippy --all-targets --all-features -- -D warnings
+        entry: cargo clippy --workspace --all-targets --features panschema/dev -- -D warnings
         language: system
         types: [rust]
         pass_filenames: false
@@ -54,10 +61,11 @@ repos:
         types: [rust]
         pass_filenames: false
 
+      # Same feature set as the two hooks above so it reuses their build.
       - id: cargo-doctest
         name: cargo test --doc
         description: Run documentation tests
-        entry: cargo test --doc --workspace
+        entry: cargo test --doc --workspace --features panschema/dev
         language: system
         types: [rust]
         pass_filenames: false
