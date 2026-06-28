@@ -24,9 +24,12 @@
 //! path, and re-entering a path on that path is rejected — across the
 //! full transitive graph, not just direct self-imports.
 //!
-//! Out of scope here (handled elsewhere): CURIE / URL imports and
-//! builtin `linkml:*` imports. An entry that doesn't resolve to a local
-//! file is reported through [`ImportError`] rather than crashing.
+//! Built-in and remote imports are recognized and skipped as no-ops:
+//! the standard `linkml:*` modules, and any CURIE or URL that expands to
+//! a remote `http(s)` URI, name well-known schemas a writer already
+//! understands rather than local files to merge. Only bare names and
+//! relative paths are resolved on disk; a path-shaped entry that names
+//! no file is reported through [`ImportError`] rather than crashing.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -167,14 +170,23 @@ fn resolve_into(
 ) -> Result<(), ImportError> {
     // Take the import list so we can mutate `root` while iterating; the
     // merged schema's `imports` is cleared (every entry is now folded
-    // in, so writers see a self-contained schema).
+    // in, so writers see a self-contained schema). The declaring
+    // schema's own prefixes classify each entry, so snapshot them before
+    // merging — which unions imported prefixes into `root` — can change
+    // the map mid-loop.
     let imports = std::mem::take(&mut root.imports);
+    let prefixes = root.prefixes.clone();
 
     for entry in imports {
-        // CURIE / URL / builtin imports are deferred: an entry with a
-        // scheme or namespace separator that isn't a local path is not
-        // resolved here. Recognized by the absence of a matching local
-        // file below, which surfaces as `Unresolvable`.
+        // Built-in / remote imports are not local files: the standard
+        // `linkml:` modules and any CURIE or URL that expands to a remote
+        // URI name well-known schemas a writer already understands as
+        // built-ins. Skip them as no-ops rather than resolving — or
+        // failing to resolve — them as local paths.
+        if is_builtin_import(&entry, &prefixes) {
+            continue;
+        }
+
         let resolved =
             resolve_entry_path(&entry, base_dir).ok_or_else(|| ImportError::Unresolvable {
                 entry: entry.clone(),
@@ -249,6 +261,46 @@ fn resolve_entry_path(entry: &str, base_dir: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// The built-in `linkml:` prefix always denotes well-known LinkML
+/// modules (`types`, `units`, `mappings`, `extended_*`), whether or not
+/// the schema declares the prefix explicitly.
+const LINKML_PREFIX: &str = "linkml";
+
+/// True when an `imports:` entry names a built-in / remote schema rather
+/// than a local file, so local-file resolution must be skipped.
+///
+/// An entry qualifies when it is a bare remote URL, or a CURIE
+/// `prefix:local` whose prefix is the built-in `linkml` namespace or
+/// expands — via the declaring schema's own `prefixes` — to a remote
+/// `http(s)` URI. Bare names and relative paths carry no such prefix and
+/// fall through to local resolution.
+fn is_builtin_import(entry: &str, prefixes: &BTreeMap<String, String>) -> bool {
+    // A bare URL imported directly (e.g. `https://w3id.org/linkml/types`).
+    if is_remote_uri(entry) {
+        return true;
+    }
+    // CURIE form `prefix:local`. No colon → bare name / relative path,
+    // which is a local import.
+    let Some((prefix, _local)) = entry.split_once(':') else {
+        return false;
+    };
+    // The standard LinkML modules are built-ins even when the schema
+    // omits the prefix declaration.
+    if prefix == LINKML_PREFIX {
+        return true;
+    }
+    // Any other CURIE counts as remote only when its prefix is declared
+    // and expands to a remote URI; otherwise treat it as a local path so
+    // a genuine local import is never silently skipped.
+    prefixes.get(prefix).is_some_and(|base| is_remote_uri(base))
+}
+
+/// True for an `http`/`https` URI — the shape a remote schema namespace
+/// takes. Local paths and bare names are never remote.
+fn is_remote_uri(s: &str) -> bool {
+    s.starts_with("http://") || s.starts_with("https://")
 }
 
 /// Canonicalize a path for cycle tracking, falling back to the path
@@ -577,6 +629,99 @@ mod tests {
         assert!(
             matches!(err, ImportError::Cycle { .. }),
             "expected a cycle error, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_imports_skips_builtin_linkml_import() {
+        // The standard way to pull in LinkML's built-in types is
+        // `imports: - linkml:types` under a `linkml:` prefix that expands
+        // to a remote URI. That CURIE names a well-known module, not a
+        // local file, so resolution skips it as a no-op: no error, and
+        // the root's own elements survive with `imports` cleared.
+        let registry = FormatRegistry::with_defaults();
+        let mut root = SchemaDefinition::new("builtin_importer");
+        root.prefixes
+            .insert("linkml".into(), "https://w3id.org/linkml/".into());
+        root.classes.insert(
+            "Customer".into(),
+            crate::linkml::ClassDefinition::new("Customer"),
+        );
+        root.imports = vec!["linkml:types".into()];
+        let root_path = fixtures_dir().join("builtin_importer.yaml");
+
+        let report = resolve_imports(&mut root, &root_path, &registry)
+            .expect("a standard linkml: import must resolve as a built-in no-op");
+
+        // The built-in import contributed nothing and was not treated as
+        // a missing local file.
+        assert!(report.loaded_files.is_empty());
+        assert!(report.collisions.is_empty());
+        // The root's own definition is untouched and imports are cleared.
+        assert!(root.classes.contains_key("Customer"));
+        assert!(root.imports.is_empty());
+    }
+
+    #[test]
+    fn resolve_imports_skips_builtin_linkml_without_declared_prefix() {
+        // The `linkml:` modules are built-ins recognized by name, not by
+        // prefix expansion: a schema that imports `linkml:types` without
+        // declaring the `linkml` prefix must still skip it, never fall
+        // through to local-file resolution.
+        let registry = FormatRegistry::with_defaults();
+        let mut root = SchemaDefinition::new("builtin_importer");
+        // Deliberately no `linkml` prefix declared.
+        root.imports = vec!["linkml:types".into()];
+        let root_path = fixtures_dir().join("builtin_importer.yaml");
+
+        let report = resolve_imports(&mut root, &root_path, &registry)
+            .expect("a linkml: import is a built-in even with no prefix declared");
+        assert!(report.loaded_files.is_empty());
+        assert!(root.imports.is_empty());
+    }
+
+    #[test]
+    fn resolve_imports_skips_remote_url_and_remote_curie() {
+        // Two non-`linkml` remote forms must skip local resolution: a
+        // bare `http(s)` URL, and a CURIE whose declared prefix expands
+        // to a remote URI. A prefix that does *not* expand to a remote
+        // URI is left for local resolution (covered elsewhere).
+        let registry = FormatRegistry::with_defaults();
+        let mut root = SchemaDefinition::new("remote_importer");
+        root.prefixes
+            .insert("ex".into(), "https://example.org/".into());
+        root.imports = vec![
+            "https://w3id.org/linkml/types".into(),
+            "ex:CoreTypes".into(),
+        ];
+        let root_path = fixtures_dir().join("remote_importer.yaml");
+
+        let report = resolve_imports(&mut root, &root_path, &registry)
+            .expect("a remote URL and a remote-expanding CURIE must both be skipped");
+        assert!(report.loaded_files.is_empty());
+        assert!(root.imports.is_empty());
+    }
+
+    #[test]
+    fn resolve_imports_skips_builtin_alongside_local_import() {
+        // A built-in CURIE and a local file in the same `imports:` list:
+        // the CURIE is skipped, the local file still resolves and merges.
+        // The fix must not over-skip genuine local imports.
+        let registry = FormatRegistry::with_defaults();
+        let (mut root, path) = read_root("app.yaml");
+        // Prepend a standard linkml: import to the local `common` import.
+        root.prefixes
+            .insert("linkml".into(), "https://w3id.org/linkml/".into());
+        root.imports.insert(0, "linkml:types".into());
+
+        let report = resolve_imports(&mut root, &path, &registry).expect("resolve imports");
+
+        // The local import still merged its class.
+        assert!(root.classes.contains_key("Address"));
+        // Only the local file was loaded; the built-in CURIE was skipped.
+        assert_eq!(
+            report.loaded_files,
+            vec![fixtures_dir().join("common.yaml").canonicalize().unwrap()]
         );
     }
 
