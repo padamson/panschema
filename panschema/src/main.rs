@@ -276,7 +276,20 @@ fn generate(
     let reader = registry
         .reader_for_path(input)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
-    let schema = reader.read(input).map_err(|e| anyhow::anyhow!("{}", e))?;
+    let mut schema = reader.read(input).map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    // Fold any `imports:` of local files into the root schema before any
+    // writer runs, so every writer consumes one self-contained schema.
+    if !schema.imports.is_empty() {
+        let report = panschema::import_resolve::resolve_imports(&mut schema, input, &registry)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        for collision in &report.collisions {
+            eprintln!(
+                "warning: imported {collision} collides with the root schema's; \
+                 keeping the root definition"
+            );
+        }
+    }
 
     // For HTML format, use HtmlWriter with custom options
     if format.eq_ignore_ascii_case("html") {

@@ -166,15 +166,16 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
 
     // 6. Verify classes are extracted and displayed (not empty)
-    // The section header should show count of 5 (Animal, Cat, Dog, Mammal, Person)
+    // The section header should show count of 6 (Animal, Cat, Dog, Mammal,
+    // Person, Pet)
     let class_section = page.locator("#classes").await;
     let class_section_html = class_section
         .inner_html()
         .await
         .expect("Failed to get classes section");
     assert!(
-        class_section_html.contains(">5<"),
-        "[{}] Classes section should show count of 5, got: {}",
+        class_section_html.contains(">6<"),
+        "[{}] Classes section should show count of 6, got: {}",
         browser_name,
         class_section_html
     );
@@ -186,8 +187,8 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         .await
         .expect("Failed to count class links");
     assert_eq!(
-        class_link_count, 5,
-        "[{}] Should have 5 class links",
+        class_link_count, 6,
+        "[{}] Should have 6 class links",
         browser_name
     );
 
@@ -210,8 +211,8 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         .await
         .expect("Failed to count class cards");
     assert_eq!(
-        class_card_count, 5,
-        "[{}] Should have 5 class cards",
+        class_card_count, 6,
+        "[{}] Should have 6 class cards",
         browser_name
     );
 
@@ -293,8 +294,8 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         .await
         .expect("Failed to get slots section");
     assert!(
-        slot_section_html.contains(">4<"),
-        "[{}] Slots section should show count of 4, got: {}",
+        slot_section_html.contains(">5<"),
+        "[{}] Slots section should show count of 5, got: {}",
         browser_name,
         slot_section_html
     );
@@ -306,8 +307,8 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         .await
         .expect("Failed to count slot links");
     assert_eq!(
-        slot_link_count, 4,
-        "[{}] Should have 4 slot links",
+        slot_link_count, 5,
+        "[{}] Should have 5 slot links",
         browser_name
     );
 
@@ -318,8 +319,8 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         .await
         .expect("Failed to count slot cards");
     assert_eq!(
-        slot_card_count, 4,
-        "[{}] Should have 4 slot cards",
+        slot_card_count, 5,
+        "[{}] Should have 5 slot cards",
         browser_name
     );
 
@@ -387,6 +388,71 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         owns_html.contains("Inverse of: has owner"),
         "[{}] owns should show inverse of characteristic",
         browser_name
+    );
+
+    // 6e-1. Card metadata rows that render only through the full
+    // OWL → IR → HTML path. The reference ontology carries a deprecated
+    // class, a class with aliases + see_also + a SKOS mapping, and a
+    // symmetric+transitive object property; each must surface in the
+    // browser DOM.
+
+    // Pet is `owl:deprecated true`: its card shows the "Deprecated"
+    // badge and the deprecation note.
+    let pet_card = page.locator("#class-Pet").await;
+    let pet_html = pet_card.inner_html().await.expect("Failed to get Pet card");
+    assert!(
+        pet_html.contains(r#"class="deprecated-badge""#),
+        "[{}] Pet card should show the Deprecated badge; got: {}",
+        browser_name,
+        pet_html
+    );
+    assert!(
+        pet_html.contains(r#"class="deprecated-note""#),
+        "[{}] Pet card should show the deprecation note; got: {}",
+        browser_name,
+        pet_html
+    );
+
+    // Person carries skos:altLabel (aliases), rdfs:seeAlso (see also),
+    // and skos:exactMatch (a mapping). The person_card_html captured
+    // above for the root-class check is reused here.
+    assert!(
+        person_card_html.contains("<dt>Aliases</dt>")
+            && person_card_html.contains("Human")
+            && person_card_html.contains("Individual"),
+        "[{}] Person card should show an Aliases row listing Human and Individual; got: {}",
+        browser_name,
+        person_card_html
+    );
+    assert!(
+        person_card_html.contains("<dt>See also</dt>")
+            && person_card_html.contains("xmlns.com/foaf/0.1/Person"),
+        "[{}] Person card should show a See also row linking to foaf:Person; got: {}",
+        browser_name,
+        person_card_html
+    );
+    assert!(
+        person_card_html.contains("<dt>Mappings</dt>")
+            && person_card_html.contains("schema.org/Person"),
+        "[{}] Person card should show a Mappings row linking to schema.org/Person; got: {}",
+        browser_name,
+        person_card_html
+    );
+
+    // relatedTo is owl:SymmetricProperty + owl:TransitiveProperty: its
+    // slot card shows both characteristic badges.
+    let related_card = page.locator("#slot-relatedTo").await;
+    let related_html = related_card
+        .inner_html()
+        .await
+        .expect("Failed to get relatedTo card");
+    assert!(
+        related_html.contains(r#"class="characteristic-badge""#)
+            && related_html.contains("Symmetric")
+            && related_html.contains("Transitive"),
+        "[{}] relatedTo card should show Symmetric and Transitive characteristic badges; got: {}",
+        browser_name,
+        related_html
     );
 
     // 6f. Verify individuals are extracted and displayed
@@ -1599,6 +1665,98 @@ fn e2e_renders_enum_and_type_sections() {
         assert!(
             nav_html.contains("Enumerations") && nav_html.contains("Types"),
             "sidebar lists Enumerations and Types; got: {nav_html}"
+        );
+
+        browser.close().await.expect("close browser");
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
+// Proves the LinkML-only card features render in a browser. These have
+// no OWL form, so the reference fixture can't exercise them: an abstract
+// class, a class with `mixins:` and worked `examples:`, and a slot with
+// numeric `minimum_value` / `maximum_value`. This renders a small LinkML
+// fixture declaring each and asserts the abstract badge, the "Mixes in"
+// mixin links, the Examples section, and the ≥ / ≤ value-bound badges
+// are present in the rendered DOM.
+#[test]
+fn e2e_renders_linkml_card_features() {
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
+    rt.block_on(async {
+        let output_dir = generate_docs_for("tests/fixtures/card_features.yaml");
+        let port = find_available_port();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch()
+            .await
+            .expect("Failed to initialize Playwright");
+        let browser = playwright
+            .chromium()
+            .launch()
+            .await
+            .expect("Failed to launch Chromium");
+        let page = browser.new_page().await.expect("Failed to create page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("navigate");
+
+        // Abstract class: NamedThing carries the abstract badge.
+        let abstract_card = page.locator("#class-NamedThing").await;
+        let abstract_html = abstract_card
+            .inner_html()
+            .await
+            .expect("NamedThing card should be present");
+        assert!(
+            abstract_html.contains(r#"class="abstract-badge""#),
+            "abstract class card shows the abstract badge; got: {abstract_html}"
+        );
+
+        // Mixins + examples: Person mixes in HasIdentifier and lists a
+        // worked example.
+        let person_card = page.locator("#class-Person").await;
+        let person_html = person_card
+            .inner_html()
+            .await
+            .expect("Person card should be present");
+        assert!(
+            person_html.contains("<dt>Mixes in</dt>")
+                && person_html.contains(r##"href="#class-HasIdentifier""##),
+            "class card shows a Mixes in row linking to the mixin; got: {person_html}"
+        );
+        assert!(
+            person_html.contains("<dt>Examples</dt>") && person_html.contains("Ada Lovelace"),
+            "class card shows an Examples section with the worked value; got: {person_html}"
+        );
+
+        // Value bounds: the age slot card surfaces ≥ / ≤ characteristic
+        // badges from minimum_value / maximum_value.
+        let age_card = page.locator("#slot-age").await;
+        let age_html = age_card
+            .inner_html()
+            .await
+            .expect("age slot card should be present");
+        assert!(
+            age_html.contains(r#"class="characteristic-badge""#)
+                && age_html.contains("≥ 0")
+                && age_html.contains("≤ 130"),
+            "slot card shows value-bound badges; got: {age_html}"
+        );
+
+        // ifabsent default: the membership slot card surfaces a Default row
+        // rendering the readable value (`"basic"`).
+        let membership_card = page.locator("#slot-membership").await;
+        let membership_html = membership_card
+            .inner_html()
+            .await
+            .expect("membership slot card should be present");
+        assert!(
+            membership_html.contains("<dt>Default</dt>") && membership_html.contains("basic"),
+            "slot card shows a Default row with the ifabsent value; got: {membership_html}"
         );
 
         browser.close().await.expect("close browser");

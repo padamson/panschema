@@ -275,6 +275,9 @@ pub struct SlotCardComponent<'a> {
     pub aliases: &'a [String],
     pub see_also: &'a [panschema::html_writer::ExternalLink],
     pub examples: &'a [panschema::linkml::Example],
+    /// The slot's `ifabsent` default, rendered readably; `None` hides the
+    /// Default row.
+    pub default: Option<&'a str>,
 }
 
 /// Individual card component template.
@@ -358,6 +361,9 @@ pub struct SampleSlot<'a> {
     pub aliases: &'a [String],
     pub see_also: &'a [panschema::html_writer::ExternalLink],
     pub examples: &'a [panschema::linkml::Example],
+    /// The slot's `ifabsent` default, rendered readably; `None` hides the
+    /// Default row.
+    pub default: Option<&'a str>,
 }
 
 /// Sample individual data for styleguide previews.
@@ -531,6 +537,7 @@ impl ComponentRenderer {
         domain: Option<&EntityRef>,
         range: Option<&RangeSpec>,
         characteristics: &[String],
+        default: Option<&str>,
     ) -> anyhow::Result<String> {
         let template = SlotCardComponent {
             id,
@@ -549,6 +556,7 @@ impl ComponentRenderer {
             aliases: &[],
             see_also: &[],
             examples: &[],
+            default,
         };
         Ok(template.render()?)
     }
@@ -737,6 +745,7 @@ impl ComponentRenderer {
             aliases: &[],
             see_also: &[],
             examples: &[],
+            default: None,
         };
 
         let domain2 = EntityRef::new("person", "Person");
@@ -764,6 +773,7 @@ impl ComponentRenderer {
             aliases: &[],
             see_also: &[],
             examples: &data_slot_examples,
+            default: Some("\"Anonymous\""),
         };
 
         let ind_types = vec![EntityRef::new("person", "Person")];
@@ -1288,6 +1298,7 @@ mod tests {
                 Some(&domain),
                 Some(&range),
                 &["Functional".to_string()],
+                None,
             )
             .unwrap();
             insta::assert_snapshot!(html);
@@ -1306,6 +1317,7 @@ mod tests {
                 Some(&domain),
                 Some(&range),
                 &[],
+                None,
             )
             .unwrap();
             insta::assert_snapshot!(html);
@@ -1322,9 +1334,49 @@ mod tests {
                 None,
                 None,
                 &[],
+                None,
             )
             .unwrap();
             insta::assert_snapshot!(html);
+        }
+
+        #[test]
+        fn slot_card_shows_default() {
+            // A slot with an `ifabsent` default renders a "Default" row
+            // showing the value; a slot without one renders no such row.
+            let with_default = ComponentRenderer::slot_card(
+                "status",
+                "status",
+                "https://example.org/ontology#status",
+                "Slot",
+                None,
+                None,
+                None,
+                &[],
+                Some("planned"),
+            )
+            .unwrap();
+            assert!(
+                with_default.contains("<dt>Default</dt>") && with_default.contains("planned"),
+                "a slot with an ifabsent default renders the Default row; got:\n{with_default}"
+            );
+
+            let without_default = ComponentRenderer::slot_card(
+                "status",
+                "status",
+                "https://example.org/ontology#status",
+                "Slot",
+                None,
+                None,
+                None,
+                &[],
+                None,
+            )
+            .unwrap();
+            assert!(
+                !without_default.contains("<dt>Default</dt>"),
+                "a slot without an ifabsent default renders no Default row; got:\n{without_default}"
+            );
         }
 
         #[test]

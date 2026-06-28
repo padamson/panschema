@@ -347,6 +347,9 @@ pub struct SlotData {
     pub see_also: Vec<ExternalLink>,
     /// Worked examples; see [`ClassData::examples`].
     pub examples: Vec<Example>,
+    /// The slot's `ifabsent` default, rendered readably for the Default
+    /// row (`planned`, `8080`, `"svc"`, `true`). `None` renders no row.
+    pub default: Option<String>,
 }
 
 /// A resolved property value for rendering individual cards.
@@ -996,6 +999,7 @@ impl HtmlWriter {
                 aliases: slot_def.aliases.clone(),
                 see_also: build_see_also(&slot_def.see_also, schema, labels),
                 examples: slot_def.examples.clone(),
+                default: slot_def.ifabsent.as_deref().map(format_ifabsent_default),
             });
         }
 
@@ -1488,6 +1492,31 @@ fn build_see_also(
         .collect()
 }
 
+/// Render a slot's `ifabsent` value readably for the Default row, peeling
+/// the typed-form wrapper down to the value a reader cares about:
+/// `ItemStatus(planned)` → `planned`, `int(8080)` → `8080`,
+/// `float(1.0)` → `1.0`, `string(svc)` → `"svc"` (quoted, so a string
+/// default is unambiguous), and a bare boolean (`true`/`True`) → `true`.
+/// Any other form is shown verbatim.
+fn format_ifabsent_default(raw: &str) -> String {
+    let trimmed = raw.trim();
+    match trimmed {
+        "true" | "True" => return "true".to_string(),
+        "false" | "False" => return "false".to_string(),
+        _ => {}
+    }
+    if let Some((form, arg)) = trimmed.strip_suffix(')').and_then(|s| s.split_once('(')) {
+        let arg = arg.trim();
+        return if form.trim() == "string" {
+            format!("\"{arg}\"")
+        } else {
+            // Enum / int / float / double all read best as the bare value.
+            arg.to_string()
+        };
+    }
+    trimmed.to_string()
+}
+
 /// `(label, definitions)` for an expanded IRI, when the store has it.
 fn lookup_term(
     labels: Option<&crate::labels::LabelStore>,
@@ -1522,6 +1551,21 @@ mod tests {
     use crate::io::Reader;
     use crate::owl_reader::OwlReader;
     use std::path::PathBuf;
+
+    #[test]
+    fn format_ifabsent_default_normalizes_booleans_and_quotes_strings() {
+        // Capitalized LinkML booleans normalize to lowercase (a bare
+        // `True`/`False` would otherwise pass through verbatim); a
+        // `string(...)` default is quoted so it reads unambiguously; enum
+        // and numeric forms show the bare value.
+        assert_eq!(format_ifabsent_default("true"), "true");
+        assert_eq!(format_ifabsent_default("True"), "true");
+        assert_eq!(format_ifabsent_default("false"), "false");
+        assert_eq!(format_ifabsent_default("False"), "false");
+        assert_eq!(format_ifabsent_default("string(svc)"), "\"svc\"");
+        assert_eq!(format_ifabsent_default("int(8080)"), "8080");
+        assert_eq!(format_ifabsent_default("ItemStatus(planned)"), "planned");
+    }
 
     fn cohort_context(viewing: &str, current: &str, edge: Option<&str>) -> VersionContext {
         VersionContext {
@@ -1681,9 +1725,9 @@ mod tests {
 
         let data = HtmlWriter::build_template_data(&schema);
 
-        // Should have 5 classes
-        assert_eq!(data.class_refs.len(), 5);
-        assert_eq!(data.class_data.len(), 5);
+        // Should have 6 classes
+        assert_eq!(data.class_refs.len(), 6);
+        assert_eq!(data.class_data.len(), 6);
 
         // Find Dog class
         let dog = data.class_data.iter().find(|c| c.id == "Dog").unwrap();
@@ -1694,10 +1738,10 @@ mod tests {
 
     #[test]
     fn class_tree_nests_reference_hierarchy_preorder() {
-        // Animal → Mammal → {Cat, Dog}, plus Person as a disconnected
-        // root rendered flat alongside the tree. `closes` counts the
-        // ancestor levels a leaf is the last descendant of, so the
-        // template can emit matching `</ul></li>` pairs.
+        // Animal → {Mammal → {Cat, Dog}, Pet}, plus Person as a
+        // disconnected root rendered flat alongside the tree. `closes`
+        // counts the ancestor levels a leaf is the last descendant of, so
+        // the template can emit matching `</ul></li>` pairs.
         let reader = OwlReader::new();
         let schema = reader.read(&reference_ontology_path()).unwrap();
         let data = HtmlWriter::build_template_data(&schema);
@@ -1720,7 +1764,8 @@ mod tests {
                 ("Animal", 0, true, 0),
                 ("Mammal", 1, true, 0),
                 ("Cat", 2, false, 0),
-                ("Dog", 2, false, 2),
+                ("Dog", 2, false, 1),
+                ("Pet", 1, false, 1),
                 ("Person", 0, false, 0),
             ]
         );
@@ -1824,12 +1869,21 @@ mod tests {
         let schema = reader.read(&reference_ontology_path()).unwrap();
         let data = HtmlWriter::build_template_data(&schema);
 
+        // Dog is the last child of Mammal but not of Animal (Pet follows
+        // Mammal under Animal), so Dog closes only Mammal's level.
         let dog = data
             .class_tree
             .iter()
             .find(|e| data.class_data[e.index].id == "Dog")
             .unwrap();
-        assert_eq!(dog.close_tags(), "</ul></li></ul></li>");
+        assert_eq!(dog.close_tags(), "</ul></li>");
+        // Pet, the last child of Animal, closes Animal's level.
+        let pet = data
+            .class_tree
+            .iter()
+            .find(|e| data.class_data[e.index].id == "Pet")
+            .unwrap();
+        assert_eq!(pet.close_tags(), "</ul></li>");
         let animal = data
             .class_tree
             .iter()
@@ -2826,9 +2880,9 @@ mod tests {
 
         let data = HtmlWriter::build_template_data(&schema);
 
-        // Should have 4 slots
-        assert_eq!(data.slot_refs.len(), 4);
-        assert_eq!(data.slot_data.len(), 4);
+        // Should have 5 slots
+        assert_eq!(data.slot_refs.len(), 5);
+        assert_eq!(data.slot_data.len(), 5);
 
         // Find hasOwner property
         let has_owner = data.slot_data.iter().find(|p| p.id == "hasOwner").unwrap();

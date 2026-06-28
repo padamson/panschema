@@ -369,7 +369,7 @@ fn render_enum<W: Write>(out: &mut W, name: &str, def: &EnumDefinition) -> fmt::
         "#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]\n",
     )?;
     out.write_str("#[non_exhaustive]\n")?;
-    writeln!(out, "pub enum {name} {{")?;
+    writeln!(out, "pub enum {} {{", type_ident(name))?;
     for (key, value) in &def.permissible_values {
         let text = if value.text.is_empty() {
             key
@@ -418,9 +418,14 @@ fn render_trait<W: Write>(
         }
     }
     if supertraits.is_empty() {
-        writeln!(out, "pub trait {name} {{}}\n")
+        writeln!(out, "pub trait {} {{}}\n", type_ident(name))
     } else {
-        writeln!(out, "pub trait {name}: {} {{}}\n", supertraits.join(" + "))
+        let bounds = supertraits
+            .iter()
+            .map(|s| type_ident(s).into_owned())
+            .collect::<Vec<_>>()
+            .join(" + ");
+        writeln!(out, "pub trait {}: {bounds} {{}}\n", type_ident(name))
     }
 }
 
@@ -462,14 +467,39 @@ fn render_class<W: Write>(
         .map(|(k, rs)| (k.clone(), rs.definition.clone()))
         .collect();
     let eq_hash_ok = eq_hash_support.get(name).copied().unwrap_or(false);
-    let derives = compute_struct_derives(&resolved, eq_hash_ok);
+    let derives = compute_struct_derives(&resolved, schema, eq_hash_ok);
     writeln!(out, "#[derive({derives})]")?;
-    writeln!(out, "pub struct {name} {{")?;
+    writeln!(out, "pub struct {} {{", type_ident(name))?;
+
+    // Module-level default fns for `ifabsent`-defaulted slots, emitted
+    // after the struct so `#[serde(default = "<fn>")]` can resolve them.
+    // Each tuple is (fn_name, rust_type, body_expr).
+    let mut ifabsent_default_fns: Vec<(String, String, String)> = Vec::new();
 
     for (slot_name, slot) in &resolved {
         let snake = snake_case(slot_name);
         let rust_field = raw_if_keyword(&snake);
-        let rust_type = field_type_for(name, slot_name, slot, schema, roles, any_of_enums);
+        let ifabsent_default = resolve_ifabsent_default(slot, schema);
+
+        // An `ifabsent` that's set but doesn't resolve to a known default
+        // falls back to the normal `Option<T>` rendering, flagged with a
+        // warning so the dropped default is visible rather than silent.
+        if ifabsent_default.is_none() && slot.ifabsent.is_some() && !slot.multivalued {
+            let expr = slot.ifabsent.as_deref().unwrap_or("");
+            write!(
+                out,
+                "    // WARNING: slot `{slot_name}` declares `ifabsent: {expr}` which\n\
+                 //          does not resolve to a known default; field falls\n\
+                 //          back to `Option<T>` with no default.\n"
+            )?;
+        }
+
+        let rust_type = match &ifabsent_default {
+            // A resolved default is always present, so the faithful shape
+            // is the bare type, not `Option<T>`.
+            Some(d) => d.rust_type(),
+            None => field_type_for(name, slot_name, slot, schema, roles, any_of_enums),
+        };
         render_doc_comment(out, "    ", slot.description.as_deref())?;
         if let Some(origin) = resolved_p[slot_name].provenance.origin_label(name) {
             writeln!(out, "    /// Inherited from {origin}.")?;
@@ -481,7 +511,11 @@ fn render_class<W: Write>(
         if snake != *slot_name || rust_field != snake {
             serde_attrs.push(format!("rename = \"{}\"", escape_str(slot_name)));
         }
-        if !slot.required && !slot.multivalued {
+        if let Some(d) = &ifabsent_default {
+            let fn_name = ifabsent_default_fn_name(name, slot_name);
+            serde_attrs.push(format!("default = \"{fn_name}\""));
+            ifabsent_default_fns.push((fn_name, d.rust_type(), d.default_expr()));
+        } else if !slot.required && !slot.multivalued {
             serde_attrs.push("default".to_string());
             serde_attrs.push("skip_serializing_if = \"Option::is_none\"".to_string());
         } else if slot.multivalued {
@@ -495,6 +529,10 @@ fn render_class<W: Write>(
     }
 
     out.write_str("}\n\n")?;
+
+    for (fn_name, rust_type, body_expr) in &ifabsent_default_fns {
+        writeln!(out, "fn {fn_name}() -> {rust_type} {{ {body_expr} }}\n")?;
+    }
 
     render_constructor(out, name, &resolved, schema, roles, any_of_enums)?;
 
@@ -525,7 +563,12 @@ fn render_class<W: Write>(
     impl_targets.sort();
     impl_targets.dedup();
     for trait_name in &impl_targets {
-        writeln!(out, "impl {trait_name} for {name} {{}}")?;
+        writeln!(
+            out,
+            "impl {} for {} {{}}",
+            type_ident(trait_name),
+            type_ident(name)
+        )?;
     }
     if !impl_targets.is_empty() {
         out.write_char('\n')?;
@@ -547,16 +590,22 @@ fn render_constructor<W: Write>(
     roles: &BTreeMap<String, ClassRole>,
     any_of_enums: &mut BTreeMap<String, Vec<String>>,
 ) -> fmt::Result {
-    let has_required = resolved
-        .values()
-        .any(|slot| slot.required && !slot.multivalued);
+    // A slot with a resolvable `ifabsent` default always has a value (the
+    // default), so it's neither a required constructor param nor an
+    // `Option` set to `None` — the ctor initializes it from the generated
+    // default fn.
+    let has_required = resolved.values().any(|slot| {
+        slot.required && !slot.multivalued && resolve_ifabsent_default(slot, schema).is_none()
+    });
     if !has_required {
         return Ok(());
     }
 
     let params: Vec<(String, String)> = resolved
         .iter()
-        .filter(|(_, slot)| slot.required && !slot.multivalued)
+        .filter(|(_, slot)| {
+            slot.required && !slot.multivalued && resolve_ifabsent_default(slot, schema).is_none()
+        })
         .map(|(slot_name, slot)| {
             (
                 raw_if_keyword(&snake_case(slot_name)).into_owned(),
@@ -570,13 +619,15 @@ fn render_constructor<W: Write>(
         .collect::<Vec<_>>()
         .join(", ");
 
-    writeln!(out, "impl {name} {{")?;
+    writeln!(out, "impl {} {{", type_ident(name))?;
     writeln!(out, "    pub fn new({param_list}) -> Self {{")?;
     writeln!(out, "        Self {{")?;
     for (slot_name, slot) in resolved {
         let snake = snake_case(slot_name);
         let field = raw_if_keyword(&snake);
-        if slot.multivalued {
+        if let Some(d) = resolve_ifabsent_default(slot, schema) {
+            writeln!(out, "            {field}: {},", d.default_expr())?;
+        } else if slot.multivalued {
             writeln!(out, "            {field}: Vec::new(),")?;
         } else if slot.required {
             writeln!(out, "            {field},")?;
@@ -629,9 +680,10 @@ fn render_kind_enum<W: Write>(
     writeln!(out, "#[derive({})]", enum_derive_line(eq_hash_ok))?;
     out.write_str("#[serde(untagged)]\n")?;
     out.write_str("#[non_exhaustive]\n")?;
-    writeln!(out, "pub enum {name}Kind {{")?;
+    writeln!(out, "pub enum {} {{", type_ident(&format!("{name}Kind")))?;
     for desc in &descendants {
-        writeln!(out, "    {desc}(Box<{desc}>),")?;
+        let ty = type_ident(desc);
+        writeln!(out, "    {ty}(Box<{ty}>),")?;
     }
     out.write_str("}\n\n")
 }
@@ -646,10 +698,11 @@ fn render_any_of_enum<W: Write>(
     writeln!(out, "#[derive({})]", enum_derive_line(eq_hash_ok))?;
     out.write_str("#[serde(untagged)]\n")?;
     out.write_str("#[non_exhaustive]\n")?;
-    writeln!(out, "pub enum {name} {{")?;
+    writeln!(out, "pub enum {} {{", type_ident(name))?;
     for member in members {
-        let variant = pascal_case(member);
-        writeln!(out, "    {variant}(Box<{member}>),")?;
+        let variant = type_ident(&pascal_case(member)).into_owned();
+        let member_ty = type_ident(member);
+        writeln!(out, "    {variant}(Box<{member_ty}>),")?;
     }
     out.write_str("}\n\n")
 }
@@ -680,13 +733,24 @@ fn enum_derive_line(eq_hash_ok: bool) -> &'static str {
 /// `Eq` + `Hash` are added when every resolved slot's field type
 /// supports them — see [`compute_eq_hash_support`] for the recursive
 /// per-class analysis the `eq_hash_ok` argument carries the result of.
-fn compute_struct_derives(slots: &BTreeMap<String, SlotDefinition>, eq_hash_ok: bool) -> String {
+fn compute_struct_derives(
+    slots: &BTreeMap<String, SlotDefinition>,
+    schema: &SchemaDefinition,
+    eq_hash_ok: bool,
+) -> String {
     let mut derives = vec!["Debug", "Clone", "PartialEq"];
     if eq_hash_ok {
         derives.push("Eq");
         derives.push("Hash");
     }
-    if slots.values().all(supports_default) {
+    // A slot with a resolvable `ifabsent` default carries a non-`Default`
+    // value (an enum variant or a non-zero literal), so it disqualifies the
+    // struct from deriving `Default` even though serde fills the field from
+    // the default fn on deserialize.
+    let all_default = slots
+        .values()
+        .all(|slot| supports_default(slot) && resolve_ifabsent_default(slot, schema).is_none());
+    if all_default {
         derives.push("Default");
     }
     derives.push("serde::Serialize");
@@ -767,7 +831,10 @@ fn field_type_for(
             .collect();
         any_of_enums.insert(enum_name.clone(), members);
         // any_of enums Box their variants internally → field stays sized.
-        return framed_sized(&enum_name, slot);
+        // The map key stays the raw synthesized name; `render_any_of_enum`
+        // applies the same `type_ident` escaping to it, so the field
+        // reference here and the enum definition agree.
+        return framed_sized(&type_ident(&enum_name), slot);
     }
 
     let Some(range) = &slot.range else {
@@ -849,7 +916,7 @@ fn type_for_range(
                 // `String` (URI/identifier). Mirrors the breadcrumb
                 // comment `render_kind_enum` emits.
                 if has_concrete_descendants(other, schema, roles) {
-                    format!("{other}Kind")
+                    type_ident(&format!("{other}Kind")).into_owned()
                 } else {
                     "String".to_string()
                 }
@@ -857,12 +924,13 @@ fn type_for_range(
                 || schema.enums.contains_key(other)
                 || schema.types.contains_key(other)
             {
-                other.to_string()
+                type_ident(other).into_owned()
             } else {
                 // Unresolved ref. Preserve verbatim — could be defined in
                 // an imported schema (a future writer pass would surface
-                // a warning).
-                other.to_string()
+                // a warning). Keyword names are still escaped so the
+                // reference is a valid Rust identifier.
+                type_ident(other).into_owned()
             }
         }
     }
@@ -1038,6 +1106,224 @@ fn raw_if_keyword(ident: &str) -> std::borrow::Cow<'_, str> {
     } else {
         std::borrow::Cow::Borrowed(ident)
     }
+}
+
+/// Escape a struct/enum/trait type name that collides with a Rust
+/// reserved word so it is usable as a type identifier in generated code.
+/// A LinkML class named `move` becomes `r#move`; one named `Self` becomes
+/// `Self_`. Unlike field/variant names, a type name is never serialized
+/// by serde, so no `#[serde(rename)]` is paired with it — but every
+/// reference site (field types, `Box`/`Vec`/`Option` inners, trait
+/// bounds, `impl` targets, enum variant payloads) must apply the same
+/// escaping so definition and use agree.
+fn type_ident(name: &str) -> std::borrow::Cow<'_, str> {
+    raw_if_keyword(name)
+}
+
+/// A resolved enum-valued `ifabsent` default: the slot's range enum and
+/// the matching permissible value, ready to render as
+/// `<enum_name>::<variant_path>`.
+struct IfAbsentEnumDefault {
+    /// The enum type name (the slot's `range`).
+    enum_name: String,
+    /// The variant path segment, already keyword-escaped
+    /// (e.g. `planned` or `r#virtual`).
+    variant_path: String,
+}
+
+/// A resolved `ifabsent` default ready to render in Rust codegen — either
+/// an enum variant or a scalar literal. Both forms render as a non-`Option`
+/// field initialized from a generated module-level default fn.
+enum IfAbsentDefault {
+    /// `<Enum>(<value>)` / bare permissible value resolved against the
+    /// slot's range enum.
+    Enum(IfAbsentEnumDefault),
+    /// A scalar form: `int(N)`, `float(F)`/`double(F)`, `string(S)`, or a
+    /// boolean. Carries the Rust field type and the default fn's return
+    /// expression.
+    Scalar {
+        /// The Rust field type (`i64`, `f64`, `String`, `bool`).
+        rust_type: String,
+        /// The default fn body, e.g. `8080`, `1.0f64`, `"svc".to_string()`,
+        /// or `true` — emitted verbatim as `fn …() -> <rust_type> { <expr> }`.
+        expr: String,
+    },
+}
+
+impl IfAbsentDefault {
+    /// The Rust field type this default renders as (non-`Option`).
+    fn rust_type(&self) -> String {
+        match self {
+            IfAbsentDefault::Enum(d) => type_ident(&d.enum_name).into_owned(),
+            IfAbsentDefault::Scalar { rust_type, .. } => rust_type.clone(),
+        }
+    }
+
+    /// The default fn body expression — the value the field takes when the
+    /// wire form omits it.
+    fn default_expr(&self) -> String {
+        match self {
+            IfAbsentDefault::Enum(d) => {
+                format!("{}::{}", type_ident(&d.enum_name), d.variant_path)
+            }
+            IfAbsentDefault::Scalar { expr, .. } => expr.clone(),
+        }
+    }
+}
+
+/// Resolve a non-multivalued slot's `ifabsent` to a renderable default —
+/// the enum form (delegated to [`resolve_ifabsent_enum_default`]) or one of
+/// the scalar forms (`int`, `float`/`double`, `string`, boolean). Returns
+/// `None` (signalling the `Option<T>` + warning fallback) for any form
+/// that doesn't parse or resolve.
+fn resolve_ifabsent_default(
+    slot: &SlotDefinition,
+    schema: &SchemaDefinition,
+) -> Option<IfAbsentDefault> {
+    if let Some(enum_default) = resolve_ifabsent_enum_default(slot, schema) {
+        return Some(IfAbsentDefault::Enum(enum_default));
+    }
+    resolve_ifabsent_scalar_default(slot)
+}
+
+/// Resolve a non-multivalued slot's `ifabsent` scalar form to its Rust type
+/// and default expression.
+///
+/// Accepted forms:
+/// - `int(N)` → `i64`, expr `N` (the integer literal, sign preserved).
+/// - `float(F)` / `double(F)` → `f64`, expr `F` (a float literal — a bare
+///   `1` is rendered `1f64` so it types as `f64`).
+/// - `string(S)` → `String`, expr `"<escaped S>".to_string()`.
+/// - boolean (`true`/`false`/`True`/`False`) → `bool`, expr `true`/`false`.
+///
+/// Returns `None` for the multivalued case, an absent `ifabsent`, or any
+/// form whose argument doesn't parse as the declared type.
+fn resolve_ifabsent_scalar_default(slot: &SlotDefinition) -> Option<IfAbsentDefault> {
+    if slot.multivalued {
+        return None;
+    }
+    let ifabsent = slot.ifabsent.as_deref()?.trim();
+
+    // Bare boolean form: `true`/`false` (LinkML may capitalize them).
+    match ifabsent {
+        "true" | "True" => {
+            return Some(IfAbsentDefault::Scalar {
+                rust_type: "bool".to_string(),
+                expr: "true".to_string(),
+            });
+        }
+        "false" | "False" => {
+            return Some(IfAbsentDefault::Scalar {
+                rust_type: "bool".to_string(),
+                expr: "false".to_string(),
+            });
+        }
+        _ => {}
+    }
+
+    // `<form>(<arg>)` forms.
+    let (form, arg) = ifabsent.strip_suffix(')').and_then(|s| s.split_once('('))?;
+    let form = form.trim();
+    let arg = arg.trim();
+
+    match form {
+        "int" => {
+            // Validate it's an integer so an unparseable arg falls back to
+            // the warning path rather than emitting code that won't compile.
+            let n: i64 = arg.parse().ok()?;
+            Some(IfAbsentDefault::Scalar {
+                rust_type: "i64".to_string(),
+                expr: n.to_string(),
+            })
+        }
+        "float" | "double" => {
+            let f: f64 = arg.parse().ok()?;
+            // Render with an `f64` suffix so a whole-number default like
+            // `float(1)` types as a float, not an integer literal.
+            let expr = if arg.contains(['.', 'e', 'E']) {
+                arg.to_string()
+            } else {
+                format!("{f}f64")
+            };
+            Some(IfAbsentDefault::Scalar {
+                rust_type: "f64".to_string(),
+                expr,
+            })
+        }
+        "string" => Some(IfAbsentDefault::Scalar {
+            rust_type: "String".to_string(),
+            expr: format!("\"{}\".to_string()", escape_str(arg)),
+        }),
+        _ => None,
+    }
+}
+
+/// Resolve a non-multivalued slot's `ifabsent` against the schema's enums
+/// when the slot's `range` is an enum.
+///
+/// Accepts both the explicit `<EnumName>(<value>)` form and the bare
+/// `<value>` form (resolved against the slot's `range` enum). Returns
+/// `Some` only when the range is a defined enum, the (optional) enum
+/// prefix matches the range, and the value is one of that enum's
+/// permissible values. Returns `None` (signalling fallback) for any
+/// unresolvable case: no `ifabsent`, multivalued, non-enum range, a
+/// mismatched enum prefix, or an unknown permissible value.
+fn resolve_ifabsent_enum_default(
+    slot: &SlotDefinition,
+    schema: &SchemaDefinition,
+) -> Option<IfAbsentEnumDefault> {
+    if slot.multivalued {
+        return None;
+    }
+    let ifabsent = slot.ifabsent.as_deref()?.trim();
+    let range = slot.range.as_deref()?;
+    let enum_def = schema.enums.get(range)?;
+
+    // Parse `<EnumName>(<value>)` or bare `<value>`.
+    let value = match ifabsent.strip_suffix(')').and_then(|s| s.split_once('(')) {
+        Some((prefix, value)) => {
+            // Explicit enum prefix must name the slot's range enum.
+            if prefix.trim() != range {
+                return None;
+            }
+            value.trim()
+        }
+        None => ifabsent,
+    };
+
+    // The value must be a permissible value of the range enum. Match on
+    // the rendered text (`value.text` when present, else the map key),
+    // mirroring how `render_enum` chooses the variant ident.
+    let matches = enum_def.permissible_values.iter().find(|(key, pv)| {
+        let text = if pv.text.is_empty() {
+            key.as_str()
+        } else {
+            pv.text.as_str()
+        };
+        text == value
+    })?;
+    let (key, pv) = matches;
+    let text = if pv.text.is_empty() {
+        key.as_str()
+    } else {
+        pv.text.as_str()
+    };
+    let variant_path = raw_if_keyword(&variant_ident_for(text)).into_owned();
+    Some(IfAbsentEnumDefault {
+        enum_name: range.to_string(),
+        variant_path,
+    })
+}
+
+/// Name of the module-level default fn for a slot's `ifabsent` enum
+/// default. Collision-free per (struct, field): `default_<struct>_<field>`
+/// in snake_case.
+fn ifabsent_default_fn_name(class_name: &str, slot_name: &str) -> String {
+    format!(
+        "default_{}_{}",
+        snake_case(class_name),
+        snake_case(slot_name)
+    )
 }
 
 fn variant_ident_for(text: &str) -> String {
@@ -1523,7 +1809,7 @@ mod tests {
             ("multi", slot_shape(Some("string"), true, true)),
             ("required_string", slot_shape(Some("string"), true, false)),
         ]);
-        let derives = compute_struct_derives(&slots, false);
+        let derives = compute_struct_derives(&slots, &SchemaDefinition::new("s"), false);
         assert!(derives.contains("Default"), "got: {derives}");
         assert!(derives.contains("PartialEq"));
     }
@@ -1534,7 +1820,7 @@ mod tests {
             ("created", slot_shape(Some("datetime"), true, false)),
             ("label", slot_shape(Some("string"), true, false)),
         ]);
-        let derives = compute_struct_derives(&slots, false);
+        let derives = compute_struct_derives(&slots, &SchemaDefinition::new("s"), false);
         assert!(!derives.contains("Default"), "got: {derives}");
         // PartialEq stays — datetime supports it.
         assert!(derives.contains("PartialEq"));
@@ -1543,7 +1829,7 @@ mod tests {
     #[test]
     fn derives_always_include_debug_clone_partialeq_serde() {
         let slots = slots_from(&[("required_class", slot_shape(Some("SomeClass"), true, false))]);
-        let derives = compute_struct_derives(&slots, false);
+        let derives = compute_struct_derives(&slots, &SchemaDefinition::new("s"), false);
         assert!(derives.contains("Debug"));
         assert!(derives.contains("Clone"));
         assert!(derives.contains("PartialEq"));
@@ -1554,7 +1840,7 @@ mod tests {
     #[test]
     fn derives_for_empty_struct_include_default() {
         // No fields → everything supports Default vacuously.
-        let derives = compute_struct_derives(&BTreeMap::new(), false);
+        let derives = compute_struct_derives(&BTreeMap::new(), &SchemaDefinition::new("s"), false);
         assert!(derives.contains("Default"));
     }
 
@@ -2080,6 +2366,41 @@ mod tests {
     }
 
     #[test]
+    fn render_class_escapes_keyword_struct_name() {
+        // A class literally named `move` (a Rust keyword) must be defined
+        // as `pub struct r#move`, and every reference to it — here a field
+        // on another class whose range is `move` — must use the same
+        // escaped ident inside its `Box<...>` framing. A bare `struct move`
+        // or `Box<move>` would fail to compile.
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .classes
+            .insert("move".to_string(), ClassDefinition::new("move"));
+
+        let mut holder = ClassDefinition::new("Holder");
+        let mut slot = SlotDefinition::new("noted");
+        slot.range = Some("move".to_string());
+        slot.required = true;
+        holder.attributes.insert("noted".to_string(), slot);
+        schema.classes.insert("Holder".to_string(), holder);
+
+        let body = RustWriter::new().render(&schema);
+
+        assert!(
+            body.contains("pub struct r#move {"),
+            "keyword class name must be defined as a raw ident; got:\n{body}"
+        );
+        assert!(
+            body.contains("pub noted: Box<r#move>,"),
+            "reference to a keyword-named class must use the same raw ident; got:\n{body}"
+        );
+        assert!(
+            !body.contains("pub struct move ") && !body.contains("Box<move>"),
+            "must not emit a bare keyword type name; got:\n{body}"
+        );
+    }
+
+    #[test]
     fn render_constructor_escapes_reserved_keyword_field() {
         // For a required slot named `move` (a Rust keyword), the
         // constructor's parameter and the `Self { .. }` init must both
@@ -2384,6 +2705,259 @@ mod tests {
             !out.contains("// WARNING"),
             "slot_usage-refined slot should suppress the unresolved-ref warning; got: {out}"
         );
+    }
+
+    // ----- ifabsent enum defaults -------------------------------------
+
+    /// Build a schema with an `ItemStatus` enum (`planned`, `placed`) and
+    /// a `PlacedItem` class carrying a `status` slot. The slot's
+    /// `ifabsent` is set by the caller so each test exercises a different
+    /// form.
+    fn ifabsent_schema(ifabsent: Option<&str>) -> (SchemaDefinition, ClassDefinition) {
+        let mut schema = SchemaDefinition::new("s");
+        let mut item_status = EnumDefinition::new("ItemStatus");
+        item_status
+            .permissible_values
+            .insert("planned".to_string(), PermissibleValue::new("planned"));
+        item_status
+            .permissible_values
+            .insert("placed".to_string(), PermissibleValue::new("placed"));
+        schema.enums.insert("ItemStatus".to_string(), item_status);
+
+        let mut status = SlotDefinition::new("status");
+        status.range = Some("ItemStatus".to_string());
+        status.ifabsent = ifabsent.map(str::to_string);
+
+        let mut class = ClassDefinition::new("PlacedItem");
+        class.attributes.insert("status".to_string(), status);
+        schema
+            .classes
+            .insert("PlacedItem".to_string(), class.clone());
+        (schema, class)
+    }
+
+    fn render_placed_item(schema: &SchemaDefinition, def: &ClassDefinition) -> String {
+        let roles = compute_class_roles(schema);
+        let mut any_of_enums = BTreeMap::new();
+        let mut out = String::new();
+        render_class(
+            &mut out,
+            "PlacedItem",
+            def,
+            schema,
+            &roles,
+            &BTreeMap::new(),
+            &mut any_of_enums,
+        )
+        .unwrap();
+        out
+    }
+
+    #[test]
+    fn render_class_emits_ifabsent_enum_default() {
+        // A non-multivalued slot whose range is an enum and whose
+        // `ifabsent` is `<Enum>(<value>)` renders as the bare enum type
+        // (not `Option`), with `#[serde(default = "<fn>")]` and a
+        // module-level default fn returning the matching variant.
+        let (schema, def) = ifabsent_schema(Some("ItemStatus(planned)"));
+        let out = render_placed_item(&schema, &def);
+
+        assert!(
+            out.contains("pub status: ItemStatus,"),
+            "status should render as the bare enum type; got:\n{out}"
+        );
+        assert!(
+            !out.contains("Option<ItemStatus>"),
+            "an ifabsent-defaulted field must not be wrapped in Option; got:\n{out}"
+        );
+        assert!(
+            out.contains("#[serde(default = \"default_placed_item_status\")]"),
+            "field should carry the serde default attribute; got:\n{out}"
+        );
+        assert!(
+            out.contains("fn default_placed_item_status() -> ItemStatus { ItemStatus::planned }"),
+            "should emit a default fn returning the matching variant; got:\n{out}"
+        );
+        // The default is always present, so it is not a `new()` param and
+        // is initialized from the variant in the constructor body.
+        assert!(
+            !out.contains("pub fn new(status:"),
+            "ifabsent-defaulted field must not be a constructor parameter; got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn render_class_emits_ifabsent_enum_default_for_bare_value_form() {
+        // LinkML may emit `ifabsent` without the enum prefix; the bare
+        // permissible-value form resolves against the slot's range enum
+        // and renders identically to the prefixed form.
+        let (schema, def) = ifabsent_schema(Some("placed"));
+        let out = render_placed_item(&schema, &def);
+
+        assert!(
+            out.contains("pub status: ItemStatus,"),
+            "bare-form ifabsent should render the bare enum type; got:\n{out}"
+        );
+        assert!(
+            out.contains("fn default_placed_item_status() -> ItemStatus { ItemStatus::placed }"),
+            "bare-form ifabsent should resolve to the matching variant; got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn render_class_falls_back_with_warning_for_unresolvable_ifabsent() {
+        // An `ifabsent` value that is not a permissible value of the
+        // range enum cannot be honored: the field falls back to the
+        // `Option<T>` rendering with a `// WARNING:` comment, and no
+        // broken default fn is emitted.
+        let (schema, def) = ifabsent_schema(Some("ItemStatus(shipped)"));
+        let out = render_placed_item(&schema, &def);
+
+        assert!(
+            out.contains("// WARNING") && out.contains("shipped"),
+            "an unresolvable ifabsent should emit a warning; got:\n{out}"
+        );
+        assert!(
+            out.contains("pub status: Option<ItemStatus>,"),
+            "unresolvable ifabsent should fall back to Option; got:\n{out}"
+        );
+        assert!(
+            !out.contains("fn default_placed_item_status"),
+            "no default fn should be emitted for an unresolvable ifabsent; got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn render_class_falls_back_with_warning_for_non_enum_ifabsent_range() {
+        // `ifabsent` with an enum prefix that doesn't name a defined enum
+        // (here the range isn't an enum at all) cannot resolve: warning +
+        // `Option<T>` fallback, no default fn.
+        let mut schema = SchemaDefinition::new("s");
+        let mut status = SlotDefinition::new("status");
+        status.range = Some("string".to_string());
+        status.ifabsent = Some("ItemStatus(planned)".to_string());
+        let mut class = ClassDefinition::new("PlacedItem");
+        class.attributes.insert("status".to_string(), status);
+        schema
+            .classes
+            .insert("PlacedItem".to_string(), class.clone());
+
+        let out = render_placed_item(&schema, &class);
+        assert!(
+            out.contains("// WARNING"),
+            "ifabsent over a non-enum range should warn; got:\n{out}"
+        );
+        assert!(
+            !out.contains("fn default_placed_item_status"),
+            "no default fn for a non-enum ifabsent range; got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn render_class_emits_ifabsent_scalar_defaults() {
+        // Each scalar `ifabsent` form renders as a non-`Option` field of
+        // the form's Rust type, with `#[serde(default = "<fn>")]` and a
+        // module-level default fn returning the literal: `int(N)` → `i64`,
+        // `float(F)`/`double(F)` → `f64` (whole numbers suffixed so they
+        // type as floats), `string(S)` → `String` (escaped), boolean →
+        // `bool` (case-insensitive `true`/`false`).
+        let mut schema = SchemaDefinition::new("s");
+        let mut config = ClassDefinition::new("Config");
+        let mut add = |name: &str, range: &str, ifabsent: &str| {
+            let mut s = SlotDefinition::new(name);
+            s.range = Some(range.to_string());
+            s.ifabsent = Some(ifabsent.to_string());
+            config.attributes.insert(name.to_string(), s);
+        };
+        add("port", "integer", "int(8080)");
+        add("ratio", "float", "float(1.0)");
+        add("scale", "double", "double(2)");
+        add("prefix", "string", "string(svc)");
+        add("enabled", "boolean", "true");
+        add("verbose", "boolean", "False");
+        schema.classes.insert("Config".to_string(), config.clone());
+
+        let roles = compute_class_roles(&schema);
+        let mut any_of_enums = BTreeMap::new();
+        let mut out = String::new();
+        render_class(
+            &mut out,
+            "Config",
+            &config,
+            &schema,
+            &roles,
+            &BTreeMap::new(),
+            &mut any_of_enums,
+        )
+        .unwrap();
+
+        for (field, ty) in [
+            ("port", "i64"),
+            ("ratio", "f64"),
+            ("scale", "f64"),
+            ("prefix", "String"),
+            ("enabled", "bool"),
+            ("verbose", "bool"),
+        ] {
+            assert!(
+                out.contains(&format!("pub {field}: {ty},")),
+                "{field} should render as the bare `{ty}`, not Option; got:\n{out}"
+            );
+            assert!(
+                out.contains(&format!("default = \"default_config_{field}\"")),
+                "{field} should carry a serde default attribute; got:\n{out}"
+            );
+        }
+
+        assert!(
+            out.contains("fn default_config_port() -> i64 { 8080 }"),
+            "int default fn should return the integer literal; got:\n{out}"
+        );
+        assert!(
+            out.contains("fn default_config_ratio() -> f64 { 1.0 }"),
+            "float default fn should return the float literal; got:\n{out}"
+        );
+        assert!(
+            out.contains("fn default_config_scale() -> f64 { 2f64 }"),
+            "whole-number double should be suffixed to type as f64; got:\n{out}"
+        );
+        assert!(
+            out.contains("fn default_config_prefix() -> String { \"svc\".to_string() }"),
+            "string default fn should return an escaped owned String; got:\n{out}"
+        );
+        assert!(
+            out.contains("fn default_config_enabled() -> bool { true }"),
+            "boolean `true` should default to true; got:\n{out}"
+        );
+        assert!(
+            out.contains("fn default_config_verbose() -> bool { false }"),
+            "boolean `False` should default to false; got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn resolve_ifabsent_scalar_default_escapes_string_literal() {
+        // A `string(...)` default whose argument contains a quote or
+        // backslash must be escaped so the generated `"…".to_string()`
+        // literal compiles.
+        let mut slot = SlotDefinition::new("label");
+        slot.range = Some("string".to_string());
+        slot.ifabsent = Some("string(a\"b\\c)".to_string());
+        let Some(IfAbsentDefault::Scalar { expr, .. }) = resolve_ifabsent_scalar_default(&slot)
+        else {
+            panic!("string(...) form should resolve to a scalar default");
+        };
+        assert_eq!(expr, "\"a\\\"b\\\\c\".to_string()");
+    }
+
+    #[test]
+    fn resolve_ifabsent_scalar_default_rejects_unparseable_numeric() {
+        // An `int(...)` whose argument isn't an integer falls through to
+        // the `None` fallback rather than emitting non-compiling code.
+        let mut slot = SlotDefinition::new("port");
+        slot.range = Some("integer".to_string());
+        slot.ifabsent = Some("int(not-a-number)".to_string());
+        assert!(resolve_ifabsent_scalar_default(&slot).is_none());
     }
 
     #[test]

@@ -1,0 +1,12 @@
+name: cycle_b
+id: https://example.org/cycle_b
+title: Cycle B
+description: Imports cycle_a, closing the loop
+
+imports:
+  - cycle_a
+
+classes:
+  BThing:
+    name: BThing
+    description: A class in cycle_b

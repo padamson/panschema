@@ -38,7 +38,7 @@ default. Start with the forms slp needs (enum + scalars); defer the long tail.
 
 ### Slice 1: `ifabsent` in the IR + enum-valued default in Rust codegen
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Should Have
 
@@ -47,9 +47,9 @@ generates a field that deserializes to that enum variant when absent — the slp
 `status` → `planned` case.
 
 **Acceptance Criteria:**
-- [ ] `SlotDefinition` gains `ifabsent: Option<String>`, `#[serde(default, skip_serializing_if = "Option::is_none")]`, auto-parsed from YAML (`slot_definition_deserializes_ifabsent`).
-- [ ] For a non-multivalued slot whose `range` is an enum and whose `ifabsent` parses as `<EnumName>(<permissible_value>)`, the Rust writer emits the field as the bare enum type (not `Option`) with `#[serde(default = "<fn>")]`, and a generated default fn returning the matching variant (resolved via `variant_ident_for`) (`render_class_emits_ifabsent_enum_default`).
-- [ ] An `ifabsent` whose enum/variant doesn't resolve falls back to the existing `Option<T>` rendering with a `// WARNING:` comment (consistent with the writer's other unresolved-reference handling), rather than emitting a broken default.
+- [x] `SlotDefinition` gains `ifabsent: Option<String>`, `#[serde(default, skip_serializing_if = "Option::is_none")]`, auto-parsed from YAML (`slot_definition_deserializes_ifabsent`).
+- [x] For a non-multivalued slot whose `range` is an enum and whose `ifabsent` parses as `<EnumName>(<permissible_value>)`, the Rust writer emits the field as the bare enum type (not `Option`) with `#[serde(default = "<fn>")]`, and a generated default fn returning the matching variant (resolved via `variant_ident_for`) (`render_class_emits_ifabsent_enum_default`).
+- [x] An `ifabsent` whose enum/variant doesn't resolve falls back to the existing `Option<T>` rendering with a `// WARNING:` comment (consistent with the writer's other unresolved-reference handling), rather than emitting a broken default.
 
 **Notes:**
 - A defaulted slot always has a value, so the non-`Option` field is the faithful shape. This interacts with the required/optional logic — keep the change localized to "non-multivalued + resolvable `ifabsent`."
@@ -59,7 +59,7 @@ generates a field that deserializes to that enum variant when absent — the slp
 
 ### Slice 2: Scalar `ifabsent` forms
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Should Have
 
@@ -67,14 +67,14 @@ generates a field that deserializes to that enum variant when absent — the slp
 `float(1.5)`, `true`/`false` — generate fields that default to those literals.
 
 **Acceptance Criteria:**
-- [ ] The codegen parses the scalar `ifabsent` forms (`int(...)`, `string(...)`, `float(...)`, boolean) and emits a non-`Option` field with a `#[serde(default = "<fn>")]` returning the literal (`render_class_emits_ifabsent_scalar_defaults`).
-- [ ] String defaults are escaped correctly in the generated literal; numeric forms map to the field's Rust numeric type.
+- [x] The codegen parses the scalar `ifabsent` forms (`int(...)`, `string(...)`, `float(...)`/`double(...)`, boolean) and emits a non-`Option` field with a `#[serde(default = "<fn>")]` returning the literal (`render_class_emits_ifabsent_scalar_defaults`).
+- [x] String defaults are escaped correctly in the generated literal; numeric forms map to the field's Rust numeric type (`i64`/`f64`, whole-number floats suffixed to type as `f64`).
 
 ---
 
 ### Slice 3: Show the default on the slot card
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Should Have
 
@@ -82,7 +82,7 @@ generates a field that deserializes to that enum variant when absent — the slp
 reader sees the declared default without reading the schema source.
 
 **Acceptance Criteria:**
-- [ ] The slot card shows a "Default" row with the `ifabsent` value (rendered readably — `planned`, `0`, `"x"`) when set, nothing when unset (`slot_card_shows_default`).
+- [x] The slot card shows a "Default" row with the `ifabsent` value (rendered readably — `planned`, `0`, `"x"`) when set, nothing when unset (`slot_card_shows_default`).
 
 **Notes:**
 - HTML-only; this is the doc-completeness half of the same metaslot, independent of the codegen slices.
@@ -116,9 +116,9 @@ default list falls here. Pick any of these up when a consumer actually needs it.
 
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
-| Slice 1: IR + enum default (codegen) | Should Have | Feature 06 | Not Started |
-| Slice 2: Scalar defaults (codegen) | Should Have | Slice 1 | Not Started |
-| Slice 3: Default on slot card (HTML) | Should Have | Slice 1 (IR field) | Not Started |
+| Slice 1: IR + enum default (codegen) | Should Have | Feature 06 | Complete |
+| Slice 2: Scalar defaults (codegen) | Should Have | Slice 1 | Complete |
+| Slice 3: Default on slot card (HTML) | Should Have | Slice 1 (IR field) | Complete |
 | Slice 4: Long-tail forms (rare) | Could Have | Slice 1 | 📋 Deferred |
 
 ---
@@ -127,11 +127,11 @@ default list falls here. Pick any of these up when a consumer actually needs it.
 
 The feature is complete when ALL of the following are true:
 
-- [ ] Slices 1–3 acceptance criteria met (slice 4 deferred)
-- [ ] All tests passing: `cargo nextest run`
-- [ ] Generated code with an `ifabsent` slot compiles in a downstream crate (the slp `status` → `planned` case round-trips)
-- [ ] Library documentation complete: `cargo doc`
-- [ ] Code formatted + clippy clean: `cargo fmt --check` + `cargo clippy --all-targets --all-features -- -D warnings`
+- [x] Slices 1–3 acceptance criteria met (slice 4 deferred)
+- [x] All tests passing: `cargo nextest run`
+- [x] Generated code with an `ifabsent` slot compiles in a downstream crate (the slp `status` → `planned` case round-trips)
+- [x] Library documentation complete: `cargo doc`
+- [x] Code formatted + clippy clean: `cargo fmt --check` + `cargo clippy --all-targets --all-features -- -D warnings`
 - [ ] README.md updated
-- [ ] CHANGELOG.md updated
-- [ ] [linkml-coverage.md](../linkml-coverage.md) `SlotDefinition` row updated — `ifabsent` moves out of the not-modeled long tail
+- [x] CHANGELOG.md updated
+- [x] [linkml-coverage.md](../linkml-coverage.md) `SlotDefinition` row updated — `ifabsent` moves out of the not-modeled long tail

@@ -43,7 +43,7 @@ truth" philosophy — one merger, not one per writer.
 
 ### Slice 1: Single-level local import merge (walking skeleton)
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Must Have
 
@@ -51,12 +51,12 @@ truth" philosophy — one merger, not one per writer.
 enums, types, and prefixes from both files in one output.
 
 **Acceptance Criteria:**
-- [ ] New resolution entry point (e.g. `resolve_imports(schema, base_dir, &registry)`) invoked in the `generate` path after read, before writer dispatch.
-- [ ] Each `imports:` entry naming a local file (resolved relative to the importing file; `.yaml`/`.yml`/`.ttl`, extension optional) is loaded via `FormatRegistry` and merged into the root.
-- [ ] Merge unions `classes`, `slots`, `enums`, `types`, and `prefixes`; the importing (root) schema wins on a name collision (the collision is recorded for slice 2 diagnostics).
-- [ ] A self-import / import cycle is detected and reported as a clear error, not an infinite loop (`resolve_imports_detects_cycle`).
-- [ ] Each merged element records its origin file (provenance) for later diagnostics and rendering.
-- [ ] Integration test: root + one imported file → generated HTML contains a class defined only in the import (`generate_merges_single_import`).
+- [x] New resolution entry point (`resolve_imports(schema, root_path, &registry)`) invoked in the `generate` path after read, before writer dispatch.
+- [x] Each `imports:` entry naming a local file (resolved relative to the importing file; `.yaml`/`.yml`/`.ttl`, extension optional) is loaded via `FormatRegistry` and merged into the root.
+- [x] Merge unions `classes`, `slots`, `enums`, `types`, and `prefixes`; the importing (root) schema wins on a name collision (the collision is recorded for slice 2 diagnostics).
+- [x] A self-import / import cycle is detected and reported as a clear error, not an infinite loop (`resolve_imports_detects_cycle`).
+- [x] Each merged element records its origin file (provenance) for later diagnostics and rendering.
+- [x] Integration test: root + one imported file → generated HTML contains a class defined only in the import (`generate_merges_single_import`).
 
 **Notes:**
 - Out of scope here: transitive imports, CURIE/remote imports, and builtin `linkml:*` imports (slices 2–3).
@@ -120,7 +120,7 @@ source file each element came from.
 
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
-| Slice 1: Single-level local merge | Must Have | Feature 03 | Not Started |
+| Slice 1: Single-level local merge | Must Have | Feature 03 | Complete |
 | Slice 2: Transitive + collisions | Must Have | Slice 1 | Not Started |
 | Slice 3: Builtin + CURIE/remote | Should Have | Slice 1 (+ Feature 13) | Not Started |
 | Slice 4: `owl:imports` + provenance | Could Have | Slice 1 | Not Started |
