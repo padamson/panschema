@@ -1,0 +1,9 @@
+name: conflict_two
+id: https://example.org/conflict_two
+title: Conflict Two
+description: Defines Widget a different, incompatible way
+
+classes:
+  Widget:
+    name: Widget
+    description: A widget as defined by conflict_two — and incompatibly

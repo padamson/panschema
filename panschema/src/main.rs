@@ -284,9 +284,17 @@ fn generate(
         let report = panschema::import_resolve::resolve_imports(&mut schema, input, &registry)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
         for collision in &report.collisions {
+            let kept = collision
+                .kept_from
+                .as_deref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "the root schema".to_string());
             eprintln!(
-                "warning: imported {collision} collides with the root schema's; \
-                 keeping the root definition"
+                "warning: {kind} `{name}` defined differently in `{dropped}` and `{kept}`; \
+                 keeping the definition from {kept}",
+                kind = collision.kind,
+                name = collision.name,
+                dropped = collision.dropped_from.display(),
             );
         }
     }

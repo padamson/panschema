@@ -1,0 +1,9 @@
+name: conflict_one
+id: https://example.org/conflict_one
+title: Conflict One
+description: Defines Widget one way
+
+classes:
+  Widget:
+    name: Widget
+    description: A widget as defined by conflict_one

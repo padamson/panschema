@@ -1,0 +1,12 @@
+name: tcycle_a
+id: https://example.org/tcycle_a
+title: Transitive Cycle A
+description: Imports B, which imports C, which imports A back — a 3-node cycle
+
+imports:
+  - tcycle_b
+
+classes:
+  TAThing:
+    name: TAThing
+    description: A class in tcycle_a

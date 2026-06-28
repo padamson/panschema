@@ -66,7 +66,7 @@ enums, types, and prefixes from both files in one output.
 
 ### Slice 2: Transitive imports + collision diagnostics
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Must Have
 
@@ -74,9 +74,9 @@ enums, types, and prefixes from both files in one output.
 two files surfaces a clear diagnostic instead of a silent last-writer-wins.
 
 **Acceptance Criteria:**
-- [ ] Imports resolve transitively; each file is loaded at most once — diamond imports de-duplicated by canonical path (`resolve_imports_dedupes_diamond`).
-- [ ] A name collision across files where the two definitions differ is reported with both source files and the entity path; byte-identical re-definitions are silently unified.
-- [ ] Cycle detection holds across the full transitive graph, not just direct self-imports.
+- [x] Imports resolve transitively; each file is loaded at most once — diamond imports de-duplicated by canonical path (`resolve_imports_dedupes_diamond`).
+- [x] A name collision across files where the two definitions differ is reported with both source files and the entity path; byte-identical re-definitions are silently unified.
+- [x] Cycle detection holds across the full transitive graph, not just direct self-imports.
 
 ---
 

@@ -1,0 +1,9 @@
+name: diamond_d
+id: https://example.org/diamond_d
+title: Diamond D
+description: Base of the diamond — reached via both arms, merged once
+
+classes:
+  DThing:
+    name: DThing
+    description: A class defined only in the diamond base

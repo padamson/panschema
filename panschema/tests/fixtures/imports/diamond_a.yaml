@@ -1,0 +1,13 @@
+name: diamond_a
+id: https://example.org/diamond_a
+title: Diamond A
+description: Apex of a diamond — imports B and C, which both import D
+
+imports:
+  - diamond_b
+  - diamond_c
+
+classes:
+  AThing:
+    name: AThing
+    description: A class defined in the diamond apex

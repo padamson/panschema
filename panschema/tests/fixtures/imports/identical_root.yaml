@@ -1,0 +1,13 @@
+name: identical_root
+id: https://example.org/identical_root
+title: Identical Root
+description: Imports two files that define Gadget identically
+
+imports:
+  - identical_one
+  - identical_two
+
+classes:
+  RootThing:
+    name: RootThing
+    description: A class defined in the identical root

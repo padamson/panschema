@@ -1,0 +1,12 @@
+name: diamond_b
+id: https://example.org/diamond_b
+title: Diamond B
+description: One arm of the diamond — imports D
+
+imports:
+  - diamond_d
+
+classes:
+  BThing:
+    name: BThing
+    description: A class defined in arm B

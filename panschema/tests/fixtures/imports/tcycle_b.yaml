@@ -1,0 +1,12 @@
+name: tcycle_b
+id: https://example.org/tcycle_b
+title: Transitive Cycle B
+description: Imports C, continuing the chain toward A
+
+imports:
+  - tcycle_c
+
+classes:
+  TBThing:
+    name: TBThing
+    description: A class in tcycle_b

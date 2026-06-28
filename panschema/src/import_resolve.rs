@@ -8,20 +8,25 @@
 //! into the root, and hands every writer a schema shaped exactly like a
 //! single-file one.
 //!
+//! Imports resolve transitively (imports of imports), and a file
+//! reached via two paths — a diamond — is loaded and merged exactly
+//! once, deduplicated by canonical path.
+//!
 //! The merge unions `classes`, `slots`, `enums`, `types`, and
-//! `prefixes`. The importing (root) schema wins on a name collision —
-//! the imported definition is dropped and the name recorded so a later
-//! diagnostic pass can surface it. Each merged element's origin file is
-//! recorded for provenance.
+//! `prefixes`. When two files define the same name, structurally equal
+//! definitions are silently unified; differing ones are an incompatible
+//! collision — the kept definition (root precedence) wins, the other is
+//! dropped, and a [`Collision`] records both files. Each merged
+//! element's origin file is recorded for provenance.
 //!
 //! A self-import or an import cycle is a hard error, never an infinite
 //! loop: every file is canonicalized and tracked on the resolution
-//! path, and re-entering a path is rejected.
+//! path, and re-entering a path on that path is rejected — across the
+//! full transitive graph, not just direct self-imports.
 //!
-//! Out of scope here (handled elsewhere): transitive imports, CURIE /
-//! URL imports, and builtin `linkml:*` imports. An entry that doesn't
-//! resolve to a local file is reported through [`ImportError`] rather
-//! than crashing.
+//! Out of scope here (handled elsewhere): CURIE / URL imports and
+//! builtin `linkml:*` imports. An entry that doesn't resolve to a local
+//! file is reported through [`ImportError`] rather than crashing.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -57,18 +62,42 @@ pub enum ImportError {
     },
 }
 
-/// Result of a successful import resolution: which element names were
-/// dropped because the root already defined them, and where every
-/// merged element originated.
+/// One incompatible name collision: two files defined the same element
+/// (same `kind` + `name`) with *different* definitions. The kept
+/// definition wins (root precedence); the dropped one is discarded.
+/// Byte-identical re-definitions never produce a `Collision` — they are
+/// silently unified.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Collision {
+    /// Element kind, e.g. `"class"`, `"slot"`, `"enum"`, `"type"`,
+    /// `"prefix"`.
+    pub kind: String,
+    /// Element name (or prefix string) shared by both definitions.
+    pub name: String,
+    /// File whose definition was kept. `None` when the kept definition
+    /// is a root-schema original with no recorded import origin.
+    pub kept_from: Option<PathBuf>,
+    /// File whose (differing) definition was dropped.
+    pub dropped_from: PathBuf,
+}
+
+/// Result of a successful import resolution: which elements collided
+/// incompatibly across files, and where every merged element
+/// originated.
 #[derive(Debug, Default)]
 pub struct ImportReport {
-    /// Names that collided — the root's definition was kept, the
-    /// import's was discarded. Each entry is `"<kind> <name>"`, e.g.
-    /// `"class Address"`. A later slice turns these into diagnostics.
-    pub collisions: Vec<String>,
+    /// Incompatible name collisions — the kept definition won (root
+    /// precedence), the differing import was discarded. Identical
+    /// re-definitions are unified and produce no entry here.
+    pub collisions: Vec<Collision>,
     /// For each merged element, the file it came from. Keyed by
     /// `"<kind> <name>"` so the same name across kinds stays distinct.
     pub origins: BTreeMap<String, PathBuf>,
+    /// Canonical path of every import file actually read and merged, in
+    /// resolution order. A diamond-deduplicated file appears exactly
+    /// once here even though two importers reference it; a skipped
+    /// duplicate is never re-added.
+    pub loaded_files: Vec<PathBuf>,
 }
 
 /// Resolve `root.imports` in place: load each imported local file and
@@ -95,22 +124,46 @@ pub fn resolve_imports(
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
     // The root file sits on the resolution stack so an import that
-    // points back at it (directly or transitively) is a cycle.
-    let mut visiting = vec![canonicalize_lossy(root_path)];
-    resolve_into(root, &base_dir, registry, &mut report, &mut visiting)?;
+    // points back at it (directly or transitively) is a cycle. It also
+    // counts as already loaded so an import pointing at the root is a
+    // dedup skip on any path that isn't itself a cycle.
+    let root_canonical = canonicalize_lossy(root_path);
+    let mut visiting = vec![root_canonical.clone()];
+    let mut loaded = std::collections::BTreeSet::from([root_canonical]);
+    resolve_into(
+        root,
+        &base_dir,
+        registry,
+        &mut report,
+        &mut visiting,
+        &mut loaded,
+    )?;
     Ok(report)
 }
 
 /// Recursive worker. Loads and merges each entry of `schema.imports`
-/// into `root`, following imports of imports while tracking the
-/// canonical path of every file on the current resolution stack so a
-/// cycle errors instead of looping.
+/// into `root`, following imports of imports.
+///
+/// Two canonical-path sets guard the walk, and they answer different
+/// questions:
+///
+/// - `visiting` is the *current* resolution path (a stack). A canonical
+///   path already on it means an import points back at a file we're
+///   still resolving — a cycle, which errors.
+/// - `loaded` is every file already merged on *any* path. A canonical
+///   path in it (but not on `visiting`) is a diamond: the file was
+///   reached via another route and already folded in, so it is skipped
+///   — not re-read, not re-merged — and its elements appear once.
+///
+/// Order at each entry: cycle check first (`visiting`), then dedup skip
+/// (`loaded`), else read + recurse + merge + record as loaded.
 fn resolve_into(
     root: &mut SchemaDefinition,
     base_dir: &Path,
     registry: &FormatRegistry,
     report: &mut ImportReport,
     visiting: &mut Vec<PathBuf>,
+    loaded: &mut std::collections::BTreeSet<PathBuf>,
 ) -> Result<(), ImportError> {
     // Take the import list so we can mutate `root` while iterating; the
     // merged schema's `imports` is cleared (every entry is now folded
@@ -132,6 +185,13 @@ fn resolve_into(
         if visiting.contains(&canonical) {
             return Err(ImportError::Cycle { path: canonical });
         }
+        // Diamond dedup: a file reached via two paths is merged once.
+        // Already loaded (and not on the current path) means another
+        // route folded it in, so skip it without re-reading or
+        // re-merging.
+        if loaded.contains(&canonical) {
+            continue;
+        }
 
         let reader = registry
             .reader_for_path(&resolved)
@@ -151,11 +211,20 @@ fn resolve_into(
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| base_dir.to_path_buf());
-        visiting.push(canonical);
-        resolve_into(&mut imported, &imported_dir, registry, report, visiting)?;
+        visiting.push(canonical.clone());
+        resolve_into(
+            &mut imported,
+            &imported_dir,
+            registry,
+            report,
+            visiting,
+            loaded,
+        )?;
         visiting.pop();
 
         merge_schema(root, &imported, &resolved, report);
+        report.loaded_files.push(canonical.clone());
+        loaded.insert(canonical);
     }
 
     Ok(())
@@ -190,23 +259,39 @@ fn canonicalize_lossy(path: &Path) -> PathBuf {
 }
 
 /// Merge `imported` into `root`. For each of `classes`, `slots`,
-/// `enums`, `types`, and `prefixes`: an entry whose name is unused in
-/// `root` is inserted and its origin recorded; an entry whose name is
-/// already present in `root` is dropped (root wins) and the collision
-/// recorded.
+/// `enums`, `types`, and `prefixes`:
+///
+/// - A name unused in `root` is inserted and its origin recorded.
+/// - A name already present whose *existing* and *incoming* definitions
+///   are structurally equal is silently unified — root keeps its copy,
+///   no collision recorded (the two files simply agree).
+/// - A name already present whose definitions *differ* is an
+///   incompatible collision: root keeps its copy (precedence) and a
+///   [`Collision`] is recorded naming the file kept (looked up from
+///   `report.origins`; `None` for a root original) and the file
+///   dropped (`origin`).
 fn merge_schema(
     root: &mut SchemaDefinition,
     imported: &SchemaDefinition,
     origin: &Path,
     report: &mut ImportReport,
 ) {
-    /// Merge one named map, recording origin on insert and collision on
-    /// conflict. `kind` labels the element for the report.
+    /// Merge one named map. On a name clash, compare definitions: equal
+    /// → unify silently; differ → keep root's and record a collision.
+    /// `kind` labels the element for the report and origin keys.
     macro_rules! merge_map {
         ($field:ident, $kind:literal) => {
             for (name, def) in &imported.$field {
-                if root.$field.contains_key(name) {
-                    report.collisions.push(format!("{} {name}", $kind));
+                if let Some(existing) = root.$field.get(name) {
+                    if existing != def {
+                        let key = format!("{} {name}", $kind);
+                        report.collisions.push(Collision {
+                            kind: $kind.to_string(),
+                            name: name.clone(),
+                            kept_from: report.origins.get(&key).cloned(),
+                            dropped_from: origin.to_path_buf(),
+                        });
+                    }
                 } else {
                     root.$field.insert(name.clone(), def.clone());
                     report
@@ -222,11 +307,19 @@ fn merge_schema(
     merge_map!(enums, "enum");
     merge_map!(types, "type");
 
-    // Prefixes union the same way; a clashing prefix keeps the root's
-    // mapping. Recorded under a `prefix` label for symmetry.
+    // Prefixes union the same way; an identical mapping unifies, a
+    // differing one keeps the root's and records a `prefix` collision.
     for (prefix, base) in &imported.prefixes {
-        if root.prefixes.contains_key(prefix) {
-            report.collisions.push(format!("prefix {prefix}"));
+        if let Some(existing) = root.prefixes.get(prefix) {
+            if existing != base {
+                let key = format!("prefix {prefix}");
+                report.collisions.push(Collision {
+                    kind: "prefix".to_string(),
+                    name: prefix.clone(),
+                    kept_from: report.origins.get(&key).cloned(),
+                    dropped_from: origin.to_path_buf(),
+                });
+            }
         } else {
             root.prefixes.insert(prefix.clone(), base.clone());
             report
@@ -322,10 +415,168 @@ mod tests {
             Some("root's own Address"),
             "the root's definition must win on collision"
         );
+        let collision = report
+            .collisions
+            .iter()
+            .find(|c| c.kind == "class" && c.name == "Address")
+            .expect("the collision should be recorded");
+        // The root's own definition was kept: a root original has no
+        // recorded import origin, so `kept_from` is None. The import's
+        // file is the one dropped.
+        assert_eq!(collision.kept_from, None);
+        assert_eq!(
+            collision.dropped_from.as_path(),
+            fixtures_dir().join("common.yaml").as_path()
+        );
+    }
+
+    #[test]
+    fn resolve_imports_dedupes_diamond() {
+        // `diamond_a` imports B and C; B and C both import D. D's
+        // elements appear exactly once and D is processed exactly once —
+        // a single recorded origin for `DThing`, not a duplicate.
+        let registry = FormatRegistry::with_defaults();
+        let (mut root, path) = read_root("diamond_a.yaml");
+
+        let report = resolve_imports(&mut root, &path, &registry).expect("resolve imports");
+
+        // Every arm's class merged in.
+        assert!(root.classes.contains_key("AThing"));
+        assert!(root.classes.contains_key("BThing"));
+        assert!(root.classes.contains_key("CThing"));
+        assert!(root.classes.contains_key("DThing"));
+
+        // D was loaded and merged exactly once despite being reached
+        // through both arms: its canonical path appears a single time in
+        // the loaded-files record (the second arm hit the dedup skip).
+        let diamond_d = fixtures_dir().join("diamond_d.yaml");
+        let diamond_d_canonical = diamond_d.canonicalize().expect("canonicalize diamond_d");
+        let d_loads = report
+            .loaded_files
+            .iter()
+            .filter(|p| **p == diamond_d_canonical)
+            .count();
+        assert_eq!(
+            d_loads, 1,
+            "the diamond base must be processed once, not per arm: {:?}",
+            report.loaded_files
+        );
+        // No collision: the base is merged once, never against itself.
         assert!(
-            report.collisions.iter().any(|c| c == "class Address"),
-            "the collision should be recorded, got {:?}",
+            report.collisions.is_empty(),
+            "the diamond base must merge once, not collide with itself: {:?}",
             report.collisions
+        );
+    }
+
+    #[test]
+    fn resolve_imports_reports_differing_collision_with_both_files() {
+        // `conflict_root` imports two files that each define `Widget`
+        // incompatibly. The first import's definition is kept; the
+        // second's is dropped. The recorded collision names both files.
+        let registry = FormatRegistry::with_defaults();
+        let (mut root, path) = read_root("conflict_root.yaml");
+
+        let report = resolve_imports(&mut root, &path, &registry).expect("resolve imports");
+
+        let collision = report
+            .collisions
+            .iter()
+            .find(|c| c.kind == "class" && c.name == "Widget")
+            .expect("the incompatible Widget redefinition must be reported");
+        assert_eq!(
+            collision.kept_from.as_deref(),
+            Some(fixtures_dir().join("conflict_one.yaml").as_path()),
+            "the first import's definition is the one kept"
+        );
+        assert_eq!(
+            collision.dropped_from.as_path(),
+            fixtures_dir().join("conflict_two.yaml").as_path(),
+            "the second import's differing definition is the one dropped"
+        );
+        // The kept definition stands in the merged schema.
+        assert_eq!(
+            root.classes["Widget"].description.as_deref(),
+            Some("A widget as defined by conflict_one")
+        );
+    }
+
+    #[test]
+    fn resolve_imports_unifies_identical_redefinition() {
+        // `identical_root` imports two files that define `Gadget`
+        // byte-identically. The two definitions agree, so they unify
+        // silently: one merged element, no collision.
+        let registry = FormatRegistry::with_defaults();
+        let (mut root, path) = read_root("identical_root.yaml");
+
+        let report = resolve_imports(&mut root, &path, &registry).expect("resolve imports");
+
+        assert!(root.classes.contains_key("Gadget"));
+        assert!(
+            report.collisions.is_empty(),
+            "identical redefinitions must not be reported as collisions: {:?}",
+            report.collisions
+        );
+    }
+
+    #[test]
+    fn merge_schema_collides_on_differing_prefix_and_unifies_identical() {
+        // The prefix map merges like the other element kinds: a prefix
+        // bound to a *different* URI in the import collides (root wins);
+        // a prefix bound *identically* unifies with no collision.
+        let mut root = SchemaDefinition::new("root");
+        root.prefixes
+            .insert("ex".to_string(), "https://root.example/".to_string());
+        root.prefixes
+            .insert("shared".to_string(), "https://shared.example/".to_string());
+
+        let mut imported = SchemaDefinition::new("imported");
+        imported
+            .prefixes
+            .insert("ex".to_string(), "https://other.example/".to_string());
+        imported
+            .prefixes
+            .insert("shared".to_string(), "https://shared.example/".to_string());
+
+        let mut report = ImportReport::default();
+        merge_schema(
+            &mut root,
+            &imported,
+            std::path::Path::new("imported.yaml"),
+            &mut report,
+        );
+
+        // Root keeps its own `ex` mapping.
+        assert_eq!(root.prefixes.get("ex").unwrap(), "https://root.example/");
+        // Exactly the differing `ex` collides; the identical `shared`
+        // unifies silently.
+        let prefix_collisions: Vec<_> = report
+            .collisions
+            .iter()
+            .filter(|c| c.kind == "prefix")
+            .collect();
+        assert_eq!(
+            prefix_collisions.len(),
+            1,
+            "only the differing prefix collides: {:?}",
+            report.collisions
+        );
+        assert_eq!(prefix_collisions[0].name, "ex");
+    }
+
+    #[test]
+    fn resolve_imports_detects_transitive_cycle() {
+        // `tcycle_a` → `tcycle_b` → `tcycle_c` → `tcycle_a`. Cycle
+        // detection holds across the full transitive graph, not just
+        // direct self-imports: resolution errors rather than looping.
+        let registry = FormatRegistry::with_defaults();
+        let (mut root, path) = read_root("tcycle_a.yaml");
+
+        let err = resolve_imports(&mut root, &path, &registry)
+            .expect_err("a transitive import cycle must be rejected");
+        assert!(
+            matches!(err, ImportError::Cycle { .. }),
+            "expected a cycle error, got {err:?}"
         );
     }
 

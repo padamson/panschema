@@ -1,0 +1,12 @@
+name: tcycle_c
+id: https://example.org/tcycle_c
+title: Transitive Cycle C
+description: Imports A back, closing the 3-node loop
+
+imports:
+  - tcycle_a
+
+classes:
+  TCThing:
+    name: TCThing
+    description: A class in tcycle_c
