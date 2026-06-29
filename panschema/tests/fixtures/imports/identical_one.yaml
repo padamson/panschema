@@ -1,0 +1,9 @@
+name: identical_one
+id: https://example.org/identical_one
+title: Identical One
+description: Defines Gadget
+
+classes:
+  Gadget:
+    name: Gadget
+    description: A gadget, defined the same way in both files

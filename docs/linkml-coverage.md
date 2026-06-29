@@ -45,9 +45,9 @@ slot, enum, type, and permissible-value alike. panschema models only a few:
 | `description` | ● | ● | ● | ● | ● | markdown + `[[xref]]` in HTML; tooltip in graph; `rdfs:comment`; doc-comment |
 | `annotations` | ● | ◐ | ◐ | ◐ | ○ | generic map; only `panschema:*` keys consumed (label, individuals, owl_property_type) |
 | `title` | ◐ | ● | ◐ | ● | ✗ | modeled on schema only; `rdfs:label` on the ontology |
-| `exact_mappings` `close_mappings` `related_mappings` `narrow_mappings` `broad_mappings` | ● | ● | ○ | ● | ○ | modeled on class + slot; HTML "Mappings" row; RDF `skos:*Match`; graph/Rust ignore |
-| `deprecated` | ● | ● | — | ● | — | modeled on schema/class/slot/enum/type; HTML "Deprecated" badge + note; `owl:deprecated true` on class/slot IRI; graph/Rust ignore |
-| `aliases` `see_also` | ● | ● | — | ● | — | modeled on schema/class/slot/enum/type; HTML "Aliases" row + "See also" CURIE-expanded links; RDF `skos:altLabel` + `rdfs:seeAlso` on class/slot IRI; graph/Rust ignore |
+| `exact_mappings` `close_mappings` `related_mappings` `narrow_mappings` `broad_mappings` | ● | ● | ○ | ● | ○ | modeled on class + slot; HTML "Mappings" row; RDF `skos:*Match` (round-trips: OWL reader reads them back); graph/Rust ignore |
+| `deprecated` | ● | ● | — | ● | — | modeled on schema/class/slot/enum/type; HTML "Deprecated" badge + note; `owl:deprecated true` on class/slot IRI (round-trips as a boolean — OWL reader reads it back into the flag; the note text is RDF-lossy); graph/Rust ignore |
+| `aliases` `see_also` | ● | ● | — | ● | — | modeled on schema/class/slot/enum/type; HTML "Aliases" row + "See also" CURIE-expanded links; RDF `skos:altLabel` + `rdfs:seeAlso` on class/slot IRI (round-trips: OWL reader reads them back); graph/Rust ignore |
 | `examples` | ● | ● | — | n/a | — | modeled on schema/class/slot/enum/type; HTML "Examples" section listing each `value` + optional `description`; no standard RDF predicate; graph/Rust ignore |
 | `comments` `notes` `todos` `in_subset` `rank` `status` `keywords` `categories` `created_by` `modified_by` `source` `structured_aliases` `alt_descriptions` `contributors` `created_on` `last_updated_on` … | ✗ | — | — | — | — | not modeled (except `contributors`/`created`/`modified` on schema, RDF-only — see below). Editorial/provenance long tail; biggest doc-completeness gap |
 
@@ -68,7 +68,7 @@ slot, enum, type, and permissible-value alike. panschema models only a few:
 | `prefixes` | ● | ● | ◐ | ● | ✗ | namespace table; CURIE expansion; `@prefix` |
 | `default_prefix` | ● | ● | ◐ | ◐ | ✗ | bare-name CURIE resolution |
 | `default_range` | ● | ○ | ○ | ○ | ○ | modeled, but no writer applies it |
-| `imports` | ● | ○ | ○ | ○ | ○ | tracked, never resolved or rendered |
+| `imports` | ● | ◐ | ◐ | ◐ | ◐ | local file imports resolved + merged at load time (every writer sees one schema); CURIE/remote/builtin imports + provenance rendering still pending |
 | `classes` `slots` `enums` `types` | ● | ● | ● | ● | ● | the indexes the writers walk |
 | `subsets` `settings` `bindings` `emit_prefixes` `source_file` `metamodel_version` `generation_date` … | ✗ | — | — | — | — | not modeled |
 
@@ -78,7 +78,7 @@ slot, enum, type, and permissible-value alike. panschema models only a few:
 
 | Metaslot | IR | HTML | Graph | RDF | Rust | Notes |
 |---|:--:|:--:|:--:|:--:|:--:|---|
-| `name` | ● | ● | ● | ● | ● | struct/trait name in codegen |
+| `name` | ● | ● | ● | ● | ● | struct/trait name in codegen; Rust keyword names emitted as raw identifiers |
 | `description` | ● | ● | ● | ● | ● | |
 | `is_a` | ● | ● | ● | ● | ● | "Subclass of"; edge; `rdfs:subClassOf`; trait + impl |
 | `mixins` | ● | ● | ● | ● | ● | "Mixes in"; edges; per-mixin `rdfs:subClassOf`; supertraits |
@@ -113,8 +113,9 @@ focused subset of the structural ones.
 | `slot_uri` | ● | ● | ● | ● | ✗ | card IRI; node URI; subject IRI |
 | `any_of` | ● | ● | ● | ○ | ● | union on card; one range edge per member; `#[serde(untagged)]` enum |
 | `*_mappings` (5) | ● | ● | ○ | ● | ○ | see Common metadata |
-| `symmetric` `asymmetric` `reflexive` `irreflexive` `transitive` | ● | ● | — | ● | — | OWL relationship characteristics: card badge + `owl:<Name>Property` axiom (feature 14 slice 1) |
-| `key` `designates_type` `subproperty_of` `singular_name` `ifabsent` `recommended` `slot_group` `unit` `implicit_prefix` `readonly` `shared` `list_elements_unique`/`_ordered` | ✗ | — | — | — | — | not modeled. `subproperty_of` (`rdfs:subPropertyOf`) would further enrich RDF/OWL |
+| `symmetric` `asymmetric` `reflexive` `irreflexive` `transitive` | ● | ● | — | ● | — | OWL relationship characteristics: card badge + `owl:<Name>Property` axiom; round-trips (OWL reader reads the axioms back into the flags) |
+| `ifabsent` | ● | ● | — | — | ● | schema-encoded default. Rust: enum and scalar (`int`/`float`/`double`/`string`/boolean) forms generate a non-`Option` field with `#[serde(default)]` + default fn; HTML "Default" row shows the value |
+| `key` `designates_type` `subproperty_of` `singular_name` `recommended` `slot_group` `unit` `implicit_prefix` `readonly` `shared` `list_elements_unique`/`_ordered` | ✗ | — | — | — | — | not modeled. `subproperty_of` (`rdfs:subPropertyOf`) would further enrich RDF/OWL |
 | `minimum_value` `maximum_value` | ● | ● | — | ○ | — | numeric value bounds: `≥`/`≤` card badge (feature 14 slice 2); RDF `owl:withRestrictions` facet deferred (slice 2b) |
 | `equals_string` `equals_string_in` `equals_number` `equals_expression` `exact_cardinality` `has_member` `all_members` `structured_pattern` `range_expression` `all_of` `exactly_one_of` `none_of` `array` | ✗ | — | — | — | — | not modeled. Value/boolean-expression constraints (a validation-feature family) |
 
@@ -127,7 +128,7 @@ renders an enum card per enum; the graph hover reuses it.
 
 | Metaslot | IR | HTML | Graph | RDF | Rust | Notes |
 |---|:--:|:--:|:--:|:--:|:--:|---|
-| `EnumDefinition.name` | ● | ● | ● | ✗ | ● | `#enum-` card; node; Rust enum |
+| `EnumDefinition.name` | ● | ● | ● | ✗ | ● | `#enum-` card; node; Rust enum (keyword names → raw identifiers) |
 | `EnumDefinition.description` | ● | ● | ● | ✗ | ● | card; tooltip; doc-comment |
 | `permissible_values` | ● | ● | ● | ✗ | ● | card list; graph hover; Rust variants (keyword names → raw identifiers). No RDF representation |
 | `PermissibleValue.text` | ● | ● | ● | ✗ | ● | card; variant ident |
@@ -181,16 +182,20 @@ Ordered by impact, with the slices already filed against each:
    class `rules` / `unique_keys`, `equals_*`, and boolean expressions
    (`all_of` / `exactly_one_of` / `none_of`). Route to
    [feature 07](features/07-schema-validation.md).
-5. **Editorial/provenance metadata** (not modeled): `aliases`, `see_also`,
-   `deprecated`, `comments`, `examples`, `in_subset`. Documentation
-   completeness; low individual cost, high collective coverage.
+5. **Editorial/provenance metadata** (not modeled): `comments`,
+   `in_subset`. Documentation completeness; low individual cost, high
+   collective coverage. (`aliases`, `see_also`, `deprecated`, and
+   `examples` are now modeled — see Common metadata; the first three also
+   round-trip through RDF.)
 6. ~~**Property characteristics**~~ **(mostly done).** The five OWL
    relationship characteristics — `symmetric`, `asymmetric`, `reflexive`,
    `irreflexive`, `transitive` — are modeled and emit `owl:<Name>Property`
    axioms + card badges ([feature 14 slice 1](features/14-slot-constraints.md) ✅).
    Remaining tail: `subproperty_of` (`rdfs:subPropertyOf`).
 7. **Dynamic enums / imports resolution**: `reachable_from`, `code_set`;
-   `imports` is tracked but never followed.
+   `imports` of local files now resolve + merge at load time, so a schema
+   split across files renders as one. CURIE/remote/builtin (`linkml:*`)
+   imports and import provenance in the rendered docs are still pending.
 8. **Subsets** (not modeled): `subsets` on the schema + `in_subset` per
    element would enable subset-scoped documentation (render only the terms in
    a named profile). Self-contained, additive.

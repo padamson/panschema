@@ -169,6 +169,25 @@ wasm-pack build panschema-viz --target web --dev --features webgpu
 
 If the link time on the debug `panschema` binary becomes a bottleneck, uncomment the relevant block in `.cargo/config.toml` to point cargo at `lld` / `mold` / `sold`. Install instructions are in that file.
 
+### Vendoring a dogfood schema release
+
+panschema regression-tests itself against every released version of the real
+dogfood schemas (`scimantic-schema`, `scidatica-schema`). Each
+release is checked in as a frozen snapshot under
+`panschema/tests/fixtures/dogfood/<repo>/<tag>.yaml` so the test suite runs
+offline. When one of those schemas cuts a new release, vendor it and commit:
+
+```bash
+scripts/vendor-dogfood-schemas.sh scimantic-schema v0.2.0   # one tag
+scripts/vendor-dogfood-schemas.sh scimantic-schema all      # every tag (needs gh)
+```
+
+The script is the only network path; it fetches the release via `panschema add`
+and writes the snapshot. The weekly Dogfood Release Monitor workflow opens a
+tracking issue when a release hasn't been vendored yet. A new release may use a
+LinkML construct panschema doesn't support yet — do any needed panschema work
+first, then vendor and commit.
+
 ### Manual Verification
 
 ```bash

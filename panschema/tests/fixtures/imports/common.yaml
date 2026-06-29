@@ -1,0 +1,42 @@
+name: common
+id: https://example.org/common
+title: Common Schema
+description: Shared definitions imported by other schemas
+
+prefixes:
+  common: https://example.org/common/
+
+classes:
+  Address:
+    name: Address
+    description: A postal address defined only in the common schema
+    attributes:
+      street:
+        name: street
+        range: string
+      city:
+        name: city
+        range: string
+
+slots:
+  identifier:
+    name: identifier
+    description: A unique identifier
+    identifier: true
+    range: string
+
+enums:
+  Country:
+    name: Country
+    description: A country code
+    permissible_values:
+      US:
+        text: US
+      CA:
+        text: CA
+
+types:
+  postal_code:
+    name: postal_code
+    description: A postal code string
+    typeof_: string

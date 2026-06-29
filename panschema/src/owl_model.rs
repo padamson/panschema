@@ -22,6 +22,47 @@ pub struct OntologyMetadata {
     pub individuals: Vec<OntologyIndividual>,
 }
 
+/// SKOS / editorial cross-references attached to a class or property.
+///
+/// Mirrors the RDF the writer emits for these constructs so they survive
+/// a Turtle→IR→Turtle round-trip: `owl:deprecated`, `skos:altLabel`,
+/// `rdfs:seeAlso`, and the five SKOS mapping predicates.
+#[derive(Debug, Clone, Default)]
+pub struct Annotations {
+    /// True when `owl:deprecated true` is asserted on the subject.
+    pub deprecated: bool,
+    /// Alternative labels (skos:altLabel literals).
+    pub aliases: Vec<String>,
+    /// Related-resource IRIs (rdfs:seeAlso).
+    pub see_also: Vec<String>,
+    /// skos:exactMatch target IRIs.
+    pub exact_mappings: Vec<String>,
+    /// skos:closeMatch target IRIs.
+    pub close_mappings: Vec<String>,
+    /// skos:relatedMatch target IRIs.
+    pub related_mappings: Vec<String>,
+    /// skos:narrowMatch target IRIs.
+    pub narrow_mappings: Vec<String>,
+    /// skos:broadMatch target IRIs.
+    pub broad_mappings: Vec<String>,
+}
+
+/// OWL relationship characteristics asserted on an object property via
+/// `rdf:type owl:<Name>Property`.
+#[derive(Debug, Clone, Default)]
+pub struct PropertyCharacteristics {
+    /// owl:SymmetricProperty
+    pub symmetric: bool,
+    /// owl:AsymmetricProperty
+    pub asymmetric: bool,
+    /// owl:ReflexiveProperty
+    pub reflexive: bool,
+    /// owl:IrreflexiveProperty
+    pub irreflexive: bool,
+    /// owl:TransitiveProperty
+    pub transitive: bool,
+}
+
 /// A class (owl:Class) extracted from an ontology
 #[derive(Debug, Clone)]
 pub struct OntologyClass {
@@ -35,6 +76,8 @@ pub struct OntologyClass {
     pub comment: Option<String>,
     /// IRI of the superclass (rdfs:subClassOf)
     pub superclass_iri: Option<String>,
+    /// SKOS / editorial cross-references (deprecated, aliases, see_also, mappings).
+    pub annotations: Annotations,
 }
 
 impl OntologyClass {
@@ -72,6 +115,10 @@ pub struct OntologyProperty {
     pub range_iri: Option<String>,
     /// IRI of the inverse property (owl:inverseOf)
     pub inverse_of_iri: Option<String>,
+    /// OWL relationship characteristics (transitive, symmetric, …).
+    pub characteristics: PropertyCharacteristics,
+    /// SKOS / editorial cross-references (deprecated, aliases, see_also, mappings).
+    pub annotations: Annotations,
 }
 
 impl OntologyProperty {
@@ -166,6 +213,8 @@ mod tests {
             domain_iri: None,
             range_iri: None,
             inverse_of_iri: None,
+            characteristics: PropertyCharacteristics::default(),
+            annotations: Annotations::default(),
         };
         assert_eq!(prop.display_label(), "has owner");
     }
@@ -181,6 +230,8 @@ mod tests {
             domain_iri: None,
             range_iri: None,
             inverse_of_iri: None,
+            characteristics: PropertyCharacteristics::default(),
+            annotations: Annotations::default(),
         };
         assert_eq!(prop.display_label(), "hasOwner");
     }
@@ -193,6 +244,7 @@ mod tests {
             label: Some("Animal".to_string()),
             comment: None,
             superclass_iri: None,
+            annotations: Annotations::default(),
         };
         assert_eq!(class.display_label(), "Animal");
     }
@@ -231,6 +283,7 @@ mod tests {
             label: None,
             comment: None,
             superclass_iri: None,
+            annotations: Annotations::default(),
         };
         assert_eq!(class.display_label(), "Animal");
     }

@@ -16,12 +16,117 @@ use sophia::turtle::parser::turtle;
 use crate::io::{IoError, IoResult, Reader};
 use crate::linkml::{ClassDefinition, SchemaDefinition, SlotDefinition};
 use crate::owl_model::{
-    OntologyClass, OntologyIndividual, OntologyMetadata, OntologyProperty, PropertyType,
-    PropertyValue,
+    Annotations, OntologyClass, OntologyIndividual, OntologyMetadata, OntologyProperty,
+    PropertyCharacteristics, PropertyType, PropertyValue,
 };
 
 /// OWL namespace
 const OWL_NS: &str = "http://www.w3.org/2002/07/owl#";
+
+/// SKOS namespace
+const SKOS_NS: &str = "http://www.w3.org/2004/02/skos/core#";
+
+/// Collect every literal object for a (subject, predicate) pair.
+fn collect_literal_values<T: Term>(
+    graph: &FastGraph,
+    subject: &SimpleTerm,
+    predicate: T,
+) -> Vec<String> {
+    graph
+        .triples_matching([subject], [predicate], Any)
+        .filter_map(Result::ok)
+        .filter_map(|t| t.o().lexical_form().map(|l| l.to_string()))
+        .collect()
+}
+
+/// Collect every IRI object for a (subject, predicate) pair.
+fn collect_iri_values<T: Term>(
+    graph: &FastGraph,
+    subject: &SimpleTerm,
+    predicate: T,
+) -> Vec<String> {
+    graph
+        .triples_matching([subject], [predicate], Any)
+        .filter_map(Result::ok)
+        .filter_map(|t| t.o().iri().map(|i| i.to_string()))
+        .collect()
+}
+
+/// True when `subject owl:deprecated true` is asserted.
+fn read_deprecated(graph: &FastGraph, subject: &SimpleTerm, owl: &Namespace<&str>) -> bool {
+    let Ok(owl_deprecated) = owl.get("deprecated") else {
+        return false;
+    };
+    graph
+        .triples_matching([subject], [owl_deprecated], Any)
+        .filter_map(Result::ok)
+        .any(|t| {
+            t.o()
+                .lexical_form()
+                .is_some_and(|l| l == "true" || l == "1")
+        })
+}
+
+/// Read the SKOS / editorial cross-references the writer emits onto a
+/// class or property IRI: `owl:deprecated`, `skos:altLabel`,
+/// `rdfs:seeAlso`, and the five SKOS mapping predicates.
+fn read_annotations(graph: &FastGraph, subject: &SimpleTerm, owl: &Namespace<&str>) -> Annotations {
+    let skos = Namespace::new_unchecked(SKOS_NS);
+    let mapping_iris = |name: &str| {
+        skos.get(name)
+            .map(|p| {
+                let p: SimpleTerm = p.into_term();
+                collect_iri_values(graph, subject, &p)
+            })
+            .unwrap_or_default()
+    };
+    let aliases = skos
+        .get("altLabel")
+        .map(|p| {
+            let p: SimpleTerm = p.into_term();
+            collect_literal_values(graph, subject, &p)
+        })
+        .unwrap_or_default();
+
+    Annotations {
+        deprecated: read_deprecated(graph, subject, owl),
+        aliases,
+        see_also: collect_iri_values(graph, subject, rdfs::seeAlso),
+        exact_mappings: mapping_iris("exactMatch"),
+        close_mappings: mapping_iris("closeMatch"),
+        related_mappings: mapping_iris("relatedMatch"),
+        narrow_mappings: mapping_iris("narrowMatch"),
+        broad_mappings: mapping_iris("broadMatch"),
+    }
+}
+
+/// Read the OWL relationship characteristics asserted on a property via
+/// `rdf:type owl:<Name>Property`.
+fn read_characteristics(
+    graph: &FastGraph,
+    subject: &SimpleTerm,
+    owl: &Namespace<&str>,
+) -> PropertyCharacteristics {
+    let has_type = |name: &str| {
+        owl.get(name)
+            .map(|ty| {
+                let ty: SimpleTerm = ty.into_term();
+                graph
+                    .triples_matching([subject], [rdf::type_], [&ty])
+                    .filter_map(Result::ok)
+                    .next()
+                    .is_some()
+            })
+            .unwrap_or(false)
+    };
+    PropertyCharacteristics {
+        symmetric: has_type("SymmetricProperty"),
+        asymmetric: has_type("AsymmetricProperty"),
+        reflexive: has_type("ReflexiveProperty"),
+        irreflexive: has_type("IrreflexiveProperty"),
+        transitive: has_type("TransitiveProperty"),
+    }
+}
 
 /// Extract the local name (fragment or last path segment) from an IRI
 pub fn extract_id_from_iri(iri: &str) -> String {
@@ -92,7 +197,7 @@ impl OwlReader {
         // Extract all owl:Class entities
         let owl_class = owl.get("Class")?;
         let owl_class_term: SimpleTerm = owl_class.into_term();
-        let classes = Self::extract_classes(&graph, &owl_class_term)?;
+        let classes = Self::extract_classes(&graph, &owl_class_term, &owl)?;
 
         // Extract all properties
         let owl_object_property = owl.get("ObjectProperty")?;
@@ -106,6 +211,7 @@ impl OwlReader {
             &owl_object_property_term,
             &owl_datatype_property_term,
             &owl_inverse_of_term,
+            &owl,
         )?;
 
         // Extract all owl:NamedIndividual entities
@@ -128,6 +234,7 @@ impl OwlReader {
     fn extract_classes(
         graph: &FastGraph,
         owl_class: &SimpleTerm<'_>,
+        owl: &Namespace<&str>,
     ) -> anyhow::Result<Vec<OntologyClass>> {
         // Helper to get a string literal for a predicate
         fn get_literal_value<T: Term>(
@@ -179,6 +286,7 @@ impl OwlReader {
             let label = get_literal_value(graph, &class_iri, rdfs::label);
             let comment = get_literal_value(graph, &class_iri, rdfs::comment);
             let superclass_iri = get_iri_value(graph, &class_iri, rdfs::subClassOf);
+            let annotations = read_annotations(graph, &class_iri, owl);
 
             classes.push(OntologyClass {
                 iri,
@@ -186,6 +294,7 @@ impl OwlReader {
                 label,
                 comment,
                 superclass_iri,
+                annotations,
             });
         }
 
@@ -201,6 +310,7 @@ impl OwlReader {
         owl_object_property: &SimpleTerm<'_>,
         owl_datatype_property: &SimpleTerm<'_>,
         owl_inverse_of: &SimpleTerm<'_>,
+        owl: &Namespace<&str>,
     ) -> anyhow::Result<Vec<OntologyProperty>> {
         // Helper to get a string literal for a predicate
         fn get_literal_value<T: Term>(
@@ -251,6 +361,8 @@ impl OwlReader {
             let domain_iri = get_iri_value(graph, &prop_iri, rdfs::domain);
             let range_iri = get_iri_value(graph, &prop_iri, rdfs::range);
             let inverse_of_iri = get_iri_value(graph, &prop_iri, owl_inverse_of);
+            let characteristics = read_characteristics(graph, &prop_iri, owl);
+            let annotations = read_annotations(graph, &prop_iri, owl);
 
             properties.push(OntologyProperty {
                 iri,
@@ -261,6 +373,8 @@ impl OwlReader {
                 domain_iri,
                 range_iri,
                 inverse_of_iri,
+                characteristics,
+                annotations,
             });
         }
 
@@ -284,6 +398,8 @@ impl OwlReader {
             let comment = get_literal_value(graph, &prop_iri, rdfs::comment);
             let domain_iri = get_iri_value(graph, &prop_iri, rdfs::domain);
             let range_iri = get_iri_value(graph, &prop_iri, rdfs::range);
+            let characteristics = read_characteristics(graph, &prop_iri, owl);
+            let annotations = read_annotations(graph, &prop_iri, owl);
 
             properties.push(OntologyProperty {
                 iri,
@@ -294,6 +410,8 @@ impl OwlReader {
                 domain_iri,
                 range_iri,
                 inverse_of_iri: None,
+                characteristics,
+                annotations,
             });
         }
 
@@ -444,6 +562,19 @@ impl OwlReader {
                 class_def.is_a = Some(superclass_id);
             }
 
+            // SKOS / editorial cross-references.
+            let ann = &owl_class.annotations;
+            if ann.deprecated {
+                class_def.deprecated = Some(String::new());
+            }
+            class_def.aliases = ann.aliases.clone();
+            class_def.see_also = ann.see_also.clone();
+            class_def.exact_mappings = ann.exact_mappings.clone();
+            class_def.close_mappings = ann.close_mappings.clone();
+            class_def.related_mappings = ann.related_mappings.clone();
+            class_def.narrow_mappings = ann.narrow_mappings.clone();
+            class_def.broad_mappings = ann.broad_mappings.clone();
+
             // Store label in annotations if different from id
             if let Some(ref label) = owl_class.label
                 && label != &owl_class.id
@@ -487,6 +618,27 @@ impl OwlReader {
                 let inverse_id = extract_id_from_iri(inverse_iri);
                 slot_def.inverse = Some(inverse_id);
             }
+
+            // OWL relationship characteristics.
+            let chars = &owl_prop.characteristics;
+            slot_def.symmetric = chars.symmetric;
+            slot_def.asymmetric = chars.asymmetric;
+            slot_def.reflexive = chars.reflexive;
+            slot_def.irreflexive = chars.irreflexive;
+            slot_def.transitive = chars.transitive;
+
+            // SKOS / editorial cross-references.
+            let ann = &owl_prop.annotations;
+            if ann.deprecated {
+                slot_def.deprecated = Some(String::new());
+            }
+            slot_def.aliases = ann.aliases.clone();
+            slot_def.see_also = ann.see_also.clone();
+            slot_def.exact_mappings = ann.exact_mappings.clone();
+            slot_def.close_mappings = ann.close_mappings.clone();
+            slot_def.related_mappings = ann.related_mappings.clone();
+            slot_def.narrow_mappings = ann.narrow_mappings.clone();
+            slot_def.broad_mappings = ann.broad_mappings.clone();
 
             // Store property type in annotations
             let prop_type = match owl_prop.property_type {
@@ -631,14 +783,14 @@ mod tests {
         let path = reference_ontology_path();
         let meta = OwlReader::parse_ontology(&path).expect("Failed to parse reference ontology");
 
-        // Reference ontology has 5 classes: Animal, Cat, Dog, Mammal, Person
-        assert_eq!(meta.classes.len(), 5);
+        // Reference ontology has 6 classes: Animal, Cat, Dog, Mammal, Person, Pet
+        assert_eq!(meta.classes.len(), 6);
 
         // Classes should be sorted alphabetically by display label
         let class_labels: Vec<&str> = meta.classes.iter().map(|c| c.display_label()).collect();
         assert_eq!(
             class_labels,
-            vec!["Animal", "Cat", "Dog", "Mammal", "Person"]
+            vec!["Animal", "Cat", "Dog", "Mammal", "Person", "Pet"]
         );
 
         // Check a specific class with subclass relationship
@@ -663,14 +815,14 @@ mod tests {
         let path = reference_ontology_path();
         let meta = OwlReader::parse_ontology(&path).expect("Failed to parse reference ontology");
 
-        // Reference ontology has 4 properties: hasAge, hasName, hasOwner, owns
-        assert_eq!(meta.properties.len(), 4);
+        // Reference ontology has 5 properties: hasAge, hasName, hasOwner, owns, relatedTo
+        assert_eq!(meta.properties.len(), 5);
 
         // Properties should be sorted alphabetically by display label
         let prop_labels: Vec<&str> = meta.properties.iter().map(|p| p.display_label()).collect();
         assert_eq!(
             prop_labels,
-            vec!["has age", "has name", "has owner", "owns"]
+            vec!["has age", "has name", "has owner", "owns", "related to"]
         );
     }
 
@@ -706,6 +858,124 @@ mod tests {
             owns.inverse_of_iri,
             Some("http://example.org/panschema/reference#hasOwner".to_string())
         );
+    }
+
+    #[test]
+    fn extracts_owl_deprecated_on_class() {
+        let path = reference_ontology_path();
+        let meta = OwlReader::parse_ontology(&path).expect("Failed to parse reference ontology");
+
+        // `:Pet owl:deprecated true` is read into the class annotations.
+        let pet = meta.classes.iter().find(|c| c.id == "Pet").unwrap();
+        assert!(pet.annotations.deprecated);
+
+        // An undeprecated class carries no deprecated flag.
+        let dog = meta.classes.iter().find(|c| c.id == "Dog").unwrap();
+        assert!(!dog.annotations.deprecated);
+    }
+
+    #[test]
+    fn reads_deprecated_from_xsd_boolean_one_lexical() {
+        // `owl:deprecated` accepts `"1"^^xsd:boolean` as a valid lexical
+        // for `true`, not just the canonical `true`. The reader treats
+        // both as deprecated; a `"0"` value is not deprecated.
+        let ttl = concat!(
+            "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+            "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+            "@prefix ex: <http://example.org/> .\n",
+            "ex:Ont a owl:Ontology .\n",
+            "ex:Legacy a owl:Class ; owl:deprecated \"1\"^^xsd:boolean .\n",
+            "ex:Live a owl:Class ; owl:deprecated \"0\"^^xsd:boolean .\n",
+        );
+        let path =
+            std::env::temp_dir().join(format!("owl_reader_dep_one_{}.ttl", std::process::id()));
+        std::fs::write(&path, ttl).unwrap();
+        let meta = OwlReader::parse_ontology(&path).expect("parse inline ontology");
+        let _ = std::fs::remove_file(&path);
+
+        let legacy = meta.classes.iter().find(|c| c.id == "Legacy").unwrap();
+        assert!(
+            legacy.annotations.deprecated,
+            "`\"1\"^^xsd:boolean` must read as deprecated"
+        );
+        let live = meta.classes.iter().find(|c| c.id == "Live").unwrap();
+        assert!(
+            !live.annotations.deprecated,
+            "`\"0\"^^xsd:boolean` must not read as deprecated"
+        );
+    }
+
+    #[test]
+    fn extracts_alt_label_and_see_also_on_class() {
+        let path = reference_ontology_path();
+        let meta = OwlReader::parse_ontology(&path).expect("Failed to parse reference ontology");
+
+        let person = meta.classes.iter().find(|c| c.id == "Person").unwrap();
+
+        // skos:altLabel literals become aliases (order-independent).
+        let mut aliases = person.annotations.aliases.clone();
+        aliases.sort();
+        assert_eq!(aliases, vec!["Human", "Individual"]);
+
+        // rdfs:seeAlso IRIs become see_also references.
+        assert_eq!(
+            person.annotations.see_also,
+            vec!["http://xmlns.com/foaf/0.1/Person"]
+        );
+    }
+
+    #[test]
+    fn extracts_skos_mappings_on_class() {
+        let path = reference_ontology_path();
+        let meta = OwlReader::parse_ontology(&path).expect("Failed to parse reference ontology");
+
+        let person = meta.classes.iter().find(|c| c.id == "Person").unwrap();
+        assert_eq!(
+            person.annotations.exact_mappings,
+            vec!["http://schema.org/Person"]
+        );
+
+        let cat = meta.classes.iter().find(|c| c.id == "Cat").unwrap();
+        assert_eq!(
+            cat.annotations.close_mappings,
+            vec!["http://dbpedia.org/resource/Cat"]
+        );
+    }
+
+    #[test]
+    fn extracts_skos_mappings_on_property() {
+        let path = reference_ontology_path();
+        let meta = OwlReader::parse_ontology(&path).expect("Failed to parse reference ontology");
+
+        let owns = meta.properties.iter().find(|p| p.id == "owns").unwrap();
+        assert_eq!(
+            owns.annotations.exact_mappings,
+            vec!["http://purl.org/dc/terms/relation"]
+        );
+    }
+
+    #[test]
+    fn extracts_owl_characteristics_on_property() {
+        let path = reference_ontology_path();
+        let meta = OwlReader::parse_ontology(&path).expect("Failed to parse reference ontology");
+
+        // `:relatedTo` is declared owl:SymmetricProperty and
+        // owl:TransitiveProperty; the other characteristics stay unset.
+        let related = meta
+            .properties
+            .iter()
+            .find(|p| p.id == "relatedTo")
+            .unwrap();
+        assert!(related.characteristics.symmetric);
+        assert!(related.characteristics.transitive);
+        assert!(!related.characteristics.asymmetric);
+        assert!(!related.characteristics.reflexive);
+        assert!(!related.characteristics.irreflexive);
+
+        // A plain object property carries no characteristics.
+        let has_owner = meta.properties.iter().find(|p| p.id == "hasOwner").unwrap();
+        assert!(!has_owner.characteristics.symmetric);
+        assert!(!has_owner.characteristics.transitive);
     }
 
     #[test]
@@ -905,6 +1175,63 @@ mod tests {
 
         let owns = schema.slots.get("owns").unwrap();
         assert_eq!(owns.inverse, Some("hasOwner".to_string()));
+    }
+
+    #[test]
+    fn owl_reader_maps_deprecated_to_ir() {
+        let reader = OwlReader::new();
+        let schema = reader.read(&reference_ontology_path()).unwrap();
+
+        // `owl:deprecated true` on a class sets the IR `deprecated` flag.
+        // RDF carries only the boolean, so the note text is empty but
+        // present (Some, not None).
+        let pet = schema.classes.get("Pet").unwrap();
+        assert!(pet.deprecated.is_some());
+
+        let dog = schema.classes.get("Dog").unwrap();
+        assert!(dog.deprecated.is_none());
+    }
+
+    #[test]
+    fn owl_reader_maps_aliases_and_see_also_to_ir() {
+        let reader = OwlReader::new();
+        let schema = reader.read(&reference_ontology_path()).unwrap();
+
+        let person = schema.classes.get("Person").unwrap();
+        let mut aliases = person.aliases.clone();
+        aliases.sort();
+        assert_eq!(aliases, vec!["Human", "Individual"]);
+        assert_eq!(person.see_also, vec!["http://xmlns.com/foaf/0.1/Person"]);
+    }
+
+    #[test]
+    fn owl_reader_maps_mappings_to_ir() {
+        let reader = OwlReader::new();
+        let schema = reader.read(&reference_ontology_path()).unwrap();
+
+        let person = schema.classes.get("Person").unwrap();
+        assert_eq!(person.exact_mappings, vec!["http://schema.org/Person"]);
+
+        let owns = schema.slots.get("owns").unwrap();
+        assert_eq!(
+            owns.exact_mappings,
+            vec!["http://purl.org/dc/terms/relation"]
+        );
+    }
+
+    #[test]
+    fn owl_reader_maps_characteristics_to_ir() {
+        let reader = OwlReader::new();
+        let schema = reader.read(&reference_ontology_path()).unwrap();
+
+        let related = schema.slots.get("relatedTo").unwrap();
+        assert!(related.symmetric);
+        assert!(related.transitive);
+        assert!(!related.reflexive);
+
+        let owns = schema.slots.get("owns").unwrap();
+        assert!(!owns.symmetric);
+        assert!(!owns.transitive);
     }
 
     #[test]

@@ -1,0 +1,12 @@
+name: diamond_c
+id: https://example.org/diamond_c
+title: Diamond C
+description: The other arm of the diamond — also imports D
+
+imports:
+  - diamond_d
+
+classes:
+  CThing:
+    name: CThing
+    description: A class defined in arm C

@@ -1,0 +1,23 @@
+name: app
+id: https://example.org/app
+title: App Schema
+description: A schema split across files via imports
+
+imports:
+  - common
+
+prefixes:
+  app: https://example.org/app/
+
+classes:
+  Customer:
+    name: Customer
+    description: A customer whose mailing address lives in the common schema
+    attributes:
+      name:
+        name: name
+        range: string
+        required: true
+      mailingAddress:
+        name: mailingAddress
+        range: Address

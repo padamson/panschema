@@ -1,0 +1,9 @@
+name: identical_two
+id: https://example.org/identical_two
+title: Identical Two
+description: Defines Gadget byte-identically to identical_one
+
+classes:
+  Gadget:
+    name: Gadget
+    description: A gadget, defined the same way in both files

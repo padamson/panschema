@@ -1,0 +1,13 @@
+name: conflict_root
+id: https://example.org/conflict_root
+title: Conflict Root
+description: Imports two files that define Widget incompatibly
+
+imports:
+  - conflict_one
+  - conflict_two
+
+classes:
+  RootThing:
+    name: RootThing
+    description: A class defined in the conflict root

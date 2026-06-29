@@ -65,6 +65,12 @@
             </dd>
         </div>
 {%- endif %}
+{%- if let Some(def) = default %}
+        <div class="detail-row">
+            <dt>Default</dt>
+            <dd><code class="mono">{{ def }}</code></dd>
+        </div>
+{%- endif %}
 {%- if let Some(pat) = pattern %}
         <div class="detail-row">
             <dt>Pattern</dt>

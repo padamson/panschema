@@ -1,0 +1,681 @@
+# Frozen vendored snapshot of scimantic-schema v0.1.0
+# (github:padamson/scimantic-schema@0.1.0), checked in so the real-world
+# Rust-codegen smoke tests run self-contained with no network fetch.
+# Do not hand-edit: to refresh, re-fetch the upstream tag and replace the
+# body below this header.
+id: http://scimantic.io/schema
+name: scimantic
+description: A minimal domain ontology for representing the scientific method as provenance chains.
+license: https://creativecommons.org/licenses/by/4.0/
+version: 0.1.0
+
+prefixes:
+  scimantic: http://scimantic.io/
+  prov: http://www.w3.org/ns/prov#
+  dcterms: http://purl.org/dc/terms/
+  xsd: http://www.w3.org/2001/XMLSchema#
+  rdfs: http://www.w3.org/2000/01/rdf-schema#
+  linkml: https://w3id.org/linkml/
+  urref: https://raw.githubusercontent.com/adelphi23/urref/469137/URREF.ttl#
+  np: http://www.nanopub.org/nschema#
+  dcat: http://www.w3.org/ns/dcat#
+  oa: http://www.w3.org/ns/oa#
+
+default_prefix: scimantic
+default_range: string
+
+imports:
+  - linkml:types
+
+classes:
+  # ---------------------------------------------------------
+  # Root Classes (Mapping to PROV)
+  # ---------------------------------------------------------
+  Entity:
+    class_uri: prov:Entity
+    description: A provenance entity. Identified by its RDF URI.
+    slots: []
+
+  Activity:
+    class_uri: prov:Activity
+    description: A provenance activity. Identified by its RDF URI.
+    slots: []
+
+  Agent:
+    class_uri: prov:Agent
+    description: A provenance agent. Identified by its RDF URI.
+
+  # ---------------------------------------------------------
+  # Scimantic Entities
+  # ---------------------------------------------------------
+  Question:
+    is_a: Entity
+    class_uri: scimantic:Question
+    description: An interrogative sentence representing the research query.
+    slots:
+      - label
+      - wasGeneratedBy
+      - motivates
+      - wasDerivedFrom
+      - wasAttributedTo
+    slot_usage:
+      wasGeneratedBy:
+        range: QuestionFormation
+        required: false
+      motivates:
+        range: LiteratureSearch
+      wasDerivedFrom:
+        any_of:
+          - range: Question
+          - range: Annotation
+          - range: Evidence
+        multivalued: true
+        description: Questions can be derived from prior questions (refinement), annotations/highlights in literature, or evidence claims.
+
+  # ---------------------------------------------------------
+  # Scimantic Activities
+  # ---------------------------------------------------------
+  QuestionFormation:
+    is_a: Activity
+    class_uri: scimantic:QuestionFormation
+    description: The activity of creating or refining a Research Question. Can be informed by prior results (iterating on findings) or by literature search (refining questions based on discovered evidence).
+    slots:
+      - wasAssociatedWith
+      - wasInformedBy
+    slot_usage:
+      wasInformedBy:
+        any_of:
+          - range: ResultAssessment
+          - range: LiteratureSearch
+        required: false
+
+  LiteratureSearch:
+    is_a: Activity
+    class_uri: scimantic:LiteratureSearch
+    description: The activity of searching literature and creating Annotations (highlights, notes) on source text.
+    slots:
+      - wasAssociatedWith
+      - wasInformedBy
+    slot_usage:
+      wasInformedBy:
+        range: QuestionFormation
+
+  EvidenceExtraction:
+    is_a: Activity
+    class_uri: scimantic:EvidenceExtraction
+    description: The activity of articulating Evidence claims from one or more Annotations. Separates the act of reading/highlighting from the act of formulating evidence statements.
+    slots:
+      - used
+      - wasAssociatedWith
+      - wasInformedBy
+    slot_usage:
+      used:
+        range: Annotation
+        multivalued: true
+        description: The annotations from which evidence is extracted.
+      wasInformedBy:
+        range: LiteratureSearch
+
+  Evidence:
+    is_a: Entity
+    mixins:
+      - URREFEvidence
+      - Nanopublication
+      - UncertaintySubject
+    class_uri: scimantic:Evidence
+    description: A factual claim extracted from a source.
+    slots:
+      - label
+      - content
+      - citation
+      - source
+      - wasGeneratedBy
+      - wasDerivedFrom
+      - wasAttributedTo
+      - accessLevel
+      - publishable
+      - supports
+      - contradicts
+      - hasUncertainty
+    slot_usage:
+      wasDerivedFrom:
+        any_of:
+          - range: Question
+          - range: Annotation
+        multivalued: true
+        description: Evidence can be derived from research questions or from annotations/highlights in literature.
+      wasGeneratedBy:
+        range: EvidenceExtraction
+      supports:
+        range: Hypothesis
+      contradicts:
+        range: Hypothesis
+
+  Hypothesis:
+    is_a: Entity
+    mixins:
+      - Nanopublication
+    class_uri: scimantic:Hypothesis
+    description: A testable claim derived from evidence.
+    slots:
+      - label
+      - wasGeneratedBy
+      - wasDerivedFrom
+      - wasAttributedTo
+    slot_usage:
+      wasGeneratedBy:
+        range: HypothesisFormation
+      wasDerivedFrom:
+        range: Premise
+        multivalued: true
+
+  ExperimentalMethod:
+    is_a: Entity
+    class_uri: scimantic:ExperimentalMethod
+    description: A specification of the experimental or computational method.
+    slots:
+      - label
+      - method
+      - parameter
+      - wasGeneratedBy
+      - wasDerivedFrom
+      - wasAttributedTo
+    slot_usage:
+      wasGeneratedBy:
+        range: DesignOfExperiment
+      wasDerivedFrom:
+        any_of:
+          - range: Hypothesis
+          - range: Evidence
+
+
+
+  Premise:
+    is_a: Entity
+    class_uri: scimantic:Premise
+    description: An evaluated proposition or insight derived from Evidence.
+    slots:
+      - label
+      - wasGeneratedBy
+      - wasDerivedFrom
+    slot_usage:
+      wasGeneratedBy:
+        range: EvidenceAssessment
+      wasDerivedFrom:
+        range: Evidence
+
+  Dataset:
+    is_a: Entity
+    mixins:
+      - DCATDataset
+      - UncertaintySubject
+    class_uri: scimantic:Dataset
+    description: Raw data, observations, or measurements produced by experimentation.
+    slots:
+      - label
+      - wasGeneratedBy
+      - wasDerivedFrom
+      - hasUncertainty
+      - wasAttributedTo
+
+    slot_usage:
+      wasGeneratedBy:
+        range: Experimentation
+      wasDerivedFrom:
+        range: ExperimentalMethod
+
+  Result:
+    is_a: Entity
+    mixins:
+      - URREFEvidence
+      - Nanopublication
+      - UncertaintySubject
+    class_uri: scimantic:Result
+    description: The outcome of an analysis activity.
+    slots:
+      - label
+      - wasGeneratedBy
+      - wasDerivedFrom
+      - wasAttributedTo
+      - refines
+      - supports
+      - contradicts
+      - hasUncertainty
+      - value
+      - unit
+    slot_usage:
+      wasGeneratedBy:
+        range: Analysis
+      wasDerivedFrom:
+        range: Dataset
+      refines:
+        range: Hypothesis
+      supports:
+        range: Hypothesis
+      contradicts:
+        range: Hypothesis
+
+  Conclusion:
+    is_a: Entity
+    mixins:
+      - Nanopublication
+    class_uri: scimantic:Conclusion
+    description: The final claim or decision derived from the ResultAssessment.
+    slots:
+      - label
+      - content
+      - wasGeneratedBy
+      - wasDerivedFrom
+      - wasAttributedTo
+    slot_usage:
+      wasGeneratedBy:
+        range: ResultAssessment
+      wasDerivedFrom:
+        range: Result
+
+  Parameter:
+    is_a: Entity
+    class_uri: scimantic:Parameter
+    description: A configured parameter within an Experimental Method.
+
+  # ---------------------------------------------------------
+  # Web Annotation Entities (W3C Open Annotation)
+  # ---------------------------------------------------------
+  Annotation:
+    is_a: Entity
+    class_uri: oa:Annotation
+    description: A text annotation or highlight that grounds Questions or Evidence in specific source text. Follows W3C Web Annotation Data Model.
+    slots:
+      - label
+      - hasBody
+      - hasTarget
+      - hasSelector
+      - wasAttributedTo
+      - wasGeneratedBy
+      - generatedAtTime
+    slot_usage:
+      hasTarget:
+        description: The source document being annotated (DOI, URL, or local file reference).
+        required: true
+      hasSelector:
+        range: TextSelector
+        description: The selector specifying which part of the target is annotated.
+      wasGeneratedBy:
+        range: LiteratureSearch
+        description: The literature search activity that produced this annotation.
+
+  TextSelector:
+    is_a: Entity
+    class_uri: oa:TextQuoteSelector
+    description: A selector that identifies text by exact quote with surrounding context. Follows W3C Web Annotation TextQuoteSelector.
+    slots:
+      - exact
+      - prefix
+      - suffix
+      - startOffset
+      - endOffset
+      - pageNumber
+
+  EvidenceAssessment:
+    is_a: Activity
+    class_uri: scimantic:EvidenceAssessment
+    description: The activity of evaluating credibility or relevance of Evidence.
+    slots:
+      - used
+      - wasInformedBy
+      - wasAssociatedWith
+    slot_usage:
+      used:
+        range: Evidence
+      wasInformedBy:
+        range: EvidenceExtraction
+
+  HypothesisFormation:
+    is_a: Activity
+    class_uri: scimantic:HypothesisFormation
+    description: The activity of synthesizing Evidence into a Hypothesis.
+    slots:
+      - used
+      - wasInformedBy
+      - wasAssociatedWith
+    slot_usage:
+      used:
+        range: Premise
+      wasInformedBy:
+        range: EvidenceAssessment
+
+
+
+
+
+  DesignOfExperiment:
+    is_a: Activity
+    class_uri: scimantic:DesignOfExperiment
+    description: The activity of creating an ExperimentalMethod from a Hypothesis.
+    slots:
+      - used
+      - wasInformedBy
+      - wasAssociatedWith
+    slot_usage:
+      used:
+        any_of:
+          - range: Hypothesis
+          - range: Evidence
+      wasInformedBy:
+        any_of:
+          - range: HypothesisFormation
+          - range: LiteratureSearch
+
+  Experimentation:
+    is_a: Activity
+    class_uri: scimantic:Experimentation
+    description: The activity of running an ExperimentalMethod to produce a Dataset.
+    slots:
+      - used
+      - wasInformedBy
+      - wasAssociatedWith
+    slot_usage:
+      used:
+        range: ExperimentalMethod
+      wasInformedBy:
+        range: DesignOfExperiment
+
+  Analysis:
+    is_a: Activity
+    class_uri: scimantic:Analysis
+    description: The activity of processing a Dataset to produce a Result.
+    slots:
+      - used
+      - wasInformedBy
+      - wasAssociatedWith
+    slot_usage:
+      used:
+        range: Dataset
+      wasInformedBy:
+        range: Experimentation
+
+  ResultAssessment:
+    is_a: Activity
+    class_uri: scimantic:ResultAssessment
+    description: The activity of comparing a Result to the original Hypothesis.
+    slots:
+      - used
+      - wasInformedBy
+      - wasAssociatedWith
+    slot_usage:
+      used:
+        range: Result
+      wasInformedBy:
+        range: Analysis
+  # ---------------------------------------------------------
+  # Uncertainty Entities (URREF Integration)
+  # ---------------------------------------------------------
+  UncertaintyModel:
+    is_a: Entity
+    class_uri: urref:UncertaintyModel
+    description: A reified uncertainty model.
+    slots:
+      - natureOfUncertainty
+      - derivationOfUncertainty
+    slot_usage:
+      natureOfUncertainty:
+        range: UncertaintyNature
+        required: true
+
+  Ambiguity:
+    is_a: UncertaintyModel
+    class_uri: urref:Ambiguity
+    description: Ambiguity is inherently Epistemic uncertainty.
+    slot_usage:
+      natureOfUncertainty:
+        range: UncertaintyNature
+        # Constraint to single value handled via OWL subClassOf restriction if needed,
+        # or simplified here as documentation since LinkML enum constraints are complex.
+
+  Vagueness:
+    is_a: UncertaintyModel
+    class_uri: urref:Vagueness
+    description: Vagueness is inherently Epistemic uncertainty.
+
+  Incompleteness:
+    is_a: UncertaintyModel
+    class_uri: urref:Incompleteness
+    description: Incompleteness is inherently Epistemic uncertainty.
+
+  Aleatory:
+    is_a: UncertaintyModel
+    class_uri: urref:Aleatory
+    description: Aleatory uncertainty entities must have nature Aleatory.
+
+  # ---------------------------------------------------------
+  # External/Mixin Classes
+  # ---------------------------------------------------------
+  URREFEvidence:
+    class_uri: urref:Evidence
+    description: Root evidence class from URREF ontology.
+
+  UncertaintyDerivation:
+    class_uri: urref:UncertaintyDerivation
+    description: Describes how the uncertainty was assessed.
+
+  Nanopublication:
+    class_uri: np:Nanopublication
+    description: A nanopublication object.
+
+  Identifiable:
+    class_uri: scimantic:Identifiable
+    mixin: true
+    description: A mixin for objects that have a unique identifier.
+    slots:
+      - id
+
+  UncertaintySubject:
+    class_uri: scimantic:UncertaintySubject
+    description: A mixin for objects that can have a reified uncertainty model.
+
+  DCATDataset:
+    class_uri: dcat:Dataset
+    description: A collection of data, published or curated by a single agent.
+
+
+
+slots:
+  # ---------------------------------------------------------
+
+  # Domain Slots (Properties)
+  # ---------------------------------------------------------
+  label:
+    slot_uri: rdfs:label
+    description: The human-readable label or text.
+    required: true
+
+  wasGeneratedBy:
+    slot_uri: prov:wasGeneratedBy
+    description: The activity that generated this entity.
+
+  wasAssociatedWith:
+    slot_uri: prov:wasAssociatedWith
+    description: The agent associated with an activity.
+    range: Agent
+    domain: Activity
+
+  wasAttributedTo:
+    slot_uri: prov:wasAttributedTo
+    description: The agent who attributed this entity (Agent).
+    range: Agent
+    domain: Entity
+
+
+  id:
+    identifier: true
+    description: Unique identifier (URI) for this node.
+    range: string
+    domain: Identifiable
+
+  motivates:
+    slot_uri: scimantic:motivates
+    description: A Question that triggers or motivates an Activity.
+    multivalued: true
+
+  used:
+    slot_uri: prov:used
+    description: Entity used by an Activity.
+
+  wasInformedBy:
+    slot_uri: prov:wasInformedBy
+    description: Activity that informed this Activity.
+
+  wasDerivedFrom:
+    slot_uri: prov:wasDerivedFrom
+    description: Entity derived from another Entity.
+
+  refines:
+    slot_uri: scimantic:refines
+    description: A Result that suggests a specific modification to a Hypothesis.
+
+
+
+  supports:
+    slot_uri: scimantic:supports
+    description: An Entity (Evidence/Result) that provides positive evidence for a Hypothesis.
+
+  contradicts:
+    slot_uri: scimantic:contradicts
+    description: An Entity (Evidence/Result) that provides negative evidence against a Hypothesis.
+
+  method:
+    slot_uri: scimantic:method
+    description: Name or description of the method.
+    range: string
+    domain: ExperimentalMethod
+
+  parameter:
+    slot_uri: scimantic:parameter
+    description: Structured configuration parameter.
+    range: Parameter
+    multivalued: true
+    domain: ExperimentalMethod
+
+
+
+  hasUncertainty:
+    slot_uri: scimantic:hasUncertainty
+    description: Links an entity to its reified uncertainty model.
+    range: UncertaintyModel
+    domain: UncertaintySubject
+
+  natureOfUncertainty:
+    slot_uri: urref:natureOfUncertainty
+    description: The nature of the uncertainty (Aleatory or Epistemic).
+    range: UncertaintyNature
+    domain: UncertaintyModel
+
+  derivationOfUncertainty:
+    slot_uri: urref:derivationOfUncertainty
+    description: How the uncertainty was derived.
+    range: UncertaintyDerivation
+    domain: UncertaintyModel
+
+  value:
+    slot_uri: scimantic:value
+    description: The numeric or categorical result.
+    range: string # Simplification for now
+    domain: Result
+
+  unit:
+    slot_uri: scimantic:unit
+    description: Unit of measurement.
+    range: string
+    domain: Result
+
+  accessLevel:
+    slot_uri: scimantic:accessLevel
+    description: Publishing scope (e.g., local, institutional, public).
+    range: string
+    domain: Nanopublication
+
+  publishable:
+    slot_uri: scimantic:publishable
+    description: Flag indicating if this is ready for public promotion.
+    range: boolean
+    domain: Nanopublication
+
+  content:
+    slot_uri: scimantic:content
+    description: The actual text content of the evidence.
+    range: string
+    domain: Evidence
+
+  citation:
+    slot_uri: dcterms:bibliographicCitation
+    description: Bibliographic reference.
+    range: string
+    domain: Evidence
+
+  source:
+    slot_uri: dcterms:source
+    description: Source URL or identifier.
+    range: string
+    domain: Evidence
+
+  generatedAtTime:
+    slot_uri: prov:generatedAtTime
+    description: Time of generation.
+    range: datetime
+    domain: Entity
+
+  # ---------------------------------------------------------
+  # Web Annotation Slots
+  # ---------------------------------------------------------
+  hasBody:
+    slot_uri: oa:hasBody
+    description: The content or comment of the annotation (optional for highlights).
+    range: string
+
+  hasTarget:
+    slot_uri: oa:hasTarget
+    description: The source being annotated (DOI, URL, or file reference).
+    range: string
+
+  hasSelector:
+    slot_uri: oa:hasSelector
+    description: The selector identifying the specific part of the target.
+
+  exact:
+    slot_uri: oa:exact
+    description: The exact text that was selected/highlighted.
+    range: string
+    required: true
+
+  prefix:
+    slot_uri: oa:prefix
+    description: Text immediately before the selection (for disambiguation).
+    range: string
+
+  suffix:
+    slot_uri: oa:suffix
+    description: Text immediately after the selection (for disambiguation).
+    range: string
+
+  startOffset:
+    slot_uri: oa:start
+    description: Character offset where the selection starts (within the target or page).
+    range: integer
+
+  endOffset:
+    slot_uri: oa:end
+    description: Character offset where the selection ends.
+    range: integer
+
+  pageNumber:
+    slot_uri: scimantic:pageNumber
+    description: Page number in PDF documents where the selection appears.
+    range: integer
+
+enums:
+  UncertaintyNature:
+    permissible_values:
+      Epistemic:
+        description: Uncertainty due to lack of knowledge.
+      Aleatory:
+        description: Uncertainty due to inherent randomness.
