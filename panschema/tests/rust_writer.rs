@@ -95,6 +95,56 @@ fn codegen_fixture_compiles_and_round_trips_in_downstream_crate() {
     cargo_run_scratch(tmp.path());
 }
 
+/// The codegen fixture renders deliberately non-canonical layout, so
+/// `rustfmt --check` passing proves the in-file skip pragma — not luck —
+/// keeps generated code stable. Skipped when `rustfmt` is absent.
+#[test]
+fn rustfmt_leaves_generated_code_untouched() {
+    let Some(rustfmt) = rustfmt_bin() else {
+        eprintln!("rustfmt not found on this host; skipping formatter-skip check");
+        return;
+    };
+    let body = RustWriter::new().render(&read_codegen_fixture());
+    assert!(
+        body.contains("#![cfg_attr(rustfmt, rustfmt_skip)]"),
+        "render must emit the file-level rustfmt skip for this check to mean anything"
+    );
+
+    let tmp = tempfile::tempdir().expect("tempdir for rustfmt check");
+    let file = tmp.path().join("generated.rs");
+    std::fs::write(&file, &body).expect("write generated file");
+
+    let status = Command::new(&rustfmt)
+        .args(["--edition", "2021", "--check"])
+        .arg(&file)
+        .status()
+        .expect("invoke rustfmt --check");
+    assert!(
+        status.success(),
+        "rustfmt --check must report no changes for skip-pragma'd generated code (exit {:?})",
+        status.code()
+    );
+}
+
+/// Locate `rustfmt` via `rustup which`, falling back to `PATH`; `None`
+/// when neither resolves.
+fn rustfmt_bin() -> Option<PathBuf> {
+    if let Ok(out) = Command::new("rustup").args(["which", "rustfmt"]).output()
+        && out.status.success()
+    {
+        let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !path.is_empty() {
+            return Some(PathBuf::from(path));
+        }
+    }
+    Command::new("rustfmt")
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|_| PathBuf::from("rustfmt"))
+}
+
 // ---------------------------------------------------------------------------
 // Acceptance tests
 // ---------------------------------------------------------------------------

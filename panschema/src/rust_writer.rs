@@ -360,7 +360,10 @@ fn render_header<W: Write>(out: &mut W, schema: &SchemaDefinition) -> fmt::Resul
         writeln!(out, "// Schema version: {v}")?;
     }
     out.write_str("// Do not hand-edit; re-run `panschema generate` to refresh.\n")?;
-    out.write_str("\n#![allow(non_camel_case_types, non_snake_case, dead_code)]\n\n")
+    // Skip the consumer's fmt and clippy from inside the file, so neither
+    // rewrites generated code and `panschema verify` stays byte-stable.
+    out.write_str("\n#![cfg_attr(rustfmt, rustfmt_skip)]\n")?;
+    out.write_str("#![allow(non_camel_case_types, non_snake_case, dead_code, clippy::all)]\n\n")
 }
 
 fn render_enum<W: Write>(out: &mut W, name: &str, def: &EnumDefinition) -> fmt::Result {
@@ -3498,6 +3501,19 @@ mod tests {
         let schema = SchemaDefinition::new("demo");
         let out = RustWriter::new().render(&schema);
         assert!(!out.contains("// Schema version:"));
+    }
+
+    #[test]
+    fn emits_self_skipping_preamble_for_formatters_and_linters() {
+        let out = RustWriter::new().render(&SchemaDefinition::new("demo"));
+        assert!(
+            out.contains("#![cfg_attr(rustfmt, rustfmt_skip)]"),
+            "missing file-level rustfmt skip; got:\n{out}"
+        );
+        assert!(
+            out.contains("clippy::all"),
+            "missing clippy allow; got:\n{out}"
+        );
     }
 
     #[test]
