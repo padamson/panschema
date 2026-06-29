@@ -21,21 +21,7 @@
 
 use askama::Template;
 
-/// A reference to an entity (class, property, individual) used in cross-references.
-#[derive(Debug, Clone)]
-pub struct EntityRef {
-    pub id: String,
-    pub label: String,
-}
-
-impl EntityRef {
-    pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
-        Self {
-            id: id.into(),
-            label: label.into(),
-        }
-    }
-}
+use panschema::html_writer::EntityRef;
 
 /// Namespace prefix/IRI mapping.
 #[derive(Debug, Clone)]

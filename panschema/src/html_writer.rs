@@ -12,11 +12,20 @@ use crate::graph_writer::GraphWriter;
 use crate::io::{IoError, IoResult, Writer};
 use crate::linkml::{Example, SchemaDefinition};
 
-/// Entity reference for sidebar navigation.
+/// Entity reference for sidebar navigation and cross-references.
 #[derive(Debug, Clone)]
 pub struct EntityRef {
     pub id: String,
     pub label: String,
+}
+
+impl EntityRef {
+    pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+        }
+    }
 }
 
 /// Namespace prefix/IRI mapping.
