@@ -36,6 +36,12 @@ impl RustWriter {
         let mut out = String::new();
         self.render_into(&mut out, schema)
             .expect("fmt::Write to String cannot fail");
+        // Terminate with exactly one newline: a trailing blank line is
+        // rewritten by EOF-normalizing pre-commit hooks and would defeat a
+        // regenerate-and-diff drift gate.
+        let end = out.trim_end().len();
+        out.truncate(end);
+        out.push('\n');
         out
     }
 
@@ -3504,6 +3510,21 @@ mod tests {
     }
 
     #[test]
+    fn render_ends_with_single_terminating_newline() {
+        let mut schema = SchemaDefinition::new("demo");
+        schema
+            .classes
+            .insert("Thing".into(), ClassDefinition::new("Thing"));
+        let out = RustWriter::new().render(&schema);
+        assert!(out.ends_with('\n'), "output must end with a newline");
+        assert!(
+            !out.ends_with("\n\n"),
+            "output must not end with a trailing blank line; tail = {:?}",
+            &out[out.len().saturating_sub(8)..]
+        );
+    }
+
+    #[test]
     fn emits_self_skipping_preamble_for_formatters_and_linters() {
         let out = RustWriter::new().render(&SchemaDefinition::new("demo"));
         assert!(
@@ -3626,7 +3647,9 @@ mod tests {
         writer.render_into(&mut sink, &schema).unwrap();
 
         let via_string = writer.render(&schema);
-        assert_eq!(sink.bytes, via_string.len());
-        assert_eq!(sink.buf, via_string);
+        // `render` trims to a single terminating newline; the raw stream
+        // carries identical content otherwise.
+        assert!(sink.bytes > 0);
+        assert_eq!(sink.buf.trim_end(), via_string.trim_end());
     }
 }
