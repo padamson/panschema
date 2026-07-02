@@ -15,6 +15,18 @@ ignore = [
     # when upstream consumers (wgpu/naga, proc-macro libs) migrate off them.
     "RUSTSEC-2024-0388", # derivative unmaintained (via wgpu/naga)
     "RUSTSEC-2024-0370", # proc-macro-error unmaintained
+
+    # Accepted DoS risk, upstream-blocked (real advisories, not merely
+    # unmaintained). quick-xml < 0.41 (memory-exhaustion via unbounded
+    # namespace-declaration allocation in the XML reader) is pinned at
+    # `^0.37` by oxrdfxml 0.2.3 -> sophia_xml 0.10 -> sophia; no released
+    # sophia/oxrdfxml bumps it yet, so the fix is not reachable from our
+    # lockfile. panschema reaches the vulnerable reader only via the
+    # label-cache XML fallback (`labels.rs`), parsing semi-trusted upstream
+    # ontology docs (Turtle is tried first; `--offline` skips fetching).
+    # Remove both when oxrdfxml bumps quick-xml to >= 0.41.
+    "RUSTSEC-2026-0194", # quick-xml NsReader memory-exhaustion DoS
+    "RUSTSEC-2026-0195", # quick-xml namespace-declaration memory-exhaustion DoS
 ]
 
 [licenses]
