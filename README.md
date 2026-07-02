@@ -23,6 +23,7 @@ Think of it as **pandoc for data modeling** — a single tool that speaks all sc
 - **CI-native**: Single binary, no JVM or complex dependencies
 - **Hot reload**: Development server with live preview
 - **GPU visualization** (optional `gpu` feature): 3D force-directed graph for schema exploration
+- **mdbook integration**: `mdbook-panschema install` adds a maintained toolbar link from an mdbook book to its schema docs
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
@@ -125,6 +126,28 @@ cargo test --features gpu --lib
 ```
 
 See [examples/university/](examples/university/) for a sample schema and [docs/features/04-schema-force-graph-visualization.md](docs/features/04-schema-force-graph-visualization.md) for the full feature plan.
+
+## Linking an mdbook book to the schema docs
+
+If you publish both an mdbook book and panschema-generated schema docs on one site, the `mdbook-panschema` plugin installs a maintained toolbar button linking the book to the schema docs — the way `mdbook-admonish install` drops its assets, so you don't hand-roll (and re-fix on every mdbook release) per-book JavaScript.
+
+Declare the link in `panschema-publish.toml`:
+
+```toml
+[book_link]
+enabled = true
+schema_path = "schema/current/"   # book-relative path to the schema docs
+label = "Schema reference"         # button tooltip / aria-label
+```
+
+Then, from the book directory (the one containing `book.toml`):
+
+```bash
+cargo install mdbook-panschema
+mdbook-panschema install          # or: mdbook-panschema install <book-dir>
+```
+
+This writes `schema-link.js` / `schema-link.css` into the book and wires them into `book.toml`'s `additional-js` / `additional-css`, idempotently — re-run after upgrading to refresh the asset. With `[book_link]` absent or `enabled = false`, `install` does nothing.
 
 ## Why panschema?
 

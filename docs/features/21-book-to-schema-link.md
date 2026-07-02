@@ -134,5 +134,5 @@ label = "Schema reference"         # button aria-label / tooltip / prose text
 - [ ] All tests passing: `cargo nextest run`.
 - [ ] Docs build cleanly: `cargo doc`.
 - [ ] Formatted: `cargo fmt --check`; no clippy warnings: `cargo clippy --all-targets --all-features -- -D warnings`.
-- [ ] README.md updated (the `mdbook-panschema install` command + `[book_link]` config).
+- [x] README.md updated (the `mdbook-panschema install` command + `[book_link]` config).
 - [ ] CHANGELOG.md updated.
