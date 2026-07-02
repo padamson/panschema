@@ -45,15 +45,15 @@ label = "Schema reference"         # button aria-label / tooltip / prose text
 
 ### Slice 1: `[book_link]` section parsing + validation (no asset, no command)
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** A consumer can declare `[book_link]` in `panschema-publish.toml` and get clear validation errors, so the wire format stabilizes before any asset or command depends on it. (Lives in the `panschema` library crate, independent of the `mdbook-panschema` crate work — so this slice can land first.)
 
 **Acceptance Criteria:**
-- [ ] A `panschema-publish.toml` with a well-formed `[book_link]` section loads without error, and its `enabled` / `schema_path` / `label` values are available to the rest of the tool.
-- [ ] Omitted fields fall back to documented defaults: `enabled = false`, `schema_path = "schema/current/"`, `label = "Schema reference"`.
-- [ ] A malformed `[book_link]` (wrong value types, unknown keys) fails to load with an actionable error, consistent with existing manifest validation.
-- [ ] A manifest with no `[book_link]` section loads successfully (the feature is opt-in).
+- [x] A `panschema-publish.toml` with a well-formed `[book_link]` section loads without error, and its `enabled` / `schema_path` / `label` values are available to the rest of the tool.
+- [x] Omitted fields fall back to documented defaults: `enabled = false`, `schema_path = "schema/current/"`, `label = "Schema reference"`.
+- [x] A malformed `[book_link]` (wrong value types, unknown keys) fails to load with an actionable error, consistent with existing manifest validation.
+- [x] A manifest with no `[book_link]` section loads successfully (the feature is opt-in).
 
 **Notes:**
 - Wire format first, mirroring 11's Slice 1 — no command surface yet, so downstream slices commit to a stable shape.
@@ -110,7 +110,7 @@ label = "Schema reference"         # button aria-label / tooltip / prose text
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | ADR 007 — command home (`mdbook-panschema` plugin) | Must Have | None | Accepted (2026-06-30) |
-| Slice 1 — `[book_link]` parse + validate | Must Have | None | Not Started |
+| Slice 1 — `[book_link]` parse + validate | Must Have | None | Completed |
 | Slice 2 — `mdbook-panschema` crate + `install [dir]` | Must Have | Slice 1 | Not Started |
 | Slice 3 — shared authoring-template adoption | Should Have | Slice 2 | Not Started |
 | Slice 4 — reference-consumer swap + dogfood | Should Have | Slice 2 | Not Started |

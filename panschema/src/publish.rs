@@ -87,6 +87,11 @@ pub struct PublishConfig {
     /// keyed by prefix name. Entries win over the built-in map.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub label_sources: std::collections::BTreeMap<String, String>,
+    /// Optional mdbook→schema cross-link config, consumed by the
+    /// `mdbook-panschema install` command. Absent means the feature is
+    /// off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub book_link: Option<BookLinkConfig>,
 }
 
 /// `[schema]` table — identity and versioning metadata.
@@ -105,6 +110,35 @@ pub struct SchemaInfo {
 pub struct FileMapping {
     /// Path to the main schema file, relative to the publish-spec's location.
     pub main: PathBuf,
+}
+
+/// `[book_link]` table — mdbook→schema cross-link config. Read by
+/// `mdbook-panschema install` to bake the schema-docs location and
+/// button label into the toolbar asset it drops into an mdbook book.
+/// The reverse direction of `[publishing].site_root_url`.
+///
+/// Unknown keys are rejected so a typo'd setting fails loudly instead
+/// of silently reverting to its default.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BookLinkConfig {
+    /// Master switch — `install` is a no-op unless this is `true`.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Book-relative path to the schema docs the button links to.
+    #[serde(default = "default_book_link_schema_path")]
+    pub schema_path: String,
+    /// Button aria-label / tooltip / prose text.
+    #[serde(default = "default_book_link_label")]
+    pub label: String,
+}
+
+fn default_book_link_schema_path() -> String {
+    "schema/current/".to_string()
+}
+
+fn default_book_link_label() -> String {
+    "Schema reference".to_string()
 }
 
 /// `[publishing]` table — multi-version doc orchestration config. Drives
@@ -1077,6 +1111,116 @@ current = "v9.9.9"
     }
 
     #[test]
+    fn parses_publish_spec_without_book_link_section() {
+        // `[book_link]` is opt-in: a spec without it must load, with no
+        // book-link config present.
+        let toml = r#"
+[schema]
+name = "x"
+version = "0.1.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+"#;
+        let cfg: PublishConfig = toml.parse().expect("a spec without [book_link] must load");
+        assert!(cfg.book_link.is_none());
+    }
+
+    #[test]
+    fn parses_empty_book_link_with_documented_defaults() {
+        // A bare `[book_link]` header takes every documented default:
+        // disabled, schema docs at `schema/current/`, generic label.
+        let toml = r#"
+[schema]
+name = "x"
+version = "0.1.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+
+[book_link]
+"#;
+        let cfg: PublishConfig = toml.parse().expect("should parse");
+        let book_link = cfg.book_link.expect("book_link should be present");
+        assert!(!book_link.enabled, "enabled must default to false");
+        assert_eq!(book_link.schema_path, "schema/current/");
+        assert_eq!(book_link.label, "Schema reference");
+    }
+
+    #[test]
+    fn parses_full_book_link_with_overrides() {
+        let toml = r#"
+[schema]
+name = "x"
+version = "0.1.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+
+[book_link]
+enabled = true
+schema_path = "docs/schema/"
+label = "Data model"
+"#;
+        let cfg: PublishConfig = toml.parse().expect("should parse");
+        let book_link = cfg.book_link.expect("book_link should be present");
+        assert!(book_link.enabled);
+        assert_eq!(book_link.schema_path, "docs/schema/");
+        assert_eq!(book_link.label, "Data model");
+    }
+
+    #[test]
+    fn rejects_book_link_with_unknown_key() {
+        // A typo'd key must fail loudly (naming the offending key), not
+        // silently drop the setting the user thought they configured.
+        let toml = r#"
+[schema]
+name = "x"
+version = "0.1.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+
+[book_link]
+lable = "Data model"
+"#;
+        let err = toml
+            .parse::<PublishConfig>()
+            .expect_err("an unknown [book_link] key must be rejected");
+        assert!(
+            err.to_string().contains("lable"),
+            "error should name the offending key; got: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_book_link_with_wrong_value_type() {
+        let toml = r#"
+[schema]
+name = "x"
+version = "0.1.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+
+[book_link]
+enabled = "yes"
+"#;
+        let err = toml
+            .parse::<PublishConfig>()
+            .expect_err("a non-boolean `enabled` must be rejected");
+        assert!(
+            err.to_string().contains("enabled"),
+            "error should name the offending field; got: {err}"
+        );
+    }
+
+    #[test]
     fn rejects_current_when_versions_empty_and_no_edge() {
         // Empty versions + no edge means there's nothing `current` could
         // legitimately match. Reject rather than silently produce an
@@ -1354,6 +1498,7 @@ versions = ["v0.1.0"]
                 format: default_format(),
             }),
             label_sources: std::collections::BTreeMap::new(),
+            book_link: None,
         }
     }
 
@@ -1397,6 +1542,7 @@ versions = ["v0.1.0"]
             },
             publishing: None,
             label_sources: std::collections::BTreeMap::new(),
+            book_link: None,
         };
         let out = tempfile::tempdir().unwrap();
         let err =
