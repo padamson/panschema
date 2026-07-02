@@ -1756,6 +1756,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mdbook-panschema"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "panschema",
+ "serde_json",
+ "tempfile",
+ "toml_edit",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

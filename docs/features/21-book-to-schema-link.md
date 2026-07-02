@@ -62,7 +62,7 @@ label = "Schema reference"         # button aria-label / tooltip / prose text
 
 ### Slice 2: `mdbook-panschema` crate + `install [dir]` command
 
-**Status:** Not Started
+**Status:** Completed (core mechanics; rendered-button ACs verified in Slice 4 dogfood)
 
 **User Value:** A consumer runs `mdbook-panschema install` and gets a working, correctly-aligned mdbook→schema toolbar button with no hand-written JS.
 
@@ -111,7 +111,7 @@ label = "Schema reference"         # button aria-label / tooltip / prose text
 |-------|----------|------------|--------|
 | ADR 007 — command home (`mdbook-panschema` plugin) | Must Have | None | Accepted (2026-06-30) |
 | Slice 1 — `[book_link]` parse + validate | Must Have | None | Completed |
-| Slice 2 — `mdbook-panschema` crate + `install [dir]` | Must Have | Slice 1 | Not Started |
+| Slice 2 — `mdbook-panschema` crate + `install [dir]` | Must Have | Slice 1 | Completed |
 | Slice 3 — shared authoring-template adoption | Should Have | Slice 2 | Not Started |
 | Slice 4 — reference-consumer swap + dogfood | Should Have | Slice 2 | Not Started |
 

@@ -1,5 +1,5 @@
 [workspace]
-members = ["panschema", "panschema-viz"]
+members = ["panschema", "panschema-viz", "mdbook-panschema"]
 resolver = "2"
 
 # `line-tables-only` keeps backtraces line-accurate but drops the

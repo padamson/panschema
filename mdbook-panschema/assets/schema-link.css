@@ -1,0 +1,7 @@
+/* @generated companion asset for `mdbook-panschema install`. */
+/* mdbook's general.css fills `.fa-svg svg` with currentColor, which would
+   turn the stroke-based glyph into a solid blob. Draw the strokes
+   instead. Sizing/centering come from mdbook's `.icon-button`/`.fa-svg`. */
+.schema-docs-button svg {
+  fill: none;
+}

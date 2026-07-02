@@ -1,0 +1,27 @@
+[package]
+name = "mdbook-panschema"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Paul Adamson"]
+description = "mdbook plugin for panschema: installs a toolbar link from an mdbook book to its panschema-generated schema docs"
+license = "Apache-2.0"
+repository = "https://github.com/padamson/panschema"
+keywords = ["mdbook", "documentation", "linkml", "ontology"]
+categories = ["command-line-utilities", "development-tools::build-utils"]
+
+[[bin]]
+name = "mdbook-panschema"
+path = "src/main.rs"
+
+[dependencies]
+# Reuse panschema's `panschema-publish.toml` parsing (`[book_link]`) rather
+# than re-deriving it — see docs/adr/007-mdbook-panschema-plugin.md.
+panschema = { path = "../panschema", version = "0.2.0" }
+clap = { version = "4", features = ["derive"] }
+toml_edit = "0.25"
+serde_json = "1"
+anyhow = "1"
+
+[dev-dependencies]
+tempfile = "3"

@@ -26,11 +26,17 @@ additional_cargo_test_args = ["--lib"]
 # scripts/mutants.sh as `--exclude` CLI flags.
 examine_globs = [
     "panschema/src/**/*.rs",
+    "mdbook-panschema/src/**/*.rs",
     "panschema-viz/src/simulation.rs",
     "panschema-viz/src/sim_common.rs",
 ]
 exclude_globs = [
     "panschema/src/components.rs",
+    # Thin clap entry point: parses args and delegates to the tested
+    # `mdbook_panschema::run`. Under `--lib` no test runs `main`, so a
+    # `main -> Ok(())` mutant can't be killed; the real logic lives in
+    # lib.rs and is mutation-covered there.
+    "mdbook-panschema/src/main.rs",
     "panschema-viz/src/lib.rs",
     "panschema-viz/src/canvas2d.rs",
     "panschema-viz/src/webgpu.rs",

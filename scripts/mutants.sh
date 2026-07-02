@@ -83,6 +83,7 @@ echo "mutating changes in ${BASE}..HEAD ($(wc -l < "$DIFF") diff lines)"
 # override by passing `--jobs N` as a trailing arg (later wins).
 exec cargo mutants --in-diff "$DIFF" --jobs 4 \
   --exclude 'panschema/src/components.rs' \
+  --exclude 'mdbook-panschema/src/main.rs' \
   --exclude 'panschema-viz/src/lib.rs' \
   --exclude 'panschema-viz/src/canvas2d.rs' \
   --exclude 'panschema-viz/src/webgpu.rs' \
