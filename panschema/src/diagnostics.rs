@@ -54,6 +54,12 @@ pub fn unmodeled_class_constructs(schema: &SchemaDefinition) -> Vec<UnmodeledCon
     scan(schema, IGNORED_CLASS_KEYS)
 }
 
+/// Whether `generate` should fail rather than merely warn: true only when
+/// strict mode is on and at least one unmodeled construct was found.
+pub fn should_fail_strict(findings: &[UnmodeledConstruct], strict: bool) -> bool {
+    strict && !findings.is_empty()
+}
+
 /// The detection mechanism, parameterized by the ignore-list so tests can
 /// exercise it with fabricated keys decoupled from the real list. Warns
 /// by default: an unmodeled key is reported unless it is in `ignored`.
@@ -130,6 +136,22 @@ mod tests {
             msg.contains("rules") && msg.contains("Deployment"),
             "message must name the construct and class; got: {msg}"
         );
+    }
+
+    #[test]
+    fn strict_fails_only_when_strict_and_findings_present() {
+        let some = vec![UnmodeledConstruct {
+            class: "C".to_string(),
+            construct: "rules".to_string(),
+        }];
+        let none: Vec<UnmodeledConstruct> = Vec::new();
+        assert!(should_fail_strict(&some, true), "strict + findings ⇒ fail");
+        assert!(!should_fail_strict(&some, false), "not strict ⇒ never fail");
+        assert!(
+            !should_fail_strict(&none, true),
+            "strict + no findings ⇒ ok"
+        );
+        assert!(!should_fail_strict(&none, false));
     }
 
     #[test]

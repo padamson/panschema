@@ -42,13 +42,13 @@ The ignore-list (`IGNORED_CLASS_KEYS` in `crate::diagnostics`) is a denylist tha
 
 ### Slice 2: `--strict` turns the warnings into an error
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** CI can fail a build that would silently drop a constraint.
 
 **Acceptance Criteria:**
-- [ ] `generate --strict` exits non-zero when any curated unmodeled construct is present, after listing them.
-- [ ] Without `--strict`, the same schema warns and exits zero.
+- [x] `generate --strict` exits non-zero when any unmodeled construct is present, after listing them (works for both `--input` and manifest modes).
+- [x] Without `--strict`, the same schema warns and exits zero.
 
 ---
 
@@ -57,13 +57,13 @@ The ignore-list (`IGNORED_CLASS_KEYS` in `crate::diagnostics`) is a denylist tha
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | Slice 1 — detect + warn | Must Have | None | Completed |
-| Slice 2 — `--strict` errors | Should Have | Slice 1 | Not Started |
+| Slice 2 — `--strict` errors | Should Have | Slice 1 | Completed |
 
 ---
 
 ## Definition of Done
 
-- [ ] Slice ACs met; all slices Completed.
-- [ ] `cargo nextest run`, `cargo fmt --check`, `cargo clippy … -D warnings`, `cargo doc` clean.
-- [ ] README.md + CHANGELOG.md updated.
-- [ ] `docs/linkml-coverage.md` notes that these constructs now warn (no longer silent).
+- [x] Slice ACs met; all slices Completed.
+- [x] `cargo nextest run`, `cargo fmt --check`, `cargo clippy … -D warnings` clean.
+- [x] README.md + CHANGELOG.md updated.
+- [x] `docs/linkml-coverage.md` notes that these constructs now warn (no longer silent).

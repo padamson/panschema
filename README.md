@@ -24,6 +24,7 @@ Think of it as **pandoc for data modeling** — a single tool that speaks all sc
 - **Hot reload**: Development server with live preview
 - **GPU visualization** (optional `gpu` feature): 3D force-directed graph for schema exploration
 - **mdbook integration**: `mdbook-panschema install` adds a maintained toolbar link from an mdbook book to its schema docs
+- **Loud about gaps**: warns on LinkML constructs it parses but doesn't model (so nothing is silently dropped); `generate --strict` fails the build instead
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 

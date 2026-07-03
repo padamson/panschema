@@ -97,6 +97,11 @@ enum Commands {
         /// and refetch them before rendering.
         #[arg(long = "refresh-labels")]
         refresh_labels: bool,
+
+        /// Fail (non-zero exit) instead of only warning when the schema
+        /// uses a LinkML construct panschema parses but does not model.
+        #[arg(long)]
+        strict: bool,
     },
     /// Scaffold `panschema-publish.toml` in the current directory.
     ///
@@ -262,6 +267,10 @@ struct LabelOptions<'a> {
     overrides: &'a std::collections::BTreeMap<String, String>,
 }
 
+// A `generate` CLI-command handler: its parameters mirror the subcommand's
+// flags, so the count exceeds clippy's default. (A `GenerateOptions` struct
+// would tidy this — a future cleanup, orthogonal to any one feature.)
+#[allow(clippy::too_many_arguments)]
 fn generate(
     input: &Path,
     output: &Path,
@@ -270,6 +279,7 @@ fn generate(
     html_graph_aspect: Option<&str>,
     html_default_layout: Option<&str>,
     labels: &LabelOptions,
+    strict: bool,
 ) -> anyhow::Result<()> {
     let registry = FormatRegistry::with_defaults();
 
@@ -301,8 +311,16 @@ fn generate(
 
     // Warn on LinkML constructs the schema declares but panschema does
     // not model — otherwise they'd be silently dropped from every output.
-    for unmodeled in panschema::diagnostics::unmodeled_class_constructs(&schema) {
-        eprintln!("warning: {}", unmodeled.message());
+    // Under `--strict`, their presence is a hard error instead.
+    let unmodeled = panschema::diagnostics::unmodeled_class_constructs(&schema);
+    for u in &unmodeled {
+        eprintln!("warning: {}", u.message());
+    }
+    if panschema::diagnostics::should_fail_strict(&unmodeled, strict) {
+        anyhow::bail!(
+            "{} unmodeled LinkML construct(s) present; failing because --strict is set",
+            unmodeled.len()
+        );
     }
 
     // For HTML format, use HtmlWriter with custom options
@@ -419,7 +437,7 @@ fn resolve_source(
 }
 
 /// `panschema generate` (no --input): walk the manifest and run configured writers.
-fn generate_from_manifest(offline: bool, refresh_labels: bool) -> anyhow::Result<()> {
+fn generate_from_manifest(offline: bool, refresh_labels: bool, strict: bool) -> anyhow::Result<()> {
     let (manifest, manifest_dir) = load_manifest()?;
     let labels = LabelOptions {
         offline,
@@ -450,12 +468,22 @@ fn generate_from_manifest(offline: bool, refresh_labels: bool) -> anyhow::Result
                 gen_cfg.html_graph_aspect.as_deref(),
                 gen_cfg.html_default_layout.as_deref(),
                 &labels,
+                strict,
             )?;
             produced_anything = true;
         }
         if let Some(rust_out) = &gen_cfg.rust {
             let rust_out = manifest_dir.join(rust_out);
-            generate(&schema_path, &rust_out, "rust", false, None, None, &labels)?;
+            generate(
+                &schema_path,
+                &rust_out,
+                "rust",
+                false,
+                None,
+                None,
+                &labels,
+                strict,
+            )?;
             produced_anything = true;
         }
     }
@@ -1205,6 +1233,7 @@ async fn main() -> anyhow::Result<()> {
             viz_mode,
             offline,
             refresh_labels,
+            strict,
         }) => match input {
             Some(input) => {
                 if format.to_lowercase() == "html" && !no_graph {
@@ -1221,9 +1250,11 @@ async fn main() -> anyhow::Result<()> {
                     refresh: refresh_labels,
                     overrides: &no_overrides,
                 };
-                generate(&input, &output, &format, !no_graph, None, None, &labels)?;
+                generate(
+                    &input, &output, &format, !no_graph, None, None, &labels, strict,
+                )?;
             }
-            None => generate_from_manifest(offline, refresh_labels)?,
+            None => generate_from_manifest(offline, refresh_labels, strict)?,
         },
         Some(Commands::Init {
             name,
@@ -1287,7 +1318,18 @@ async fn main() -> anyhow::Result<()> {
                     refresh: false,
                     overrides: &no_overrides,
                 };
-                generate(&input, &cli.output, &cli.format, true, None, None, &labels)?;
+                // Bare-CLI fallback (no subcommand): strict mode is a
+                // `generate`-subcommand flag, so it's off here.
+                generate(
+                    &input,
+                    &cli.output,
+                    &cli.format,
+                    true,
+                    None,
+                    None,
+                    &labels,
+                    false,
+                )?;
             } else {
                 println!("panschema: no input specified. Use --help for usage.");
             }
@@ -1330,6 +1372,7 @@ mod tests {
                 viz_mode,
                 offline,
                 refresh_labels,
+                strict,
             }) => {
                 assert_eq!(input, Some(PathBuf::from("test.ttl")));
                 assert_eq!(output, PathBuf::from("docs"));
@@ -1338,6 +1381,7 @@ mod tests {
                 assert!(matches!(viz_mode, VizMode::Auto)); // default auto
                 assert!(!offline); // default false (labels fetched)
                 assert!(!refresh_labels); // default false (cache reused)
+                assert!(!strict); // default false (warn, don't fail)
             }
             _ => panic!("Expected Generate command"),
         }
