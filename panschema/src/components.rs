@@ -238,6 +238,7 @@ pub struct ClassCardComponent<'a> {
     pub aliases: &'a [String],
     pub see_also: &'a [panschema::html_writer::ExternalLink],
     pub examples: &'a [panschema::linkml::Example],
+    pub rules: &'a [panschema::html_writer::RuleInClass],
 }
 
 /// Property card component template.
@@ -326,6 +327,7 @@ pub struct SampleClass<'a> {
     pub aliases: &'a [String],
     pub see_also: &'a [panschema::html_writer::ExternalLink],
     pub examples: &'a [panschema::linkml::Example],
+    pub rules: &'a [panschema::html_writer::RuleInClass],
 }
 
 /// Sample property data for styleguide previews.
@@ -508,6 +510,7 @@ impl ComponentRenderer {
             aliases: &[],
             see_also: &[],
             examples: &[],
+            rules: &[],
         };
         Ok(template.render()?)
     }
@@ -690,6 +693,13 @@ impl ComponentRenderer {
                 description: None,
             },
         ];
+        let class_rules = vec![panschema::html_writer::RuleInClass {
+            title: Some("adults must give an email".to_string()),
+            description: Some("ties age to a required contact field.".to_string()),
+            summary: Some(
+                "when <code>age</code> &gt;= 18, then <code>email</code> is required".to_string(),
+            ),
+        }];
         let sample_class = SampleClass {
             id: "person",
             label: "Person",
@@ -707,6 +717,7 @@ impl ComponentRenderer {
             aliases: &class_aliases,
             see_also: &class_see_also,
             examples: &class_examples,
+            rules: &class_rules,
         };
 
         let domain = EntityRef::new("person", "Person");
@@ -1038,6 +1049,7 @@ mod tests {
                 aliases: &[],
                 see_also: &[],
                 examples: &[],
+                rules: &[],
             };
             let html = template.render().unwrap();
             assert!(
@@ -1069,6 +1081,7 @@ mod tests {
                 aliases: &[],
                 see_also: &[],
                 examples: &[],
+                rules: &[],
             };
             let html = deprecated.render().unwrap();
             assert!(
@@ -1127,6 +1140,7 @@ mod tests {
                 aliases: &aliases,
                 see_also: &see_also,
                 examples: &[],
+                rules: &[],
             };
             let html = editorial.render().unwrap();
             assert!(
@@ -1195,6 +1209,7 @@ mod tests {
                 aliases: &[],
                 see_also: &[],
                 examples: &examples,
+                rules: &[],
             };
             let html = with_examples.render().unwrap();
             assert!(

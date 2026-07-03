@@ -944,6 +944,79 @@ fn cli_generate_html_prints_graph_visualization_mode() {
     let _ = fs::remove_dir_all(&output_dir2);
 }
 
+/// `panschema generate --format ttl` for a schema with `rules` warns that
+/// they won't appear in the RDF output — `rules` is IR-modeled (so the
+/// unmodeled-construct guard stays silent), but no RDF writer projects it
+/// yet, and that gap must not be silent either. The same schema through
+/// `--format html` gets no such warning, since the HTML writer does
+/// render `rules`.
+#[test]
+fn cli_generate_rdf_warns_rules_not_emitted() {
+    let schema_yaml = r#"
+id: https://example.org/rules-rdf-gap
+name: rules_rdf_gap
+default_range: string
+classes:
+  Deployment:
+    attributes:
+      status:
+        range: string
+    rules:
+      - description: an actual deployment must name its environment
+        preconditions:
+          slot_conditions:
+            status:
+              equals_string: actual
+"#;
+    let tmp = std::env::temp_dir().join("panschema_rules_rdf_gap_test");
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).unwrap();
+    let schema_path = tmp.join("schema.yaml");
+    fs::write(&schema_path, schema_yaml).unwrap();
+
+    let ttl_output = tmp.join("out.ttl");
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--input",
+            schema_path.to_str().unwrap(),
+            "--output",
+            ttl_output.to_str().unwrap(),
+            "--format",
+            "ttl",
+        ])
+        .output()
+        .expect("panschema");
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Deployment") && stderr.contains("rules"),
+        "ttl format should warn that Deployment's rules aren't emitted; got:\n{stderr}"
+    );
+
+    let html_output = tmp.join("html_out");
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--input",
+            schema_path.to_str().unwrap(),
+            "--output",
+            html_output.to_str().unwrap(),
+            "--format",
+            "html",
+        ])
+        .output()
+        .expect("panschema");
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("does not yet emit"),
+        "html format renders rules, so it must not warn about the RDF gap; got:\n{stderr}"
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
 /// `panschema generate` fans out across every populated writer key in
 /// `[generate.<name>]` — running `html` and `rust` in one invocation.
 #[test]

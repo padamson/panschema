@@ -354,6 +354,15 @@ fn generate(
             .write(&schema, output)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
     } else {
+        // `rules` is IR-modeled (so `unmodeled_class_constructs` above
+        // stays silent about it) but no RDF writer projects it yet
+        // (feature 17 slice 4) — warn here so that gap isn't silent either.
+        for class in panschema::diagnostics::classes_with_rules_unsupported_in_rdf(&schema) {
+            eprintln!(
+                "warning: class `{class}` declares `rules`, which panschema does not yet emit \
+                 to RDF/OWL; only the HTML docs render them"
+            );
+        }
         let writer = registry
             .writer_for_format(format)
             .ok_or_else(|| anyhow::anyhow!("Unsupported output format: {}", format))?;

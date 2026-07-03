@@ -81,6 +81,25 @@ fn scan(schema: &SchemaDefinition, ignored: &[&str]) -> Vec<UnmodeledConstruct> 
     found
 }
 
+/// Classes whose `rules` won't appear in RDF/OWL output.
+///
+/// This is a second, narrower class of silent drop than
+/// [`unmodeled_class_constructs`]: `rules` is IR-modeled (feature 17 slice
+/// 1), so it never reaches the `unmodeled` catch-all and that guard stays
+/// silent about it — but no writer projects `rules` to RDF yet (deferred,
+/// feature 17 slice 4), so a schema with `rules` renders them in HTML and
+/// drops them from every RDF format with no signal. Call this when
+/// generating a non-HTML format so that gap stays loud too, until slice 4
+/// closes it.
+pub fn classes_with_rules_unsupported_in_rdf(schema: &SchemaDefinition) -> Vec<String> {
+    schema
+        .classes
+        .iter()
+        .filter(|(_, class)| !class.rules.is_empty())
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,6 +171,23 @@ mod tests {
             "strict + no findings ⇒ ok"
         );
         assert!(!should_fail_strict(&none, false));
+    }
+
+    #[test]
+    fn classes_with_rules_unsupported_in_rdf_lists_classes_with_rules() {
+        let schema = parse(
+            "name: s\nclasses:\n  Deployment:\n    rules:\n      - description: d\n  Bare:\n    description: no rules here\n",
+        );
+        assert_eq!(
+            classes_with_rules_unsupported_in_rdf(&schema),
+            vec!["Deployment".to_string()]
+        );
+    }
+
+    #[test]
+    fn classes_with_rules_unsupported_in_rdf_empty_when_no_rules() {
+        let schema = parse("name: s\nclasses:\n  Bare:\n    description: x\n");
+        assert!(classes_with_rules_unsupported_in_rdf(&schema).is_empty());
     }
 
     #[test]

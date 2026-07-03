@@ -73,6 +73,22 @@ pub struct ClassData {
     /// section listing each value with its optional description; empty
     /// renders nothing.
     pub examples: Vec<Example>,
+    /// Conditional constraints from `rules:`. Rendered as a "Rules"
+    /// section; empty renders nothing.
+    pub rules: Vec<RuleInClass>,
+}
+
+/// A `rules` entry as rendered on a class card.
+#[derive(Debug, Clone)]
+pub struct RuleInClass {
+    pub title: Option<String>,
+    /// Markdown-rendered, like [`ClassData::description`].
+    pub description: Option<String>,
+    /// Markdown-rendered "when … then …" sentence built from the rule's
+    /// pre/postconditions (e.g. "when `status` = `actual`, then `region`
+    /// is required"). `None` when the rule has neither — a
+    /// title/description-only entry.
+    pub summary: Option<String>,
 }
 
 /// One pre-order entry in the Classes hierarchy view. The template
@@ -824,6 +840,7 @@ impl HtmlWriter {
                 aliases: class_def.aliases.clone(),
                 see_also: build_see_also(&class_def.see_also, schema, labels),
                 examples: class_def.examples.clone(),
+                rules: build_rules(&class_def.rules, schema),
             });
         }
 
@@ -1499,6 +1516,94 @@ fn build_see_also(
             }
         })
         .collect()
+}
+
+/// Build the rendered `rules` list. Title/description pass through the
+/// same markdown pipeline as [`ClassData::description`]; `summary` is
+/// built from the pre/postconditions and rendered the same way, so
+/// slot/value names referenced in either come out as `<code>`.
+fn build_rules(rules: &[crate::linkml::ClassRule], schema: &SchemaDefinition) -> Vec<RuleInClass> {
+    rules
+        .iter()
+        .map(|rule| RuleInClass {
+            title: rule.title.clone(),
+            description: rule
+                .description
+                .as_deref()
+                .map(|d| render_description(d, schema)),
+            summary: rule_summary_markdown(rule).map(|s| render_description(&s, schema)),
+        })
+        .collect()
+}
+
+/// Render a `ClassRule`'s pre/postconditions as one markdown "when …
+/// then …" sentence. `None` when the rule carries neither (a
+/// title/description-only entry).
+fn rule_summary_markdown(rule: &crate::linkml::ClassRule) -> Option<String> {
+    let when = rule
+        .preconditions
+        .as_ref()
+        .map(|c| describe_slot_conditions(&c.slot_conditions))
+        .filter(|s| !s.is_empty());
+    let then = rule
+        .postconditions
+        .as_ref()
+        .map(|c| describe_slot_conditions(&c.slot_conditions))
+        .filter(|s| !s.is_empty());
+
+    match (when, then) {
+        (Some(w), Some(t)) => Some(format!("when {}, then {}", w.join(", "), t.join(", "))),
+        (Some(w), None) => Some(format!("when {}", w.join(", "))),
+        (None, Some(t)) => Some(format!("then {}", t.join(", "))),
+        (None, None) => None,
+    }
+}
+
+/// Render each slot's condition as a markdown clause, e.g. "`status` =
+/// `actual`" or "`region` is required". Skips a slot whose condition sets
+/// none of the fields panschema renders.
+fn describe_slot_conditions(
+    slot_conditions: &std::collections::BTreeMap<String, crate::linkml::SlotCondition>,
+) -> Vec<String> {
+    slot_conditions
+        .iter()
+        .filter_map(|(slot, cond)| describe_slot_condition(slot, cond))
+        .collect()
+}
+
+fn describe_slot_condition(slot: &str, cond: &crate::linkml::SlotCondition) -> Option<String> {
+    let mut clauses = Vec::new();
+    if let Some(v) = &cond.equals_string {
+        clauses.push(format!("= `{v}`"));
+    }
+    if let Some(v) = cond.equals_number {
+        clauses.push(format!("= {v}"));
+    }
+    if cond.required {
+        clauses.push("is required".to_string());
+    }
+    if let Some(r) = &cond.range {
+        clauses.push(format!("is a `{r}`"));
+    }
+    if let Some(p) = &cond.pattern {
+        clauses.push(format!("matches `{p}`"));
+    }
+    if let Some(min) = cond.minimum_value {
+        clauses.push(format!(">= {min}"));
+    }
+    if let Some(max) = cond.maximum_value {
+        clauses.push(format!("<= {max}"));
+    }
+    if let Some(min) = cond.minimum_cardinality {
+        clauses.push(format!("has at least {min} value(s)"));
+    }
+    if let Some(max) = cond.maximum_cardinality {
+        clauses.push(format!("has at most {max} value(s)"));
+    }
+    if clauses.is_empty() {
+        return None;
+    }
+    Some(format!("`{slot}` {}", clauses.join(" and ")))
 }
 
 /// Render a slot's `ifabsent` value readably for the Default row, peeling
@@ -2748,6 +2853,82 @@ mod tests {
         assert!(
             plain_card.aliases.is_empty() && plain_card.see_also.is_empty(),
             "a slot with neither field renders no aliases/see-also row"
+        );
+    }
+
+    #[test]
+    fn class_card_shows_rules() {
+        use crate::linkml::{
+            ClassDefinition, ClassRule, RuleConditions, SchemaDefinition, SlotCondition,
+        };
+        // A class's `rules:` render as a "Rules" row: each rule's title
+        // and markdown description render like any other description,
+        // and its pre/postconditions render as a "when … then …"
+        // sentence with slot/value names as `<code>` — the human-
+        // readable rendering of a conditional requirement ("an actual
+        // deployment must name its environment and provider").
+        let mut schema = SchemaDefinition::new("deployments");
+        let mut deployment = ClassDefinition::new("Deployment");
+        deployment.rules = vec![ClassRule {
+            title: Some("actual deployments are located".to_string()),
+            description: Some("ties status to required fields".to_string()),
+            preconditions: Some(RuleConditions {
+                slot_conditions: {
+                    let mut m = std::collections::BTreeMap::new();
+                    m.insert(
+                        "status".to_string(),
+                        SlotCondition {
+                            equals_string: Some("actual".to_string()),
+                            ..Default::default()
+                        },
+                    );
+                    m
+                },
+            }),
+            postconditions: Some(RuleConditions {
+                slot_conditions: {
+                    let mut m = std::collections::BTreeMap::new();
+                    m.insert(
+                        "region".to_string(),
+                        SlotCondition {
+                            required: true,
+                            ..Default::default()
+                        },
+                    );
+                    m
+                },
+            }),
+        }];
+        schema.classes.insert("Deployment".to_string(), deployment);
+        schema
+            .classes
+            .insert("Bare".to_string(), ClassDefinition::new("Bare"));
+
+        let out = tempfile::tempdir().unwrap();
+        let writer = HtmlWriter::with_options(false);
+        crate::io::Writer::write(&writer, &schema, out.path()).unwrap();
+        let html = std::fs::read_to_string(out.path().join("index.html")).unwrap();
+
+        assert!(html.contains("Rules"), "expected a Rules row; got: {html}");
+        assert!(
+            html.contains("actual deployments are located"),
+            "expected the rule title; got: {html}"
+        );
+        assert!(
+            html.contains("ties status to required fields"),
+            "expected the rendered description; got: {html}"
+        );
+        assert!(
+            html.contains("<code>status</code>") && html.contains("<code>actual</code>"),
+            "expected the precondition rendered with slot/value as code; got: {html}"
+        );
+        assert!(
+            html.contains("<code>region</code>") && html.contains("is required"),
+            "expected the postcondition rendered; got: {html}"
+        );
+        assert!(
+            html.contains("when") && html.contains("then"),
+            "expected a when…then sentence; got: {html}"
         );
     }
 

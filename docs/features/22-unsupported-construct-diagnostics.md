@@ -2,13 +2,13 @@
 
 **Feature:** Warn (and, under a strict mode, error) when a schema uses a LinkML construct panschema parses but does not model — so a real constraint can't ship silently ignored.
 
-**User Story:** As a schema author, when I write a construct panschema doesn't yet support (a class `rules` block, `unique_keys`, a boolean class expression), I want a clear diagnostic that it was parsed but will not render or emit — instead of it vanishing with no signal — so I can rework or defer it deliberately.
+**User Story:** As a schema author, when I write a construct panschema doesn't yet support (`unique_keys`, a boolean class expression), I want a clear diagnostic that it was parsed but will not render or emit — instead of it vanishing with no signal — so I can rework or defer it deliberately.
 
 **Related ADR:** None. Complements [07-schema-validation.md](07-schema-validation.md) (structural well-formedness) and [17-class-validation-constructs.md](17-class-validation-constructs.md) (which *models* these constructs); this feature makes their *absence of support* loud in the meantime.
 
 **Approach:** Vertical Slicing with Outside-In TDD.
 
-> The canonical list of unmodeled constructs lives in [`docs/linkml-coverage.md`](../linkml-coverage.md); this feature turns the highest-value subset from silent to loud. It is the P0 guard in the "support nimbus" menu — cheap, and it makes every later modeling feature safe to attempt (a producer learns immediately when something isn't wired).
+> The canonical list of unmodeled constructs lives in [`docs/linkml-coverage.md`](../linkml-coverage.md); this feature turns the highest-value subset from silent to loud. It is a prerequisite guard — cheap, and it makes every later modeling feature safe to attempt (a producer learns immediately when something isn't wired).
 
 ---
 
@@ -30,7 +30,7 @@ Surfacing mirrors the existing collision/unresolved-slot warnings: `eprintln!("w
 
 **Status:** Completed
 
-**User Value:** A schema that carries a `rules` / `unique_keys` / boolean-expression block on a class produces a warning at generate time instead of silently dropping it.
+**User Value:** A schema that carries a `unique_keys` / boolean-expression block on a class produces a warning at generate time instead of silently dropping it.
 
 **Acceptance Criteria:**
 - [x] Generating a schema whose class carries *any* unmodeled key emits a warning naming the key and the class — by default, even for a key not previously enumerated.

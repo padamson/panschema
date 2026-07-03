@@ -187,6 +187,64 @@ impl SchemaDefinition {
     }
 }
 
+/// A conditional constraint on a class: LinkML's `rules` metaslot.
+///
+/// Corresponds to LinkML ClassRule.
+/// Reference: <https://linkml.io/linkml-model/latest/docs/ClassRule/>
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClassRule {
+    /// Short label for the rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Human-readable explanation of the rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Condition that must hold for the rule to apply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preconditions: Option<RuleConditions>,
+    /// Condition required once the rule applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub postconditions: Option<RuleConditions>,
+}
+
+/// An anonymous class expression used as a [`ClassRule`]'s pre/postcondition:
+/// LinkML's `slot_conditions` map, slot name -> the constraint subset
+/// panschema renders on that slot elsewhere.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RuleConditions {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub slot_conditions: BTreeMap<String, SlotCondition>,
+}
+
+/// One slot's constraint within a [`RuleConditions`]' `slot_conditions` map.
+///
+/// Mirrors the subset of LinkML's `SlotDefinition`-shaped slot condition
+/// panschema already renders on ordinary slots (`range` / `required` /
+/// cardinality / value bounds / `pattern`), plus `equals_string` /
+/// `equals_number` — the equality checks a precondition like "`status` =
+/// `actual`" needs, since none of the other fields express equality.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SlotCondition {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_cardinality: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_cardinality: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_value: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_value: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equals_string: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equals_number: Option<f64>,
+}
+
 /// A class definition in a LinkML schema
 ///
 /// Corresponds to LinkML ClassDefinition.
@@ -256,11 +314,16 @@ pub struct ClassDefinition {
     /// Format-specific annotations
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub annotations: BTreeMap<String, String>,
+    /// Conditional constraints (LinkML `rules`): each fires its
+    /// postconditions when its preconditions hold. Rendered as a "Rules"
+    /// section on the class card.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<ClassRule>,
     /// LinkML keys present on this class in the source but not modeled
     /// by panschema. Captured (rather than silently dropped by serde)
     /// so [`crate::diagnostics`] can warn when a producer writes a
-    /// construct — e.g. `rules`, `unique_keys` — that won't render or
-    /// emit. Populated only by the YAML reader; empty otherwise.
+    /// construct — e.g. `unique_keys` — that won't render or emit.
+    /// Populated only by the YAML reader; empty otherwise.
     #[serde(flatten, default)]
     pub unmodeled: BTreeMap<String, serde_yaml::Value>,
 }
@@ -290,6 +353,7 @@ impl ClassDefinition {
             narrow_mappings: Vec::new(),
             broad_mappings: Vec::new(),
             annotations: BTreeMap::new(),
+            rules: Vec::new(),
         }
     }
 
@@ -936,6 +1000,59 @@ examples:
         assert!(out.contains("examples:"), "got:\n{out}");
         let bare_out = serde_yaml::to_string(&bare).unwrap();
         assert!(!bare_out.contains("examples:"), "got:\n{bare_out}");
+    }
+
+    #[test]
+    fn class_definition_deserializes_rules() {
+        // A `rules` entry's `preconditions` / `postconditions` each carry a
+        // `slot_conditions` map: slot name -> the constraint subset
+        // panschema renders elsewhere (`range` / `required` / cardinality /
+        // value bounds / `pattern`), plus `equals_string` / `equals_number`
+        // — the equality checks a precondition like "`status` = `actual`"
+        // needs, since none of the other fields express equality.
+        let yaml = "
+name: Deployment
+rules:
+  - title: actual deployments are located
+    description: an actual deployment must name its environment and provider
+    preconditions:
+      slot_conditions:
+        status:
+          equals_string: actual
+    postconditions:
+      slot_conditions:
+        in_environment:
+          required: true
+        on_provider:
+          required: true
+";
+        let class: ClassDefinition = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(class.rules.len(), 1);
+        let rule = &class.rules[0];
+        assert_eq!(
+            rule.title.as_deref(),
+            Some("actual deployments are located")
+        );
+        assert_eq!(
+            rule.description.as_deref(),
+            Some("an actual deployment must name its environment and provider")
+        );
+
+        let pre = rule.preconditions.as_ref().expect("preconditions");
+        let status_cond = pre.slot_conditions.get("status").expect("status cond");
+        assert_eq!(status_cond.equals_string.as_deref(), Some("actual"));
+
+        let post = rule.postconditions.as_ref().expect("postconditions");
+        assert!(post.slot_conditions.get("in_environment").unwrap().required);
+        assert!(post.slot_conditions.get("on_provider").unwrap().required);
+
+        let bare: ClassDefinition = serde_yaml::from_str("name: Deployment").unwrap();
+        assert!(bare.rules.is_empty());
+
+        let out = serde_yaml::to_string(&class).unwrap();
+        assert!(out.contains("rules:"), "got:\n{out}");
+        let bare_out = serde_yaml::to_string(&bare).unwrap();
+        assert!(!bare_out.contains("rules:"), "got:\n{bare_out}");
     }
 
     #[test]

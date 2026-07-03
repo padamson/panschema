@@ -89,7 +89,8 @@ slot, enum, type, and permissible-value alike. panschema models only a few:
 | `class_uri` | ● | ● | ● | ● | ✗ | card IRI; node URI; subject IRI |
 | `subclass_of` (external) | ● | ● | ○ | ● | ✗ | "Subclass of (external)"; `rdfs:subClassOf <external>`; graph ignores |
 | `*_mappings` (5) | ● | ● | ○ | ● | ○ | see Common metadata |
-| `union_of` `defining_slots` `tree_root` `unique_keys` `rules` `classification_rules` `disjoint_with` `class_expression` (`any_of`/`all_of`/`exactly_one_of`/`none_of`/`slot_conditions`) | ✗ | — | — | — | — | not modeled, but no longer *silent*: `generate` warns on any unmodeled class key by default (`crate::diagnostics`, ignore-list starts empty) — so these and any not-yet-enumerated construct are reported. `rules` + `unique_keys` are the high-value validation gaps |
+| `rules` | ● | ● | ✗ | ✗ | ✗ | class-level conditional constraints: card renders each rule's title/description plus a "when … then …" sentence built from its pre/postcondition `slot_conditions` (`range`/`required`/cardinality/value bounds/`pattern`/`equals_string`/`equals_number`) ([feature 17 slice 1](features/17-class-validation-constructs.md) ✅); SHACL/RDF projection deferred (slice 4) |
+| `union_of` `defining_slots` `tree_root` `unique_keys` `classification_rules` `disjoint_with` `class_expression` (`any_of`/`all_of`/`exactly_one_of`/`none_of`) | ✗ | — | — | — | — | not modeled, but no longer *silent*: `generate` warns on any unmodeled class key by default (`crate::diagnostics`, ignore-list starts empty) — so these and any not-yet-enumerated construct are reported. `unique_keys` is the remaining high-value validation gap ([feature 17 slice 2](features/17-class-validation-constructs.md)) |
 
 ---
 
@@ -178,10 +179,16 @@ Ordered by impact, with the slices already filed against each:
 4. **Validation-feature families** (mostly not modeled): slot value bounds
    `minimum_value` / `maximum_value` are modeled + rendered as card badges
    ([feature 14 slice 2](features/14-slot-constraints.md) ✅; their RDF
-   `owl:withRestrictions` facet is deferred, slice 2b). Still not modeled:
-   class `rules` / `unique_keys`, `equals_*`, and boolean expressions
-   (`all_of` / `exactly_one_of` / `none_of`). Route to
-   [feature 07](features/07-schema-validation.md).
+   `owl:withRestrictions` facet is deferred, slice 2b). Class `rules` is now
+   modeled + rendered ([feature 17 slice 1](features/17-class-validation-constructs.md)
+   ✅; RDF/SHACL projection deferred, slice 4 — generating a non-HTML format
+   for a schema with `rules` warns of the gap in the meantime). Still not
+   modeled: `unique_keys`, `equals_string_in` / `equals_expression` /
+   other slot-condition equality forms beyond `equals_string` /
+   `equals_number`, and class-level boolean expressions (`all_of` /
+   `exactly_one_of` / `none_of`). Route to
+   [feature 17](features/17-class-validation-constructs.md) (class-level) /
+   [feature 07](features/07-schema-validation.md) (structural validation).
 5. **Editorial/provenance metadata** (not modeled): `comments`,
    `in_subset`. Documentation completeness; low individual cost, high
    collective coverage. (`aliases`, `see_also`, `deprecated`, and

@@ -39,7 +39,33 @@ projection.
 
 ## Vertical Slices
 
-### Slice 1: `unique_keys` (IR + card)
+### Slice 1: `rules` (IR + card)
+
+**Status:** Completed
+
+**Priority:** Must Have — the conditional-requirement half of the User
+Story (e.g. "an actual deployment must name its environment and
+provider"); built before `unique_keys` because it's the construct a real
+consumer is currently blocked on.
+
+**User Value:** A class's conditional rules render as a readable "Rules" section
+(e.g. "if `provider` = AWS then `region` is required").
+
+**Acceptance Criteria:**
+- [x] New IR for `ClassRule` with `preconditions` / `postconditions` (each an anonymous class expression carrying `slot_conditions`), plus optional `title` / `description`; `ClassDefinition` gains `rules: Vec<ClassRule>`.
+- [x] The serde-derived reader parses the nested `slot_conditions` map — slot name → the constraint subset panschema already renders (`range` / `required` / cardinality / value bounds / `pattern`), plus `equals_string` / `equals_number` (LinkML's slot-condition equality checks — needed for a precondition like "`status` = `actual`"; not otherwise expressible by the renders-elsewhere subset) (`class_definition_deserializes_rules`).
+- [x] The class card renders each rule as its description plus a human-readable "when … then …" rendering of its pre/postconditions, e.g. "when `status` = `actual`, then `region` is required" (`class_card_shows_rules`).
+- [x] Generating a non-HTML (RDF) format for a schema with non-empty `rules` warns that they aren't emitted to RDF/OWL yet — `rules` is IR-modeled, so it no longer trips the feature-22 unmodeled-construct guard, but it also isn't RDF-projected until slice 4, and that gap must not be silent either (`cli_generate_rdf_warns_rules_not_emitted`, `classes_with_rules_unsupported_in_rdf_*`).
+
+**Notes:**
+- Model the `slot_condition` fields panschema already surfaces elsewhere, plus `equals_string` / `equals_number` (the minimum needed for the User Story's motivating example — a precondition like "`status` = `actual`"); other exotic expression members are out of scope until a consumer needs them.
+- The RDF-gap warning (last AC) is a stopgap, not a general mechanism — it is
+  specific to `rules`. It should be removed once slice 4 lands, since `rules`
+  would then be genuinely RDF-projected rather than merely warned-about.
+
+---
+
+### Slice 2: `unique_keys` (IR + card)
 
 **Status:** Not Started
 
@@ -55,25 +81,6 @@ listing each key's slot tuple.
 
 **Notes:**
 - This is documentation plus a structural check; enforcement against instance data is out of scope (the consuming application's job).
-
----
-
-### Slice 2: `rules` (IR + card)
-
-**Status:** Not Started
-
-**Priority:** Should Have
-
-**User Value:** A class's conditional rules render as a readable "Rules" section
-(e.g. "if `provider` = AWS then `region` is required").
-
-**Acceptance Criteria:**
-- [ ] New IR for `ClassRule` with `preconditions` / `postconditions` (each an anonymous class expression carrying `slot_conditions`), plus optional `title` / `description`; `ClassDefinition` gains `rules: Vec<ClassRule>`.
-- [ ] The serde-derived reader parses the nested `slot_conditions` map — slot name → the constraint subset panschema already renders (`range` / `required` / cardinality / value bounds / `pattern`) (`class_definition_deserializes_rules`).
-- [ ] The class card renders each rule as its description plus a human-readable "when … then …" rendering of its pre/postconditions (`class_card_shows_rules`).
-
-**Notes:**
-- Model only the `slot_condition` fields panschema already surfaces elsewhere; exotic expression members are out of scope until a consumer needs them.
 
 ---
 
@@ -110,6 +117,7 @@ naturally with a `panschema validate --data` surface extending
 
 **Acceptance Criteria:**
 - [ ] (when undeferred) Emit a SHACL `sh:NodeShape` per class with property-shape constraints mirroring `unique_keys` and the renderable rule subset, with tests pinning the shape triples.
+- [ ] (when undeferred, for `rules` specifically) Remove slice 1's interim `classes_with_rules_unsupported_in_rdf` warning — once `rules` is genuinely RDF-projected, warning that it isn't would itself be a false signal.
 
 ---
 
@@ -117,8 +125,8 @@ naturally with a `panschema validate --data` surface extending
 
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
-| Slice 1: `unique_keys` | Should Have | Feature 07 (shared check helper) | Not Started |
-| Slice 2: `rules` | Should Have | None | Not Started |
+| Slice 1: `rules` | Must Have | None | Completed |
+| Slice 2: `unique_keys` | Should Have | Feature 07 (shared check helper) | Not Started |
 | Slice 3: Boolean class expressions | Could Have | None | Not Started |
 | Slice 4: SHACL/OWL projection | Could Have | Slices 1–2 | 📋 Deferred |
 
