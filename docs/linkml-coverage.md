@@ -89,7 +89,7 @@ slot, enum, type, and permissible-value alike. panschema models only a few:
 | `class_uri` | ● | ● | ● | ● | ✗ | card IRI; node URI; subject IRI |
 | `subclass_of` (external) | ● | ● | ○ | ● | ✗ | "Subclass of (external)"; `rdfs:subClassOf <external>`; graph ignores |
 | `*_mappings` (5) | ● | ● | ○ | ● | ○ | see Common metadata |
-| `union_of` `defining_slots` `tree_root` `unique_keys` `rules` `classification_rules` `disjoint_with` `class_expression` (`any_of`/`all_of`/`exactly_one_of`/`none_of`/`slot_conditions`) | ✗ | — | — | — | — | not modeled. `rules` + `unique_keys` are the high-value validation gaps |
+| `union_of` `defining_slots` `tree_root` `unique_keys` `rules` `classification_rules` `disjoint_with` `class_expression` (`any_of`/`all_of`/`exactly_one_of`/`none_of`/`slot_conditions`) | ✗ | — | — | — | — | not modeled, but no longer *silent*: `generate` warns on any unmodeled class key by default (`crate::diagnostics`, ignore-list starts empty) — so these and any not-yet-enumerated construct are reported. `rules` + `unique_keys` are the high-value validation gaps |
 
 ---
 

@@ -256,6 +256,13 @@ pub struct ClassDefinition {
     /// Format-specific annotations
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub annotations: BTreeMap<String, String>,
+    /// LinkML keys present on this class in the source but not modeled
+    /// by panschema. Captured (rather than silently dropped by serde)
+    /// so [`crate::diagnostics`] can warn when a producer writes a
+    /// construct — e.g. `rules`, `unique_keys` — that won't render or
+    /// emit. Populated only by the YAML reader; empty otherwise.
+    #[serde(flatten, default)]
+    pub unmodeled: BTreeMap<String, serde_yaml::Value>,
 }
 
 impl ClassDefinition {
@@ -270,6 +277,7 @@ impl ClassDefinition {
             examples: Vec::new(),
             is_a: None,
             mixins: Vec::new(),
+            unmodeled: BTreeMap::new(),
             r#abstract: false,
             slots: Vec::new(),
             attributes: BTreeMap::new(),

@@ -299,6 +299,12 @@ fn generate(
         }
     }
 
+    // Warn on LinkML constructs the schema declares but panschema does
+    // not model — otherwise they'd be silently dropped from every output.
+    for unmodeled in panschema::diagnostics::unmodeled_class_constructs(&schema) {
+        eprintln!("warning: {}", unmodeled.message());
+    }
+
     // For HTML format, use HtmlWriter with custom options
     if format.eq_ignore_ascii_case("html") {
         use panschema::html_writer::{HtmlWriter, parse_graph_aspect};
