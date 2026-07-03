@@ -1,6 +1,6 @@
 ---
 source: panschema/src/components.rs
-assertion_line: 1059
+assertion_line: 1069
 expression: html
 ---
 <article class="entity-card class-card" id="class-thing">
@@ -327,6 +327,24 @@ expression: html
     .rule-description code {
         font-size: var(--text-sm);
         color: var(--color-text);
+    }
+
+    .unique-key-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+    }
+
+    .unique-key-entry + .unique-key-entry {
+        margin-top: var(--space-3);
+        padding-top: var(--space-3);
+        border-top: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
+    }
+
+    .unique-key-description {
+        margin-top: var(--space-1);
+        font-size: var(--text-sm);
+        color: var(--color-text-muted);
     }
 
     @media (max-width: 640px) {

@@ -76,6 +76,9 @@ pub struct ClassData {
     /// Conditional constraints from `rules:`. Rendered as a "Rules"
     /// section; empty renders nothing.
     pub rules: Vec<RuleInClass>,
+    /// Uniqueness constraints from `unique_keys:`. Rendered as a "Unique
+    /// keys" row; empty renders nothing.
+    pub unique_keys: Vec<UniqueKeyInClass>,
 }
 
 /// A `rules` entry as rendered on a class card.
@@ -89,6 +92,17 @@ pub struct RuleInClass {
     /// is required"). `None` when the rule has neither — a
     /// title/description-only entry.
     pub summary: Option<String>,
+}
+
+/// A `unique_keys` entry as rendered on a class card.
+#[derive(Debug, Clone)]
+pub struct UniqueKeyInClass {
+    /// The key's name (the `unique_keys` map key).
+    pub name: String,
+    /// The slot tuple whose combined values must be unique.
+    pub slots: Vec<String>,
+    /// Markdown-rendered description, when the key declares one.
+    pub description: Option<String>,
 }
 
 /// One pre-order entry in the Classes hierarchy view. The template
@@ -841,6 +855,7 @@ impl HtmlWriter {
                 see_also: build_see_also(&class_def.see_also, schema, labels),
                 examples: class_def.examples.clone(),
                 rules: build_rules(&class_def.rules, schema),
+                unique_keys: build_unique_keys(&class_def.unique_keys, schema),
             });
         }
 
@@ -1532,6 +1547,26 @@ fn build_rules(rules: &[crate::linkml::ClassRule], schema: &SchemaDefinition) ->
                 .as_deref()
                 .map(|d| render_description(d, schema)),
             summary: rule_summary_markdown(rule).map(|s| render_description(&s, schema)),
+        })
+        .collect()
+}
+
+/// Build the rendered `unique_keys` list, in stable name-sorted order
+/// (the source is a `BTreeMap`). Descriptions pass through the same
+/// markdown pipeline as [`ClassData::description`].
+fn build_unique_keys(
+    unique_keys: &std::collections::BTreeMap<String, crate::linkml::UniqueKey>,
+    schema: &SchemaDefinition,
+) -> Vec<UniqueKeyInClass> {
+    unique_keys
+        .iter()
+        .map(|(name, key)| UniqueKeyInClass {
+            name: name.clone(),
+            slots: key.unique_key_slots.clone(),
+            description: key
+                .description
+                .as_deref()
+                .map(|d| render_description(d, schema)),
         })
         .collect()
 }
@@ -2929,6 +2964,46 @@ mod tests {
         assert!(
             html.contains("when") && html.contains("then"),
             "expected a when…then sentence; got: {html}"
+        );
+    }
+
+    #[test]
+    fn class_card_shows_unique_keys() {
+        use crate::linkml::{ClassDefinition, SchemaDefinition, UniqueKey};
+        // A class's `unique_keys:` render as a "Unique keys" row, one entry
+        // per key, listing its slot tuple as `<code>` names and its
+        // optional description. A class with none renders no such row.
+        let mut schema = SchemaDefinition::new("offerings");
+        let mut offering = ClassDefinition::new("Offering");
+        offering.unique_keys.insert(
+            "service_provider_key".to_string(),
+            UniqueKey {
+                unique_key_slots: vec!["service_type".to_string(), "offered_by".to_string()],
+                description: Some("unique per service type and provider".to_string()),
+            },
+        );
+        schema.classes.insert("Offering".to_string(), offering);
+        schema
+            .classes
+            .insert("Bare".to_string(), ClassDefinition::new("Bare"));
+
+        let out = tempfile::tempdir().unwrap();
+        let writer = HtmlWriter::with_options(false);
+        crate::io::Writer::write(&writer, &schema, out.path()).unwrap();
+        let html = std::fs::read_to_string(out.path().join("index.html")).unwrap();
+
+        assert!(
+            html.contains("Unique keys"),
+            "expected a Unique keys row; got: {html}"
+        );
+        assert!(
+            html.contains("<code class=\"mono\">service_type</code>")
+                && html.contains("<code class=\"mono\">offered_by</code>"),
+            "expected the key's slot tuple rendered as code; got: {html}"
+        );
+        assert!(
+            html.contains("unique per service type and provider"),
+            "expected the key description; got: {html}"
         );
     }
 

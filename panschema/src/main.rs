@@ -323,6 +323,14 @@ fn generate(
         );
     }
 
+    // Warn on `unique_keys` that reference a slot the class doesn't have —
+    // a structural defect that would otherwise render a broken constraint.
+    // (A stopgap on the `generate` warning path until the feature-07
+    // `validate` surface, its eventual home, is built.)
+    for u in panschema::diagnostics::unresolved_unique_key_slots(&schema) {
+        eprintln!("warning: {}", u.message());
+    }
+
     // For HTML format, use HtmlWriter with custom options
     if format.eq_ignore_ascii_case("html") {
         use panschema::html_writer::{HtmlWriter, parse_graph_aspect};

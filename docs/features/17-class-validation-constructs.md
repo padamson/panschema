@@ -62,12 +62,16 @@ consumer is currently blocked on.
 - The RDF-gap warning (last AC) is a stopgap, not a general mechanism — it is
   specific to `rules`. It should be removed once slice 4 lands, since `rules`
   would then be genuinely RDF-projected rather than merely warned-about.
+- No graph-writer change is needed for the graph hover to show rules: the
+  class-node hover clones the rendered HTML card's markup ("one source of
+  truth"), so the Rules section appears in the hover automatically. The graph
+  does *not* draw rules as a node/edge — they're not a binary relation.
 
 ---
 
 ### Slice 2: `unique_keys` (IR + card)
 
-**Status:** Not Started
+**Status:** Completed
 
 **Priority:** Should Have
 
@@ -75,12 +79,14 @@ consumer is currently blocked on.
 listing each key's slot tuple.
 
 **Acceptance Criteria:**
-- [ ] New `UniqueKey { unique_key_slots: Vec<String>, description: Option<String> }`; `ClassDefinition` gains `unique_keys: BTreeMap<String, UniqueKey>` (serde-default empty), auto-parsed (`class_definition_deserializes_unique_keys`).
-- [ ] The class card renders a "Unique keys" row per key, listing its slot tuple (`class_card_shows_unique_keys`).
-- [ ] Each referenced slot is checked against the class's effective slot set; an unresolved key slot is a diagnostic routed through the [feature 07](07-schema-validation.md) check path (shared helper).
+- [x] New `UniqueKey { unique_key_slots: Vec<String>, description: Option<String> }`; `ClassDefinition` gains `unique_keys: BTreeMap<String, UniqueKey>` (serde-default empty), auto-parsed (`class_definition_deserializes_unique_keys`).
+- [x] The class card renders a "Unique keys" row per key, listing its slot tuple (`class_card_shows_unique_keys`).
+- [x] Each referenced slot is checked against the class's effective slot set; an unresolved key slot is a diagnostic (`unresolved_unique_key_slots`, `cli_generate_warns_unresolved_unique_key_slot`).
 
 **Notes:**
 - This is documentation plus a structural check; enforcement against instance data is out of scope (the consuming application's job).
+- Feature 07's `validate` surface (the AC's intended home for the structural check) isn't built yet, so the unresolved-key-slot check routes through the existing `generate`-time `eprintln!("warning: …")` path — the same stopgap the slice-1 RDF-gap warning uses. When feature 07 lands, it should call `unresolved_unique_key_slots` from the shared check path (and can gate it under `verify --strict`).
+- Like `rules`, no graph-writer change is needed for the graph hover to show the Unique keys row: the class-node hover reuses the rendered HTML card. The graph draws no dedicated node/edge for `unique_keys`.
 
 ---
 
@@ -126,7 +132,7 @@ naturally with a `panschema validate --data` surface extending
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | Slice 1: `rules` | Must Have | None | Completed |
-| Slice 2: `unique_keys` | Should Have | Feature 07 (shared check helper) | Not Started |
+| Slice 2: `unique_keys` | Should Have | Feature 07 (shared check helper) | Completed |
 | Slice 3: Boolean class expressions | Could Have | None | Not Started |
 | Slice 4: SHACL/OWL projection | Could Have | Slices 1–2 | 📋 Deferred |
 
@@ -136,10 +142,10 @@ naturally with a `panschema validate --data` surface extending
 
 The feature is complete when ALL of the following are true:
 
-- [ ] Slices 1–2 acceptance criteria met (slice 3 optional; slice 4 deferred)
-- [ ] All tests passing: `cargo nextest run`
-- [ ] Library documentation complete: `cargo doc`
-- [ ] Code formatted + clippy clean: `cargo fmt --check` + `cargo clippy --all-targets --all-features -- -D warnings`
-- [ ] README.md updated
-- [ ] CHANGELOG.md updated
-- [ ] [linkml-coverage.md](../linkml-coverage.md) ClassDefinition rows updated for the newly modeled constructs
+- [x] Slices 1–2 acceptance criteria met (slice 3 optional; slice 4 deferred)
+- [x] All tests passing: `cargo nextest run`
+- [x] Library documentation complete: `cargo doc`
+- [x] Code formatted + clippy clean: `cargo fmt --check` + `cargo clippy --all-targets --all-features -- -D warnings`
+- [x] README.md updated — the "Loud about gaps" bullet already covers the diagnostics; individual modeled constructs aren't itemized in the feature list (consistent with `aliases`/`examples`/value-bounds)
+- [x] CHANGELOG.md updated
+- [x] [linkml-coverage.md](../linkml-coverage.md) ClassDefinition rows updated for the newly modeled constructs

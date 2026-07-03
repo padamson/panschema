@@ -245,6 +245,21 @@ pub struct SlotCondition {
     pub equals_number: Option<f64>,
 }
 
+/// A uniqueness constraint on a class: LinkML's `unique_keys` metaslot.
+///
+/// The tuple of `unique_key_slots` must be unique across instances of the
+/// class. Corresponds to LinkML UniqueKey.
+/// Reference: <https://linkml.io/linkml-model/latest/docs/UniqueKey/>
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UniqueKey {
+    /// The slots whose combined values must be unique.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unique_key_slots: Vec<String>,
+    /// Human-readable explanation of the constraint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
 /// A class definition in a LinkML schema
 ///
 /// Corresponds to LinkML ClassDefinition.
@@ -319,6 +334,11 @@ pub struct ClassDefinition {
     /// section on the class card.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rules: Vec<ClassRule>,
+    /// Uniqueness constraints (LinkML `unique_keys`): each names a tuple
+    /// of slots whose combined values must be unique across instances.
+    /// Rendered as a "Unique keys" row on the class card.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub unique_keys: BTreeMap<String, UniqueKey>,
     /// LinkML keys present on this class in the source but not modeled
     /// by panschema. Captured (rather than silently dropped by serde)
     /// so [`crate::diagnostics`] can warn when a producer writes a
@@ -354,6 +374,7 @@ impl ClassDefinition {
             broad_mappings: Vec::new(),
             annotations: BTreeMap::new(),
             rules: Vec::new(),
+            unique_keys: BTreeMap::new(),
         }
     }
 
@@ -1053,6 +1074,50 @@ rules:
         assert!(out.contains("rules:"), "got:\n{out}");
         let bare_out = serde_yaml::to_string(&bare).unwrap();
         assert!(!bare_out.contains("rules:"), "got:\n{bare_out}");
+    }
+
+    #[test]
+    fn class_definition_deserializes_unique_keys() {
+        // A `unique_keys` map parses into `BTreeMap<String, UniqueKey>`,
+        // each key naming its `unique_key_slots` tuple and an optional
+        // `description`. The map is empty when unset, and an empty map is
+        // skipped on serialization.
+        let yaml = "
+name: Offering
+unique_keys:
+  service_provider_key:
+    description: an offering is unique per service type and provider
+    unique_key_slots:
+      - service_type
+      - offered_by
+  name_key:
+    unique_key_slots:
+      - name
+";
+        let class: ClassDefinition = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(class.unique_keys.len(), 2);
+
+        let spk = class
+            .unique_keys
+            .get("service_provider_key")
+            .expect("service_provider_key");
+        assert_eq!(
+            spk.description.as_deref(),
+            Some("an offering is unique per service type and provider")
+        );
+        assert_eq!(spk.unique_key_slots, vec!["service_type", "offered_by"]);
+
+        let nk = class.unique_keys.get("name_key").expect("name_key");
+        assert_eq!(nk.unique_key_slots, vec!["name"]);
+        assert!(nk.description.is_none());
+
+        let bare: ClassDefinition = serde_yaml::from_str("name: Offering").unwrap();
+        assert!(bare.unique_keys.is_empty());
+
+        let out = serde_yaml::to_string(&class).unwrap();
+        assert!(out.contains("unique_keys:"), "got:\n{out}");
+        let bare_out = serde_yaml::to_string(&bare).unwrap();
+        assert!(!bare_out.contains("unique_keys:"), "got:\n{bare_out}");
     }
 
     #[test]

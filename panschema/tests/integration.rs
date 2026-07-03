@@ -1017,6 +1017,55 @@ classes:
     let _ = fs::remove_dir_all(&tmp);
 }
 
+/// `panschema generate` for a schema whose `unique_keys` names a slot the
+/// class doesn't have warns about the unresolved reference — a structural
+/// defect that would otherwise render a broken constraint silently. A key
+/// naming only real slots produces no such warning.
+#[test]
+fn cli_generate_warns_unresolved_unique_key_slot() {
+    let schema_yaml = r#"
+id: https://example.org/unique-key-gap
+name: unique_key_gap
+default_range: string
+classes:
+  Offering:
+    attributes:
+      service_type:
+        range: string
+    unique_keys:
+      k:
+        unique_key_slots: [service_type, ghost]
+"#;
+    let tmp = std::env::temp_dir().join("panschema_unique_key_gap_test");
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).unwrap();
+    let schema_path = tmp.join("schema.yaml");
+    fs::write(&schema_path, schema_yaml).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--input",
+            schema_path.to_str().unwrap(),
+            "--output",
+            tmp.join("out").to_str().unwrap(),
+        ])
+        .output()
+        .expect("panschema");
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("ghost") && stderr.contains("Offering") && stderr.contains("`k`"),
+        "expected a warning naming the unresolved key slot; got:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("service_type"),
+        "a resolved key slot must not warn; got:\n{stderr}"
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
 /// `panschema generate` fans out across every populated writer key in
 /// `[generate.<name>]` — running `html` and `rust` in one invocation.
 #[test]

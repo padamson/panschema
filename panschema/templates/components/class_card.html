@@ -140,6 +140,25 @@
             </dd>
         </div>
 {%- endif %}
+{%- if !unique_keys.is_empty() %}
+        <div class="detail-row">
+            <dt>Unique keys</dt>
+            <dd>
+                <ul class="unique-key-list">
+{%- for key in unique_keys %}
+                    <li class="unique-key-entry">
+                        <span class="unique-key-slots">
+{%- for slot in key.slots %}<code class="mono">{{ slot }}</code>{% if !loop.last %} + {% endif %}{% endfor %}
+                        </span>
+{%- if let Some(desc) = key.description.as_deref() %}
+                        <div class="unique-key-description">{{ desc|safe }}</div>
+{%- endif %}
+                    </li>
+{%- endfor %}
+                </ul>
+            </dd>
+        </div>
+{%- endif %}
 {%- if !slots.is_empty() %}
         <div class="detail-row">
             <dt>Slots</dt>
@@ -482,6 +501,24 @@
     .rule-description code {
         font-size: var(--text-sm);
         color: var(--color-text);
+    }
+
+    .unique-key-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+    }
+
+    .unique-key-entry + .unique-key-entry {
+        margin-top: var(--space-3);
+        padding-top: var(--space-3);
+        border-top: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
+    }
+
+    .unique-key-description {
+        margin-top: var(--space-1);
+        font-size: var(--text-sm);
+        color: var(--color-text-muted);
     }
 
     @media (max-width: 640px) {

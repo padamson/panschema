@@ -100,6 +100,56 @@ pub fn classes_with_rules_unsupported_in_rdf(schema: &SchemaDefinition) -> Vec<S
         .collect()
 }
 
+/// A `unique_keys` slot that doesn't resolve to any slot on its class.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnresolvedKeySlot {
+    /// The class carrying the `unique_keys` entry.
+    pub class: String,
+    /// The `unique_keys` entry (map key) naming the constraint.
+    pub key: String,
+    /// The referenced slot name that isn't in the class's effective set.
+    pub slot: String,
+}
+
+impl UnresolvedKeySlot {
+    /// A user-facing warning line.
+    pub fn message(&self) -> String {
+        format!(
+            "unique key `{}` on class `{}` references slot `{}`, which the class does not have",
+            self.key, self.class, self.slot
+        )
+    }
+}
+
+/// Report every `unique_keys` slot that names a slot the class doesn't
+/// actually have, checked against its *effective* slot set (inherited +
+/// mixin + inline + `slot_usage`), in deterministic order.
+///
+/// A structural check with no home yet: feature 07's `validate` surface
+/// isn't built, so this routes through the same `generate`-time
+/// `eprintln!` warning path as the other diagnostics until it lands.
+pub fn unresolved_unique_key_slots(schema: &SchemaDefinition) -> Vec<UnresolvedKeySlot> {
+    let mut found = Vec::new();
+    for (class_name, class) in &schema.classes {
+        if class.unique_keys.is_empty() {
+            continue;
+        }
+        let effective = crate::linkml_resolve::resolve_effective_slots(class, schema);
+        for (key_name, key) in &class.unique_keys {
+            for slot in &key.unique_key_slots {
+                if !effective.contains_key(slot) {
+                    found.push(UnresolvedKeySlot {
+                        class: class_name.clone(),
+                        key: key_name.clone(),
+                        slot: slot.clone(),
+                    });
+                }
+            }
+        }
+    }
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,6 +238,81 @@ mod tests {
     fn classes_with_rules_unsupported_in_rdf_empty_when_no_rules() {
         let schema = parse("name: s\nclasses:\n  Bare:\n    description: x\n");
         assert!(classes_with_rules_unsupported_in_rdf(&schema).is_empty());
+    }
+
+    // The resolver keys cycle-detection on `ClassDefinition.name`, which the
+    // YAML reader backfills from the map key before any diagnostic runs;
+    // these tests build classes with names already set to match that
+    // precondition (the raw `parse` helper skips backfill).
+    use crate::linkml::{ClassDefinition, SlotDefinition, UniqueKey};
+
+    fn class_with_attr(name: &str, attr: &str) -> ClassDefinition {
+        let mut c = ClassDefinition::new(name);
+        c.attributes
+            .insert(attr.to_string(), SlotDefinition::new(attr));
+        c
+    }
+
+    #[test]
+    fn unresolved_unique_key_slots_flags_a_slot_the_class_lacks() {
+        // `offered_by` is a real attribute; `ghost` is not — only the
+        // latter is flagged, and it names the class, key, and slot.
+        let mut schema = SchemaDefinition::new("s");
+        let mut offering = class_with_attr("Offering", "offered_by");
+        offering.unique_keys.insert(
+            "k".to_string(),
+            UniqueKey {
+                unique_key_slots: vec!["offered_by".to_string(), "ghost".to_string()],
+                description: None,
+            },
+        );
+        schema.classes.insert("Offering".to_string(), offering);
+        assert_eq!(
+            unresolved_unique_key_slots(&schema),
+            vec![UnresolvedKeySlot {
+                class: "Offering".to_string(),
+                key: "k".to_string(),
+                slot: "ghost".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn unresolved_unique_key_slots_resolves_inherited_slots() {
+        // A key slot defined on an `is_a` parent is in the effective set,
+        // so it does not warn.
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .classes
+            .insert("Base".to_string(), class_with_attr("Base", "name"));
+        let mut sub = ClassDefinition::new("Sub");
+        sub.is_a = Some("Base".to_string());
+        sub.unique_keys.insert(
+            "k".to_string(),
+            UniqueKey {
+                unique_key_slots: vec!["name".to_string()],
+                description: None,
+            },
+        );
+        schema.classes.insert("Sub".to_string(), sub);
+        assert!(
+            unresolved_unique_key_slots(&schema).is_empty(),
+            "an inherited slot must resolve"
+        );
+    }
+
+    #[test]
+    fn unresolved_unique_key_slots_message_names_class_key_slot() {
+        let msg = UnresolvedKeySlot {
+            class: "Offering".to_string(),
+            key: "k".to_string(),
+            slot: "ghost".to_string(),
+        }
+        .message();
+        assert!(
+            msg.contains("Offering") && msg.contains("`k`") && msg.contains("ghost"),
+            "message must name class, key, and slot; got: {msg}"
+        );
     }
 
     #[test]

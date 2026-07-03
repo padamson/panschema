@@ -239,6 +239,7 @@ pub struct ClassCardComponent<'a> {
     pub see_also: &'a [panschema::html_writer::ExternalLink],
     pub examples: &'a [panschema::linkml::Example],
     pub rules: &'a [panschema::html_writer::RuleInClass],
+    pub unique_keys: &'a [panschema::html_writer::UniqueKeyInClass],
 }
 
 /// Property card component template.
@@ -328,6 +329,7 @@ pub struct SampleClass<'a> {
     pub see_also: &'a [panschema::html_writer::ExternalLink],
     pub examples: &'a [panschema::linkml::Example],
     pub rules: &'a [panschema::html_writer::RuleInClass],
+    pub unique_keys: &'a [panschema::html_writer::UniqueKeyInClass],
 }
 
 /// Sample property data for styleguide previews.
@@ -511,6 +513,7 @@ impl ComponentRenderer {
             see_also: &[],
             examples: &[],
             rules: &[],
+            unique_keys: &[],
         };
         Ok(template.render()?)
     }
@@ -700,6 +703,11 @@ impl ComponentRenderer {
                 "when <code>age</code> &gt;= 18, then <code>email</code> is required".to_string(),
             ),
         }];
+        let class_unique_keys = vec![panschema::html_writer::UniqueKeyInClass {
+            name: "name_key".to_string(),
+            slots: vec!["given_name".to_string(), "family_name".to_string()],
+            description: Some("a person is unique by full name.".to_string()),
+        }];
         let sample_class = SampleClass {
             id: "person",
             label: "Person",
@@ -718,6 +726,7 @@ impl ComponentRenderer {
             see_also: &class_see_also,
             examples: &class_examples,
             rules: &class_rules,
+            unique_keys: &class_unique_keys,
         };
 
         let domain = EntityRef::new("person", "Person");
@@ -1050,6 +1059,7 @@ mod tests {
                 see_also: &[],
                 examples: &[],
                 rules: &[],
+                unique_keys: &[],
             };
             let html = template.render().unwrap();
             assert!(
@@ -1082,6 +1092,7 @@ mod tests {
                 see_also: &[],
                 examples: &[],
                 rules: &[],
+                unique_keys: &[],
             };
             let html = deprecated.render().unwrap();
             assert!(
@@ -1141,6 +1152,7 @@ mod tests {
                 see_also: &see_also,
                 examples: &[],
                 rules: &[],
+                unique_keys: &[],
             };
             let html = editorial.render().unwrap();
             assert!(
@@ -1210,6 +1222,7 @@ mod tests {
                 see_also: &[],
                 examples: &examples,
                 rules: &[],
+                unique_keys: &[],
             };
             let html = with_examples.render().unwrap();
             assert!(

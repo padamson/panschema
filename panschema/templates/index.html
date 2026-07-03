@@ -64,6 +64,7 @@
         {%- let see_also = class.see_also.as_slice() %}
         {%- let examples = class.examples.as_slice() %}
         {%- let rules = class.rules.as_slice() %}
+        {%- let unique_keys = class.unique_keys.as_slice() %}
         {% include "components/class_card.html" %}
         {%- if entry.has_children %}
         <ul class="class-tree-children">
