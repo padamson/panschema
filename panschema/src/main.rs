@@ -57,7 +57,7 @@ struct Cli {
     #[arg(short, long, global = true, default_value = "output")]
     output: PathBuf,
 
-    /// Output format: html, ttl, jsonld, rdfxml, ntriples
+    /// Output format: html, ttl, jsonld, rdfxml, ntriples, graph-json, rust
     #[arg(short, long, global = true, default_value = "html")]
     format: String,
 }
@@ -76,7 +76,7 @@ enum Commands {
         #[arg(short, long, default_value = "output")]
         output: PathBuf,
 
-        /// Output format: html, ttl, jsonld, rdfxml, ntriples, graph-json
+        /// Output format: html, ttl, jsonld, rdfxml, ntriples, graph-json, rust
         #[arg(short, long, default_value = "html")]
         format: String,
 
@@ -331,6 +331,15 @@ fn generate(
         eprintln!("warning: {}", u.message());
     }
 
+    // `rules` and `unique_keys` are IR-modeled (so `unmodeled_class_constructs`
+    // above stays silent about them) but only the HTML writer projects them
+    // fully today — warn for every other target format, naming that format
+    // rather than assuming RDF. (Empty for `format == "html"`, so this is
+    // safe to call unconditionally.)
+    for u in panschema::diagnostics::classes_with_unprojected_constructs(&schema, format) {
+        eprintln!("warning: {}", u.message(format));
+    }
+
     // For HTML format, use HtmlWriter with custom options
     if format.eq_ignore_ascii_case("html") {
         use panschema::html_writer::{HtmlWriter, parse_graph_aspect};
@@ -362,15 +371,6 @@ fn generate(
             .write(&schema, output)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
     } else {
-        // `rules` is IR-modeled (so `unmodeled_class_constructs` above
-        // stays silent about it) but no RDF writer projects it yet
-        // (feature 17 slice 4) — warn here so that gap isn't silent either.
-        for class in panschema::diagnostics::classes_with_rules_unsupported_in_rdf(&schema) {
-            eprintln!(
-                "warning: class `{class}` declares `rules`, which panschema does not yet emit \
-                 to RDF/OWL; only the HTML docs render them"
-            );
-        }
         let writer = registry
             .writer_for_format(format)
             .ok_or_else(|| anyhow::anyhow!("Unsupported output format: {}", format))?;
@@ -1367,6 +1367,36 @@ mod tests {
         assert_eq!(cli.format, "html");
         assert!(cli.input.is_none());
         assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn help_text_lists_every_registered_writer_format() {
+        // The `--format` help strings are hand-written, disconnected from
+        // `FormatRegistry` — they can silently drift when a writer is
+        // added (this is how `rust` was found missing from both the
+        // top-level and `generate` subcommand help text). Assert every
+        // registered format id actually appears in both.
+        let registry = panschema::io::FormatRegistry::with_defaults();
+        let format_ids = registry.writer_format_ids();
+
+        let top_level_help = Cli::command().render_long_help().to_string();
+        let generate_help = Cli::command()
+            .find_subcommand("generate")
+            .expect("generate subcommand")
+            .clone()
+            .render_long_help()
+            .to_string();
+
+        for id in &format_ids {
+            assert!(
+                top_level_help.contains(id),
+                "top-level --help must list format `{id}`; got:\n{top_level_help}"
+            );
+            assert!(
+                generate_help.contains(id),
+                "generate --help must list format `{id}`; got:\n{generate_help}"
+            );
+        }
     }
 
     #[test]

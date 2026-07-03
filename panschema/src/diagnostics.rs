@@ -1,16 +1,25 @@
-//! Diagnostics for LinkML constructs panschema parses but does not model.
+//! Diagnostics against two classes of silent drop: a construct panschema
+//! doesn't model at all, and a construct it models but a specific writer
+//! doesn't project.
 //!
-//! `serde` silently ignores unknown YAML keys, so a producer can write a
-//! real constraint (`rules`, `unique_keys`, a boolean class expression)
-//! and ship a schema where it is quietly dropped. [`ClassDefinition`]
-//! captures such keys in its `unmodeled` catch-all; this module warns on
-//! them.
+//! **Parse → IR.** `serde` silently ignores unknown YAML keys, so a
+//! producer can write a real constraint (a boolean class expression, a
+//! not-yet-modeled metaslot) and ship a schema where it is quietly
+//! dropped. [`ClassDefinition`] captures such keys in its `unmodeled`
+//! catch-all; [`unmodeled_class_constructs`] warns on them.
 //!
 //! The guard warns by **default**: the ignore-list starts empty, so every
 //! unmodeled key is reported until a specific one is identified as safe to
 //! silence. That direction is deliberate — an allowlist could only catch
 //! drops we already anticipated, leaving the exact blind spot the guard
 //! exists to close.
+//!
+//! **IR → writer.** A construct can be fully IR-modeled (so the guard
+//! above never sees it) while a *specific* writer still doesn't project
+//! it — e.g. `rules` and `unique_keys` render in HTML but aren't emitted
+//! to RDF or Rust. [`classes_with_unprojected_constructs`] warns on that,
+//! parameterized by the target format so the message names what was
+//! actually requested.
 //!
 //! [`ClassDefinition`]: crate::linkml::ClassDefinition
 
@@ -81,23 +90,58 @@ fn scan(schema: &SchemaDefinition, ignored: &[&str]) -> Vec<UnmodeledConstruct> 
     found
 }
 
-/// Classes whose `rules` won't appear in RDF/OWL output.
-///
-/// This is a second, narrower class of silent drop than
-/// [`unmodeled_class_constructs`]: `rules` is IR-modeled (feature 17 slice
-/// 1), so it never reaches the `unmodeled` catch-all and that guard stays
-/// silent about it — but no writer projects `rules` to RDF yet (deferred,
-/// feature 17 slice 4), so a schema with `rules` renders them in HTML and
-/// drops them from every RDF format with no signal. Call this when
-/// generating a non-HTML format so that gap stays loud too, until slice 4
-/// closes it.
-pub fn classes_with_rules_unsupported_in_rdf(schema: &SchemaDefinition) -> Vec<String> {
-    schema
-        .classes
-        .iter()
-        .filter(|(_, class)| !class.rules.is_empty())
-        .map(|(name, _)| name.clone())
-        .collect()
+/// One class-level construct that's IR-modeled — so
+/// [`unmodeled_class_constructs`] never sees it — but that the target
+/// format's writer doesn't project.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnprojectedConstruct {
+    /// The class carrying the construct.
+    pub class: String,
+    /// The construct name (`"rules"` or `"unique_keys"` today).
+    pub construct: &'static str,
+}
+
+impl UnprojectedConstruct {
+    /// A user-facing warning line naming the format that was actually
+    /// requested — not a hardcoded one, so `--format rust` doesn't claim
+    /// an RDF-specific gap it has nothing to do with.
+    pub fn message(&self, format: &str) -> String {
+        format!(
+            "class `{}` declares `{}`, which panschema does not emit to the `{}` format; only the HTML docs render it",
+            self.class, self.construct, format
+        )
+    }
+}
+
+/// Report every class-level construct that's IR-modeled but that `format`
+/// doesn't project — a second, narrower class of silent drop than
+/// [`unmodeled_class_constructs`]: `rules` and `unique_keys` are IR-modeled
+/// (feature 17), so they never reach the `unmodeled` catch-all, but only
+/// the HTML writer projects them fully today. Empty for `format == "html"`
+/// (case-insensitive); call for every other target format.
+pub fn classes_with_unprojected_constructs(
+    schema: &SchemaDefinition,
+    format: &str,
+) -> Vec<UnprojectedConstruct> {
+    if format.eq_ignore_ascii_case("html") {
+        return Vec::new();
+    }
+    let mut found = Vec::new();
+    for (class_name, class) in &schema.classes {
+        if !class.rules.is_empty() {
+            found.push(UnprojectedConstruct {
+                class: class_name.clone(),
+                construct: "rules",
+            });
+        }
+        if !class.unique_keys.is_empty() {
+            found.push(UnprojectedConstruct {
+                class: class_name.clone(),
+                construct: "unique_keys",
+            });
+        }
+    }
+    found
 }
 
 /// A `unique_keys` slot that doesn't resolve to any slot on its class.
@@ -224,20 +268,61 @@ mod tests {
     }
 
     #[test]
-    fn classes_with_rules_unsupported_in_rdf_lists_classes_with_rules() {
+    fn classes_with_unprojected_constructs_covers_rules_and_unique_keys() {
         let schema = parse(
-            "name: s\nclasses:\n  Deployment:\n    rules:\n      - description: d\n  Bare:\n    description: no rules here\n",
+            "name: s\nclasses:\n  Deployment:\n    rules:\n      - description: d\n  Offering:\n    unique_keys:\n      k:\n        unique_key_slots: [x]\n  Bare:\n    description: neither\n",
         );
+        let mut found = classes_with_unprojected_constructs(&schema, "ttl");
+        found.sort_by(|a, b| (a.class.as_str(), a.construct).cmp(&(b.class.as_str(), b.construct)));
         assert_eq!(
-            classes_with_rules_unsupported_in_rdf(&schema),
-            vec!["Deployment".to_string()]
+            found,
+            vec![
+                UnprojectedConstruct {
+                    class: "Deployment".to_string(),
+                    construct: "rules",
+                },
+                UnprojectedConstruct {
+                    class: "Offering".to_string(),
+                    construct: "unique_keys",
+                },
+            ]
         );
     }
 
     #[test]
-    fn classes_with_rules_unsupported_in_rdf_empty_when_no_rules() {
+    fn classes_with_unprojected_constructs_empty_for_html() {
+        // HTML is the one writer that fully projects both constructs
+        // today — case-insensitively, matching the CLI's format matching.
+        let schema =
+            parse("name: s\nclasses:\n  Deployment:\n    rules:\n      - description: d\n");
+        assert!(classes_with_unprojected_constructs(&schema, "html").is_empty());
+        assert!(classes_with_unprojected_constructs(&schema, "HTML").is_empty());
+    }
+
+    #[test]
+    fn classes_with_unprojected_constructs_empty_when_neither_present() {
         let schema = parse("name: s\nclasses:\n  Bare:\n    description: x\n");
-        assert!(classes_with_rules_unsupported_in_rdf(&schema).is_empty());
+        assert!(classes_with_unprojected_constructs(&schema, "rust").is_empty());
+    }
+
+    #[test]
+    fn unprojected_construct_message_names_the_requested_format() {
+        // The slice-1 bug this generalization fixes: the old message
+        // hardcoded "RDF/OWL" even for `--format rust`. The format
+        // argument must flow through into the message verbatim.
+        let msg = UnprojectedConstruct {
+            class: "Deployment".to_string(),
+            construct: "rules",
+        }
+        .message("rust");
+        assert!(
+            msg.contains("rust") && msg.contains("Deployment") && msg.contains("rules"),
+            "message must name the requested format, class, and construct; got: {msg}"
+        );
+        assert!(
+            !msg.contains("RDF/OWL"),
+            "message must not hardcode a format the caller didn't request; got: {msg}"
+        );
     }
 
     // The resolver keys cycle-detection on `ClassDefinition.name`, which the

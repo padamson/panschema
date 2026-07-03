@@ -944,17 +944,20 @@ fn cli_generate_html_prints_graph_visualization_mode() {
     let _ = fs::remove_dir_all(&output_dir2);
 }
 
-/// `panschema generate --format ttl` for a schema with `rules` warns that
-/// they won't appear in the RDF output — `rules` is IR-modeled (so the
-/// unmodeled-construct guard stays silent), but no RDF writer projects it
-/// yet, and that gap must not be silent either. The same schema through
-/// `--format html` gets no such warning, since the HTML writer does
-/// render `rules`.
+/// `panschema generate --format ttl` (or `rust`, or any non-HTML format)
+/// for a schema with `rules` and `unique_keys` warns that neither will
+/// appear in that output — both are IR-modeled (so the unmodeled-
+/// construct guard stays silent), but only the HTML writer projects them
+/// fully, and that gap must not be silent either. The warning names the
+/// format actually requested — the bug this generalization fixes: the
+/// original slice-1 warning hardcoded "RDF/OWL" even when the requested
+/// format was `rust`, which has nothing to do with RDF. `--format html`
+/// gets no such warning, since the HTML writer does render both.
 #[test]
-fn cli_generate_rdf_warns_rules_not_emitted() {
+fn cli_generate_non_html_warns_unprojected_constructs() {
     let schema_yaml = r#"
-id: https://example.org/rules-rdf-gap
-name: rules_rdf_gap
+id: https://example.org/unprojected-gap
+name: unprojected_gap
 default_range: string
 classes:
   Deployment:
@@ -967,32 +970,55 @@ classes:
           slot_conditions:
             status:
               equals_string: actual
+  Offering:
+    attributes:
+      service_type:
+        range: string
+      offered_by:
+        range: string
+    unique_keys:
+      k:
+        unique_key_slots: [service_type, offered_by]
 "#;
-    let tmp = std::env::temp_dir().join("panschema_rules_rdf_gap_test");
+    let tmp = std::env::temp_dir().join("panschema_unprojected_gap_test");
     let _ = fs::remove_dir_all(&tmp);
     fs::create_dir_all(&tmp).unwrap();
     let schema_path = tmp.join("schema.yaml");
     fs::write(&schema_path, schema_yaml).unwrap();
 
-    let ttl_output = tmp.join("out.ttl");
-    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .args([
-            "generate",
-            "--input",
-            schema_path.to_str().unwrap(),
-            "--output",
-            ttl_output.to_str().unwrap(),
-            "--format",
-            "ttl",
-        ])
-        .output()
-        .expect("panschema");
-    assert!(output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("Deployment") && stderr.contains("rules"),
-        "ttl format should warn that Deployment's rules aren't emitted; got:\n{stderr}"
-    );
+    for format in ["ttl", "rust"] {
+        let out_path = tmp.join(format!("out_{format}"));
+        let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+            .args([
+                "generate",
+                "--input",
+                schema_path.to_str().unwrap(),
+                "--output",
+                out_path.to_str().unwrap(),
+                "--format",
+                format,
+            ])
+            .output()
+            .expect("panschema");
+        assert!(output.status.success(), "format {format} should succeed");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("Deployment") && stderr.contains("rules"),
+            "{format} should warn that Deployment's rules aren't emitted; got:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("Offering") && stderr.contains("unique_keys"),
+            "{format} should warn that Offering's unique_keys aren't emitted; got:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(&format!("`{format}`")),
+            "{format}'s warning must name the actually-requested format; got:\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("RDF/OWL"),
+            "{format}'s warning must not hardcode RDF/OWL; got:\n{stderr}"
+        );
+    }
 
     let html_output = tmp.join("html_out");
     let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
@@ -1010,8 +1036,8 @@ classes:
     assert!(output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        !stderr.contains("does not yet emit"),
-        "html format renders rules, so it must not warn about the RDF gap; got:\n{stderr}"
+        !stderr.contains("does not emit"),
+        "html format renders both rules and unique_keys, so it must not warn about the gap; got:\n{stderr}"
     );
 
     let _ = fs::remove_dir_all(&tmp);

@@ -152,6 +152,14 @@ impl FormatRegistry {
             .map(|w| w.as_ref())
     }
 
+    /// The format IDs of every registered writer, in registration order —
+    /// the definitive list of values `generate --format` accepts. Exists
+    /// so a check (e.g. the CLI's hand-written `--help` text) can be
+    /// verified against the registry instead of drifting from it.
+    pub fn writer_format_ids(&self) -> Vec<&str> {
+        self.writers.iter().map(|w| w.format_id()).collect()
+    }
+
     /// Get file extension from a path
     pub fn extension_from_path(path: &Path) -> Option<&str> {
         path.extension().and_then(|e| e.to_str())
@@ -384,5 +392,30 @@ mod tests {
 
         assert!(registry.writer_for_format("graph-json").is_some());
         assert!(registry.writer_for_format("GRAPH-JSON").is_some()); // case insensitive
+    }
+
+    #[test]
+    fn writer_format_ids_lists_every_registered_writer() {
+        // The definitive list `generate --help`'s hand-written format
+        // list is checked against, so a writer added to `with_defaults`
+        // with no matching help-text update is caught rather than
+        // silently drifting (this is how `rust` was found missing from
+        // both `--format` help strings).
+        let registry = FormatRegistry::with_defaults();
+        let ids = registry.writer_format_ids();
+        for expected in [
+            "html",
+            "ttl",
+            "jsonld",
+            "rdfxml",
+            "ntriples",
+            "graph-json",
+            "rust",
+        ] {
+            assert!(
+                ids.contains(&expected),
+                "expected `{expected}` among registered writer format ids; got: {ids:?}"
+            );
+        }
     }
 }

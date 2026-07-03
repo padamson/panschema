@@ -55,13 +55,11 @@ consumer is currently blocked on.
 - [x] New IR for `ClassRule` with `preconditions` / `postconditions` (each an anonymous class expression carrying `slot_conditions`), plus optional `title` / `description`; `ClassDefinition` gains `rules: Vec<ClassRule>`.
 - [x] The serde-derived reader parses the nested `slot_conditions` map — slot name → the constraint subset panschema already renders (`range` / `required` / cardinality / value bounds / `pattern`), plus `equals_string` / `equals_number` (LinkML's slot-condition equality checks — needed for a precondition like "`status` = `actual`"; not otherwise expressible by the renders-elsewhere subset) (`class_definition_deserializes_rules`).
 - [x] The class card renders each rule as its description plus a human-readable "when … then …" rendering of its pre/postconditions, e.g. "when `status` = `actual`, then `region` is required" (`class_card_shows_rules`).
-- [x] Generating a non-HTML (RDF) format for a schema with non-empty `rules` warns that they aren't emitted to RDF/OWL yet — `rules` is IR-modeled, so it no longer trips the feature-22 unmodeled-construct guard, but it also isn't RDF-projected until slice 4, and that gap must not be silent either (`cli_generate_rdf_warns_rules_not_emitted`, `classes_with_rules_unsupported_in_rdf_*`).
+- [x] Generating a non-HTML format for a schema with non-empty `rules` warns that it isn't emitted there yet — `rules` is IR-modeled, so it no longer trips the feature-22 unmodeled-construct guard, but it also isn't projected by any writer but HTML until slice 4, and that gap must not be silent either. Generalized in [feature 23](23-cross-writer-construct-coverage-diagnostics.md) to a shared, format-aware mechanism (`classes_with_unprojected_constructs`) covering both `rules` and `unique_keys` (`cli_generate_non_html_warns_unprojected_constructs`).
 
 **Notes:**
 - Model the `slot_condition` fields panschema already surfaces elsewhere, plus `equals_string` / `equals_number` (the minimum needed for the User Story's motivating example — a precondition like "`status` = `actual`"); other exotic expression members are out of scope until a consumer needs them.
-- The RDF-gap warning (last AC) is a stopgap, not a general mechanism — it is
-  specific to `rules`. It should be removed once slice 4 lands, since `rules`
-  would then be genuinely RDF-projected rather than merely warned-about.
+- The writer-projection warning (last AC) is a stopgap that [feature 23](23-cross-writer-construct-coverage-diagnostics.md) now owns and generalizes. It should stop reporting `rules` specifically once slice 4 lands, since `rules` would then be genuinely projected rather than merely warned-about.
 - No graph-writer change is needed for the graph hover to show rules: the
   class-node hover clones the rendered HTML card's markup ("one source of
   truth"), so the Rules section appears in the hover automatically. The graph
@@ -85,7 +83,7 @@ listing each key's slot tuple.
 
 **Notes:**
 - This is documentation plus a structural check; enforcement against instance data is out of scope (the consuming application's job).
-- Feature 07's `validate` surface (the AC's intended home for the structural check) isn't built yet, so the unresolved-key-slot check routes through the existing `generate`-time `eprintln!("warning: …")` path — the same stopgap the slice-1 RDF-gap warning uses. When feature 07 lands, it should call `unresolved_unique_key_slots` from the shared check path (and can gate it under `verify --strict`).
+- Feature 07's `validate` surface (the AC's intended home for the structural check) isn't built yet, so the unresolved-key-slot check routes through the existing `generate`-time `eprintln!("warning: …")` path — the same stopgap [feature 23](23-cross-writer-construct-coverage-diagnostics.md)'s writer-projection warning uses. When feature 07 lands, it should call `unresolved_unique_key_slots` from the shared check path (and can gate it under `verify --strict`).
 - Like `rules`, no graph-writer change is needed for the graph hover to show the Unique keys row: the class-node hover reuses the rendered HTML card. The graph draws no dedicated node/edge for `unique_keys`.
 
 ---
@@ -123,7 +121,7 @@ naturally with a `panschema validate --data` surface extending
 
 **Acceptance Criteria:**
 - [ ] (when undeferred) Emit a SHACL `sh:NodeShape` per class with property-shape constraints mirroring `unique_keys` and the renderable rule subset, with tests pinning the shape triples.
-- [ ] (when undeferred, for `rules` specifically) Remove slice 1's interim `classes_with_rules_unsupported_in_rdf` warning — once `rules` is genuinely RDF-projected, warning that it isn't would itself be a false signal.
+- [ ] (when undeferred, for `rules` specifically) Stop reporting `rules` from [feature 23](23-cross-writer-construct-coverage-diagnostics.md)'s `classes_with_unprojected_constructs` for RDF formats — once `rules` is genuinely RDF-projected, warning that it isn't would itself be a false signal. (`unique_keys` keeps warning; it has no RDF projection planned.)
 
 ---
 
