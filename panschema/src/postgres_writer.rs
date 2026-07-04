@@ -317,16 +317,12 @@ fn sql_type_for_slot_range(range: Option<&str>, schema: &SchemaDefinition) -> St
 /// Map a LinkML scalar range to its Postgres column type. Mirrors
 /// `rust_writer::type_for_range`'s alias set for the primitive ranges.
 ///
-/// The first arm is unreachable-but-documented: it maps to the exact
-/// same `"text"` the `_` fallback below produces, so no test can ever
-/// distinguish "matched explicitly" from "fell through to default" for
-/// these names (a mutation-testing run confirmed this — deleting the arm
-/// is a true equivalent mutant). It stays written out anyway, as a record
-/// of which names are deliberately text, not merely unrecognized.
+/// `string`/`str`/`uri`/`uriorcurie`/`curie`/`ncname`/`objectidentifier`/
+/// `nodeidentifier` all resolve to `"text"` — the same value the `_`
+/// fallback below produces for any other unrecognized name — so they're
+/// covered by the fallback rather than listed as their own match arm.
 fn sql_type_for_range(range: &str) -> &'static str {
     match range {
-        "string" | "str" | "uri" | "uriorcurie" | "curie" | "ncname" | "objectidentifier"
-        | "nodeidentifier" => "text",
         "integer" | "int" => "integer",
         "boolean" | "bool" => "boolean",
         "float" | "double" | "decimal" => "double precision",
