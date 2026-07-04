@@ -3,8 +3,8 @@ use std::path::Path;
 use std::process::Command;
 
 /// Write a `panschema-publish.toml` + main schema file into `pkg_dir`.
-/// Mirrors the v0.3 unified package shape (slice 1 retrofit): every
-/// path source is a directory containing a publish file + the main file.
+/// Mirrors the unified package shape: every path source is a directory
+/// containing a publish file + the main file.
 fn write_pkg(pkg_dir: &Path, name: &str, version: &str, main_filename: &str, schema_body: &str) {
     fs::create_dir_all(pkg_dir).expect("mkdir pkg");
     let publish = format!(
@@ -949,10 +949,10 @@ fn cli_generate_html_prints_graph_visualization_mode() {
 /// appear in that output — both are IR-modeled (so the unmodeled-
 /// construct guard stays silent), but only the HTML writer projects them
 /// fully, and that gap must not be silent either. The warning names the
-/// format actually requested — the bug this generalization fixes: the
-/// original slice-1 warning hardcoded "RDF/OWL" even when the requested
-/// format was `rust`, which has nothing to do with RDF. `--format html`
-/// gets no such warning, since the HTML writer does render both.
+/// format actually requested — an earlier version of this warning
+/// hardcoded "RDF/OWL" even when the requested format was `rust`, which
+/// has nothing to do with RDF. `--format html` gets no such warning,
+/// since the HTML writer does render both.
 #[test]
 fn cli_generate_non_html_warns_unprojected_constructs() {
     let schema_yaml = r#"

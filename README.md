@@ -25,6 +25,7 @@ Think of it as **pandoc for data modeling** — a single tool that speaks all sc
 - **GPU visualization** (optional `gpu` feature): 3D force-directed graph for schema exploration
 - **mdbook integration**: `mdbook-panschema install` adds a maintained toolbar link from an mdbook book to its schema docs
 - **Loud about gaps**: warns on LinkML constructs it parses but doesn't model (so nothing is silently dropped); `generate --strict` fails the build instead
+- **Postgres DDL**: `generate --format postgres` emits `CREATE TABLE`/`CREATE TYPE` DDL from the same LinkML schema your Rust structs come from — no hand-written SQL to keep in sync
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
@@ -66,7 +67,10 @@ Open http://localhost:3000 to view the documentation.
 | Format | Status |
 |--------|--------|
 | HTML Documentation | Full support |
-| OWL/Turtle | Full support |
+| OWL/Turtle, JSON-LD, RDF/XML, N-Triples | Full support |
+| Rust types | Full support |
+| Graph JSON | Full support |
+| Postgres DDL | Partial support (concrete classes, scalars, enums, single-valued class references) |
 | LinkML YAML | Planned |
 | Markdown | Planned |
 | JSON Schema | Planned |
@@ -149,6 +153,26 @@ mdbook-panschema install          # or: mdbook-panschema install <book-dir>
 ```
 
 This writes `schema-link.js` / `schema-link.css` into the book and wires them into `book.toml`'s `additional-js` / `additional-css`, idempotently — re-run after upgrading to refresh the asset. With `[book_link]` absent or `enabled = false`, `install` does nothing.
+
+## Generating a Postgres schema
+
+If your application is backed by Postgres, `generate --format postgres` emits the `CREATE TABLE` / `CREATE TYPE` DDL for the same LinkML schema your Rust structs come from, so the two never drift apart by hand:
+
+```bash
+panschema generate --input schema.yaml --output schema.sql --format postgres
+```
+
+Coverage today is concrete classes with scalar/enum/single-valued-class-reference slots; a class using `is_a`, a multivalued slot, or `any_of` is skipped with a warning naming why, rather than emitting broken DDL. See [docs/features/24-postgres-ddl-writer.md](docs/features/24-postgres-ddl-writer.md) for the full design and what's still to come.
+
+panschema doesn't do migrations — `schema.sql` describes the *current* desired schema, not a diff. Pair it with a dedicated schema-diff tool that introspects your live database and applies the delta:
+
+```bash
+# Declarative, idempotent apply (no migration-file history)
+psqldef mydb < schema.sql
+
+# Or: generate a discrete, reviewable migration file (closer to alembic)
+atlas migrate diff --to file://schema.sql --dev-url "docker://postgres/16"
+```
 
 ## Why panschema?
 

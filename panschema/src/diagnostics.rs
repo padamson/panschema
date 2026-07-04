@@ -115,10 +115,10 @@ impl UnprojectedConstruct {
 
 /// Report every class-level construct that's IR-modeled but that `format`
 /// doesn't project — a second, narrower class of silent drop than
-/// [`unmodeled_class_constructs`]: `rules` and `unique_keys` are IR-modeled
-/// (feature 17), so they never reach the `unmodeled` catch-all, but only
-/// the HTML writer projects them fully today. Empty for `format == "html"`
-/// (case-insensitive); call for every other target format.
+/// [`unmodeled_class_constructs`]: `rules` and `unique_keys` are IR-modeled,
+/// so they never reach the `unmodeled` catch-all, but only the HTML writer
+/// projects them fully today. Empty for `format == "html"` (case-
+/// insensitive); call for every other target format.
 pub fn classes_with_unprojected_constructs(
     schema: &SchemaDefinition,
     format: &str,
@@ -169,7 +169,7 @@ impl UnresolvedKeySlot {
 /// actually have, checked against its *effective* slot set (inherited +
 /// mixin + inline + `slot_usage`), in deterministic order.
 ///
-/// A structural check with no home yet: feature 07's `validate` surface
+/// A structural check with no home yet: a dedicated `validate` surface
 /// isn't built, so this routes through the same `generate`-time
 /// `eprintln!` warning path as the other diagnostics until it lands.
 pub fn unresolved_unique_key_slots(schema: &SchemaDefinition) -> Vec<UnresolvedKeySlot> {
@@ -307,9 +307,9 @@ mod tests {
 
     #[test]
     fn unprojected_construct_message_names_the_requested_format() {
-        // The slice-1 bug this generalization fixes: the old message
-        // hardcoded "RDF/OWL" even for `--format rust`. The format
-        // argument must flow through into the message verbatim.
+        // An earlier version of this message hardcoded "RDF/OWL" even for
+        // `--format rust`. The format argument must flow through into the
+        // message verbatim.
         let msg = UnprojectedConstruct {
             class: "Deployment".to_string(),
             construct: "rules",

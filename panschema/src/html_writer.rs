@@ -2458,11 +2458,10 @@ mod tests {
     #[test]
     fn render_description_renders_markdown_inline_links() {
         // `[text](url)` is the canonical markdown affordance for
-        // embedding a clickable link in a description. Before this
-        // slice, descriptions escaped all markup so the only way to
-        // reference another schema entity was the in-band `[[Name]]`
-        // marker. Markdown links cover external URLs that don't fit
-        // the xref mechanism (book chapters, papers, glossaries).
+        // embedding a clickable link in a description. Markdown links
+        // cover external URLs that don't fit the xref mechanism (book
+        // chapters, papers, glossaries); the in-band `[[Name]]` marker
+        // remains how a description references another schema entity.
         use crate::linkml::SchemaDefinition;
         let schema = SchemaDefinition::new("s");
         let html = render_description("see the [book](../../) for context", &schema);

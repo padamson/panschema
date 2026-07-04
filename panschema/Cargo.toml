@@ -93,6 +93,12 @@ insta = "1"
 # downstream consumers cover the semantic class of errors.
 syn = { version = "2", features = ["full"] }
 
+# Syntactic validation of PostgresWriter output: a Rust binding to
+# `libpg_query`, Postgres's own C parser extracted as a standalone
+# library. Real-Postgres-oracle syntax checking with no running database;
+# a real-Postgres apply/constraint-enforcement tier is not yet built.
+pg_query = "6"
+
 # E2E browser testing. The npm-pinned Playwright version in
 # `.github/workflows/{test,security}.yml` and `.pre-commit-config.yaml`
 # must match `playwright_rs::PLAYWRIGHT_VERSION` exactly — wire-protocol

@@ -57,7 +57,7 @@ struct Cli {
     #[arg(short, long, global = true, default_value = "output")]
     output: PathBuf,
 
-    /// Output format: html, ttl, jsonld, rdfxml, ntriples, graph-json, rust
+    /// Output format: html, ttl, jsonld, rdfxml, ntriples, graph-json, rust, postgres
     #[arg(short, long, global = true, default_value = "html")]
     format: String,
 }
@@ -76,7 +76,7 @@ enum Commands {
         #[arg(short, long, default_value = "output")]
         output: PathBuf,
 
-        /// Output format: html, ttl, jsonld, rdfxml, ntriples, graph-json, rust
+        /// Output format: html, ttl, jsonld, rdfxml, ntriples, graph-json, rust, postgres
         #[arg(short, long, default_value = "html")]
         format: String,
 
@@ -338,6 +338,20 @@ fn generate(
     // safe to call unconditionally.)
     for u in panschema::diagnostics::classes_with_unprojected_constructs(&schema, format) {
         eprintln!("warning: {}", u.message(format));
+    }
+
+    // The Postgres writer covers concrete classes with scalar/enum/
+    // single-valued-class-reference slots only; a class using `is_a`, a
+    // multivalued slot, or `any_of` — or referencing one of those — is
+    // skipped rather than emitted as broken DDL. Warn so the omission is
+    // visible instead of a schema silently producing a thinner script.
+    if format.eq_ignore_ascii_case("postgres") {
+        for skipped in panschema::postgres_writer::skipped_classes(&schema) {
+            eprintln!(
+                "warning: class `{}` has no postgres table: {}",
+                skipped.class, skipped.reason
+            );
+        }
     }
 
     // For HTML format, use HtmlWriter with custom options

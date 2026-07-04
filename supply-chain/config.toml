@@ -64,6 +64,10 @@ criteria = "safe-to-deploy"
 version = "1.2.62"
 criteria = "safe-to-deploy"
 
+[[exemptions.clang-sys]]
+version = "1.8.1"
+criteria = "safe-to-run"
+
 [[exemptions.console]]
 version = "0.16.3"
 criteria = "safe-to-run"
@@ -164,6 +168,10 @@ criteria = "safe-to-deploy"
 version = "0.4.3"
 criteria = "safe-to-deploy"
 
+[[exemptions.fs_extra]]
+version = "1.3.0"
+criteria = "safe-to-run"
+
 [[exemptions.fsevent-sys]]
 version = "4.1.0"
 criteria = "safe-to-deploy"
@@ -239,6 +247,10 @@ criteria = "safe-to-deploy"
 [[exemptions.hexf-parse]]
 version = "0.2.1"
 criteria = "safe-to-deploy"
+
+[[exemptions.home]]
+version = "0.5.12"
+criteria = "safe-to-run"
 
 [[exemptions.http-range-header]]
 version = "0.4.2"
@@ -417,6 +429,10 @@ version = "0.1.16"
 criteria = "safe-to-deploy"
 
 [[exemptions.linux-raw-sys]]
+version = "0.4.15"
+criteria = "safe-to-run"
+
+[[exemptions.linux-raw-sys]]
 version = "0.12.1"
 criteria = "safe-to-deploy"
 
@@ -448,6 +464,10 @@ criteria = "safe-to-deploy"
 version = "2.0.5"
 criteria = "safe-to-deploy"
 
+[[exemptions.minimal-lexical]]
+version = "0.2.1"
+criteria = "safe-to-run"
+
 [[exemptions.mio]]
 version = "1.2.0"
 criteria = "safe-to-deploy"
@@ -459,6 +479,10 @@ criteria = "safe-to-deploy"
 [[exemptions.mownstr]]
 version = "0.3.1"
 criteria = "safe-to-deploy"
+
+[[exemptions.multimap]]
+version = "0.10.0"
+criteria = "safe-to-run"
 
 [[exemptions.mutants]]
 version = "0.0.4"
@@ -549,8 +573,16 @@ version = "0.2.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.petgraph]]
+version = "0.7.1"
+criteria = "safe-to-run"
+
+[[exemptions.petgraph]]
 version = "0.8.3"
 criteria = "safe-to-deploy"
+
+[[exemptions.pg_query]]
+version = "6.1.1"
+criteria = "safe-to-run"
 
 [[exemptions.pin-project-lite]]
 version = "0.2.17"
@@ -595,6 +627,14 @@ criteria = "safe-to-deploy"
 [[exemptions.profiling]]
 version = "1.0.18"
 criteria = "safe-to-deploy"
+
+[[exemptions.prost-build]]
+version = "0.13.5"
+criteria = "safe-to-run"
+
+[[exemptions.prost-types]]
+version = "0.13.1"
+criteria = "safe-to-run"
 
 [[exemptions.pulldown-cmark]]
 version = "0.13.4"
@@ -655,6 +695,10 @@ criteria = "safe-to-deploy"
 [[exemptions.rustc-hash]]
 version = "2.1.2"
 criteria = "safe-to-deploy"
+
+[[exemptions.rustix]]
+version = "0.38.44"
+criteria = "safe-to-run"
 
 [[exemptions.rustix]]
 version = "1.1.4"
