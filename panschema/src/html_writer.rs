@@ -3221,6 +3221,59 @@ mod tests {
         let _ = fs::remove_dir_all(temp_dir);
     }
 
+    /// Parse `html` with `html5ever` — the same spec-conformant HTML5
+    /// engine Servo/Firefox use — and return the list of parse errors it
+    /// records. A real HTML5-grammar oracle: unlike a browser's forgiving
+    /// silent repair, or this module's own `.contains(...)` assertions,
+    /// this reports every spec violation the tree builder recovers from.
+    fn html5_parse_errors(html: &str) -> Vec<String> {
+        use html5ever::tendril::TendrilSink;
+        use html5ever::{ParseOpts, parse_document};
+        use markup5ever_rcdom::RcDom;
+
+        let dom = parse_document(RcDom::default(), ParseOpts::default()).one(html);
+        dom.errors.borrow().iter().map(|e| e.to_string()).collect()
+    }
+
+    #[test]
+    fn html5_parse_errors_catches_malformed_markup() {
+        // The oracle must have teeth: a document with a mis-nested tag is
+        // a spec violation html5ever recovers from but records. If this
+        // returned empty, the conformance check below would be vacuous.
+        let errors = html5_parse_errors(
+            "<!DOCTYPE html><html><head></head><body><p><div></p></div></body></html>",
+        );
+        assert!(
+            !errors.is_empty(),
+            "html5ever should record a parse error for the mis-nested <p>/<div>"
+        );
+    }
+
+    #[test]
+    fn rendered_html_is_spec_valid_html5() {
+        // The generated documentation page parses cleanly under a real
+        // HTML5-conformance parser — no mis-nesting, unclosed tags, or
+        // stray markup that a forgiving browser would silently repair
+        // (and that this module's own string `.contains(...)` checks
+        // can't see).
+        let reader = OwlReader::new();
+        let schema = reader.read(&reference_ontology_path()).unwrap();
+        let writer = HtmlWriter::new();
+        let temp_dir = std::env::temp_dir().join("panschema_html5_validity_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        writer.write(&schema, &temp_dir).expect("Write failed");
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("Failed to read");
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        let errors = html5_parse_errors(&html);
+        assert!(
+            errors.is_empty(),
+            "generated HTML has {} HTML5 conformance error(s):\n{}",
+            errors.len(),
+            errors.join("\n")
+        );
+    }
+
     #[test]
     fn html_writer_emits_responsive_card_grid_and_aspect_ratio_graph() {
         let reader = OwlReader::new();

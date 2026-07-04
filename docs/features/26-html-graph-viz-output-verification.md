@@ -60,7 +60,7 @@ justifies them.
 
 ### Slice 1: HTML5 spec validation
 
-**Status:** Not Started
+**Status:** Completed
 
 **Priority:** Should Have — cheap and closes the biggest real gap
 (Chromium's leniency masking spec violations).
@@ -69,8 +69,9 @@ justifies them.
 grammar, not just "a browser tolerated it."
 
 **Acceptance Criteria:**
-- [ ] Generated HTML is parsed by a real HTML5-conformance parser (e.g. `html5ever`, the pure-Rust engine Servo/Firefox use) and any parse errors are surfaced as test failures.
-- [ ] Runs as a fast, every-test-run check — no browser needed for this tier.
+- [x] Generated HTML is parsed by a real HTML5-conformance parser (`html5ever` + `markup5ever_rcdom`, the pure-Rust engine Servo/Firefox use) and any parse errors are surfaced as test failures (`rendered_html_is_spec_valid_html5`).
+- [x] Runs as a fast, every-test-run check — no browser needed for this tier.
+- [x] The oracle itself is proven to have teeth — a test feeds it deliberately mis-nested markup and asserts it actually reports an error (`html5_parse_errors_catches_malformed_markup`), so the conformance check can't be vacuously green.
 
 **Notes:**
 - Prefer a Rust-native parser over shelling out to a JVM/Python
@@ -123,7 +124,7 @@ something other than panschema's own HTML/viz ever consumes it.
 
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
-| Slice 1: HTML5 spec validation | Should Have | None | Not Started |
+| Slice 1: HTML5 spec validation | Should Have | None | Completed |
 | Slice 2: Promote visual check to CI | Could Have | None | Not Started |
 | Slice 3: `graph-json` contract test | Could Have | A second consumer | Not Started |
 
@@ -132,7 +133,7 @@ something other than panschema's own HTML/viz ever consumes it.
 ## Definition of Done
 
 - [x] Real-browser E2E tier exists and runs in CI (`playwright-rs`)
-- [ ] Slice 1 acceptance criteria met
+- [x] Slice 1 acceptance criteria met
 - [ ] Slices 2–3 only if their trigger condition is met
-- [ ] All tests passing: `cargo nextest run --features dev`
-- [ ] CHANGELOG.md updated (slice 1 only — infra-only slices 2–3 may not warrant an entry, per the CHANGELOG consolidation convention)
+- [x] All tests passing: `cargo nextest run --features dev`
+- [x] CHANGELOG.md updated (slice 1 only — infra-only slices 2–3 may not warrant an entry, per the CHANGELOG consolidation convention)

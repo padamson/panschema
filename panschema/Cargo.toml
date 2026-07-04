@@ -105,4 +105,11 @@ pg_query = "6"
 # mismatches silently break the harness.
 playwright-rs = "0.14"
 
+# Spec-conformance validation of HtmlWriter output: the same HTML5 parser
+# Servo/Firefox use. A real browser silently repairs malformed markup, so
+# "renders correctly in Chromium" (the existing Playwright E2E tier)
+# doesn't prove spec validity — this catches what that tier can't.
+html5ever = "0.39.0"
+markup5ever_rcdom = "0.39.0"
+
 # Profile settings are in workspace root Cargo.toml
