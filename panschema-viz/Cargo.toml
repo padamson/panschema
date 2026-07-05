@@ -59,7 +59,7 @@ mutants = "0.0.4"
 rust-sugiyama = "0.4"
 
 # WebGPU (optional, only with webgpu feature)
-wgpu = { version = "29", features = ["webgpu"], optional = true }
+wgpu = { version = "30", features = ["webgpu"], optional = true }
 bytemuck = { version = "1", features = ["derive"], optional = true }
 
 # Profile settings are in workspace root Cargo.toml

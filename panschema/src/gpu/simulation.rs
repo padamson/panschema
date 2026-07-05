@@ -282,6 +282,7 @@ impl GpuSimulation {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: None,
                 force_fallback_adapter: false,
+                apply_limit_buckets: false,
             })
             .await
             .expect("Failed to find suitable GPU adapter");
@@ -423,7 +424,9 @@ impl GpuSimulation {
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
         rx.recv().unwrap().expect("Failed to map buffer");
 
-        let data = buffer_slice.get_mapped_range();
+        let data = buffer_slice
+            .get_mapped_range()
+            .expect("Failed to get mapped buffer range");
         let nodes: Vec<GpuNode> = bytemuck::cast_slice(&data).to_vec();
         drop(data);
         self.staging_buffer.unmap();

@@ -69,7 +69,7 @@ tempfile = "3.24.0"
 mutants = "0.0.4"
 
 # GPU force simulation (optional)
-wgpu = { version = "29", optional = true }
+wgpu = { version = "30", optional = true }
 bytemuck = { version = "1", features = ["derive"], optional = true }
 pollster = { version = "0.4", optional = true }
 
