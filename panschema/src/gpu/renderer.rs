@@ -149,7 +149,7 @@ impl GpuRenderer {
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 buffers: &[
                     // Icosphere vertices (per-vertex)
-                    wgpu::VertexBufferLayout {
+                    Some(wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<MeshVertex>() as u64,
                         step_mode: wgpu::VertexStepMode::Vertex,
                         attributes: &[
@@ -166,9 +166,9 @@ impl GpuRenderer {
                                 shader_location: 1,
                             },
                         ],
-                    },
+                    }),
                     // Node instances (per-instance)
-                    wgpu::VertexBufferLayout {
+                    Some(wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<NodeInstance>() as u64,
                         step_mode: wgpu::VertexStepMode::Instance,
                         attributes: &[
@@ -197,7 +197,7 @@ impl GpuRenderer {
                                 shader_location: 5,
                             },
                         ],
-                    },
+                    }),
                 ],
             },
             fragment: Some(wgpu::FragmentState {
@@ -245,7 +245,7 @@ impl GpuRenderer {
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 buffers: &[
                     // Edge instances (per-instance)
-                    wgpu::VertexBufferLayout {
+                    Some(wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<EdgeInstance>() as u64,
                         step_mode: wgpu::VertexStepMode::Instance,
                         attributes: &[
@@ -274,7 +274,7 @@ impl GpuRenderer {
                                 shader_location: 3,
                             },
                         ],
-                    },
+                    }),
                 ],
             },
             fragment: Some(wgpu::FragmentState {
@@ -585,7 +585,9 @@ impl GpuRenderer {
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
         rx.recv().unwrap().unwrap();
 
-        let data = buffer_slice.get_mapped_range();
+        let data = buffer_slice
+            .get_mapped_range()
+            .expect("Failed to get mapped buffer range");
 
         // Remove padding from each row
         let mut pixels = Vec::with_capacity((self.config.width * self.config.height * 4) as usize);
@@ -632,6 +634,7 @@ pub async fn create_render_device() -> (wgpu::Device, wgpu::Queue) {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter: false,
+            apply_limit_buckets: false,
         })
         .await
         .expect("Failed to find GPU adapter");
