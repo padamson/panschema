@@ -55,7 +55,7 @@ resolvable type triple") or OWL semantics.
 
 ### Slice 1: Independent load-and-query oracle via `oxigraph`
 
-**Status:** Not Started
+**Status:** Completed
 
 **Priority:** Should Have
 
@@ -64,8 +64,9 @@ store and queried, catching graph-level mistakes the shared internal
 core wouldn't self-report.
 
 **Acceptance Criteria:**
-- [ ] Generated TTL loads cleanly into an `oxigraph` in-memory store with no parse errors (`oxigraph` is pure Rust — no JVM, consistent with panschema's own "no JVM" positioning, and test-only, never shipped).
-- [ ] A handful of basic SPARQL sanity queries pass against representative fixtures — e.g. every class IRI has an `rdf:type owl:Class` triple, every declared `subClassOf`/`inverseOf`/mapping predicate resolves to a well-formed triple, no unexpected dangling blank nodes.
+- [x] Generated TTL loads cleanly into an `oxigraph` in-memory store with no parse errors (`oxigraph` is pure Rust — no JVM, consistent with panschema's own "no JVM" positioning, and test-only, never shipped) (`generated_ttl_loads_into_an_independent_triple_store`).
+- [x] A handful of basic SPARQL sanity queries pass against representative fixtures — e.g. every class IRI has an `rdf:type owl:Class` triple, every declared `subClassOf`/`inverseOf`/mapping predicate resolves to a well-formed triple, no unexpected dangling blank nodes (`every_class_has_an_owl_class_type_triple_in_the_independent_store`).
+- [x] The oracle itself is proven to have teeth — a test feeds it syntactically invalid Turtle and asserts the load actually fails (`oxigraph_rejects_malformed_turtle`), so the check can't be vacuously green.
 
 **Notes:**
 - Fast tier — in-memory, no Docker, runs on every test invocation.
@@ -118,7 +119,7 @@ the canonical W3C test suite, rather than panschema's own logic.
 
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
-| Slice 1: `oxigraph` load-and-query oracle | Should Have | None | Not Started |
+| Slice 1: `oxigraph` load-and-query oracle | Should Have | None | Completed |
 | Slice 2: OWL-DL/SHACL consistency checking | Won't Have (until triggered) | A real axiom-emitting construct | 📋 Deferred |
 | Slice 3: W3C test-suite conformance | Could Have | None | Not Started |
 
@@ -127,7 +128,7 @@ the canonical W3C test suite, rather than panschema's own logic.
 ## Definition of Done
 
 - [x] Serialization-correctness-by-construction (sophia) and cross-format/round-trip internal checks exist and run in CI
-- [ ] Slice 1 acceptance criteria met
+- [x] Slice 1 acceptance criteria met
 - [ ] Slice 2 only when its trigger condition (a real axiom-emitting construct) is met
-- [ ] All tests passing: `cargo nextest run`
-- [ ] CHANGELOG.md updated (slice 1)
+- [x] All tests passing: `cargo nextest run --features dev`
+- [x] CHANGELOG.md updated (slice 1)

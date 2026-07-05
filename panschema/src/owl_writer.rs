@@ -646,4 +646,103 @@ mod tests {
         let owns2 = schema2.slots.get("owns").unwrap();
         assert_eq!(owns.inverse, owns2.inverse);
     }
+
+    // ========== Independent RDF oracle (oxigraph) ==========
+    //
+    // `sophia` (the serializer) guarantees syntactic well-formedness by
+    // construction, but nothing so far checks the generated graph against
+    // an *independent* RDF engine. These tests load the rendered TTL into
+    // a separate, real triple store (oxigraph) and query it — catching
+    // graph-level mistakes sophia's own serializer wouldn't self-report.
+
+    fn render_to_store(schema: &SchemaDefinition) -> oxigraph::store::Store {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let output_path = temp_dir.path().join("output.ttl");
+        OwlWriter::new()
+            .write(schema, &output_path)
+            .expect("Failed to write");
+        let ttl = fs::read_to_string(&output_path).expect("Failed to read");
+
+        let store = oxigraph::store::Store::new().expect("Failed to create oxigraph store");
+        store
+            .load_from_slice(oxigraph::io::RdfFormat::Turtle, &ttl)
+            .unwrap_or_else(|e| panic!("oxigraph rejected generated TTL: {e}\n\nTTL:\n{ttl}"));
+        store
+    }
+
+    fn ask(store: &oxigraph::store::Store, query: &str) -> bool {
+        use oxigraph::sparql::{QueryResults, SparqlEvaluator};
+        match SparqlEvaluator::new()
+            .parse_query(query)
+            .unwrap_or_else(|e| panic!("invalid SPARQL query: {e}\n\n{query}"))
+            .on_store(store)
+            .execute()
+            .expect("query execution failed")
+        {
+            QueryResults::Boolean(b) => b,
+            QueryResults::Solutions(_) => panic!("expected an ASK query result, got Solutions"),
+            QueryResults::Graph(_) => panic!("expected an ASK query result, got Graph"),
+        }
+    }
+
+    #[test]
+    fn oxigraph_rejects_malformed_turtle() {
+        // The oracle must have teeth: if oxigraph accepted garbage, the
+        // "loads cleanly" checks below would be vacuous.
+        let store = oxigraph::store::Store::new().unwrap();
+        let result =
+            store.load_from_slice(oxigraph::io::RdfFormat::Turtle, "this is not turtle {{{");
+        assert!(
+            result.is_err(),
+            "oxigraph should reject syntactically invalid Turtle"
+        );
+    }
+
+    #[test]
+    fn generated_ttl_loads_into_an_independent_triple_store() {
+        let mut schema = create_test_schema();
+        let mut animal = ClassDefinition::new("Animal");
+        animal.class_uri = Some("http://example.org/test#Animal".to_string());
+        schema.classes.insert("Animal".to_string(), animal);
+
+        // `render_to_store` itself panics on a load failure — reaching
+        // this line is the assertion.
+        render_to_store(&schema);
+    }
+
+    #[test]
+    fn every_class_has_an_owl_class_type_triple_in_the_independent_store() {
+        let mut schema = create_test_schema();
+        let mut animal = ClassDefinition::new("Animal");
+        animal.class_uri = Some("http://example.org/test#Animal".to_string());
+        schema.classes.insert("Animal".to_string(), animal);
+        let mut dog = ClassDefinition::new("Dog");
+        dog.class_uri = Some("http://example.org/test#Dog".to_string());
+        dog.is_a = Some("Animal".to_string());
+        schema.classes.insert("Dog".to_string(), dog);
+
+        let store = render_to_store(&schema);
+
+        for uri in [
+            "http://example.org/test#Animal",
+            "http://example.org/test#Dog",
+        ] {
+            assert!(
+                ask(
+                    &store,
+                    &format!("ASK {{ <{uri}> a <http://www.w3.org/2002/07/owl#Class> }}")
+                ),
+                "expected {uri} to have an owl:Class type triple, independently queryable via oxigraph"
+            );
+        }
+
+        // And the inheritance edge is queryable too.
+        assert!(
+            ask(
+                &store,
+                "ASK { <http://example.org/test#Dog> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/test#Animal> }"
+            ),
+            "expected Dog rdfs:subClassOf Animal to be independently queryable via oxigraph"
+        );
+    }
 }

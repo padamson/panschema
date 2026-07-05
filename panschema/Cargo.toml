@@ -112,4 +112,22 @@ playwright-rs = "0.14"
 html5ever = "0.39.0"
 markup5ever_rcdom = "0.39.0"
 
+# Independent RDF oracle for the RDF/OWL writer family: loads generated
+# TTL into a real, separate triple store and runs SPARQL sanity queries,
+# catching graph-level mistakes sophia's serializer wouldn't (it
+# guarantees syntax, not graph sanity). `default-features = false` drops
+# the `rocksdb` feature (a C++ build we don't need) — only the in-memory
+# `Store` is used here.
+#
+# `features = ["rdf-12"]` is required, not optional: `sophia_xml` (used
+# by the RDF/XML writer) depends on `oxrdf` with its own `rdf-12` feature
+# on, and Cargo unifies features across the whole build — so `oxrdf`'s
+# `Term::Triple` variant is compiled in project-wide regardless of what
+# oxigraph itself requests. Oxigraph's own sub-crates (built assuming
+# `rdf-12` is off) don't exhaustively match that variant, so the build
+# fails unless oxigraph also opts into `rdf-12`, pulling in the sub-crate
+# versions that do handle it. Don't drop this feature without confirming
+# `sophia_xml`'s `oxrdf` requirement no longer forces it on.
+oxigraph = { version = "0.5.9", default-features = false, features = ["rdf-12"] }
+
 # Profile settings are in workspace root Cargo.toml
