@@ -187,9 +187,30 @@ feature 17 slice 2) are enforced by the database itself, not just
 documented.
 
 **Acceptance Criteria:**
-- [ ] `unique_keys` emits a `UNIQUE` table constraint per key, over its slot tuple's columns.
-- [ ] `pattern` emits a `CHECK (col ~ 'pattern')` on the column.
-- [ ] `minimum_value` / `maximum_value` emit a `CHECK` bounding the column.
+- [ ] `unique_keys` emits a table-level `CONSTRAINT <table>_<key_name>_key UNIQUE (col1, col2, ...)` per key, resolved through the same effective-slot set as [feature 17 slice 2](17-class-validation-constructs.md) (inherited/mixed-in slots included) — not just `class.attributes`.
+- [ ] A `unique_keys` entry naming a slot the class doesn't have (already flagged by `diagnostics::unresolved_unique_key_slots`, which every writer's CLI path already warns on) is dropped from the emitted DDL rather than emitting a `UNIQUE` referencing a nonexistent column. The writer resolves independently of the CLI warning — it must not emit broken SQL even if a caller ignored the warning.
+- [ ] `pattern` emits an inline `CHECK (col ~ 'pattern')` on the column, single-quote-escaping the pattern the same way enum permissible values already are (`render()`'s existing `.replace('\'', "''")`).
+- [ ] `minimum_value` / `maximum_value` emit a single inline `CHECK` on the column: both bounds combine into one `CHECK (col >= min AND col <= max)`; either alone emits just that side.
+- [ ] `diagnostics::classes_with_unprojected_constructs` no longer reports `unique_keys` as unprojected for `format == "postgres"` once this slice lands (it currently flags `unique_keys` for every non-HTML format) — leaving this unfixed would print a stale "won't appear in postgres output" warning for a construct postgres now emits. `rules` stays flagged for postgres until slice 3.
+- [ ] [linkml-coverage.md](../linkml-coverage.md) rows for `unique_keys`, `pattern`, and `minimum_value`/`maximum_value` gain a Postgres ✅ instead of "not yet built".
+
+**Notes:**
+- `unique_keys` is a table-level constraint (potentially multi-column) so
+  it's appended as its own line alongside the column definitions, not
+  inlined on one column's line, unlike `pattern`/value-bounds (both
+  strictly single-column).
+- No ordering/deferral concern like the slice 1 FK constraints: every
+  column a `unique_keys`/`pattern`/value-bounds constraint references
+  lives in the same table being declared, so all three go inline in the
+  same `CREATE TABLE` statement — no `ALTER TABLE ... ADD CONSTRAINT`
+  needed here.
+- Every new construct gets `pg_query` syntax coverage (the established
+  per-construct pattern from slice 1/[feature 28](28-postgres-ddl-writer-output-verification.md)
+  slice 1) as it's added; the real-apply oracle
+  ([feature 28](28-postgres-ddl-writer-output-verification.md) slice 2)
+  is not extended here — proving these constraints actually *enforce*
+  against real data is feature 28 slice 3's job, which depends on this
+  slice existing first.
 
 ---
 
