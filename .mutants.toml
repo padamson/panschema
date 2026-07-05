@@ -32,6 +32,14 @@ examine_globs = [
 ]
 exclude_globs = [
     "panschema/src/components.rs",
+    # `gpu/**` is gated behind the optional `gpu` feature, which no CI
+    # job builds or tests (it needs a real or software GPU adapter that
+    # the runners don't provision). Left in scope, its mutants build
+    # with the feature off — `mod gpu;` isn't even compiled in — so
+    # every mutant here trivially "passes" regardless of the module's
+    # own (locally-run) test coverage. Same class of problem as the
+    # browser-only wasm modules below.
+    "panschema/src/gpu/**",
     # Thin clap entry point: parses args and delegates to the tested
     # `mdbook_panschema::run`. Under `--lib` no test runs `main`, so a
     # `main -> Ok(())` mutant can't be killed; the real logic lives in
