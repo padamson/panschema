@@ -41,11 +41,11 @@ been the oracle since day one), the Postgres writer has had none.
 
 Slice 1 (`pg_query` syntax validation) is in place, built alongside
 [feature 24](24-postgres-ddl-writer.md) slice 1 rather than after it.
-Slices 2–4 (real-Postgres apply, constraint-enforcement round-trip,
-dogfood regression) are not yet built — until slice 2 lands, this
-writer's V&V is verification-only (syntax), with no validation
-(behavioral) tier yet. See [feature 25](25-rust-writer-output-verification.md)
-for what the full two-tier bar looks like once both exist.
+Slice 2 (real-Postgres apply) is now also in place, so this writer has
+both a verification (syntax) and a validation (behavioral) tier —
+matching the bar [feature 25](25-rust-writer-output-verification.md)
+describes for the Rust writer. Slices 3–4 (constraint-enforcement
+round-trip, dogfood regression) are not yet built.
 
 ---
 
@@ -87,7 +87,7 @@ produce.
 
 ### Slice 2: Real-Postgres apply test via `testcontainers` — thorough, gated
 
-**Status:** Not Started
+**Status:** Completed
 
 **Priority:** Should Have
 
@@ -97,9 +97,9 @@ real, running Postgres — not just parse — catching semantic errors
 a type mismatch between a FK column and its target's primary key).
 
 **Acceptance Criteria:**
-- [ ] Add `testcontainers` (with its Postgres module) as a dev-dependency.
-- [ ] A test spins up a disposable Postgres container, applies the full generated DDL for a representative fixture schema (the one from slice 1's whole-script test), and asserts it applies with no errors.
-- [ ] Gated like the existing thorough tiers in this codebase (mutation testing's full-vs-`--in-diff` split, the dogfood full-compile-only-for-latest-release policy): fast/cheap by default, this slice's test is `#[ignore]`d locally (Docker startup cost) but runs in CI.
+- [x] Add `testcontainers` (with its Postgres module) as a dev-dependency.
+- [x] A test spins up a disposable Postgres container, applies the full generated DDL for a representative fixture schema (the one from slice 1's whole-script test), and asserts it applies with no errors (`postgres_apply_applies_generated_ddl_to_a_real_database`).
+- [x] Gated like the existing thorough tiers in this codebase (mutation testing's full-vs-`--in-diff` split, the dogfood full-compile-only-for-latest-release policy): fast/cheap by default, this slice's test is `#[ignore]`d locally (Docker startup cost) but runs in CI (a dedicated `postgres-apply` job in `test.yml`).
 
 **Notes:**
 - This is the tier that would have caught the FK-naming bug directly:
@@ -110,6 +110,11 @@ a type mismatch between a FK column and its target's primary key).
   fix; the naming mismatch is a confusion/correctness-adjacent issue
   more than a hard SQL error) — worth confirming empirically once this
   slice exists rather than asserting from the doc alone.
+- The container image is pinned to `postgres:16-alpine`, not the test
+  module's own default (`postgres:11-alpine`): every synthesized primary
+  key uses `gen_random_uuid()`, which is only built into Postgres 13+.
+  Testing against the module's older default would fail on this
+  writer's own generated DDL, independent of any real bug.
 
 ---
 
@@ -162,7 +167,7 @@ regression coverage the same way they already get Rust-writer coverage
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | Slice 1: `pg_query` syntax validation | Must Have | Feature 24 slice 1 | Completed |
-| Slice 2: Real-Postgres apply via `testcontainers` | Should Have | Slice 1 | Not Started |
+| Slice 2: Real-Postgres apply via `testcontainers` | Should Have | Slice 1 | Completed |
 | Slice 3: Constraint-enforcement round-trip | Could Have | Slice 2, feature 24 slices 2-3 | Not Started |
 | Slice 4: Dogfood regression coverage | Won't Have (until triggered) | A real schema using covered constructs | 📋 Deferred |
 
@@ -171,8 +176,8 @@ regression coverage the same way they already get Rust-writer coverage
 ## Definition of Done
 
 - [x] Slice 1 acceptance criteria met (Must Have)
-- [ ] Slice 2 acceptance criteria met, or explicitly deferred with a reason
+- [x] Slice 2 acceptance criteria met, or explicitly deferred with a reason
 - [x] All tests passing: `cargo nextest run`
 - [x] Code formatted + clippy clean: `cargo fmt --check` + `cargo clippy --all-targets --all-features -- -D warnings`
-- [ ] CHANGELOG.md updated
-- [ ] CI workflow updated if slice 2's gated test needs a new job (Docker availability, timing)
+- [x] CHANGELOG.md updated
+- [x] CI workflow updated if slice 2's gated test needs a new job (Docker availability, timing)

@@ -823,14 +823,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn whole_script_with_enum_fk_and_both_pk_kinds_parses_as_one_unit() {
-        // A representative multi-class fixture combining every construct
-        // this writer supports together — an enum, a synthesized uuid PK,
-        // an identifier-derived PK, and an FK between them — parsed as one
-        // whole script (not per-statement), so a statement-ordering
-        // mistake (e.g. a CREATE TYPE after the table that needs it)
-        // would fail this even if each statement parsed individually.
+    /// A representative multi-class fixture combining every construct this
+    /// writer supports together — an enum, a synthesized uuid PK, an
+    /// identifier-derived PK, and an FK between them.
+    fn whole_script_fixture_schema() -> SchemaDefinition {
         use crate::linkml::{EnumDefinition, PermissibleValue};
         let mut schema = SchemaDefinition::new("nimbus");
 
@@ -867,6 +863,17 @@ mod tests {
             .insert("on_provider".to_string(), on_provider);
         schema.classes.insert("Deployment".to_string(), deployment);
 
+        schema
+    }
+
+    #[test]
+    fn whole_script_with_enum_fk_and_both_pk_kinds_parses_as_one_unit() {
+        // Parsed as one whole script (not per-statement), so a
+        // statement-ordering mistake (e.g. a CREATE TYPE after the table
+        // that needs it) would fail this even if each statement parsed
+        // individually.
+        let schema = whole_script_fixture_schema();
+
         let out = PostgresWriter::new().render(&schema);
         assert_valid_postgres_sql(&out);
         // Sanity that this fixture actually exercises what it claims to
@@ -876,5 +883,39 @@ mod tests {
         assert!(out.contains("code text PRIMARY KEY"));
         assert!(out.contains("id uuid PRIMARY KEY DEFAULT gen_random_uuid()"));
         assert!(out.contains("ALTER TABLE deployment ADD CONSTRAINT"));
+    }
+
+    #[test]
+    #[ignore = "needs Docker; run with `cargo nextest run -p panschema --features dev --run-ignored=only -E 'test(postgres_apply)'`"]
+    fn postgres_apply_applies_generated_ddl_to_a_real_database() {
+        // pg_query (above) proves the DDL is syntactically valid Postgres;
+        // it can't catch a semantic error like an FK column whose type
+        // doesn't match its target's real primary key. Applying the DDL
+        // against a real, disposable Postgres container is the oracle
+        // that would.
+        use testcontainers_modules::postgres::Postgres;
+        use testcontainers_modules::testcontainers::ImageExt;
+        use testcontainers_modules::testcontainers::runners::SyncRunner;
+
+        let ddl = PostgresWriter::new().render(&whole_script_fixture_schema());
+
+        // Pinned rather than the module's own default (Postgres 11):
+        // `gen_random_uuid()` — used for every synthesized primary key —
+        // is only built into Postgres 13+, so testing against an older
+        // default would fail on this writer's own generated DDL.
+        let node = Postgres::default()
+            .with_tag("16-alpine")
+            .start()
+            .expect("failed to start Postgres container");
+        let port = node
+            .get_host_port_ipv4(5432)
+            .expect("failed to get container's mapped port");
+        let connection_string = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+        let mut client = postgres::Client::connect(&connection_string, postgres::NoTls)
+            .expect("failed to connect to Postgres container");
+
+        client.batch_execute(&ddl).unwrap_or_else(|e| {
+            panic!("generated DDL failed to apply to a real Postgres database: {e}\n\nDDL:\n{ddl}")
+        });
     }
 }

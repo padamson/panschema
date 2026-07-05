@@ -130,4 +130,12 @@ markup5ever_rcdom = "0.39.0"
 # `sophia_xml`'s `oxrdf` requirement no longer forces it on.
 oxigraph = { version = "0.5.9", default-features = false, features = ["rdf-12"] }
 
+# Real-Postgres apply oracle for PostgresWriter: spins up a disposable
+# Postgres container and applies generated DDL against it, catching
+# semantic errors `pg_query` syntax checking can't (e.g. an FK
+# referencing a column that doesn't actually exist). Gated `#[ignore]`
+# locally (Docker startup cost); runs in CI via a dedicated job.
+testcontainers-modules = { version = "0.15", features = ["postgres", "blocking"] }
+postgres = "0.19"
+
 # Profile settings are in workspace root Cargo.toml

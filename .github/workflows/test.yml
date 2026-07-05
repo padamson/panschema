@@ -178,3 +178,43 @@ jobs:
       run: cargo nextest run -p panschema --features dev
       env:
         BROWSER: all
+
+  postgres-apply:
+    name: Postgres Apply (real database)
+    runs-on: ubuntu-latest
+    # Docker-gated real-Postgres apply test for PostgresWriter output
+    # (`#[ignore]`d elsewhere: local runs skip container startup cost).
+    # ubuntu-latest ships a running Docker daemon, so this is its own
+    # small job rather than folded into the OS test matrix above, which
+    # also runs on macOS/Windows runners without one.
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-postgres-apply-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-postgres-apply-
+
+      # html_writer.rs include_bytes!/include_str! these at compile time;
+      # empty placeholders satisfy type-checking without a wasm-pack run.
+      - name: Stub WASM artifacts
+        run: |
+          mkdir -p panschema-viz/pkg
+          touch panschema-viz/pkg/panschema_viz.js panschema-viz/pkg/panschema_viz_bg.wasm
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Run Postgres apply test against a real database
+        run: cargo nextest run -p panschema --features dev --run-ignored=only -E 'test(postgres_apply)'
