@@ -190,7 +190,7 @@ Read our [WHY.md](WHY.md) to understand the full vision.
 
 ```bash
 # Install Playwright browsers
-npx playwright@1.59.1 install
+npx playwright@1.60.0 install
 ```
 
 ### Building & Testing

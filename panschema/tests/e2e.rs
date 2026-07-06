@@ -5,7 +5,7 @@
 //! ## Setup
 //! Install Playwright browsers matching the version bundled with playwright-rs:
 //! ```bash
-//! npx playwright@1.59.1 install
+//! npx playwright@1.60.0 install
 //! ```
 //!
 //! The required version is exposed as [`playwright_rs::PLAYWRIGHT_VERSION`].
