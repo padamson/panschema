@@ -119,33 +119,22 @@ fn render(schema: &SchemaDefinition) -> String {
                 ""
             }
         )];
-        // Slot name → the column name it actually resolves to, so a
-        // table-level `unique_keys` constraint (below) can name the real
-        // columns — an FK slot's column is `{slot}_{target_pk}`, not the
-        // bare slot name, and the identifier slot maps to `pk_col`.
-        let mut slot_columns: BTreeMap<&str, String> = BTreeMap::new();
-        if let Some(pk) = &pk_slot {
-            slot_columns.insert(pk.as_str(), pk_col.clone());
-        }
+        // Slot name → the column name it actually resolves to, so the
+        // table-level constraints below (`unique_keys`, `rules`) can name
+        // the real columns. The single source of column naming, shared with
+        // `skipped_rules` so its skip decision can't drift from what `render`
+        // actually emits.
+        let slot_columns = slot_column_map(class, schema);
         for (slot_name, slot) in &effective {
             if pk_slot.as_deref() == Some(slot_name.as_str()) {
                 continue;
             }
+            let col = &slot_columns[slot_name];
             let not_null = if slot.required { " NOT NULL" } else { "" };
             let range = slot.range.as_deref();
             if let Some(target_class) = range.and_then(|r| schema.classes.get_key_value(r)) {
                 let (target_name, target_def) = target_class;
                 let (target_pk_col, target_pk_type) = class_primary_key(target_def, schema);
-                // Named after the target's actual primary key column
-                // (matching LinkML's own relmodel_transformer convention)
-                // rather than a hardcoded `_id` suffix, which wouldn't
-                // even refer to a real column when the target's key is
-                // named something else (e.g. an `identifier` slot `code`).
-                let col = format!(
-                    "{}_{}",
-                    crate::rust_writer::snake_case(slot_name),
-                    target_pk_col
-                );
                 lines.push(format!("    {col} {target_pk_type}{not_null}"));
                 fk_constraints.push(FkConstraint {
                     from_table: table.clone(),
@@ -157,13 +146,10 @@ fn render(schema: &SchemaDefinition) -> String {
                         crate::rust_writer::snake_case(slot_name)
                     ),
                 });
-                slot_columns.insert(slot_name.as_str(), col);
             } else {
-                let col = crate::rust_writer::snake_case(slot_name);
                 let sql_type = sql_type_for_slot_range(range, schema);
-                let checks = column_checks(&col, slot);
+                let checks = column_checks(col, slot);
                 lines.push(format!("    {col} {sql_type}{not_null}{checks}"));
-                slot_columns.insert(slot_name.as_str(), col);
             }
         }
         // Table-level UNIQUE constraints from `unique_keys`. A key that
@@ -187,6 +173,23 @@ fn render(schema: &SchemaDefinition) -> String {
                 lines.push(format!(
                     "    CONSTRAINT {table}_{}_key UNIQUE ({col_list})",
                     crate::rust_writer::snake_case(key_name)
+                ));
+            }
+        }
+        // Conditional `CHECK` constraints from `rules`: `NOT (pre) OR (post)`,
+        // the standard SQL encoding of "when precondition holds, postcondition
+        // must too". A rule that can't be expressed as a column CHECK is
+        // dropped here (and separately surfaced by `skipped_rules` on the CLI
+        // path) rather than emitted broken.
+        for (i, rule) in class.rules.iter().enumerate() {
+            if let (Some(pre), Some(post)) = (&rule.preconditions, &rule.postconditions)
+                && let (Some(p_sql), Some(q_sql)) = (
+                    rule_conditions_to_sql(pre, &slot_columns),
+                    rule_conditions_to_sql(post, &slot_columns),
+                )
+            {
+                lines.push(format!(
+                    "    CONSTRAINT {table}_rule{i}_check CHECK (NOT ({p_sql}) OR ({q_sql}))"
                 ));
             }
         }
@@ -232,6 +235,95 @@ fn column_checks(col: &str, slot: &crate::linkml::SlotDefinition) -> String {
     checks
 }
 
+/// Every effective slot of `class` mapped to the column name it becomes:
+/// the identifier slot to the primary-key column, a single-valued
+/// class-range slot to its `{slot}_{target_pk}` foreign-key column, and any
+/// other scalar slot to its bare `snake_case` name. The one place column
+/// naming is decided, so `render` (emission) and `skipped_rules`
+/// (diagnostic) can't disagree about which columns exist.
+fn slot_column_map(class: &ClassDefinition, schema: &SchemaDefinition) -> BTreeMap<String, String> {
+    let effective = crate::linkml_resolve::resolve_effective_slots(class, schema);
+    let (pk_col, _) = class_primary_key(class, schema);
+    let pk_slot = effective
+        .iter()
+        .find(|(_, slot)| slot.identifier)
+        .map(|(name, _)| name.clone());
+
+    let mut map = BTreeMap::new();
+    if let Some(pk) = &pk_slot {
+        map.insert(pk.clone(), pk_col.clone());
+    }
+    for (slot_name, slot) in &effective {
+        if pk_slot.as_deref() == Some(slot_name.as_str()) {
+            continue;
+        }
+        let col = match slot.range.as_deref().and_then(|r| schema.classes.get(r)) {
+            Some(target_def) => {
+                let (target_pk_col, _) = class_primary_key(target_def, schema);
+                format!(
+                    "{}_{}",
+                    crate::rust_writer::snake_case(slot_name),
+                    target_pk_col
+                )
+            }
+            None => crate::rust_writer::snake_case(slot_name),
+        };
+        map.insert(slot_name.clone(), col);
+    }
+    map
+}
+
+/// Map a rule's `slot_conditions` to a SQL boolean expression — the `AND`
+/// of every condition's predicates — or `None` if the conditions can't be
+/// expressed as a column `CHECK`. Unexpressible when: the map is empty; a
+/// referenced slot isn't a column of this class (`slot_columns` miss); a
+/// condition carries a `range` or cardinality field (no single-column SQL
+/// form); or a condition has no expressible field at all. The field →
+/// predicate mapping mirrors the HTML "when … then …" sentence
+/// (`html_writer.rs`'s `describe_slot_condition`).
+fn rule_conditions_to_sql(
+    conds: &crate::linkml::RuleConditions,
+    slot_columns: &BTreeMap<String, String>,
+) -> Option<String> {
+    if conds.slot_conditions.is_empty() {
+        return None;
+    }
+    let mut preds = Vec::new();
+    for (slot, cond) in &conds.slot_conditions {
+        let col = slot_columns.get(slot.as_str())?;
+        // Fields with no single-column CHECK form make the whole rule
+        // unexpressible (the HTML card can still render them).
+        if cond.range.is_some()
+            || cond.minimum_cardinality.is_some()
+            || cond.maximum_cardinality.is_some()
+        {
+            return None;
+        }
+        if let Some(v) = &cond.equals_string {
+            preds.push(format!("{col} = '{}'", v.replace('\'', "''")));
+        }
+        if let Some(n) = cond.equals_number {
+            preds.push(format!("{col} = {n}"));
+        }
+        if cond.required {
+            preds.push(format!("{col} IS NOT NULL"));
+        }
+        if let Some(p) = &cond.pattern {
+            preds.push(format!("{col} ~ '{}'", p.replace('\'', "''")));
+        }
+        if let Some(m) = cond.minimum_value {
+            preds.push(format!("{col} >= {m}"));
+        }
+        if let Some(m) = cond.maximum_value {
+            preds.push(format!("{col} <= {m}"));
+        }
+    }
+    if preds.is_empty() {
+        return None;
+    }
+    Some(preds.join(" AND "))
+}
+
 /// A deferred foreign-key constraint, added after every table is declared.
 struct FkConstraint {
     from_table: String,
@@ -259,6 +351,72 @@ pub fn skipped_classes(schema: &SchemaDefinition) -> Vec<SkippedClass> {
         .into_iter()
         .map(|(class, reason)| SkippedClass { class, reason })
         .collect()
+}
+
+/// A `rules` entry [`render`] can't project to a `CHECK` constraint, and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkippedRule {
+    pub class: String,
+    /// The rule's title, or `rule #<n>` (its position) when it has none.
+    pub rule: String,
+    pub reason: String,
+}
+
+/// Rules [`render`] can't emit as a conditional `CHECK`, with a diagnostic
+/// naming each. A rule is unexpressible when it has only one of
+/// pre/postconditions, or a condition side that can't become a column
+/// predicate (empty, a `range`/cardinality field, or a slot the class
+/// doesn't have). Shares [`slot_column_map`] and [`rule_conditions_to_sql`]
+/// with `render`, so this reports exactly the rules `render` drops — no
+/// drift between the warning and the emitted DDL. Classes that get no table
+/// at all (abstract, or skipped per [`compute_skips`]) contribute no rule
+/// diagnostics — their omission is already covered by [`skipped_classes`].
+pub fn skipped_rules(schema: &SchemaDefinition) -> Vec<SkippedRule> {
+    let skips = compute_skips(schema);
+    let mut out = Vec::new();
+    for (class_name, class) in &schema.classes {
+        if class.r#abstract || skips.contains_key(class_name) || class.rules.is_empty() {
+            continue;
+        }
+        let slot_columns = slot_column_map(class, schema);
+        for (i, rule) in class.rules.iter().enumerate() {
+            if let Some(reason) = rule_skip_reason(rule, &slot_columns) {
+                out.push(SkippedRule {
+                    class: class_name.clone(),
+                    rule: rule.title.clone().unwrap_or_else(|| format!("rule #{i}")),
+                    reason,
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Why [`render`] would skip `rule`, or `None` if it emits a `CHECK`. Calls
+/// the same [`rule_conditions_to_sql`] `render` uses, so the decision is
+/// identical.
+fn rule_skip_reason(
+    rule: &crate::linkml::ClassRule,
+    slot_columns: &BTreeMap<String, String>,
+) -> Option<String> {
+    match (&rule.preconditions, &rule.postconditions) {
+        (Some(pre), Some(post)) => {
+            if rule_conditions_to_sql(pre, slot_columns).is_none() {
+                Some(
+                    "its preconditions can't be expressed as a Postgres CHECK (empty, a `range`/cardinality condition, or a slot the class doesn't have)"
+                        .to_string(),
+                )
+            } else if rule_conditions_to_sql(post, slot_columns).is_none() {
+                Some(
+                    "its postconditions can't be expressed as a Postgres CHECK (empty, a `range`/cardinality condition, or a slot the class doesn't have)"
+                        .to_string(),
+                )
+            } else {
+                None
+            }
+        }
+        _ => Some("a Postgres CHECK needs both preconditions and postconditions".to_string()),
+    }
 }
 
 /// The shared computation behind [`skipped_classes`] and [`render`]'s own
@@ -1072,6 +1230,305 @@ mod tests {
         assert!(
             !out.contains(">="),
             "no minimum_value set, so no `>=` clause; got:\n{out}"
+        );
+    }
+
+    /// A class with a conditional rule: when `status` = `actual`, `region`
+    /// is required. Both slots are plain strings so the emitted predicates
+    /// are text comparisons (no enum setup needed).
+    fn class_with_conditional_rule() -> ClassDefinition {
+        use crate::linkml::{ClassRule, RuleConditions, SlotCondition};
+        let mut class = ClassDefinition::new("Deployment");
+        let mut status = SlotDefinition::new("status");
+        status.range = Some("string".to_string());
+        class.attributes.insert("status".to_string(), status);
+        let mut region = SlotDefinition::new("region");
+        region.range = Some("string".to_string());
+        class.attributes.insert("region".to_string(), region);
+
+        let pre = SlotCondition {
+            equals_string: Some("actual".to_string()),
+            ..Default::default()
+        };
+        let post = SlotCondition {
+            required: true,
+            ..Default::default()
+        };
+        class.rules.push(ClassRule {
+            title: Some("actual-needs-region".to_string()),
+            description: None,
+            preconditions: Some(RuleConditions {
+                slot_conditions: [("status".to_string(), pre)].into_iter().collect(),
+            }),
+            postconditions: Some(RuleConditions {
+                slot_conditions: [("region".to_string(), post)].into_iter().collect(),
+            }),
+        });
+        class
+    }
+
+    #[test]
+    fn a_rule_emits_a_conditional_check_constraint() {
+        let schema = schema_with_class(class_with_conditional_rule());
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            out.contains(
+                "CONSTRAINT deployment_rule0_check CHECK (NOT (status = 'actual') OR (region IS NOT NULL))"
+            ),
+            "expected the conditional rule encoded as NOT(pre) OR (post); got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn an_expressible_rule_is_not_reported_as_skipped() {
+        let schema = schema_with_class(class_with_conditional_rule());
+        assert!(
+            skipped_rules(&schema).is_empty(),
+            "a fully expressible rule must not be reported as skipped; got: {:?}",
+            skipped_rules(&schema)
+        );
+    }
+
+    #[test]
+    fn a_one_sided_rule_is_skipped_with_a_diagnostic() {
+        use crate::linkml::{ClassRule, RuleConditions, SlotCondition};
+        let mut class = ClassDefinition::new("Deployment");
+        let mut status = SlotDefinition::new("status");
+        status.range = Some("string".to_string());
+        class.attributes.insert("status".to_string(), status);
+        let pre = SlotCondition {
+            equals_string: Some("actual".to_string()),
+            ..Default::default()
+        };
+        class.rules.push(ClassRule {
+            title: Some("dangling".to_string()),
+            description: None,
+            preconditions: Some(RuleConditions {
+                slot_conditions: [("status".to_string(), pre)].into_iter().collect(),
+            }),
+            postconditions: None,
+        });
+        let schema = schema_with_class(class);
+
+        // Not emitted...
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            !out.contains("CHECK"),
+            "a one-sided rule emits no CHECK; got:\n{out}"
+        );
+        // ...and reported, named by its title.
+        let skipped = skipped_rules(&schema);
+        assert_eq!(skipped.len(), 1, "got: {skipped:?}");
+        assert_eq!(skipped[0].class, "Deployment");
+        assert_eq!(skipped[0].rule, "dangling");
+    }
+
+    #[test]
+    fn a_rule_with_a_range_condition_is_skipped_and_labeled_by_index() {
+        // `range` has no single-column CHECK form, so the rule is
+        // unexpressible; with no title it's labeled by position.
+        use crate::linkml::{ClassRule, RuleConditions, SlotCondition};
+        let mut class = ClassDefinition::new("Deployment");
+        let mut status = SlotDefinition::new("status");
+        status.range = Some("string".to_string());
+        class.attributes.insert("status".to_string(), status);
+        let mut region = SlotDefinition::new("region");
+        region.range = Some("string".to_string());
+        class.attributes.insert("region".to_string(), region);
+        let pre = SlotCondition {
+            equals_string: Some("actual".to_string()),
+            ..Default::default()
+        };
+        let post = SlotCondition {
+            range: Some("SomeType".to_string()), // not CHECK-able
+            ..Default::default()
+        };
+        class.rules.push(ClassRule {
+            title: None,
+            description: None,
+            preconditions: Some(RuleConditions {
+                slot_conditions: [("status".to_string(), pre)].into_iter().collect(),
+            }),
+            postconditions: Some(RuleConditions {
+                slot_conditions: [("region".to_string(), post)].into_iter().collect(),
+            }),
+        });
+        let schema = schema_with_class(class);
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            !out.contains("CHECK (NOT"),
+            "unexpressible rule emits no CHECK; got:\n{out}"
+        );
+        let skipped = skipped_rules(&schema);
+        assert_eq!(skipped.len(), 1, "got: {skipped:?}");
+        assert_eq!(skipped[0].rule, "rule #0", "untitled rule labeled by index");
+    }
+
+    #[test]
+    fn a_rule_naming_a_missing_slot_is_skipped() {
+        use crate::linkml::{ClassRule, RuleConditions, SlotCondition};
+        let mut class = ClassDefinition::new("Deployment");
+        let mut status = SlotDefinition::new("status");
+        status.range = Some("string".to_string());
+        class.attributes.insert("status".to_string(), status);
+        let pre = SlotCondition {
+            equals_string: Some("actual".to_string()),
+            ..Default::default()
+        };
+        let post = SlotCondition {
+            required: true,
+            ..Default::default()
+        };
+        class.rules.push(ClassRule {
+            title: Some("ghost-ref".to_string()),
+            description: None,
+            preconditions: Some(RuleConditions {
+                slot_conditions: [("status".to_string(), pre)].into_iter().collect(),
+            }),
+            postconditions: Some(RuleConditions {
+                slot_conditions: [("ghost".to_string(), post)].into_iter().collect(),
+            }),
+        });
+        let schema = schema_with_class(class);
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            !out.contains("ghost"),
+            "no column for the missing slot; got:\n{out}"
+        );
+        assert_eq!(skipped_rules(&schema).len(), 1);
+    }
+
+    /// A rule whose postcondition pairs an expressible field (`required`)
+    /// with `cond`'s unexpressible field. Used to pin each disjunct of the
+    /// "no single-column CHECK form" guard: the expressible field alone
+    /// would emit, so the rule is skipped *only* because the guard treats
+    /// the unexpressible field as disqualifying (OR, not AND).
+    fn schema_with_rule_postcondition(cond: crate::linkml::SlotCondition) -> SchemaDefinition {
+        use crate::linkml::{ClassRule, RuleConditions, SlotCondition};
+        let mut class = ClassDefinition::new("Deployment");
+        let mut status = SlotDefinition::new("status");
+        status.range = Some("string".to_string());
+        class.attributes.insert("status".to_string(), status);
+        let mut region = SlotDefinition::new("region");
+        region.range = Some("string".to_string());
+        class.attributes.insert("region".to_string(), region);
+        let pre = SlotCondition {
+            equals_string: Some("actual".to_string()),
+            ..Default::default()
+        };
+        class.rules.push(ClassRule {
+            title: Some("r".to_string()),
+            description: None,
+            preconditions: Some(RuleConditions {
+                slot_conditions: [("status".to_string(), pre)].into_iter().collect(),
+            }),
+            postconditions: Some(RuleConditions {
+                slot_conditions: [("region".to_string(), cond)].into_iter().collect(),
+            }),
+        });
+        schema_with_class(class)
+    }
+
+    #[test]
+    fn a_rule_condition_mixing_required_with_min_cardinality_is_skipped() {
+        // `minimum_cardinality` has no single-column CHECK form, so even
+        // paired with an expressible `required` the whole rule is skipped —
+        // the guard is a disjunction (any unexpressible field disqualifies).
+        let schema = schema_with_rule_postcondition(crate::linkml::SlotCondition {
+            required: true,
+            minimum_cardinality: Some(1),
+            ..Default::default()
+        });
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            !out.contains("CHECK (NOT"),
+            "rule must be skipped; got:\n{out}"
+        );
+        assert_eq!(skipped_rules(&schema).len(), 1, "and reported as skipped");
+    }
+
+    #[test]
+    fn a_rule_condition_mixing_required_with_max_cardinality_is_skipped() {
+        let schema = schema_with_rule_postcondition(crate::linkml::SlotCondition {
+            required: true,
+            maximum_cardinality: Some(1),
+            ..Default::default()
+        });
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            !out.contains("CHECK (NOT"),
+            "rule must be skipped; got:\n{out}"
+        );
+        assert_eq!(skipped_rules(&schema).len(), 1, "and reported as skipped");
+    }
+
+    #[test]
+    fn an_abstract_class_contributes_no_rule_diagnostics() {
+        // An abstract class gets no table at all, so its rules are moot —
+        // `skipped_rules` must not report them (that omission is covered by
+        // the class getting no table, not a per-rule warning).
+        use crate::linkml::{ClassRule, RuleConditions, SlotCondition};
+        let mut class = ClassDefinition::new("AbstractThing");
+        class.r#abstract = true;
+        let mut status = SlotDefinition::new("status");
+        status.range = Some("string".to_string());
+        class.attributes.insert("status".to_string(), status);
+        let pre = SlotCondition {
+            equals_string: Some("actual".to_string()),
+            ..Default::default()
+        };
+        class.rules.push(ClassRule {
+            title: Some("moot".to_string()),
+            description: None,
+            preconditions: Some(RuleConditions {
+                slot_conditions: [("status".to_string(), pre)].into_iter().collect(),
+            }),
+            postconditions: None, // one-sided → would be "skipped" if it had a table
+        });
+        let schema = schema_with_class(class);
+        assert!(
+            skipped_rules(&schema).is_empty(),
+            "an abstract class's rules must not be reported; got: {:?}",
+            skipped_rules(&schema)
+        );
+    }
+
+    #[test]
+    fn a_table_less_class_contributes_no_rule_diagnostics() {
+        // A class skipped for `is_a` (no table) likewise contributes no
+        // per-rule diagnostics — its whole omission is `skipped_classes`.
+        use crate::linkml::{ClassRule, RuleConditions, SlotCondition};
+        let mut class = ClassDefinition::new("Sub");
+        class.is_a = Some("Base".to_string());
+        let mut status = SlotDefinition::new("status");
+        status.range = Some("string".to_string());
+        class.attributes.insert("status".to_string(), status);
+        let pre = SlotCondition {
+            equals_string: Some("actual".to_string()),
+            ..Default::default()
+        };
+        class.rules.push(ClassRule {
+            title: Some("moot".to_string()),
+            description: None,
+            preconditions: Some(RuleConditions {
+                slot_conditions: [("status".to_string(), pre)].into_iter().collect(),
+            }),
+            postconditions: None,
+        });
+        let schema = schema_with_class(class);
+        assert!(
+            skipped_rules(&schema).is_empty(),
+            "a table-less (is_a-skipped) class's rules must not be reported; got: {:?}",
+            skipped_rules(&schema)
         );
     }
 

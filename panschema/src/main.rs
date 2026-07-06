@@ -352,6 +352,15 @@ fn generate(
                 skipped.class, skipped.reason
             );
         }
+        // A rule on a table-bearing class that can't become a CHECK is
+        // dropped from the DDL; warn so it isn't a silent gap (a class
+        // with no table at all is already covered above).
+        for skipped in panschema::postgres_writer::skipped_rules(&schema) {
+            eprintln!(
+                "warning: rule `{}` on class `{}` is not emitted as a postgres CHECK: {}",
+                skipped.rule, skipped.class, skipped.reason
+            );
+        }
     }
 
     // For HTML format, use HtmlWriter with custom options

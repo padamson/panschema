@@ -123,14 +123,14 @@ pub fn classes_with_unprojected_constructs(
     schema: &SchemaDefinition,
     format: &str,
 ) -> Vec<UnprojectedConstruct> {
-    if format.eq_ignore_ascii_case("html") {
+    // HTML renders both constructs; Postgres projects both (`unique_keys`
+    // as UNIQUE, `rules` as conditional CHECK) — so neither format has an
+    // unprojected-construct gap here. Partial cases (an unresolvable
+    // unique-key slot, a rule that can't become a CHECK) are surfaced by
+    // their own per-construct diagnostics, not this blanket one.
+    if format.eq_ignore_ascii_case("html") || format.eq_ignore_ascii_case("postgres") {
         return Vec::new();
     }
-    // The Postgres writer projects `unique_keys` as UNIQUE constraints, so
-    // it's no longer an unprojected construct there — but it doesn't yet
-    // project `rules` (that's a later slice), so `rules` still warns for
-    // every non-HTML format including postgres.
-    let unique_keys_projected = format.eq_ignore_ascii_case("postgres");
     let mut found = Vec::new();
     for (class_name, class) in &schema.classes {
         if !class.rules.is_empty() {
@@ -139,7 +139,7 @@ pub fn classes_with_unprojected_constructs(
                 construct: "rules",
             });
         }
-        if !class.unique_keys.is_empty() && !unique_keys_projected {
+        if !class.unique_keys.is_empty() {
             found.push(UnprojectedConstruct {
                 class: class_name.clone(),
                 construct: "unique_keys",
@@ -295,21 +295,19 @@ mod tests {
     }
 
     #[test]
-    fn postgres_projects_unique_keys_so_only_rules_is_flagged() {
-        // The Postgres writer emits `unique_keys` as UNIQUE constraints, so
-        // it must not warn that they won't appear — but `rules` isn't
-        // projected to postgres yet, so that one still warns.
+    fn postgres_projects_both_rules_and_unique_keys_so_neither_is_flagged() {
+        // The Postgres writer emits both `unique_keys` (UNIQUE) and `rules`
+        // (conditional CHECK), so it must not warn that either won't appear.
+        // The partial cases — an unresolvable unique-key slot, a rule that
+        // can't become a CHECK — are surfaced by their own per-construct
+        // diagnostics, not this blanket one.
         let schema = parse(
             "name: s\nclasses:\n  Deployment:\n    rules:\n      - description: d\n  Offering:\n    unique_keys:\n      k:\n        unique_key_slots: [x]\n",
         );
-        let found = classes_with_unprojected_constructs(&schema, "postgres");
-        assert_eq!(
-            found,
-            vec![UnprojectedConstruct {
-                class: "Deployment".to_string(),
-                construct: "rules",
-            }],
-            "postgres must flag rules but not unique_keys; got: {found:?}"
+        assert!(
+            classes_with_unprojected_constructs(&schema, "postgres").is_empty(),
+            "postgres projects both constructs; got: {:?}",
+            classes_with_unprojected_constructs(&schema, "postgres")
         );
     }
 

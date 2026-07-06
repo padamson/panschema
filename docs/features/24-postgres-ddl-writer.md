@@ -216,15 +216,27 @@ documented.
 
 ### Slice 3: `rules` as `CHECK` constraints
 
-**Status:** Not Started
+**Status:** Completed
 
 **Priority:** Should Have — closes the gap feature 17 slice 4 (RDF)
 couldn't: a `rules` conditional requirement becomes an actually-enforced
 database constraint, not just a rendered sentence.
 
 **Acceptance Criteria:**
-- [ ] Each rule with both `preconditions` and `postconditions` slot conditions built from `equals_string` / `equals_number` / `required` / `pattern` / `minimum_value` / `maximum_value` emits a `CHECK` constraint combining them (`precondition-not-true OR postcondition-true`, the standard SQL encoding of a conditional constraint).
-- [ ] A `rules` entry whose conditions aren't expressible this way (a bare `range` condition, or a precondition/postcondition-only rule) is skipped with a diagnostic naming the rule, not silently dropped.
+- [x] Each rule with both `preconditions` and `postconditions` emits a table-level `CONSTRAINT <table>_rule<n>_check CHECK (NOT (<precondition>) OR (<postcondition>))` — the standard SQL encoding of a conditional constraint (a NULL precondition column makes the antecedent unknown, so the row passes, matching "the rule doesn't fire when its trigger slot is absent"). `<n>` is the rule's position in the `rules` list (stable, and titles aren't safe identifiers) (`a_rule_emits_a_conditional_check_constraint`).
+- [x] Each side is the `AND` of its `slot_conditions`' predicates, mapping the same field set the HTML "when … then …" sentence uses (`html_writer.rs`'s `describe_slot_condition`) to SQL: `equals_string` → `col = '...'` (quotes escaped), `equals_number` → `col = n`, `required` → `col IS NOT NULL`, `pattern` → `col ~ '...'` (escaped), `minimum_value`/`maximum_value` → `col >= n` / `col <= n`. Each condition slot resolves to its real column via the shared `slot_column_map` (so an FK slot's `{slot}_{target_pk}` column and the identifier→PK column resolve correctly).
+- [x] A rule that can't be expressed as a `CHECK` is skipped with a diagnostic naming the class and rule (title if present, else `rule #<n>`), never silently dropped — the unexpressible cases being: only one of pre/postconditions present; an empty condition side; a `range` / `minimum_cardinality` / `maximum_cardinality` condition (no single-column `CHECK` form); or a condition naming a slot the class doesn't have. Surfaced via `skipped_rules(schema)` wired into `generate --format postgres` in `main.rs`, mirroring `skipped_classes` (`a_one_sided_rule_is_skipped_with_a_diagnostic`, `a_rule_with_a_range_condition_is_skipped_and_labeled_by_index`, `a_rule_naming_a_missing_slot_is_skipped`). `skipped_rules` shares `slot_column_map` + `rule_conditions_to_sql` with `render`, so the warning can't drift from what's emitted.
+- [x] `diagnostics::classes_with_unprojected_constructs` no longer flags `rules` (or `unique_keys`) for `format == "postgres"` — postgres now projects both, so it returns empty for postgres as it already does for html; other non-HTML formats still flag both (`postgres_projects_both_rules_and_unique_keys_so_neither_is_flagged`).
+- [x] [linkml-coverage.md](../linkml-coverage.md)'s `rules` row now carries a Postgres `●◨` (syntax-verified via `pg_query`), noting the unexpressible-rule skip.
+
+**Notes:**
+- Like `unique_keys`, this is a table-level constraint appended after the
+  column lines — every column a rule references lives in the same table.
+- The expressible field set is deliberately the CHECK-able subset of what
+  `SlotCondition` can carry; `range`/cardinality are the HTML-only fields
+  that force a skip. This is the same `slot_conditions` IR feature 17
+  slice 4 (SHACL/OWL) will consume — the two projections share the
+  vocabulary, so this slice's predicate mapping informs that one.
 
 ---
 
@@ -308,7 +320,7 @@ computing the delta.
 |-------|----------|------------|--------|
 | Slice 1: core DDL | Must Have | None | Completed |
 | Slice 2: `unique_keys`/`pattern`/value bounds | Must Have | Slice 1 | Completed |
-| Slice 3: `rules` as `CHECK` | Should Have | Slice 1 | Not Started |
+| Slice 3: `rules` as `CHECK` | Should Have | Slice 1 | Completed |
 | Slice 4: multivalued scalars as arrays | Should Have | Slice 1 | Not Started |
 | Slice 5: multivalued class-refs as linking tables | Could Have | Slice 1 | Not Started |
 | Slice 6: `is_a` inheritance strategy | Could Have | Slice 1 | Not Started |
@@ -318,7 +330,7 @@ computing the delta.
 
 ## Definition of Done
 
-- [x] Slices 1–2 acceptance criteria met (slices 3–6 as demand confirms; slice 7 deferred)
+- [x] Slices 1–3 acceptance criteria met (slices 4–6 as demand confirms; slice 7 deferred)
 - [x] All tests passing: `cargo nextest run`
 - [ ] Library documentation complete: `cargo doc`
 - [x] Code formatted + clippy clean: `cargo fmt --check` + `cargo clippy --all-targets --all-features -- -D warnings`
