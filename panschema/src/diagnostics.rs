@@ -126,6 +126,11 @@ pub fn classes_with_unprojected_constructs(
     if format.eq_ignore_ascii_case("html") {
         return Vec::new();
     }
+    // The Postgres writer projects `unique_keys` as UNIQUE constraints, so
+    // it's no longer an unprojected construct there — but it doesn't yet
+    // project `rules` (that's a later slice), so `rules` still warns for
+    // every non-HTML format including postgres.
+    let unique_keys_projected = format.eq_ignore_ascii_case("postgres");
     let mut found = Vec::new();
     for (class_name, class) in &schema.classes {
         if !class.rules.is_empty() {
@@ -134,7 +139,7 @@ pub fn classes_with_unprojected_constructs(
                 construct: "rules",
             });
         }
-        if !class.unique_keys.is_empty() {
+        if !class.unique_keys.is_empty() && !unique_keys_projected {
             found.push(UnprojectedConstruct {
                 class: class_name.clone(),
                 construct: "unique_keys",
@@ -286,6 +291,25 @@ mod tests {
                     construct: "unique_keys",
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn postgres_projects_unique_keys_so_only_rules_is_flagged() {
+        // The Postgres writer emits `unique_keys` as UNIQUE constraints, so
+        // it must not warn that they won't appear — but `rules` isn't
+        // projected to postgres yet, so that one still warns.
+        let schema = parse(
+            "name: s\nclasses:\n  Deployment:\n    rules:\n      - description: d\n  Offering:\n    unique_keys:\n      k:\n        unique_key_slots: [x]\n",
+        );
+        let found = classes_with_unprojected_constructs(&schema, "postgres");
+        assert_eq!(
+            found,
+            vec![UnprojectedConstruct {
+                class: "Deployment".to_string(),
+                construct: "rules",
+            }],
+            "postgres must flag rules but not unique_keys; got: {found:?}"
         );
     }
 

@@ -119,6 +119,14 @@ fn render(schema: &SchemaDefinition) -> String {
                 ""
             }
         )];
+        // Slot name → the column name it actually resolves to, so a
+        // table-level `unique_keys` constraint (below) can name the real
+        // columns — an FK slot's column is `{slot}_{target_pk}`, not the
+        // bare slot name, and the identifier slot maps to `pk_col`.
+        let mut slot_columns: BTreeMap<&str, String> = BTreeMap::new();
+        if let Some(pk) = &pk_slot {
+            slot_columns.insert(pk.as_str(), pk_col.clone());
+        }
         for (slot_name, slot) in &effective {
             if pk_slot.as_deref() == Some(slot_name.as_str()) {
                 continue;
@@ -141,7 +149,7 @@ fn render(schema: &SchemaDefinition) -> String {
                 lines.push(format!("    {col} {target_pk_type}{not_null}"));
                 fk_constraints.push(FkConstraint {
                     from_table: table.clone(),
-                    from_col: col,
+                    from_col: col.clone(),
                     to_table: crate::rust_writer::snake_case(target_name),
                     to_col: target_pk_col,
                     constraint_name: format!(
@@ -149,10 +157,37 @@ fn render(schema: &SchemaDefinition) -> String {
                         crate::rust_writer::snake_case(slot_name)
                     ),
                 });
+                slot_columns.insert(slot_name.as_str(), col);
             } else {
                 let col = crate::rust_writer::snake_case(slot_name);
                 let sql_type = sql_type_for_slot_range(range, schema);
-                lines.push(format!("    {col} {sql_type}{not_null}"));
+                let checks = column_checks(&col, slot);
+                lines.push(format!("    {col} {sql_type}{not_null}{checks}"));
+                slot_columns.insert(slot_name.as_str(), col);
+            }
+        }
+        // Table-level UNIQUE constraints from `unique_keys`. A key that
+        // names a slot the class doesn't have is dropped entirely rather
+        // than emitting a UNIQUE over a nonexistent column — the same
+        // gap `diagnostics::unresolved_unique_key_slots` warns about on
+        // the CLI path, enforced here so the writer never emits broken
+        // DDL even if that warning is ignored.
+        for (key_name, key) in &class.unique_keys {
+            let cols: Option<Vec<&String>> = key
+                .unique_key_slots
+                .iter()
+                .map(|s| slot_columns.get(s.as_str()))
+                .collect();
+            if let Some(cols) = cols {
+                let col_list = cols
+                    .iter()
+                    .map(|c| c.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                lines.push(format!(
+                    "    CONSTRAINT {table}_{}_key UNIQUE ({col_list})",
+                    crate::rust_writer::snake_case(key_name)
+                ));
             }
         }
         writeln!(out, "{}", lines.join(",\n")).ok();
@@ -170,6 +205,31 @@ fn render(schema: &SchemaDefinition) -> String {
     }
 
     out
+}
+
+/// Inline `CHECK` clauses for a scalar column, from the slot's value
+/// constraints — the leading-space-prefixed suffix appended to the column
+/// definition. Empty when the slot has none.
+///
+/// - `pattern` → `CHECK (col ~ 'regex')` (single quotes doubled so the
+///   literal can't break the statement, same escaping the enum values use).
+/// - `minimum_value` / `maximum_value` → a single `CHECK` combining both
+///   with `AND` when both are set, or just the one side when only one is.
+fn column_checks(col: &str, slot: &crate::linkml::SlotDefinition) -> String {
+    let mut checks = String::new();
+    if let Some(p) = &slot.pattern {
+        checks.push_str(&format!(" CHECK ({col} ~ '{}')", p.replace('\'', "''")));
+    }
+    let bound = match (slot.minimum_value, slot.maximum_value) {
+        (Some(min), Some(max)) => Some(format!("{col} >= {min} AND {col} <= {max}")),
+        (Some(min), None) => Some(format!("{col} >= {min}")),
+        (None, Some(max)) => Some(format!("{col} <= {max}")),
+        (None, None) => None,
+    };
+    if let Some(b) = bound {
+        checks.push_str(&format!(" CHECK ({b})"));
+    }
+    checks
 }
 
 /// A deferred foreign-key constraint, added after every table is declared.
@@ -883,6 +943,171 @@ mod tests {
         assert!(out.contains("code text PRIMARY KEY"));
         assert!(out.contains("id uuid PRIMARY KEY DEFAULT gen_random_uuid()"));
         assert!(out.contains("ALTER TABLE deployment ADD CONSTRAINT"));
+    }
+
+    #[test]
+    fn unique_keys_emit_a_table_level_unique_constraint() {
+        use crate::linkml::UniqueKey;
+        let mut class = ClassDefinition::new("Offering");
+        let mut service_type = SlotDefinition::new("service_type");
+        service_type.range = Some("string".to_string());
+        class
+            .attributes
+            .insert("service_type".to_string(), service_type);
+        let mut offered_by = SlotDefinition::new("offered_by");
+        offered_by.range = Some("string".to_string());
+        class
+            .attributes
+            .insert("offered_by".to_string(), offered_by);
+        class.unique_keys.insert(
+            "service_offering".to_string(),
+            UniqueKey {
+                unique_key_slots: vec!["service_type".to_string(), "offered_by".to_string()],
+                description: None,
+            },
+        );
+        let schema = schema_with_class(class);
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            out.contains(
+                "CONSTRAINT offering_service_offering_key UNIQUE (service_type, offered_by)"
+            ),
+            "expected a named table-level UNIQUE constraint over the key's slot tuple; got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn pattern_emits_an_inline_check_constraint() {
+        let mut class = ClassDefinition::new("Provider");
+        let mut code = SlotDefinition::new("code");
+        code.range = Some("string".to_string());
+        code.pattern = Some("^[A-Z]{3}$".to_string());
+        class.attributes.insert("code".to_string(), code);
+        let schema = schema_with_class(class);
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            out.contains("code text CHECK (code ~ '^[A-Z]{3}$')"),
+            "expected an inline regex CHECK on the patterned column; got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn pattern_single_quotes_are_escaped() {
+        // A pattern containing a single quote must be doubled (`''`), or the
+        // generated CHECK is a syntax error / injection. pg_query catches
+        // it if we get this wrong.
+        let mut class = ClassDefinition::new("Note");
+        let mut body = SlotDefinition::new("body");
+        body.range = Some("string".to_string());
+        body.pattern = Some("it's".to_string());
+        class.attributes.insert("body".to_string(), body);
+        let schema = schema_with_class(class);
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            out.contains("CHECK (body ~ 'it''s')"),
+            "single quotes in a pattern must be doubled; got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn both_value_bounds_emit_one_combined_check() {
+        let mut class = ClassDefinition::new("Reading");
+        let mut level = SlotDefinition::new("level");
+        level.range = Some("integer".to_string());
+        level.minimum_value = Some(0.0);
+        level.maximum_value = Some(100.0);
+        class.attributes.insert("level".to_string(), level);
+        let schema = schema_with_class(class);
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            out.contains("level integer CHECK (level >= 0 AND level <= 100)"),
+            "both bounds must combine into one CHECK; got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn a_single_value_bound_emits_only_that_side() {
+        let mut class = ClassDefinition::new("Reading");
+        let mut ratio = SlotDefinition::new("ratio");
+        ratio.range = Some("float".to_string());
+        ratio.minimum_value = Some(0.0);
+        class.attributes.insert("ratio".to_string(), ratio);
+        let schema = schema_with_class(class);
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            out.contains("ratio double precision CHECK (ratio >= 0)"),
+            "a lone minimum_value must emit only the `>=` side; got:\n{out}"
+        );
+        assert!(
+            !out.contains("<="),
+            "no maximum_value set, so no `<=` clause; got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn a_lone_maximum_value_emits_only_the_upper_bound() {
+        let mut class = ClassDefinition::new("Reading");
+        let mut ratio = SlotDefinition::new("ratio");
+        ratio.range = Some("float".to_string());
+        ratio.maximum_value = Some(1.0);
+        class.attributes.insert("ratio".to_string(), ratio);
+        let schema = schema_with_class(class);
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            out.contains("ratio double precision CHECK (ratio <= 1)"),
+            "a lone maximum_value must emit only the `<=` side; got:\n{out}"
+        );
+        assert!(
+            !out.contains(">="),
+            "no minimum_value set, so no `>=` clause; got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn unique_key_naming_a_missing_slot_is_dropped_not_emitted() {
+        // A key referencing a slot the class doesn't have must not emit a
+        // UNIQUE clause naming a nonexistent column (which would be broken
+        // DDL). The CLI separately warns about it via
+        // `diagnostics::unresolved_unique_key_slots`; the writer itself
+        // must still never emit broken SQL even if that warning is ignored.
+        use crate::linkml::UniqueKey;
+        let mut class = ClassDefinition::new("Offering");
+        let mut service_type = SlotDefinition::new("service_type");
+        service_type.range = Some("string".to_string());
+        class
+            .attributes
+            .insert("service_type".to_string(), service_type);
+        class.unique_keys.insert(
+            "bad_key".to_string(),
+            UniqueKey {
+                unique_key_slots: vec!["service_type".to_string(), "ghost".to_string()],
+                description: None,
+            },
+        );
+        let schema = schema_with_class(class);
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            !out.contains("ghost"),
+            "a key naming a slot the class lacks must not appear in the DDL; got:\n{out}"
+        );
+        assert!(
+            !out.contains("bad_key"),
+            "a key with an unresolved slot must be dropped entirely, not emitted partially; got:\n{out}"
+        );
     }
 
     #[test]

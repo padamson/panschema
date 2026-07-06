@@ -178,7 +178,7 @@ applicable `CREATE TABLE` script.
 
 ### Slice 2: Constraints — `unique_keys`, `pattern`, value bounds
 
-**Status:** Not Started
+**Status:** Completed
 
 **Priority:** Must Have
 
@@ -187,12 +187,12 @@ feature 17 slice 2) are enforced by the database itself, not just
 documented.
 
 **Acceptance Criteria:**
-- [ ] `unique_keys` emits a table-level `CONSTRAINT <table>_<key_name>_key UNIQUE (col1, col2, ...)` per key, resolved through the same effective-slot set as [feature 17 slice 2](17-class-validation-constructs.md) (inherited/mixed-in slots included) — not just `class.attributes`.
-- [ ] A `unique_keys` entry naming a slot the class doesn't have (already flagged by `diagnostics::unresolved_unique_key_slots`, which every writer's CLI path already warns on) is dropped from the emitted DDL rather than emitting a `UNIQUE` referencing a nonexistent column. The writer resolves independently of the CLI warning — it must not emit broken SQL even if a caller ignored the warning.
-- [ ] `pattern` emits an inline `CHECK (col ~ 'pattern')` on the column, single-quote-escaping the pattern the same way enum permissible values already are (`render()`'s existing `.replace('\'', "''")`).
-- [ ] `minimum_value` / `maximum_value` emit a single inline `CHECK` on the column: both bounds combine into one `CHECK (col >= min AND col <= max)`; either alone emits just that side.
-- [ ] `diagnostics::classes_with_unprojected_constructs` no longer reports `unique_keys` as unprojected for `format == "postgres"` once this slice lands (it currently flags `unique_keys` for every non-HTML format) — leaving this unfixed would print a stale "won't appear in postgres output" warning for a construct postgres now emits. `rules` stays flagged for postgres until slice 3.
-- [ ] [linkml-coverage.md](../linkml-coverage.md) rows for `unique_keys`, `pattern`, and `minimum_value`/`maximum_value` gain a Postgres ✅ instead of "not yet built".
+- [x] `unique_keys` emits a table-level `CONSTRAINT <table>_<key_name>_key UNIQUE (col1, col2, ...)` per key, resolved through the same effective-slot set as [feature 17 slice 2](17-class-validation-constructs.md) (inherited/mixed-in slots included) — not just `class.attributes` (`unique_keys_emit_a_table_level_unique_constraint`).
+- [x] A `unique_keys` entry naming a slot the class doesn't have (already flagged by `diagnostics::unresolved_unique_key_slots`, which every writer's CLI path already warns on) is dropped from the emitted DDL rather than emitting a `UNIQUE` referencing a nonexistent column. The writer resolves independently of the CLI warning — it must not emit broken SQL even if a caller ignored the warning (`unique_key_naming_a_missing_slot_is_dropped_not_emitted`).
+- [x] `pattern` emits an inline `CHECK (col ~ 'pattern')` on the column, single-quote-escaping the pattern the same way enum permissible values already are (`pattern_emits_an_inline_check_constraint`, `pattern_single_quotes_are_escaped`).
+- [x] `minimum_value` / `maximum_value` emit a single inline `CHECK` on the column: both bounds combine into one `CHECK (col >= min AND col <= max)`; either alone emits just that side (`both_value_bounds_emit_one_combined_check`, `a_single_value_bound_emits_only_that_side`).
+- [x] `diagnostics::classes_with_unprojected_constructs` no longer reports `unique_keys` as unprojected for `format == "postgres"` (it still flags `unique_keys` for every other non-HTML format, and still flags `rules` for postgres until slice 3) (`postgres_projects_unique_keys_so_only_rules_is_flagged`).
+- [x] [linkml-coverage.md](../linkml-coverage.md) rows for `unique_keys`, `pattern`, and `minimum_value`/`maximum_value` now carry a Postgres `●◨` (full projection, syntax-verified via `pg_query`).
 
 **Notes:**
 - `unique_keys` is a table-level constraint (potentially multi-column) so
@@ -307,7 +307,7 @@ computing the delta.
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | Slice 1: core DDL | Must Have | None | Completed |
-| Slice 2: `unique_keys`/`pattern`/value bounds | Must Have | Slice 1 | Not Started |
+| Slice 2: `unique_keys`/`pattern`/value bounds | Must Have | Slice 1 | Completed |
 | Slice 3: `rules` as `CHECK` | Should Have | Slice 1 | Not Started |
 | Slice 4: multivalued scalars as arrays | Should Have | Slice 1 | Not Started |
 | Slice 5: multivalued class-refs as linking tables | Could Have | Slice 1 | Not Started |
@@ -318,10 +318,10 @@ computing the delta.
 
 ## Definition of Done
 
-- [ ] Slices 1–2 acceptance criteria met (slices 3–6 as demand confirms; slice 7 deferred)
-- [ ] All tests passing: `cargo nextest run`
+- [x] Slices 1–2 acceptance criteria met (slices 3–6 as demand confirms; slice 7 deferred)
+- [x] All tests passing: `cargo nextest run`
 - [ ] Library documentation complete: `cargo doc`
-- [ ] Code formatted + clippy clean: `cargo fmt --check` + `cargo clippy --all-targets --all-features -- -D warnings`
-- [ ] README.md gains a section on `--format postgres` and the sqldef/Atlas migration workflow, mirroring the mdbook-panschema install section's shape
-- [ ] CHANGELOG.md updated
-- [ ] [linkml-coverage.md](../linkml-coverage.md) gains a writer column entry (or a dedicated table) for the new writer's per-construct coverage
+- [x] Code formatted + clippy clean: `cargo fmt --check` + `cargo clippy --all-targets --all-features -- -D warnings`
+- [x] README.md gains a section on `--format postgres` and the sqldef/Atlas migration workflow, mirroring the mdbook-panschema install section's shape
+- [x] CHANGELOG.md updated
+- [x] [linkml-coverage.md](../linkml-coverage.md) gains a writer column entry (or a dedicated table) for the new writer's per-construct coverage
