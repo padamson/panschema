@@ -581,111 +581,283 @@ fn map_linkml_to_xsd(linkml_type: &str) -> String {
 /// `sh:minInclusive`/`sh:maxInclusive`.
 pub fn build_shacl_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
     let mut graph = FastGraph::new();
-    let sh = Namespace::new_unchecked(SH_NS);
-    let sh_node_shape = sh
-        .get("NodeShape")
-        .map_err(|e| IoError::Parse(e.to_string()))?;
-    let sh_target_class = sh
-        .get("targetClass")
-        .map_err(|e| IoError::Parse(e.to_string()))?;
-    let sh_property = sh
-        .get("property")
-        .map_err(|e| IoError::Parse(e.to_string()))?;
-    let sh_path = sh.get("path").map_err(|e| IoError::Parse(e.to_string()))?;
-    let sh_datatype = sh
-        .get("datatype")
-        .map_err(|e| IoError::Parse(e.to_string()))?;
-    let sh_class = sh.get("class").map_err(|e| IoError::Parse(e.to_string()))?;
-    let sh_min_count = sh
-        .get("minCount")
-        .map_err(|e| IoError::Parse(e.to_string()))?;
-    let sh_max_count = sh
-        .get("maxCount")
-        .map_err(|e| IoError::Parse(e.to_string()))?;
-    let sh_pattern = sh
-        .get("pattern")
-        .map_err(|e| IoError::Parse(e.to_string()))?;
-    let sh_min_inclusive = sh
-        .get("minInclusive")
-        .map_err(|e| IoError::Parse(e.to_string()))?;
-    let sh_max_inclusive = sh
-        .get("maxInclusive")
-        .map_err(|e| IoError::Parse(e.to_string()))?;
+    let t = ShaclTerms::new()?;
 
     for (name, class_def) in &schema.classes {
         let class_iri_str = class_iri_string(name, class_def, schema);
         let class_iri = make_iri(&class_iri_str)?;
-        let shape_iri = make_iri(&format!("{class_iri_str}Shape"))?;
+        let shape_iri_str = format!("{class_iri_str}Shape");
+        let shape_iri = make_iri(&shape_iri_str)?;
 
         graph
-            .insert(&shape_iri, rdf::type_, sh_node_shape)
+            .insert(&shape_iri, rdf::type_, &t.node_shape)
             .map_err(|e| IoError::Write(e.to_string()))?;
         graph
-            .insert(&shape_iri, sh_target_class, &class_iri)
+            .insert(&shape_iri, &t.target_class, &class_iri)
             .map_err(|e| IoError::Write(e.to_string()))?;
 
         let effective = crate::linkml_resolve::resolve_effective_slots(class_def, schema);
         for (slot_name, slot) in &effective {
-            let prop_shape = make_iri(&format!("{class_iri_str}Shape/{slot_name}"))?;
-            let prop_iri = make_iri(&slot_iri_string(slot_name, slot, schema))?;
+            let prop_shape = make_iri(&format!("{shape_iri_str}/{slot_name}"))?;
+            let path = make_iri(&slot_iri_string(slot_name, slot, schema))?;
+            emit_property_shape(
+                &mut graph,
+                &t,
+                &shape_iri,
+                &prop_shape,
+                &path,
+                schema,
+                PropertyConstraints::from_slot(slot),
+            )?;
+        }
+
+        // `rules` → conditional shapes. A rule "if precondition then
+        // postcondition" is SHACL Core's `sh:or ( [sh:not <pre>] <post> )`
+        // — the shape analogue of the SQL `NOT (pre) OR (post)` the Postgres
+        // writer emits. Pre/post are node shapes built from the same
+        // `slot_conditions` field set (with `equals_string`/`equals_number`
+        // → `sh:hasValue`). All sub-shapes get deterministic named IRIs
+        // rather than blank nodes, so the output is stable and queryable.
+        for (i, rule) in class_def.rules.iter().enumerate() {
+            let (Some(pre), Some(post)) = (&rule.preconditions, &rule.postconditions) else {
+                continue; // one-sided rule: no conditional to express
+            };
+            if pre.slot_conditions.is_empty() || post.slot_conditions.is_empty() {
+                continue;
+            }
+            let resolve_path = |slot: &str| -> IoResult<Iri<String>> {
+                let s = effective
+                    .iter()
+                    .find(|(n, _)| n.as_str() == slot)
+                    .map(|(_, d)| slot_iri_string(slot, d, schema))
+                    .unwrap_or_else(|| format!("{}#{}", ontology_iri_string(schema), slot));
+                make_iri(&s)
+            };
+
+            let pre_iri = make_iri(&format!("{shape_iri_str}/rule{i}/pre"))?;
+            for (slot, cond) in &pre.slot_conditions {
+                let ps = make_iri(&format!("{shape_iri_str}/rule{i}/pre/{slot}"))?;
+                let path = resolve_path(slot)?;
+                emit_property_shape(
+                    &mut graph,
+                    &t,
+                    &pre_iri,
+                    &ps,
+                    &path,
+                    schema,
+                    PropertyConstraints::from_condition(cond),
+                )?;
+            }
+            let post_iri = make_iri(&format!("{shape_iri_str}/rule{i}/post"))?;
+            for (slot, cond) in &post.slot_conditions {
+                let ps = make_iri(&format!("{shape_iri_str}/rule{i}/post/{slot}"))?;
+                let path = resolve_path(slot)?;
+                emit_property_shape(
+                    &mut graph,
+                    &t,
+                    &post_iri,
+                    &ps,
+                    &path,
+                    schema,
+                    PropertyConstraints::from_condition(cond),
+                )?;
+            }
+
+            // `[ sh:not <pre> ]` and the two-element list `( notpre post )`,
+            // then `<classShape> sh:or ( notpre post )`.
+            let notpre = make_iri(&format!("{shape_iri_str}/rule{i}/notpre"))?;
+            let or0 = make_iri(&format!("{shape_iri_str}/rule{i}/or0"))?;
+            let or1 = make_iri(&format!("{shape_iri_str}/rule{i}/or1"))?;
+            let w = |g: &mut FastGraph, s: &Iri<String>, p, o: &Iri<String>| -> IoResult<()> {
+                g.insert(s, p, o)
+                    .map_err(|e| IoError::Write(e.to_string()))?;
+                Ok(())
+            };
             graph
-                .insert(&shape_iri, sh_property, &prop_shape)
+                .insert(&notpre, &t.not_, &pre_iri)
                 .map_err(|e| IoError::Write(e.to_string()))?;
             graph
-                .insert(&prop_shape, sh_path, &prop_iri)
+                .insert(&shape_iri, &t.or_, &or0)
                 .map_err(|e| IoError::Write(e.to_string()))?;
-
-            // Range: class-valued → sh:class, plain scalar → sh:datatype.
-            // An enum range is neither (its permissible values aren't an
-            // xsd datatype); left unconstrained until an `sh:in` projection.
-            if let Some(range) = slot.range.as_deref() {
-                if let Some(target) = schema.classes.get(range) {
-                    let target_iri = make_iri(&class_iri_string(range, target, schema))?;
-                    graph
-                        .insert(&prop_shape, sh_class, &target_iri)
-                        .map_err(|e| IoError::Write(e.to_string()))?;
-                } else if !schema.enums.contains_key(range) {
-                    let xsd_iri = make_iri(&map_linkml_to_xsd(range))?;
-                    graph
-                        .insert(&prop_shape, sh_datatype, &xsd_iri)
-                        .map_err(|e| IoError::Write(e.to_string()))?;
-                }
-            }
-
-            if slot.required {
-                graph
-                    .insert(&prop_shape, sh_min_count, 1_i32)
-                    .map_err(|e| IoError::Write(e.to_string()))?;
-            }
-            if let Some(min) = slot.minimum_cardinality {
-                graph
-                    .insert(&prop_shape, sh_min_count, min as i32)
-                    .map_err(|e| IoError::Write(e.to_string()))?;
-            }
-            if let Some(max) = slot.maximum_cardinality {
-                graph
-                    .insert(&prop_shape, sh_max_count, max as i32)
-                    .map_err(|e| IoError::Write(e.to_string()))?;
-            }
-            if let Some(pattern) = slot.pattern.as_deref() {
-                graph
-                    .insert(&prop_shape, sh_pattern, pattern)
-                    .map_err(|e| IoError::Write(e.to_string()))?;
-            }
-            if let Some(min) = slot.minimum_value {
-                graph
-                    .insert(&prop_shape, sh_min_inclusive, min)
-                    .map_err(|e| IoError::Write(e.to_string()))?;
-            }
-            if let Some(max) = slot.maximum_value {
-                graph
-                    .insert(&prop_shape, sh_max_inclusive, max)
-                    .map_err(|e| IoError::Write(e.to_string()))?;
-            }
+            w(&mut graph, &or0, rdf::first, &notpre)?;
+            w(&mut graph, &or0, rdf::rest, &or1)?;
+            w(&mut graph, &or1, rdf::first, &post_iri)?;
+            graph
+                .insert(&or1, rdf::rest, rdf::nil)
+                .map_err(|e| IoError::Write(e.to_string()))?;
         }
     }
 
     Ok(graph)
+}
+
+/// The SHACL predicate IRIs the shapes graph uses, as owned `Iri<String>`
+/// (so no `Namespace`/`NsTerm` lifetime threads through the builders).
+struct ShaclTerms {
+    node_shape: Iri<String>,
+    target_class: Iri<String>,
+    property: Iri<String>,
+    path: Iri<String>,
+    datatype: Iri<String>,
+    class: Iri<String>,
+    min_count: Iri<String>,
+    max_count: Iri<String>,
+    pattern: Iri<String>,
+    min_inclusive: Iri<String>,
+    max_inclusive: Iri<String>,
+    has_value: Iri<String>,
+    or_: Iri<String>,
+    not_: Iri<String>,
+}
+
+impl ShaclTerms {
+    fn new() -> IoResult<Self> {
+        let sh = |n: &str| make_iri(&format!("{SH_NS}{n}"));
+        Ok(Self {
+            node_shape: sh("NodeShape")?,
+            target_class: sh("targetClass")?,
+            property: sh("property")?,
+            path: sh("path")?,
+            datatype: sh("datatype")?,
+            class: sh("class")?,
+            min_count: sh("minCount")?,
+            max_count: sh("maxCount")?,
+            pattern: sh("pattern")?,
+            min_inclusive: sh("minInclusive")?,
+            max_inclusive: sh("maxInclusive")?,
+            has_value: sh("hasValue")?,
+            or_: sh("or")?,
+            not_: sh("not")?,
+        })
+    }
+}
+
+/// The value-constraint fields a property shape projects, drawn from either
+/// a full slot ([`from_slot`]) or a rule's `slot_condition` matcher
+/// ([`from_condition`], which adds the `equals_*` → `sh:hasValue` checks a
+/// precondition needs). One mapping, so base slots and rule conditions
+/// can't drift.
+///
+/// [`from_slot`]: PropertyConstraints::from_slot
+/// [`from_condition`]: PropertyConstraints::from_condition
+#[derive(Default)]
+struct PropertyConstraints<'a> {
+    range: Option<&'a str>,
+    required: bool,
+    pattern: Option<&'a str>,
+    min_value: Option<f64>,
+    max_value: Option<f64>,
+    min_cardinality: Option<u32>,
+    max_cardinality: Option<u32>,
+    equals_string: Option<&'a str>,
+    equals_number: Option<f64>,
+}
+
+impl<'a> PropertyConstraints<'a> {
+    fn from_slot(slot: &'a SlotDefinition) -> Self {
+        Self {
+            range: slot.range.as_deref(),
+            required: slot.required,
+            pattern: slot.pattern.as_deref(),
+            min_value: slot.minimum_value,
+            max_value: slot.maximum_value,
+            min_cardinality: slot.minimum_cardinality,
+            max_cardinality: slot.maximum_cardinality,
+            ..Default::default()
+        }
+    }
+
+    fn from_condition(cond: &'a crate::linkml::SlotCondition) -> Self {
+        Self {
+            range: cond.range.as_deref(),
+            required: cond.required,
+            pattern: cond.pattern.as_deref(),
+            min_value: cond.minimum_value,
+            max_value: cond.maximum_value,
+            min_cardinality: cond.minimum_cardinality,
+            max_cardinality: cond.maximum_cardinality,
+            equals_string: cond.equals_string.as_deref(),
+            equals_number: cond.equals_number,
+        }
+    }
+}
+
+/// Emit one `sh:property` shape: link it to `shape`, set its `sh:path`, and
+/// project each constraint the field set carries. `range` → `sh:class`
+/// (class-valued) or `sh:datatype` (scalar; enum ranges stay unconstrained);
+/// `required`/cardinality → `sh:minCount`/`sh:maxCount`; `pattern` →
+/// `sh:pattern`; value bounds → `sh:minInclusive`/`sh:maxInclusive`;
+/// `equals_*` → `sh:hasValue`.
+fn emit_property_shape(
+    graph: &mut FastGraph,
+    t: &ShaclTerms,
+    shape: &Iri<String>,
+    prop_shape: &Iri<String>,
+    path: &Iri<String>,
+    schema: &SchemaDefinition,
+    c: PropertyConstraints<'_>,
+) -> IoResult<()> {
+    graph
+        .insert(shape, &t.property, prop_shape)
+        .map_err(|e| IoError::Write(e.to_string()))?;
+    graph
+        .insert(prop_shape, &t.path, path)
+        .map_err(|e| IoError::Write(e.to_string()))?;
+
+    if let Some(range) = c.range {
+        if let Some(target) = schema.classes.get(range) {
+            let target_iri = make_iri(&class_iri_string(range, target, schema))?;
+            graph
+                .insert(prop_shape, &t.class, &target_iri)
+                .map_err(|e| IoError::Write(e.to_string()))?;
+        } else if !schema.enums.contains_key(range) {
+            let xsd_iri = make_iri(&map_linkml_to_xsd(range))?;
+            graph
+                .insert(prop_shape, &t.datatype, &xsd_iri)
+                .map_err(|e| IoError::Write(e.to_string()))?;
+        }
+    }
+    if c.required {
+        graph
+            .insert(prop_shape, &t.min_count, 1_i32)
+            .map_err(|e| IoError::Write(e.to_string()))?;
+    }
+    if let Some(min) = c.min_cardinality {
+        graph
+            .insert(prop_shape, &t.min_count, min as i32)
+            .map_err(|e| IoError::Write(e.to_string()))?;
+    }
+    if let Some(max) = c.max_cardinality {
+        graph
+            .insert(prop_shape, &t.max_count, max as i32)
+            .map_err(|e| IoError::Write(e.to_string()))?;
+    }
+    if let Some(pattern) = c.pattern {
+        graph
+            .insert(prop_shape, &t.pattern, pattern)
+            .map_err(|e| IoError::Write(e.to_string()))?;
+    }
+    if let Some(min) = c.min_value {
+        graph
+            .insert(prop_shape, &t.min_inclusive, min)
+            .map_err(|e| IoError::Write(e.to_string()))?;
+    }
+    if let Some(max) = c.max_value {
+        graph
+            .insert(prop_shape, &t.max_inclusive, max)
+            .map_err(|e| IoError::Write(e.to_string()))?;
+    }
+    if let Some(v) = c.equals_string {
+        graph
+            .insert(prop_shape, &t.has_value, v)
+            .map_err(|e| IoError::Write(e.to_string()))?;
+    }
+    if let Some(n) = c.equals_number {
+        graph
+            .insert(prop_shape, &t.has_value, n)
+            .map_err(|e| IoError::Write(e.to_string()))?;
+    }
+    Ok(())
 }
 
 // ============================================================================

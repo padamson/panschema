@@ -142,8 +142,8 @@ tier is deferred, exactly as feature 28 slice 3 is for Postgres.
 
 #### Slice 4b: `rules` → conditional shapes
 
-- [ ] Each rule with both pre/postconditions emits a shape encoding "if precondition then postcondition" in SHACL Core — `sh:or ( [ sh:not <preconditionShape> ] <postconditionShape> )`, the shape analogue of feature 24 slice 3's `NOT (pre) OR (post)` — with pre/post shapes built from the same `slot_conditions` field set. A rule not expressible this way is skipped with a diagnostic (reuse the `rules`-skip vocabulary from feature 24 slice 3).
-- [ ] Stop reporting `rules` from [feature 23](23-cross-writer-construct-coverage-diagnostics.md)'s `classes_with_unprojected_constructs` for `format == "shacl"` — once `rules` is genuinely SHACL-projected, warning that it isn't would be a false signal.
+- [x] Each rule with both pre/postconditions emits a shape encoding "if precondition then postcondition" in SHACL Core — `sh:or ( [ sh:not <preconditionShape> ] <postconditionShape> )`, the shape analogue of feature 24 slice 3's `NOT (pre) OR (post)`, wired as an RDF list with deterministic named sub-shape IRIs — with pre/post shapes built from the same `slot_conditions` field set (shared `emit_property_shape` / `PropertyConstraints`), adding `equals_string`/`equals_number` → `sh:hasValue` for the precondition equality checks (`a_rule_projects_pre_and_post_condition_shapes`, `a_rule_wires_the_conditional_as_sh_or_not_pre_post`). A one-sided or empty-conditioned rule has no conditional to express and is not emitted (SHACL Core expresses the full `slot_conditions` field set otherwise, so there's no "inexpressible field" skip class like Postgres's).
+- [x] Stop reporting `rules` from [feature 23](23-cross-writer-construct-coverage-diagnostics.md)'s `classes_with_unprojected_constructs` for `format == "shacl"` (`unique_keys` keeps warning there until slice 4c) (`shacl_projects_rules_so_only_unique_keys_is_flagged`).
 
 #### Slice 4c: `unique_keys` → SPARQL constraint — optional
 

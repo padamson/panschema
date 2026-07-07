@@ -131,9 +131,13 @@ pub fn classes_with_unprojected_constructs(
     if format.eq_ignore_ascii_case("html") || format.eq_ignore_ascii_case("postgres") {
         return Vec::new();
     }
+    // SHACL projects `rules` (as conditional shapes) but not `unique_keys`
+    // yet (SHACL Core has no cross-instance uniqueness) — so for shacl only
+    // `unique_keys` is still an unprojected gap.
+    let rules_projected = format.eq_ignore_ascii_case("shacl");
     let mut found = Vec::new();
     for (class_name, class) in &schema.classes {
-        if !class.rules.is_empty() {
+        if !class.rules.is_empty() && !rules_projected {
             found.push(UnprojectedConstruct {
                 class: class_name.clone(),
                 construct: "rules",
@@ -308,6 +312,26 @@ mod tests {
             classes_with_unprojected_constructs(&schema, "postgres").is_empty(),
             "postgres projects both constructs; got: {:?}",
             classes_with_unprojected_constructs(&schema, "postgres")
+        );
+    }
+
+    #[test]
+    fn shacl_projects_rules_so_only_unique_keys_is_flagged() {
+        // The SHACL writer emits `rules` as conditional shapes, so it must
+        // not warn they won't appear — but it has no `unique_keys`
+        // projection yet (SHACL Core has no cross-instance uniqueness), so
+        // that one still warns.
+        let schema = parse(
+            "name: s\nclasses:\n  Deployment:\n    rules:\n      - description: d\n  Offering:\n    unique_keys:\n      k:\n        unique_key_slots: [x]\n",
+        );
+        let found = classes_with_unprojected_constructs(&schema, "shacl");
+        assert_eq!(
+            found,
+            vec![UnprojectedConstruct {
+                class: "Offering".to_string(),
+                construct: "unique_keys",
+            }],
+            "shacl must flag unique_keys but not rules; got: {found:?}"
         );
     }
 

@@ -236,6 +236,223 @@ mod tests {
         );
     }
 
+    /// A class with the canonical conditional rule: when `status` =
+    /// `actual`, `region` is required.
+    fn schema_with_conditional_rule() -> SchemaDefinition {
+        use crate::linkml::{ClassRule, RuleConditions, SlotCondition};
+        let mut schema = SchemaDefinition::new("test");
+        schema.id = Some(EX.to_string());
+
+        let mut deployment = ClassDefinition::new("Deployment");
+        deployment.class_uri = Some(format!("{EX}#Deployment"));
+        let mut status = SlotDefinition::new("status");
+        status.range = Some("string".to_string());
+        deployment.attributes.insert("status".to_string(), status);
+        let mut region = SlotDefinition::new("region");
+        region.range = Some("string".to_string());
+        deployment.attributes.insert("region".to_string(), region);
+
+        deployment.rules.push(ClassRule {
+            title: Some("actual-needs-region".to_string()),
+            description: None,
+            preconditions: Some(RuleConditions {
+                slot_conditions: [(
+                    "status".to_string(),
+                    SlotCondition {
+                        equals_string: Some("actual".to_string()),
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            }),
+            postconditions: Some(RuleConditions {
+                slot_conditions: [(
+                    "region".to_string(),
+                    SlotCondition {
+                        required: true,
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            }),
+        });
+        schema.classes.insert("Deployment".to_string(), deployment);
+        schema
+    }
+
+    #[test]
+    fn a_rule_projects_pre_and_post_condition_shapes() {
+        let store = render_to_store(&schema_with_conditional_rule());
+        // Precondition matcher: status must have value "actual".
+        assert!(
+            ask(
+                &store,
+                &format!(
+                    "ASK {{ <{EX}#DeploymentShape/rule0/pre> <{SH}property> ?p . \
+                     ?p <{SH}path> <{EX}#status> ; <{SH}hasValue> \"actual\" }}"
+                )
+            ),
+            "precondition should project equals_string → sh:hasValue"
+        );
+        // Postcondition: region required → sh:minCount 1.
+        assert!(
+            ask(
+                &store,
+                &format!(
+                    "ASK {{ <{EX}#DeploymentShape/rule0/post> <{SH}property> ?p . \
+                     ?p <{SH}path> <{EX}#region> ; <{SH}minCount> 1 }}"
+                )
+            ),
+            "postcondition should project required → sh:minCount 1"
+        );
+    }
+
+    #[test]
+    fn a_rule_wires_the_conditional_as_sh_or_not_pre_post() {
+        let store = render_to_store(&schema_with_conditional_rule());
+        const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+        // The class shape carries sh:or of a 2-element list: [sh:not pre], post.
+        assert!(
+            ask(
+                &store,
+                &format!(
+                    "ASK {{ \
+                     <{EX}#Deployment> ^<{SH}targetClass> ?shape . \
+                     ?shape <{SH}or> ?l0 . \
+                     ?l0 <{RDF}first> ?notpre ; <{RDF}rest> ?l1 . \
+                     ?notpre <{SH}not> <{EX}#DeploymentShape/rule0/pre> . \
+                     ?l1 <{RDF}first> <{EX}#DeploymentShape/rule0/post> ; <{RDF}rest> <{RDF}nil> \
+                     }}"
+                )
+            ),
+            "the rule must wire sh:or ( [sh:not pre] post ) as an RDF list"
+        );
+    }
+
+    #[test]
+    fn cardinality_projects_to_min_and_max_count() {
+        let mut schema = SchemaDefinition::new("test");
+        schema.id = Some(EX.to_string());
+        let mut thing = ClassDefinition::new("Thing");
+        thing.class_uri = Some(format!("{EX}#Thing"));
+        let mut tags = SlotDefinition::new("tags");
+        tags.range = Some("string".to_string());
+        tags.minimum_cardinality = Some(1);
+        tags.maximum_cardinality = Some(5);
+        thing.attributes.insert("tags".to_string(), tags);
+        schema.classes.insert("Thing".to_string(), thing);
+
+        let store = render_to_store(&schema);
+        assert!(
+            ask(
+                &store,
+                &format!(
+                    "ASK {{ ?p <{SH}path> <{EX}#tags> ; <{SH}minCount> 1 ; <{SH}maxCount> 5 }}"
+                )
+            ),
+            "cardinality must project to sh:minCount/sh:maxCount"
+        );
+    }
+
+    #[test]
+    fn a_rule_with_an_empty_condition_side_emits_no_conditional() {
+        // A rule whose precondition (or postcondition) carries no
+        // slot_conditions has no conditional to express — it must emit no
+        // `sh:or` at all, not a degenerate one pointing at an empty shape.
+        use crate::linkml::{ClassRule, RuleConditions, SlotCondition};
+        let mut schema = SchemaDefinition::new("test");
+        schema.id = Some(EX.to_string());
+        let mut c = ClassDefinition::new("Deployment");
+        c.class_uri = Some(format!("{EX}#Deployment"));
+        let mut region = SlotDefinition::new("region");
+        region.range = Some("string".to_string());
+        c.attributes.insert("region".to_string(), region);
+        c.rules.push(ClassRule {
+            title: Some("empty-pre".to_string()),
+            description: None,
+            preconditions: Some(RuleConditions {
+                slot_conditions: Default::default(), // empty side
+            }),
+            postconditions: Some(RuleConditions {
+                slot_conditions: [(
+                    "region".to_string(),
+                    SlotCondition {
+                        required: true,
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            }),
+        });
+        schema.classes.insert("Deployment".to_string(), c);
+
+        let store = render_to_store(&schema);
+        assert!(
+            !ask(&store, &format!("ASK {{ ?s <{SH}or> ?o }}")),
+            "an empty-conditioned rule must emit no sh:or"
+        );
+    }
+
+    #[test]
+    fn a_rule_condition_uses_the_slots_own_uri_for_sh_path() {
+        // The precondition slot has a distinct `slot_uri`; its property
+        // shape's `sh:path` must be that URI (resolved from the *right*
+        // slot's definition), not the `{ontology}#{name}` fallback.
+        use crate::linkml::{ClassRule, RuleConditions, SlotCondition};
+        let mut schema = SchemaDefinition::new("test");
+        schema.id = Some(EX.to_string());
+        let mut c = ClassDefinition::new("Deployment");
+        c.class_uri = Some(format!("{EX}#Deployment"));
+        let mut status = SlotDefinition::new("status");
+        status.range = Some("string".to_string());
+        status.slot_uri = Some(format!("{EX}#statusProp"));
+        c.attributes.insert("status".to_string(), status);
+        let mut region = SlotDefinition::new("region");
+        region.range = Some("string".to_string());
+        c.attributes.insert("region".to_string(), region);
+        c.rules.push(ClassRule {
+            title: Some("r".to_string()),
+            description: None,
+            preconditions: Some(RuleConditions {
+                slot_conditions: [(
+                    "status".to_string(),
+                    SlotCondition {
+                        equals_string: Some("actual".to_string()),
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            }),
+            postconditions: Some(RuleConditions {
+                slot_conditions: [(
+                    "region".to_string(),
+                    SlotCondition {
+                        required: true,
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            }),
+        });
+        schema.classes.insert("Deployment".to_string(), c);
+
+        let store = render_to_store(&schema);
+        assert!(
+            ask(
+                &store,
+                &format!(
+                    "ASK {{ <{EX}#DeploymentShape/rule0/pre> <{SH}property> ?p . ?p <{SH}path> <{EX}#statusProp> }}"
+                )
+            ),
+            "a rule condition must resolve the referenced slot's own slot_uri for sh:path"
+        );
+    }
+
     #[test]
     fn a_scalar_slot_projects_to_sh_datatype() {
         let store = render_to_store(&schema_with_constrained_class());
