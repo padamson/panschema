@@ -63,6 +63,17 @@ pub enum ImportError {
         path: PathBuf,
         source: crate::io::IoError,
     },
+
+    /// An import resolved to a path outside the root schema's own
+    /// directory tree (e.g. `../../../etc/passwd`). Rejected so a schema
+    /// — especially a fetched, untrusted one — can't pull arbitrary host
+    /// files into the merged output.
+    #[error("import `{entry}` resolves to `{}`, outside the schema directory `{}`", resolved.display(), root.display())]
+    EscapesRoot {
+        entry: String,
+        resolved: PathBuf,
+        root: PathBuf,
+    },
 }
 
 /// One incompatible name collision: two files defined the same element
@@ -133,9 +144,17 @@ pub fn resolve_imports(
     let root_canonical = canonicalize_lossy(root_path);
     let mut visiting = vec![root_canonical.clone()];
     let mut loaded = std::collections::BTreeSet::from([root_canonical]);
+    // The containment boundary for every import (transitively): nothing
+    // may resolve outside the root schema's own directory tree. Imports
+    // may descend into subdirectories and step between them, but may not
+    // escape above this root — so a fetched, untrusted schema can't reach
+    // arbitrary host files. Canonicalized so the `starts_with` check
+    // compares real paths, not `..`-laden ones.
+    let root_dir = canonicalize_lossy(&base_dir);
     resolve_into(
         root,
         &base_dir,
+        &root_dir,
         registry,
         &mut report,
         &mut visiting,
@@ -163,6 +182,7 @@ pub fn resolve_imports(
 fn resolve_into(
     root: &mut SchemaDefinition,
     base_dir: &Path,
+    root_dir: &Path,
     registry: &FormatRegistry,
     report: &mut ImportReport,
     visiting: &mut Vec<PathBuf>,
@@ -194,6 +214,17 @@ fn resolve_into(
             })?;
 
         let canonical = canonicalize_lossy(&resolved);
+        // Containment: the resolved file must live within the root
+        // schema's directory tree. Checked on the canonical path so
+        // `../` escapes are seen for what they resolve to, not their
+        // textual form.
+        if !canonical.starts_with(root_dir) {
+            return Err(ImportError::EscapesRoot {
+                entry: entry.clone(),
+                resolved: canonical,
+                root: root_dir.to_path_buf(),
+            });
+        }
         if visiting.contains(&canonical) {
             return Err(ImportError::Cycle { path: canonical });
         }
@@ -227,6 +258,7 @@ fn resolve_into(
         resolve_into(
             &mut imported,
             &imported_dir,
+            root_dir,
             registry,
             report,
             visiting,
@@ -431,6 +463,43 @@ mod tests {
         assert!(report.collisions.is_empty());
         // The merged schema is self-contained: imports were folded in.
         assert!(root.imports.is_empty());
+    }
+
+    #[test]
+    fn resolve_imports_rejects_traversal_escaping_the_root_directory() {
+        // An import that resolves outside the root schema's own directory
+        // tree — `../secret` here, `../../../etc/passwd` in the wild — must
+        // be rejected, not read and merged. A fetched package must not be
+        // able to pull arbitrary host files into a consumer's generate.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("secret.yaml"),
+            "name: secret\nid: https://example.org/secret\nclasses:\n  Leaked:\n    name: Leaked\n    description: sensitive\n",
+        )
+        .unwrap();
+        let pkg = tmp.path().join("pkg");
+        std::fs::create_dir(&pkg).unwrap();
+        let root_path = pkg.join("app.yaml");
+        std::fs::write(
+            &root_path,
+            "name: app\nid: https://example.org/app\nimports:\n  - ../secret\nclasses:\n  App:\n    name: App\n    description: root\n",
+        )
+        .unwrap();
+
+        let registry = FormatRegistry::with_defaults();
+        let reader = registry.reader_for_path(&root_path).unwrap();
+        let mut root = reader.read(&root_path).unwrap();
+
+        let err = resolve_imports(&mut root, &root_path, &registry)
+            .expect_err("an import escaping the root directory must be rejected");
+        assert!(
+            matches!(err, ImportError::EscapesRoot { .. }),
+            "expected EscapesRoot; got: {err:?}"
+        );
+        assert!(
+            !root.classes.contains_key("Leaked"),
+            "the escaping file's class must never be merged"
+        );
     }
 
     #[test]

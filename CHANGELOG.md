@@ -153,6 +153,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 - **Generated HTML docs no longer let schema content break out of the embedded graph JSON (stored XSS).** The interactive graph's data is embedded in an inline `<script>` as JSON, and JSON does not escape `<` — so a `</script>` inside any schema string (a class/slot name or `description`) closed the script element mid-JSON and executed whatever markup followed, in the browser of anyone viewing the generated (or published) docs. Every `<` in the embedded JSON is now escaped as `<`, which `JSON.parse` decodes back to `<` — the graph data is byte-for-byte unchanged, only the on-page representation is safe. Affected anyone rendering docs from a schema they did not author.
+- **The dev server (`panschema serve`) now binds loopback (`127.0.0.1`) by default instead of all interfaces (`0.0.0.0`).** It previously exposed the generated docs to the entire local network while printing a `http://localhost:…` URL that hid the exposure. Pass `--host-all` to opt back into binding all interfaces.
+- **`imports:` can no longer escape the schema's directory tree.** A relative import such as `../../../etc/passwd` was resolved and merged like any local file; a fetched, untrusted schema package could use it to pull arbitrary host files into a consumer's generated output. Every import (transitively) must now resolve within the root schema's own directory tree, canonicalized so `..` escapes are caught by where they actually point — an out-of-tree import is a hard error naming the offending entry.
 
 ## [0.2.0] - 2026-01-25
 

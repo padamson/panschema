@@ -234,6 +234,11 @@ enum Commands {
         /// Port to run the server on
         #[arg(short, long, default_value = "3000")]
         port: u16,
+
+        /// Bind all interfaces (0.0.0.0) instead of loopback only, exposing
+        /// the server to the local network. Off by default.
+        #[arg(long = "host-all")]
+        host_all: bool,
     },
     /// Generate shell completion script (source the output, e.g. `panschema completions zsh > ~/.zfunc/_panschema`)
     Completions {
@@ -1330,8 +1335,9 @@ async fn main() -> anyhow::Result<()> {
             input,
             output,
             port,
+            host_all,
         }) => {
-            server::serve(&input, &output, port).await?;
+            server::serve(&input, &output, port, host_all).await?;
         }
         Some(Commands::Completions { shell }) => {
             let mut cmd = Cli::command();

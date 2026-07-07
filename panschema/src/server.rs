@@ -8,6 +8,15 @@ use tower_livereload::LiveReloadLayer;
 
 use panschema::io::FormatRegistry;
 
+/// The `host:port` the dev server binds. Defaults to loopback
+/// (`127.0.0.1`) so generated docs aren't exposed to the local network;
+/// `external == true` opts into `0.0.0.0` (all interfaces) when the user
+/// explicitly asks for it.
+fn bind_address(external: bool, port: u16) -> String {
+    let host = if external { "0.0.0.0" } else { "127.0.0.1" };
+    format!("{host}:{port}")
+}
+
 /// Regenerate documentation from input ontology
 fn regenerate(input: &Path, output: &Path) -> anyhow::Result<()> {
     let registry = FormatRegistry::with_defaults();
@@ -27,7 +36,12 @@ fn regenerate(input: &Path, output: &Path) -> anyhow::Result<()> {
 }
 
 /// Start the development server with hot reload
-pub async fn serve(input: &Path, output: &Path, port: u16) -> anyhow::Result<()> {
+// `#[mutants::skip]`: this awaits `axum::serve` forever, so it has no
+// unit-testable return path (a test can't await it without spawn +
+// timeout + cancel). The one piece of decision logic — the bind address
+// — is extracted into `bind_address`, which is unit-tested.
+#[mutants::skip]
+pub async fn serve(input: &Path, output: &Path, port: u16, external: bool) -> anyhow::Result<()> {
     // Generate initial documentation
     regenerate(input, output)?;
     println!("Generated initial documentation in {}", output.display());
@@ -93,10 +107,10 @@ pub async fn serve(input: &Path, output: &Path, port: u16) -> anyhow::Result<()>
         .fallback_service(ServeDir::new(output))
         .layer(livereload);
 
-    let addr = format!("0.0.0.0:{port}");
+    let addr = bind_address(external, port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
-    println!("Development server running at http://localhost:{port}");
+    println!("Development server running at http://{addr}");
     println!("Watching {} for changes...", input.display());
     println!("Press Ctrl+C to stop");
 
@@ -110,7 +124,9 @@ pub async fn serve(input: &Path, output: &Path, port: u16) -> anyhow::Result<()>
 }
 
 /// Start a simple static file server with live reload (no input file watching).
+// `#[mutants::skip]`: same untestable-server-loop rationale as `serve`.
 #[cfg(feature = "dev")]
+#[mutants::skip]
 pub async fn serve_static(output: &Path, port: u16) -> anyhow::Result<()> {
     // Create live reload layer
     let livereload = LiveReloadLayer::new();
@@ -131,10 +147,11 @@ pub async fn serve_static(output: &Path, port: u16) -> anyhow::Result<()> {
         .fallback_service(ServeDir::new(output))
         .layer(livereload);
 
-    let addr = format!("0.0.0.0:{port}");
+    // Styleguide preview is a local dev tool; always loopback.
+    let addr = bind_address(false, port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
-    println!("Server running at http://localhost:{port}");
+    println!("Server running at http://{addr}");
     println!("Watching {} for changes...", output.display());
     println!("Press Ctrl+C to stop");
 
@@ -144,4 +161,19 @@ pub async fn serve_static(output: &Path, port: u16) -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bind_address;
+
+    #[test]
+    fn defaults_to_loopback() {
+        assert_eq!(bind_address(false, 3000), "127.0.0.1:3000");
+    }
+
+    #[test]
+    fn external_opt_in_binds_all_interfaces() {
+        assert_eq!(bind_address(true, 8080), "0.0.0.0:8080");
+    }
 }
