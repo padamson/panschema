@@ -23,6 +23,7 @@ Two different kinds of "support" are tracked separately:
    - **RDF** — [rdf_serializers.rs](../panschema/src/rdf_serializers.rs) + [owl_writer.rs](../panschema/src/owl_writer.rs)
    - **Rust** — [rust_writer.rs](../panschema/src/rust_writer.rs) codegen
    - **Postgres** — [postgres_writer.rs](../panschema/src/postgres_writer.rs) DDL ([feature 24](features/24-postgres-ddl-writer.md))
+   - **SHACL** — [shacl_writer.rs](../panschema/src/shacl_writer.rs) validation shapes ([feature 17 slice 4](features/17-class-validation-constructs.md)); a cross-cutting constraints projection (one `sh:NodeShape` per class with property shapes for slot value-constraints), not tracked as a per-construct column in the table below
 
 Legend: ● full · ◐ partial / indirect · ○ modeled but inert (silent-drop
 risk) · — not applicable to this writer · ✗ not modeled in the IR.

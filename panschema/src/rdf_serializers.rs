@@ -14,12 +14,43 @@ use sophia::inmem::graph::FastGraph;
 use sophia::iri::Iri;
 
 use crate::io::{IoError, IoResult, Writer};
-use crate::linkml::SchemaDefinition;
+use crate::linkml::{ClassDefinition, SchemaDefinition, SlotDefinition};
 
 // Namespace constants
 const OWL_NS: &str = "http://www.w3.org/2002/07/owl#";
 const DCTERMS_NS: &str = "http://purl.org/dc/terms/";
 const SKOS_NS: &str = "http://www.w3.org/2004/02/skos/core#";
+const SH_NS: &str = "http://www.w3.org/ns/shacl#";
+
+/// The ontology's base IRI — the schema `id`, or the shared fallback.
+fn ontology_iri_string(schema: &SchemaDefinition) -> &str {
+    schema
+        .id
+        .as_deref()
+        .unwrap_or("http://example.org/ontology")
+}
+
+/// Absolute IRI for a class: its `class_uri` (CURIE-expanded) or
+/// `{ontology}#{name}`. The single source of class-IRI derivation, shared
+/// by the OWL graph and the SHACL shapes graph so a shape targets exactly
+/// the IRI the OWL output declares.
+fn class_iri_string(name: &str, class_def: &ClassDefinition, schema: &SchemaDefinition) -> String {
+    class_def
+        .class_uri
+        .as_deref()
+        .map(|c| expand_curie(c, schema))
+        .unwrap_or_else(|| format!("{}#{}", ontology_iri_string(schema), name))
+}
+
+/// Absolute IRI for a slot: its `slot_uri` (CURIE-expanded) or
+/// `{ontology}#{name}`. Shared by the OWL graph and the SHACL shapes graph.
+fn slot_iri_string(name: &str, slot_def: &SlotDefinition, schema: &SchemaDefinition) -> String {
+    slot_def
+        .slot_uri
+        .as_deref()
+        .map(|s| expand_curie(s, schema))
+        .unwrap_or_else(|| format!("{}#{}", ontology_iri_string(schema), name))
+}
 
 /// Expand a CURIE-shaped name (`prefix:local`) against `schema.prefixes`
 /// into an absolute IRI. Inputs that are already absolute URLs
@@ -122,10 +153,7 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
     let dcterms = Namespace::new_unchecked(DCTERMS_NS);
 
     // Ontology IRI
-    let ontology_iri_str = schema
-        .id
-        .as_deref()
-        .unwrap_or("http://example.org/ontology");
+    let ontology_iri_str = ontology_iri_string(schema);
     let ontology_iri = make_iri(ontology_iri_str)?;
 
     // Ontology declaration
@@ -222,11 +250,7 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
     let rdfs_subclass_of = rdfs::subClassOf;
 
     for (name, class_def) in &schema.classes {
-        let class_iri_str = class_def
-            .class_uri
-            .as_deref()
-            .map(|c| expand_curie(c, schema))
-            .unwrap_or_else(|| format!("{}#{}", ontology_iri_str, name));
+        let class_iri_str = class_iri_string(name, class_def, schema);
         let class_iri = make_iri(&class_iri_str)?;
 
         // rdf:type owl:Class
@@ -332,11 +356,7 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
         .collect::<Result<_, _>>()?;
 
     for (name, slot_def) in &schema.slots {
-        let prop_iri_str = slot_def
-            .slot_uri
-            .as_deref()
-            .map(|s| expand_curie(s, schema))
-            .unwrap_or_else(|| format!("{}#{}", ontology_iri_str, name));
+        let prop_iri_str = slot_iri_string(name, slot_def, schema);
         let prop_iri = make_iri(&prop_iri_str)?;
 
         // Determine property type
@@ -544,6 +564,128 @@ fn map_linkml_to_xsd(linkml_type: &str) -> String {
         "uri" => format!("{}anyURI", xsd_ns),
         _ => format!("{}{}", xsd_ns, linkml_type),
     }
+}
+
+/// Build a SHACL shapes graph from the LinkML IR: one `sh:NodeShape` per
+/// class (`sh:targetClass` its IRI) with a `sh:property` shape per effective
+/// slot carrying that slot's value constraints. A separate artifact from the
+/// OWL graph ([`build_rdf_graph`]) — a validation shapes file a SHACL engine
+/// consumes — but built from the same IRI derivation, so every shape targets
+/// the class/property IRIs the OWL output declares.
+///
+/// SHACL Core only. Slot `range` → `sh:datatype` (scalar) or `sh:class`
+/// (class-valued); an enum range carries no datatype/class constraint yet
+/// (`sh:in` projection is a later refinement). `required` → `sh:minCount 1`;
+/// `minimum_cardinality`/`maximum_cardinality` → `sh:minCount`/`sh:maxCount`;
+/// `pattern` → `sh:pattern`; `minimum_value`/`maximum_value` →
+/// `sh:minInclusive`/`sh:maxInclusive`.
+pub fn build_shacl_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
+    let mut graph = FastGraph::new();
+    let sh = Namespace::new_unchecked(SH_NS);
+    let sh_node_shape = sh
+        .get("NodeShape")
+        .map_err(|e| IoError::Parse(e.to_string()))?;
+    let sh_target_class = sh
+        .get("targetClass")
+        .map_err(|e| IoError::Parse(e.to_string()))?;
+    let sh_property = sh
+        .get("property")
+        .map_err(|e| IoError::Parse(e.to_string()))?;
+    let sh_path = sh.get("path").map_err(|e| IoError::Parse(e.to_string()))?;
+    let sh_datatype = sh
+        .get("datatype")
+        .map_err(|e| IoError::Parse(e.to_string()))?;
+    let sh_class = sh.get("class").map_err(|e| IoError::Parse(e.to_string()))?;
+    let sh_min_count = sh
+        .get("minCount")
+        .map_err(|e| IoError::Parse(e.to_string()))?;
+    let sh_max_count = sh
+        .get("maxCount")
+        .map_err(|e| IoError::Parse(e.to_string()))?;
+    let sh_pattern = sh
+        .get("pattern")
+        .map_err(|e| IoError::Parse(e.to_string()))?;
+    let sh_min_inclusive = sh
+        .get("minInclusive")
+        .map_err(|e| IoError::Parse(e.to_string()))?;
+    let sh_max_inclusive = sh
+        .get("maxInclusive")
+        .map_err(|e| IoError::Parse(e.to_string()))?;
+
+    for (name, class_def) in &schema.classes {
+        let class_iri_str = class_iri_string(name, class_def, schema);
+        let class_iri = make_iri(&class_iri_str)?;
+        let shape_iri = make_iri(&format!("{class_iri_str}Shape"))?;
+
+        graph
+            .insert(&shape_iri, rdf::type_, sh_node_shape)
+            .map_err(|e| IoError::Write(e.to_string()))?;
+        graph
+            .insert(&shape_iri, sh_target_class, &class_iri)
+            .map_err(|e| IoError::Write(e.to_string()))?;
+
+        let effective = crate::linkml_resolve::resolve_effective_slots(class_def, schema);
+        for (slot_name, slot) in &effective {
+            let prop_shape = make_iri(&format!("{class_iri_str}Shape/{slot_name}"))?;
+            let prop_iri = make_iri(&slot_iri_string(slot_name, slot, schema))?;
+            graph
+                .insert(&shape_iri, sh_property, &prop_shape)
+                .map_err(|e| IoError::Write(e.to_string()))?;
+            graph
+                .insert(&prop_shape, sh_path, &prop_iri)
+                .map_err(|e| IoError::Write(e.to_string()))?;
+
+            // Range: class-valued → sh:class, plain scalar → sh:datatype.
+            // An enum range is neither (its permissible values aren't an
+            // xsd datatype); left unconstrained until an `sh:in` projection.
+            if let Some(range) = slot.range.as_deref() {
+                if let Some(target) = schema.classes.get(range) {
+                    let target_iri = make_iri(&class_iri_string(range, target, schema))?;
+                    graph
+                        .insert(&prop_shape, sh_class, &target_iri)
+                        .map_err(|e| IoError::Write(e.to_string()))?;
+                } else if !schema.enums.contains_key(range) {
+                    let xsd_iri = make_iri(&map_linkml_to_xsd(range))?;
+                    graph
+                        .insert(&prop_shape, sh_datatype, &xsd_iri)
+                        .map_err(|e| IoError::Write(e.to_string()))?;
+                }
+            }
+
+            if slot.required {
+                graph
+                    .insert(&prop_shape, sh_min_count, 1_i32)
+                    .map_err(|e| IoError::Write(e.to_string()))?;
+            }
+            if let Some(min) = slot.minimum_cardinality {
+                graph
+                    .insert(&prop_shape, sh_min_count, min as i32)
+                    .map_err(|e| IoError::Write(e.to_string()))?;
+            }
+            if let Some(max) = slot.maximum_cardinality {
+                graph
+                    .insert(&prop_shape, sh_max_count, max as i32)
+                    .map_err(|e| IoError::Write(e.to_string()))?;
+            }
+            if let Some(pattern) = slot.pattern.as_deref() {
+                graph
+                    .insert(&prop_shape, sh_pattern, pattern)
+                    .map_err(|e| IoError::Write(e.to_string()))?;
+            }
+            if let Some(min) = slot.minimum_value {
+                graph
+                    .insert(&prop_shape, sh_min_inclusive, min)
+                    .map_err(|e| IoError::Write(e.to_string()))?;
+            }
+            if let Some(max) = slot.maximum_value {
+                graph
+                    .insert(&prop_shape, sh_max_inclusive, max)
+                    .map_err(|e| IoError::Write(e.to_string()))?;
+            }
+        }
+    }
+
+    Ok(graph)
 }
 
 // ============================================================================

@@ -21,6 +21,7 @@ pub mod postgres_writer;
 pub mod publish;
 pub mod rdf_serializers;
 pub mod rust_writer;
+pub mod shacl_writer;
 pub mod source;
 pub mod yaml_reader;
 

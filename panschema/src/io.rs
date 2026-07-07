@@ -22,6 +22,7 @@ use crate::owl_writer::OwlWriter;
 use crate::postgres_writer::PostgresWriter;
 use crate::rdf_serializers::{JsonLdWriter, NTriplesWriter, RdfXmlWriter};
 use crate::rust_writer::RustWriter;
+use crate::shacl_writer::ShaclWriter;
 use crate::yaml_reader::YamlReader;
 
 /// Errors that can occur during reading or writing
@@ -112,7 +113,7 @@ impl FormatRegistry {
     /// - Readers: `OwlReader` (ttl, turtle), `YamlReader` (yaml, yml)
     /// - Writers: `HtmlWriter` (html), `OwlWriter` (ttl), `JsonLdWriter` (jsonld),
     ///   `RdfXmlWriter` (rdfxml), `NTriplesWriter` (ntriples), `GraphWriter` (graph-json),
-    ///   `RustWriter` (rust), `PostgresWriter` (postgres)
+    ///   `RustWriter` (rust), `PostgresWriter` (postgres), `ShaclWriter` (shacl)
     pub fn with_defaults() -> Self {
         let mut registry = Self::new();
         registry.register_reader(Box::new(OwlReader::new()));
@@ -125,6 +126,7 @@ impl FormatRegistry {
         registry.register_writer(Box::new(GraphWriter::new()));
         registry.register_writer(Box::new(RustWriter::new()));
         registry.register_writer(Box::new(PostgresWriter::new()));
+        registry.register_writer(Box::new(ShaclWriter::new()));
         registry
     }
 
@@ -405,6 +407,14 @@ mod tests {
     }
 
     #[test]
+    fn with_defaults_registers_shacl_writer() {
+        let registry = FormatRegistry::with_defaults();
+
+        assert!(registry.writer_for_format("shacl").is_some());
+        assert!(registry.writer_for_format("SHACL").is_some()); // case insensitive
+    }
+
+    #[test]
     fn writer_format_ids_lists_every_registered_writer() {
         // The definitive list `generate --help`'s hand-written format
         // list is checked against, so a writer added to `with_defaults`
@@ -422,6 +432,7 @@ mod tests {
             "graph-json",
             "rust",
             "postgres",
+            "shacl",
         ] {
             assert!(
                 ids.contains(&expected),

@@ -103,25 +103,51 @@ the existing slot-level `any_of`.
 
 ---
 
-### Slice 4: SHACL / OWL projection of class constraints — deferred
+### Slice 4: SHACL projection of class constraints
 
-**Status:** 📋 Deferred
+**Status:** In Progress
 
-**Priority:** Could Have
+**Priority:** Should Have — undeferred: three downstream consumers need a
+machine-readable projection (nimbus's ch06 conditional rule; scidatica's
+platform, which expects SHACL from panschema; scimantic-engine/t2t, which
+load SHACL into oxigraph at runtime to validate triples before they hit
+the store).
 
-**User Value:** Emit `unique_keys` / `rules` as SHACL shapes (or OWL
-restrictions) so they are machine-checkable, not just visible.
+**User Value:** Emit `unique_keys` / `rules` / slot value-constraints as
+SHACL shapes so they are machine-checkable by any SHACL engine, not just
+visible in the docs.
 
-**Why deferred:** panschema has no SHACL writer, and instance-data validation is
-the consuming application's responsibility in the current architecture — the doc
-generator documents constraints, it does not enforce them against an A-box.
-Picked up when a validation consumer needs a machine-readable projection; pairs
-naturally with a `panschema validate --data` surface extending
-[feature 07](07-schema-validation.md).
+**Design:** A standalone `ShaclWriter` (format id `shacl`, registered in
+`FormatRegistry`), emitting a self-contained Turtle **shapes graph** — a
+separate artifact from the OWL/TTL output, matching the `[generate.<name>]`
+`shacl = "shapes.ttl"` shape consumers already expect (its manifest key is
+wired separately, later). Reuses `rdf_serializers`' IRI derivation
+(`expand_curie`, class/property IRIs, `map_linkml_to_xsd`) so every shape
+targets the same class/property IRIs the OWL output declares. SHACL **Core**
+only (no SHACL-AF) wherever expressible; the same `slot_conditions` →
+predicate vocabulary [feature 24 slice 3](24-postgres-ddl-writer.md) maps to
+SQL `CHECK` maps here to shape constraints.
 
-**Acceptance Criteria:**
-- [ ] (when undeferred) Emit a SHACL `sh:NodeShape` per class with property-shape constraints mirroring `unique_keys` and the renderable rule subset, with tests pinning the shape triples.
-- [ ] (when undeferred, for `rules` specifically) Stop reporting `rules` from [feature 23](23-cross-writer-construct-coverage-diagnostics.md)'s `classes_with_unprojected_constructs` for RDF formats — once `rules` is genuinely RDF-projected, warning that it isn't would itself be a false signal. (`unique_keys` keeps warning; it has no RDF projection planned.)
+**V&V:** generated shapes are loaded into `oxigraph` and shape triples
+asserted via SPARQL (the [feature 27](27-rdf-owl-family-output-verification.md)
+oracle). Full SHACL *validation* (a shape actually rejecting bad data)
+needs a SHACL engine — no pure-Rust one exists yet, so that behavioral
+tier is deferred, exactly as feature 28 slice 3 is for Postgres.
+
+#### Slice 4a: `ShaclWriter` skeleton + base property shapes — walking skeleton
+
+- [x] `ShaclWriter` implements `Writer` (`format_id() == "shacl"`), registered in `FormatRegistry::with_defaults` (`with_defaults_registers_shacl_writer`, `shacl_writer_format_id_is_shacl`).
+- [x] One `sh:NodeShape` per class with `sh:targetClass <classIRI>`, and one `sh:property` shape per effective slot carrying: `sh:path <slotIRI>`; scalar range → `sh:datatype <xsd>`, single-valued class range → `sh:class <targetClassIRI>`; `required` → `sh:minCount 1`; `minimum_cardinality`/`maximum_cardinality` → `sh:minCount`/`sh:maxCount`; `pattern` → `sh:pattern`; `minimum_value`/`maximum_value` → `sh:minInclusive`/`sh:maxInclusive`. IRI derivation shared with the OWL graph via `rdf_serializers::{class_iri_string, slot_iri_string}` so shapes target the exact IRIs the OWL output declares (`every_class_gets_a_node_shape_targeting_its_iri`, `base_slot_constraints_project_to_property_shapes`, `a_scalar_slot_projects_to_sh_datatype`).
+- [x] Output loads into `oxigraph` and the shape/target/constraint triples are SPARQL-assertable (the feature 27 oracle applied to the shapes graph).
+
+#### Slice 4b: `rules` → conditional shapes
+
+- [ ] Each rule with both pre/postconditions emits a shape encoding "if precondition then postcondition" in SHACL Core — `sh:or ( [ sh:not <preconditionShape> ] <postconditionShape> )`, the shape analogue of feature 24 slice 3's `NOT (pre) OR (post)` — with pre/post shapes built from the same `slot_conditions` field set. A rule not expressible this way is skipped with a diagnostic (reuse the `rules`-skip vocabulary from feature 24 slice 3).
+- [ ] Stop reporting `rules` from [feature 23](23-cross-writer-construct-coverage-diagnostics.md)'s `classes_with_unprojected_constructs` for `format == "shacl"` — once `rules` is genuinely SHACL-projected, warning that it isn't would be a false signal.
+
+#### Slice 4c: `unique_keys` → SPARQL constraint — optional
+
+- [ ] SHACL Core has no native cross-instance uniqueness; a `unique_keys` tuple maps to a `sh:sparql` constraint (SHACL-AF). Build only if a consumer needs uniqueness machine-checked; otherwise `unique_keys` stays HTML/Postgres-only.
 
 ---
 

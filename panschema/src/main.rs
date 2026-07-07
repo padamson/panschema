@@ -57,7 +57,7 @@ struct Cli {
     #[arg(short, long, global = true, default_value = "output")]
     output: PathBuf,
 
-    /// Output format: html, ttl, jsonld, rdfxml, ntriples, graph-json, rust, postgres
+    /// Output format: html, ttl, jsonld, rdfxml, ntriples, graph-json, rust, postgres, shacl
     #[arg(short, long, global = true, default_value = "html")]
     format: String,
 }
@@ -76,7 +76,7 @@ enum Commands {
         #[arg(short, long, default_value = "output")]
         output: PathBuf,
 
-        /// Output format: html, ttl, jsonld, rdfxml, ntriples, graph-json, rust, postgres
+        /// Output format: html, ttl, jsonld, rdfxml, ntriples, graph-json, rust, postgres, shacl
         #[arg(short, long, default_value = "html")]
         format: String,
 
