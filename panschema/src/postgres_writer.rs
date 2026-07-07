@@ -54,6 +54,17 @@ fn needs_parent_dir(output: &Path) -> bool {
     output.parent().is_some_and(|p| !p.as_os_str().is_empty())
 }
 
+/// Double-quote a Postgres identifier, doubling any embedded `"`. Applied
+/// to every identifier this writer interpolates into SQL — table, column,
+/// enum type, and constraint names. Quoting is unconditional: it makes
+/// reserved words (a class named `Order`) legal, and it confines a
+/// hostile or merely unusual name to the identifier position instead of
+/// letting it alter the statement. Names are snake_cased (lowercased)
+/// first, so quoting doesn't change how well-formed names resolve.
+fn quote_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
 fn render(schema: &SchemaDefinition) -> String {
     let mut out = String::new();
     writeln!(
@@ -75,7 +86,8 @@ fn render(schema: &SchemaDefinition) -> String {
             .collect();
         writeln!(
             out,
-            "CREATE TYPE {type_name} AS ENUM ({});",
+            "CREATE TYPE {} AS ENUM ({});",
+            quote_ident(&type_name),
             values.join(", ")
         )
         .ok();
@@ -110,9 +122,10 @@ fn render(schema: &SchemaDefinition) -> String {
             .find(|(_, slot)| slot.identifier)
             .map(|(name, _)| name.clone());
 
-        writeln!(out, "CREATE TABLE {table} (").ok();
+        writeln!(out, "CREATE TABLE {} (", quote_ident(&table)).ok();
         let mut lines = vec![format!(
-            "    {pk_col} {pk_type} PRIMARY KEY{}",
+            "    {} {pk_type} PRIMARY KEY{}",
+            quote_ident(&pk_col),
             if pk_slot.is_none() {
                 " DEFAULT gen_random_uuid()"
             } else {
@@ -135,7 +148,10 @@ fn render(schema: &SchemaDefinition) -> String {
             if let Some(target_class) = range.and_then(|r| schema.classes.get_key_value(r)) {
                 let (target_name, target_def) = target_class;
                 let (target_pk_col, target_pk_type) = class_primary_key(target_def, schema);
-                lines.push(format!("    {col} {target_pk_type}{not_null}"));
+                lines.push(format!(
+                    "    {} {target_pk_type}{not_null}",
+                    quote_ident(col)
+                ));
                 fk_constraints.push(FkConstraint {
                     from_table: table.clone(),
                     from_col: col.clone(),
@@ -149,7 +165,10 @@ fn render(schema: &SchemaDefinition) -> String {
             } else {
                 let sql_type = sql_type_for_slot_range(range, schema);
                 let checks = column_checks(col, slot);
-                lines.push(format!("    {col} {sql_type}{not_null}{checks}"));
+                lines.push(format!(
+                    "    {} {sql_type}{not_null}{checks}",
+                    quote_ident(col)
+                ));
             }
         }
         // Table-level UNIQUE constraints from `unique_keys`. A key that
@@ -167,12 +186,15 @@ fn render(schema: &SchemaDefinition) -> String {
             if let Some(cols) = cols {
                 let col_list = cols
                     .iter()
-                    .map(|c| c.as_str())
+                    .map(|c| quote_ident(c))
                     .collect::<Vec<_>>()
                     .join(", ");
                 lines.push(format!(
-                    "    CONSTRAINT {table}_{}_key UNIQUE ({col_list})",
-                    crate::rust_writer::snake_case(key_name)
+                    "    CONSTRAINT {} UNIQUE ({col_list})",
+                    quote_ident(&format!(
+                        "{table}_{}_key",
+                        crate::rust_writer::snake_case(key_name)
+                    ))
                 ));
             }
         }
@@ -189,7 +211,8 @@ fn render(schema: &SchemaDefinition) -> String {
                 )
             {
                 lines.push(format!(
-                    "    CONSTRAINT {table}_rule{i}_check CHECK (NOT ({p_sql}) OR ({q_sql}))"
+                    "    CONSTRAINT {} CHECK (NOT ({p_sql}) OR ({q_sql}))",
+                    quote_ident(&format!("{table}_rule{i}_check"))
                 ));
             }
         }
@@ -202,7 +225,11 @@ fn render(schema: &SchemaDefinition) -> String {
         writeln!(
             out,
             "ALTER TABLE {} ADD CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({});",
-            fk.from_table, fk.constraint_name, fk.from_col, fk.to_table, fk.to_col
+            quote_ident(&fk.from_table),
+            quote_ident(&fk.constraint_name),
+            quote_ident(&fk.from_col),
+            quote_ident(&fk.to_table),
+            quote_ident(&fk.to_col)
         )
         .ok();
     }
@@ -219,6 +246,7 @@ fn render(schema: &SchemaDefinition) -> String {
 /// - `minimum_value` / `maximum_value` → a single `CHECK` combining both
 ///   with `AND` when both are set, or just the one side when only one is.
 fn column_checks(col: &str, slot: &crate::linkml::SlotDefinition) -> String {
+    let col = quote_ident(col);
     let mut checks = String::new();
     if let Some(p) = &slot.pattern {
         checks.push_str(&format!(" CHECK ({col} ~ '{}')", p.replace('\'', "''")));
@@ -290,7 +318,7 @@ fn rule_conditions_to_sql(
     }
     let mut preds = Vec::new();
     for (slot, cond) in &conds.slot_conditions {
-        let col = slot_columns.get(slot.as_str())?;
+        let col = quote_ident(slot_columns.get(slot.as_str())?);
         // Fields with no single-column CHECK form make the whole rule
         // unexpressible (the HTML card can still render them).
         if cond.range.is_some()
@@ -521,12 +549,14 @@ fn referenced_enums(schema: &SchemaDefinition) -> Vec<&str> {
     names.into_iter().collect()
 }
 
-/// The Postgres column type for a slot's range: an enum type name if the
-/// range resolves to a declared enum, else the scalar type mapping.
+/// The Postgres column type for a slot's range: an enum type name (quoted —
+/// it's an identifier this writer itself declares) if the range resolves to
+/// a declared enum, else the scalar type mapping (a builtin type keyword,
+/// never quoted).
 fn sql_type_for_slot_range(range: Option<&str>, schema: &SchemaDefinition) -> String {
     let range = range.unwrap_or("string");
     if schema.enums.contains_key(range) {
-        crate::rust_writer::snake_case(range)
+        quote_ident(&crate::rust_writer::snake_case(range))
     } else {
         sql_type_for_range(range).to_string()
     }
@@ -603,6 +633,46 @@ mod tests {
     }
 
     #[test]
+    fn reserved_word_class_name_emits_quoted_applicable_ddl() {
+        // `ORDER` is a fully reserved Postgres keyword: unquoted
+        // `CREATE TABLE order (...)` is a syntax error the pg_query oracle
+        // rejects. Quoting every identifier makes the name legal.
+        let mut class = ClassDefinition::new("Order");
+        let mut placed_at = SlotDefinition::new("placed_at");
+        placed_at.range = Some("datetime".to_string());
+        class.attributes.insert("placed_at".to_string(), placed_at);
+        let schema = schema_with_class(class);
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            out.contains("CREATE TABLE \"order\" ("),
+            "reserved-word class name must emit a quoted table identifier; got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn hostile_class_name_stays_inside_its_quoted_identifier() {
+        // A name crafted to break out of the identifier position must end
+        // up entirely inside one quoted identifier — the parsed script may
+        // contain only CREATE statements, never a smuggled DROP.
+        let mut class = ClassDefinition::new("Evil (x int); DROP TABLE users; --");
+        let mut name_slot = SlotDefinition::new("name");
+        name_slot.range = Some("string".to_string());
+        class.attributes.insert("name".to_string(), name_slot);
+        let schema = schema_with_class(class);
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        let parsed = pg_query::parse(&out).expect("already validated above");
+        let tree = format!("{parsed:?}");
+        assert!(
+            !tree.contains("DropStmt"),
+            "hostile name must not smuggle a DROP statement into the parse tree; got:\n{out}"
+        );
+    }
+
+    #[test]
     fn emits_create_table_with_scalar_columns() {
         let mut class = ClassDefinition::new("Offering");
         let mut name_slot = SlotDefinition::new("name");
@@ -614,11 +684,11 @@ mod tests {
         let out = PostgresWriter::new().render(&schema);
         assert_valid_postgres_sql(&out);
         assert!(
-            out.contains("CREATE TABLE offering ("),
+            out.contains("CREATE TABLE \"offering\" ("),
             "expected a CREATE TABLE for the class; got:\n{out}"
         );
         assert!(
-            out.contains("name text NOT NULL"),
+            out.contains("\"name\" text NOT NULL"),
             "expected a NOT NULL text column for the required string slot; got:\n{out}"
         );
     }
@@ -637,7 +707,7 @@ mod tests {
         let out = PostgresWriter::new().render(&schema);
         assert_valid_postgres_sql(&out);
         assert!(
-            out.contains("description text") && !out.contains("description text NOT NULL"),
+            out.contains("\"description\" text") && !out.contains("\"description\" text NOT NULL"),
             "an optional slot must not be NOT NULL; got:\n{out}"
         );
     }
@@ -668,7 +738,7 @@ mod tests {
             ("recorded_at_time", "time"),
         ] {
             assert!(
-                out.contains(&format!("{slot_name} {sql_type}")),
+                out.contains(&format!("\"{slot_name}\" {sql_type}")),
                 "expected `{slot_name}` typed as `{sql_type}`; got:\n{out}"
             );
         }
@@ -682,7 +752,7 @@ mod tests {
         let out = PostgresWriter::new().render(&schema);
         assert_valid_postgres_sql(&out);
         assert!(
-            out.contains("id uuid PRIMARY KEY DEFAULT gen_random_uuid()"),
+            out.contains("\"id\" uuid PRIMARY KEY DEFAULT gen_random_uuid()"),
             "expected a synthesized uuid primary key; got:\n{out}"
         );
     }
@@ -699,11 +769,11 @@ mod tests {
         let out = PostgresWriter::new().render(&schema);
         assert_valid_postgres_sql(&out);
         assert!(
-            out.contains("sku text PRIMARY KEY"),
+            out.contains("\"sku\" text PRIMARY KEY"),
             "expected the identifier slot to become the primary key; got:\n{out}"
         );
         assert!(
-            !out.contains("id uuid PRIMARY KEY"),
+            !out.contains("\"id\" uuid PRIMARY KEY"),
             "must not also synthesize a uuid primary key; got:\n{out}"
         );
     }
@@ -733,17 +803,17 @@ mod tests {
         let out = PostgresWriter::new().render(&schema);
         assert_valid_postgres_sql(&out);
         let create_type_pos = out
-            .find("CREATE TYPE deployment_status AS ENUM ('actual', 'planned')")
+            .find("CREATE TYPE \"deployment_status\" AS ENUM ('actual', 'planned')")
             .unwrap_or_else(|| panic!("expected the enum type; got:\n{out}"));
         let create_table_pos = out
-            .find("CREATE TABLE deployment (")
+            .find("CREATE TABLE \"deployment\" (")
             .unwrap_or_else(|| panic!("expected the table; got:\n{out}"));
         assert!(
             create_type_pos < create_table_pos,
             "CREATE TYPE must precede the table that references it; got:\n{out}"
         );
         assert!(
-            out.contains("status deployment_status NOT NULL"),
+            out.contains("\"status\" \"deployment_status\" NOT NULL"),
             "expected the column typed as the enum; got:\n{out}"
         );
     }
@@ -769,14 +839,15 @@ mod tests {
         // The column itself: nullable (not required), typed to match the
         // referenced table's primary key (a synthesized uuid here).
         assert!(
-            out.contains("on_provider_id uuid") && !out.contains("on_provider_id uuid NOT NULL"),
+            out.contains("\"on_provider_id\" uuid")
+                && !out.contains("\"on_provider_id\" uuid NOT NULL"),
             "expected a nullable FK column typed as uuid; got:\n{out}"
         );
         // The constraint is deferred (added after every CREATE TABLE) so
         // declaration order — and cycles between classes — never matter.
         let last_create_table = out.rfind("CREATE TABLE").expect("a CREATE TABLE");
         let fk_pos = out
-            .find("ALTER TABLE deployment ADD CONSTRAINT deployment_on_provider_fkey FOREIGN KEY (on_provider_id) REFERENCES provider (id)")
+            .find("ALTER TABLE \"deployment\" ADD CONSTRAINT \"deployment_on_provider_fkey\" FOREIGN KEY (\"on_provider_id\") REFERENCES \"provider\" (\"id\")")
             .unwrap_or_else(|| panic!("expected the deferred FK constraint; got:\n{out}"));
         assert!(
             fk_pos > last_create_table,
@@ -804,7 +875,7 @@ mod tests {
         let out = PostgresWriter::new().render(&schema);
         assert_valid_postgres_sql(&out);
         assert!(
-            out.contains("deployment_of_id uuid NOT NULL"),
+            out.contains("\"deployment_of_id\" uuid NOT NULL"),
             "a required class-range slot's FK column must be NOT NULL; got:\n{out}"
         );
     }
@@ -836,7 +907,7 @@ mod tests {
         let out = PostgresWriter::new().render(&schema);
         assert_valid_postgres_sql(&out);
         assert!(
-            out.contains("on_provider_code text"),
+            out.contains("\"on_provider_code\" text"),
             "FK column must be named after the target's actual primary key column (`code`), not a hardcoded `_id`; got:\n{out}"
         );
         assert!(
@@ -844,7 +915,7 @@ mod tests {
             "must not also emit the old hardcoded `_id` suffix; got:\n{out}"
         );
         assert!(
-            out.contains("REFERENCES provider (code)"),
+            out.contains("REFERENCES \"provider\" (\"code\")"),
             "FK must reference the target's actual primary key column; got:\n{out}"
         );
     }
@@ -858,7 +929,7 @@ mod tests {
         let out = PostgresWriter::new().render(&schema);
         assert_valid_postgres_sql(&out);
         assert!(
-            !out.contains("CREATE TABLE infra_component"),
+            !out.contains("CREATE TABLE \"infra_component\""),
             "an abstract class must not get a table; got:\n{out}"
         );
     }
@@ -884,15 +955,15 @@ mod tests {
 
         let out = PostgresWriter::new().render(&schema);
         assert_valid_postgres_sql(&out);
-        let deployment_table = &out[out.find("CREATE TABLE deployment (").unwrap()..];
+        let deployment_table = &out[out.find("CREATE TABLE \"deployment\" (").unwrap()..];
         assert!(
-            deployment_table.contains("created_at timestamptz")
-                && deployment_table.contains("status text"),
+            deployment_table.contains("\"created_at\" timestamptz")
+                && deployment_table.contains("\"status\" text"),
             "expected the mixin's attribute flattened alongside the class's own; got:\n{out}"
         );
         // The mixin, not being abstract, still gets its own table too.
         assert!(
-            out.contains("CREATE TABLE auditable ("),
+            out.contains("CREATE TABLE \"auditable\" ("),
             "a non-abstract mixin still gets its own table; got:\n{out}"
         );
     }
@@ -910,7 +981,7 @@ mod tests {
         let out = PostgresWriter::new().render(&schema);
         assert_valid_postgres_sql(&out);
         assert!(
-            !out.contains("CREATE TABLE sub"),
+            !out.contains("CREATE TABLE \"sub\""),
             "a class using is_a must not get a table yet; got:\n{out}"
         );
         let skipped = skipped_classes(&schema);
@@ -935,7 +1006,7 @@ mod tests {
         let out = PostgresWriter::new().render(&schema);
         assert_valid_postgres_sql(&out);
         assert!(
-            !out.contains("CREATE TABLE deployment"),
+            !out.contains("CREATE TABLE \"deployment\""),
             "a class with a multivalued slot must not get a table yet; got:\n{out}"
         );
         assert_eq!(
@@ -959,7 +1030,7 @@ mod tests {
         let out = PostgresWriter::new().render(&schema);
         assert_valid_postgres_sql(&out);
         assert!(
-            !out.contains("CREATE TABLE input"),
+            !out.contains("CREATE TABLE \"input\""),
             "a class with an any_of slot must not get a table; got:\n{out}"
         );
         assert_eq!(
@@ -995,7 +1066,7 @@ mod tests {
         let out = PostgresWriter::new().render(&schema);
         assert_valid_postgres_sql(&out);
         assert!(
-            !out.contains("CREATE TABLE deployment"),
+            !out.contains("CREATE TABLE \"deployment\""),
             "a class referencing a skipped class must itself be skipped, not emit a broken FK; got:\n{out}"
         );
         let skipped = skipped_classes(&schema);
@@ -1097,10 +1168,10 @@ mod tests {
         // Sanity that this fixture actually exercises what it claims to
         // (a failure here means the test stopped covering what its name
         // says, independent of whether pg_query accepts the output).
-        assert!(out.contains("CREATE TYPE deployment_status AS ENUM"));
-        assert!(out.contains("code text PRIMARY KEY"));
-        assert!(out.contains("id uuid PRIMARY KEY DEFAULT gen_random_uuid()"));
-        assert!(out.contains("ALTER TABLE deployment ADD CONSTRAINT"));
+        assert!(out.contains("CREATE TYPE \"deployment_status\" AS ENUM"));
+        assert!(out.contains("\"code\" text PRIMARY KEY"));
+        assert!(out.contains("\"id\" uuid PRIMARY KEY DEFAULT gen_random_uuid()"));
+        assert!(out.contains("ALTER TABLE \"deployment\" ADD CONSTRAINT"));
     }
 
     #[test]
@@ -1130,7 +1201,7 @@ mod tests {
         assert_valid_postgres_sql(&out);
         assert!(
             out.contains(
-                "CONSTRAINT offering_service_offering_key UNIQUE (service_type, offered_by)"
+                "CONSTRAINT \"offering_service_offering_key\" UNIQUE (\"service_type\", \"offered_by\")"
             ),
             "expected a named table-level UNIQUE constraint over the key's slot tuple; got:\n{out}"
         );
@@ -1148,7 +1219,7 @@ mod tests {
         let out = PostgresWriter::new().render(&schema);
         assert_valid_postgres_sql(&out);
         assert!(
-            out.contains("code text CHECK (code ~ '^[A-Z]{3}$')"),
+            out.contains("\"code\" text CHECK (\"code\" ~ '^[A-Z]{3}$')"),
             "expected an inline regex CHECK on the patterned column; got:\n{out}"
         );
     }
@@ -1168,7 +1239,7 @@ mod tests {
         let out = PostgresWriter::new().render(&schema);
         assert_valid_postgres_sql(&out);
         assert!(
-            out.contains("CHECK (body ~ 'it''s')"),
+            out.contains("CHECK (\"body\" ~ 'it''s')"),
             "single quotes in a pattern must be doubled; got:\n{out}"
         );
     }
@@ -1186,7 +1257,7 @@ mod tests {
         let out = PostgresWriter::new().render(&schema);
         assert_valid_postgres_sql(&out);
         assert!(
-            out.contains("level integer CHECK (level >= 0 AND level <= 100)"),
+            out.contains("\"level\" integer CHECK (\"level\" >= 0 AND \"level\" <= 100)"),
             "both bounds must combine into one CHECK; got:\n{out}"
         );
     }
@@ -1203,7 +1274,7 @@ mod tests {
         let out = PostgresWriter::new().render(&schema);
         assert_valid_postgres_sql(&out);
         assert!(
-            out.contains("ratio double precision CHECK (ratio >= 0)"),
+            out.contains("\"ratio\" double precision CHECK (\"ratio\" >= 0)"),
             "a lone minimum_value must emit only the `>=` side; got:\n{out}"
         );
         assert!(
@@ -1224,7 +1295,7 @@ mod tests {
         let out = PostgresWriter::new().render(&schema);
         assert_valid_postgres_sql(&out);
         assert!(
-            out.contains("ratio double precision CHECK (ratio <= 1)"),
+            out.contains("\"ratio\" double precision CHECK (\"ratio\" <= 1)"),
             "a lone maximum_value must emit only the `<=` side; got:\n{out}"
         );
         assert!(
@@ -1275,7 +1346,7 @@ mod tests {
         assert_valid_postgres_sql(&out);
         assert!(
             out.contains(
-                "CONSTRAINT deployment_rule0_check CHECK (NOT (status = 'actual') OR (region IS NOT NULL))"
+                "CONSTRAINT \"deployment_rule0_check\" CHECK (NOT (\"status\" = 'actual') OR (\"region\" IS NOT NULL))"
             ),
             "expected the conditional rule encoded as NOT(pre) OR (post); got:\n{out}"
         );

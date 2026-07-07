@@ -99,6 +99,7 @@ impl RustWriter {
 
 impl Writer for RustWriter {
     fn write(&self, schema: &SchemaDefinition, output: &Path) -> IoResult<()> {
+        validate_identifiers(schema)?;
         if let Some(parent) = output.parent()
             && !parent.as_os_str().is_empty()
         {
@@ -111,6 +112,53 @@ impl Writer for RustWriter {
     fn format_id(&self) -> &str {
         "rust"
     }
+}
+
+/// Reject any schema name that can't become a Rust identifier before a
+/// single line is emitted. Names flow verbatim into `struct`/`enum`/field/
+/// variant positions (keyword escaping aside), so a name carrying anything
+/// outside `[A-Za-z0-9_]` (or starting with a digit) would inject arbitrary
+/// tokens into the generated source — or, at best, produce code that does
+/// not compile. Rejecting loudly beats silently mangling: a mangled name is
+/// the same silent-drop class of bug panschema exists to avoid.
+fn validate_identifiers(schema: &SchemaDefinition) -> IoResult<()> {
+    fn ok(name: &str) -> bool {
+        let mut chars = name.chars();
+        matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    }
+    let bad = |kind: &str, name: &str| {
+        IoError::Write(format!(
+            "{kind} `{name}` cannot be a Rust identifier (allowed: letters, \
+             digits, `_`, not starting with a digit); rename it in the schema"
+        ))
+    };
+    for (name, class) in &schema.classes {
+        if !ok(name) {
+            return Err(bad("class", name));
+        }
+        for attr in class.attributes.keys() {
+            if !ok(attr) {
+                return Err(bad("attribute", attr));
+            }
+        }
+    }
+    for name in schema.slots.keys() {
+        if !ok(name) {
+            return Err(bad("slot", name));
+        }
+    }
+    for (name, def) in &schema.enums {
+        if !ok(name) {
+            return Err(bad("enum", name));
+        }
+        for value in def.permissible_values.keys() {
+            if !ok(value) {
+                return Err(bad("permissible value", value));
+            }
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1357,6 +1405,69 @@ fn variant_ident_for(text: &str) -> String {
 mod tests {
     use super::*;
     use crate::linkml::{ClassDefinition, EnumDefinition, PermissibleValue, SlotDefinition};
+
+    // ----- identifier validation ---------------------------------------
+
+    /// Write `schema` through the `Writer` path and return the result.
+    fn try_write(schema: &SchemaDefinition) -> crate::io::IoResult<()> {
+        use crate::io::Writer as _;
+        let dir = tempfile::tempdir().unwrap();
+        RustWriter::new().write(schema, &dir.path().join("out.rs"))
+    }
+
+    #[test]
+    fn a_class_name_with_invalid_identifier_chars_is_rejected_loudly() {
+        // A name that can't become a Rust identifier must fail the write
+        // with an error naming the offender — emitting it verbatim would
+        // inject arbitrary tokens into the generated source.
+        let mut schema = SchemaDefinition::new("s");
+        let hostile = "Evil; include!(\"/tmp/x.rs\"); struct Y";
+        schema
+            .classes
+            .insert(hostile.to_string(), ClassDefinition::new(hostile));
+
+        let err = try_write(&schema).expect_err("hostile class name must be rejected");
+        assert!(
+            err.to_string().contains("Evil"),
+            "error must name the offending entity; got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_permissible_value_with_invalid_identifier_chars_is_rejected_loudly() {
+        let mut schema = SchemaDefinition::new("s");
+        let mut status = EnumDefinition::new("Status");
+        status.permissible_values.insert(
+            "in progress".to_string(),
+            PermissibleValue::new("in progress"),
+        );
+        schema.enums.insert("Status".to_string(), status);
+        let mut class = ClassDefinition::new("Item");
+        let mut slot = SlotDefinition::new("status");
+        slot.range = Some("Status".to_string());
+        class.attributes.insert("status".to_string(), slot);
+        schema.classes.insert("Item".to_string(), class);
+
+        let err = try_write(&schema).expect_err("bad permissible value must be rejected");
+        assert!(
+            err.to_string().contains("in progress"),
+            "error must name the offending value; got: {err}"
+        );
+    }
+
+    #[test]
+    fn keyword_names_still_pass_validation() {
+        // Rust keywords are legal LinkML names — the raw-identifier
+        // escaping handles them; validation must not reject them.
+        let mut schema = SchemaDefinition::new("s");
+        let mut class = ClassDefinition::new("Item");
+        let mut slot = SlotDefinition::new("type");
+        slot.range = Some("string".to_string());
+        class.attributes.insert("type".to_string(), slot);
+        schema.classes.insert("Item".to_string(), class);
+
+        try_write(&schema).expect("keyword slot name must remain accepted");
+    }
 
     // ----- snake_case --------------------------------------------------
 
