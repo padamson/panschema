@@ -151,6 +151,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `GraphWriter` now emits range edges for inline class attributes (e.g., `Student.year` → `YearEnum`). Previously only top-level `slots:` produced domain/range edges, so most relationships in idiomatic LinkML schemas were silently dropped from the visualization. Inline attributes connect the owning class directly to the range target (no separate slot node), labeled with the attribute name.
 - 3D camera `zoom()` direction was inverted relative to the 2D camera and the documented contract; `factor > 1.0` now zooms in for both.
 
+### Security
+- **Generated HTML docs no longer let schema content break out of the embedded graph JSON (stored XSS).** The interactive graph's data is embedded in an inline `<script>` as JSON, and JSON does not escape `<` — so a `</script>` inside any schema string (a class/slot name or `description`) closed the script element mid-JSON and executed whatever markup followed, in the browser of anyone viewing the generated (or published) docs. Every `<` in the embedded JSON is now escaped as `<`, which `JSON.parse` decodes back to `<` — the graph data is byte-for-byte unchanged, only the on-page representation is safe. Affected anyone rendering docs from a schema they did not author.
+
 ## [0.2.0] - 2026-01-25
 
 Project renamed from **rontodoc** to **panschema** to reflect broader schema support.

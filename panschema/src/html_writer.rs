@@ -1290,8 +1290,15 @@ impl Writer for HtmlWriter {
             let graph_data = GraphWriter::new().schema_to_graph(schema);
             let node_count = graph_data.nodes.len();
             let edge_count = graph_data.edges.len();
-            let json =
-                serde_json::to_string(&graph_data).map_err(|e| IoError::Write(e.to_string()))?;
+            // The JSON is embedded in an inline <script>; serde_json does
+            // not escape `<`, so a `</script>` inside any schema string
+            // would close the element mid-JSON and execute what follows.
+            // Escaping `<` as its `<` form keeps the JSON byte-for-byte
+            // equivalent (JSON.parse decodes it back), so panschema-viz reads
+            // the identical wire shape — only the on-page bytes change.
+            let json = serde_json::to_string(&graph_data)
+                .map_err(|e| IoError::Write(e.to_string()))?
+                .replace('<', "\\u003c");
             (Some(json), node_count, edge_count)
         } else {
             (None, 0, 0)
@@ -3271,6 +3278,37 @@ mod tests {
             "generated HTML has {} HTML5 conformance error(s):\n{}",
             errors.len(),
             errors.join("\n")
+        );
+    }
+
+    #[test]
+    fn schema_strings_cannot_break_out_of_the_embedded_graph_json_script() {
+        // Schema-provided strings flow into the graph JSON embedded in an
+        // inline <script>. A `</script>` inside a description would end
+        // the script element mid-JSON and execute whatever follows —
+        // stored XSS in the generated docs. The serialized JSON must
+        // therefore never contain a literal `<`.
+        let mut schema = crate::linkml::SchemaDefinition::new("s");
+        schema.id = Some("http://example.org/xss".to_string());
+        let mut class = crate::linkml::ClassDefinition::new("Innocent");
+        class.description = Some("</script><img src=x onerror=alert(1)><script>".to_string());
+        schema.classes.insert("Innocent".to_string(), class);
+
+        let writer = HtmlWriter::new();
+        let temp_dir = std::env::temp_dir().join("panschema_graph_json_xss_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        writer.write(&schema, &temp_dir).expect("Write failed");
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("Failed to read");
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        let json_line = html
+            .lines()
+            .find(|l| l.contains("__PANSCHEMA_GRAPH_DATA__"))
+            .expect("the embedded graph JSON assignment");
+        assert!(
+            !json_line.contains('<'),
+            "embedded graph JSON must escape every `<` so schema content \
+             cannot close the script element; got:\n{json_line}"
         );
     }
 
