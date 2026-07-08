@@ -368,6 +368,20 @@ fn generate(
         }
     }
 
+    // The SHACL writer projects most `rules` as conditional shapes, but a
+    // one-sided rule, an empty condition side, or a condition naming a slot
+    // the class doesn't have has no shape form — dropped rather than
+    // emitting a shape over a fabricated property IRI. Warn so it isn't a
+    // silent gap.
+    if format.eq_ignore_ascii_case("shacl") {
+        for skipped in panschema::rdf_serializers::shacl_skipped_rules(&schema) {
+            eprintln!(
+                "warning: rule `{}` on class `{}` is not emitted as a SHACL shape: {}",
+                skipped.rule, skipped.class, skipped.reason
+            );
+        }
+    }
+
     // For HTML format, use HtmlWriter with custom options
     if format.eq_ignore_ascii_case("html") {
         use panschema::html_writer::{HtmlWriter, parse_graph_aspect};

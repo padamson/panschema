@@ -618,26 +618,29 @@ pub fn build_shacl_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
         // `slot_conditions` field set (with `equals_string`/`equals_number`
         // → `sh:hasValue`). All sub-shapes get deterministic named IRIs
         // rather than blank nodes, so the output is stable and queryable.
+        let slot_names: std::collections::BTreeSet<&str> =
+            effective.keys().map(String::as_str).collect();
         for (i, rule) in class_def.rules.iter().enumerate() {
-            let (Some(pre), Some(post)) = (&rule.preconditions, &rule.postconditions) else {
-                continue; // one-sided rule: no conditional to express
-            };
-            if pre.slot_conditions.is_empty() || post.slot_conditions.is_empty() {
+            // Skip a rule that can't be a conditional shape — one-sided, an
+            // empty condition side, or a condition naming a slot the class
+            // doesn't have. Never fabricate a property IRI for a missing
+            // slot (that would emit a shape rejecting all valid data); the
+            // omission is surfaced by `shacl_skipped_rules` on the CLI path.
+            if shacl_rule_skip_reason(rule, &slot_names).is_some() {
                 continue;
             }
-            let resolve_path = |slot: &str| -> IoResult<Iri<String>> {
-                let s = effective
-                    .iter()
-                    .find(|(n, _)| n.as_str() == slot)
-                    .map(|(_, d)| slot_iri_string(slot, d, schema))
-                    .unwrap_or_else(|| format!("{}#{}", ontology_iri_string(schema), slot));
-                make_iri(&s)
-            };
+            let pre = rule.preconditions.as_ref().unwrap();
+            let post = rule.postconditions.as_ref().unwrap();
 
             let pre_iri = make_iri(&format!("{shape_iri_str}/rule{i}/pre"))?;
             for (slot, cond) in &pre.slot_conditions {
+                let def = effective
+                    .iter()
+                    .find(|(n, _)| n.as_str() == slot)
+                    .map(|(_, d)| d)
+                    .expect("skip check guarantees the slot resolves");
                 let ps = make_iri(&format!("{shape_iri_str}/rule{i}/pre/{slot}"))?;
-                let path = resolve_path(slot)?;
+                let path = make_iri(&slot_iri_string(slot, def, schema))?;
                 emit_property_shape(
                     &mut graph,
                     &t,
@@ -645,13 +648,21 @@ pub fn build_shacl_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
                     &ps,
                     &path,
                     schema,
-                    PropertyConstraints::from_condition(cond),
+                    // A condition carries no `range` of its own; the slot's
+                    // declared range is what types an `equals_number`
+                    // `sh:hasValue` correctly.
+                    PropertyConstraints::from_condition(cond).with_range(def.range.as_deref()),
                 )?;
             }
             let post_iri = make_iri(&format!("{shape_iri_str}/rule{i}/post"))?;
             for (slot, cond) in &post.slot_conditions {
+                let def = effective
+                    .iter()
+                    .find(|(n, _)| n.as_str() == slot)
+                    .map(|(_, d)| d)
+                    .expect("skip check guarantees the slot resolves");
                 let ps = make_iri(&format!("{shape_iri_str}/rule{i}/post/{slot}"))?;
-                let path = resolve_path(slot)?;
+                let path = make_iri(&slot_iri_string(slot, def, schema))?;
                 emit_property_shape(
                     &mut graph,
                     &t,
@@ -659,7 +670,7 @@ pub fn build_shacl_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
                     &ps,
                     &path,
                     schema,
-                    PropertyConstraints::from_condition(cond),
+                    PropertyConstraints::from_condition(cond).with_range(def.range.as_deref()),
                 )?;
             }
 
@@ -780,6 +791,86 @@ impl<'a> PropertyConstraints<'a> {
             equals_number: cond.equals_number,
         }
     }
+
+    /// Fill in `range` from the slot's declaration when the condition
+    /// carries none of its own — a rule condition's range lives on the
+    /// slot, not the condition, and it's what types `equals_number`.
+    fn with_range(mut self, range: Option<&'a str>) -> Self {
+        if self.range.is_none() {
+            self.range = range;
+        }
+        self
+    }
+}
+
+/// A `rules` entry [`build_shacl_graph`] can't project to a conditional
+/// shape, and why — the SHACL analogue of `postgres_writer::SkippedRule`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShaclSkippedRule {
+    pub class: String,
+    /// The rule's title, or `rule #<n>` (its position) when it has none.
+    pub rule: String,
+    pub reason: String,
+}
+
+/// Rules the SHACL writer can't emit as a conditional shape, with a
+/// diagnostic naming each. A rule is skipped when it has only one of
+/// pre/postconditions, an empty condition side, or a condition naming a
+/// slot the class doesn't have (which would otherwise fabricate a property
+/// IRI for a nonexistent slot). Shares [`shacl_rule_skip_reason`] with
+/// `build_shacl_graph`, so it reports exactly the rules the writer drops.
+pub fn shacl_skipped_rules(schema: &SchemaDefinition) -> Vec<ShaclSkippedRule> {
+    let mut out = Vec::new();
+    for (class_name, class) in &schema.classes {
+        if class.rules.is_empty() {
+            continue;
+        }
+        let effective = crate::linkml_resolve::resolve_effective_slots(class, schema);
+        let slot_names: std::collections::BTreeSet<&str> =
+            effective.keys().map(String::as_str).collect();
+        for (i, rule) in class.rules.iter().enumerate() {
+            if let Some(reason) = shacl_rule_skip_reason(rule, &slot_names) {
+                out.push(ShaclSkippedRule {
+                    class: class_name.clone(),
+                    rule: rule.title.clone().unwrap_or_else(|| format!("rule #{i}")),
+                    reason,
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Why the SHACL writer skips `rule`, or `None` if it emits a conditional
+/// shape. `slot_names` is the class's effective slot set. Shared by
+/// `build_shacl_graph` (skip decision) and [`shacl_skipped_rules`]
+/// (diagnostic), so the two can't disagree.
+fn shacl_rule_skip_reason(
+    rule: &crate::linkml::ClassRule,
+    slot_names: &std::collections::BTreeSet<&str>,
+) -> Option<String> {
+    match (&rule.preconditions, &rule.postconditions) {
+        (Some(pre), Some(post)) => {
+            if pre.slot_conditions.is_empty() || post.slot_conditions.is_empty() {
+                return Some("a precondition or postcondition has no slot_conditions".to_string());
+            }
+            for slot in pre
+                .slot_conditions
+                .keys()
+                .chain(post.slot_conditions.keys())
+            {
+                if !slot_names.contains(slot.as_str()) {
+                    return Some(format!(
+                        "references slot `{slot}`, which the class does not have"
+                    ));
+                }
+            }
+            None
+        }
+        _ => Some(
+            "a SHACL conditional shape needs both preconditions and postconditions".to_string(),
+        ),
+    }
 }
 
 /// Emit one `sh:property` shape: link it to `shape`, set its `sh:path`, and
@@ -853,9 +944,23 @@ fn emit_property_shape(
             .map_err(|e| IoError::Write(e.to_string()))?;
     }
     if let Some(n) = c.equals_number {
-        graph
-            .insert(prop_shape, &t.has_value, n)
-            .map_err(|e| IoError::Write(e.to_string()))?;
+        // `sh:hasValue` is term equality (datatype-sensitive), so the
+        // literal must carry the datatype the slot's range declares — an
+        // integer-range slot's data is `xsd:integer`, which a default
+        // `xsd:double` literal can never equal. Insert an integer-typed
+        // literal (sophia types `isize` as `xsd:integer`, matching
+        // `map_linkml_to_xsd`) for integer ranges; keep `xsd:double` for
+        // float/double/decimal or rangeless conditions.
+        let is_integer = matches!(c.range, Some("integer") | Some("int"));
+        if is_integer {
+            graph
+                .insert(prop_shape, &t.has_value, n as isize)
+                .map_err(|e| IoError::Write(e.to_string()))?;
+        } else {
+            graph
+                .insert(prop_shape, &t.has_value, n)
+                .map_err(|e| IoError::Write(e.to_string()))?;
+        }
     }
     Ok(())
 }

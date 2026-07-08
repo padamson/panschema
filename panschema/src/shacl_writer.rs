@@ -454,6 +454,162 @@ mod tests {
     }
 
     #[test]
+    fn equals_number_on_an_integer_range_uses_an_integer_typed_hasvalue() {
+        // `sh:hasValue` is RDF term equality (datatype-sensitive). An
+        // integer-range slot's instance data is `"N"^^xsd:integer`, so the
+        // hasValue literal must be xsd:integer too — a default xsd:double
+        // literal could never match, silently inverting the rule. In SPARQL
+        // the plain literal `1` is xsd:integer, so this pattern matches only
+        // if the stored term is xsd:integer.
+        use crate::linkml::{ClassRule, RuleConditions, SlotCondition};
+        let mut schema = SchemaDefinition::new("test");
+        schema.id = Some(EX.to_string());
+        let mut c = ClassDefinition::new("Task");
+        c.class_uri = Some(format!("{EX}#Task"));
+        let mut priority = SlotDefinition::new("priority");
+        priority.range = Some("integer".to_string());
+        c.attributes.insert("priority".to_string(), priority);
+        let mut region = SlotDefinition::new("region");
+        region.range = Some("string".to_string());
+        c.attributes.insert("region".to_string(), region);
+        c.rules.push(ClassRule {
+            title: Some("p1-needs-region".to_string()),
+            description: None,
+            preconditions: Some(RuleConditions {
+                slot_conditions: [(
+                    "priority".to_string(),
+                    SlotCondition {
+                        equals_number: Some(1.0),
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            }),
+            postconditions: Some(RuleConditions {
+                slot_conditions: [(
+                    "region".to_string(),
+                    SlotCondition {
+                        required: true,
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            }),
+        });
+        schema.classes.insert("Task".to_string(), c);
+
+        let store = render_to_store(&schema);
+        assert!(
+            ask(
+                &store,
+                &format!("ASK {{ <{EX}#TaskShape/rule0/pre/priority> <{SH}hasValue> 1 }}")
+            ),
+            "equals_number on an integer range must emit an xsd:integer hasValue"
+        );
+    }
+
+    #[test]
+    fn a_rule_naming_a_missing_slot_is_skipped_not_emitted_with_a_phantom_iri() {
+        // A condition referencing a slot the class doesn't have must NOT
+        // emit a shape over a fabricated `{ontology}#{slot}` path (which
+        // would reject all valid data). The rule is dropped and reported.
+        use crate::linkml::{ClassRule, RuleConditions, SlotCondition};
+        use crate::rdf_serializers::shacl_skipped_rules;
+        let mut schema = SchemaDefinition::new("test");
+        schema.id = Some(EX.to_string());
+        let mut c = ClassDefinition::new("Deployment");
+        c.class_uri = Some(format!("{EX}#Deployment"));
+        let mut status = SlotDefinition::new("status");
+        status.range = Some("string".to_string());
+        c.attributes.insert("status".to_string(), status);
+        c.rules.push(ClassRule {
+            title: Some("ghost-ref".to_string()),
+            description: None,
+            preconditions: Some(RuleConditions {
+                slot_conditions: [(
+                    "status".to_string(),
+                    SlotCondition {
+                        equals_string: Some("actual".to_string()),
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            }),
+            postconditions: Some(RuleConditions {
+                slot_conditions: [(
+                    "ghost".to_string(),
+                    SlotCondition {
+                        required: true,
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            }),
+        });
+        schema.classes.insert("Deployment".to_string(), c);
+
+        // No conditional shape emitted (no sh:or), and no phantom `#ghost`
+        // path anywhere in the graph.
+        let store = render_to_store(&schema);
+        assert!(
+            !ask(&store, &format!("ASK {{ ?s <{SH}or> ?o }}")),
+            "a rule naming a missing slot must emit no conditional shape"
+        );
+        assert!(
+            !ask(&store, &format!("ASK {{ ?p <{SH}path> <{EX}#ghost> }}")),
+            "no shape may reference a fabricated property IRI for a missing slot"
+        );
+        // ...and it's reported, named by its title.
+        let skipped = shacl_skipped_rules(&schema);
+        assert_eq!(skipped.len(), 1, "got: {skipped:?}");
+        assert_eq!(skipped[0].class, "Deployment");
+        assert_eq!(skipped[0].rule, "ghost-ref");
+    }
+
+    #[test]
+    fn a_one_sided_rule_is_skipped_and_reported() {
+        use crate::linkml::{ClassRule, RuleConditions, SlotCondition};
+        use crate::rdf_serializers::shacl_skipped_rules;
+        let mut schema = SchemaDefinition::new("test");
+        schema.id = Some(EX.to_string());
+        let mut c = ClassDefinition::new("Deployment");
+        c.class_uri = Some(format!("{EX}#Deployment"));
+        let mut status = SlotDefinition::new("status");
+        status.range = Some("string".to_string());
+        c.attributes.insert("status".to_string(), status);
+        c.rules.push(ClassRule {
+            title: None, // untitled → labeled by index
+            description: None,
+            preconditions: Some(RuleConditions {
+                slot_conditions: [(
+                    "status".to_string(),
+                    SlotCondition {
+                        equals_string: Some("actual".to_string()),
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            }),
+            postconditions: None,
+        });
+        schema.classes.insert("Deployment".to_string(), c);
+
+        let store = render_to_store(&schema);
+        assert!(
+            !ask(&store, &format!("ASK {{ ?s <{SH}or> ?o }}")),
+            "a one-sided rule must emit no conditional shape"
+        );
+        let skipped = shacl_skipped_rules(&schema);
+        assert_eq!(skipped.len(), 1, "got: {skipped:?}");
+        assert_eq!(skipped[0].rule, "rule #0");
+    }
+
+    #[test]
     fn a_scalar_slot_projects_to_sh_datatype() {
         let store = render_to_store(&schema_with_constrained_class());
         assert!(
