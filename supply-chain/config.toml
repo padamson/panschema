@@ -805,7 +805,7 @@ version = "0.3.33"
 criteria = "safe-to-deploy"
 
 [[exemptions.playwright-rs]]
-version = "0.14.0"
+version = "0.14.1"
 criteria = "safe-to-run"
 
 [[exemptions.playwright-rs-macros]]
