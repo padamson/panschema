@@ -357,6 +357,41 @@ mod tests {
     }
 
     #[test]
+    fn required_and_minimum_cardinality_reconcile_to_one_min_count() {
+        // `required` and `minimum_cardinality` are two spellings of the same
+        // lower bound. Emitting both a `sh:minCount 1` (from `required`) and a
+        // `sh:minCount 2` (from the cardinality) yields a self-contradictory
+        // shape. They must reconcile to a single count, with the explicit
+        // cardinality winning — matching the HTML/effective-cardinality view.
+        let mut schema = SchemaDefinition::new("test");
+        schema.id = Some(EX.to_string());
+        let mut thing = ClassDefinition::new("Thing");
+        thing.class_uri = Some(format!("{EX}#Thing"));
+        let mut tags = SlotDefinition::new("tags");
+        tags.range = Some("string".to_string());
+        tags.required = true;
+        tags.minimum_cardinality = Some(2);
+        thing.attributes.insert("tags".to_string(), tags);
+        schema.classes.insert("Thing".to_string(), thing);
+
+        let store = render_to_store(&schema);
+        assert!(
+            ask(
+                &store,
+                &format!("ASK {{ ?p <{SH}path> <{EX}#tags> ; <{SH}minCount> 2 }}")
+            ),
+            "the effective lower bound (2) must be the emitted sh:minCount"
+        );
+        assert!(
+            !ask(
+                &store,
+                &format!("ASK {{ ?p <{SH}path> <{EX}#tags> ; <{SH}minCount> 1 }}")
+            ),
+            "the `required`-derived sh:minCount 1 must not coexist with the cardinality's"
+        );
+    }
+
+    #[test]
     fn a_rule_with_an_empty_condition_side_emits_no_conditional() {
         // A rule whose precondition (or postcondition) carries no
         // slot_conditions has no conditional to express — it must emit no

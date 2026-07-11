@@ -575,9 +575,10 @@ fn map_linkml_to_xsd(linkml_type: &str) -> String {
 ///
 /// SHACL Core only. Slot `range` → `sh:datatype` (scalar) or `sh:class`
 /// (class-valued); an enum range carries no datatype/class constraint yet
-/// (`sh:in` projection is a later refinement). `required` → `sh:minCount 1`;
-/// `minimum_cardinality`/`maximum_cardinality` → `sh:minCount`/`sh:maxCount`;
-/// `pattern` → `sh:pattern`; `minimum_value`/`maximum_value` →
+/// (`sh:in` projection is a later refinement). `required` and
+/// `minimum_cardinality` reconcile to a single `sh:minCount` (explicit
+/// cardinality wins); `maximum_cardinality` → `sh:maxCount`; `pattern` →
+/// `sh:pattern`; `minimum_value`/`maximum_value` →
 /// `sh:minInclusive`/`sh:maxInclusive`.
 pub fn build_shacl_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
     let mut graph = FastGraph::new();
@@ -908,14 +909,14 @@ fn emit_property_shape(
                 .map_err(|e| IoError::Write(e.to_string()))?;
         }
     }
-    if c.required {
+    // `required` and `minimum_cardinality` are two spellings of the same
+    // lower bound; emitting a `sh:minCount` for each would contradict itself.
+    // Reconcile to one, with an explicit cardinality winning over the flag —
+    // the same precedence `effective_cardinality` gives the HTML view.
+    let effective_min = c.min_cardinality.unwrap_or(u32::from(c.required));
+    if effective_min > 0 {
         graph
-            .insert(prop_shape, &t.min_count, 1_i32)
-            .map_err(|e| IoError::Write(e.to_string()))?;
-    }
-    if let Some(min) = c.min_cardinality {
-        graph
-            .insert(prop_shape, &t.min_count, min as i32)
+            .insert(prop_shape, &t.min_count, effective_min as i32)
             .map_err(|e| IoError::Write(e.to_string()))?;
     }
     if let Some(max) = c.max_cardinality {
