@@ -392,6 +392,30 @@ mod tests {
     }
 
     #[test]
+    fn a_slot_with_no_lower_bound_emits_no_min_count() {
+        // An optional slot (neither `required` nor `minimum_cardinality`) has
+        // an effective lower bound of zero, which is the absence of a
+        // constraint — it must emit no `sh:minCount` at all, not `sh:minCount 0`.
+        let mut schema = SchemaDefinition::new("test");
+        schema.id = Some(EX.to_string());
+        let mut thing = ClassDefinition::new("Thing");
+        thing.class_uri = Some(format!("{EX}#Thing"));
+        let mut note = SlotDefinition::new("note");
+        note.range = Some("string".to_string());
+        thing.attributes.insert("note".to_string(), note);
+        schema.classes.insert("Thing".to_string(), thing);
+
+        let store = render_to_store(&schema);
+        assert!(
+            !ask(
+                &store,
+                &format!("ASK {{ ?p <{SH}path> <{EX}#note> ; <{SH}minCount> ?n }}")
+            ),
+            "a slot with no lower bound must emit no sh:minCount"
+        );
+    }
+
+    #[test]
     fn a_rule_with_an_empty_condition_side_emits_no_conditional() {
         // A rule whose precondition (or postcondition) carries no
         // slot_conditions has no conditional to express — it must emit no
