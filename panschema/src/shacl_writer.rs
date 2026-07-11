@@ -511,6 +511,62 @@ mod tests {
     }
 
     #[test]
+    fn a_postcondition_equals_number_is_typed_from_its_own_slots_range() {
+        // The postcondition slot must resolve to *its own* definition — the
+        // resolved range is what types the `equals_number` hasValue. `amount`
+        // is integer, `label` is string; a lookup that matched any other slot
+        // would type `amount`'s hasValue from `label` (xsd:double) and fail
+        // the xsd:integer ASK below.
+        use crate::linkml::{ClassRule, RuleConditions, SlotCondition};
+        let mut schema = SchemaDefinition::new("test");
+        schema.id = Some(EX.to_string());
+        let mut c = ClassDefinition::new("Gate");
+        c.class_uri = Some(format!("{EX}#Gate"));
+        let mut amount = SlotDefinition::new("amount");
+        amount.range = Some("integer".to_string());
+        c.attributes.insert("amount".to_string(), amount);
+        let mut label = SlotDefinition::new("label");
+        label.range = Some("string".to_string());
+        c.attributes.insert("label".to_string(), label);
+        c.rules.push(ClassRule {
+            title: Some("labelled-gates-set-amount".to_string()),
+            description: None,
+            preconditions: Some(RuleConditions {
+                slot_conditions: [(
+                    "label".to_string(),
+                    SlotCondition {
+                        equals_string: Some("open".to_string()),
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            }),
+            postconditions: Some(RuleConditions {
+                slot_conditions: [(
+                    "amount".to_string(),
+                    SlotCondition {
+                        equals_number: Some(5.0),
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            }),
+        });
+        schema.classes.insert("Gate".to_string(), c);
+
+        let store = render_to_store(&schema);
+        assert!(
+            ask(
+                &store,
+                &format!("ASK {{ <{EX}#GateShape/rule0/post/amount> <{SH}hasValue> 5 }}")
+            ),
+            "postcondition equals_number on an integer slot must emit an xsd:integer hasValue"
+        );
+    }
+
+    #[test]
     fn a_rule_naming_a_missing_slot_is_skipped_not_emitted_with_a_phantom_iri() {
         // A condition referencing a slot the class doesn't have must NOT
         // emit a shape over a fabricated `{ontology}#{slot}` path (which
