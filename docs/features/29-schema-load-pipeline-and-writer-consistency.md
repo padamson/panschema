@@ -88,7 +88,7 @@ name, on every command, instead of six per-format silent degradations.
 
 ### Slice 3: RDF family renders effective slots
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Must Have
 
@@ -97,10 +97,10 @@ slots) emits RDF that actually declares its properties; the SHACL shapes and
 the OWL ontology describe the same vocabulary.
 
 **Acceptance Criteria:**
-- [ ] For a class with inline `attributes:`, the TTL/JSON-LD/RDF-XML/N-Triples output declares each attribute as a property (type, label, domain, range), verified through the independent triple-store oracle.
-- [ ] Properties reached via `is_a` and mixins render on the RDF output consistently with how the HTML and SHACL writers already resolve them.
-- [ ] Every `sh:path` IRI in the SHACL shapes graph has a corresponding property declaration in the OWL output for the same schema (a test loads both into one store and checks).
-- [ ] A property defined both as a top-level slot and reachable as an effective slot emits once, not twice.
+- [x] For a class with inline `attributes:`, the TTL/JSON-LD/RDF-XML/N-Triples output declares each attribute as a property (type, label, domain, range), verified through the independent triple-store oracle.
+- [x] Properties reached via `is_a` and mixins render on the RDF output consistently with how the HTML and SHACL writers already resolve them.
+- [x] Every `sh:path` IRI in the SHACL shapes graph has a corresponding property declaration in the OWL output for the same schema (a test loads both into one store and checks).
+- [x] A property defined both as a top-level slot and reachable as an effective slot emits once, not twice.
 
 **Notes:**
 - The OWL round-trip tests pass today only because the reference fixture is
@@ -173,7 +173,7 @@ across three files.
 |-------|----------|------------|--------|
 | Slice 1: shared load pipeline | Must Have | None | Not Started |
 | Slice 2: dangling-reference diagnostic | Must Have | Slice 1 | Not Started |
-| Slice 3: RDF family effective slots | Must Have | None | Not Started |
+| Slice 3: RDF family effective slots | Must Have | None | Complete |
 | Slice 4: uniform output paths | Should Have | None | Not Started |
 | Slice 5: consolidate helpers | Should Have | None | Not Started |
 | Slice 6: writer diagnostics surface | Could Have | Slice 2 | Not Started |

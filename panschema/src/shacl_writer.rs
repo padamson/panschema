@@ -737,4 +737,54 @@ mod tests {
             "a plain scalar slot must carry sh:datatype"
         );
     }
+
+    #[test]
+    fn every_shacl_path_has_an_owl_property_declaration() {
+        // The SHACL shapes and the OWL ontology must describe the same
+        // vocabulary: every `sh:path` in the shapes graph must name a property
+        // the OWL output declares. An attribute-style class exercises the case
+        // that used to break this — SHACL resolves effective slots, but the
+        // OWL writer walked only top-level `slots:`, so a `sh:path` could point
+        // at a property the OWL graph never declared.
+        use crate::owl_writer::OwlWriter;
+        let mut schema = SchemaDefinition::new("test");
+        schema.id = Some(EX.to_string());
+        let mut order = ClassDefinition::new("Order");
+        order.class_uri = Some(format!("{EX}#Order"));
+        let mut amount = SlotDefinition::new("amount");
+        amount.range = Some("integer".to_string());
+        order.attributes.insert("amount".to_string(), amount);
+        let mut label = SlotDefinition::new("label");
+        label.range = Some("string".to_string());
+        order.attributes.insert("label".to_string(), label);
+        schema.classes.insert("Order".to_string(), order);
+
+        let dir = TempDir::new().expect("temp dir");
+        let owl_path = dir.path().join("ontology.ttl");
+        let shapes_path = dir.path().join("shapes.ttl");
+        OwlWriter::new()
+            .write(&schema, &owl_path)
+            .expect("write owl");
+        ShaclWriter::new()
+            .write(&schema, &shapes_path)
+            .expect("write shacl");
+
+        // Both graphs into one store, so a cross-graph query can check that
+        // each shape path resolves to an OWL declaration.
+        let store = oxigraph::store::Store::new().expect("store");
+        for path in [owl_path, shapes_path] {
+            let ttl = fs::read_to_string(&path).expect("read ttl");
+            store
+                .load_from_slice(oxigraph::io::RdfFormat::Turtle, &ttl)
+                .unwrap_or_else(|e| panic!("oxigraph rejected TTL: {e}\n\n{ttl}"));
+        }
+
+        assert!(
+            !ask(
+                &store,
+                &format!("ASK {{ ?shape <{SH}path> ?p FILTER NOT EXISTS {{ ?p a ?t }} }}")
+            ),
+            "every sh:path must resolve to a declared OWL property"
+        );
+    }
 }

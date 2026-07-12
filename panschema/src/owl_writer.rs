@@ -504,6 +504,38 @@ mod tests {
     }
 
     #[test]
+    fn roundtrip_preserves_inline_attribute_properties() {
+        use crate::owl_reader::OwlReader;
+        // The reference fixture is TTL-sourced, so its slots land top-level and
+        // never exercise the inline `attributes:` path. An attribute-defined
+        // property must survive an OWL write -> read: OWL has no `attributes:`
+        // concept, so it reads back as a top-level slot with its range — but it
+        // must not vanish, as it did when the writer ignored attributes.
+        let mut schema = create_test_schema();
+        let mut order = ClassDefinition::new("Order");
+        order.class_uri = Some("http://example.org/test#Order".to_string());
+        let mut amount = SlotDefinition::new("amount");
+        amount.range = Some("integer".to_string());
+        order.attributes.insert("amount".to_string(), amount);
+        schema.classes.insert("Order".to_string(), order);
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let output_path = temp_dir.path().join("output.ttl");
+        OwlWriter::new()
+            .write(&schema, &output_path)
+            .expect("Failed to write");
+        let schema2 = OwlReader::new()
+            .read(&output_path)
+            .expect("Failed to read back");
+
+        let amount2 = schema2
+            .slots
+            .get("amount")
+            .expect("the inline attribute must survive the OWL round-trip as a property");
+        assert_eq!(amount2.range.as_deref(), Some("integer"));
+    }
+
+    #[test]
     fn ttl_output_declares_prefixes_from_schema_prefixes_block() {
         // The schema's prefixes block must round-trip into TTL `PREFIX`
         // declarations. Without these, sophia's pretty serializer
