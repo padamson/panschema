@@ -107,7 +107,7 @@ impl UnprojectedConstruct {
     /// an RDF-specific gap it has nothing to do with.
     pub fn message(&self, format: &str) -> String {
         format!(
-            "class `{}` declares `{}`, which panschema does not emit to the `{}` format; only the HTML docs render it",
+            "class `{}` declares `{}`, which panschema does not emit to the `{}` format",
             self.class, self.construct, format
         )
     }
@@ -116,9 +116,10 @@ impl UnprojectedConstruct {
 /// Report every class-level construct that's IR-modeled but that `format`
 /// doesn't project — a second, narrower class of silent drop than
 /// [`unmodeled_class_constructs`]: `rules` and `unique_keys` are IR-modeled,
-/// so they never reach the `unmodeled` catch-all, but only the HTML writer
-/// projects them fully today. Empty for `format == "html"` (case-
-/// insensitive); call for every other target format.
+/// so they never reach the `unmodeled` catch-all, but not every writer
+/// projects them (HTML and Postgres project both; SHACL projects `rules`
+/// only; the rest project neither). Empty for the formats that project the
+/// construct; call for every target format.
 pub fn classes_with_unprojected_constructs(
     schema: &SchemaDefinition,
     format: &str,

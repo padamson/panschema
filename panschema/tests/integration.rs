@@ -944,15 +944,15 @@ fn cli_generate_html_prints_graph_visualization_mode() {
     let _ = fs::remove_dir_all(&output_dir2);
 }
 
-/// `panschema generate --format ttl` (or `rust`, or any non-HTML format)
-/// for a schema with `rules` and `unique_keys` warns that neither will
-/// appear in that output — both are IR-modeled (so the unmodeled-
-/// construct guard stays silent), but only the HTML writer projects them
-/// fully, and that gap must not be silent either. The warning names the
-/// format actually requested — an earlier version of this warning
+/// `panschema generate --format ttl` (or `rust`, or any format that
+/// projects neither construct) for a schema with `rules` and `unique_keys`
+/// warns that neither will appear in that output — both are IR-modeled (so
+/// the unmodeled-construct guard stays silent), but the requested writer
+/// doesn't project them, and that gap must not be silent either. The warning
+/// names the format actually requested — an earlier version of this warning
 /// hardcoded "RDF/OWL" even when the requested format was `rust`, which
 /// has nothing to do with RDF. `--format html` gets no such warning,
-/// since the HTML writer does render both.
+/// since the HTML writer renders both.
 #[test]
 fn cli_generate_non_html_warns_unprojected_constructs() {
     let schema_yaml = r#"
