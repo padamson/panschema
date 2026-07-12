@@ -72,8 +72,8 @@ user-login = "fitzgen"
 user-name = "Nick Fitzgerald"
 
 [[publisher.bytemuck]]
-version = "1.25.0"
-when = "2026-01-31"
+version = "1.25.1"
+when = "2026-07-10"
 user-id = 7211
 user-login = "Lokathor"
 user-name = "Lokathor"
