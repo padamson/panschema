@@ -200,11 +200,13 @@ Ordered by impact, with the slices already filed against each:
    `minimum_value` / `maximum_value` are modeled + rendered as card badges
    ([feature 14 slice 2](features/14-slot-constraints.md) ✅; their RDF
    `owl:withRestrictions` facet is deferred, slice 2b). Class `rules` and
-   `unique_keys` are now modeled + rendered
-   ([feature 17](features/17-class-validation-constructs.md) slices 1–2 ✅;
-   `rules` RDF/SHACL projection deferred, slice 4 — generating a non-HTML
-   format for a schema with `rules` warns of the gap in the meantime; a
-   `unique_keys` slot the class lacks warns at generate time). Still not
+   `unique_keys` are modeled, rendered, and projected to the constraint
+   writers ([feature 17](features/17-class-validation-constructs.md) slices
+   1, 2, 4 ✅): `rules` become Postgres conditional `CHECK`s and SHACL
+   conditional shapes, `unique_keys` become Postgres `UNIQUE` constraints;
+   a format that projects neither warns of the gap, and a `unique_keys`
+   slot the class lacks warns at generate time. Cross-instance `unique_keys`
+   in SHACL (needs SPARQL) is still to come. Still not
    modeled: `equals_string_in` / `equals_expression` / other slot-condition
    equality forms beyond `equals_string` / `equals_number`, and class-level
    boolean expressions (`all_of` / `exactly_one_of` / `none_of`, slice 3).

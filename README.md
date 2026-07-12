@@ -26,6 +26,7 @@ Think of it as **pandoc for data modeling** — a single tool that speaks all sc
 - **mdbook integration**: `mdbook-panschema install` adds a maintained toolbar link from an mdbook book to its schema docs
 - **Loud about gaps**: warns on LinkML constructs it parses but doesn't model (so nothing is silently dropped); `generate --strict` fails the build instead
 - **Postgres DDL**: `generate --format postgres` emits `CREATE TABLE`/`CREATE TYPE` DDL from the same LinkML schema your Rust structs come from — no hand-written SQL to keep in sync
+- **SHACL shapes**: `generate --format shacl` emits a SHACL shapes graph so a schema's value constraints are machine-checkable by any SHACL engine, not just visible in the docs
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
@@ -70,7 +71,8 @@ Open http://localhost:3000 to view the documentation.
 | OWL/Turtle, JSON-LD, RDF/XML, N-Triples | Full support |
 | Rust types | Full support |
 | Graph JSON | Full support |
-| Postgres DDL | Partial support (concrete classes, scalars, enums, single-valued class references) |
+| SHACL shapes | Full support |
+| Postgres DDL | Partial support (concrete classes, scalars, enums, single-valued class references, and `unique_keys`/`pattern`/value-bound/`rules` constraints) |
 | LinkML YAML | Planned |
 | Markdown | Planned |
 | JSON Schema | Planned |
@@ -239,13 +241,13 @@ first, then vendor and commit.
 ### Manual Verification
 
 ```bash
-panschema serve --input tests/fixtures/reference.ttl
+panschema serve --input panschema/tests/fixtures/reference.ttl
 ```
 
 ### UI Component Style Guide
 
 ```bash
-cargo watch -w src -w templates -x 'run --features dev -- styleguide --serve'
+cargo watch -w panschema/src -w panschema/templates -x 'run -p panschema --features dev -- styleguide --serve'
 ```
 
 ## Contributing
