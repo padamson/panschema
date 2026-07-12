@@ -578,18 +578,14 @@ fn generate_html_for_version(
     use crate::io::{FormatRegistry, Writer};
 
     let registry = FormatRegistry::with_defaults();
-    let reader = registry
-        .reader_for_path(input)
-        .map_err(|e| PublishError::GenerateFailed {
+    // Read + resolve local `imports:` through the shared load path, so a
+    // published version renders the same merged schema as `generate`/`serve`.
+    let schema = crate::import_resolve::load_schema(input, &registry).map_err(|e| {
+        PublishError::GenerateFailed {
             version: version.to_string(),
             message: e.to_string(),
-        })?;
-    let schema = reader
-        .read(input)
-        .map_err(|e| PublishError::GenerateFailed {
-            version: version.to_string(),
-            message: e.to_string(),
-        })?;
+        }
+    })?;
     let mut writer = HtmlWriter::with_options(true)
         .with_version_context(cohort.context_for(version))
         .with_site_root_href(cohort.site_root_href.clone());
@@ -1912,5 +1908,43 @@ versions = ["v0.1.0"]
         assert_eq!(after, "version: wt-marker\n");
         // Sanity check that the test is exercising what we think.
         assert_ne!(after, before);
+    }
+
+    #[test]
+    fn publish_generation_resolves_local_imports() {
+        // A published version must render the same resolved schema as
+        // `generate`; the per-version generator previously read the root file
+        // without resolving `imports:`, so imported elements were dropped.
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("common.yaml"),
+            "id: https://example.org/common\nname: common\nclasses:\n  ImportedThing:\n    description: from the imported file\n",
+        )
+        .unwrap();
+        let main = dir.path().join("main.yaml");
+        std::fs::write(
+            &main,
+            "id: https://example.org/main\nname: main\nimports:\n  - common\nclasses:\n  RootThing:\n    description: root\n",
+        )
+        .unwrap();
+        let out = dir.path().join("out");
+        let cohort = CohortContext {
+            all_versions: vec!["1.0.0".to_string()],
+            current: "1.0.0".to_string(),
+            edge: None,
+            url_pattern: "../{version}/".to_string(),
+            site_root_href: "../current/".to_string(),
+            label_sources: std::collections::BTreeMap::new(),
+        };
+
+        generate_html_for_version("1.0.0", &main, &out, &cohort)
+            .expect("publish generation should succeed");
+        let html = std::fs::read_to_string(out.join("index.html")).expect("index.html");
+        assert!(
+            html.contains("ImportedThing"),
+            "published docs must include imported classes; `ImportedThing` was missing"
+        );
     }
 }

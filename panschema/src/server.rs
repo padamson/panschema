@@ -21,10 +21,8 @@ fn bind_address(external: bool, port: u16) -> String {
 fn regenerate(input: &Path, output: &Path) -> anyhow::Result<()> {
     let registry = FormatRegistry::with_defaults();
 
-    let reader = registry
-        .reader_for_path(input)
+    let schema = panschema::import_resolve::load_schema(input, &registry)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
-    let schema = reader.read(input).map_err(|e| anyhow::anyhow!("{}", e))?;
 
     let writer = registry
         .writer_for_format("html")
@@ -175,5 +173,35 @@ mod tests {
     #[test]
     fn external_opt_in_binds_all_interfaces() {
         assert_eq!(bind_address(true, 8080), "0.0.0.0:8080");
+    }
+
+    #[test]
+    fn regenerate_resolves_local_imports_before_rendering() {
+        // The dev server must render the same resolved schema as `generate`.
+        // It previously read the root file without resolving `imports:`, so a
+        // schema split across files previewed missing its imported elements.
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("common.yaml"),
+            "id: https://example.org/common\nname: common\nclasses:\n  ImportedThing:\n    description: defined in the imported file\n",
+        )
+        .unwrap();
+        let main = dir.path().join("main.yaml");
+        fs::write(
+            &main,
+            "id: https://example.org/main\nname: main\nimports:\n  - common\nclasses:\n  RootThing:\n    description: root\n",
+        )
+        .unwrap();
+        let out = dir.path().join("out");
+
+        super::regenerate(&main, &out).expect("regenerate should succeed");
+        let html = fs::read_to_string(out.join("index.html")).expect("index.html should exist");
+        assert!(
+            html.contains("ImportedThing"),
+            "the served docs must include imported classes; `ImportedThing` was missing"
+        );
     }
 }

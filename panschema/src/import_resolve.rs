@@ -36,8 +36,44 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
-use crate::io::FormatRegistry;
+use crate::io::{FormatRegistry, IoError, IoResult};
 use crate::linkml::SchemaDefinition;
+
+/// The single load path — read the input, then fold in any local `imports:` —
+/// shared by every command (`generate`, `serve`, `publish`), so all three
+/// render the same merged schema. A schema split across files previously
+/// rendered its imports only under `generate`; `serve` and `publish` read the
+/// root file alone.
+///
+/// Collisions between an import and the root are reported to stderr (matching
+/// the behavior `generate` had inline). Import-resolution failures — a missing
+/// file, a cycle, a path escaping the schema directory — surface as an
+/// [`IoError::Parse`].
+pub fn load_schema(input: &Path, registry: &FormatRegistry) -> IoResult<SchemaDefinition> {
+    let reader = registry.reader_for_path(input)?;
+    let mut schema = reader.read(input)?;
+
+    if !schema.imports.is_empty() {
+        let report = resolve_imports(&mut schema, input, registry)
+            .map_err(|e| IoError::Parse(e.to_string()))?;
+        for collision in &report.collisions {
+            let kept = collision
+                .kept_from
+                .as_deref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "the root schema".to_string());
+            eprintln!(
+                "warning: {kind} `{name}` defined differently in `{dropped}` and `{kept}`; \
+                 keeping the definition from {kept}",
+                kind = collision.kind,
+                name = collision.name,
+                dropped = collision.dropped_from.display(),
+            );
+        }
+    }
+
+    Ok(schema)
+}
 
 /// Extensions tried, in order, when an `imports:` entry has no
 /// extension of its own (`imports: [common]` → `common.yaml`, then

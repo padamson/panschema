@@ -288,31 +288,10 @@ fn generate(
 ) -> anyhow::Result<()> {
     let registry = FormatRegistry::with_defaults();
 
-    let reader = registry
-        .reader_for_path(input)
+    // Read the input and fold in any local `imports:` through the shared load
+    // path, so `generate` renders the same merged schema as `serve`/`publish`.
+    let schema = panschema::import_resolve::load_schema(input, &registry)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
-    let mut schema = reader.read(input).map_err(|e| anyhow::anyhow!("{}", e))?;
-
-    // Fold any `imports:` of local files into the root schema before any
-    // writer runs, so every writer consumes one self-contained schema.
-    if !schema.imports.is_empty() {
-        let report = panschema::import_resolve::resolve_imports(&mut schema, input, &registry)
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
-        for collision in &report.collisions {
-            let kept = collision
-                .kept_from
-                .as_deref()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|| "the root schema".to_string());
-            eprintln!(
-                "warning: {kind} `{name}` defined differently in `{dropped}` and `{kept}`; \
-                 keeping the definition from {kept}",
-                kind = collision.kind,
-                name = collision.name,
-                dropped = collision.dropped_from.display(),
-            );
-        }
-    }
 
     // Warn on LinkML constructs the schema declares but panschema does
     // not model — otherwise they'd be silently dropped from every output.
