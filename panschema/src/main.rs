@@ -337,10 +337,10 @@ fn generate(
     }
 
     // `rules` and `unique_keys` are IR-modeled (so `unmodeled_class_constructs`
-    // above stays silent about them) but only the HTML writer projects them
-    // fully today — warn for every other target format, naming that format
-    // rather than assuming RDF. (Empty for `format == "html"`, so this is
-    // safe to call unconditionally.)
+    // above stays silent about them) but not every writer projects them — warn
+    // for a format that doesn't, naming that format rather than assuming RDF.
+    // (Empty for the formats that do project the construct, so this is safe to
+    // call unconditionally.)
     for u in panschema::diagnostics::classes_with_unprojected_constructs(&schema, format) {
         eprintln!("warning: {}", u.message(format));
     }

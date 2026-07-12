@@ -143,7 +143,14 @@ fn render(schema: &SchemaDefinition) -> String {
                 continue;
             }
             let col = &slot_columns[slot_name];
-            let not_null = if slot.required { " NOT NULL" } else { "" };
+            // NOT NULL follows the *effective* lower bound: an explicit
+            // `minimum_cardinality >= 1` makes a column required even without
+            // the `required` flag, the same reconciliation HTML and SHACL use.
+            let not_null = if crate::linkml_resolve::effective_cardinality(slot).required {
+                " NOT NULL"
+            } else {
+                ""
+            };
             let range = slot.range.as_deref();
             if let Some(target_class) = range.and_then(|r| schema.classes.get_key_value(r)) {
                 let (target_name, target_def) = target_class;
@@ -709,6 +716,27 @@ mod tests {
         assert!(
             out.contains("\"description\" text") && !out.contains("\"description\" text NOT NULL"),
             "an optional slot must not be NOT NULL; got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn minimum_cardinality_of_one_makes_a_column_not_null() {
+        // NOT NULL must reflect *effective* cardinality, not the raw
+        // `required` flag: a slot with `minimum_cardinality: 1` is required
+        // even when `required` is unset, matching how HTML/SHACL read it.
+        let mut class = ClassDefinition::new("Offering");
+        let mut code_slot = SlotDefinition::new("code");
+        code_slot.range = Some("string".to_string());
+        code_slot.required = false;
+        code_slot.minimum_cardinality = Some(1);
+        class.attributes.insert("code".to_string(), code_slot);
+        let schema = schema_with_class(class);
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            out.contains("\"code\" text NOT NULL"),
+            "minimum_cardinality >= 1 must make the column NOT NULL; got:\n{out}"
         );
     }
 
