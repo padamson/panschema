@@ -745,4 +745,34 @@ mod tests {
             "expected Dog rdfs:subClassOf Animal to be independently queryable via oxigraph"
         );
     }
+
+    #[test]
+    fn inline_attributes_are_declared_as_properties_in_the_independent_store() {
+        // A class using the idiomatic inline `attributes:` form must still
+        // emit its properties. The RDF emitter walked only top-level
+        // `schema.slots`, so an attribute-defined property vanished from the
+        // OWL output entirely — the class was declared with no properties,
+        // and any SHACL `sh:path` pointing at it had no OWL counterpart.
+        let mut schema = create_test_schema();
+        let mut order = ClassDefinition::new("Order");
+        order.class_uri = Some("http://example.org/test#Order".to_string());
+        let mut amount = SlotDefinition::new("amount");
+        amount.range = Some("integer".to_string());
+        order.attributes.insert("amount".to_string(), amount);
+        schema.classes.insert("Order".to_string(), order);
+
+        let store = render_to_store(&schema);
+        assert!(
+            ask(
+                &store,
+                "ASK { \
+                    <http://example.org/test#amount> \
+                        a <http://www.w3.org/2002/07/owl#DatatypeProperty> ; \
+                        <http://www.w3.org/2000/01/rdf-schema#domain> <http://example.org/test#Order> ; \
+                        <http://www.w3.org/2000/01/rdf-schema#range> <http://www.w3.org/2001/XMLSchema#integer> \
+                }"
+            ),
+            "an inline attribute must be declared as a datatype property with its domain and range"
+        );
+    }
 }

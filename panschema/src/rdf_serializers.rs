@@ -355,7 +355,49 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
         .map(|t| t.map_err(|e| IoError::Parse(e.to_string())))
         .collect::<Result<_, _>>()?;
 
+    // Assemble the properties to declare. Every top-level `schema.slots`
+    // entry emits with its canonical global definition (unchanged). On top of
+    // that, a class using inline `attributes:` (or a slot reached only through
+    // `is_a`/mixin resolution) introduces effective slots that never appear in
+    // `schema.slots`; without these the RDF output declares a class with no
+    // properties, and any SHACL `sh:path` pointing at them has no OWL
+    // counterpart. Fold each such slot in once (dedup by name — the same
+    // name-based IRI SHACL uses), recording an owning class so it gets an
+    // `rdfs:domain`.
+    struct PropEmit {
+        name: String,
+        slot: SlotDefinition,
+        domain_class: Option<String>,
+    }
+    let mut props: Vec<PropEmit> = Vec::new();
+    let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for (name, slot_def) in &schema.slots {
+        seen.insert(name.clone());
+        props.push(PropEmit {
+            name: name.clone(),
+            slot: slot_def.clone(),
+            domain_class: None,
+        });
+    }
+    for (class_name, class_def) in &schema.classes {
+        for (slot_name, slot) in crate::linkml_resolve::resolve_effective_slots(class_def, schema) {
+            if !seen.insert(slot_name.clone()) {
+                continue;
+            }
+            props.push(PropEmit {
+                name: slot_name,
+                slot,
+                domain_class: Some(class_name.clone()),
+            });
+        }
+    }
+
+    for PropEmit {
+        name,
+        slot: slot_def,
+        domain_class,
+    } in &props
+    {
         let prop_iri_str = slot_iri_string(name, slot_def, schema);
         let prop_iri = make_iri(&prop_iri_str)?;
 
@@ -425,8 +467,12 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
                 .map_err(|e| IoError::Write(e.to_string()))?;
         }
 
-        // rdfs:domain
-        if let Some(ref domain) = slot_def.domain {
+        // rdfs:domain — an explicit `domain:` wins; otherwise an
+        // attribute/effective slot is domained by the class that introduced
+        // it (a top-level slot without an explicit domain keeps its current
+        // domain-less behavior).
+        let domain_name = slot_def.domain.as_deref().or(domain_class.as_deref());
+        if let Some(domain) = domain_name {
             let domain_iri_str = schema
                 .classes
                 .get(domain)
