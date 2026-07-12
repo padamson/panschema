@@ -69,6 +69,27 @@ pub fn should_fail_strict(findings: &[UnmodeledConstruct], strict: bool) -> bool
     strict && !findings.is_empty()
 }
 
+/// The format-independent schema diagnostics the shared load path
+/// ([`crate::import_resolve::load_schema`]) emits for every command —
+/// unmodeled class constructs, and `unique_keys` naming a slot the class
+/// lacks — as ready-to-print message bodies. Format-specific diagnostics
+/// (writer projection gaps, Postgres/SHACL skips) and `--strict` enforcement
+/// stay at the `generate` call site.
+pub fn schema_load_diagnostics(schema: &SchemaDefinition) -> Vec<String> {
+    let mut out = Vec::new();
+    out.extend(
+        unmodeled_class_constructs(schema)
+            .iter()
+            .map(|u| u.message()),
+    );
+    out.extend(
+        unresolved_unique_key_slots(schema)
+            .iter()
+            .map(|u| u.message()),
+    );
+    out
+}
+
 /// The detection mechanism, parameterized by the ignore-list so tests can
 /// exercise it with fabricated keys decoupled from the real list. Warns
 /// by default: an unmodeled key is reported unless it is in `ignored`.
@@ -246,6 +267,26 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].construct, UNKNOWN_KEY);
         assert_eq!(found[0].class, "C");
+    }
+
+    #[test]
+    fn schema_load_diagnostics_reports_unmodeled_and_unresolved_unique_keys() {
+        // The shared load path collects the format-independent schema
+        // diagnostics — an unmodeled construct and a `unique_key` naming a slot
+        // the class lacks — so `serve` and `publish` surface them just like
+        // `generate`, instead of only `generate` warning.
+        let schema = parse(&format!(
+            "name: s\nclasses:\n  C:\n    {UNKNOWN_KEY}: []\n  Keyed:\n    unique_keys:\n      k:\n        unique_key_slots: [missing]\n"
+        ));
+        let msgs = schema_load_diagnostics(&schema);
+        assert!(
+            msgs.iter().any(|m| m.contains(UNKNOWN_KEY)),
+            "expected an unmodeled-construct message; got: {msgs:?}"
+        );
+        assert!(
+            msgs.iter().any(|m| m.contains("missing")),
+            "expected an unresolved unique-key-slot message; got: {msgs:?}"
+        );
     }
 
     #[test]

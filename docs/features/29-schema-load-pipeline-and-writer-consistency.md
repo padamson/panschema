@@ -53,7 +53,7 @@ Cross-schema imports work starts only after slices 1–3 land.
 
 ### Slice 1: Shared load pipeline used by generate, serve, and publish
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Must Have
 
@@ -61,9 +61,9 @@ Cross-schema imports work starts only after slices 1–3 land.
 `generate`; an import-using schema previews correctly under hot reload.
 
 **Acceptance Criteria:**
-- [ ] A single load path performs read → import resolution → schema-level diagnostics, and `generate`, `serve` (including hot-reload regeneration), and `publish` all render through it.
-- [ ] For a schema with local `imports:`, the HTML `serve` renders and the `publish` output contain the imported elements (a test pins each command's output against the merged schema).
-- [ ] Generate-time diagnostics (unmodeled constructs, unresolved unique-key slots, writer-projection warnings) fire on the `serve` and `publish` paths too.
+- [x] A single load path performs read → import resolution → schema-level diagnostics, and `generate`, `serve` (including hot-reload regeneration), and `publish` all render through it.
+- [x] For a schema with local `imports:`, the HTML `serve` renders and the `publish` output contain the imported elements (a test pins each command's output against the merged schema).
+- [x] Generate-time diagnostics (unmodeled constructs, unresolved unique-key slots) fire on the `serve` and `publish` paths too. (Writer-projection warnings are format-specific — empty for HTML, which `serve`/`publish` always emit — so they stay at the `generate` site.)
 
 ---
 
@@ -171,7 +171,7 @@ across three files.
 
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
-| Slice 1: shared load pipeline | Must Have | None | Not Started |
+| Slice 1: shared load pipeline | Must Have | None | Complete |
 | Slice 2: dangling-reference diagnostic | Must Have | Slice 1 | Not Started |
 | Slice 3: RDF family effective slots | Must Have | None | Complete |
 | Slice 4: uniform output paths | Should Have | None | Not Started |

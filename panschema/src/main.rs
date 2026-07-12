@@ -293,26 +293,15 @@ fn generate(
     let schema = panschema::import_resolve::load_schema(input, &registry)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-    // Warn on LinkML constructs the schema declares but panschema does
-    // not model — otherwise they'd be silently dropped from every output.
-    // Under `--strict`, their presence is a hard error instead.
+    // The unmodeled-construct and unresolved-unique-key warnings are emitted by
+    // the shared load path above (so `serve`/`publish` surface them too). Under
+    // `--strict`, their presence is additionally a hard error here.
     let unmodeled = panschema::diagnostics::unmodeled_class_constructs(&schema);
-    for u in &unmodeled {
-        eprintln!("warning: {}", u.message());
-    }
     if panschema::diagnostics::should_fail_strict(&unmodeled, strict) {
         anyhow::bail!(
             "{} unmodeled LinkML construct(s) present; failing because --strict is set",
             unmodeled.len()
         );
-    }
-
-    // Warn on `unique_keys` that reference a slot the class doesn't have —
-    // a structural defect that would otherwise render a broken constraint.
-    // (A stopgap on the `generate` warning path until the feature-07
-    // `validate` surface, its eventual home, is built.)
-    for u in panschema::diagnostics::unresolved_unique_key_slots(&schema) {
-        eprintln!("warning: {}", u.message());
     }
 
     // `rules` and `unique_keys` are IR-modeled (so `unmodeled_class_constructs`

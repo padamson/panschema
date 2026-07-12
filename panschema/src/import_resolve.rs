@@ -72,6 +72,13 @@ pub fn load_schema(input: &Path, registry: &FormatRegistry) -> IoResult<SchemaDe
         }
     }
 
+    // Schema-level diagnostics that don't depend on the output format, so every
+    // command surfaces them — previously only `generate` did. `--strict`
+    // enforcement and format-specific warnings stay at the `generate` site.
+    for message in crate::diagnostics::schema_load_diagnostics(&schema) {
+        eprintln!("warning: {message}");
+    }
+
     Ok(schema)
 }
 
