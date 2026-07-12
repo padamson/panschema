@@ -439,22 +439,31 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
                 .map_err(|e| IoError::Write(e.to_string()))?;
         }
 
-        // rdfs:range
+        // rdfs:range. An enum range has no RDF projection yet, and its name is
+        // not an XSD datatype — the scalar fallback would fabricate a
+        // nonexistent `xsd:{EnumName}`, so skip rdfs:range for it (guarding
+        // enums the way the SHACL and Postgres writers do).
         if let Some(ref range) = slot_def.range {
             let range_iri_str = if is_object_property {
-                schema
-                    .classes
-                    .get(range)
-                    .and_then(|c| c.class_uri.as_deref())
-                    .map(|c| expand_curie(c, schema))
-                    .unwrap_or_else(|| format!("{}#{}", ontology_iri_str, range))
+                Some(
+                    schema
+                        .classes
+                        .get(range)
+                        .and_then(|c| c.class_uri.as_deref())
+                        .map(|c| expand_curie(c, schema))
+                        .unwrap_or_else(|| format!("{}#{}", ontology_iri_str, range)),
+                )
+            } else if schema.enums.contains_key(range) {
+                None
             } else {
-                map_linkml_to_xsd(range)
+                Some(map_linkml_to_xsd(range))
             };
-            let range_iri = make_iri(&range_iri_str)?;
-            graph
-                .insert(&prop_iri, rdfs::range, &range_iri)
-                .map_err(|e| IoError::Write(e.to_string()))?;
+            if let Some(range_iri_str) = range_iri_str {
+                let range_iri = make_iri(&range_iri_str)?;
+                graph
+                    .insert(&prop_iri, rdfs::range, &range_iri)
+                    .map_err(|e| IoError::Write(e.to_string()))?;
+            }
         }
 
         // owl:inverseOf
@@ -575,9 +584,10 @@ fn map_linkml_to_xsd(linkml_type: &str) -> String {
 ///
 /// SHACL Core only. Slot `range` → `sh:datatype` (scalar) or `sh:class`
 /// (class-valued); an enum range carries no datatype/class constraint yet
-/// (`sh:in` projection is a later refinement). `required` → `sh:minCount 1`;
-/// `minimum_cardinality`/`maximum_cardinality` → `sh:minCount`/`sh:maxCount`;
-/// `pattern` → `sh:pattern`; `minimum_value`/`maximum_value` →
+/// (`sh:in` projection is a later refinement). `required` and
+/// `minimum_cardinality` reconcile to a single `sh:minCount` (explicit
+/// cardinality wins); `maximum_cardinality` → `sh:maxCount`; `pattern` →
+/// `sh:pattern`; `minimum_value`/`maximum_value` →
 /// `sh:minInclusive`/`sh:maxInclusive`.
 pub fn build_shacl_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
     let mut graph = FastGraph::new();
@@ -908,14 +918,14 @@ fn emit_property_shape(
                 .map_err(|e| IoError::Write(e.to_string()))?;
         }
     }
-    if c.required {
+    // `required` and `minimum_cardinality` are two spellings of the same
+    // lower bound; emitting a `sh:minCount` for each would contradict itself.
+    // Reconcile to one, with an explicit cardinality winning over the flag —
+    // the same precedence `effective_cardinality` gives the HTML view.
+    let effective_min = c.min_cardinality.unwrap_or(u32::from(c.required));
+    if effective_min > 0 {
         graph
-            .insert(prop_shape, &t.min_count, 1_i32)
-            .map_err(|e| IoError::Write(e.to_string()))?;
-    }
-    if let Some(min) = c.min_cardinality {
-        graph
-            .insert(prop_shape, &t.min_count, min as i32)
+            .insert(prop_shape, &t.min_count, effective_min as i32)
             .map_err(|e| IoError::Write(e.to_string()))?;
     }
     if let Some(max) = c.max_cardinality {
@@ -1470,6 +1480,39 @@ mod tests {
         assert!(
             !has_type(format!("{OWL_NS}ReflexiveProperty")),
             "unset characteristics must not be emitted"
+        );
+    }
+
+    #[test]
+    fn build_rdf_graph_does_not_fabricate_an_xsd_datatype_for_an_enum_range() {
+        // A slot ranged on an enum is neither an object property nor an XSD
+        // scalar. Falling through to the scalar mapping fabricates a
+        // nonexistent `xsd:{EnumName}` as its rdfs:range; the enum must be
+        // guarded (no rdfs:range yet), the way the SHACL/Postgres writers do.
+        use crate::linkml::EnumDefinition;
+        use sophia::api::term::Term;
+        use sophia::api::triple::Triple;
+
+        let mut schema = schema_with_prefixes();
+        schema.enums.insert(
+            "PriorityLevel".to_string(),
+            EnumDefinition::new("PriorityLevel"),
+        );
+        let mut priority = SlotDefinition::new("priority");
+        priority.range = Some("PriorityLevel".into());
+        schema.slots.insert("priority".to_string(), priority);
+
+        let graph = build_rdf_graph(&schema).unwrap();
+        let rdfs_range = "http://www.w3.org/2000/01/rdf-schema#range";
+        let fabricated = "http://www.w3.org/2001/XMLSchema#PriorityLevel";
+        let has_fabricated_range = graph.triples().any(|t| {
+            let tr = t.unwrap();
+            tr.p().iri().is_some_and(|i| i.as_str() == rdfs_range)
+                && tr.o().iri().is_some_and(|i| i.as_str() == fabricated)
+        });
+        assert!(
+            !has_fabricated_range,
+            "an enum range must not emit a fabricated xsd:{{EnumName}} rdfs:range"
         );
     }
 

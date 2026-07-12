@@ -28,7 +28,7 @@ Input → Reader → LinkML IR → [Filters] → Writer → Output
 | Component | Description |
 |-----------|-------------|
 | **Readers** | Parse input formats into LinkML IR (`OwlReader`, `YamlReader`) |
-| **Writers** | Generate output formats from LinkML IR (`HtmlWriter`, `OwlWriter`, RDF serializers, `GraphWriter`, `RustWriter`) |
+| **Writers** | Generate output formats from LinkML IR (`HtmlWriter`, `OwlWriter`, RDF serializers, `GraphWriter`, `RustWriter`, `PostgresWriter`, `ShaclWriter`) |
 | **Filters** | Transform IR (optional, user-customizable; not yet implemented) |
 
 ## Release Strategy
@@ -80,7 +80,6 @@ Input → Reader → LinkML IR → [Filters] → Writer → Output
 
 - **Round-trip OWL ↔ LinkML conversion** (`panschema convert`).
 - **JSON Schema reader + writer** (`JsonSchemaReader`, `JsonSchemaWriter`).
-- **SHACL writer** as a third writer in the `[generate.<name>]` fan-out.
 - **`Filter` trait** for user-customizable IR transformations.
 - **Schema diff / compatibility checks** (`panschema diff`).
 
@@ -106,6 +105,24 @@ Input → Reader → LinkML IR → [Filters] → Writer → Output
 | 09 | [Graph Layout Selection](features/09-graph-layout-selection.md) | Layout-algorithm picker + egraph-rs / rust-sugiyama adoption (KK, stress, SGD, Sugiyama, circular, radial) | **In progress (v0.3.0+): slices 1–3 + 6 shipped (FD, KK, Hierarchical); slices 4–5, 7–8 planned** |
 | 10 | [Authoring Experience](features/10-authoring-experience.md) | Schema/ontology authoring lints + diagnostics (friction-gathered from real authoring passes) | **Planned (v0.4.0+)** |
 | 11 | [Versioned Docs (`panschema publish`)](features/11-versioned-docs-publish.md) | Multi-version HTML orchestration + in-page version dropdown/banner | **In progress (v0.3.0+): slices 1–4, 6, 7 shipped; slice 5 (dogfood) remaining** |
+| 12 | [LinkML IR Resolver Services](features/12-linkml-ir-resolver-services.md) | Shared `is_a`/mixin/`slot_usage` resolver + effective cardinality | **Shipped for v0.3.0** |
+| 13 | [Upstream Ontology Label Cache](features/13-upstream-label-cache.md) | Cache upstream ontology labels for cross-references | **Shipped for v0.3.0** |
+| 14 | [Slot Constraints](features/14-slot-constraints.md) | OWL property characteristics + `minimum_value`/`maximum_value` bounds | **Shipped for v0.3.0** |
+| 15 | [Multi-file Schema Modularity](features/15-multi-file-schema-modularity.md) | Local `imports:` resolution + merge (CURIE/cross-schema imports pending, see feature 29) | **Shipped for v0.3.0 (local imports)** |
+| 16 | [Lifecycle & Editorial Metadata](features/16-lifecycle-editorial-metadata.md) | `deprecated`, `aliases`, `see_also`, `examples` — render + RDF round-trip | **Shipped for v0.3.0** |
+| 17 | [Class Validation Constructs](features/17-class-validation-constructs.md) | `unique_keys` + `rules` across HTML/Postgres/SHACL | **In progress (v0.3.0): `unique_keys` + `rules` shipped; class boolean expressions planned** |
+| 18 | [Exemplar Individuals in the Graph](features/18-exemplar-individuals-in-graph.md) | Worked-example individuals in the schema graph | **Planned** |
+| 19 | [Slot Defaults (`ifabsent`)](features/19-ifabsent-slot-defaults.md) | `ifabsent` → Rust field defaults + HTML "Default" row | **Shipped for v0.3.0** |
+| 20 | [Dogfood Schema Regression Fixtures](features/20-dogfood-schema-regression-fixtures.md) | Downstream-schema regression fixtures + release monitoring | **Planned** |
+| 21 | [mdbook → Schema Cross-Link](features/21-book-to-schema-link.md) | `mdbook-panschema install` toolbar link from a book to its schema docs | **Shipped for v0.3.0** |
+| 22 | [Silently-dropped Construct Diagnostics](features/22-unsupported-construct-diagnostics.md) | Warn on LinkML constructs parsed but not IR-modeled; `--strict` fails | **Shipped for v0.3.0** |
+| 23 | [Cross-writer Construct Coverage Diagnostics](features/23-cross-writer-construct-coverage-diagnostics.md) | Warn on IR-modeled constructs a writer doesn't project | **Shipped for v0.3.0** |
+| 24 | [Postgres DDL Writer](features/24-postgres-ddl-writer.md) | `generate --format postgres` — tables, enums, FKs, constraints | **In progress (v0.3.0): scalar/enum/FK/constraint slices shipped; multivalued + `is_a` deferred** |
+| 25 | [Rust Writer Output Verification](features/25-rust-writer-output-verification.md) | Compile-and-run V&V oracle for the Rust writer | **Planned** |
+| 26 | [HTML + Graph Viz Output Verification](features/26-html-graph-viz-output-verification.md) | HTML5-conformance + browser V&V for HTML/graph output | **Shipped for v0.3.0** |
+| 27 | [RDF/OWL Family Output Verification](features/27-rdf-owl-family-output-verification.md) | `oxigraph` load-and-query V&V for the RDF writers | **Shipped for v0.3.0** |
+| 28 | [Postgres DDL Output Verification](features/28-postgres-ddl-writer-output-verification.md) | `pg_query` syntax + `testcontainers` apply V&V for Postgres DDL | **Shipped for v0.3.0** |
+| 29 | [Shared Schema Load Pipeline + Writer Consistency](features/29-schema-load-pipeline-and-writer-consistency.md) | Unify the load path + reconcile writer projections | **Planned** |
 
 ## Delivery Approach
 
