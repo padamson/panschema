@@ -301,7 +301,7 @@ fn generate(
     // reference is additionally a hard error here.
     let unmodeled = panschema::diagnostics::unmodeled_class_constructs(&schema);
     let dangling = panschema::diagnostics::dangling_references(&schema);
-    if strict && (!unmodeled.is_empty() || !dangling.is_empty()) {
+    if panschema::diagnostics::should_fail_strict(&unmodeled, &dangling, strict) {
         anyhow::bail!(
             "{} unmodeled LinkML construct(s) and {} dangling reference(s) present; \
              failing because --strict is set",

@@ -64,9 +64,15 @@ pub fn unmodeled_class_constructs(schema: &SchemaDefinition) -> Vec<UnmodeledCon
 }
 
 /// Whether `generate` should fail rather than merely warn: true only when
-/// strict mode is on and at least one unmodeled construct was found.
-pub fn should_fail_strict(findings: &[UnmodeledConstruct], strict: bool) -> bool {
-    strict && !findings.is_empty()
+/// strict mode is on and the schema has at least one blocking problem — an
+/// unmodeled construct or a dangling reference. Keeping the decision here (not
+/// inline in the CLI) keeps it unit-testable.
+pub fn should_fail_strict(
+    unmodeled: &[UnmodeledConstruct],
+    dangling: &[DanglingRef],
+    strict: bool,
+) -> bool {
+    strict && (!unmodeled.is_empty() || !dangling.is_empty())
 }
 
 /// The format-independent schema diagnostics the shared load path
@@ -521,18 +527,31 @@ mod tests {
 
     #[test]
     fn strict_fails_only_when_strict_and_findings_present() {
-        let some = vec![UnmodeledConstruct {
+        let unmodeled = vec![UnmodeledConstruct {
             class: "C".to_string(),
             construct: "rules".to_string(),
         }];
-        let none: Vec<UnmodeledConstruct> = Vec::new();
-        assert!(should_fail_strict(&some, true), "strict + findings ⇒ fail");
-        assert!(!should_fail_strict(&some, false), "not strict ⇒ never fail");
+        let dangling = vec![DanglingRef {
+            referrer: "slot `x`".to_string(),
+            kind: "range",
+            name: "Missing".to_string(),
+        }];
+        let no_unmodeled: Vec<UnmodeledConstruct> = Vec::new();
+        let no_dangling: Vec<DanglingRef> = Vec::new();
+
+        // Not strict ⇒ never fail, whatever is present.
+        assert!(!should_fail_strict(&unmodeled, &dangling, false));
+        // Strict + nothing ⇒ ok.
+        assert!(!should_fail_strict(&no_unmodeled, &no_dangling, true));
+        // Strict + either kind of finding ⇒ fail.
         assert!(
-            !should_fail_strict(&none, true),
-            "strict + no findings ⇒ ok"
+            should_fail_strict(&unmodeled, &no_dangling, true),
+            "strict + unmodeled ⇒ fail"
         );
-        assert!(!should_fail_strict(&none, false));
+        assert!(
+            should_fail_strict(&no_unmodeled, &dangling, true),
+            "strict + dangling ⇒ fail"
+        );
     }
 
     #[test]
