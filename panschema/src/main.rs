@@ -98,8 +98,10 @@ enum Commands {
         #[arg(long = "refresh-labels")]
         refresh_labels: bool,
 
-        /// Fail (non-zero exit) instead of only warning when the schema
-        /// uses a LinkML construct panschema parses but does not model.
+        /// Fail (non-zero exit) instead of only warning when the schema uses
+        /// a LinkML construct panschema parses but does not model, or contains
+        /// a dangling reference (a `range`, `is_a`, `mixin`, or `inverse`
+        /// naming nothing the schema defines).
         #[arg(long)]
         strict: bool,
     },
@@ -293,14 +295,18 @@ fn generate(
     let schema = panschema::import_resolve::load_schema(input, &registry)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-    // The unmodeled-construct and unresolved-unique-key warnings are emitted by
-    // the shared load path above (so `serve`/`publish` surface them too). Under
-    // `--strict`, their presence is additionally a hard error here.
+    // The unmodeled-construct, unresolved-unique-key, and dangling-reference
+    // warnings are emitted by the shared load path above (so `serve`/`publish`
+    // surface them too). Under `--strict`, an unmodeled construct or a dangling
+    // reference is additionally a hard error here.
     let unmodeled = panschema::diagnostics::unmodeled_class_constructs(&schema);
-    if panschema::diagnostics::should_fail_strict(&unmodeled, strict) {
+    let dangling = panschema::diagnostics::dangling_references(&schema);
+    if strict && (!unmodeled.is_empty() || !dangling.is_empty()) {
         anyhow::bail!(
-            "{} unmodeled LinkML construct(s) present; failing because --strict is set",
-            unmodeled.len()
+            "{} unmodeled LinkML construct(s) and {} dangling reference(s) present; \
+             failing because --strict is set",
+            unmodeled.len(),
+            dangling.len()
         );
     }
 

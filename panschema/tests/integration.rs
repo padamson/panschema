@@ -1043,6 +1043,70 @@ classes:
     let _ = fs::remove_dir_all(&tmp);
 }
 
+/// `panschema generate --strict` exits non-zero on a dangling reference (here
+/// a slot `range` naming no class/enum/type/primitive), not just warns. The
+/// same schema without `--strict` succeeds with a warning naming the missing
+/// reference.
+#[test]
+fn cli_generate_strict_fails_on_a_dangling_reference() {
+    let schema_yaml = r#"
+id: https://example.org/dangling
+name: dangling
+classes:
+  Order:
+    slots: [ships_to]
+slots:
+  ships_to:
+    range: Warehouse
+"#;
+    let tmp = std::env::temp_dir().join("panschema_strict_dangling_test");
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).unwrap();
+    let schema_path = tmp.join("schema.yaml");
+    fs::write(&schema_path, schema_yaml).unwrap();
+
+    let run = |extra: &[&str]| {
+        let out_path = tmp.join("out");
+        let mut args = vec![
+            "generate",
+            "--input",
+            schema_path.to_str().unwrap(),
+            "--output",
+            out_path.to_str().unwrap(),
+            "--format",
+            "ttl",
+        ];
+        args.extend_from_slice(extra);
+        Command::new(env!("CARGO_BIN_EXE_panschema"))
+            .args(&args)
+            .output()
+            .expect("panschema")
+    };
+
+    let strict = run(&["--strict"]);
+    assert!(
+        !strict.status.success(),
+        "--strict must fail on a dangling reference"
+    );
+    let strict_err = String::from_utf8_lossy(&strict.stderr);
+    assert!(
+        strict_err.contains("Warehouse"),
+        "the failure must name the missing reference; got:\n{strict_err}"
+    );
+
+    let lax = run(&[]);
+    assert!(
+        lax.status.success(),
+        "without --strict, a dangling reference is only a warning"
+    );
+    assert!(
+        String::from_utf8_lossy(&lax.stderr).contains("Warehouse"),
+        "without --strict, the dangling reference must still warn"
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
 /// `panschema generate` for a schema whose `unique_keys` names a slot the
 /// class doesn't have warns about the unresolved reference — a structural
 /// defect that would otherwise render a broken constraint silently. A key

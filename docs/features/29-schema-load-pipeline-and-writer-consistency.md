@@ -69,7 +69,7 @@ Cross-schema imports work starts only after slices 1–3 land.
 
 ### Slice 2: Dangling-reference diagnostic
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Must Have
 
@@ -79,10 +79,10 @@ primitive — produces one clear warning naming the referrer and the missing
 name, on every command, instead of six per-format silent degradations.
 
 **Acceptance Criteria:**
-- [ ] Loading a schema in which a slot's `range` names a class that doesn't exist warns, naming the slot and the missing name; likewise for `is_a`, `mixins`, and `inverse` references.
-- [ ] The diagnostic runs in the shared load pipeline (slice 1), so `generate`, `serve`, and `publish` all surface it for any output format.
-- [ ] `generate --strict` turns the warning into a non-zero exit.
-- [ ] Writers' per-format degradation behavior is unchanged by this slice (the warning makes it visible; changing per-writer fallbacks is separate).
+- [x] Loading a schema in which a slot's `range` names a class that doesn't exist warns, naming the slot and the missing name; likewise for `is_a`, `mixins`, and `inverse` references.
+- [x] The diagnostic runs in the shared load pipeline (slice 1), so `generate`, `serve`, and `publish` all surface it for any output format.
+- [x] `generate --strict` turns the warning into a non-zero exit.
+- [x] Writers' per-format degradation behavior is unchanged by this slice (the warning makes it visible; changing per-writer fallbacks is separate).
 
 ---
 
@@ -172,7 +172,7 @@ across three files.
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | Slice 1: shared load pipeline | Must Have | None | Complete |
-| Slice 2: dangling-reference diagnostic | Must Have | Slice 1 | Not Started |
+| Slice 2: dangling-reference diagnostic | Must Have | Slice 1 | Complete |
 | Slice 3: RDF family effective slots | Must Have | None | Complete |
 | Slice 4: uniform output paths | Should Have | None | Not Started |
 | Slice 5: consolidate helpers | Should Have | None | Not Started |
