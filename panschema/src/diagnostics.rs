@@ -458,6 +458,55 @@ mod tests {
     }
 
     #[test]
+    fn dangling_references_flags_every_reference_kind_with_its_own_message() {
+        // Each of the four reference kinds is reported, and each message names
+        // its kind — a range, an is_a parent, a mixin, and an inverse that all
+        // resolve to nothing.
+        let schema = parse(
+            "name: s\nclasses:\n  Bad:\n    is_a: MissingParent\n    mixins: [MissingMixin]\nslots:\n  r:\n    range: NoSuchClass\n  inv:\n    inverse: no_such_slot\n",
+        );
+        let msgs: Vec<String> = dangling_references(&schema)
+            .iter()
+            .map(|d| d.message())
+            .collect();
+        assert!(
+            msgs.iter()
+                .any(|m| m.contains("has range") && m.contains("NoSuchClass")),
+            "range message missing or unlabeled; got: {msgs:?}"
+        );
+        assert!(
+            msgs.iter()
+                .any(|m| m.contains("has parent") && m.contains("MissingParent")),
+            "is_a message missing or unlabeled; got: {msgs:?}"
+        );
+        assert!(
+            msgs.iter()
+                .any(|m| m.contains("mixes in") && m.contains("MissingMixin")),
+            "mixin message missing or unlabeled; got: {msgs:?}"
+        );
+        assert!(
+            msgs.iter()
+                .any(|m| m.contains("has inverse") && m.contains("no_such_slot")),
+            "inverse message missing or unlabeled; got: {msgs:?}"
+        );
+    }
+
+    #[test]
+    fn dangling_references_accepts_all_resolving_reference_kinds() {
+        // Every reference resolves — is_a/mixin to a class, a range to a class,
+        // an enum, a `types:` entry, and a built-in, and an inverse to a known
+        // slot — so nothing is flagged. Pins each resolution branch.
+        let schema = parse(
+            "name: s\nenums:\n  Color: {}\ntypes:\n  MyStr: {}\nclasses:\n  Base: {}\n  Sub:\n    is_a: Base\n    mixins: [Base]\nslots:\n  to_class:\n    range: Base\n  to_enum:\n    range: Color\n  to_type:\n    range: MyStr\n  to_builtin:\n    range: string\n  fwd:\n    inverse: bwd\n  bwd: {}\n",
+        );
+        assert!(
+            dangling_references(&schema).is_empty(),
+            "all references resolve, so none should be flagged; got: {:?}",
+            dangling_references(&schema)
+        );
+    }
+
+    #[test]
     fn message_names_the_construct_and_class() {
         let msg = UnmodeledConstruct {
             class: "Deployment".to_string(),
