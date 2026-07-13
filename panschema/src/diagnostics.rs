@@ -87,6 +87,142 @@ pub fn schema_load_diagnostics(schema: &SchemaDefinition) -> Vec<String> {
             .iter()
             .map(|u| u.message()),
     );
+    out.extend(dangling_references(schema).iter().map(|d| d.message()));
+    out
+}
+
+/// LinkML's standard built-in scalar types. A slot `range` naming one of
+/// these resolves without a class/enum/`types:` definition, so it is not a
+/// dangling reference. The full standard set is listed so a valid primitive
+/// never trips the [`dangling_references`] warning; a schema's own custom
+/// primitives live in `types:` and resolve there.
+const LINKML_BUILTIN_TYPES: &[&str] = &[
+    "string",
+    "integer",
+    "boolean",
+    "float",
+    "double",
+    "decimal",
+    "time",
+    "date",
+    "datetime",
+    "date_or_datetime",
+    "uriorcurie",
+    "curie",
+    "uri",
+    "ncname",
+    "objectidentifier",
+    "nodeidentifier",
+    "jsonpointer",
+    "jsonpath",
+    "sparqlpath",
+];
+
+/// A reference that fails to resolve after loading: a slot `range`, a class
+/// `is_a` parent or `mixin`, or a slot `inverse` naming nothing the schema
+/// defines. Each writer degrades a dangling reference differently and
+/// silently (the graph drops the edge, the RDF/SHACL writers mint an IRI
+/// from the bare name, Postgres falls back to `text`); this surfaces it once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DanglingRef {
+    /// The slot or class carrying the reference, pre-formatted (e.g.
+    /// ``slot `ships_to` ``).
+    pub referrer: String,
+    /// Which reference it is: `range`, `is_a`, `mixin`, or `inverse`.
+    pub kind: &'static str,
+    /// The unresolved name.
+    pub name: String,
+}
+
+impl DanglingRef {
+    /// A user-facing warning line naming the referrer, the reference kind, and
+    /// the missing name.
+    pub fn message(&self) -> String {
+        let (verb, expected) = match self.kind {
+            "range" => ("has range", "class, enum, type, or built-in type"),
+            "is_a" => ("has parent", "class"),
+            "mixin" => ("mixes in", "class"),
+            "inverse" => ("has inverse", "slot"),
+            _ => ("references", "definition"),
+        };
+        format!(
+            "{} {verb} `{}`, which names no {expected} the schema defines",
+            self.referrer, self.name
+        )
+    }
+}
+
+/// Report every reference that doesn't resolve against the loaded schema — a
+/// slot `range` (must be a class, enum, `types:` entry, or built-in), a class
+/// `is_a`/`mixin` (must be a class), or a slot `inverse` (must be a known
+/// slot). Deterministic order: class references by class name, then slot
+/// references (top-level slots, then inline attributes).
+pub fn dangling_references(schema: &SchemaDefinition) -> Vec<DanglingRef> {
+    let mut out = Vec::new();
+
+    let resolves_as_type = |name: &str| {
+        schema.classes.contains_key(name)
+            || schema.enums.contains_key(name)
+            || schema.types.contains_key(name)
+            || LINKML_BUILTIN_TYPES.contains(&name)
+    };
+
+    // Every slot name the schema defines — top-level plus inline attributes —
+    // so an `inverse` can resolve against either.
+    let mut all_slot_names: std::collections::BTreeSet<&str> =
+        schema.slots.keys().map(String::as_str).collect();
+    for class in schema.classes.values() {
+        all_slot_names.extend(class.attributes.keys().map(String::as_str));
+    }
+
+    // Class-level references.
+    for (class_name, class) in &schema.classes {
+        if let Some(parent) = &class.is_a
+            && !schema.classes.contains_key(parent)
+        {
+            out.push(DanglingRef {
+                referrer: format!("class `{class_name}`"),
+                kind: "is_a",
+                name: parent.clone(),
+            });
+        }
+        for mixin in &class.mixins {
+            if !schema.classes.contains_key(mixin) {
+                out.push(DanglingRef {
+                    referrer: format!("class `{class_name}`"),
+                    kind: "mixin",
+                    name: mixin.clone(),
+                });
+            }
+        }
+    }
+
+    // Slot-level references (top-level slots, then inline attributes).
+    let mut slots: Vec<(&str, &_)> = schema.slots.iter().map(|(n, s)| (n.as_str(), s)).collect();
+    for class in schema.classes.values() {
+        slots.extend(class.attributes.iter().map(|(n, s)| (n.as_str(), s)));
+    }
+    for (slot_name, slot) in slots {
+        if let Some(range) = &slot.range
+            && !resolves_as_type(range)
+        {
+            out.push(DanglingRef {
+                referrer: format!("slot `{slot_name}`"),
+                kind: "range",
+                name: range.clone(),
+            });
+        }
+        if let Some(inverse) = &slot.inverse
+            && !all_slot_names.contains(inverse.as_str())
+        {
+            out.push(DanglingRef {
+                referrer: format!("slot `{slot_name}`"),
+                kind: "inverse",
+                name: inverse.clone(),
+            });
+        }
+    }
+
     out
 }
 
@@ -286,6 +422,38 @@ mod tests {
         assert!(
             msgs.iter().any(|m| m.contains("missing")),
             "expected an unresolved unique-key-slot message; got: {msgs:?}"
+        );
+    }
+
+    #[test]
+    fn dangling_references_flags_a_range_naming_a_missing_class() {
+        // A slot range that names no class, enum, type, or built-in primitive
+        // is a dangling reference — one clear warning, instead of each writer
+        // silently degrading (graph drops the edge, RDF/SHACL fabricate an IRI).
+        let schema = parse(
+            "name: s\nclasses:\n  Order:\n    slots: [ships_to]\nslots:\n  ships_to:\n    range: Warehouse\n",
+        );
+        let msgs: Vec<String> = dangling_references(&schema)
+            .iter()
+            .map(|d| d.message())
+            .collect();
+        assert!(
+            msgs.iter()
+                .any(|m| m.contains("ships_to") && m.contains("Warehouse")),
+            "expected a dangling-range warning naming `ships_to` -> `Warehouse`; got: {msgs:?}"
+        );
+    }
+
+    #[test]
+    fn dangling_references_accepts_builtin_primitive_ranges() {
+        // A valid LinkML primitive range must NOT be flagged — the whole point
+        // is to catch typo'd class names, not every non-class range.
+        let schema = parse(
+            "name: s\nclasses:\n  Order:\n    slots: [code]\nslots:\n  code:\n    range: string\n",
+        );
+        assert!(
+            dangling_references(&schema).is_empty(),
+            "a built-in primitive range must not be reported as dangling"
         );
     }
 
