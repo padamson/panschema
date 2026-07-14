@@ -68,7 +68,7 @@ fn render(schema: &SchemaDefinition) -> String {
 
     for enum_name in referenced_enums(schema) {
         let def = &schema.enums[enum_name];
-        let type_name = crate::rust_writer::snake_case(enum_name);
+        let type_name = crate::casing::snake_case(enum_name);
         let values: Vec<String> = def
             .permissible_values
             .keys()
@@ -101,7 +101,7 @@ fn render(schema: &SchemaDefinition) -> String {
             // surfaced to the caller.
             continue;
         }
-        let table = crate::rust_writer::snake_case(class_name);
+        let table = crate::casing::snake_case(class_name);
         let effective = crate::linkml_resolve::resolve_effective_slots(class, schema);
         let (pk_col, pk_type) = class_primary_key(class, schema);
 
@@ -152,11 +152,11 @@ fn render(schema: &SchemaDefinition) -> String {
                 fk_constraints.push(FkConstraint {
                     from_table: table.clone(),
                     from_col: col.clone(),
-                    to_table: crate::rust_writer::snake_case(target_name),
+                    to_table: crate::casing::snake_case(target_name),
                     to_col: target_pk_col,
                     constraint_name: format!(
                         "{table}_{}_fkey",
-                        crate::rust_writer::snake_case(slot_name)
+                        crate::casing::snake_case(slot_name)
                     ),
                 });
             } else {
@@ -190,7 +190,7 @@ fn render(schema: &SchemaDefinition) -> String {
                     "    CONSTRAINT {} UNIQUE ({col_list})",
                     quote_ident(&format!(
                         "{table}_{}_key",
-                        crate::rust_writer::snake_case(key_name)
+                        crate::casing::snake_case(key_name)
                     ))
                 ));
             }
@@ -285,13 +285,9 @@ fn slot_column_map(class: &ClassDefinition, schema: &SchemaDefinition) -> BTreeM
         let col = match slot.range.as_deref().and_then(|r| schema.classes.get(r)) {
             Some(target_def) => {
                 let (target_pk_col, _) = class_primary_key(target_def, schema);
-                format!(
-                    "{}_{}",
-                    crate::rust_writer::snake_case(slot_name),
-                    target_pk_col
-                )
+                format!("{}_{}", crate::casing::snake_case(slot_name), target_pk_col)
             }
-            None => crate::rust_writer::snake_case(slot_name),
+            None => crate::casing::snake_case(slot_name),
         };
         map.insert(slot_name.clone(), col);
     }
@@ -520,7 +516,7 @@ fn class_primary_key(class: &ClassDefinition, schema: &SchemaDefinition) -> (Str
     let effective = crate::linkml_resolve::resolve_effective_slots(class, schema);
     match effective.iter().find(|(_, slot)| slot.identifier) {
         Some((name, slot)) => {
-            let col = crate::rust_writer::snake_case(name);
+            let col = crate::casing::snake_case(name);
             let sql_type = sql_type_for_slot_range(slot.range.as_deref(), schema);
             (col, sql_type)
         }
@@ -553,7 +549,7 @@ fn referenced_enums(schema: &SchemaDefinition) -> Vec<&str> {
 fn sql_type_for_slot_range(range: Option<&str>, schema: &SchemaDefinition) -> String {
     let range = range.unwrap_or("string");
     if schema.enums.contains_key(range) {
-        quote_ident(&crate::rust_writer::snake_case(range))
+        quote_ident(&crate::casing::snake_case(range))
     } else {
         sql_type_for_range(range).to_string()
     }

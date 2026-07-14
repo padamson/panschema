@@ -4,6 +4,7 @@
 //! internal representation.
 
 pub mod cache;
+pub mod casing;
 pub mod diagnostics;
 pub mod graph_writer;
 pub mod html_writer;

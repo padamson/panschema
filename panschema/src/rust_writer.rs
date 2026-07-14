@@ -12,6 +12,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write};
+
+use crate::casing::{pascal_case, snake_case};
 use std::path::Path;
 
 use crate::io::{IoError, IoResult, Writer};
@@ -993,75 +995,6 @@ fn type_for_range(
 // String helpers
 // ---------------------------------------------------------------------------
 
-/// Convert a LinkML identifier (typically lowerCamelCase) to snake_case
-/// for use as a Rust field name. Lowercases existing characters and
-/// inserts `_` before each uppercase letter that follows a lowercase one
-/// or a digit. Handles consecutive uppercase by treating runs as a single
-/// "word" (so `URL_path` → `url_path`, not `u_r_l_path`).
-///
-/// Examples:
-/// - `wasGeneratedBy` → `was_generated_by`
-/// - `id` → `id`
-/// - `URL` → `url`
-/// - `parseHTTPRequest` → `parse_http_request`
-/// - `already_snake` → `already_snake`
-pub fn snake_case(name: &str) -> String {
-    let mut out = String::with_capacity(name.len() + 4);
-    let mut prev: Option<char> = None;
-    let mut iter = name.chars().peekable();
-
-    while let Some(c) = iter.next() {
-        if c == '_' {
-            out.push('_');
-            prev = Some(c);
-            continue;
-        }
-        if c.is_ascii_uppercase() {
-            let next = iter.peek().copied();
-            let prev_is_lower_or_digit =
-                prev.is_some_and(|p| p.is_ascii_lowercase() || p.is_ascii_digit());
-            let prev_is_upper = prev.is_some_and(|p| p.is_ascii_uppercase());
-            let next_is_lower = next.is_some_and(|n| n.is_ascii_lowercase());
-            let needs_underscore = prev.is_some()
-                && !out.ends_with('_')
-                && (prev_is_lower_or_digit || (prev_is_upper && next_is_lower));
-            if needs_underscore {
-                out.push('_');
-            }
-            for lower in c.to_lowercase() {
-                out.push(lower);
-            }
-        } else {
-            out.push(c);
-        }
-        prev = Some(c);
-    }
-    out
-}
-
-/// Convert an identifier (lowerCamelCase, snake_case, or already
-/// PascalCase) to PascalCase. Used to derive a Rust type name from a
-/// LinkML slot name (`wasDerivedFrom` → `WasDerivedFrom`).
-pub fn pascal_case(name: &str) -> String {
-    let mut out = String::with_capacity(name.len());
-    let mut capitalize_next = true;
-    for c in name.chars() {
-        if c == '_' || c == '-' {
-            capitalize_next = true;
-            continue;
-        }
-        if capitalize_next {
-            for upper in c.to_uppercase() {
-                out.push(upper);
-            }
-            capitalize_next = false;
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
 /// Emit a LinkML description as Rust doc-comment lines. Each output line
 /// is `<indent>/// <text>\n`. Lines are wrapped at a soft 80-column
 /// boundary (76 chars of content + 4 chars of `/// ` prefix), breaking
@@ -1463,60 +1396,6 @@ mod tests {
         schema.classes.insert("Item".to_string(), class);
 
         try_write(&schema).expect("keyword slot name must remain accepted");
-    }
-
-    // ----- snake_case --------------------------------------------------
-
-    #[test]
-    fn snake_case_lower_camel() {
-        assert_eq!(snake_case("wasGeneratedBy"), "was_generated_by");
-    }
-
-    #[test]
-    fn snake_case_already_snake() {
-        assert_eq!(snake_case("already_snake"), "already_snake");
-    }
-
-    #[test]
-    fn snake_case_single_lowercase() {
-        assert_eq!(snake_case("id"), "id");
-    }
-
-    #[test]
-    fn snake_case_all_caps_acronym() {
-        assert_eq!(snake_case("URL"), "url");
-    }
-
-    #[test]
-    fn snake_case_internal_acronym() {
-        assert_eq!(snake_case("parseHTTPRequest"), "parse_http_request");
-    }
-
-    #[test]
-    fn snake_case_with_digit() {
-        assert_eq!(snake_case("foo2Bar"), "foo2_bar");
-    }
-
-    // ----- pascal_case -------------------------------------------------
-
-    #[test]
-    fn pascal_case_lower_camel_to_pascal() {
-        assert_eq!(pascal_case("wasDerivedFrom"), "WasDerivedFrom");
-    }
-
-    #[test]
-    fn pascal_case_snake_to_pascal() {
-        assert_eq!(pascal_case("some_snake_name"), "SomeSnakeName");
-    }
-
-    #[test]
-    fn pascal_case_already_pascal() {
-        assert_eq!(pascal_case("UncertaintyModel"), "UncertaintyModel");
-    }
-
-    #[test]
-    fn pascal_case_single_lowercase() {
-        assert_eq!(pascal_case("id"), "Id");
     }
 
     // ----- class roles -------------------------------------------------
