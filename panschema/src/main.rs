@@ -471,6 +471,7 @@ fn resolve_source(
 
 /// `panschema generate` (no --input): walk the manifest and run configured writers.
 fn generate_from_manifest(offline: bool, refresh_labels: bool, strict: bool) -> anyhow::Result<()> {
+    use anyhow::Context as _;
     let (manifest, manifest_dir) = load_manifest()?;
     let labels = LabelOptions {
         offline,
@@ -502,21 +503,36 @@ fn generate_from_manifest(offline: bool, refresh_labels: bool, strict: bool) -> 
                 gen_cfg.html_default_layout.as_deref(),
                 &labels,
                 strict,
-            )?;
+            )
+            .with_context(|| format!("schema `{name}`, format `html`"))?;
             produced_anything = true;
         }
-        if let Some(rust_out) = &gen_cfg.rust {
-            let rust_out = manifest_dir.join(rust_out);
+        // Every non-HTML writer is a single output file with a uniform call
+        // shape; fan out over the configured ones. HTML stays separate above
+        // because it writes a directory and takes viz options.
+        for (format, out_opt) in [
+            ("rust", &gen_cfg.rust),
+            ("postgres", &gen_cfg.postgres),
+            ("shacl", &gen_cfg.shacl),
+            ("ttl", &gen_cfg.ttl),
+            ("jsonld", &gen_cfg.jsonld),
+            ("rdfxml", &gen_cfg.rdfxml),
+            ("ntriples", &gen_cfg.ntriples),
+            ("graph-json", &gen_cfg.graph_json),
+        ] {
+            let Some(out) = out_opt else { continue };
+            let out = manifest_dir.join(out);
             generate(
                 &schema_path,
-                &rust_out,
-                "rust",
+                &out,
+                format,
                 false,
                 None,
                 None,
                 &labels,
                 strict,
-            )?;
+            )
+            .with_context(|| format!("schema `{name}`, format `{format}`"))?;
             produced_anything = true;
         }
     }

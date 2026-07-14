@@ -1205,6 +1205,68 @@ rust = "src/generated/sample.rs"
     );
 }
 
+/// `panschema generate` fans out across every writer key configurable in
+/// `[generate.<name>]` — not just html/rust — so a consumer gets Postgres
+/// DDL, SHACL shapes, the RDF family, and graph JSON from the same manifest
+/// that gets its Rust types.
+#[test]
+fn manifest_driven_generate_runs_every_configured_writer() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+
+    write_sample_pkg(consumer, "sample-pkg");
+
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+sample_schema = { path = "./sample-pkg" }
+
+[generate.sample_schema]
+html = "out/docs/"
+rust = "out/schema.rs"
+postgres = "out/schema.sql"
+shacl = "out/shapes.shacl.ttl"
+ttl = "out/schema.ttl"
+jsonld = "out/schema.jsonld"
+rdfxml = "out/schema.rdf"
+ntriples = "out/schema.nt"
+graph-json = "out/graph.json"
+"#,
+    )
+    .expect("write manifest");
+
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("generate")
+        .current_dir(consumer)
+        .status()
+        .expect("Failed to execute panschema");
+    assert!(status.success(), "panschema exited with error");
+
+    // Every configured format lands its file, each carrying a
+    // schema-specific token proving real content — not an empty stub.
+    let out = consumer.join("out");
+    for (rel, needle) in [
+        ("docs/index.html", "Person"),
+        ("schema.rs", "Person"),
+        ("schema.sql", "person"),
+        ("shapes.shacl.ttl", "NodeShape"),
+        ("schema.ttl", "Person"),
+        ("schema.jsonld", "Person"),
+        ("schema.rdf", "Person"),
+        ("schema.nt", "Person"),
+        ("graph.json", "Person"),
+    ] {
+        let path = out.join(rel);
+        let body = fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("expected output at {}: {e}", path.display()));
+        assert!(
+            body.contains(needle),
+            "{rel} missing `{needle}`; got:\n{body}"
+        );
+    }
+}
+
 /// `panschema generate` with only a `rust` writer (no `html`) still
 /// produces the rust file. Locks in the fan-out is independent per writer.
 #[test]

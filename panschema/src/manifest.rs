@@ -70,9 +70,10 @@ pub struct SchemaDep {
 /// One entry under `[generate.<name>]` — maps writer kinds to output paths.
 /// Each field corresponds to a writer; absence means that writer isn't run.
 ///
-/// To add a new writer key, add an `Option<PathBuf>` field here and a
-/// matching branch in `main.rs::generate_from_manifest`. The dispatch loop
-/// fans out across every populated field.
+/// To add a new single-file writer key, add an `Option<PathBuf>` field here
+/// and an entry in the dispatch table in `main.rs::generate_from_manifest`.
+/// HTML keeps a dedicated branch because it writes to a directory and takes
+/// viz options; the other writers fan out uniformly over the table.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct GenerateConfig {
@@ -98,6 +99,31 @@ pub struct GenerateConfig {
     /// Rust module output file path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rust: Option<PathBuf>,
+    /// Postgres DDL output file path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub postgres: Option<PathBuf>,
+    /// SHACL shapes graph output file path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shacl: Option<PathBuf>,
+    /// OWL/Turtle output file path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl: Option<PathBuf>,
+    /// JSON-LD output file path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jsonld: Option<PathBuf>,
+    /// RDF/XML output file path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rdfxml: Option<PathBuf>,
+    /// N-Triples output file path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ntriples: Option<PathBuf>,
+    /// Graph JSON (panschema-viz wire format) output file path.
+    #[serde(
+        rename = "graph-json",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub graph_json: Option<PathBuf>,
 }
 
 /// Canonical layout-algorithm identifiers accepted by
@@ -696,17 +722,46 @@ remote = { source = "github:padamson/scimantic-schema", version = "0.1.3" }
 
     #[test]
     fn errors_on_unknown_writer_in_generate() {
-        // `shacl` is reserved for a future writer; not in GenerateConfig yet.
-        // `deny_unknown_fields` should reject it cleanly.
+        // A writer key with no corresponding registered writer (here `avro`)
+        // must be rejected by `deny_unknown_fields`, not silently ignored.
         let toml = r#"
 [schemas]
 x = { path = "./x-pkg" }
 
 [generate.x]
-shacl = "shapes/x.ttl"
+avro = "schema/x.avsc"
 "#;
         let err = toml.parse::<Manifest>().expect_err("should reject");
         assert!(matches!(err, ManifestError::Parse(_)));
+    }
+
+    #[test]
+    fn parses_all_registered_writer_keys_in_generate() {
+        // Every writer key the generate fan-out dispatches must parse.
+        let toml = r#"
+[schemas]
+x = { path = "./x-pkg" }
+
+[generate.x]
+html = "docs/"
+rust = "src/x.rs"
+postgres = "x.sql"
+shacl = "x.shacl.ttl"
+ttl = "x.ttl"
+jsonld = "x.jsonld"
+rdfxml = "x.rdf"
+ntriples = "x.nt"
+graph-json = "x.json"
+"#;
+        let m = toml.parse::<Manifest>().expect("should parse");
+        let cfg = m.generate.get("x").expect("generate.x present");
+        assert_eq!(cfg.postgres.as_deref(), Some(Path::new("x.sql")));
+        assert_eq!(cfg.shacl.as_deref(), Some(Path::new("x.shacl.ttl")));
+        assert_eq!(cfg.ttl.as_deref(), Some(Path::new("x.ttl")));
+        assert_eq!(cfg.jsonld.as_deref(), Some(Path::new("x.jsonld")));
+        assert_eq!(cfg.rdfxml.as_deref(), Some(Path::new("x.rdf")));
+        assert_eq!(cfg.ntriples.as_deref(), Some(Path::new("x.nt")));
+        assert_eq!(cfg.graph_json.as_deref(), Some(Path::new("x.json")));
     }
 
     #[test]
