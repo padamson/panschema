@@ -123,7 +123,8 @@ the OWL ontology describe the same vocabulary.
 
 ### Slice 5: Consolidate naming/CURIE/type-mapping helpers
 
-**Status:** Not Started
+**Status:** In progress — prefix-map (AC 2) and casing (AC 4) done; CURIE
+(AC 1) and primitive-alias (AC 3) remaining.
 
 **Priority:** Should Have
 
@@ -133,9 +134,9 @@ can't silently misrender in another.
 
 **Acceptance Criteria:**
 - [ ] One CURIE-expansion implementation (single unknown-prefix and default-prefix behavior) used by the RDF builders and the HTML writer.
-- [ ] One prefix-map builder used by the Turtle-emitting writers (with per-writer builtin additions like `sh:`/`xsd:` layered, not forked); the OWL output declares `xsd:` when it emits `xsd:`-typed terms.
+- [x] One prefix-map builder used by the Turtle-emitting writers (with per-writer builtin additions like `sh:`/`xsd:` layered, not forked); the OWL output declares `xsd:` when it emits `xsd:`-typed terms.
 - [ ] One primitive-alias table shared by the Rust, Postgres, and XSD type mappings (aliases like `str`/`int`/`bool` map consistently; no fabricated `xsd:` IRIs from the alias fallback).
-- [ ] Casing helpers move out of `rust_writer` into a shared module.
+- [x] Casing helpers move out of `rust_writer` into a shared module.
 
 ---
 

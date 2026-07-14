@@ -6,14 +6,14 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
 
-use sophia::api::prefix::{Prefix, PrefixMapPair};
 use sophia::api::serializer::TripleSerializer;
-use sophia::iri::Iri;
 use sophia::turtle::serializer::turtle::{TurtleConfig, TurtleSerializer};
 
 use crate::io::{IoError, IoResult, Writer};
 use crate::linkml::SchemaDefinition;
-use crate::rdf_serializers::build_rdf_graph;
+use crate::rdf_serializers::{
+    OWL_NS, RDF_NS, RDFS_NS, XSD_NS, build_rdf_graph, build_turtle_prefix_map,
+};
 
 /// Writer for OWL ontologies in Turtle (.ttl) format
 pub struct OwlWriter;
@@ -46,7 +46,18 @@ impl Writer for OwlWriter {
         // in streaming mode). Prefixes that aren't valid sophia `Prefix`
         // values are silently dropped — they can't be used in the output
         // anyway.
-        let prefix_map = build_prefix_map(schema);
+        // Declare the standard namespaces the OWL graph emits so terms like
+        // `rdfs:range xsd:integer` serialize in compact form, not as verbose
+        // absolute IRIs.
+        let prefix_map = build_turtle_prefix_map(
+            schema,
+            &[
+                ("xsd", XSD_NS),
+                ("rdf", RDF_NS),
+                ("rdfs", RDFS_NS),
+                ("owl", OWL_NS),
+            ],
+        );
         let config = TurtleConfig::new()
             .with_pretty(true)
             .with_own_prefix_map(prefix_map);
@@ -62,38 +73,6 @@ impl Writer for OwlWriter {
     fn format_id(&self) -> &str {
         "ttl"
     }
-}
-
-/// Construct a sophia `PrefixMap` from the schema's `prefixes:` block.
-/// Each `(name, base)` pair becomes a `(Prefix, Iri)` entry; entries that
-/// fail sophia's prefix/IRI validation are skipped with a `tracing::warn!`.
-fn build_prefix_map(schema: &SchemaDefinition) -> Vec<PrefixMapPair> {
-    schema
-        .prefixes
-        .iter()
-        .filter_map(|(name, base)| {
-            let prefix = Prefix::new(name.clone().into_boxed_str())
-                .map_err(|e| {
-                    tracing::warn!(
-                        prefix = name,
-                        error = %e,
-                        "skipping invalid prefix declaration"
-                    );
-                })
-                .ok()?;
-            let iri = Iri::new(base.clone().into_boxed_str())
-                .map_err(|e| {
-                    tracing::warn!(
-                        prefix = name,
-                        base = base,
-                        error = %e,
-                        "skipping prefix with invalid base IRI"
-                    );
-                })
-                .ok()?;
-            Some((prefix, iri))
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -567,6 +546,31 @@ mod tests {
         assert!(
             content.contains("obo:") && content.contains("http://purl.obolibrary.org/obo/"),
             "expected obo prefix declaration; got:\n{content}"
+        );
+    }
+
+    #[test]
+    fn ttl_output_declares_the_xsd_prefix_for_xsd_typed_terms() {
+        // A datatype-property range like `integer` emits `rdfs:range
+        // xsd:integer`. The OWL prefix map must include `xsd:` so that term
+        // serializes in compact form, not as a verbose absolute IRI — the
+        // SHACL writer already declares `xsd:`, the OWL writer did not.
+        let mut schema = create_test_schema();
+        let mut thing = ClassDefinition::new("Thing");
+        thing.class_uri = Some("http://example.org/test#Thing".to_string());
+        let mut count = SlotDefinition::new("count");
+        count.range = Some("integer".to_string());
+        thing.attributes.insert("count".to_string(), count);
+        schema.classes.insert("Thing".to_string(), thing);
+
+        let temp_dir = TempDir::new().expect("tempdir");
+        let output_path = temp_dir.path().join("out.ttl");
+        OwlWriter::new().write(&schema, &output_path).unwrap();
+        let content = fs::read_to_string(&output_path).unwrap();
+
+        assert!(
+            content.contains("xsd:integer"),
+            "OWL output must declare and use the `xsd:` prefix for xsd-typed terms; got:\n{content}"
         );
     }
 

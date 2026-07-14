@@ -17,10 +17,49 @@ use crate::io::{IoError, IoResult, Writer};
 use crate::linkml::{ClassDefinition, SchemaDefinition, SlotDefinition};
 
 // Namespace constants
-const OWL_NS: &str = "http://www.w3.org/2002/07/owl#";
+pub(crate) const OWL_NS: &str = "http://www.w3.org/2002/07/owl#";
 const DCTERMS_NS: &str = "http://purl.org/dc/terms/";
 const SKOS_NS: &str = "http://www.w3.org/2004/02/skos/core#";
-const SH_NS: &str = "http://www.w3.org/ns/shacl#";
+pub(crate) const SH_NS: &str = "http://www.w3.org/ns/shacl#";
+pub(crate) const XSD_NS: &str = "http://www.w3.org/2001/XMLSchema#";
+pub(crate) const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+pub(crate) const RDFS_NS: &str = "http://www.w3.org/2000/01/rdf-schema#";
+
+/// Build a sophia Turtle prefix map from the schema's `prefixes:` block plus
+/// the given per-writer builtin prefixes (e.g. `xsd:` for OWL, `sh:` for
+/// SHACL) — one builder shared by every Turtle-emitting writer so their
+/// declarations can't drift. A builtin whose name the schema already declares
+/// is left to the schema's binding. Entries that fail sophia's prefix/IRI
+/// validation are dropped with a `tracing::warn!` (they can't appear in the
+/// output anyway).
+pub(crate) fn build_turtle_prefix_map(
+    schema: &SchemaDefinition,
+    builtins: &[(&str, &str)],
+) -> Vec<sophia::api::prefix::PrefixMapPair> {
+    use sophia::api::prefix::Prefix;
+    schema
+        .prefixes
+        .iter()
+        .map(|(n, b)| (n.as_str(), b.as_str()))
+        .chain(
+            builtins
+                .iter()
+                .copied()
+                .filter(|(name, _)| !schema.prefixes.contains_key(*name)),
+        )
+        .filter_map(|(name, base)| {
+            let prefix = Prefix::new(name.to_string().into_boxed_str())
+                .map_err(|e| tracing::warn!(prefix = name, error = %e, "skipping invalid prefix"))
+                .ok()?;
+            let iri = Iri::new(base.to_string().into_boxed_str())
+                .map_err(
+                    |e| tracing::warn!(prefix = name, base, error = %e, "skipping bad base IRI"),
+                )
+                .ok()?;
+            Some((prefix, iri))
+        })
+        .collect()
+}
 
 /// The ontology's base IRI — the schema `id`, or the shared fallback.
 fn ontology_iri_string(schema: &SchemaDefinition) -> &str {

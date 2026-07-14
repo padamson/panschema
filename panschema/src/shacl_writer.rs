@@ -10,14 +10,12 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
 
-use sophia::api::prefix::{Prefix, PrefixMapPair};
 use sophia::api::serializer::TripleSerializer;
-use sophia::iri::Iri;
 use sophia::turtle::serializer::turtle::{TurtleConfig, TurtleSerializer};
 
 use crate::io::{IoError, IoResult, Writer};
 use crate::linkml::SchemaDefinition;
-use crate::rdf_serializers::build_shacl_graph;
+use crate::rdf_serializers::{SH_NS, XSD_NS, build_shacl_graph, build_turtle_prefix_map};
 
 /// Writer for a SHACL shapes graph in Turtle (.ttl) format.
 pub struct ShaclWriter;
@@ -42,11 +40,15 @@ impl Writer for ShaclWriter {
         let file = File::create(output).map_err(IoError::Io)?;
         let writer = BufWriter::new(file);
 
-        // Same prefix-aware Turtle config the OWL writer uses, plus a `sh:`
-        // declaration so the shapes graph reads in compact form.
-        let config = TurtleConfig::new()
-            .with_pretty(true)
-            .with_own_prefix_map(build_prefix_map(schema));
+        // Same prefix-aware Turtle config the OWL writer uses, plus `sh:` and
+        // `xsd:` declarations so the shapes graph reads in compact form.
+        let config =
+            TurtleConfig::new()
+                .with_pretty(true)
+                .with_own_prefix_map(build_turtle_prefix_map(
+                    schema,
+                    &[("sh", SH_NS), ("xsd", XSD_NS)],
+                ));
         let mut serializer = TurtleSerializer::new_with_config(writer, config);
 
         serializer
@@ -59,34 +61,6 @@ impl Writer for ShaclWriter {
     fn format_id(&self) -> &str {
         "shacl"
     }
-}
-
-/// The schema's `prefixes:` block plus the `sh:` (SHACL) and `xsd:`
-/// declarations the shapes graph itself uses, as a sophia prefix map.
-/// Entries that fail sophia's prefix/IRI validation are dropped with a
-/// `tracing::warn!` (they can't appear in the output anyway).
-fn build_prefix_map(schema: &SchemaDefinition) -> Vec<PrefixMapPair> {
-    let builtins = [
-        ("sh", "http://www.w3.org/ns/shacl#"),
-        ("xsd", "http://www.w3.org/2001/XMLSchema#"),
-    ];
-    schema
-        .prefixes
-        .iter()
-        .map(|(n, b)| (n.as_str(), b.as_str()))
-        .chain(builtins)
-        .filter_map(|(name, base)| {
-            let prefix = Prefix::new(name.to_string().into_boxed_str())
-                .map_err(|e| tracing::warn!(prefix = name, error = %e, "skipping invalid prefix"))
-                .ok()?;
-            let iri = Iri::new(base.to_string().into_boxed_str())
-                .map_err(
-                    |e| tracing::warn!(prefix = name, base, error = %e, "skipping bad base IRI"),
-                )
-                .ok()?;
-            Some((prefix, iri))
-        })
-        .collect()
 }
 
 #[cfg(test)]
