@@ -39,16 +39,12 @@ impl Writer for OwlWriter {
         let file = File::create(output).map_err(IoError::Io)?;
         let writer = BufWriter::new(file);
 
-        // Wire the schema's `prefixes:` block into sophia's TurtleConfig so
-        // the serializer emits `@prefix foo: <https://...>` declarations and
-        // can fold absolute IRIs back into compact CURIE form. `with_pretty`
+        // Wire the schema's `prefixes:` block plus the standard namespaces the
+        // OWL graph emits (`xsd:`/`rdf:`/`rdfs:`/`owl:`) into sophia's
+        // TurtleConfig, so terms like `rdfs:range xsd:integer` serialize in
+        // compact CURIE form instead of verbose absolute IRIs. `with_pretty`
         // is required for prefix-aware output (sophia ignores the prefix map
-        // in streaming mode). Prefixes that aren't valid sophia `Prefix`
-        // values are silently dropped — they can't be used in the output
-        // anyway.
-        // Declare the standard namespaces the OWL graph emits so terms like
-        // `rdfs:range xsd:integer` serialize in compact form, not as verbose
-        // absolute IRIs.
+        // in streaming mode).
         let prefix_map = build_turtle_prefix_map(
             schema,
             &[
@@ -571,6 +567,63 @@ mod tests {
         assert!(
             content.contains("xsd:integer"),
             "OWL output must declare and use the `xsd:` prefix for xsd-typed terms; got:\n{content}"
+        );
+    }
+
+    #[test]
+    fn int_alias_range_maps_to_xsd_integer_not_a_fabricated_iri() {
+        // A range alias like `int` must resolve to `xsd:integer`, never a
+        // nonexistent `xsd:int` fabricated by the old alias fallback.
+        let mut schema = create_test_schema();
+        let mut thing = ClassDefinition::new("Thing");
+        thing.class_uri = Some("http://example.org/test#Thing".to_string());
+        let mut n = SlotDefinition::new("n");
+        n.range = Some("int".to_string());
+        thing.attributes.insert("n".to_string(), n);
+        schema.classes.insert("Thing".to_string(), thing);
+
+        let store = render_to_store(&schema);
+        let rdfs_range = "http://www.w3.org/2000/01/rdf-schema#range";
+        assert!(
+            ask(
+                &store,
+                &format!(
+                    "ASK {{ <http://example.org/test#n> <{rdfs_range}> <http://www.w3.org/2001/XMLSchema#integer> }}"
+                )
+            ),
+            "the `int` alias must map to xsd:integer"
+        );
+        assert!(
+            !ask(
+                &store,
+                &format!(
+                    "ASK {{ <http://example.org/test#n> <{rdfs_range}> <http://www.w3.org/2001/XMLSchema#int> }}"
+                )
+            ),
+            "must not fabricate a nonexistent xsd:int"
+        );
+    }
+
+    #[test]
+    fn unknown_datatype_range_emits_no_rdfs_range_instead_of_fabricating() {
+        // A range that names no class/enum/type/primitive (a typo, already
+        // flagged by the dangling-reference diagnostic) must not emit a
+        // fabricated `rdfs:range xsd:Bogus`.
+        let mut schema = create_test_schema();
+        let mut thing = ClassDefinition::new("Thing");
+        thing.class_uri = Some("http://example.org/test#Thing".to_string());
+        let mut m = SlotDefinition::new("m");
+        m.range = Some("Bogus".to_string());
+        thing.attributes.insert("m".to_string(), m);
+        schema.classes.insert("Thing".to_string(), thing);
+
+        let store = render_to_store(&schema);
+        assert!(
+            !ask(
+                &store,
+                "ASK { <http://example.org/test#m> <http://www.w3.org/2000/01/rdf-schema#range> ?r }"
+            ),
+            "an unknown datatype range must emit no rdfs:range, not a fabricated xsd IRI"
         );
     }
 

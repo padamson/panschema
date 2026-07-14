@@ -563,9 +563,16 @@ fn sql_type_for_slot_range(range: Option<&str>, schema: &SchemaDefinition) -> St
 /// fallback below produces for any other unrecognized name — so they're
 /// covered by the fallback rather than listed as their own match arm.
 fn sql_type_for_range(range: &str) -> &'static str {
-    match range {
-        "integer" | "int" => "integer",
-        "boolean" | "bool" => "boolean",
+    // Resolve aliases (`int`/`bool`/`str`) through the shared primitive table
+    // so every writer agrees on what a primitive is; non-primitives fall
+    // through to `text`.
+    let canonical = match crate::primitives::canonical_primitive(range) {
+        Some(p) => p,
+        None => range,
+    };
+    match canonical {
+        "integer" => "integer",
+        "boolean" => "boolean",
         "float" | "double" | "decimal" => "double precision",
         "date" => "date",
         "datetime" => "timestamptz",

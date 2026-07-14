@@ -953,11 +953,17 @@ fn type_for_range(
     schema: &SchemaDefinition,
     roles: &BTreeMap<String, ClassRole>,
 ) -> String {
-    match range {
-        "string" | "str" | "uri" | "uriorcurie" | "curie" | "ncname" | "objectidentifier"
+    // Resolve aliases (`int`/`bool`/`str`) through the shared primitive table;
+    // a non-primitive keeps its original name for the class/enum/trait lookup.
+    let canonical = match crate::primitives::canonical_primitive(range) {
+        Some(p) => p,
+        None => range,
+    };
+    match canonical {
+        "string" | "uri" | "uriorcurie" | "curie" | "ncname" | "objectidentifier"
         | "nodeidentifier" => "String".to_string(),
-        "integer" | "int" => "i64".to_string(),
-        "boolean" | "bool" => "bool".to_string(),
+        "integer" => "i64".to_string(),
+        "boolean" => "bool".to_string(),
         "float" | "double" | "decimal" => "f64".to_string(),
         "datetime" => "chrono::DateTime<chrono::Utc>".to_string(),
         "date" => "chrono::NaiveDate".to_string(),

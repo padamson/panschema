@@ -19,6 +19,7 @@ pub mod owl_model;
 pub mod owl_reader;
 pub mod owl_writer;
 pub mod postgres_writer;
+pub mod primitives;
 pub mod publish;
 pub mod rdf_serializers;
 pub mod rust_writer;

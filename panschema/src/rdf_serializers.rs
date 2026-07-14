@@ -524,10 +524,11 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
                 .map_err(|e| IoError::Write(e.to_string()))?;
         }
 
-        // rdfs:range. An enum range has no RDF projection yet, and its name is
-        // not an XSD datatype — the scalar fallback would fabricate a
-        // nonexistent `xsd:{EnumName}`, so skip rdfs:range for it (guarding
-        // enums the way the SHACL and Postgres writers do).
+        // rdfs:range. For a datatype property the range must be a built-in
+        // primitive to get an `rdfs:range` — an enum, a class the writer
+        // didn't recognize as an object property, or a typo has no XSD
+        // datatype, so emit none rather than fabricating a nonexistent
+        // `xsd:{name}` (`xsd_datatype_iri` returns `None` for all of those).
         if let Some(ref range) = slot_def.range {
             let range_iri_str = if is_object_property {
                 Some(
@@ -538,10 +539,8 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
                         .map(|c| expand_curie(c, schema))
                         .unwrap_or_else(|| format!("{}#{}", ontology_iri_str, range)),
                 )
-            } else if schema.enums.contains_key(range) {
-                None
             } else {
-                Some(map_linkml_to_xsd(range))
+                crate::primitives::xsd_datatype_iri(range)
             };
             if let Some(range_iri_str) = range_iri_str {
                 let range_iri = make_iri(&range_iri_str)?;
@@ -641,23 +640,6 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
 /// Helper to create an IRI
 fn make_iri(s: &str) -> IoResult<Iri<String>> {
     Iri::new(s.to_string()).map_err(|e| IoError::Parse(format!("Invalid IRI '{}': {}", s, e)))
-}
-
-/// Map LinkML types to XSD IRIs
-fn map_linkml_to_xsd(linkml_type: &str) -> String {
-    let xsd_ns = "http://www.w3.org/2001/XMLSchema#";
-    match linkml_type {
-        "string" => format!("{}string", xsd_ns),
-        "integer" => format!("{}integer", xsd_ns),
-        "float" => format!("{}float", xsd_ns),
-        "double" => format!("{}double", xsd_ns),
-        "boolean" => format!("{}boolean", xsd_ns),
-        "date" => format!("{}date", xsd_ns),
-        "datetime" => format!("{}dateTime", xsd_ns),
-        "time" => format!("{}time", xsd_ns),
-        "uri" => format!("{}anyURI", xsd_ns),
-        _ => format!("{}{}", xsd_ns, linkml_type),
-    }
 }
 
 /// Build a SHACL shapes graph from the LinkML IR: one `sh:NodeShape` per
@@ -996,8 +978,11 @@ fn emit_property_shape(
             graph
                 .insert(prop_shape, &t.class, &target_iri)
                 .map_err(|e| IoError::Write(e.to_string()))?;
-        } else if !schema.enums.contains_key(range) {
-            let xsd_iri = make_iri(&map_linkml_to_xsd(range))?;
+        } else if let Some(xsd) = crate::primitives::xsd_datatype_iri(range) {
+            // Only a built-in primitive gets an `sh:datatype`; an enum or a
+            // typo has no XSD datatype, so emit none rather than a fabricated
+            // `xsd:{name}`.
+            let xsd_iri = make_iri(&xsd)?;
             graph
                 .insert(prop_shape, &t.datatype, &xsd_iri)
                 .map_err(|e| IoError::Write(e.to_string()))?;
@@ -1425,33 +1410,6 @@ mod tests {
             .iter()
             .map(|s| s.to_string())
             .collect()
-        );
-    }
-
-    #[test]
-    fn xsd_mapping_uses_canonical_iris() {
-        // Pin down the exact XSD IRI for each LinkML primitive. The
-        // fallback arm produces `xsd:{linkml_type}` verbatim, so for
-        // types where capitalisation differs (`datetime` →
-        // `dateTime`, `uri` → `anyURI`), the dedicated match arm is
-        // load-bearing. Deleting any arm reverts to the verbatim
-        // form, which is observably wrong for RDF consumers.
-        let xsd = "http://www.w3.org/2001/XMLSchema#";
-        assert_eq!(map_linkml_to_xsd("string"), format!("{xsd}string"));
-        assert_eq!(map_linkml_to_xsd("integer"), format!("{xsd}integer"));
-        assert_eq!(map_linkml_to_xsd("float"), format!("{xsd}float"));
-        assert_eq!(map_linkml_to_xsd("double"), format!("{xsd}double"));
-        assert_eq!(map_linkml_to_xsd("boolean"), format!("{xsd}boolean"));
-        assert_eq!(map_linkml_to_xsd("date"), format!("{xsd}date"));
-        // dateTime — capital T is intentional, matches XSD canonical form.
-        assert_eq!(map_linkml_to_xsd("datetime"), format!("{xsd}dateTime"));
-        assert_eq!(map_linkml_to_xsd("time"), format!("{xsd}time"));
-        // anyURI — XSD's name for URI-typed literals.
-        assert_eq!(map_linkml_to_xsd("uri"), format!("{xsd}anyURI"));
-        // Fallback: unknown LinkML type passes through verbatim.
-        assert_eq!(
-            map_linkml_to_xsd("custom_type"),
-            format!("{xsd}custom_type")
         );
     }
 
