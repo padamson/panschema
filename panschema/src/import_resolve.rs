@@ -14,10 +14,13 @@
 //!
 //! The merge unions `classes`, `slots`, `enums`, `types`, and
 //! `prefixes`. When two files define the same name, structurally equal
-//! definitions are silently unified; differing ones are an incompatible
-//! collision — the kept definition (root precedence) wins, the other is
-//! dropped, and a [`Collision`] records both files. Each merged
-//! element's origin file is recorded for provenance.
+//! definitions are silently unified. A differing definition is an
+//! incompatible collision resolved by who wins: when the root (importing)
+//! schema is one side, root precedence is deterministic, so it wins with a
+//! warning; when both sides are imports (neither is the root), the survivor
+//! would depend on merge order — never safe for a data-model contract — so
+//! the load fails naming both files. Each merged element's origin file is
+//! recorded for provenance.
 //!
 //! A self-import or an import cycle is a hard error, never an infinite
 //! loop: every file is canonicalized and tracked on the resolution
@@ -54,10 +57,10 @@ use crate::linkml::SchemaDefinition;
 /// rendered its imports only under `generate`; `serve` and `publish` read the
 /// root file alone.
 ///
-/// Collisions between an import and the root are reported to stderr (matching
-/// the behavior `generate` had inline). Import-resolution failures — a missing
-/// file, a cycle, a path escaping the schema directory — surface as an
-/// [`IoError::Parse`].
+/// A collision the root wins is reported to stderr as a warning; a collision
+/// between two imports (no principled winner) fails with an [`IoError::Parse`].
+/// Import-resolution failures — a missing file, a cycle, a path escaping the
+/// schema directory — also surface as an [`IoError::Parse`].
 pub fn load_schema(input: &Path, registry: &FormatRegistry) -> IoResult<SchemaDefinition> {
     load_schema_with_deps(input, registry, &BTreeMap::new())
 }
@@ -81,19 +84,35 @@ pub fn load_schema_with_deps(
     if !schema.imports.is_empty() {
         let report = resolve_imports(&mut schema, input, registry, deps)
             .map_err(|e| IoError::Parse(e.to_string()))?;
+        // Split collisions by who won. When the root (importing) schema wins,
+        // the override is deterministic and author-controlled — warn and
+        // proceed. When an *earlier import* won, the two definitions come
+        // from imports and neither is the root, so the survivor was decided
+        // by merge order — never a safe pick for a data-model contract. Fail,
+        // naming both sources.
+        let mut conflicts = Vec::new();
         for collision in &report.collisions {
-            let kept = collision
-                .kept_from
-                .as_deref()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|| "the root schema".to_string());
-            eprintln!(
-                "warning: {kind} `{name}` defined differently in `{dropped}` and `{kept}`; \
-                 keeping the definition from {kept}",
-                kind = collision.kind,
-                name = collision.name,
-                dropped = collision.dropped_from.display(),
-            );
+            match collision.kept_from.as_deref() {
+                None => eprintln!(
+                    "warning: {kind} `{name}` defined differently in `{dropped}` and the root \
+                     schema; keeping the root's definition",
+                    kind = collision.kind,
+                    name = collision.name,
+                    dropped = collision.dropped_from.display(),
+                ),
+                Some(kept) => conflicts.push(format!(
+                    "conflicting definitions of {kind} `{name}`: `{kept}` and `{dropped}` define \
+                     it differently and neither is the importing schema, so there is no safe \
+                     merge — align the two definitions or import only one",
+                    kind = collision.kind,
+                    name = collision.name,
+                    kept = kept.display(),
+                    dropped = collision.dropped_from.display(),
+                )),
+            }
+        }
+        if !conflicts.is_empty() {
+            return Err(IoError::Parse(conflicts.join("\n")));
         }
     }
 
@@ -1047,6 +1066,57 @@ mod tests {
             crate::linkml_resolve::expand_curie(&root, "bpx:Widget").as_deref(),
             Some("https://example.org/bpx/Widget"),
             "the dependency's prefix must expand after the cross-package merge"
+        );
+    }
+
+    #[test]
+    fn load_schema_errors_when_two_imports_conflict() {
+        // `conflict_root` imports two files that define `Widget`
+        // incompatibly; neither is the root, so there is no safe winner —
+        // the load must fail naming both sources, not silently pick by order.
+        let registry = FormatRegistry::with_defaults();
+        let path = fixtures_dir().join("conflict_root.yaml");
+        let err =
+            load_schema(&path, &registry).expect_err("conflicting imports must fail the load");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Widget"),
+            "error must name the element; got: {msg}"
+        );
+        assert!(
+            msg.contains("conflict_one.yaml") && msg.contains("conflict_two.yaml"),
+            "error must name both conflicting sources; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn load_schema_keeps_root_definition_over_a_conflicting_import() {
+        // The root schema itself defines `Widget` and imports a file that
+        // defines it differently. Root precedence is deterministic, so the
+        // load succeeds keeping the root's definition — a warning, not a
+        // failure (unlike a conflict between two imports).
+        let registry = FormatRegistry::with_defaults();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::write(
+            dir.join("other.yaml"),
+            "name: other\nid: https://example.org/other\ndefault_range: string\n\
+             classes:\n  Widget:\n    description: from import\n    attributes:\n      a:\n        range: string\n",
+        )
+        .unwrap();
+        let root_path = dir.join("root.yaml");
+        std::fs::write(
+            &root_path,
+            "name: root\nid: https://example.org/root\ndefault_range: string\n\
+             imports:\n  - other\nclasses:\n  Widget:\n    description: from root\n    attributes:\n      a:\n        range: string\n",
+        )
+        .unwrap();
+
+        let schema = load_schema(&root_path, &registry).expect("root override must succeed");
+        assert_eq!(
+            schema.classes["Widget"].description.as_deref(),
+            Some("from root"),
+            "the root's definition must win, and the load must not fail"
         );
     }
 }

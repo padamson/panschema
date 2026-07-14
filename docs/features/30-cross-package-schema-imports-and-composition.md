@@ -98,7 +98,7 @@ generated output includes both its own and the imported definitions.
 
 ### Slice 3: App layering — importing multiple schemas at once
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Must Have
 
@@ -110,11 +110,11 @@ local classes — the real app topology, where an app-local identity schema
 composes several shared functionality domains.
 
 **Acceptance Criteria:**
-- [ ] An app schema that `imports:` two or more fetched dependencies loads and merges all of them together with its own definitions; every configured output format contains the classes, slots, and enums contributed by each imported schema and by the app itself.
-- [ ] A class in the app schema can reference a class defined in any of the imported schemas (as a slot `range`, an `is_a` parent, or a mixin) and the reference resolves — no dangling-reference warning for a name a sibling import defines.
-- [ ] When two imported schemas each import the same base schema at the same pinned version, that base's definitions appear once in the output, never duplicated.
-- [ ] When two imported schemas import the same base schema at conflicting pinned versions, the command fails with a clear error naming both requiring schemas and both versions — it never silently picks one or merges across versions.
-- [ ] A self-contained fixture with a diamond shape — an app importing two shared schemas that both import a common base — generates and Rust-compiles, pinning the multi-import merge (including the deduplicated shared base) end to end.
+- [x] An app schema that `imports:` two or more fetched dependencies loads and merges all of them together with its own definitions; every configured output format contains the classes, slots, and enums contributed by each imported schema and by the app itself.
+- [x] A class in the app schema can reference a class defined in any of the imported schemas (as a slot `range`, an `is_a` parent, or a mixin) and the reference resolves — no dangling-reference warning for a name a sibling import defines.
+- [x] When two imported schemas each import the same base schema at the same pinned version, that base's definitions appear once in the output, never duplicated.
+- [x] Two dependencies that define the same element *differently* have no principled winner (neither is the importing app), so the command **fails** naming both source files and the element, never silently picking one by import order. The flat manifest structurally prevents a single import graph from pinning one schema at two versions — so a cross-version clash surfaces as this definitional conflict. (Original wording spoke of "conflicting pinned versions"; the flat model makes that the observable form. A root-vs-import override, being deterministic, stays a warning.) An explicit, element-scoped opt-out is deferred — see [Slice 8](#slice-8-explicit-conflict-resolution--when-we-need-it).
+- [x] A self-contained fixture with a diamond shape — an app importing two shared schemas that both import a common base — generates and Rust-compiles, pinning the multi-import merge (including the deduplicated shared base) end to end.
 
 ### Slice 4: Schema-as-crate emission (crate producer / A2)
 
@@ -176,22 +176,52 @@ act, and staleness is visible — without loosening pins.
 - [ ] `panschema outdated` reports, read-only, each dependency's pinned version and any newer available tag; it changes nothing.
 - [ ] Exact pinning remains the only resolution mode — no semver ranges are introduced (see "Tracked, deliberately not in this feature").
 
+### Slice 8: Explicit conflict resolution — *when we need it*
+
+**Status:** Deferred — build when a real conflict needs an override
+
+**Priority:** When we need it (no consumer has hit an unresolvable
+dep-vs-dep conflict yet; Slice 3 fails loudly, which is the safe default).
+
+**User Value:** When two dependencies genuinely must coexist despite defining
+the same element differently, an author can resolve the specific clash
+explicitly — per element, naming the winning source — without a blanket
+"merge anyway" that could mask a conflict they weren't tracking.
+
+**Sketch (to design when built):**
+- A durable, reviewable resolution lives in the manifest, not just a CLI flag
+  — e.g. a `[resolve]` table keyed by `"<kind>:<name>"` → winning dependency
+  name, Cargo-`[patch]`-style, so the decision is committed and diffable.
+- Resolution is an **allowlist**: only the elements it names are force-merged;
+  a conflict on any *unnamed* element still fails (Slice 3's default). This is
+  the safety property — nothing untracked is silently merged.
+- It names the **winning source**, since a dep-vs-dep clash has no precedence
+  to fall back on.
+- Error if a `[resolve]` entry names an element that has no conflict (stale
+  entry) — so the table can't drift silently.
+- A one-off `--resolve <kind>:<name>=<source>` CLI form may layer on top for
+  experiments, but the manifest table is the reviewable home.
+
+**Acceptance Criteria:** *(to be written when the slice is scheduled)*
+
 ## Slice Priority and Dependencies
 
 | Slice | Priority | Depends On | Status |
 |---|---|---|---|
 | Slice 1: `[generate]` writer coverage | Must Have | Feature 05 | Complete |
 | Slice 2: cross-package imports (inline / A1) | Must Have | Feature 29 S1, Feature 05 | Complete |
-| Slice 3: app layering — multiple imports | Must Have | Slice 2 | Not Started |
+| Slice 3: app layering — multiple imports | Must Have | Slice 2 | Complete |
 | Slice 4: schema-as-crate (A2 producer) | Should Have | Rust writer | Not Started |
 | Slice 5: extern references (A2 consumer) | Should Have | Slice 2, Slice 4 | Not Started |
 | Slice 6: dev-vs-release local override | Should Have | Feature 05 | Not Started |
 | Slice 7: `update` + `outdated` | Should Have | Feature 05 | Not Started |
+| Slice 8: explicit conflict resolution | When we need it | Slice 3 | Deferred |
 
 Slices 1–3 are the near-term unblock (a layering app generates all formats
-from its own schema plus one or more fetched dependencies, inline). Slices 4–5
-deliver the shared-crate composition. Slices 6–7 are version-workflow
-ergonomics.
+from its own schema plus one or more fetched dependencies, inline) and are
+**complete**. Slices 4–5 deliver the shared-crate composition. Slices 6–7 are
+version-workflow ergonomics. Slice 8 waits for a real conflict that needs an
+override — Slice 3 fails loudly until then.
 
 ## Definition of Done
 

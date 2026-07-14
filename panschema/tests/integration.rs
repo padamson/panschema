@@ -1432,6 +1432,184 @@ rust = "out/app.rs"
     );
 }
 
+/// A layering app importing two sibling schemas that both import a common
+/// base (a diamond) merges every schema once: the app's own classes, both
+/// siblings, and the shared base — the base deduplicated, no spurious
+/// collision — and cross-import references resolve.
+#[test]
+fn manifest_driven_generate_merges_a_diamond_of_cross_package_imports() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+
+    // Helper: write a package dir with a schema file + publish toml.
+    let write_pkg = |dir: &str, file: &str, name: &str, body: &str| {
+        let pkg = root.join(dir);
+        fs::create_dir_all(&pkg).expect("mkdir pkg");
+        fs::write(pkg.join(file), body).expect("write schema");
+        fs::write(
+            pkg.join("panschema-publish.toml"),
+            format!("[schema]\nname = \"{name}\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"{file}\"\n"),
+        )
+        .expect("write publish toml");
+    };
+
+    write_pkg(
+        "base-pkg",
+        "base.yaml",
+        "base",
+        "name: base\nid: https://example.org/base\ndefault_range: string\n\
+         classes:\n  Base:\n    attributes:\n      a:\n        range: string\n",
+    );
+    // Two siblings, each importing base and referencing Base.
+    write_pkg(
+        "dep1-pkg",
+        "dep1.yaml",
+        "dep1",
+        "name: dep1\nid: https://example.org/dep1\ndefault_range: string\n\
+         imports:\n  - base\nclasses:\n  Dep1:\n    attributes:\n      b:\n        range: Base\n",
+    );
+    write_pkg(
+        "dep2-pkg",
+        "dep2.yaml",
+        "dep2",
+        "name: dep2\nid: https://example.org/dep2\ndefault_range: string\n\
+         imports:\n  - base\nclasses:\n  Dep2:\n    attributes:\n      c:\n        range: Base\n",
+    );
+    // App imports both siblings and references each.
+    write_pkg(
+        "app-pkg",
+        "app.yaml",
+        "app",
+        "name: app\nid: https://example.org/app\ndefault_range: string\n\
+         imports:\n  - dep1\n  - dep2\nclasses:\n  App:\n    attributes:\n      \
+         d1:\n        range: Dep1\n      d2:\n        range: Dep2\n",
+    );
+
+    fs::write(
+        root.join("panschema.toml"),
+        r#"
+[schemas]
+app = { path = "./app-pkg" }
+dep1 = { path = "./dep1-pkg" }
+dep2 = { path = "./dep2-pkg" }
+base = { path = "./base-pkg" }
+
+[generate.app]
+rust = "out/app.rs"
+"#,
+    )
+    .expect("write manifest");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("generate")
+        .current_dir(root)
+        .output()
+        .expect("Failed to execute panschema");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "diamond generate failed; stderr:\n{stderr}"
+    );
+
+    let body = fs::read_to_string(root.join("out").join("app.rs")).expect("read app.rs");
+    for class in ["struct App", "struct Dep1", "struct Dep2", "struct Base"] {
+        assert!(
+            body.contains(class),
+            "diamond output missing `{class}`; got:\n{body}"
+        );
+    }
+    // The shared base is merged once, not duplicated by the two importers
+    // (no class name starts with "Base" other than `Base` itself).
+    assert_eq!(
+        body.matches("struct Base").count(),
+        1,
+        "shared base class must appear exactly once; got:\n{body}"
+    );
+    // A deduplicated diamond is silent — no incompatible-collision warning.
+    assert!(
+        !stderr.contains("defined differently"),
+        "diamond dedup must not warn of a collision; stderr:\n{stderr}"
+    );
+}
+
+/// Two dependencies that define the same element differently have no
+/// principled winner (neither is the importing app), so a merge would be
+/// order-dependent. The command must fail, naming both sources and the
+/// element — never silently pick one by import order.
+#[test]
+fn manifest_driven_generate_errors_on_conflicting_cross_package_definitions() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+
+    let write_pkg = |dir: &str, file: &str, name: &str, body: &str| {
+        let pkg = root.join(dir);
+        fs::create_dir_all(&pkg).expect("mkdir pkg");
+        fs::write(pkg.join(file), body).expect("write schema");
+        fs::write(
+            pkg.join("panschema-publish.toml"),
+            format!("[schema]\nname = \"{name}\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"{file}\"\n"),
+        )
+        .expect("write publish toml");
+    };
+
+    // Two deps define `Shared` incompatibly; neither is the app.
+    write_pkg(
+        "dep1-pkg",
+        "dep1.yaml",
+        "dep1",
+        "name: dep1\nid: https://example.org/dep1\ndefault_range: string\n\
+         classes:\n  Shared:\n    description: from dep1\n    attributes:\n      a:\n        range: string\n",
+    );
+    write_pkg(
+        "dep2-pkg",
+        "dep2.yaml",
+        "dep2",
+        "name: dep2\nid: https://example.org/dep2\ndefault_range: string\n\
+         classes:\n  Shared:\n    description: from dep2 (incompatible)\n    attributes:\n      b:\n        range: integer\n",
+    );
+    write_pkg(
+        "app-pkg",
+        "app.yaml",
+        "app",
+        "name: app\nid: https://example.org/app\ndefault_range: string\n\
+         imports:\n  - dep1\n  - dep2\nclasses:\n  App:\n    attributes:\n      x:\n        range: string\n",
+    );
+
+    fs::write(
+        root.join("panschema.toml"),
+        r#"
+[schemas]
+app = { path = "./app-pkg" }
+dep1 = { path = "./dep1-pkg" }
+dep2 = { path = "./dep2-pkg" }
+
+[generate.app]
+rust = "out/app.rs"
+"#,
+    )
+    .expect("write manifest");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("generate")
+        .current_dir(root)
+        .output()
+        .expect("Failed to execute panschema");
+
+    assert!(
+        !output.status.success(),
+        "a dep-vs-dep definitional conflict must fail, not silently pick by import order"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Shared"),
+        "error must name the conflicting element; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("dep1.yaml") && stderr.contains("dep2.yaml"),
+        "error must name both conflicting sources; got:\n{stderr}"
+    );
+}
+
 /// `panschema generate` with only a `rust` writer (no `html`) still
 /// produces the rust file. Locks in the fan-out is independent per writer.
 #[test]
