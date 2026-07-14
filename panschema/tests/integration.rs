@@ -1367,6 +1367,71 @@ rust = "out/app.rs"
     );
 }
 
+/// An `imports:` entry that is neither a local file nor a declared
+/// `[schemas]` dependency fails with a diagnostic that names the entry and
+/// points at the package workflow — never a silent drop of the import.
+#[test]
+fn manifest_driven_generate_diagnoses_undeclared_cross_package_import() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+
+    let app = root.join("app-pkg");
+    fs::create_dir_all(&app).expect("mkdir app");
+    fs::write(
+        app.join("app.yaml"),
+        r#"
+name: app
+id: https://example.org/app
+imports:
+  - ghost
+default_range: string
+classes:
+  Gadget:
+    attributes:
+      name:
+        range: string
+"#,
+    )
+    .expect("write app schema");
+    fs::write(
+        app.join("panschema-publish.toml"),
+        "[schema]\nname = \"app\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"app.yaml\"\n",
+    )
+    .expect("write app publish toml");
+
+    fs::write(
+        root.join("panschema.toml"),
+        r#"
+[schemas]
+app = { path = "./app-pkg" }
+
+[generate.app]
+rust = "out/app.rs"
+"#,
+    )
+    .expect("write manifest");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("generate")
+        .current_dir(root)
+        .output()
+        .expect("Failed to execute panschema");
+
+    assert!(
+        !output.status.success(),
+        "an undeclared import must fail the command, not drop silently"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("ghost"),
+        "diagnostic must name the unresolved entry; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("panschema fetch") && stderr.contains("[schemas]"),
+        "diagnostic must point at the package workflow; got:\n{stderr}"
+    );
+}
+
 /// `panschema generate` with only a `rust` writer (no `html`) still
 /// produces the rust file. Locks in the fan-out is independent per writer.
 #[test]

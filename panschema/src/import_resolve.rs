@@ -115,9 +115,16 @@ const IMPORT_EXTENSIONS: &[&str] = &["yaml", "yml", "ttl"];
 /// Errors raised while resolving `imports:`.
 #[derive(Error, Debug)]
 pub enum ImportError {
-    /// An import entry could not be resolved to a readable local file.
-    /// Carries the raw entry and the importing file for context.
-    #[error("import `{entry}` (from `{importer}`) could not be resolved to a local file")]
+    /// An import entry resolved to nothing: not a local file, not a
+    /// declared `[schemas]` dependency, not a built-in module. Carries the
+    /// raw entry and the importing file, and points at the package
+    /// workflow so a misspelled or undeclared dependency is actionable
+    /// rather than a bare "no file" message.
+    #[error(
+        "import `{entry}` (from `{importer}`) could not be resolved: it names no local file, \
+         no declared `[schemas]` dependency, and no built-in module. If it is a package \
+         dependency, add it to `[schemas]` and run `panschema fetch`."
+    )]
     Unresolvable { entry: String, importer: PathBuf },
 
     /// A self-import or an import cycle was detected. `path` is the
@@ -998,6 +1005,48 @@ mod tests {
         assert!(
             !root.classes.contains_key("DepOnly"),
             "a same-named dependency must not shadow the local import"
+        );
+    }
+
+    #[test]
+    fn merged_dependency_prefixes_expand_cross_namespace_curies() {
+        // A CURIE in the imported dependency's own namespace must expand
+        // after the merge: the dependency's `prefixes` union into the root,
+        // so the shared `expand_curie` resolves a cross-namespace reference.
+        let registry = FormatRegistry::with_defaults();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let base_dir = tmp.path().join("base");
+        let app_dir = tmp.path().join("app");
+        std::fs::create_dir_all(&base_dir).expect("mkdir base");
+        std::fs::create_dir_all(&app_dir).expect("mkdir app");
+        let base_path = base_dir.join("base.yaml");
+        std::fs::write(
+            &base_path,
+            "name: base\nid: https://example.org/base\ndefault_range: string\n\
+             prefixes:\n  bpx: https://example.org/bpx/\n\
+             classes:\n  Widget:\n    attributes:\n      a:\n        range: string\n",
+        )
+        .expect("write base");
+        let app_path = app_dir.join("app.yaml");
+        std::fs::write(
+            &app_path,
+            "name: app\nid: https://example.org/app\ndefault_range: string\n\
+             imports:\n  - base\nclasses:\n  Gadget:\n    attributes:\n      a:\n        range: string\n",
+        )
+        .expect("write app");
+
+        let deps = BTreeMap::from([("base".to_string(), base_path)]);
+        let mut root = registry
+            .reader_for_path(&app_path)
+            .unwrap()
+            .read(&app_path)
+            .unwrap();
+        resolve_imports(&mut root, &app_path, &registry, &deps).expect("resolve");
+
+        assert_eq!(
+            crate::linkml_resolve::expand_curie(&root, "bpx:Widget").as_deref(),
+            Some("https://example.org/bpx/Widget"),
+            "the dependency's prefix must expand after the cross-package merge"
         );
     }
 }

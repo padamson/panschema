@@ -78,7 +78,7 @@ DDL (and TTL/SHACL/graph) from the same manifest that gets its Rust types.
 
 ### Slice 2: Cross-package `imports:` across the cache boundary (inline / A1)
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Must Have
 
@@ -90,11 +90,11 @@ name loads that dependency's schema from the cache and merges it, so the app's
 generated output includes both its own and the imported definitions.
 
 **Acceptance Criteria:**
-- [ ] An `imports:` entry whose value matches a `[schemas]` dependency name resolves to that dependency's fetched schema in the source cache and merges into the importing schema (its classes/slots/enums/types/prefixes), reusing the feature-15 merge + collision rules.
-- [ ] Resolution precedence is deterministic and never shadows a real local import: local file → manifest-dependency name → builtin (`linkml:*`) → CURIE/URL.
-- [ ] A dependency named in `imports:` but not yet fetched produces a clear diagnostic (naming the dependency and suggesting `panschema fetch`), never a hang or a silent drop.
-- [ ] The imported schema's own-namespace CURIEs expand correctly on the read/merge path (through the one shared `expand_curie`), so cross-namespace references resolve.
-- [ ] A self-contained two-package fixture (a base schema + an app schema importing it by dependency name) generates and Rust-compiles, pinning the merge end to end.
+- [x] An `imports:` entry whose value matches a `[schemas]` dependency name resolves to that dependency's fetched schema in the source cache and merges into the importing schema (its classes/slots/enums/types/prefixes), reusing the feature-15 merge + collision rules.
+- [x] Resolution precedence is deterministic and never shadows a real local import: local file → manifest-dependency name → builtin (`linkml:*`) → CURIE/URL.
+- [x] An `imports:` entry that names neither a local file nor a declared `[schemas]` dependency produces a clear diagnostic naming the entry and pointing at `[schemas]` + `panschema fetch`, never a silent drop. (A *declared* dependency that isn't cached is fetched on demand rather than errored, so the actionable failure is the undeclared/misspelled entry.)
+- [x] The imported schema's own-namespace CURIEs expand correctly on the read/merge path (through the one shared `expand_curie`), so cross-namespace references resolve.
+- [x] A self-contained two-package fixture (a base schema + an app schema importing it by dependency name) generates and Rust-compiles, pinning the merge end to end.
 
 ### Slice 3: App layering — importing multiple schemas at once
 
@@ -180,8 +180,8 @@ act, and staleness is visible — without loosening pins.
 
 | Slice | Priority | Depends On | Status |
 |---|---|---|---|
-| Slice 1: `[generate]` writer coverage | Must Have | Feature 05 | Not Started |
-| Slice 2: cross-package imports (inline / A1) | Must Have | Feature 29 S1, Feature 05 | Not Started |
+| Slice 1: `[generate]` writer coverage | Must Have | Feature 05 | Complete |
+| Slice 2: cross-package imports (inline / A1) | Must Have | Feature 29 S1, Feature 05 | Complete |
 | Slice 3: app layering — multiple imports | Must Have | Slice 2 | Not Started |
 | Slice 4: schema-as-crate (A2 producer) | Should Have | Rust writer | Not Started |
 | Slice 5: extern references (A2 consumer) | Should Have | Slice 2, Slice 4 | Not Started |
