@@ -111,13 +111,13 @@ the OWL ontology describe the same vocabulary.
 
 ### Slice 4: Uniform output-path handling
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Should Have
 
 **Acceptance Criteria:**
-- [ ] `generate --output some/new/dir/out.<ext>` behaves identically for every file-producing format: parent directories are created (or the command fails with an error that names the path) — one behavior, asserted across all registered writers in a single parameterized test.
-- [ ] The duplicate parent-directory guards in individual writers are replaced by one shared implementation.
+- [x] `generate --output some/new/dir/out.<ext>` behaves identically for every file-producing format: parent directories are created (or the command fails with an error that names the path) — one behavior, asserted across all registered writers in a single parameterized test.
+- [x] The duplicate parent-directory guards in individual writers are replaced by one shared implementation.
 
 ---
 
@@ -174,7 +174,7 @@ across three files.
 | Slice 1: shared load pipeline | Must Have | None | Complete |
 | Slice 2: dangling-reference diagnostic | Must Have | Slice 1 | Complete |
 | Slice 3: RDF family effective slots | Must Have | None | Complete |
-| Slice 4: uniform output paths | Should Have | None | Not Started |
+| Slice 4: uniform output paths | Should Have | None | Complete |
 | Slice 5: consolidate helpers | Should Have | None | Not Started |
 | Slice 6: writer diagnostics surface | Could Have | Slice 2 | Not Started |
 

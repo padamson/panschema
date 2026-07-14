@@ -100,11 +100,7 @@ impl RustWriter {
 impl Writer for RustWriter {
     fn write(&self, schema: &SchemaDefinition, output: &Path) -> IoResult<()> {
         validate_identifiers(schema)?;
-        if let Some(parent) = output.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            std::fs::create_dir_all(parent).map_err(IoError::Io)?;
-        }
+        crate::io::ensure_output_parent(output)?;
         std::fs::write(output, self.render(schema)).map_err(IoError::Io)?;
         Ok(())
     }

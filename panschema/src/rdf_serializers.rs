@@ -1046,6 +1046,7 @@ impl Writer for JsonLdWriter {
 
         use sophia::jsonld::serializer::JsonLdSerializer;
 
+        crate::io::ensure_output_parent(output)?;
         let file = File::create(output).map_err(IoError::Io)?;
         let writer = BufWriter::new(file);
 
@@ -1090,6 +1091,7 @@ impl Writer for RdfXmlWriter {
 
         use sophia::xml::serializer::RdfXmlSerializer;
 
+        crate::io::ensure_output_parent(output)?;
         let file = File::create(output).map_err(IoError::Io)?;
         let writer = BufWriter::new(file);
 
@@ -1132,6 +1134,7 @@ impl Writer for NTriplesWriter {
 
         use sophia::turtle::serializer::nt::NTriplesSerializer;
 
+        crate::io::ensure_output_parent(output)?;
         let file = File::create(output).map_err(IoError::Io)?;
         let writer = BufWriter::new(file);
 

@@ -792,6 +792,7 @@ impl Writer for GraphWriter {
         let json = serde_json::to_string_pretty(&graph)
             .map_err(|e| IoError::Write(format!("JSON serialization failed: {}", e)))?;
 
+        crate::io::ensure_output_parent(output)?;
         std::fs::write(output, json).map_err(IoError::Io)?;
 
         Ok(())

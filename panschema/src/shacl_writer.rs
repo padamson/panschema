@@ -38,6 +38,7 @@ impl Writer for ShaclWriter {
     fn write(&self, schema: &SchemaDefinition, output: &Path) -> IoResult<()> {
         let graph = build_shacl_graph(schema)?;
 
+        crate::io::ensure_output_parent(output)?;
         let file = File::create(output).map_err(IoError::Io)?;
         let writer = BufWriter::new(file);
 

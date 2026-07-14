@@ -34,9 +34,7 @@ impl Default for PostgresWriter {
 
 impl Writer for PostgresWriter {
     fn write(&self, schema: &SchemaDefinition, output: &Path) -> IoResult<()> {
-        if needs_parent_dir(output) {
-            std::fs::create_dir_all(output.parent().unwrap()).map_err(IoError::Io)?;
-        }
+        crate::io::ensure_output_parent(output)?;
         std::fs::write(output, self.render(schema)).map_err(IoError::Io)?;
         Ok(())
     }
@@ -44,14 +42,6 @@ impl Writer for PostgresWriter {
     fn format_id(&self) -> &str {
         "postgres"
     }
-}
-
-/// Whether `output` names a parent directory that might need creating.
-/// False for a bare filename with no directory component (`.parent()`
-/// there is `Some("")`, not `None`, so the check can't just be
-/// `.is_some()`).
-fn needs_parent_dir(output: &Path) -> bool {
-    output.parent().is_some_and(|p| !p.as_os_str().is_empty())
 }
 
 /// Double-quote a Postgres identifier, doubling any embedded `"`. Applied
@@ -613,18 +603,6 @@ mod tests {
     #[test]
     fn postgres_writer_format_id_is_postgres() {
         assert_eq!(PostgresWriter::new().format_id(), "postgres");
-    }
-
-    #[test]
-    fn needs_parent_dir_true_for_a_nested_path() {
-        assert!(needs_parent_dir(Path::new("out/schema.sql")));
-    }
-
-    #[test]
-    fn needs_parent_dir_false_for_a_bare_filename() {
-        // A bare filename's `.parent()` is `Some("")`, not `None` — the
-        // check has to test emptiness, not just `.is_some()`.
-        assert!(!needs_parent_dir(Path::new("schema.sql")));
     }
 
     #[test]

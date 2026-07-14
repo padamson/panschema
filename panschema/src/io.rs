@@ -52,6 +52,20 @@ pub enum IoError {
 /// Result type for reader/writer operations
 pub type IoResult<T> = Result<T, IoError>;
 
+/// Ensure the parent directory of a writer's `output` file exists, creating it
+/// (and any missing ancestors) if needed. A no-op when the path has no parent
+/// or a parent of the current directory. Every file-producing writer calls
+/// this before creating its output so `--output new/dir/out.ext` behaves the
+/// same across formats.
+pub fn ensure_output_parent(output: &Path) -> IoResult<()> {
+    if let Some(parent) = output.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).map_err(IoError::Io)?;
+    }
+    Ok(())
+}
+
 /// A reader parses an input format into the LinkML IR
 ///
 /// Readers are responsible for:
@@ -439,5 +453,55 @@ mod tests {
                 "expected `{expected}` among registered writer format ids; got: {ids:?}"
             );
         }
+    }
+
+    #[test]
+    fn every_writer_creates_missing_output_parent_directories() {
+        // `generate --output new/dir/out.<ext>` must behave the same for every
+        // file-producing format — the parent directories are created. Some
+        // writers created them, others (owl/shacl/the RDF family/graph) called
+        // File::create straight away and failed on a fresh path.
+        use crate::linkml::{ClassDefinition, SlotDefinition};
+        use tempfile::TempDir;
+
+        let mut schema = SchemaDefinition::new("s");
+        schema.id = Some("https://example.org/s".to_string());
+        let mut thing = ClassDefinition::new("Thing");
+        thing.class_uri = Some("https://example.org/s#Thing".to_string());
+        let mut name = SlotDefinition::new("name");
+        name.range = Some("string".to_string());
+        thing.attributes.insert("name".to_string(), name);
+        schema.classes.insert("Thing".to_string(), thing);
+
+        let registry = FormatRegistry::with_defaults();
+        let base = TempDir::new().expect("temp dir");
+        for format in registry.writer_format_ids() {
+            let writer = registry.writer_for_format(format).expect(format);
+            let out = base
+                .path()
+                .join(format)
+                .join("deep")
+                .join("nested")
+                .join("out");
+            writer.write(&schema, &out).unwrap_or_else(|e| {
+                panic!("`{format}` failed writing to a fresh nested path: {e}")
+            });
+        }
+    }
+
+    #[test]
+    fn ensure_output_parent_creates_missing_ancestors() {
+        use tempfile::TempDir;
+        let base = TempDir::new().expect("temp dir");
+        let out = base.path().join("a").join("b").join("out.ttl");
+        ensure_output_parent(&out).expect("should create parents");
+        assert!(out.parent().expect("has parent").is_dir());
+    }
+
+    #[test]
+    fn ensure_output_parent_is_a_noop_for_a_bare_filename() {
+        // A bare filename's `.parent()` is `Some("")`, not `None` — the helper
+        // must treat that as a no-op, not try to create an empty-named dir.
+        ensure_output_parent(Path::new("out.ttl")).expect("bare filename is a no-op");
     }
 }
