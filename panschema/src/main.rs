@@ -287,12 +287,15 @@ fn generate(
     html_default_layout: Option<&str>,
     labels: &LabelOptions,
     strict: bool,
+    deps: &std::collections::BTreeMap<String, PathBuf>,
 ) -> anyhow::Result<()> {
     let registry = FormatRegistry::with_defaults();
 
-    // Read the input and fold in any local `imports:` through the shared load
-    // path, so `generate` renders the same merged schema as `serve`/`publish`.
-    let schema = panschema::import_resolve::load_schema(input, &registry)
+    // Read the input and fold in any `imports:` through the shared load path,
+    // so `generate` renders the same merged schema as `serve`/`publish`.
+    // `deps` lets an `imports:` entry naming a manifest dependency resolve
+    // across the package boundary; it's empty for a single-file `--input`.
+    let schema = panschema::import_resolve::load_schema_with_deps(input, &registry, deps)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     // The unmodeled-construct, unresolved-unique-key, and dangling-reference
@@ -484,10 +487,20 @@ fn generate_from_manifest(offline: bool, refresh_labels: bool, strict: bool) -> 
         return Ok(());
     }
 
-    let mut produced_anything = false;
+    // Resolve every declared schema to its main file up front, so an
+    // `imports:` entry naming another `[schemas]` dependency can resolve to
+    // that dependency's schema across the package boundary. Import-only
+    // dependencies (no `[generate]` block) still populate this map.
+    let mut deps: std::collections::BTreeMap<String, PathBuf> = std::collections::BTreeMap::new();
     for (name, dep) in &manifest.schemas {
         let panschema::source::Resolved { schema_path, .. } =
             resolve_source(name, dep, &manifest_dir)?;
+        deps.insert(name.clone(), schema_path);
+    }
+
+    let mut produced_anything = false;
+    for name in manifest.schemas.keys() {
+        let schema_path = &deps[name];
         let Some(gen_cfg) = manifest.generate.get(name) else {
             eprintln!("schema `{name}`: no [generate.{name}] block; skipping");
             continue;
@@ -495,7 +508,7 @@ fn generate_from_manifest(offline: bool, refresh_labels: bool, strict: bool) -> 
         if let Some(html_out) = &gen_cfg.html {
             let html_out = manifest_dir.join(html_out);
             generate(
-                &schema_path,
+                schema_path,
                 &html_out,
                 "html",
                 true,
@@ -503,6 +516,7 @@ fn generate_from_manifest(offline: bool, refresh_labels: bool, strict: bool) -> 
                 gen_cfg.html_default_layout.as_deref(),
                 &labels,
                 strict,
+                &deps,
             )
             .with_context(|| format!("schema `{name}`, format `html`"))?;
             produced_anything = true;
@@ -523,7 +537,7 @@ fn generate_from_manifest(offline: bool, refresh_labels: bool, strict: bool) -> 
             let Some(out) = out_opt else { continue };
             let out = manifest_dir.join(out);
             generate(
-                &schema_path,
+                schema_path,
                 &out,
                 format,
                 false,
@@ -531,6 +545,7 @@ fn generate_from_manifest(offline: bool, refresh_labels: bool, strict: bool) -> 
                 None,
                 &labels,
                 strict,
+                &deps,
             )
             .with_context(|| format!("schema `{name}`, format `{format}`"))?;
             produced_anything = true;
@@ -1299,8 +1314,9 @@ async fn main() -> anyhow::Result<()> {
                     refresh: refresh_labels,
                     overrides: &no_overrides,
                 };
+                let no_deps = std::collections::BTreeMap::new();
                 generate(
-                    &input, &output, &format, !no_graph, None, None, &labels, strict,
+                    &input, &output, &format, !no_graph, None, None, &labels, strict, &no_deps,
                 )?;
             }
             None => generate_from_manifest(offline, refresh_labels, strict)?,
@@ -1370,6 +1386,7 @@ async fn main() -> anyhow::Result<()> {
                 };
                 // Bare-CLI fallback (no subcommand): strict mode is a
                 // `generate`-subcommand flag, so it's off here.
+                let no_deps = std::collections::BTreeMap::new();
                 generate(
                     &input,
                     &cli.output,
@@ -1379,6 +1396,7 @@ async fn main() -> anyhow::Result<()> {
                     None,
                     &labels,
                     false,
+                    &no_deps,
                 )?;
             } else {
                 println!("panschema: no input specified. Use --help for usage.");

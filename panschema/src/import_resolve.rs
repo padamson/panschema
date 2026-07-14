@@ -27,9 +27,18 @@
 //! Built-in and remote imports are recognized and skipped as no-ops:
 //! the standard `linkml:*` modules, and any CURIE or URL that expands to
 //! a remote `http(s)` URI, name well-known schemas a writer already
-//! understands rather than local files to merge. Only bare names and
-//! relative paths are resolved on disk; a path-shaped entry that names
-//! no file is reported through [`ImportError`] rather than crashing.
+//! understands rather than local files to merge.
+//!
+//! An entry may also name a manifest `[schemas]` dependency (see
+//! [`load_schema_with_deps`]): when it isn't a local file but matches a
+//! declared dependency, it resolves to that dependency's schema in its own
+//! package tree and merges across the package boundary. Resolution
+//! precedence is local file → manifest dependency → built-in/remote, so a
+//! real local import is never shadowed by a same-named dependency. Local
+//! imports stay contained within their package's directory; a
+//! manifest-declared dependency is a trusted jump into another tree. A
+//! bare name or relative path that names no local file, no dependency, and
+//! no built-in is reported through [`ImportError`] rather than crashing.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -50,11 +59,27 @@ use crate::linkml::SchemaDefinition;
 /// file, a cycle, a path escaping the schema directory — surface as an
 /// [`IoError::Parse`].
 pub fn load_schema(input: &Path, registry: &FormatRegistry) -> IoResult<SchemaDefinition> {
+    load_schema_with_deps(input, registry, &BTreeMap::new())
+}
+
+/// Like [`load_schema`], but also resolves `imports:` entries that name a
+/// manifest `[schemas]` dependency. `deps` maps each declared dependency
+/// name to the resolved main-schema file for that dependency (in its own
+/// package, typically the source cache). An `imports:` entry that isn't a
+/// local file and matches a `deps` key is loaded from across the package
+/// boundary and merged — this is how a layering app composes fetched
+/// schemas. Callers with no manifest context pass an empty map (then this
+/// behaves exactly like [`load_schema`]).
+pub fn load_schema_with_deps(
+    input: &Path,
+    registry: &FormatRegistry,
+    deps: &BTreeMap<String, PathBuf>,
+) -> IoResult<SchemaDefinition> {
     let reader = registry.reader_for_path(input)?;
     let mut schema = reader.read(input)?;
 
     if !schema.imports.is_empty() {
-        let report = resolve_imports(&mut schema, input, registry)
+        let report = resolve_imports(&mut schema, input, registry, deps)
             .map_err(|e| IoError::Parse(e.to_string()))?;
         for collision in &report.collisions {
             let kept = collision
@@ -174,6 +199,7 @@ pub fn resolve_imports(
     root: &mut SchemaDefinition,
     root_path: &Path,
     registry: &FormatRegistry,
+    deps: &BTreeMap<String, PathBuf>,
 ) -> Result<ImportReport, ImportError> {
     let mut report = ImportReport::default();
     let base_dir = root_path
@@ -199,6 +225,7 @@ pub fn resolve_imports(
         &base_dir,
         &root_dir,
         registry,
+        deps,
         &mut report,
         &mut visiting,
         &mut loaded,
@@ -222,11 +249,13 @@ pub fn resolve_imports(
 ///
 /// Order at each entry: cycle check first (`visiting`), then dedup skip
 /// (`loaded`), else read + recurse + merge + record as loaded.
+#[allow(clippy::too_many_arguments)]
 fn resolve_into(
     root: &mut SchemaDefinition,
     base_dir: &Path,
     root_dir: &Path,
     registry: &FormatRegistry,
+    deps: &BTreeMap<String, PathBuf>,
     report: &mut ImportReport,
     visiting: &mut Vec<PathBuf>,
     loaded: &mut std::collections::BTreeSet<PathBuf>,
@@ -241,33 +270,49 @@ fn resolve_into(
     let prefixes = root.prefixes.clone();
 
     for entry in imports {
-        // Built-in / remote imports are not local files: the standard
-        // `linkml:` modules and any CURIE or URL that expands to a remote
-        // URI name well-known schemas a writer already understands as
-        // built-ins. Skip them as no-ops rather than resolving — or
-        // failing to resolve — them as local paths.
-        if is_builtin_import(&entry, &prefixes) {
+        // Resolve the entry to a file plus the containment root for its own
+        // (transitive) local imports, in precedence order:
+        //   local file → manifest dependency → built-in/remote → error.
+        // Local wins so a real local import is never shadowed by a
+        // same-named dependency.
+        let (resolved, child_root_dir) = if let Some(local) = resolve_entry_path(&entry, base_dir) {
+            // Local import: must live within the current package's tree.
+            // Checked on the canonical path so `../` escapes are seen for
+            // what they resolve to, not their textual form. Its own imports
+            // stay contained to the same package (`root_dir` unchanged).
+            let canonical = canonicalize_lossy(&local);
+            if !canonical.starts_with(root_dir) {
+                return Err(ImportError::EscapesRoot {
+                    entry: entry.clone(),
+                    resolved: canonical,
+                    root: root_dir.to_path_buf(),
+                });
+            }
+            (local, root_dir.to_path_buf())
+        } else if let Some(dep_path) = deps.get(&entry) {
+            // Manifest dependency: a trusted, manifest-declared jump into
+            // another package tree (typically the source cache), so it is
+            // *not* bound by the current package's containment root. That
+            // package's own local imports are then contained to its tree.
+            let dep_dir = dep_path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."));
+            (dep_path.clone(), canonicalize_lossy(&dep_dir))
+        } else if is_builtin_import(&entry, &prefixes) {
+            // Built-in / remote imports are not local files: the standard
+            // `linkml:` modules and any CURIE or URL that expands to a
+            // remote URI name well-known schemas a writer already
+            // understands. Skip them as no-ops.
             continue;
-        }
-
-        let resolved =
-            resolve_entry_path(&entry, base_dir).ok_or_else(|| ImportError::Unresolvable {
+        } else {
+            return Err(ImportError::Unresolvable {
                 entry: entry.clone(),
                 importer: base_dir.to_path_buf(),
-            })?;
+            });
+        };
 
         let canonical = canonicalize_lossy(&resolved);
-        // Containment: the resolved file must live within the root
-        // schema's directory tree. Checked on the canonical path so
-        // `../` escapes are seen for what they resolve to, not their
-        // textual form.
-        if !canonical.starts_with(root_dir) {
-            return Err(ImportError::EscapesRoot {
-                entry: entry.clone(),
-                resolved: canonical,
-                root: root_dir.to_path_buf(),
-            });
-        }
         if visiting.contains(&canonical) {
             return Err(ImportError::Cycle { path: canonical });
         }
@@ -301,8 +346,9 @@ fn resolve_into(
         resolve_into(
             &mut imported,
             &imported_dir,
-            root_dir,
+            &child_root_dir,
             registry,
+            deps,
             report,
             visiting,
             loaded,
@@ -464,6 +510,13 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/imports")
     }
 
+    /// Empty manifest-dependency map for the local-imports tests (no
+    /// cross-package resolution). Cross-package resolution is covered by
+    /// the integration suite's two-package fixture.
+    fn no_deps() -> BTreeMap<String, PathBuf> {
+        BTreeMap::new()
+    }
+
     /// Load a fixture as the root schema via the registry, the same way
     /// `generate` does before resolving imports.
     fn read_root(name: &str) -> (SchemaDefinition, PathBuf) {
@@ -485,7 +538,8 @@ mod tests {
             !root.classes.contains_key("Address"),
             "Address must originate only in the import"
         );
-        let report = resolve_imports(&mut root, &path, &registry).expect("resolve imports");
+        let report =
+            resolve_imports(&mut root, &path, &registry, &no_deps()).expect("resolve imports");
 
         assert!(
             root.classes.contains_key("Address"),
@@ -533,7 +587,7 @@ mod tests {
         let reader = registry.reader_for_path(&root_path).unwrap();
         let mut root = reader.read(&root_path).unwrap();
 
-        let err = resolve_imports(&mut root, &root_path, &registry)
+        let err = resolve_imports(&mut root, &root_path, &registry, &no_deps())
             .expect_err("an import escaping the root directory must be rejected");
         assert!(
             matches!(err, ImportError::EscapesRoot { .. }),
@@ -553,7 +607,7 @@ mod tests {
         let registry = FormatRegistry::with_defaults();
         let (mut root, path) = read_root("cycle_a.yaml");
 
-        let err = resolve_imports(&mut root, &path, &registry)
+        let err = resolve_imports(&mut root, &path, &registry, &no_deps())
             .expect_err("a cyclic import graph must be rejected");
         assert!(
             matches!(err, ImportError::Cycle { .. }),
@@ -572,7 +626,8 @@ mod tests {
         root_address.description = Some("root's own Address".into());
         root.classes.insert("Address".into(), root_address);
 
-        let report = resolve_imports(&mut root, &path, &registry).expect("resolve imports");
+        let report =
+            resolve_imports(&mut root, &path, &registry, &no_deps()).expect("resolve imports");
 
         assert_eq!(
             root.classes["Address"].description.as_deref(),
@@ -602,7 +657,8 @@ mod tests {
         let registry = FormatRegistry::with_defaults();
         let (mut root, path) = read_root("diamond_a.yaml");
 
-        let report = resolve_imports(&mut root, &path, &registry).expect("resolve imports");
+        let report =
+            resolve_imports(&mut root, &path, &registry, &no_deps()).expect("resolve imports");
 
         // Every arm's class merged in.
         assert!(root.classes.contains_key("AThing"));
@@ -641,7 +697,8 @@ mod tests {
         let registry = FormatRegistry::with_defaults();
         let (mut root, path) = read_root("conflict_root.yaml");
 
-        let report = resolve_imports(&mut root, &path, &registry).expect("resolve imports");
+        let report =
+            resolve_imports(&mut root, &path, &registry, &no_deps()).expect("resolve imports");
 
         let collision = report
             .collisions
@@ -673,7 +730,8 @@ mod tests {
         let registry = FormatRegistry::with_defaults();
         let (mut root, path) = read_root("identical_root.yaml");
 
-        let report = resolve_imports(&mut root, &path, &registry).expect("resolve imports");
+        let report =
+            resolve_imports(&mut root, &path, &registry, &no_deps()).expect("resolve imports");
 
         assert!(root.classes.contains_key("Gadget"));
         assert!(
@@ -736,7 +794,7 @@ mod tests {
         let registry = FormatRegistry::with_defaults();
         let (mut root, path) = read_root("tcycle_a.yaml");
 
-        let err = resolve_imports(&mut root, &path, &registry)
+        let err = resolve_imports(&mut root, &path, &registry, &no_deps())
             .expect_err("a transitive import cycle must be rejected");
         assert!(
             matches!(err, ImportError::Cycle { .. }),
@@ -762,7 +820,7 @@ mod tests {
         root.imports = vec!["linkml:types".into()];
         let root_path = fixtures_dir().join("builtin_importer.yaml");
 
-        let report = resolve_imports(&mut root, &root_path, &registry)
+        let report = resolve_imports(&mut root, &root_path, &registry, &no_deps())
             .expect("a standard linkml: import must resolve as a built-in no-op");
 
         // The built-in import contributed nothing and was not treated as
@@ -786,7 +844,7 @@ mod tests {
         root.imports = vec!["linkml:types".into()];
         let root_path = fixtures_dir().join("builtin_importer.yaml");
 
-        let report = resolve_imports(&mut root, &root_path, &registry)
+        let report = resolve_imports(&mut root, &root_path, &registry, &no_deps())
             .expect("a linkml: import is a built-in even with no prefix declared");
         assert!(report.loaded_files.is_empty());
         assert!(root.imports.is_empty());
@@ -808,7 +866,7 @@ mod tests {
         ];
         let root_path = fixtures_dir().join("remote_importer.yaml");
 
-        let report = resolve_imports(&mut root, &root_path, &registry)
+        let report = resolve_imports(&mut root, &root_path, &registry, &no_deps())
             .expect("a remote URL and a remote-expanding CURIE must both be skipped");
         assert!(report.loaded_files.is_empty());
         assert!(root.imports.is_empty());
@@ -826,7 +884,8 @@ mod tests {
             .insert("linkml".into(), "https://w3id.org/linkml/".into());
         root.imports.insert(0, "linkml:types".into());
 
-        let report = resolve_imports(&mut root, &path, &registry).expect("resolve imports");
+        let report =
+            resolve_imports(&mut root, &path, &registry, &no_deps()).expect("resolve imports");
 
         // The local import still merged its class.
         assert!(root.classes.contains_key("Address"));
@@ -846,8 +905,99 @@ mod tests {
         root.imports = vec!["does_not_exist".into()];
         let root_path = fixtures_dir().join("orphan_importer.yaml");
 
-        let err = resolve_imports(&mut root, &root_path, &registry)
+        let err = resolve_imports(&mut root, &root_path, &registry, &no_deps())
             .expect_err("an unresolvable import must error");
         assert!(matches!(err, ImportError::Unresolvable { .. }));
+    }
+
+    /// Minimal single-class schema body for a temp package.
+    fn schema_yaml(name: &str, class: &str) -> String {
+        format!(
+            "name: {name}\nid: https://example.org/{name}\ndefault_range: string\n\
+             classes:\n  {class}:\n    attributes:\n      a:\n        range: string\n"
+        )
+    }
+
+    #[test]
+    fn resolve_imports_resolves_dependency_name_across_package_boundary() {
+        // An `imports:` entry that is not a local file but names a manifest
+        // dependency resolves to that dependency's schema in a *separate*
+        // package tree (outside the app's own containment root) and merges.
+        let registry = FormatRegistry::with_defaults();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let base_dir = tmp.path().join("base");
+        let app_dir = tmp.path().join("app");
+        std::fs::create_dir_all(&base_dir).expect("mkdir base");
+        std::fs::create_dir_all(&app_dir).expect("mkdir app");
+        let base_path = base_dir.join("base.yaml");
+        std::fs::write(&base_path, schema_yaml("base", "Widget")).expect("write base");
+        let app_path = app_dir.join("app.yaml");
+        std::fs::write(
+            &app_path,
+            "name: app\nid: https://example.org/app\ndefault_range: string\n\
+             imports:\n  - base\nclasses:\n  Gadget:\n    attributes:\n      a:\n        range: string\n",
+        )
+        .expect("write app");
+
+        let deps = BTreeMap::from([("base".to_string(), base_path)]);
+        let mut root = registry
+            .reader_for_path(&app_path)
+            .unwrap()
+            .read(&app_path)
+            .unwrap();
+        resolve_imports(&mut root, &app_path, &registry, &deps).expect("resolve cross-package");
+
+        assert!(
+            root.classes.contains_key("Widget"),
+            "dependency's class must merge across the package boundary"
+        );
+        assert!(
+            root.classes.contains_key("Gadget"),
+            "app's own class must remain"
+        );
+    }
+
+    #[test]
+    fn local_import_wins_over_a_same_named_dependency() {
+        // Precedence: a real local `common.yaml` is never shadowed by a
+        // dependency that happens to share its name.
+        let registry = FormatRegistry::with_defaults();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let app_dir = tmp.path().join("app");
+        let other_dir = tmp.path().join("other");
+        std::fs::create_dir_all(&app_dir).expect("mkdir app");
+        std::fs::create_dir_all(&other_dir).expect("mkdir other");
+        std::fs::write(
+            app_dir.join("common.yaml"),
+            schema_yaml("common", "LocalOnly"),
+        )
+        .expect("write local common");
+        let dep_common = other_dir.join("common.yaml");
+        std::fs::write(&dep_common, schema_yaml("dep_common", "DepOnly"))
+            .expect("write dep common");
+        let app_path = app_dir.join("app.yaml");
+        std::fs::write(
+            &app_path,
+            "name: app\nid: https://example.org/app\ndefault_range: string\n\
+             imports:\n  - common\nclasses:\n  Gadget:\n    attributes:\n      a:\n        range: string\n",
+        )
+        .expect("write app");
+
+        let deps = BTreeMap::from([("common".to_string(), dep_common)]);
+        let mut root = registry
+            .reader_for_path(&app_path)
+            .unwrap()
+            .read(&app_path)
+            .unwrap();
+        resolve_imports(&mut root, &app_path, &registry, &deps).expect("resolve");
+
+        assert!(
+            root.classes.contains_key("LocalOnly"),
+            "the local common.yaml must win"
+        );
+        assert!(
+            !root.classes.contains_key("DepOnly"),
+            "a same-named dependency must not shadow the local import"
+        );
     }
 }

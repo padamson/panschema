@@ -1267,6 +1267,106 @@ graph-json = "out/graph.json"
     }
 }
 
+/// A layering app whose own schema `imports:` a sibling `[schemas]`
+/// dependency by name resolves that dependency across the package boundary
+/// (not as a local file) and merges it, so the app's generated Rust
+/// contains both its own and the imported types.
+#[test]
+fn manifest_driven_generate_resolves_cross_package_import_by_dependency_name() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+
+    // Base package: a Widget class in its own namespace.
+    let base = root.join("base-pkg");
+    fs::create_dir_all(&base).expect("mkdir base");
+    fs::write(
+        base.join("base.yaml"),
+        r#"
+name: base
+id: https://example.org/base
+prefixes:
+  linkml: https://w3id.org/linkml/
+  base: https://example.org/base/
+default_range: string
+classes:
+  Widget:
+    attributes:
+      label:
+        range: string
+"#,
+    )
+    .expect("write base schema");
+    fs::write(
+        base.join("panschema-publish.toml"),
+        "[schema]\nname = \"base\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"base.yaml\"\n",
+    )
+    .expect("write base publish toml");
+
+    // App package: a Gadget class referencing base's Widget, importing base
+    // by its dependency name (the `[schemas]` key), not a local path.
+    let app = root.join("app-pkg");
+    fs::create_dir_all(&app).expect("mkdir app");
+    fs::write(
+        app.join("app.yaml"),
+        r#"
+name: app
+id: https://example.org/app
+imports:
+  - base
+prefixes:
+  linkml: https://w3id.org/linkml/
+  app: https://example.org/app/
+default_range: string
+classes:
+  Gadget:
+    attributes:
+      name:
+        range: string
+      widget:
+        range: Widget
+"#,
+    )
+    .expect("write app schema");
+    fs::write(
+        app.join("panschema-publish.toml"),
+        "[schema]\nname = \"app\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"app.yaml\"\n",
+    )
+    .expect("write app publish toml");
+
+    fs::write(
+        root.join("panschema.toml"),
+        r#"
+[schemas]
+app = { path = "./app-pkg" }
+base = { path = "./base-pkg" }
+
+[generate.app]
+rust = "out/app.rs"
+"#,
+    )
+    .expect("write manifest");
+
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("generate")
+        .current_dir(root)
+        .status()
+        .expect("Failed to execute panschema");
+    assert!(status.success(), "panschema exited with error");
+
+    let rust_out = root.join("out").join("app.rs");
+    let body = fs::read_to_string(&rust_out).expect("read app.rs");
+    // The app's own class and the cross-package imported class are both
+    // present, and the imported type is Rust-usable (Gadget references it).
+    assert!(
+        body.contains("struct Gadget"),
+        "app's own class missing; got:\n{body}"
+    );
+    assert!(
+        body.contains("struct Widget"),
+        "cross-package imported class missing; got:\n{body}"
+    );
+}
+
 /// `panschema generate` with only a `rust` writer (no `html`) still
 /// produces the rust file. Locks in the fan-out is independent per writer.
 #[test]
