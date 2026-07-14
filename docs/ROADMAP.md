@@ -122,7 +122,8 @@ Input → Reader → LinkML IR → [Filters] → Writer → Output
 | 26 | [HTML + Graph Viz Output Verification](features/26-html-graph-viz-output-verification.md) | HTML5-conformance + browser V&V for HTML/graph output | **Shipped for v0.3.0** |
 | 27 | [RDF/OWL Family Output Verification](features/27-rdf-owl-family-output-verification.md) | `oxigraph` load-and-query V&V for the RDF writers | **Shipped for v0.3.0** |
 | 28 | [Postgres DDL Output Verification](features/28-postgres-ddl-writer-output-verification.md) | `pg_query` syntax + `testcontainers` apply V&V for Postgres DDL | **Shipped for v0.3.0** |
-| 29 | [Shared Schema Load Pipeline + Writer Consistency](features/29-schema-load-pipeline-and-writer-consistency.md) | Unify the load path + reconcile writer projections | **Planned** |
+| 29 | [Shared Schema Load Pipeline + Writer Consistency](features/29-schema-load-pipeline-and-writer-consistency.md) | Unify the load path + reconcile writer projections | **Shipped (slices 1–5); writer-diagnostics surface deferred** |
+| 30 | [Cross-package Schema Imports + Codegen Composition](features/30-cross-package-schema-imports-and-composition.md) | Consume a schema across the fetch/cache boundary — inline-merge or shared-crate — with exact-version pinning | **Planned** |
 
 ## Delivery Approach
 

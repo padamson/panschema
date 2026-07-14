@@ -1850,9 +1850,8 @@ fn add_errors_on_unknown_source_protocol() {
 
 /// `panschema add` against a missing manifest must produce an error
 /// message that includes a literal copy-paste shell command to create
-/// the manifest. The exact wording matters: dogfooding feedback
-/// (`panschema--consumer-init-ux.md`) flagged the previous "Create one"
-/// hint as too vague for first-time consumers.
+/// the manifest. The exact wording matters: the previous "Create one"
+/// hint proved too vague for first-time consumers.
 #[test]
 fn add_missing_manifest_error_includes_literal_init_command() {
     let tmp = tempfile::tempdir().expect("tempdir");

@@ -396,7 +396,7 @@ For 2D mode, labels are rendered directly on the Canvas2D context with hover sup
 
 **Notes:**
 - One small helper in `GraphWriter`, called once after `add_slots` so the slot-side `domain` edges are already in `graph.edges` for the dedup seed. No new `EnumType` variants, no new option fields — pure additive logic.
-- After this slice ships, scimantic-schema's deployed Pages graph at `/schema/v0.2.0/` gains edges for every previously-orphan slot, closing the cross-repo bug. Re-render needed downstream.
+- After this slice ships, scimantic-schema's deployed Pages graph at `/schema/v0.2.0/` gains edges for every previously-orphan slot, closing the downstream rendering bug. Re-render needed downstream.
 
 ---
 

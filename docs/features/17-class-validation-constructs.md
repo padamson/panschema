@@ -108,10 +108,9 @@ the existing slot-level `any_of`.
 **Status:** In Progress
 
 **Priority:** Should Have — undeferred: three downstream consumers need a
-machine-readable projection (nimbus's ch06 conditional rule; scidatica's
-platform, which expects SHACL from panschema; scimantic-engine/t2t, which
-load SHACL into oxigraph at runtime to validate triples before they hit
-the store).
+machine-readable projection (a schema with a conditional rule; a platform
+that expects SHACL from panschema; and consumers that load SHACL into
+oxigraph at runtime to validate triples before they hit the store).
 
 **User Value:** Emit `unique_keys` / `rules` / slot value-constraints as
 SHACL shapes so they are machine-checkable by any SHACL engine, not just

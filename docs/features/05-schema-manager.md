@@ -251,11 +251,11 @@ This slice deliberately splits into three phases following the project's release
 - [ ] `docs/guide-consumer.md` — consumer workflow: writing `panschema.toml`, `panschema add`, `panschema fetch`/`verify`/`generate`, lockfile semantics.
 - [ ] CHANGELOG keeps accumulating under `[Unreleased]` (no rollup yet).
 
-**Phase B — Dogfood (cross-repo, blocking on Phase A):**
+**Phase B — Downstream dogfood (blocking on Phase A):**
 
 - [ ] **scimantic-schema** adopts `panschema-publish.toml` (via `panschema init --from`) and cuts a tagged release using `panschema release --level patch --git --push`.
 - [ ] **t2t** declares a `panschema.toml` with `source = "github:padamson/scimantic-schema"` + the tagged version. Runs `fetch`/`verify`/`generate` end-to-end against the real github source.
-- [ ] Any friction (error messages, performance, ergonomic surprises, missing safety checks) flows back to panschema as cross-repo notes or fixes on `main`. Loop until both downstreams are happy.
+- [ ] Any friction (error messages, performance, ergonomic surprises, missing safety checks) flows back to panschema as issues or fixes on `main`. Loop until both downstreams are happy.
 
 **Phase C — Tag v0.3.0 (after Phase B clears):**
 
@@ -621,7 +621,7 @@ before the t2t consumer-side dogfood (Phase B) starts.
 - **`init` prints per-field provenance.** Output now reports
   whether each field was explicit, derived from `--from`, or
   defaulted. Removes the silent "where did `linkml = 1.7.0` come
-  from?" question that the dogfood note flagged.
+  from?" question that dogfooding surfaced.
 - 7 new integration tests (no-op bump, annotated-tag verification
   via `git cat-file -t`, drift refusal, drift-clear happy path,
   drift skip when LinkML lacks a version field, init provenance
@@ -641,8 +641,8 @@ before the t2t consumer-side dogfood (Phase B) starts.
 - **Annotated tag message format: `release v<ver>`.** Matches the
   commit-message convention. No reason to deviate.
 
-These fixes close `panschema--release-command-gaps.md`. The
-scimantic-schema dogfood's "next real release" condition can now
+These fixes close the release-command gaps surfaced during
+dogfooding. The scimantic-schema dogfood's "next real release" condition can now
 be satisfied — `panschema release --level patch --git --push`
 will work end-to-end against scimantic-schema's `v0.1.0` baseline
 without hitting any of the surfaced bugs.

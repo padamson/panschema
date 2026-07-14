@@ -1126,7 +1126,7 @@ mod tests {
     /// identifier-derived PK, and an FK between them.
     fn whole_script_fixture_schema() -> SchemaDefinition {
         use crate::linkml::{EnumDefinition, PermissibleValue};
-        let mut schema = SchemaDefinition::new("nimbus");
+        let mut schema = SchemaDefinition::new("example");
 
         let mut status_enum = EnumDefinition::new("DeploymentStatus");
         status_enum

@@ -145,14 +145,14 @@ Field semantics:
 
 **Status:** Not Started
 
-**User Value:** The feature is real. scimantic-schema's `.github/workflows/docs.yml` is rewritten to call `panschema publish`, and the deployed Pages site shows the full multi-version UX. This is also the release vehicle for whatever panschema version ships the feature — the [panschema release-command-gaps note](https://example.invalid) flagged that the version-bump path needs real exercise.
+**User Value:** The feature is real. scimantic-schema's `.github/workflows/docs.yml` is rewritten to call `panschema publish`, and the deployed Pages site shows the full multi-version UX. This is also the release vehicle for whatever panschema version ships the feature — the version-bump path needs real exercise on a genuine release.
 
 **Acceptance Criteria:**
 - [ ] scimantic-schema's `panschema-publish.toml` gains a `[publishing]` block listing `["v0.1.0", "v0.2.0"]`, `edge = "main"`, `current = "v0.2.0"`, `url_pattern = "/schema/{version}/"`.
 - [ ] scimantic-schema's `.github/workflows/docs.yml` replaces the multi-step generate with a single `panschema publish --output site/schema/`.
 - [ ] scimantic-schema gets a `site/index.html` stub redirecting to `/schema/current/` (the mdbook landing-page work is a separate workstream).
 - [ ] Deployed Pages site shows `/schema/v0.1.0/`, `/schema/v0.2.0/`, `/schema/main/`, `/schema/current/` rendering with a working dropdown.
-- [ ] Cut a panschema release (cross-repo note 05-12 `release-command-gaps` flagged this path needs exercise; the feature's release is a fine vehicle).
+- [ ] Cut a panschema release (the version-bump path needs exercise on a genuine release; the feature's release is a fine vehicle).
 
 ---
 
