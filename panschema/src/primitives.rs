@@ -40,7 +40,6 @@ pub fn canonical_primitive(name: &str) -> Option<&'static str> {
 pub fn xsd_datatype_iri(name: &str) -> Option<String> {
     let xsd = "http://www.w3.org/2001/XMLSchema#";
     let local = match canonical_primitive(name)? {
-        "string" => "string",
         "integer" => "integer",
         "float" => "float",
         "double" => "double",
@@ -51,8 +50,9 @@ pub fn xsd_datatype_iri(name: &str) -> Option<String> {
         "time" => "time",
         "uri" | "uriorcurie" => "anyURI",
         "ncname" => "NCName",
-        // The remaining LinkML identifier types have no dedicated XSD
-        // datatype; `xsd:string` is their canonical lexical space.
+        // `string` and the remaining LinkML identifier types (`curie`,
+        // `jsonpointer`, …) have no dedicated XSD datatype; `xsd:string` is
+        // their canonical lexical space.
         _ => "string",
     };
     Some(format!("{xsd}{local}"))
@@ -92,5 +92,64 @@ mod tests {
     #[test]
     fn non_primitive_has_no_xsd_datatype() {
         assert_eq!(xsd_datatype_iri("Warehouse"), None);
+    }
+
+    #[test]
+    fn every_builtin_primitive_canonicalizes_to_itself() {
+        // Each canonical primitive name resolves to itself (pins every arm so
+        // dropping one is caught, not silently None).
+        for p in [
+            "string",
+            "integer",
+            "boolean",
+            "float",
+            "double",
+            "decimal",
+            "time",
+            "date",
+            "datetime",
+            "date_or_datetime",
+            "uriorcurie",
+            "curie",
+            "uri",
+            "ncname",
+            "objectidentifier",
+            "nodeidentifier",
+            "jsonpointer",
+            "jsonpath",
+            "sparqlpath",
+        ] {
+            assert_eq!(canonical_primitive(p), Some(p), "`{p}` must be a primitive");
+        }
+    }
+
+    #[test]
+    fn xsd_datatype_iri_is_canonical_for_each_primitive() {
+        // Pin the exact XSD local name each primitive maps to, so dropping an
+        // arm (which would fall back to `xsd:string`) is caught.
+        let xsd = "http://www.w3.org/2001/XMLSchema#";
+        for (name, local) in [
+            ("string", "string"),
+            ("integer", "integer"),
+            ("float", "float"),
+            ("double", "double"),
+            ("decimal", "decimal"),
+            ("boolean", "boolean"),
+            ("date", "date"),
+            ("datetime", "dateTime"),
+            ("time", "time"),
+            ("uri", "anyURI"),
+            ("uriorcurie", "anyURI"),
+            ("ncname", "NCName"),
+            // identifier types with no dedicated XSD datatype → xsd:string
+            ("curie", "string"),
+            ("jsonpointer", "string"),
+        ] {
+            assert_eq!(
+                xsd_datatype_iri(name),
+                Some(format!("{xsd}{local}")),
+                "wrong XSD datatype for `{name}`"
+            );
+        }
     }
 }
