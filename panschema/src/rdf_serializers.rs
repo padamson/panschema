@@ -99,24 +99,21 @@ fn slot_iri_string(name: &str, slot_def: &SlotDefinition, schema: &SchemaDefinit
 /// in `schema.prefixes` are passed through with a `tracing::warn!` so the
 /// caller doesn't silently emit a relative IRI.
 fn expand_curie(name: &str, schema: &SchemaDefinition) -> String {
-    if name.contains("://") {
-        return name.to_string();
-    }
-    let Some((prefix, local)) = name.split_once(':') else {
-        return name.to_string();
-    };
-    match schema.prefixes.get(prefix) {
-        Some(base) => format!("{base}{local}"),
-        None => {
-            tracing::warn!(
-                prefix = prefix,
-                curie = name,
-                "CURIE prefix not declared in `schema.prefixes`; \
-                 emitting unexpanded IRI which may be invalid downstream"
-            );
-            name.to_string()
-        }
-    }
+    // Delegate the expansion decision (known prefix, absolute IRI,
+    // `default_prefix` for bare names) to the one shared implementation the
+    // HTML writer also uses, so the two can't diverge. That core returns
+    // `None` when nothing resolves; RDF must still emit *something*, so pass
+    // the input through unchanged with a warning (an undeclared prefix, or a
+    // bare name with no `default_prefix`, that `build_rdf_graph` will fall
+    // back on).
+    crate::linkml_resolve::expand_curie(schema, name).unwrap_or_else(|| {
+        tracing::warn!(
+            curie = name,
+            "CURIE could not be expanded against `schema.prefixes`; \
+             emitting unexpanded IRI which may be invalid downstream"
+        );
+        name.to_string()
+    })
 }
 
 /// Emit one SKOS triple per mapping value for the subject IRI,
@@ -1324,10 +1321,24 @@ mod tests {
 
     #[test]
     fn expand_curie_passes_bare_name_through_unchanged() {
-        // Names without a colon aren't CURIEs; the caller (build_rdf_graph)
-        // applies the `{ontology}#{name}` fallback for these.
+        // Without a `default_prefix`, a bare name has no expansion, so it
+        // passes through and the caller (build_rdf_graph) applies the
+        // `{ontology}#{name}` fallback.
         let schema = schema_with_prefixes();
         assert_eq!(expand_curie("BareName", &schema), "BareName");
+    }
+
+    #[test]
+    fn expand_curie_uses_default_prefix_for_bare_names() {
+        // With a `default_prefix`, a bare name expands against it — the same
+        // decision the HTML writer's shared `linkml_resolve::expand_curie`
+        // makes, so the two can't disagree.
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .prefixes
+            .insert("ex".to_string(), "http://example.org/".to_string());
+        schema.default_prefix = Some("ex".to_string());
+        assert_eq!(expand_curie("Thing", &schema), "http://example.org/Thing");
     }
 
     #[test]
