@@ -123,7 +123,8 @@ Input → Reader → LinkML IR → [Filters] → Writer → Output
 | 27 | [RDF/OWL Family Output Verification](features/27-rdf-owl-family-output-verification.md) | `oxigraph` load-and-query V&V for the RDF writers | **Shipped for v0.3.0** |
 | 28 | [Postgres DDL Output Verification](features/28-postgres-ddl-writer-output-verification.md) | `pg_query` syntax + `testcontainers` apply V&V for Postgres DDL | **Shipped for v0.3.0** |
 | 29 | [Shared Schema Load Pipeline + Writer Consistency](features/29-schema-load-pipeline-and-writer-consistency.md) | Unify the load path + reconcile writer projections | **Shipped (slices 1–5); writer-diagnostics surface deferred** |
-| 30 | [Cross-package Schema Imports + Codegen Composition](features/30-cross-package-schema-imports-and-composition.md) | Consume a schema across the fetch/cache boundary — inline-merge or shared-crate — with exact-version pinning | **Planned** |
+| 30 | [Cross-package Schema Imports + Codegen Composition](features/30-cross-package-schema-imports-and-composition.md) | Consume a schema across the fetch/cache boundary — inline-merge or shared-crate — with exact-version pinning | **In progress: slices 1–3 (writer coverage, cross-package imports, layering) shipped** |
+| 31 | [Rule Visualization in the Schema Graph](features/31-rule-visualization-in-the-schema-graph.md) | Governed-slot glyphs, slot-scoped rule cards, and highlight-on-hover for a rule's participants — no persistent edges | **Planned** |
 
 ## Delivery Approach
 
