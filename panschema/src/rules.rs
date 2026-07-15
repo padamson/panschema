@@ -107,6 +107,20 @@ fn describe_slot_conditions(
 }
 
 fn describe_slot_condition(slot: &str, cond: &SlotCondition) -> Option<String> {
+    // `any_of` on the slot's value: describe each alternative for the same
+    // slot and join with "or", e.g. "`verdict` = `approved` or `verdict` =
+    // `rejected`". Alternatives that render nothing are dropped.
+    if !cond.any_of.is_empty() {
+        let alts: Vec<String> = cond
+            .any_of
+            .iter()
+            .filter_map(|alt| describe_slot_condition(slot, alt))
+            .collect();
+        if !alts.is_empty() {
+            return Some(alts.join(" or "));
+        }
+    }
+
     let mut clauses = Vec::new();
     if let Some(v) = &cond.equals_string {
         clauses.push(format!("= `{v}`"));
@@ -200,6 +214,40 @@ mod tests {
             p.governed,
             vec!["approved_at", "approved_by"],
             "governed slots, sorted + deduped"
+        );
+    }
+
+    #[test]
+    fn slot_level_any_of_renders_as_alternatives_in_the_trigger() {
+        // The real cuisineiq `ImageApproval` shape: the `verdict` slot
+        // condition is an `any_of` over equals_string values. It must render
+        // as a "when" trigger, not vanish (which left "then … is present"
+        // with no trigger).
+        let branch = |v: &str| SlotCondition {
+            equals_string: Some(v.to_string()),
+            ..Default::default()
+        };
+        let verdict = SlotCondition {
+            any_of: vec![branch("approved"), branch("rejected")],
+            ..Default::default()
+        };
+        let present = SlotCondition {
+            value_presence: Some(ValuePresence::Present),
+            ..Default::default()
+        };
+        let rule = ClassRule {
+            title: None,
+            description: None,
+            preconditions: Some(conds(&[("verdict", verdict)], Vec::new())),
+            postconditions: Some(conds(&[("approved_by", present)], Vec::new())),
+        };
+
+        // Lock the exact human-readable formatting, not just fragments.
+        let s = rule_summary(&rule).expect("a slot-level any_of rule must render a summary");
+        assert_eq!(
+            s,
+            "when `verdict` = `approved` or `verdict` = `rejected`, \
+             then `approved_by` is present"
         );
     }
 

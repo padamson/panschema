@@ -266,6 +266,13 @@ pub struct SlotCondition {
     /// like "once approved, `approved_by` is present".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value_presence: Option<ValuePresence>,
+    /// LinkML `any_of` on this slot's condition: the slot's value satisfies
+    /// *any* of these alternative sub-conditions — e.g. `verdict` is
+    /// `approved` **or** `rejected`. Distinct from [`RuleConditions::any_of`]
+    /// (which alternates whole condition sets); this alternates a single
+    /// slot's value expressions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub any_of: Vec<SlotCondition>,
 }
 
 /// A uniqueness constraint on a class: LinkML's `unique_keys` metaslot.
@@ -1176,6 +1183,44 @@ rules:
         assert!(
             out.contains("PRESENT"),
             "value_presence must round-trip; got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn slot_condition_deserializes_slot_level_any_of() {
+        // The real dogfood shape: `any_of` *inside* a slot condition (the
+        // slot's value is any of several), distinct from `any_of` on the
+        // whole condition set. Verbatim from a consumer schema's rule.
+        let yaml = "
+name: ImageApproval
+rules:
+  - preconditions:
+      slot_conditions:
+        verdict:
+          any_of:
+            - equals_string: approved
+            - equals_string: rejected
+    postconditions:
+      slot_conditions:
+        approved_by:
+          value_presence: PRESENT
+";
+        let class: ClassDefinition = serde_yaml::from_str(yaml).unwrap();
+        let pre = class.rules[0].preconditions.as_ref().unwrap();
+        let verdict = pre.slot_conditions.get("verdict").unwrap();
+        assert_eq!(
+            verdict.any_of.len(),
+            2,
+            "both slot-level alternatives parse"
+        );
+        assert_eq!(verdict.any_of[0].equals_string.as_deref(), Some("approved"));
+        assert_eq!(verdict.any_of[1].equals_string.as_deref(), Some("rejected"));
+
+        // Round-trips without dropping the nested any_of.
+        let out = serde_yaml::to_string(&class).unwrap();
+        assert!(
+            out.contains("any_of:"),
+            "slot-level any_of must round-trip; got:\n{out}"
         );
     }
 
