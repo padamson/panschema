@@ -199,6 +199,51 @@ classes:
 }
 
 #[test]
+fn every_graph_node_has_a_matching_html_card() {
+    // The graph hover reuses each node's rendered HTML card, looked up by
+    // `id="<kind>-<name>"`; the JS `buildCompactNodeHover` is only a thin
+    // last resort. This pins the invariant that makes that reuse safe:
+    // every graph node id `<kind>:<name>` has a matching card element, so
+    // the fallback is never the real render path.
+    let output_dir = std::env::temp_dir().join("panschema_node_card_correspondence");
+    let _ = fs::remove_dir_all(&output_dir);
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "--input",
+            "tests/fixtures/reference.ttl",
+            "--output",
+            output_dir.to_str().unwrap(),
+        ])
+        .status()
+        .expect("Failed to execute panschema");
+    assert!(status.success(), "panschema exited with error");
+    let html = fs::read_to_string(output_dir.join("index.html")).expect("read index.html");
+
+    // Pull the embedded graph object (`window.__PANSCHEMA_GRAPH_DATA__ =
+    // {...};`). A streaming parse reads exactly the first JSON value, so a
+    // `;` inside a description string can't truncate it.
+    let marker = "window.__PANSCHEMA_GRAPH_DATA__ = ";
+    let start = html.find(marker).expect("embedded graph data") + marker.len();
+    let graph: serde_json::Value = serde_json::Deserializer::from_str(&html[start..])
+        .into_iter()
+        .next()
+        .expect("a graph JSON value")
+        .expect("valid graph JSON");
+
+    let nodes = graph["nodes"].as_array().expect("nodes array");
+    assert!(!nodes.is_empty(), "reference schema should produce nodes");
+    for node in nodes {
+        let id = node["id"].as_str().expect("node id string");
+        let (kind, name) = id.split_once(':').expect("node id is `<kind>:<name>`");
+        let card_id = format!("id=\"{kind}-{name}\"");
+        assert!(
+            html.contains(&card_id),
+            "graph node `{id}` has no matching HTML card (`{card_id}`) — the hover would fall back",
+        );
+    }
+}
+
+#[test]
 fn generates_documentation_from_reference_ontology() {
     let output_dir = std::env::temp_dir().join("panschema_integration_test");
     let _ = fs::remove_dir_all(&output_dir);

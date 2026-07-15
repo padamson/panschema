@@ -838,118 +838,6 @@
         return escapeForText(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
-    // Render a list of names (slots, parents, mixins, permissible
-    // values) comma-separated. Lists every member — no truncation — so
-    // the card shows all of a node's connections. Empty string for an
-    // empty input.
-    function renderHoverList(items) {
-        if (!Array.isArray(items) || items.length === 0) return '';
-        return items.map(escapeForText).join(', ');
-    }
-
-    // One line per slot: "name: range (required, 1..3) — from X".
-    // Structured payload from the Rust side; every field except
-    // `name` is optional on the wire.
-    function slotSummaryText(s) {
-        if (typeof s === 'string') return s;   // pre-structured payloads
-        let line = s.name;
-        if (s.range) line += ': ' + s.range;
-        const bits = [];
-        if (s.required === true) bits.push('required');
-        if (s.multivalued === true) bits.push('multi-valued');
-        if (s.min != null || s.max != null) {
-            bits.push((s.min != null ? s.min : '0') + '..' + (s.max != null ? s.max : '*'));
-        }
-        if (bits.length) line += ' (' + bits.join(', ') + ')';
-        if (s.origin) line += ' \u2014 from ' + s.origin;
-        return line;
-    }
-
-    // Slot entries stack one per line (they're full phrases, not
-    // names); all of them, no truncation.
-    function renderHoverSlotList(slots) {
-        if (!Array.isArray(slots) || slots.length === 0) return '';
-        return slots
-            .map(function (s) { return escapeForText(slotSummaryText(s)); })
-            .join('<br>');
-    }
-
-    function renderHoverRow(key, valueHtml) {
-        return '<div class="graph-hover-row">'
-            + '<span class="graph-hover-key">' + escapeForText(key) + ':</span>'
-            + '<span class="graph-hover-value">' + valueHtml + '</span>'
-            + '</div>';
-    }
-
-    // Build the kind-specific rows from a `kindMetadata` payload (the
-    // serde-tagged enum mirrored from Rust). Returns an empty string
-    // for nodes without metadata (today: Type nodes) so the caller
-    // can concatenate unconditionally.
-    function renderKindMetadata(km) {
-        if (!km || !km.kind) return '';
-        let rows = '';
-        if (km.kind === 'class') {
-            if (km.parents && km.parents.length) {
-                rows += renderHoverRow('Parents', renderHoverList(km.parents));
-            }
-            if (km.mixins && km.mixins.length) {
-                rows += renderHoverRow('Mixins', renderHoverList(km.mixins));
-            }
-            if (km.slots && km.slots.length) {
-                rows += renderHoverRow('Slots', renderHoverSlotList(km.slots));
-            }
-        } else if (km.kind === 'slot') {
-            if (Array.isArray(km.domains) && km.domains.length) {
-                rows += renderHoverRow('Domain', renderHoverList(km.domains));
-            }
-            if (km.range)  rows += renderHoverRow('Range',  escapeForText(km.range));
-            // A polymorphic range lists its member ranges; supplements
-            // the single Range row above.
-            if (Array.isArray(km.anyOf) && km.anyOf.length) {
-                rows += renderHoverRow('Any of', renderHoverList(km.anyOf));
-            }
-            // Combine the cardinality facts into one row so the card
-            // stays compact. Absent flags read as false on the wire
-            // (serde skips defaults), so guard with `=== true`;
-            // explicit min/max bounds render as a "min..max" range.
-            const cardBits = [];
-            if (km.required === true)    cardBits.push('required');
-            if (km.multivalued === true) cardBits.push('multi-valued');
-            if (km.identifier === true)  cardBits.push('identifier');
-            if (km.min != null || km.max != null) {
-                cardBits.push((km.min != null ? km.min : '0') + '..' + (km.max != null ? km.max : '*'));
-            }
-            if (cardBits.length) rows += renderHoverRow('Cardinality', escapeForText(cardBits.join(', ')));
-            // The full regex can be long; truncate with the complete
-            // value in a native tooltip.
-            if (km.pattern) {
-                const full = km.pattern;
-                const shown = full.length > 40 ? full.slice(0, 40) + '…' : full;
-                rows += renderHoverRow('Pattern',
-                    '<span title="' + escapeForAttr(full) + '">' + escapeForText(shown) + '</span>');
-            }
-        } else if (km.kind === 'enum') {
-            if (km.permissibleValues && km.permissibleValues.length) {
-                rows += renderHoverRow('Values', renderHoverEnumValues(km.permissibleValues));
-            }
-        }
-        return rows;
-    }
-
-    // Enum permissible values: each value's text, with its description
-    // (when present) in a native tooltip and the curie-expanded meaning
-    // IRI on a `data-meaning` attribute for future click-to-jump. All
-    // values, no truncation.
-    function renderHoverEnumValues(values) {
-        if (!Array.isArray(values) || values.length === 0) return '';
-        return values.map(function (v) {
-            if (typeof v === 'string') return escapeForText(v);   // legacy payloads
-            let attrs = '';
-            if (v.description) attrs += ' title="' + escapeForAttr(v.description) + '"';
-            if (v.meaning) attrs += ' data-meaning="' + escapeForAttr(v.meaning) + '"';
-            return '<span class="graph-hover-pv"' + attrs + '>' + escapeForText(v.text) + '</span>';
-        }).join(', ');
-    }
 
     // Short, author-readable gloss for each LinkML edge kind. Looked
     // up by the stable `kind` tag the Rust side emits (independent of
@@ -969,11 +857,11 @@
     // position.
     // The already-rendered HTML card for a graph node, or null. Graph
     // node ids are `<kind>:<name>` (`slot:executes`, `class:Act`); the
-    // doc body renders `#<kind>-<name>` for every kind. Each node kind
-    // now has a card section, so the hover reuses the rendered card and
-    // can't drift from the doc body. (A schema with no enums/types still
-    // returns null for those — the section is omitted — and the hover
-    // falls back to the compact rows.)
+    // doc body renders `#<kind>-<name>` for every kind. Every graph node
+    // is a locally-defined class/slot/enum/type, so its card is always in
+    // the page and the hover reuses it — a single source of truth that
+    // can't drift from the doc body. `buildCompactNodeHover` is only the
+    // thin last-resort if a card is somehow missing.
     const NODE_CARD_PREFIX = { slot: 'slot-', class: 'class-', enum: 'enum-', type: 'type-' };
     function nodeCardElement(nodeId) {
         const colon = nodeId.indexOf(':');
@@ -982,10 +870,11 @@
         return prefix ? document.getElementById(prefix + nodeId.slice(colon + 1)) : null;
     }
 
-    // Compact JS-built hover rows — the fallback for a node whose card
-    // isn't in this page (e.g. an enum/type when the schema declares
-    // none) and the original layout. Nodes with a rendered card reuse it
-    // instead (see `nodeCardElement`).
+    // Thin identity-only fallback (label / type / id / iri / connections)
+    // for the rare node whose rendered card isn't found in the page. Every
+    // graph node is a locally-defined class/slot/enum/type with a card, so
+    // this is a last resort, not a parallel renderer — the reused HTML card
+    // (`nodeCardElement`) owns the rich rendering, no duplication.
     function buildCompactNodeHover(d) {
         const connCount = Array.isArray(d.connections) ? d.connections.length : 0;
         // Type row carries an "(abstract)" suffix when the LinkML class
@@ -1008,7 +897,6 @@
         }
         rows += '<div class="graph-hover-row"><span class="graph-hover-key">Connections:</span>'
             + '<span class="graph-hover-value">' + connCount + '</span></div>';
-        rows += renderKindMetadata(d.kindMetadata);
         if (d.description) {
             rows += '<div class="graph-hover-description">' + escapeForText(d.description) + '</div>';
         }
