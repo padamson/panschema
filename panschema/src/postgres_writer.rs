@@ -1338,9 +1338,11 @@ mod tests {
             title: Some("actual-needs-region".to_string()),
             description: None,
             preconditions: Some(RuleConditions {
+                any_of: Vec::new(),
                 slot_conditions: [("status".to_string(), pre)].into_iter().collect(),
             }),
             postconditions: Some(RuleConditions {
+                any_of: Vec::new(),
                 slot_conditions: [("region".to_string(), post)].into_iter().collect(),
             }),
         });
@@ -1386,6 +1388,7 @@ mod tests {
             title: Some("dangling".to_string()),
             description: None,
             preconditions: Some(RuleConditions {
+                any_of: Vec::new(),
                 slot_conditions: [("status".to_string(), pre)].into_iter().collect(),
             }),
             postconditions: None,
@@ -1430,9 +1433,11 @@ mod tests {
             title: None,
             description: None,
             preconditions: Some(RuleConditions {
+                any_of: Vec::new(),
                 slot_conditions: [("status".to_string(), pre)].into_iter().collect(),
             }),
             postconditions: Some(RuleConditions {
+                any_of: Vec::new(),
                 slot_conditions: [("region".to_string(), post)].into_iter().collect(),
             }),
         });
@@ -1468,9 +1473,11 @@ mod tests {
             title: Some("ghost-ref".to_string()),
             description: None,
             preconditions: Some(RuleConditions {
+                any_of: Vec::new(),
                 slot_conditions: [("status".to_string(), pre)].into_iter().collect(),
             }),
             postconditions: Some(RuleConditions {
+                any_of: Vec::new(),
                 slot_conditions: [("ghost".to_string(), post)].into_iter().collect(),
             }),
         });
@@ -1507,9 +1514,11 @@ mod tests {
             title: Some("r".to_string()),
             description: None,
             preconditions: Some(RuleConditions {
+                any_of: Vec::new(),
                 slot_conditions: [("status".to_string(), pre)].into_iter().collect(),
             }),
             postconditions: Some(RuleConditions {
+                any_of: Vec::new(),
                 slot_conditions: [("region".to_string(), cond)].into_iter().collect(),
             }),
         });
@@ -1570,6 +1579,7 @@ mod tests {
             title: Some("moot".to_string()),
             description: None,
             preconditions: Some(RuleConditions {
+                any_of: Vec::new(),
                 slot_conditions: [("status".to_string(), pre)].into_iter().collect(),
             }),
             postconditions: None, // one-sided → would be "skipped" if it had a table
@@ -1600,6 +1610,7 @@ mod tests {
             title: Some("moot".to_string()),
             description: None,
             preconditions: Some(RuleConditions {
+                any_of: Vec::new(),
                 slot_conditions: [("status".to_string(), pre)].into_iter().collect(),
             }),
             postconditions: None,

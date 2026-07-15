@@ -214,6 +214,24 @@ pub struct ClassRule {
 pub struct RuleConditions {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub slot_conditions: BTreeMap<String, SlotCondition>,
+    /// LinkML `any_of`: alternative condition sets. The condition holds when
+    /// *any* one of these sub-condition sets holds — e.g. a precondition
+    /// that fires when `verdict` is `approved` **or** `rejected`. Empty when
+    /// the condition is a plain `slot_conditions` map.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub any_of: Vec<RuleConditions>,
+}
+
+/// LinkML `value_presence` check on a slot condition: the slot's value must
+/// be present (non-null) or absent (null) for the condition to hold — the
+/// checkable content of a postcondition like "once approved, `approved_by`
+/// is present".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ValuePresence {
+    #[serde(rename = "PRESENT")]
+    Present,
+    #[serde(rename = "ABSENT")]
+    Absent,
 }
 
 /// One slot's constraint within a [`RuleConditions`]' `slot_conditions` map.
@@ -243,6 +261,11 @@ pub struct SlotCondition {
     pub equals_string: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub equals_number: Option<f64>,
+    /// LinkML `value_presence`: the slot's value must be present or absent
+    /// for the condition to hold — the checkable content of a postcondition
+    /// like "once approved, `approved_by` is present".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_presence: Option<ValuePresence>,
 }
 
 /// A uniqueness constraint on a class: LinkML's `unique_keys` metaslot.
@@ -1074,6 +1097,86 @@ rules:
         assert!(out.contains("rules:"), "got:\n{out}");
         let bare_out = serde_yaml::to_string(&bare).unwrap();
         assert!(!bare_out.contains("rules:"), "got:\n{bare_out}");
+    }
+
+    #[test]
+    fn rule_conditions_deserialize_value_presence_and_any_of() {
+        // cuisineiq's ImageApproval shape: an `any_of` precondition (the
+        // rule fires when `verdict` is any of several values) and
+        // `value_presence` postconditions (a slot must be present once the
+        // rule applies). Both were silently dropped before being modeled.
+        let yaml = "
+name: ImageApproval
+rules:
+  - title: approved or rejected images are attributed
+    preconditions:
+      any_of:
+        - slot_conditions:
+            verdict:
+              equals_string: approved
+        - slot_conditions:
+            verdict:
+              equals_string: rejected
+    postconditions:
+      slot_conditions:
+        approved_by:
+          value_presence: PRESENT
+        approved_at:
+          value_presence: PRESENT
+";
+        let class: ClassDefinition = serde_yaml::from_str(yaml).unwrap();
+        let rule = &class.rules[0];
+
+        // Both `any_of` alternatives are captured, each with its own
+        // slot condition.
+        let pre = rule.preconditions.as_ref().expect("preconditions");
+        assert_eq!(pre.any_of.len(), 2, "both any_of alternatives must parse");
+        assert_eq!(
+            pre.any_of[0]
+                .slot_conditions
+                .get("verdict")
+                .unwrap()
+                .equals_string
+                .as_deref(),
+            Some("approved")
+        );
+        assert_eq!(
+            pre.any_of[1]
+                .slot_conditions
+                .get("verdict")
+                .unwrap()
+                .equals_string
+                .as_deref(),
+            Some("rejected")
+        );
+
+        // The `value_presence` postconditions parse to the modeled enum.
+        let post = rule.postconditions.as_ref().expect("postconditions");
+        assert_eq!(
+            post.slot_conditions
+                .get("approved_by")
+                .unwrap()
+                .value_presence,
+            Some(ValuePresence::Present)
+        );
+        assert_eq!(
+            post.slot_conditions
+                .get("approved_at")
+                .unwrap()
+                .value_presence,
+            Some(ValuePresence::Present)
+        );
+
+        // Round-trips without losing either field.
+        let out = serde_yaml::to_string(&class).unwrap();
+        assert!(
+            out.contains("any_of:"),
+            "any_of must round-trip; got:\n{out}"
+        );
+        assert!(
+            out.contains("PRESENT"),
+            "value_presence must round-trip; got:\n{out}"
+        );
     }
 
     #[test]

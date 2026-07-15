@@ -231,6 +231,7 @@ mod tests {
             title: Some("actual-needs-region".to_string()),
             description: None,
             preconditions: Some(RuleConditions {
+                any_of: Vec::new(),
                 slot_conditions: [(
                     "status".to_string(),
                     SlotCondition {
@@ -242,6 +243,7 @@ mod tests {
                 .collect(),
             }),
             postconditions: Some(RuleConditions {
+                any_of: Vec::new(),
                 slot_conditions: [(
                     "region".to_string(),
                     SlotCondition {
@@ -407,9 +409,11 @@ mod tests {
             title: Some("empty-pre".to_string()),
             description: None,
             preconditions: Some(RuleConditions {
+                any_of: Vec::new(),
                 slot_conditions: Default::default(), // empty side
             }),
             postconditions: Some(RuleConditions {
+                any_of: Vec::new(),
                 slot_conditions: [(
                     "region".to_string(),
                     SlotCondition {
@@ -451,6 +455,7 @@ mod tests {
             title: Some("r".to_string()),
             description: None,
             preconditions: Some(RuleConditions {
+                any_of: Vec::new(),
                 slot_conditions: [(
                     "status".to_string(),
                     SlotCondition {
@@ -462,6 +467,7 @@ mod tests {
                 .collect(),
             }),
             postconditions: Some(RuleConditions {
+                any_of: Vec::new(),
                 slot_conditions: [(
                     "region".to_string(),
                     SlotCondition {
@@ -510,6 +516,7 @@ mod tests {
             title: Some("p1-needs-region".to_string()),
             description: None,
             preconditions: Some(RuleConditions {
+                any_of: Vec::new(),
                 slot_conditions: [(
                     "priority".to_string(),
                     SlotCondition {
@@ -521,6 +528,7 @@ mod tests {
                 .collect(),
             }),
             postconditions: Some(RuleConditions {
+                any_of: Vec::new(),
                 slot_conditions: [(
                     "region".to_string(),
                     SlotCondition {
@@ -566,6 +574,7 @@ mod tests {
             title: Some("labelled-gates-set-amount".to_string()),
             description: None,
             preconditions: Some(RuleConditions {
+                any_of: Vec::new(),
                 slot_conditions: [(
                     "label".to_string(),
                     SlotCondition {
@@ -577,6 +586,7 @@ mod tests {
                 .collect(),
             }),
             postconditions: Some(RuleConditions {
+                any_of: Vec::new(),
                 slot_conditions: [(
                     "amount".to_string(),
                     SlotCondition {
@@ -618,6 +628,7 @@ mod tests {
             title: Some("ghost-ref".to_string()),
             description: None,
             preconditions: Some(RuleConditions {
+                any_of: Vec::new(),
                 slot_conditions: [(
                     "status".to_string(),
                     SlotCondition {
@@ -629,6 +640,7 @@ mod tests {
                 .collect(),
             }),
             postconditions: Some(RuleConditions {
+                any_of: Vec::new(),
                 slot_conditions: [(
                     "ghost".to_string(),
                     SlotCondition {
@@ -675,6 +687,7 @@ mod tests {
             title: None, // untitled → labeled by index
             description: None,
             preconditions: Some(RuleConditions {
+                any_of: Vec::new(),
                 slot_conditions: [(
                     "status".to_string(),
                     SlotCondition {

@@ -1585,12 +1585,12 @@ fn rule_summary_markdown(rule: &crate::linkml::ClassRule) -> Option<String> {
     let when = rule
         .preconditions
         .as_ref()
-        .map(|c| describe_slot_conditions(&c.slot_conditions))
+        .map(describe_conditions)
         .filter(|s| !s.is_empty());
     let then = rule
         .postconditions
         .as_ref()
-        .map(|c| describe_slot_conditions(&c.slot_conditions))
+        .map(describe_conditions)
         .filter(|s| !s.is_empty());
 
     match (when, then) {
@@ -1599,6 +1599,27 @@ fn rule_summary_markdown(rule: &crate::linkml::ClassRule) -> Option<String> {
         (None, Some(t)) => Some(format!("then {}", t.join(", "))),
         (None, None) => None,
     }
+}
+
+/// Describe a whole condition set as markdown clauses: its `slot_conditions`
+/// plus any `any_of` alternatives. Each `any_of` branch is parenthesized and
+/// the branches are joined with "or", so a precondition that fires when
+/// `verdict` is `approved` or `rejected` reads
+/// "(`verdict` = `approved`) or (`verdict` = `rejected`)". A branch that
+/// renders nothing is dropped rather than shown as an empty "()".
+fn describe_conditions(conditions: &crate::linkml::RuleConditions) -> Vec<String> {
+    let mut clauses = describe_slot_conditions(&conditions.slot_conditions);
+    let alts: Vec<String> = conditions
+        .any_of
+        .iter()
+        .map(|alt| describe_conditions(alt).join(" and "))
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("({s})"))
+        .collect();
+    if !alts.is_empty() {
+        clauses.push(alts.join(" or "));
+    }
+    clauses
 }
 
 /// Render each slot's condition as a markdown clause, e.g. "`status` =
@@ -1620,6 +1641,15 @@ fn describe_slot_condition(slot: &str, cond: &crate::linkml::SlotCondition) -> O
     }
     if let Some(v) = cond.equals_number {
         clauses.push(format!("= {v}"));
+    }
+    if let Some(vp) = cond.value_presence {
+        clauses.push(
+            match vp {
+                crate::linkml::ValuePresence::Present => "is present",
+                crate::linkml::ValuePresence::Absent => "is absent",
+            }
+            .to_string(),
+        );
     }
     if cond.required {
         clauses.push("is required".to_string());
@@ -2914,6 +2944,7 @@ mod tests {
             title: Some("actual deployments are located".to_string()),
             description: Some("ties status to required fields".to_string()),
             preconditions: Some(RuleConditions {
+                any_of: Vec::new(),
                 slot_conditions: {
                     let mut m = std::collections::BTreeMap::new();
                     m.insert(
@@ -2927,6 +2958,7 @@ mod tests {
                 },
             }),
             postconditions: Some(RuleConditions {
+                any_of: Vec::new(),
                 slot_conditions: {
                     let mut m = std::collections::BTreeMap::new();
                     m.insert(
@@ -2970,6 +3002,69 @@ mod tests {
         assert!(
             html.contains("when") && html.contains("then"),
             "expected a when…then sentence; got: {html}"
+        );
+    }
+
+    #[test]
+    fn class_card_renders_any_of_and_value_presence_rule_conditions() {
+        use crate::linkml::{
+            ClassDefinition, ClassRule, RuleConditions, SchemaDefinition, SlotCondition,
+            ValuePresence,
+        };
+        // cuisineiq's ImageApproval shape: an `any_of` precondition (verdict
+        // is approved OR rejected) and a `value_presence` postcondition
+        // (approved_by must be present). Both must render as trigger and
+        // consequence — not vanish, leaving a bare title.
+        let mut schema = SchemaDefinition::new("approvals");
+        let mut cls = ClassDefinition::new("ImageApproval");
+        let alt = |val: &str| RuleConditions {
+            any_of: Vec::new(),
+            slot_conditions: std::collections::BTreeMap::from([(
+                "verdict".to_string(),
+                SlotCondition {
+                    equals_string: Some(val.to_string()),
+                    ..Default::default()
+                },
+            )]),
+        };
+        cls.rules = vec![ClassRule {
+            title: Some("approved or rejected images are attributed".to_string()),
+            description: None,
+            preconditions: Some(RuleConditions {
+                slot_conditions: std::collections::BTreeMap::new(),
+                any_of: vec![alt("approved"), alt("rejected")],
+            }),
+            postconditions: Some(RuleConditions {
+                any_of: Vec::new(),
+                slot_conditions: std::collections::BTreeMap::from([(
+                    "approved_by".to_string(),
+                    SlotCondition {
+                        value_presence: Some(ValuePresence::Present),
+                        ..Default::default()
+                    },
+                )]),
+            }),
+        }];
+        schema.classes.insert("ImageApproval".to_string(), cls);
+
+        let out = tempfile::tempdir().unwrap();
+        let writer = HtmlWriter::with_options(false);
+        crate::io::Writer::write(&writer, &schema, out.path()).unwrap();
+        let html = std::fs::read_to_string(out.path().join("index.html")).unwrap();
+
+        // Both `any_of` alternatives render as the trigger, joined by "or".
+        assert!(
+            html.contains("<code>approved</code>") && html.contains("<code>rejected</code>"),
+            "any_of precondition must render both alternatives; got: {html}"
+        );
+        assert!(
+            html.contains(" or "),
+            "any_of alternatives must be joined with 'or'; got: {html}"
+        );
+        // The `value_presence` postcondition renders its consequence.
+        assert!(
+            html.contains("<code>approved_by</code>") && html.contains("is present"),
+            "value_presence postcondition must render; got: {html}"
         );
     }
 
