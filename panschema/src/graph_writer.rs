@@ -190,6 +190,14 @@ pub struct RuleSummary {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+    /// Slots that make the rule fire (precondition side, `any_of` included),
+    /// for highlighting the rule's trigger nodes on hover.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trigger_slots: Vec<String>,
+    /// Slots the rule then constrains (postcondition side), for placing
+    /// governed-slot glyphs and highlighting the governed nodes on hover.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub governed_slots: Vec<String>,
 }
 
 /// One permissible value of an enum in the hover card: the value
@@ -593,10 +601,15 @@ impl GraphWriter {
                 rules: class_def
                     .rules
                     .iter()
-                    .map(|r| RuleSummary {
-                        title: r.title.clone(),
-                        description: r.description.clone(),
-                        summary: crate::rules::rule_summary(r),
+                    .map(|r| {
+                        let participants = crate::rules::rule_participants(r);
+                        RuleSummary {
+                            title: r.title.clone(),
+                            description: r.description.clone(),
+                            summary: crate::rules::rule_summary(r),
+                            trigger_slots: participants.trigger,
+                            governed_slots: participants.governed,
+                        }
                     })
                     .collect(),
             });
@@ -1495,6 +1508,58 @@ mod tests {
         assert!(
             summary.contains("approved_by") && summary.contains("is present"),
             "consequence must render the value_presence postcondition; got: {summary}"
+        );
+    }
+
+    #[test]
+    fn class_rules_carry_trigger_and_governed_participant_slots() {
+        use crate::linkml::{ClassRule, RuleConditions, SlotCondition, ValuePresence};
+        // For highlight-on-hover the viz needs the slots each rule touches,
+        // split by side: trigger (precondition, incl. any_of) vs governed
+        // (postcondition).
+        let mut schema = SchemaDefinition::new("approvals");
+        let mut cls = ClassDefinition::new("ImageApproval");
+        let alt = |v: &str| RuleConditions {
+            any_of: Vec::new(),
+            slot_conditions: std::collections::BTreeMap::from([(
+                "verdict".to_string(),
+                SlotCondition {
+                    equals_string: Some(v.to_string()),
+                    ..Default::default()
+                },
+            )]),
+        };
+        cls.rules = vec![ClassRule {
+            title: None,
+            description: None,
+            preconditions: Some(RuleConditions {
+                slot_conditions: std::collections::BTreeMap::new(),
+                any_of: vec![alt("approved"), alt("rejected")],
+            }),
+            postconditions: Some(RuleConditions {
+                any_of: Vec::new(),
+                slot_conditions: std::collections::BTreeMap::from([(
+                    "approved_by".to_string(),
+                    SlotCondition {
+                        value_presence: Some(ValuePresence::Present),
+                        ..Default::default()
+                    },
+                )]),
+            }),
+        }];
+        schema.classes.insert("ImageApproval".to_string(), cls);
+
+        let graph = GraphWriter::new().schema_to_graph(&schema);
+        let rules = class_rules(&graph, "ImageApproval");
+        assert_eq!(
+            rules[0].trigger_slots,
+            vec!["verdict"],
+            "trigger slots come from the any_of precondition branches"
+        );
+        assert_eq!(
+            rules[0].governed_slots,
+            vec!["approved_by"],
+            "governed slots come from the postconditions"
         );
     }
 

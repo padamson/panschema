@@ -52,21 +52,22 @@ the explicit alternative to new edge *types* — there are none.
 
 ## Vertical Slices
 
-### Slice 1: Exporter — rule participants and governed-slot markers
+### Slice 1: Exporter — rule participant slots
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Must Have
 
-**User Value:** The graph JSON carries enough per-rule and per-slot structure
-for the viz to place glyphs, build slot-scoped cards, and highlight
-participants — the data foundation for every later slice.
+**User Value:** The graph JSON carries, per rule, the slots it touches — split
+into trigger and governed — so the viz can place governed-slot glyphs, build
+slot-scoped cards, and highlight participants on hover. The data foundation
+for every later slice.
 
 **Acceptance Criteria:**
-- [ ] Each rule in a class node's metadata carries its **participant slots**, split into *trigger* (precondition) and *governed* (postcondition) slot names, resolved to the node identifiers the viz can highlight.
-- [ ] Each slot node that at least one rule governs carries a **marker flag** in its metadata, so the viz can place a glyph without re-deriving rule membership.
-- [ ] Trigger/governed membership is computed from the same condition walk as the rendered summary (`crate::rules`), so a slot named through `any_of` or on either side is attributed correctly; a rule that names no resolvable slot contributes no markers.
-- [ ] Output is additive and byte-stable for schemas with no rules (no new keys emitted), so the viz tolerates old and new payloads.
+- [x] Each rule in a class node's metadata carries its **participant slots**, split into *trigger* (precondition) and *governed* (postcondition) slot names.
+- [x] The viz places a governed-slot glyph by checking whether a slot appears in any rule's `governed_slots` — **derived from the per-rule data above, no separate per-slot flag** (avoids a redundant, class-ambiguous marker on globally-shared slot nodes).
+- [x] Trigger/governed membership is computed from the same condition walk as the rendered summary (`crate::rules`), so a slot named through `any_of` or on either side is attributed correctly; deduplicated and sorted.
+- [x] Output is additive and byte-stable for schemas with no rules (the fields skip serialization when empty), so the viz tolerates old and new payloads.
 
 ### Slice 2: Viz — governed-slot glyph and slot-scoped hover card
 
@@ -119,7 +120,7 @@ surface).*
 
 | Slice | Priority | Depends On | Status |
 |---|---|---|---|
-| Slice 1: exporter participants + markers | Must Have | graph-JSON rule metadata | Not Started |
+| Slice 1: exporter participant slots | Must Have | graph-JSON rule metadata | Complete |
 | Slice 2: governed-slot glyph + scoped card | Should Have | Slice 1 | Not Started |
 | Slice 3: participant highlighting + connectors | Should Have | Slices 1–2 | Not Started |
 | Slice 4: rules in the pinned card | When we need it | Slice 1, pin-on-click | Deferred |

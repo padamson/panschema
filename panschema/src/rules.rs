@@ -8,6 +8,46 @@
 
 use crate::linkml::{ClassRule, RuleConditions, SlotCondition, ValuePresence};
 
+/// The slots a rule names, split by side: `trigger` slots appear in its
+/// preconditions (what makes the rule fire), `governed` slots in its
+/// postconditions (what the rule then constrains). Both are deduplicated and
+/// sorted. Used to place graph glyphs on governed slots and to highlight a
+/// rule's participants on hover.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RuleParticipants {
+    pub trigger: Vec<String>,
+    pub governed: Vec<String>,
+}
+
+/// Collect the trigger and governed slot names a rule references, walking
+/// both the direct `slot_conditions` and every `any_of` branch on each side.
+pub fn rule_participants(rule: &ClassRule) -> RuleParticipants {
+    RuleParticipants {
+        trigger: rule
+            .preconditions
+            .as_ref()
+            .map(condition_slots)
+            .unwrap_or_default(),
+        governed: rule
+            .postconditions
+            .as_ref()
+            .map(condition_slots)
+            .unwrap_or_default(),
+    }
+}
+
+/// Every slot named in a condition set — its own `slot_conditions` keys plus
+/// those of every `any_of` branch, recursively — deduplicated and sorted.
+fn condition_slots(conditions: &RuleConditions) -> Vec<String> {
+    let mut names: Vec<String> = conditions.slot_conditions.keys().cloned().collect();
+    for alt in &conditions.any_of {
+        names.extend(condition_slots(alt));
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
 /// Render a rule's pre/postconditions as one markdown "when … then …"
 /// sentence, e.g. "when `status` = `actual`, then `region` is required", or
 /// "when (`verdict` = `approved`) or (`verdict` = `rejected`), then
@@ -108,4 +148,69 @@ fn describe_slot_condition(slot: &str, cond: &SlotCondition) -> Option<String> {
         return None;
     }
     Some(format!("`{slot}` {}", clauses.join(" and ")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn conds(slots: &[(&str, SlotCondition)], any_of: Vec<RuleConditions>) -> RuleConditions {
+        RuleConditions {
+            slot_conditions: slots
+                .iter()
+                .map(|(n, c)| (n.to_string(), c.clone()))
+                .collect(),
+            any_of,
+        }
+    }
+
+    #[test]
+    fn rule_participants_split_trigger_and_governed_including_any_of() {
+        // ImageApproval shape: an `any_of` precondition over `verdict`, and
+        // `value_presence` postconditions on `approved_by` / `approved_at`.
+        // Trigger comes from the any_of branches; governed from the
+        // postcondition slots — each deduplicated and sorted.
+        let eq = |v: &str| SlotCondition {
+            equals_string: Some(v.to_string()),
+            ..Default::default()
+        };
+        let present = SlotCondition {
+            value_presence: Some(ValuePresence::Present),
+            ..Default::default()
+        };
+        let rule = ClassRule {
+            title: None,
+            description: None,
+            preconditions: Some(conds(
+                &[],
+                vec![
+                    conds(&[("verdict", eq("approved"))], Vec::new()),
+                    conds(&[("verdict", eq("rejected"))], Vec::new()),
+                ],
+            )),
+            postconditions: Some(conds(
+                &[("approved_by", present.clone()), ("approved_at", present)],
+                Vec::new(),
+            )),
+        };
+
+        let p = rule_participants(&rule);
+        assert_eq!(p.trigger, vec!["verdict"], "trigger from any_of branches");
+        assert_eq!(
+            p.governed,
+            vec!["approved_at", "approved_by"],
+            "governed slots, sorted + deduped"
+        );
+    }
+
+    #[test]
+    fn rule_participants_are_empty_for_a_conditionless_rule() {
+        let rule = ClassRule {
+            title: Some("t".into()),
+            description: None,
+            preconditions: None,
+            postconditions: None,
+        };
+        assert_eq!(rule_participants(&rule), RuleParticipants::default());
+    }
 }
