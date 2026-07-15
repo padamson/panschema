@@ -134,6 +134,10 @@ pub enum KindMetadata {
         slots: Vec<SlotSummary>,
         parents: Vec<String>,
         mixins: Vec<String>,
+        /// The class's conditional `rules`, each with the rendered
+        /// "when … then …" summary. Empty when the class declares none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        rules: Vec<RuleSummary>,
     },
     /// Resolved view of a LinkML slot. `required` / `multivalued`
     /// are the effective-cardinality reconciliation of the bool
@@ -170,6 +174,22 @@ pub enum KindMetadata {
     Enum {
         permissible_values: Vec<PermissibleValueSummary>,
     },
+}
+
+/// One class rule in the hover payload: its title/description plus the
+/// rendered "when … then …" summary — the same projection the HTML card
+/// uses (see [`crate::rules`]). Carried so the viz popup can surface rules;
+/// the viz-side `KindMetadata::Class` mirror gains this field when it
+/// consumes it (the popup redesign), and ignores it until then.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleSummary {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
 
 /// One permissible value of an enum in the hover card: the value
@@ -570,6 +590,15 @@ impl GraphWriter {
                 slots: resolve_class_slots(schema, name),
                 parents: class_def.is_a.iter().cloned().collect(),
                 mixins: class_def.mixins.clone(),
+                rules: class_def
+                    .rules
+                    .iter()
+                    .map(|r| RuleSummary {
+                        title: r.title.clone(),
+                        description: r.description.clone(),
+                        summary: crate::rules::rule_summary(r),
+                    })
+                    .collect(),
             });
 
             let (uri, uri_unresolved) = resolve_node_uri(schema, class_def.class_uri.as_deref());
@@ -1392,9 +1421,81 @@ mod tests {
                 slots,
                 parents,
                 mixins,
+                ..
             } => (slots.as_slice(), parents.as_slice(), mixins.as_slice()),
             other => panic!("expected Class metadata, got {:?}", other),
         }
+    }
+
+    /// Pull the `rules` list from a class node's `KindMetadata::Class`.
+    fn class_rules<'a>(graph: &'a GraphData, name: &str) -> &'a [RuleSummary] {
+        let id = format!("class:{}", name);
+        let node = graph
+            .nodes
+            .iter()
+            .find(|n| n.id == id)
+            .expect("class node should exist");
+        match node.kind_metadata.as_ref().expect("class needs metadata") {
+            KindMetadata::Class { rules, .. } => rules.as_slice(),
+            other => panic!("expected Class metadata, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn class_kind_metadata_carries_rules_for_the_hover_payload() {
+        use crate::linkml::{ClassRule, RuleConditions, SlotCondition, ValuePresence};
+        // The graph export must carry class rules so the viz popup can show
+        // them (today it emits nothing). Same full projection as the HTML
+        // card: an `any_of` trigger and a `value_presence` consequence.
+        let mut schema = SchemaDefinition::new("approvals");
+        let mut cls = ClassDefinition::new("ImageApproval");
+        let alt = |v: &str| RuleConditions {
+            any_of: Vec::new(),
+            slot_conditions: std::collections::BTreeMap::from([(
+                "verdict".to_string(),
+                SlotCondition {
+                    equals_string: Some(v.to_string()),
+                    ..Default::default()
+                },
+            )]),
+        };
+        cls.rules = vec![ClassRule {
+            title: Some("attributed once decided".to_string()),
+            description: None,
+            preconditions: Some(RuleConditions {
+                slot_conditions: std::collections::BTreeMap::new(),
+                any_of: vec![alt("approved"), alt("rejected")],
+            }),
+            postconditions: Some(RuleConditions {
+                any_of: Vec::new(),
+                slot_conditions: std::collections::BTreeMap::from([(
+                    "approved_by".to_string(),
+                    SlotCondition {
+                        value_presence: Some(ValuePresence::Present),
+                        ..Default::default()
+                    },
+                )]),
+            }),
+        }];
+        schema.classes.insert("ImageApproval".to_string(), cls);
+
+        let graph = GraphWriter::new().schema_to_graph(&schema);
+        let rules = class_rules(&graph, "ImageApproval");
+        assert_eq!(
+            rules.len(),
+            1,
+            "the class rule must appear in graph metadata"
+        );
+        assert_eq!(rules[0].title.as_deref(), Some("attributed once decided"));
+        let summary = rules[0].summary.as_deref().expect("rule summary");
+        assert!(
+            summary.contains("approved") && summary.contains("rejected"),
+            "trigger must render both any_of alternatives; got: {summary}"
+        );
+        assert!(
+            summary.contains("approved_by") && summary.contains("is present"),
+            "consequence must render the value_presence postcondition; got: {summary}"
+        );
     }
 
     #[test]

@@ -22,6 +22,7 @@ pub mod postgres_writer;
 pub mod primitives;
 pub mod publish;
 pub mod rdf_serializers;
+pub mod rules;
 pub mod rust_writer;
 pub mod shacl_writer;
 pub mod source;

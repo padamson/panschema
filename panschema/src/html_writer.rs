@@ -1553,7 +1553,7 @@ fn build_rules(rules: &[crate::linkml::ClassRule], schema: &SchemaDefinition) ->
                 .description
                 .as_deref()
                 .map(|d| render_description(d, schema)),
-            summary: rule_summary_markdown(rule).map(|s| render_description(&s, schema)),
+            summary: crate::rules::rule_summary(rule).map(|s| render_description(&s, schema)),
         })
         .collect()
 }
@@ -1576,106 +1576,6 @@ fn build_unique_keys(
                 .map(|d| render_description(d, schema)),
         })
         .collect()
-}
-
-/// Render a `ClassRule`'s pre/postconditions as one markdown "when …
-/// then …" sentence. `None` when the rule carries neither (a
-/// title/description-only entry).
-fn rule_summary_markdown(rule: &crate::linkml::ClassRule) -> Option<String> {
-    let when = rule
-        .preconditions
-        .as_ref()
-        .map(describe_conditions)
-        .filter(|s| !s.is_empty());
-    let then = rule
-        .postconditions
-        .as_ref()
-        .map(describe_conditions)
-        .filter(|s| !s.is_empty());
-
-    match (when, then) {
-        (Some(w), Some(t)) => Some(format!("when {}, then {}", w.join(", "), t.join(", "))),
-        (Some(w), None) => Some(format!("when {}", w.join(", "))),
-        (None, Some(t)) => Some(format!("then {}", t.join(", "))),
-        (None, None) => None,
-    }
-}
-
-/// Describe a whole condition set as markdown clauses: its `slot_conditions`
-/// plus any `any_of` alternatives. Each `any_of` branch is parenthesized and
-/// the branches are joined with "or", so a precondition that fires when
-/// `verdict` is `approved` or `rejected` reads
-/// "(`verdict` = `approved`) or (`verdict` = `rejected`)". A branch that
-/// renders nothing is dropped rather than shown as an empty "()".
-fn describe_conditions(conditions: &crate::linkml::RuleConditions) -> Vec<String> {
-    let mut clauses = describe_slot_conditions(&conditions.slot_conditions);
-    let alts: Vec<String> = conditions
-        .any_of
-        .iter()
-        .map(|alt| describe_conditions(alt).join(" and "))
-        .filter(|s| !s.is_empty())
-        .map(|s| format!("({s})"))
-        .collect();
-    if !alts.is_empty() {
-        clauses.push(alts.join(" or "));
-    }
-    clauses
-}
-
-/// Render each slot's condition as a markdown clause, e.g. "`status` =
-/// `actual`" or "`region` is required". Skips a slot whose condition sets
-/// none of the fields panschema renders.
-fn describe_slot_conditions(
-    slot_conditions: &std::collections::BTreeMap<String, crate::linkml::SlotCondition>,
-) -> Vec<String> {
-    slot_conditions
-        .iter()
-        .filter_map(|(slot, cond)| describe_slot_condition(slot, cond))
-        .collect()
-}
-
-fn describe_slot_condition(slot: &str, cond: &crate::linkml::SlotCondition) -> Option<String> {
-    let mut clauses = Vec::new();
-    if let Some(v) = &cond.equals_string {
-        clauses.push(format!("= `{v}`"));
-    }
-    if let Some(v) = cond.equals_number {
-        clauses.push(format!("= {v}"));
-    }
-    if let Some(vp) = cond.value_presence {
-        clauses.push(
-            match vp {
-                crate::linkml::ValuePresence::Present => "is present",
-                crate::linkml::ValuePresence::Absent => "is absent",
-            }
-            .to_string(),
-        );
-    }
-    if cond.required {
-        clauses.push("is required".to_string());
-    }
-    if let Some(r) = &cond.range {
-        clauses.push(format!("is a `{r}`"));
-    }
-    if let Some(p) = &cond.pattern {
-        clauses.push(format!("matches `{p}`"));
-    }
-    if let Some(min) = cond.minimum_value {
-        clauses.push(format!(">= {min}"));
-    }
-    if let Some(max) = cond.maximum_value {
-        clauses.push(format!("<= {max}"));
-    }
-    if let Some(min) = cond.minimum_cardinality {
-        clauses.push(format!("has at least {min} value(s)"));
-    }
-    if let Some(max) = cond.maximum_cardinality {
-        clauses.push(format!("has at most {max} value(s)"));
-    }
-    if clauses.is_empty() {
-        return None;
-    }
-    Some(format!("`{slot}` {}", clauses.join(" and ")))
 }
 
 /// Render a slot's `ifabsent` value readably for the Default row, peeling
