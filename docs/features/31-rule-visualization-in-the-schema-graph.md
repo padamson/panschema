@@ -23,6 +23,26 @@ it. Every viz slice is browser-dogfooded on a rendered graph — a wire-format
 change can pass all Rust tests while the rendered graph is broken, so the
 writer and viz sides are mirrored and hover-tested together.
 
+## Progress / reshape (clean base)
+
+A code review of the graph-viz hover found the graph **reuses each node's
+rendered HTML card** (the `#class-…` / `#slot-…` element), not a JS-built
+view — so rule rendering belongs in the HTML writer, and it flows to the
+graph hover/pinned card for free. This reshapes the slices below:
+
+- **Class rules in the hover** — done (class card already renders rules; the
+  hover reuses it).
+- **Pinned card** — done: clicking a node pins its full reused card (with a
+  close button); the separate details panel was removed.
+- **Slot's governing rules** — done: the HTML **slot card** now has a "Rules"
+  section listing every class rule that references the slot, so it shows on
+  the doc page and the graph slot hover/pin via reuse. (Supersedes the
+  earlier plan to carry this in the graph-JSON `kindMetadata`, which the same
+  review found to be dead payload.)
+- **Remaining:** the governed-slot **glyph** (canvas) and **highlight-on-hover**
+  of a rule's participants — the latter to ride `data-` attributes on the
+  reused card rather than `kindMetadata`.
+
 ## Why Now
 
 - The graph JSON now carries each class's rules (title, description, rendered

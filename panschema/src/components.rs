@@ -266,6 +266,8 @@ pub struct SlotCardComponent<'a> {
     /// The slot's `ifabsent` default, rendered readably; `None` hides the
     /// Default row.
     pub default: Option<&'a str>,
+    /// Class rules that govern the slot; empty in the standalone preview.
+    pub governing_rules: &'a [panschema::html_writer::GoverningRule],
 }
 
 /// Individual card component template.
@@ -354,6 +356,8 @@ pub struct SampleSlot<'a> {
     /// The slot's `ifabsent` default, rendered readably; `None` hides the
     /// Default row.
     pub default: Option<&'a str>,
+    /// Class rules that govern the slot; empty in previews.
+    pub governing_rules: &'a [panschema::html_writer::GoverningRule],
 }
 
 /// Sample individual data for styleguide previews.
@@ -549,6 +553,7 @@ impl ComponentRenderer {
             see_also: &[],
             examples: &[],
             default,
+            governing_rules: &[],
         };
         Ok(template.render()?)
     }
@@ -752,6 +757,7 @@ impl ComponentRenderer {
             see_also: &[],
             examples: &[],
             default: None,
+            governing_rules: &[],
         };
 
         let domain2 = EntityRef::new("person", "Person");
@@ -780,6 +786,7 @@ impl ComponentRenderer {
             see_also: &[],
             examples: &data_slot_examples,
             default: Some("\"Anonymous\""),
+            governing_rules: &[],
         };
 
         let ind_types = vec![EntityRef::new("person", "Person")];

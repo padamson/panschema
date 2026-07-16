@@ -389,6 +389,20 @@ pub struct SlotData {
     /// The slot's `ifabsent` default, rendered readably for the Default
     /// row (`planned`, `8080`, `"svc"`, `true`). `None` renders no row.
     pub default: Option<String>,
+    /// Class rules that reference this slot (on either side), each naming
+    /// the class and carrying the rendered rule summary — the slot card's
+    /// "Governed by" section. Empty when no rule names the slot.
+    pub governing_rules: Vec<GoverningRule>,
+}
+
+/// A class rule that references a slot, for the slot card's "Governed by"
+/// section: which class's rule it is, its title, and the rendered "when …
+/// then …" summary.
+#[derive(Debug, Clone)]
+pub struct GoverningRule {
+    pub class: EntityRef,
+    pub title: Option<String>,
+    pub summary: Option<String>,
 }
 
 /// A resolved property value for rendering individual cards.
@@ -1041,6 +1055,7 @@ impl HtmlWriter {
                 see_also: build_see_also(&slot_def.see_also, schema, labels),
                 examples: slot_def.examples.clone(),
                 default: slot_def.ifabsent.as_deref().map(format_ifabsent_default),
+                governing_rules: governing_rules_for_slot(slot_id, schema),
             });
         }
 
@@ -1544,6 +1559,41 @@ fn build_see_also(
 /// same markdown pipeline as [`ClassData::description`]; `summary` is
 /// built from the pre/postconditions and rendered the same way, so
 /// slot/value names referenced in either come out as `<code>`.
+/// Rules across every class that reference `slot_name` (on either the
+/// trigger or governed side), for the slot card's "Governed by" section — so
+/// a reader viewing a slot sees the conditional logic that constrains it.
+/// Classes iterate in sorted (`BTreeMap`) order for deterministic output.
+fn governing_rules_for_slot(slot_name: &str, schema: &SchemaDefinition) -> Vec<GoverningRule> {
+    let mut governing = Vec::new();
+    for (class_id, class_def) in &schema.classes {
+        let class_label = class_def
+            .annotations
+            .get("panschema:label")
+            .cloned()
+            .unwrap_or_else(|| class_id.clone());
+        for rule in &class_def.rules {
+            let participants = crate::rules::rule_participants(rule);
+            let names_slot = participants
+                .trigger
+                .iter()
+                .chain(participants.governed.iter())
+                .any(|s| s == slot_name);
+            if names_slot {
+                governing.push(GoverningRule {
+                    class: EntityRef {
+                        id: class_id.clone(),
+                        label: class_label.clone(),
+                    },
+                    title: rule.title.clone(),
+                    summary: crate::rules::rule_summary(rule)
+                        .map(|s| render_description(&s, schema)),
+                });
+            }
+        }
+    }
+    governing
+}
+
 fn build_rules(rules: &[crate::linkml::ClassRule], schema: &SchemaDefinition) -> Vec<RuleInClass> {
     rules
         .iter()
@@ -3096,6 +3146,92 @@ mod tests {
             !prop.characteristics.iter().any(|c| c == "Reflexive"),
             "unset characteristics must not render; got {:?}",
             prop.characteristics
+        );
+    }
+
+    #[test]
+    fn slot_card_lists_the_rules_that_govern_the_slot() {
+        use crate::linkml::{
+            ClassDefinition, ClassRule, RuleConditions, SchemaDefinition, SlotCondition,
+            SlotDefinition, ValuePresence,
+        };
+        // A slot named in a class rule shows that rule on its card, naming
+        // the class — so a reader on the slot sees why it is conditional.
+        let mut schema = SchemaDefinition::new("approvals");
+        schema
+            .slots
+            .insert("verdict".to_string(), SlotDefinition::new("verdict"));
+        schema.slots.insert(
+            "approved_by".to_string(),
+            SlotDefinition::new("approved_by"),
+        );
+        // `image` is a slot no rule references — it must carry zero rules.
+        schema
+            .slots
+            .insert("image".to_string(), SlotDefinition::new("image"));
+        let mut cls = ClassDefinition::new("ImageApproval");
+        cls.slots = vec!["verdict".into(), "approved_by".into(), "image".into()];
+        cls.rules = vec![ClassRule {
+            title: None,
+            description: None,
+            preconditions: Some(RuleConditions {
+                any_of: Vec::new(),
+                slot_conditions: std::collections::BTreeMap::from([(
+                    "verdict".to_string(),
+                    SlotCondition {
+                        equals_string: Some("approved".to_string()),
+                        ..Default::default()
+                    },
+                )]),
+            }),
+            postconditions: Some(RuleConditions {
+                any_of: Vec::new(),
+                slot_conditions: std::collections::BTreeMap::from([(
+                    "approved_by".to_string(),
+                    SlotCondition {
+                        value_presence: Some(ValuePresence::Present),
+                        ..Default::default()
+                    },
+                )]),
+            }),
+        }];
+        schema.classes.insert("ImageApproval".to_string(), cls);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let approved_by = data
+            .slot_data
+            .iter()
+            .find(|s| s.id == "approved_by")
+            .expect("approved_by slot card");
+        assert_eq!(
+            approved_by.governing_rules.len(),
+            1,
+            "approved_by is governed by one rule"
+        );
+        assert_eq!(approved_by.governing_rules[0].class.id, "ImageApproval");
+        let summary = approved_by.governing_rules[0]
+            .summary
+            .as_deref()
+            .expect("a rendered rule summary");
+        assert!(
+            summary.contains("approved_by") && summary.contains("present"),
+            "summary should name the slot and its consequence; got: {summary}"
+        );
+
+        // The trigger slot also lists the rule (it's a participant).
+        let verdict = data.slot_data.iter().find(|s| s.id == "verdict").unwrap();
+        assert_eq!(
+            verdict.governing_rules.len(),
+            1,
+            "verdict triggers the rule"
+        );
+
+        // A slot no rule references carries none — pins the membership test
+        // (a slot is included only when a rule actually names it).
+        let image = data.slot_data.iter().find(|s| s.id == "image").unwrap();
+        assert!(
+            image.governing_rules.is_empty(),
+            "a slot no rule references must list no rules"
         );
     }
 

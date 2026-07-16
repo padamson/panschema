@@ -136,6 +136,18 @@
             </dd>
         </div>
 {%- endif %}
+{%- if !governing_rules.is_empty() %}
+        <div class="detail-row">
+            <dt>Rules</dt>
+            <dd>
+                <ul class="governing-rules">
+{%- for rule in governing_rules %}
+                    <li><a href="#class-{{ rule.class.id }}" class="entity-link">{{ rule.class.label }}</a>{% match rule.summary %}{% when Some with (s) %} — {{ s|safe }}{% when None %}{% endmatch %}</li>
+{%- endfor %}
+                </ul>
+            </dd>
+        </div>
+{%- endif %}
     </div>
 </article>
 <style>
