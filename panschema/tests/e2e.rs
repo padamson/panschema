@@ -1560,6 +1560,117 @@ fn e2e_happy_path() {
     });
 }
 
+/// Clicking a graph node pins its card open (persistent, with a × close
+/// button); the old top-right details panel is gone; the × closes the card
+/// but keeps the node selected. Drives a *real* click at the node's canvas
+/// position (`node_canvas_pos`) — nodes are canvas-drawn, so there's no DOM
+/// element to target.
+#[test]
+fn e2e_click_pins_node_card_keeping_selection() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let output_dir = generate_docs();
+        let port = find_available_port();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("goto");
+
+        // The old details panel must be gone entirely.
+        let details = page.locator("#graph-details-panel").await;
+        assert_eq!(
+            details.count().await.expect("count"),
+            0,
+            "the details panel should be removed"
+        );
+
+        // Let the wasm graph load and settle a layout, then click node 0 at
+        // its canvas position through the real click handler.
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        let clicked = page
+            .evaluate_value(
+                r#"(function(){
+                    var viz = window.__panschema_viz;
+                    if (!viz || typeof viz.node_canvas_pos !== 'function') return 'no-viz';
+                    var pos = viz.node_canvas_pos(0);
+                    if (!pos || pos.length < 2) return 'no-pos';
+                    var canvas = document.getElementById('graph-canvas');
+                    var rect = canvas.getBoundingClientRect();
+                    var dpr = window.devicePixelRatio || 1;
+                    var x = rect.left + pos[0] / dpr, y = rect.top + pos[1] / dpr;
+                    canvas.dispatchEvent(new MouseEvent('click', {clientX: x, clientY: y, bubbles: true}));
+                    return 'clicked';
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert!(clicked.contains("clicked"), "expected to click a node; got: {clicked}");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // The card is now pinned (persistent) with a visible close button.
+        let card = page.locator("#graph-hover-card").await;
+        let card_class = card
+            .get_attribute("class")
+            .await
+            .expect("class")
+            .unwrap_or_default();
+        assert!(
+            card_class.contains("graph-hover-pinned"),
+            "card should be pinned; class = {card_class}"
+        );
+        assert!(card.is_visible().await.expect("visible"), "pinned card should be visible");
+        assert!(
+            page.locator("#graph-hover-close")
+                .await
+                .is_visible()
+                .await
+                .expect("close visible"),
+            "the close button should show when pinned"
+        );
+        let sel = page
+            .evaluate_value("window.__panschema_viz.selected_node_index()")
+            .await
+            .unwrap_or_default();
+        assert!(!sel.contains("-1"), "a node should be selected; got {sel}");
+
+        // × closes the card but keeps the node selected.
+        page.locator("#graph-hover-close")
+            .await
+            .click(None)
+            .await
+            .expect("click close");
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(
+            !page
+                .locator("#graph-hover-card")
+                .await
+                .is_visible()
+                .await
+                .expect("visible after close"),
+            "card should hide after ×"
+        );
+        let sel_after = page
+            .evaluate_value("window.__panschema_viz.selected_node_index()")
+            .await
+            .unwrap_or_default();
+        assert!(
+            !sel_after.contains("-1"),
+            "node should stay selected after ×; got {sel_after}"
+        );
+
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
 // Proves the layout auto-default end-to-end (feature 09 slice 9): an
 // is_a-heavy schema, with no layout pinned and no persisted choice,
 // must initialize the picker to `hierarchical` via the wasm density

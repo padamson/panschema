@@ -472,6 +472,20 @@ impl Visualization {
         self.selected_node_index()
     }
 
+    /// Canvas-space `[x, y]` of node `idx`, or an empty array when the
+    /// index is out of range. Lets a test dispatch a real pointer event at a
+    /// node (hover/click/pin) without guessing screen coordinates — the
+    /// graph is canvas-drawn, so nodes have no DOM position to target.
+    pub fn node_canvas_pos(&self, idx: usize) -> Vec<f32> {
+        match self.simulation.nodes.get(idx) {
+            Some(n) => {
+                let (cx, cy) = self.renderer.world_to_canvas(n.x, n.y);
+                vec![cx, cy]
+            }
+            None => Vec::new(),
+        }
+    }
+
     /// Get the currently selected node index (-1 if none)
     pub fn selected_node_index(&self) -> i32 {
         self.interaction

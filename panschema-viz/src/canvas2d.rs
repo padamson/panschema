@@ -259,6 +259,13 @@ impl Canvas2DRenderer {
         self.camera.update_animation();
     }
 
+    /// Canvas-space position of a world point, using the same camera
+    /// transform that places the node. Exposed so a test can dispatch a
+    /// real pointer event at a node without guessing screen coordinates.
+    pub(crate) fn world_to_canvas(&self, x: f32, y: f32) -> (f32, f32) {
+        self.camera.world_to_canvas(x, y)
+    }
+
     /// Render the simulation state
     #[allow(clippy::too_many_arguments)]
     pub fn render(
