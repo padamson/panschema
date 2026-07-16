@@ -102,42 +102,13 @@
             <span id="graph-info-label"></span>
         </div>
 
-        {# Ephemeral hover card — shown while the cursor is over a
-           node or edge; hides on hover-out. Separate from the
-           persistent details panel below so clicking pins a view
-           without losing the hover affordance. #}
+        {# Node/edge card. Ephemeral while hovering (tracks the cursor,
+           hides on hover-out); clicking a node pins it open (persistent,
+           with a close button) — the pinned card is the selected node's
+           full reused doc card. #}
         <div class="graph-hover-card" id="graph-hover-card" style="display: none;" role="tooltip" aria-hidden="true">
+            <button class="graph-hover-close" id="graph-hover-close" type="button" title="Close (keeps the node selected)" aria-label="Close">×</button>
             <div class="graph-hover-content" id="graph-hover-content"></div>
-        </div>
-
-        {# Details panel (shown when a node is selected) #}
-        <div class="graph-details-panel" id="graph-details-panel" style="display: none;">
-            <div class="graph-details-header">
-                <span class="graph-details-title" id="graph-details-title">Node Details</span>
-                <button class="graph-details-close" id="graph-details-close" title="Close (Escape)">×</button>
-            </div>
-            <div class="graph-details-content" id="graph-details-content">
-                <div class="graph-detail-row">
-                    <span class="graph-detail-label">Label:</span>
-                    <span class="graph-detail-value" id="graph-detail-label"></span>
-                </div>
-                <div class="graph-detail-row">
-                    <span class="graph-detail-label">Type:</span>
-                    <span class="graph-detail-value" id="graph-detail-type"></span>
-                </div>
-                <div class="graph-detail-row">
-                    <span class="graph-detail-label">ID:</span>
-                    <span class="graph-detail-value graph-detail-id" id="graph-detail-id"></span>
-                </div>
-                <div class="graph-detail-row" id="graph-detail-fixed-row">
-                    <span class="graph-detail-label">Fixed:</span>
-                    <span class="graph-detail-value" id="graph-detail-fixed"></span>
-                </div>
-                <div class="graph-detail-row" id="graph-detail-connections-row">
-                    <span class="graph-detail-label">Connections:</span>
-                    <span class="graph-detail-value" id="graph-detail-connections"></span>
-                </div>
-            </div>
         </div>
     </div>
 </section>
@@ -472,80 +443,6 @@
 }
 
 /* Details panel */
-.graph-details-panel {
-    position: absolute;
-    top: var(--spacing-md, 12px);
-    right: var(--spacing-md, 12px);
-    width: 280px;
-    max-width: calc(100% - 24px);
-    background: var(--color-bg-secondary, #2d2d44);
-    border: 1px solid var(--color-border, #374151);
-    border-radius: var(--radius-md, 6px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-    z-index: 20;
-    overflow: hidden;
-}
-
-.graph-details-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: var(--spacing-sm, 8px) var(--spacing-md, 12px);
-    background: var(--color-bg-tertiary, #1a1a2e);
-    border-bottom: 1px solid var(--color-border, #374151);
-}
-
-.graph-details-title {
-    font-size: var(--font-size-sm, 13px);
-    font-weight: 600;
-    color: var(--color-text, #e5e7eb);
-}
-
-.graph-details-close {
-    background: none;
-    border: none;
-    color: var(--color-text-muted, #9ca3af);
-    font-size: 18px;
-    cursor: pointer;
-    padding: 0 4px;
-    line-height: 1;
-    transition: color 0.2s;
-}
-
-.graph-details-close:hover {
-    color: var(--color-text, #e5e7eb);
-}
-
-.graph-details-content {
-    padding: var(--spacing-sm, 8px) var(--spacing-md, 12px);
-}
-
-.graph-detail-row {
-    display: flex;
-    margin-bottom: var(--spacing-xs, 4px);
-    font-size: var(--font-size-sm, 13px);
-}
-
-.graph-detail-row:last-child {
-    margin-bottom: 0;
-}
-
-.graph-detail-label {
-    color: var(--color-text-muted, #9ca3af);
-    min-width: 90px;
-    flex-shrink: 0;
-}
-
-.graph-detail-value {
-    color: var(--color-text, #e5e7eb);
-    word-break: break-word;
-}
-
-.graph-detail-id {
-    font-family: var(--font-mono, monospace);
-    font-size: var(--font-size-xs, 11px);
-    color: var(--color-text-muted, #9ca3af);
-}
 
 /* Ephemeral hover card — positioned at the cursor via JS. The card
    intercepts no pointer events so hovering its own edge doesn't
@@ -576,6 +473,38 @@
     max-height: 80vh;
     overflow-y: auto;
     padding: 12px 14px;
+}
+
+/* Pinned card: clicking a node keeps its card open. The pin state makes
+   the card interactive (so the close button is clickable — the hovering
+   card is otherwise pointer-events:none) and reveals the close button.
+   Closing keeps the node selected. */
+.graph-hover-card.graph-hover-pinned {
+    pointer-events: auto;
+}
+
+.graph-hover-close {
+    display: none;
+    position: absolute;
+    top: 4px;
+    right: 6px;
+    z-index: 1;
+    background: none;
+    border: none;
+    color: var(--color-text-muted, #9ca3af);
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 4px;
+    transition: color 0.2s;
+}
+
+.graph-hover-card.graph-hover-pinned .graph-hover-close {
+    display: block;
+}
+
+.graph-hover-close:hover {
+    color: var(--color-text, #e5e7eb);
 }
 
 .graph-hover-content {
@@ -810,11 +739,17 @@
     // hover target is unchanged across frames.
     const hoverCard = document.getElementById('graph-hover-card');
     const hoverContent = document.getElementById('graph-hover-content');
+    const hoverClose = document.getElementById('graph-hover-close');
+    // Index of the node whose card is pinned open by a click (-1 when
+    // none). A pinned card is persistent: it ignores ephemeral hover and
+    // survives hover-out until the user unpins it or clicks another node.
+    let pinnedNodeIndex = -1;
     // Cache the last-rendered (kind, idx) so mousemove events that
     // don't change the hover target don't re-stamp the DOM.
     let lastHoverKey = null;
 
     function hideHoverCard() {
+        if (pinnedNodeIndex >= 0) return;  // a pinned card stays until unpinned
         if (hoverCard && hoverCard.style.display !== 'none') {
             hoverCard.style.display = 'none';
             hoverCard.setAttribute('aria-hidden', 'true');
@@ -905,6 +840,9 @@
 
     function updateHoverCard(clientX, clientY) {
         if (!hoverCard || !viz) return;
+        // A pinned card wins: ignore ephemeral hover while one is open so a
+        // stray mouse move can't replace or dismiss the pinned view.
+        if (pinnedNodeIndex >= 0) return;
         // Only the 2D path has WASM-side edge hit-test today; 3D mode
         // populates the hover card from node hover only.
         const nodeIdx = (typeof viz.hovered_node_index === 'function')
@@ -917,9 +855,8 @@
         else if (edgeIdx >= 0) { kind = 'edge'; idx = edgeIdx; }
         else { hideHoverCard(); return; }
 
-        // If the user has already click-selected this same node, the
-        // persistent details panel is showing the same content — the
-        // ephemeral hover card would be redundant. Skip rendering it.
+        // The selected node's card is (or was) pinned; don't also flash an
+        // ephemeral hover for it.
         if (kind === 'node' && idx === selectedNodeIndex) {
             hideHoverCard();
             return;
@@ -1001,61 +938,53 @@
         hoverCard.style.top  = Math.max(0, top) + 'px';
     }
 
-    // Details panel elements
-    const detailsPanel = document.getElementById('graph-details-panel');
-    const detailsClose = document.getElementById('graph-details-close');
-    const detailLabel = document.getElementById('graph-detail-label');
-    const detailType = document.getElementById('graph-detail-type');
-    const detailId = document.getElementById('graph-detail-id');
-    const detailFixed = document.getElementById('graph-detail-fixed');
-    const detailConnections = document.getElementById('graph-detail-connections');
+    // Node idx's card markup for the hover / pinned card, or null. Reuses
+    // the rendered HTML doc card when present (one source of truth), else
+    // the thin compact fallback.
+    function nodeCardMarkup(idx) {
+        let d;
+        try { d = JSON.parse(viz.get_node_details(idx)); } catch (e) { return null; }
+        if (!d.id) return null;
+        const cardEl = nodeCardElement(d.id);
+        if (cardEl) return { html: cardEl.innerHTML, isFull: true };
+        return { html: buildCompactNodeHover(d), isFull: false };
+    }
+
+    // Pin node idx's card open at (clientX, clientY): persistent, with a
+    // close button, ignoring ephemeral hover. The node stays selected.
+    function pinNode(idx, clientX, clientY) {
+        const markup = nodeCardMarkup(idx);
+        if (!markup) return;
+        hoverContent.innerHTML = markup.html;
+        hoverCard.classList.toggle('graph-hover-full', markup.isFull);
+        hoverCard.classList.add('graph-hover-pinned');
+        hoverCard.style.display = 'block';
+        hoverCard.setAttribute('aria-hidden', 'false');
+        pinnedNodeIndex = idx;
+        lastHoverKey = null;
+        // Same viewport-relative placement rule as the hover card.
+        const r = hoverCard.getBoundingClientRect();
+        const w = r.width || 240, h = r.height || 80, margin = 14;
+        const flipX = (clientX + margin + w) > window.innerWidth;
+        const flipY = (clientY + margin + h) > window.innerHeight;
+        hoverCard.style.left = Math.max(0, flipX ? clientX - margin - w : clientX + margin) + 'px';
+        hoverCard.style.top  = Math.max(0, flipY ? clientY - margin - h : clientY + margin) + 'px';
+    }
+
+    // Close the pinned card but keep the node selected (highlighted). Click
+    // the node again to reopen; click empty space or Escape to deselect.
+    function unpinCard() {
+        if (pinnedNodeIndex < 0) return;
+        pinnedNodeIndex = -1;
+        hoverCard.classList.remove('graph-hover-pinned');
+        hideHoverCard();
+    }
 
     // LocalStorage key for label preferences
     const LABEL_PREFS_KEY = 'panschema-label-prefs';
 
-    // Show the details panel with node information
-    function showDetailsPanel(nodeIndex) {
-        if (!viz || nodeIndex < 0) {
-            hideDetailsPanel();
-            return;
-        }
-
-        try {
-            const detailsJson = viz.get_node_details(nodeIndex);
-            const details = JSON.parse(detailsJson);
-
-            if (!details.id) {
-                hideDetailsPanel();
-                return;
-            }
-
-            detailLabel.textContent = details.label || 'Unknown';
-            detailType.textContent = details.type || 'Unknown';
-            detailId.textContent = details.id;
-            detailFixed.textContent = details.isFixed ? 'Yes (pinned)' : 'No';
-
-            // Format connections list
-            if (details.connections && details.connections.length > 0) {
-                detailConnections.textContent = details.connections.length + ' nodes';
-                detailConnections.title = details.connections.join(', ');
-            } else {
-                detailConnections.textContent = 'None';
-                detailConnections.title = '';
-            }
-
-            detailsPanel.style.display = 'block';
-        } catch (e) {
-            console.warn('Failed to get node details:', e);
-            hideDetailsPanel();
-        }
-    }
-
-    // Hide the details panel
-    function hideDetailsPanel() {
-        detailsPanel.style.display = 'none';
-    }
-
-    // Deselect current node and hide details
+    // Deselect the current node: clear the pin, the selection, and the
+    // canvas focus/highlight.
     function deselectNode() {
         if (viz) {
             if (typeof viz.deselect === 'function') {
@@ -1066,7 +995,9 @@
             }
         }
         selectedNodeIndex = -1;
-        hideDetailsPanel();
+        pinnedNodeIndex = -1;
+        hoverCard.classList.remove('graph-hover-pinned');
+        hideHoverCard();
     }
 
     // Save label preferences to localStorage
@@ -1976,17 +1907,17 @@
             if (!is3D && typeof viz.select_at === 'function') {
                 selectedNodeIndex = viz.select_at(mouseX * dpr, mouseY * dpr);
                 if (selectedNodeIndex >= 0) {
-                    showDetailsPanel(selectedNodeIndex);
+                    pinNode(selectedNodeIndex, e.clientX, e.clientY);
                 } else {
-                    hideDetailsPanel();
+                    deselectNode();
                 }
             } else if (is3D && typeof viz.select_at === 'function') {
                 // 3D selection uses screen coordinates
                 selectedNodeIndex = viz.select_at(mouseX * dpr, mouseY * dpr, canvas.width, canvas.height);
                 if (selectedNodeIndex >= 0) {
-                    showDetailsPanel(selectedNodeIndex);
+                    pinNode(selectedNodeIndex, e.clientX, e.clientY);
                 } else {
-                    hideDetailsPanel();
+                    deselectNode();
                 }
             }
         });
@@ -2161,10 +2092,6 @@
                         viz.toggle_fixed(draggingNodeIndex);
                     }
                     viz.end_drag(false);
-                    // Refresh details panel if this node is selected
-                    if (selectedNodeIndex === draggingNodeIndex) {
-                        showDetailsPanel(selectedNodeIndex);
-                    }
                 } else {
                     // Shift+drag-release pins at new position; plain release rejoins sim
                     viz.end_drag(e.shiftKey && dragMoved);
@@ -2213,9 +2140,9 @@
             }
         });
 
-        // Details panel close button
-        detailsClose.addEventListener('click', () => {
-            deselectNode();
+        // Pinned-card close button: unpin but keep the node selected.
+        hoverClose.addEventListener('click', () => {
+            unpinCard();
         });
 
         // Keyboard shortcuts
@@ -2260,8 +2187,6 @@
             if (e.key === 'Delete' || e.key === 'Backspace') {
                 if (viz && selectedNodeIndex >= 0 && typeof viz.unfix_node === 'function') {
                     viz.unfix_node(selectedNodeIndex);
-                    // Update details panel if showing
-                    showDetailsPanel(selectedNodeIndex);
                 }
                 return;
             }
