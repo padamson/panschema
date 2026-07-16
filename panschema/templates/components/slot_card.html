@@ -142,7 +142,7 @@
             <dd>
                 <ul class="governing-rules">
 {%- for rule in governing_rules %}
-                    <li><a href="#class-{{ rule.class.id }}" class="entity-link">{{ rule.class.label }}</a>{% match rule.summary %}{% when Some with (s) %} — {{ s|safe }}{% when None %}{% endmatch %}</li>
+                    <li data-participants="{{ rule.participants }}"><a href="#class-{{ rule.class.id }}" class="entity-link">{{ rule.class.label }}</a>{% match rule.summary %}{% when Some with (s) %} — {{ s|safe }}{% when None %}{% endmatch %}</li>
 {%- endfor %}
                 </ul>
             </dd>

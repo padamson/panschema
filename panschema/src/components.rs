@@ -707,6 +707,7 @@ impl ComponentRenderer {
             summary: Some(
                 "when <code>age</code> &gt;= 18, then <code>email</code> is required".to_string(),
             ),
+            participants: "class:person slot:age slot:email".to_string(),
         }];
         let class_unique_keys = vec![panschema::html_writer::UniqueKeyInClass {
             name: "name_key".to_string(),

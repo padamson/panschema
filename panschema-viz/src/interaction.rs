@@ -44,6 +44,10 @@ pub struct InteractionState {
     pub focused_neighbors: HashSet<usize>,
     /// Set of hidden node types (for filtering)
     pub hidden_types: HashSet<String>,
+    /// Nodes emphasized transiently while the user hovers a rule (its
+    /// trigger/governed slots and owning class). Empty when nothing is
+    /// hovered; drawn with a highlight ring, dimming the rest.
+    pub highlighted_nodes: HashSet<usize>,
 }
 
 impl InteractionState {
@@ -189,6 +193,16 @@ impl InteractionState {
     /// Get the currently focused node.
     pub fn focused_node(&self) -> Option<usize> {
         self.focused_node
+    }
+
+    /// Replace the highlighted-node set (a rule's participant nodes).
+    pub fn set_highlight(&mut self, nodes: impl IntoIterator<Item = usize>) {
+        self.highlighted_nodes = nodes.into_iter().collect();
+    }
+
+    /// Clear the highlight (hover ended).
+    pub fn clear_highlight(&mut self) {
+        self.highlighted_nodes.clear();
     }
 
     /// Hide a node type from display.

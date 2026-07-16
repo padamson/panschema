@@ -268,6 +268,7 @@ impl Canvas2DRenderer {
 
     /// Render the simulation state
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &self,
         sim: &CpuSimulation,
@@ -279,6 +280,7 @@ impl Canvas2DRenderer {
         focused_node: Option<usize>,
         focused_connected: &HashSet<usize>,
         hidden_nodes: &HashSet<usize>,
+        highlighted_nodes: &HashSet<usize>,
         show_arrows: bool,
     ) {
         // Clear canvas
@@ -308,6 +310,7 @@ impl Canvas2DRenderer {
             focused_node,
             focused_connected,
             hidden_nodes,
+            highlighted_nodes,
         );
 
         // Draw labels on top (if enabled or hovered)
@@ -814,6 +817,7 @@ impl Canvas2DRenderer {
 
     /// Render all nodes
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn render_nodes(
         &self,
         nodes: &[SimNode],
@@ -822,6 +826,7 @@ impl Canvas2DRenderer {
         focused_node: Option<usize>,
         focused_connected: &HashSet<usize>,
         hidden_nodes: &HashSet<usize>,
+        highlighted_nodes: &HashSet<usize>,
     ) {
         for (i, node) in nodes.iter().enumerate() {
             // Skip hidden nodes
@@ -855,6 +860,25 @@ impl Canvas2DRenderer {
                     )
                     .ok();
                 self.ctx.set_stroke_style_str("rgba(59, 130, 246, 1.0)"); // Blue selection ring
+                self.ctx.set_line_width(3.0);
+                self.ctx.stroke();
+            }
+
+            // Rule-participant highlight ring (amber), shown while a rule
+            // entry in a card is hovered. Distinct hue from the blue
+            // selection ring so both can coexist.
+            if highlighted_nodes.contains(&i) {
+                self.ctx.begin_path();
+                self.ctx
+                    .arc(
+                        cx as f64,
+                        cy as f64,
+                        (radius + 4.0) as f64,
+                        0.0,
+                        std::f64::consts::TAU,
+                    )
+                    .ok();
+                self.ctx.set_stroke_style_str("rgba(251, 191, 36, 1.0)"); // Amber
                 self.ctx.set_line_width(3.0);
                 self.ctx.stroke();
             }

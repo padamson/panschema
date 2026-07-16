@@ -124,7 +124,7 @@
             <dd>
                 <ul class="rule-list">
 {%- for rule in rules %}
-                    <li class="rule-entry">
+                    <li class="rule-entry" data-participants="{{ rule.participants }}">
 {%- if let Some(title) = rule.title.as_deref() %}
                         <div class="rule-title">{{ title }}</div>
 {%- endif %}

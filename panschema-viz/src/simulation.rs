@@ -167,8 +167,8 @@ pub struct CpuSimulation {
     pub nodes: Vec<SimNode>,
     pub edges: Vec<SimEdge>,
     pub config: SimulationConfig,
-    /// Mapping from node ID to index (for future interactivity)
-    #[allow(dead_code)]
+    /// Mapping from node ID (`"slot:verdict"`) to index, for id-based
+    /// lookups like rule-participant highlighting (see `index_of`).
     node_id_to_index: std::collections::HashMap<String, usize>,
 }
 
@@ -260,6 +260,11 @@ impl CpuSimulation {
             config,
             node_id_to_index,
         }
+    }
+
+    /// Index of the node with `id` (e.g. `"slot:verdict"`), if present.
+    pub fn index_of(&self, id: &str) -> Option<usize> {
+        self.node_id_to_index.get(id).copied()
     }
 
     /// Configure anisotropic axial centering so the post-settle bounding
@@ -688,6 +693,19 @@ mod tests {
 
         assert_eq!(sim.nodes.len(), 2);
         assert_eq!(sim.edges.len(), 1);
+    }
+
+    #[test]
+    fn index_of_maps_each_node_id_to_its_position() {
+        let graph = make_test_graph();
+        let sim = CpuSimulation::from_graph_data(&graph);
+
+        // Node order is preserved, so ids map to their input positions —
+        // this is what highlight-on-hover relies on to turn a rule's
+        // participant ids into node indices.
+        assert_eq!(sim.index_of("a"), Some(0));
+        assert_eq!(sim.index_of("b"), Some(1));
+        assert_eq!(sim.index_of("missing"), None);
     }
 
     #[test]

@@ -1671,6 +1671,206 @@ fn e2e_click_pins_node_card_keeping_selection() {
     });
 }
 
+/// A pinned card can be dragged by its handle to a new position, so it can
+/// be moved off nodes the reader wants to inspect. Pins node 0, drags the
+/// `#graph-hover-drag` grip, and asserts the card's top-left moved to the
+/// handler-computed target (drag offset applied, viewport-clamped).
+#[test]
+fn e2e_pinned_card_is_draggable_by_its_handle() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let output_dir = generate_docs();
+        let port = find_available_port();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("goto");
+
+        // Let the wasm graph settle, then pin node 0 through the click handler.
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        let clicked = page
+            .evaluate_value(
+                r#"(function(){
+                    var viz = window.__panschema_viz;
+                    if (!viz || typeof viz.node_canvas_pos !== 'function') return 'no-viz';
+                    var pos = viz.node_canvas_pos(0);
+                    if (!pos || pos.length < 2) return 'no-pos';
+                    var canvas = document.getElementById('graph-canvas');
+                    var rect = canvas.getBoundingClientRect();
+                    var dpr = window.devicePixelRatio || 1;
+                    var x = rect.left + pos[0] / dpr, y = rect.top + pos[1] / dpr;
+                    canvas.dispatchEvent(new MouseEvent('click', {clientX: x, clientY: y, bubbles: true}));
+                    return 'clicked';
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert!(clicked.contains("clicked"), "expected to pin a node; got: {clicked}");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // Drag the handle to a fixed in-viewport target and report the
+        // before/after card position plus the handler-expected target.
+        let result = page
+            .evaluate_value(
+                r#"(function(){
+                    var card = document.getElementById('graph-hover-card');
+                    var drag = document.getElementById('graph-hover-drag');
+                    if (!card.classList.contains('graph-hover-pinned')) return 'not-pinned';
+                    var hr = drag.getBoundingClientRect();
+                    var cr0 = card.getBoundingClientRect();
+                    var mdX = hr.left + 4, mdY = hr.top + 4;
+                    var offX = mdX - cr0.left, offY = mdY - cr0.top;
+                    drag.dispatchEvent(new MouseEvent('mousedown', {clientX: mdX, clientY: mdY, bubbles: true}));
+                    var tX = 300, tY = 260;
+                    document.dispatchEvent(new MouseEvent('mousemove', {clientX: tX, clientY: tY, bubbles: true}));
+                    document.dispatchEvent(new MouseEvent('mouseup', {clientX: tX, clientY: tY, bubbles: true}));
+                    var cr1 = card.getBoundingClientRect();
+                    var expLeft = Math.min(Math.max(0, tX - offX), window.innerWidth - card.offsetWidth);
+                    var expTop = Math.min(Math.max(0, tY - offY), window.innerHeight - card.offsetHeight);
+                    return [cr0.left, cr0.top, cr1.left, cr1.top, expLeft, expTop].join(',');
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        let nums: Vec<f64> = result
+            .trim_matches('"')
+            .split(',')
+            .filter_map(|s| s.trim().parse::<f64>().ok())
+            .collect();
+        assert_eq!(nums.len(), 6, "expected 6 coords; got: {result}");
+        let (b_left, b_top, a_left, a_top, exp_left, exp_top) =
+            (nums[0], nums[1], nums[2], nums[3], nums[4], nums[5]);
+        assert!(
+            (a_left - exp_left).abs() <= 2.0 && (a_top - exp_top).abs() <= 2.0,
+            "card should land at the drag target ({exp_left},{exp_top}); got ({a_left},{a_top})"
+        );
+        assert!(
+            (a_left - b_left).abs() > 20.0 || (a_top - b_top).abs() > 20.0,
+            "the card should have visibly moved; before ({b_left},{b_top}) after ({a_left},{a_top})"
+        );
+
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
+/// Hovering a rule entry in a slot card highlights the rule's participant
+/// nodes on the graph (its trigger/governed slots and owning class), and
+/// moving off clears it. Asserts the highlight *logic* via the viz state
+/// (canvas pixels aren't readable); the amber ring is the visual layer.
+#[test]
+fn e2e_hovering_a_rule_entry_highlights_participant_nodes() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let output_dir = generate_docs_for("tests/fixtures/rules_graph.yaml");
+        let port = find_available_port();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("goto");
+
+        // The slot card's rule entry carries the participant node ids.
+        let attr = page
+            .locator("#slot-approved_by [data-participants]")
+            .await
+            .get_attribute("data-participants")
+            .await
+            .expect("attr")
+            .unwrap_or_default();
+        assert!(
+            attr.contains("slot:approved_by") && attr.contains("class:ImageApproval"),
+            "the rule entry should carry its participant ids; got: {attr}"
+        );
+
+        // Let the wasm graph initialize.
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+
+        // Hovering the rule entry highlights its participant nodes.
+        let count = page
+            .evaluate_value(
+                r#"(function(){
+                    var el = document.querySelector('#slot-approved_by [data-participants]');
+                    if (!el) return 'no-el';
+                    el.dispatchEvent(new MouseEvent('mouseover', {bubbles: true}));
+                    var viz = window.__panschema_viz;
+                    return (viz && typeof viz.highlighted_node_count === 'function')
+                        ? String(viz.highlighted_node_count()) : 'no-viz';
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        let n: i32 = count.trim().trim_matches('"').parse().unwrap_or(0);
+        assert!(
+            n >= 2,
+            "hovering the rule should highlight its participant nodes; got count={count}"
+        );
+
+        // The highlight must actually paint: after a render frame, the 2D
+        // canvas should contain amber ring pixels (state alone isn't enough —
+        // the render loop has to pick up the highlight).
+        let amber = page
+            .evaluate_value(
+                r#"(async function(){
+                    var el = document.querySelector('#slot-approved_by [data-participants]');
+                    el.dispatchEvent(new MouseEvent('mouseover', {bubbles: true}));
+                    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+                    var canvas = document.getElementById('graph-canvas');
+                    var ctx = canvas.getContext('2d');
+                    if (!ctx) return 'no-2d-ctx';
+                    var d = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+                    var c = 0;
+                    for (var i = 0; i < d.length; i += 4) {
+                        if (d[i] > 230 && d[i+1] > 160 && d[i+1] < 215 && d[i+2] < 70) c++;
+                    }
+                    return String(c);
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        let amber_px: i64 = amber.trim().trim_matches('"').parse().unwrap_or(0);
+        assert!(
+            amber_px > 0,
+            "the amber highlight ring should paint on the canvas; amber pixels={amber}"
+        );
+
+        // Moving off the entry clears the highlight.
+        let cleared = page
+            .evaluate_value(
+                r#"(function(){
+                    var el = document.querySelector('#slot-approved_by [data-participants]');
+                    el.dispatchEvent(new MouseEvent('mouseout', {bubbles: true, relatedTarget: document.body}));
+                    return String(window.__panschema_viz.highlighted_node_count());
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert_eq!(
+            cleared.trim().trim_matches('"'),
+            "0",
+            "moving off the entry should clear the highlight; got {cleared}"
+        );
+
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
 // Proves the layout auto-default end-to-end (feature 09 slice 9): an
 // is_a-heavy schema, with no layout pinned and no persisted choice,
 // must initialize the picker to `hierarchical` via the wasm density

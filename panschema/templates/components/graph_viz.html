@@ -107,6 +107,7 @@
            with a close button) — the pinned card is the selected node's
            full reused doc card. #}
         <div class="graph-hover-card" id="graph-hover-card" style="display: none;" role="tooltip" aria-hidden="true">
+            <div class="graph-hover-drag" id="graph-hover-drag" title="Drag to reposition" aria-hidden="true"><span class="graph-hover-grip">⠿</span> drag</div>
             <button class="graph-hover-close" id="graph-hover-close" type="button" title="Close (keeps the node selected)" aria-label="Close">×</button>
             <div class="graph-hover-content" id="graph-hover-content"></div>
         </div>
@@ -483,6 +484,40 @@
     pointer-events: auto;
 }
 
+/* Drag handle: only a pinned card is repositionable, so the grip bar
+   shows solely in the pinned state. Dragging the handle (not the card
+   body) moves the card, so links and rule entries inside stay clickable
+   and hoverable. */
+.graph-hover-drag {
+    display: none;
+}
+
+.graph-hover-card.graph-hover-pinned .graph-hover-drag {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    cursor: grab;
+    user-select: none;
+    color: var(--color-text-muted, #9ca3af);
+    font-size: var(--font-size-xs, 11px);
+    margin: -4px 20px 6px -4px;
+    padding: 2px 4px 6px 4px;
+    border-bottom: 1px solid var(--color-border, #374151);
+}
+
+.graph-hover-card.graph-hover-full.graph-hover-pinned .graph-hover-drag {
+    margin: -8px 20px 8px -10px;
+    padding: 4px 4px 8px 10px;
+}
+
+.graph-hover-card.graph-hover-pinned .graph-hover-drag.dragging {
+    cursor: grabbing;
+}
+
+.graph-hover-grip {
+    letter-spacing: -1px;
+}
+
 .graph-hover-close {
     display: none;
     position: absolute;
@@ -740,6 +775,7 @@
     const hoverCard = document.getElementById('graph-hover-card');
     const hoverContent = document.getElementById('graph-hover-content');
     const hoverClose = document.getElementById('graph-hover-close');
+    const hoverDrag = document.getElementById('graph-hover-drag');
     // Index of the node whose card is pinned open by a click (-1 when
     // none). A pinned card is persistent: it ignores ephemeral hover and
     // survives hover-out until the user unpins it or clicks another node.
@@ -1922,6 +1958,25 @@
             }
         });
 
+        // Highlight a rule's participant nodes on the graph while the cursor
+        // is over that rule's entry in a card (works for the doc slot/class
+        // cards and the reused hover/pinned graph card, via delegation). The
+        // ids come from the `data-participants` attribute the writer emits.
+        document.addEventListener('mouseover', (e) => {
+            const el = e.target.closest && e.target.closest('[data-participants]');
+            if (el && viz && typeof viz.highlight_nodes === 'function') {
+                viz.highlight_nodes(el.getAttribute('data-participants') || '');
+            }
+        });
+        document.addEventListener('mouseout', (e) => {
+            const el = e.target.closest && e.target.closest('[data-participants]');
+            if (!el || !viz || typeof viz.clear_highlight !== 'function') return;
+            // Ignore moves to a child within the same entry.
+            const to = e.relatedTarget;
+            if (to && to.closest && to.closest('[data-participants]') === el) return;
+            viz.clear_highlight();
+        });
+
         // Hover detection for labels and cursor changes
         canvas.addEventListener('mousemove', (e) => {
             if (!isDragging && viz) {
@@ -2144,6 +2199,45 @@
         hoverClose.addEventListener('click', () => {
             unpinCard();
         });
+
+        // Drag the pinned card by its handle so it can be moved off nodes
+        // the reader wants to inspect. Only the handle initiates a drag;
+        // the card body stays interactive (links, rule-hover highlighting).
+        // The card is `position: fixed`, so left/top are viewport coords
+        // and map directly to clientX/clientY.
+        if (hoverDrag) {
+            let dragOffsetX = 0;
+            let dragOffsetY = 0;
+
+            const onDragMove = (e) => {
+                const w = hoverCard.offsetWidth;
+                const h = hoverCard.offsetHeight;
+                const left = Math.min(Math.max(0, e.clientX - dragOffsetX), window.innerWidth - w);
+                const top = Math.min(Math.max(0, e.clientY - dragOffsetY), window.innerHeight - h);
+                hoverCard.style.left = left + 'px';
+                hoverCard.style.top = top + 'px';
+                e.preventDefault();
+            };
+
+            const onDragEnd = () => {
+                hoverDrag.classList.remove('dragging');
+                document.removeEventListener('mousemove', onDragMove);
+                document.removeEventListener('mouseup', onDragEnd);
+            };
+
+            hoverDrag.addEventListener('mousedown', (e) => {
+                if (pinnedNodeIndex < 0) return;
+                const rect = hoverCard.getBoundingClientRect();
+                dragOffsetX = e.clientX - rect.left;
+                dragOffsetY = e.clientY - rect.top;
+                hoverDrag.classList.add('dragging');
+                document.addEventListener('mousemove', onDragMove);
+                document.addEventListener('mouseup', onDragEnd);
+                // Don't let the mousedown reach the canvas (pan/select).
+                e.preventDefault();
+                e.stopPropagation();
+            });
+        }
 
         // Keyboard shortcuts
         window.addEventListener('keydown', (e) => {

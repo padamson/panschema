@@ -33,15 +33,22 @@ graph hover/pinned card for free. This reshapes the slices below:
 - **Class rules in the hover** — done (class card already renders rules; the
   hover reuses it).
 - **Pinned card** — done: clicking a node pins its full reused card (with a
-  close button); the separate details panel was removed.
+  close button); the separate details panel was removed. The pinned card has a
+  drag handle so a reader can move it off nodes they want to inspect while its
+  rule entries stay hoverable (they drive the highlight below).
 - **Slot's governing rules** — done: the HTML **slot card** now has a "Rules"
   section listing every class rule that references the slot, so it shows on
   the doc page and the graph slot hover/pin via reuse. (Supersedes the
   earlier plan to carry this in the graph-JSON `kindMetadata`, which the same
   review found to be dead payload.)
-- **Remaining:** the governed-slot **glyph** (canvas) and **highlight-on-hover**
-  of a rule's participants — the latter to ride `data-` attributes on the
-  reused card rather than `kindMetadata`.
+- **Highlight-on-hover** — done: hovering a rule entry in any card highlights
+  the rule's participant nodes (trigger/governed slots + class) with an amber
+  ring on the graph, cleared on mouse-out. Participant node ids ride a
+  `data-participants` attribute the writer emits; a `Visualization::
+  highlight_nodes(ids)` marks the set, verified end-to-end by an e2e test
+  (playwright-rs drives the hover and asserts `highlighted_node_count`).
+- **Remaining:** the governed-slot **glyph** (a persistent per-slot marker),
+  and optional ephemeral connectors between highlighted nodes.
 
 ## Why Now
 

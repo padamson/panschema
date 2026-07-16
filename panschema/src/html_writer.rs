@@ -92,6 +92,10 @@ pub struct RuleInClass {
     /// is required"). `None` when the rule has neither — a
     /// title/description-only entry.
     pub summary: Option<String>,
+    /// Space-separated graph node ids this rule touches (`class:<C>` plus a
+    /// `slot:<s>` per participant slot), for `data-participants` — the graph
+    /// highlights these nodes when the rule entry is hovered.
+    pub participants: String,
 }
 
 /// A `unique_keys` entry as rendered on a class card.
@@ -403,6 +407,10 @@ pub struct GoverningRule {
     pub class: EntityRef,
     pub title: Option<String>,
     pub summary: Option<String>,
+    /// Space-separated graph node ids this rule touches (`class:<C>` plus a
+    /// `slot:<s>` per trigger/governed slot), for the `data-participants`
+    /// attribute the graph reads to highlight the rule's nodes on hover.
+    pub participants: String,
 }
 
 /// A resolved property value for rendering individual cards.
@@ -868,7 +876,7 @@ impl HtmlWriter {
                 aliases: class_def.aliases.clone(),
                 see_also: build_see_also(&class_def.see_also, schema, labels),
                 examples: class_def.examples.clone(),
-                rules: build_rules(&class_def.rules, schema),
+                rules: build_rules(class_id, &class_def.rules, schema),
                 unique_keys: build_unique_keys(&class_def.unique_keys, schema),
             });
         }
@@ -1587,6 +1595,7 @@ fn governing_rules_for_slot(slot_name: &str, schema: &SchemaDefinition) -> Vec<G
                     title: rule.title.clone(),
                     summary: crate::rules::rule_summary(rule)
                         .map(|s| render_description(&s, schema)),
+                    participants: rule_participant_ids(class_id, rule),
                 });
             }
         }
@@ -1594,7 +1603,28 @@ fn governing_rules_for_slot(slot_name: &str, schema: &SchemaDefinition) -> Vec<G
     governing
 }
 
-fn build_rules(rules: &[crate::linkml::ClassRule], schema: &SchemaDefinition) -> Vec<RuleInClass> {
+/// Graph node ids a rule on `class_id` touches — `class:<id>` plus a
+/// `slot:<s>` for each trigger/governed slot — as one space-separated string
+/// for the `data-participants` attribute the graph highlight-on-hover reads.
+fn rule_participant_ids(class_id: &str, rule: &crate::linkml::ClassRule) -> String {
+    let participants = crate::rules::rule_participants(rule);
+    let mut ids = vec![format!("class:{class_id}")];
+    for s in participants
+        .trigger
+        .iter()
+        .chain(participants.governed.iter())
+    {
+        ids.push(format!("slot:{s}"));
+    }
+    ids.dedup();
+    ids.join(" ")
+}
+
+fn build_rules(
+    class_id: &str,
+    rules: &[crate::linkml::ClassRule],
+    schema: &SchemaDefinition,
+) -> Vec<RuleInClass> {
     rules
         .iter()
         .map(|rule| RuleInClass {
@@ -1604,6 +1634,7 @@ fn build_rules(rules: &[crate::linkml::ClassRule], schema: &SchemaDefinition) ->
                 .as_deref()
                 .map(|d| render_description(d, schema)),
             summary: crate::rules::rule_summary(rule).map(|s| render_description(&s, schema)),
+            participants: rule_participant_ids(class_id, rule),
         })
         .collect()
 }
@@ -3209,6 +3240,15 @@ mod tests {
             "approved_by is governed by one rule"
         );
         assert_eq!(approved_by.governing_rules[0].class.id, "ImageApproval");
+        // Participants carry the graph node ids the rule touches (class +
+        // each trigger/governed slot), for highlight-on-hover.
+        let parts = &approved_by.governing_rules[0].participants;
+        assert!(
+            parts.contains("class:ImageApproval")
+                && parts.contains("slot:verdict")
+                && parts.contains("slot:approved_by"),
+            "participants should list the class and each participant slot; got: {parts}"
+        );
         let summary = approved_by.governing_rules[0]
             .summary
             .as_deref()

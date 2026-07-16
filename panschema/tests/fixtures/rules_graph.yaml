@@ -1,0 +1,31 @@
+name: rules_graph
+id: https://example.org/rules_graph
+description: Minimal schema with a class rule, for graph highlight-on-hover e2e.
+default_range: string
+prefixes:
+  linkml: https://w3id.org/linkml/
+  ex: https://example.org/rules_graph/
+default_prefix: ex
+
+slots:
+  verdict:
+    range: string
+  approved_by:
+    range: string
+
+classes:
+  ImageApproval:
+    description: The review of an image.
+    slots:
+      - verdict
+      - approved_by
+    rules:
+      - description: A decided review names its reviewer.
+        preconditions:
+          slot_conditions:
+            verdict:
+              equals_string: approved
+        postconditions:
+          slot_conditions:
+            approved_by:
+              value_presence: PRESENT

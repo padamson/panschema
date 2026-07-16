@@ -241,6 +241,7 @@ impl Visualization {
             self.interaction.focused_node,
             &focused_connected,
             &hidden_nodes,
+            &self.interaction.highlighted_nodes,
             self.show_arrows,
         );
     }
@@ -484,6 +485,28 @@ impl Visualization {
             }
             None => Vec::new(),
         }
+    }
+
+    /// Highlight a rule's participant nodes, given space-separated node ids
+    /// (`"slot:verdict slot:approved_by class:ImageApproval"`). Unknown ids
+    /// are ignored. Called on hover of a rule entry in a card; the
+    /// highlighted set is drawn emphasized with the rest dimmed.
+    pub fn highlight_nodes(&mut self, ids: &str) {
+        let indices = ids
+            .split_whitespace()
+            .filter_map(|id| self.simulation.index_of(id));
+        self.interaction.set_highlight(indices);
+    }
+
+    /// Clear the rule-participant highlight (hover ended).
+    pub fn clear_highlight(&mut self) {
+        self.interaction.clear_highlight();
+    }
+
+    /// Number of currently highlighted nodes — lets a test assert the hover
+    /// resolved a rule's participants without reading canvas pixels.
+    pub fn highlighted_node_count(&self) -> usize {
+        self.interaction.highlighted_nodes.len()
     }
 
     /// Get the currently selected node index (-1 if none)
