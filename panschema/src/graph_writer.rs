@@ -25,6 +25,10 @@ pub mod colors {
     /// Type nodes: Orange (#E67E22)
     pub const TYPE: [f32; 4] = [0.902, 0.494, 0.133, 1.0];
 
+    /// Individual (A-box instance) nodes: Teal (#29B8B3) — distinct from
+    /// every T-box kind so the instance graph reads apart from the schema.
+    pub const INDIVIDUAL: [f32; 4] = [0.161, 0.722, 0.702, 1.0];
+
     /// Alpha value for abstract classes
     pub const ABSTRACT_ALPHA: f32 = 0.7;
 }
@@ -37,6 +41,9 @@ pub enum NodeType {
     Slot,
     Enum,
     Type,
+    /// An OWL `NamedIndividual` — an A-box instance, drawn only in the
+    /// separate instance graph, never in the schema (T-box) graph.
+    Individual,
 }
 
 impl NodeType {
@@ -47,6 +54,7 @@ impl NodeType {
             NodeType::Slot => colors::SLOT,
             NodeType::Enum => colors::ENUM,
             NodeType::Type => colors::TYPE,
+            NodeType::Individual => colors::INDIVIDUAL,
         }
     }
 }
@@ -67,6 +75,9 @@ pub enum EdgeType {
     Inverse,
     /// Type inheritance (typeof_)
     TypeOf,
+    /// An object-property assertion between two individuals in the
+    /// instance graph (labelled by the property).
+    Assertion,
 }
 
 /// A node in the graph representation
@@ -174,6 +185,24 @@ pub enum KindMetadata {
     Enum {
         permissible_values: Vec<PermissibleValueSummary>,
     },
+    /// An OWL individual in the instance graph: the class ids it is an
+    /// instance of (resolvable to class cards) plus its literal-valued
+    /// property assertions (object-valued ones become edges instead).
+    Individual {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        types: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        literals: Vec<PropertyLiteral>,
+    },
+}
+
+/// A literal-valued property assertion on an individual, shown on the
+/// instance node's hover (object-valued assertions become edges).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PropertyLiteral {
+    pub property: String,
+    pub value: String,
 }
 
 /// One class rule in the hover payload: its title/description plus the
@@ -278,6 +307,24 @@ pub struct GraphEdge {
 /// Returns `(display_uri, unresolved)`.
 ///
 /// [`expand_curie`]: crate::linkml_resolve::expand_curie
+/// Local name of an IRI: the part after the last `#` or `/`, else the
+/// whole string. Mirrors how the HTML individual card resolves a type
+/// IRI to a class id.
+fn local_name(iri: &str) -> &str {
+    iri.rsplit(['#', '/']).next().unwrap_or(iri)
+}
+
+/// Capitalize the first character (ASCII), leaving the rest untouched —
+/// the instance node's display label when the individual has no
+/// `rdfs:label`, matching the HTML individual card's fallback.
+fn capitalize_first(id: &str) -> String {
+    let mut chars = id.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
 fn resolve_node_uri(schema: &SchemaDefinition, uri: Option<&str>) -> (Option<String>, bool) {
     match uri {
         None => (None, false),
@@ -451,6 +498,141 @@ impl GraphWriter {
             self.add_class_side_slot_edges(schema, &mut graph);
         }
 
+        graph
+    }
+
+    /// Build the separate instance (A-box) graph from the OWL individuals
+    /// panschema ingested into `panschema:individual*` annotations: one
+    /// node per individual (kind `Individual`, carrying its type class ids
+    /// and literal-valued assertions), and one `Assertion` edge per
+    /// object-property assertion that links two individuals (its value is
+    /// the target individual's IRI). Distinct from [`schema_to_graph`] —
+    /// no individual nodes ever enter the schema (T-box) graph. Returns a
+    /// graph with no nodes when the schema declares no individuals, so the
+    /// caller can omit the instance-graph section entirely.
+    pub fn schema_to_instance_graph(&self, schema: &SchemaDefinition) -> GraphData {
+        use std::collections::HashMap;
+
+        let mut graph = GraphData::new(schema.name.clone(), schema.title.clone());
+
+        let Some(ids_csv) = schema.annotations.get("panschema:individuals") else {
+            return graph;
+        };
+        let ids: Vec<&str> = ids_csv
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        // Map each individual's IRI to its node id so an object-property
+        // assertion (whose value is the target's IRI) resolves to an edge.
+        let node_id_of = |id: &str| format!("individual:{id}");
+        let mut iri_to_node: HashMap<&str, String> = HashMap::new();
+        for id in &ids {
+            if let Some(iri) = schema
+                .annotations
+                .get(&format!("panschema:individual:{id}:_iri"))
+            {
+                iri_to_node.insert(iri.as_str(), node_id_of(id));
+            }
+        }
+
+        for id in &ids {
+            let node_id = node_id_of(id);
+
+            let label = schema
+                .annotations
+                .get(&format!("panschema:individual:{id}:_label"))
+                .cloned()
+                .unwrap_or_else(|| capitalize_first(id));
+
+            // rdf:type IRIs → the class ids the schema actually defines.
+            let types: Vec<String> = schema
+                .annotations
+                .get(&format!("panschema:individual:{id}"))
+                .map(|csv| {
+                    csv.split(',')
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(local_name)
+                        .filter(|tid| schema.classes.contains_key(*tid))
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            // Walk this individual's property assertions. An object-valued
+            // one (value == a known individual's IRI) becomes an edge; a
+            // literal-valued one becomes hover metadata.
+            let prefix = format!("panschema:individual:{id}:");
+            let mut literals: Vec<PropertyLiteral> = Vec::new();
+            for (key, value) in &schema.annotations {
+                let Some(prop) = key.strip_prefix(&prefix) else {
+                    continue;
+                };
+                // Skip the reserved sub-keys (`_iri`/`_label`/`_comment`)
+                // and the per-property `:_label` companion keys.
+                if prop.starts_with('_') || prop.ends_with(":_label") {
+                    continue;
+                }
+                let prop_label = schema
+                    .annotations
+                    .get(&format!("{key}:_label"))
+                    .cloned()
+                    .or_else(|| {
+                        schema
+                            .slots
+                            .get(prop)
+                            .and_then(|s| s.annotations.get("panschema:label").cloned())
+                    })
+                    .unwrap_or_else(|| prop.to_string());
+
+                if let Some(target) = iri_to_node.get(value.as_str()) {
+                    graph.edges.push(GraphEdge {
+                        source: node_id.clone(),
+                        target: target.clone(),
+                        edge_type: EdgeType::Assertion,
+                        label: Some(prop_label),
+                    });
+                } else {
+                    literals.push(PropertyLiteral {
+                        property: prop_label,
+                        value: value.clone(),
+                    });
+                }
+            }
+            literals.sort_by(|a, b| a.property.cmp(&b.property));
+
+            let comment = schema
+                .annotations
+                .get(&format!("panschema:individual:{id}:_comment"))
+                .cloned();
+            let (uri, uri_unresolved) = resolve_node_uri(
+                schema,
+                schema
+                    .annotations
+                    .get(&format!("panschema:individual:{id}:_iri"))
+                    .map(String::as_str),
+            );
+
+            graph.nodes.push(GraphNode {
+                id: node_id,
+                label,
+                node_type: NodeType::Individual,
+                color: NodeType::Individual.color(),
+                description: comment,
+                uri,
+                uri_unresolved,
+                is_abstract: false,
+                kind_metadata: Some(KindMetadata::Individual { types, literals }),
+            });
+        }
+
+        // Stable order: nodes by id, edges by (source, target, label).
+        graph.nodes.sort_by(|a, b| a.id.cmp(&b.id));
+        graph.edges.sort_by(|a, b| {
+            (&a.source, &a.target, &a.label).cmp(&(&b.source, &b.target, &b.label))
+        });
         graph
     }
 
@@ -851,6 +1033,74 @@ mod tests {
     use crate::linkml::{
         ClassDefinition, EnumDefinition, PermissibleValue, SlotDefinition, TypeDefinition,
     };
+
+    // ========== Instance (A-box) graph ==========
+
+    #[test]
+    fn instance_graph_is_empty_when_the_schema_has_no_individuals() {
+        let schema = SchemaDefinition::new("no-individuals");
+        let graph = GraphWriter::new().schema_to_instance_graph(&schema);
+        assert!(
+            graph.nodes.is_empty() && graph.edges.is_empty(),
+            "a schema with no individuals yields no instance graph"
+        );
+    }
+
+    #[test]
+    fn instance_graph_emits_typed_nodes_and_assertion_edges() {
+        use crate::io::Reader;
+        use crate::owl_reader::OwlReader;
+
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/instance_graph.ttl");
+        let schema = OwlReader::new().read(&fixture).expect("read fixture");
+        let graph = GraphWriter::new().schema_to_instance_graph(&schema);
+
+        // One node per individual, all of kind Individual — no T-box nodes.
+        assert_eq!(graph.nodes.len(), 2, "two individuals → two nodes");
+        assert!(
+            graph
+                .nodes
+                .iter()
+                .all(|n| n.node_type == NodeType::Individual),
+            "the instance graph holds only Individual nodes"
+        );
+        let wine = graph
+            .nodes
+            .iter()
+            .find(|n| n.id == "individual:chateauMorgon")
+            .expect("wine individual node");
+
+        // It carries its type (a resolvable class id) and its literal
+        // assertion as hover metadata — not as an edge.
+        match wine.kind_metadata.as_ref().expect("individual metadata") {
+            KindMetadata::Individual { types, literals } => {
+                assert_eq!(types, &["Wine"], "typed as its rdf:type class");
+                assert_eq!(
+                    literals,
+                    &[PropertyLiteral {
+                        property: "color".to_string(),
+                        value: "red".to_string(),
+                    }],
+                    "the datatype assertion is node metadata, not an edge"
+                );
+            }
+            other => panic!("expected Individual metadata, got {other:?}"),
+        }
+
+        // The object assertion (fromRegion → beaujolais) is exactly one
+        // labelled edge between the two individual nodes.
+        assert_eq!(
+            graph.edges.len(),
+            1,
+            "one object-property assertion → one edge"
+        );
+        let edge = &graph.edges[0];
+        assert_eq!(edge.source, "individual:chateauMorgon");
+        assert_eq!(edge.target, "individual:beaujolais");
+        assert_eq!(edge.edge_type, EdgeType::Assertion);
+        assert_eq!(edge.label.as_deref(), Some("from region"));
+    }
 
     // ========== Empty/Minimal Schema Tests ==========
 

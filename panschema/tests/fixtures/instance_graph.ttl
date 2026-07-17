@@ -1,0 +1,29 @@
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix ex: <https://example.org/wine#> .
+
+ex: a owl:Ontology ;
+    rdfs:label "Instance graph fixture" .
+
+ex:Wine a owl:Class ;
+    rdfs:label "Wine" .
+
+ex:Region a owl:Class ;
+    rdfs:label "Region" .
+
+ex:fromRegion a owl:ObjectProperty ;
+    rdfs:label "from region" .
+
+ex:color a owl:DatatypeProperty ;
+    rdfs:label "color" .
+
+# A wine individual with an object assertion (to a region) and a literal.
+ex:chateauMorgon a owl:NamedIndividual, ex:Wine ;
+    rdfs:label "Chateau Morgon" ;
+    ex:fromRegion ex:beaujolais ;
+    ex:color "red" .
+
+ex:beaujolais a owl:NamedIndividual, ex:Region ;
+    rdfs:label "Beaujolais" .
