@@ -62,6 +62,9 @@ fn edge_rgb(kind: EdgeType) -> (u8, u8, u8) {
         EdgeType::Range => (190, 165, 120),
         EdgeType::Inverse => (165, 140, 185),
         EdgeType::TypeOf => (190, 150, 160),
+        // Instance-graph property assertion — a desaturated teal keyed to
+        // the individual node color.
+        EdgeType::Assertion => (130, 175, 170),
     }
 }
 
@@ -133,6 +136,9 @@ pub(crate) enum NodeShape {
     Rectangle,
     Diamond,
     Pill,
+    /// Individual (A-box instance) nodes — a hexagon, distinct from every
+    /// T-box shape.
+    Hexagon,
 }
 
 /// Map a node's resolved kind to its ADR-005 shape. `Class` →
@@ -144,6 +150,7 @@ fn node_shape(kind: Option<&KindMetadata>) -> NodeShape {
         Some(KindMetadata::Class { .. }) => NodeShape::Circle,
         Some(KindMetadata::Slot { .. }) => NodeShape::Pill,
         Some(KindMetadata::Enum { .. }) => NodeShape::Diamond,
+        Some(KindMetadata::Individual { .. }) => NodeShape::Hexagon,
         None => NodeShape::Rectangle,
     }
 }
@@ -741,6 +748,19 @@ impl Canvas2DRenderer {
                 let _ = self.ctx.arc(rx, cy, rr, -PI / 2.0, PI / 2.0); // right cap
                 self.ctx.line_to(lx, cy + rr);
                 let _ = self.ctx.arc(lx, cy, rr, PI / 2.0, PI * 1.5); // left cap
+                self.ctx.close_path();
+            }
+            NodeShape::Hexagon => {
+                // Flat-top hexagon within radius `r`, six vertices at 60°.
+                for i in 0..6 {
+                    let a = PI / 6.0 + TAU * (i as f64) / 6.0;
+                    let (x, y) = (cx + r * a.cos(), cy + r * a.sin());
+                    if i == 0 {
+                        self.ctx.move_to(x, y);
+                    } else {
+                        self.ctx.line_to(x, y);
+                    }
+                }
                 self.ctx.close_path();
             }
         }

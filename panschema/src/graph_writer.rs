@@ -1057,7 +1057,7 @@ mod tests {
         let graph = GraphWriter::new().schema_to_instance_graph(&schema);
 
         // One node per individual, all of kind Individual — no T-box nodes.
-        assert_eq!(graph.nodes.len(), 2, "two individuals → two nodes");
+        assert_eq!(graph.nodes.len(), 3, "three individuals → three nodes");
         assert!(
             graph
                 .nodes
@@ -1065,6 +1065,15 @@ mod tests {
                 .all(|n| n.node_type == NodeType::Individual),
             "the instance graph holds only Individual nodes"
         );
+
+        // An individual with no rdfs:label gets a capitalize-first fallback.
+        let napa = graph
+            .nodes
+            .iter()
+            .find(|n| n.id == "individual:napa")
+            .expect("label-less individual node");
+        assert_eq!(napa.label, "Napa", "no-label individual → capitalized id");
+
         let wine = graph
             .nodes
             .iter()

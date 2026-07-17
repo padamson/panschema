@@ -20,6 +20,11 @@ pub mod colors {
     /// Type nodes: Orange (#E67E22)
     pub const TYPE: [f32; 4] = [0.902, 0.494, 0.133, 1.0];
 
+    /// Individual (A-box instance) nodes: Teal (#29B8B3). Mirrors the
+    /// writer-side constant so the instance graph reads apart from the
+    /// T-box kinds.
+    pub const INDIVIDUAL: [f32; 4] = [0.161, 0.722, 0.702, 1.0];
+
     /// Alpha value for abstract classes
     pub const ABSTRACT_ALPHA: f32 = 0.7;
 }
@@ -32,6 +37,9 @@ pub enum NodeType {
     Slot,
     Enum,
     Type,
+    /// An OWL individual (A-box instance) — drawn only in the instance
+    /// graph, never the schema graph.
+    Individual,
 }
 
 impl NodeType {
@@ -43,6 +51,7 @@ impl NodeType {
             NodeType::Slot => colors::SLOT,
             NodeType::Enum => colors::ENUM,
             NodeType::Type => colors::TYPE,
+            NodeType::Individual => colors::INDIVIDUAL,
         }
     }
 }
@@ -63,6 +72,8 @@ pub enum EdgeType {
     Inverse,
     /// Type inheritance (typeof_)
     TypeOf,
+    /// Object-property assertion between two individuals (instance graph).
+    Assertion,
 }
 
 /// A node in the graph representation
@@ -164,6 +175,24 @@ pub enum KindMetadata {
     Enum {
         permissible_values: Vec<PermissibleValueSummary>,
     },
+    /// An OWL individual in the instance graph: the class ids it is an
+    /// instance of plus its literal-valued property assertions (object
+    /// assertions are edges instead). Mirrors the writer side.
+    Individual {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        types: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        literals: Vec<PropertyLiteral>,
+    },
+}
+
+/// A literal-valued property assertion on an individual, shown on the
+/// instance node's hover. Mirrors the writer-side struct.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PropertyLiteral {
+    pub property: String,
+    pub value: String,
 }
 
 /// One class rule in the graph metadata — its rendered summary plus

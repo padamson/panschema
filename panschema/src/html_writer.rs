@@ -455,6 +455,9 @@ struct IndexTemplate<'a> {
     /// Empty slice for class cards that don't have slots yet
     /// Graph data JSON for visualization (None = no graph)
     graph_json: Option<&'a str>,
+    /// Separate instance (A-box) graph JSON rendered in the Individuals
+    /// section (None = the schema declares no individuals).
+    instance_graph_json: Option<&'a str>,
     /// Number of nodes in the graph (for sidebar badge)
     graph_node_count: usize,
     /// Number of edges in the graph (for sidebar badge)
@@ -1327,6 +1330,25 @@ impl Writer for HtmlWriter {
             (None, 0, 0)
         };
 
+        // Separate instance (A-box) graph, rendered beneath the Individuals
+        // section. Only emitted when the schema actually has individuals, so
+        // an individual-free schema gets no instance graph. Escaped the same
+        // way as the schema graph JSON (see above).
+        let instance_graph_json = if self.include_graph {
+            let instance_data = GraphWriter::new().schema_to_instance_graph(schema);
+            if instance_data.nodes.is_empty() {
+                None
+            } else {
+                Some(
+                    serde_json::to_string(&instance_data)
+                        .map_err(|e| IoError::Write(e.to_string()))?
+                        .replace('<', "\\u003c"),
+                )
+            }
+        } else {
+            None
+        };
+
         let template = IndexTemplate {
             title: &data.title,
             iri: &data.iri,
@@ -1346,6 +1368,7 @@ impl Writer for HtmlWriter {
             individual_data: &data.individual_data,
             namespaces: &data.namespaces,
             graph_json: graph_json_string.as_deref(),
+            instance_graph_json: instance_graph_json.as_deref(),
             graph_node_count,
             graph_edge_count,
             graph_aspect_w: self.graph_aspect.0,

@@ -813,6 +813,7 @@ fn edge_type_tag(edge_type: crate::graph_types::EdgeType) -> &'static str {
         EdgeType::Range => "range",
         EdgeType::Inverse => "inverseOf",
         EdgeType::TypeOf => "typeOf",
+        EdgeType::Assertion => "assertion",
     }
 }
 
@@ -829,6 +830,7 @@ fn node_kind_label(kind: Option<&crate::graph_types::KindMetadata>) -> &'static 
         Some(KindMetadata::Class { .. }) => "Class",
         Some(KindMetadata::Slot { .. }) => "Slot",
         Some(KindMetadata::Enum { .. }) => "Enum",
+        Some(KindMetadata::Individual { .. }) => "Individual",
         None => "Type",
     }
 }

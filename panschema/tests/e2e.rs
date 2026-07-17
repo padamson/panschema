@@ -1953,6 +1953,98 @@ fn e2e_rule_touched_nodes_draw_a_persistent_amber_ring() {
     });
 }
 
+/// A schema with OWL individuals renders a separate instance (A-box) graph
+/// beneath the Individuals cards. Asserts the exporter emitted the right
+/// A-box (2 individuals, 1 assertion edge), that it embedded into the page,
+/// and that its own canvas actually paints the teal individual nodes — a
+/// distinct viz from the schema graph.
+#[test]
+fn e2e_instance_graph_renders_individuals_beneath_the_cards() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let output_dir = generate_docs_for("tests/fixtures/instance_graph.ttl");
+        let port = find_available_port();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("goto");
+
+        // The instance graph canvas exists — a second, distinct canvas.
+        assert_eq!(
+            page.locator("#instance-graph-canvas")
+                .await
+                .count()
+                .await
+                .expect("count"),
+            1,
+            "the Individuals section should carry an instance-graph canvas"
+        );
+
+        // The embedded A-box is exactly what the exporter built.
+        let counts = page
+            .evaluate_value(
+                r#"(function(){
+                    var d = window.__PANSCHEMA_INSTANCE_GRAPH_DATA__;
+                    return d ? (d.nodes.length + ',' + d.edges.length) : 'none';
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert_eq!(
+            counts.trim().trim_matches('"'),
+            "3,1",
+            "three individuals + one object-property assertion; got {counts}"
+        );
+
+        // Let the instance viz load its (separate) wasm module and settle.
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+
+        // The viz initialized and its canvas painted the teal individual
+        // nodes (RGB ~ 41,184,179) — proof the A-box graph actually renders,
+        // not just that the data embedded.
+        let result = page
+            .evaluate_value(
+                r#"(async function(){
+                    var viz = window.__panschema_instance_viz;
+                    if (!viz) return 'no-viz';
+                    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+                    var c = document.getElementById('instance-graph-canvas');
+                    var ctx = c.getContext('2d');
+                    if (!ctx) return 'no-2d-ctx';
+                    var d = ctx.getImageData(0, 0, c.width, c.height).data;
+                    var teal = 0;
+                    for (var i = 0; i < d.length; i += 4) {
+                        if (d[i] < 100 && d[i+1] > 150 && d[i+1] < 215 && d[i+2] > 150 && d[i+2] < 215) teal++;
+                    }
+                    return 'ok:' + teal;
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        let result = result.trim().trim_matches('"').to_string();
+        assert!(
+            result.starts_with("ok:"),
+            "the instance viz should have initialized; got {result}"
+        );
+        let teal: i64 = result.trim_start_matches("ok:").parse().unwrap_or(0);
+        assert!(
+            teal > 0,
+            "the instance graph should paint teal individual nodes; teal pixels={teal}"
+        );
+
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
 // Proves the layout auto-default end-to-end (feature 09 slice 9): an
 // is_a-heavy schema, with no layout pinned and no persisted choice,
 // must initialize the picker to `hierarchical` via the wasm density

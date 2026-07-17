@@ -27,3 +27,6 @@ ex:chateauMorgon a owl:NamedIndividual, ex:Wine ;
 
 ex:beaujolais a owl:NamedIndividual, ex:Region ;
     rdfs:label "Beaujolais" .
+
+# No rdfs:label — exercises the capitalize-first label fallback ("napa" → "Napa").
+ex:napa a owl:NamedIndividual, ex:Region .

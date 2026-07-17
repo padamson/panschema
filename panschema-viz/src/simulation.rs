@@ -109,6 +109,7 @@ impl SimEdge {
             EdgeType::Range => "range".to_string(),
             EdgeType::Inverse => "inverseOf".to_string(),
             EdgeType::TypeOf => "typeOf".to_string(),
+            EdgeType::Assertion => "assertion".to_string(),
         }
     }
 }

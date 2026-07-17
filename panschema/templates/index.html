@@ -227,6 +227,14 @@
         {% include "components/individual_card.html" %}
 {%- endfor %}
     </div>
+{# The worked example as a connected instance graph — a distinct A-box viz,
+   not the schema graph. Only present when the exporter emitted one. #}
+{%- if let Some(json) = instance_graph_json %}
+    <script>
+        window.__PANSCHEMA_INSTANCE_GRAPH_DATA__ = {{ json|safe }};
+    </script>
+    {% include "components/instance_graph.html" %}
+{%- endif %}
 {%- endif %}
 </section>
 {% endblock %}

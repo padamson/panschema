@@ -109,7 +109,7 @@ foundation for the rest.
 
 ### Slice 2: HTML + viz — render the instance graph in the Individuals block
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Must Have
 
@@ -127,11 +127,19 @@ their assertions.
 
 ### Slice 3: Type anchoring + hover-card reuse + polish
 
-**Status:** Not Started
+**Status:** Deferred — revisit alongside the LinkML instance reader
 
 **Priority:** Should Have
 
 **Depends on:** Slices 1–2.
+
+**Note:** Deferred in favour of the LinkML+JSON instance program (JSON-Schema
+writer → LinkML instance reader → `panschema validate --data`). The instance
+graph currently renders (Slice 2) with pan/zoom but no hover-card reuse; hover
+reuse and type anchoring are picked up when the instance viz is pointed at the
+LinkML instance source, so both land together rather than being built twice.
+Two known follow-ups to fold in then: the instance viz loads its own copy of
+the wasm module (share one across both viz), and hover-card reuse.
 
 **User Value:** Each instance reads as "an X" at a glance, and hovering one shows
 the same content as its card, so the instance graph and the cards can't drift.
