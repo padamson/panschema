@@ -36,6 +36,13 @@ pub struct SimNode {
     /// domain/range/required/multivalued for slots, and
     /// permissible values for enums.
     pub kind_metadata: Option<KindMetadata>,
+    /// `true` when any class rule touches this node — a slot on either
+    /// side (trigger or governed) of a rule, or a class that declares a
+    /// rule. Set at construction by scanning every class node's rules;
+    /// drives the persistent amber rule ring. This is exactly the union
+    /// of every rule's hover-highlight participant set, so a node ringed
+    /// at rest is one that lights up when its rule is hovered.
+    pub in_rule: bool,
     /// Position in 2D space
     pub x: f32,
     pub y: f32,
@@ -66,6 +73,7 @@ impl SimNode {
             uri_unresolved: node.uri_unresolved,
             is_abstract: node.is_abstract,
             kind_metadata: node.kind_metadata.clone(),
+            in_rule: false, // Set by from_graph_data once all nodes are known.
             x: radius * angle.cos(),
             y: radius * angle.sin(),
             vx: 0.0,
@@ -186,12 +194,35 @@ impl CpuSimulation {
         let total = graph.nodes.len();
 
         // Create nodes with initial positions
-        let nodes: Vec<SimNode> = graph
+        let mut nodes: Vec<SimNode> = graph
             .nodes
             .iter()
             .enumerate()
             .map(|(i, n)| SimNode::from_graph_node(n, i, total))
             .collect();
+
+        // Mark rule-touched nodes: every slot on either side of a rule
+        // (trigger or governed) plus the class that declares it. Slot ids
+        // use the same `slot:<name>` scheme as the slot node ids, and a
+        // class node carries its own `class:<name>` id — together this is
+        // exactly the union of every rule's highlight participant set, so
+        // the persistent ring set matches what lights up on hover.
+        let mut rule_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for n in &graph.nodes {
+            if let Some(KindMetadata::Class { rules, .. }) = &n.kind_metadata {
+                if !rules.is_empty() {
+                    rule_ids.insert(n.id.clone());
+                }
+                for rule in rules {
+                    for slot in rule.trigger_slots.iter().chain(rule.governed_slots.iter()) {
+                        rule_ids.insert(format!("slot:{slot}"));
+                    }
+                }
+            }
+        }
+        for node in &mut nodes {
+            node.in_rule = rule_ids.contains(&node.id);
+        }
 
         // Build ID to index mapping
         let node_id_to_index: std::collections::HashMap<String, usize> = nodes
@@ -224,7 +255,6 @@ impl CpuSimulation {
         // apply stronger repulsion between disconnected pieces.
         let components =
             sim_common::compute_components(nodes.len(), edges.iter().map(|e| (e.source, e.target)));
-        let mut nodes = nodes;
         for (i, node) in nodes.iter_mut().enumerate() {
             node.component = components[i];
         }
@@ -693,6 +723,82 @@ mod tests {
 
         assert_eq!(sim.nodes.len(), 2);
         assert_eq!(sim.edges.len(), 1);
+    }
+
+    fn slot_node(id: &str) -> GraphNode {
+        GraphNode {
+            id: id.to_string(),
+            label: id.to_string(),
+            node_type: NodeType::Slot,
+            color: [0.0, 0.0, 1.0, 1.0],
+            description: None,
+            uri: None,
+            uri_unresolved: false,
+            is_abstract: false,
+            kind_metadata: None,
+        }
+    }
+
+    #[test]
+    fn in_rule_flag_marks_every_node_a_rule_touches() {
+        use crate::graph_types::{KindMetadata, RuleSummary};
+        let graph = GraphData {
+            schema_name: "t".to_string(),
+            schema_title: None,
+            format_version: "1.0".to_string(),
+            nodes: vec![
+                GraphNode {
+                    id: "class:ImageApproval".to_string(),
+                    label: "ImageApproval".to_string(),
+                    node_type: NodeType::Class,
+                    color: [1.0, 0.0, 0.0, 1.0],
+                    description: None,
+                    uri: None,
+                    uri_unresolved: false,
+                    is_abstract: false,
+                    kind_metadata: Some(KindMetadata::Class {
+                        slots: vec![],
+                        parents: vec![],
+                        mixins: vec![],
+                        rules: vec![RuleSummary {
+                            title: None,
+                            description: None,
+                            summary: None,
+                            trigger_slots: vec!["verdict".to_string()],
+                            governed_slots: vec!["approved_by".to_string()],
+                        }],
+                    }),
+                },
+                slot_node("slot:verdict"),
+                slot_node("slot:approved_by"),
+                slot_node("slot:url"),
+            ],
+            edges: vec![],
+        };
+        let sim = CpuSimulation::from_graph_data(&graph);
+        let in_rule = |id: &str| sim.nodes[sim.index_of(id).unwrap()].in_rule;
+
+        // A postcondition (governed) slot is touched by the rule.
+        assert!(
+            in_rule("slot:approved_by"),
+            "a governed slot should be flagged in_rule"
+        );
+        // A trigger slot is equally touched — it must ring at rest too, so
+        // the at-rest set matches the on-hover highlight set.
+        assert!(
+            in_rule("slot:verdict"),
+            "a trigger slot should be flagged in_rule"
+        );
+        // The class that declares the rule participates as well.
+        assert!(
+            in_rule("class:ImageApproval"),
+            "a class that declares a rule should be flagged in_rule"
+        );
+        // A slot no rule mentions stays unflagged.
+        assert!(
+            !in_rule("slot:url"),
+            "a slot no rule references should not be flagged in_rule"
+        );
     }
 
     #[test]

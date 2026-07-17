@@ -1871,6 +1871,88 @@ fn e2e_hovering_a_rule_entry_highlights_participant_nodes() {
     });
 }
 
+/// Every node a class rule touches — a trigger *or* governed slot, and the
+/// class that declares the rule — wears a persistent amber ring on the
+/// graph at rest. Asserts the flagged set covers all of them (not just the
+/// governed slot) and that the amber ring actually paints in the canvas
+/// pixels around a rule node — with no hover active, the only amber is the
+/// persistent ring.
+#[test]
+fn e2e_rule_touched_nodes_draw_a_persistent_amber_ring() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let output_dir = generate_docs_for("tests/fixtures/rules_graph.yaml");
+        let port = find_available_port();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("goto");
+
+        // Let the wasm graph initialize and settle a layout.
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+
+        // Assert the governed set resolved and its ring paints: scan the
+        // canvas pixels in a box around the governed node for amber. No
+        // hover is active, so the only amber is the persistent ring.
+        let result = page
+            .evaluate_value(
+                r#"(async function(){
+                    var viz = window.__panschema_viz;
+                    if (!viz || typeof viz.rule_node_count !== 'function') return 'no-viz';
+                    var count = viz.rule_node_count();
+                    var pos = viz.rule_node_canvas_positions();
+                    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+                    var canvas = document.getElementById('graph-canvas');
+                    var ctx = canvas.getContext('2d');
+                    if (!ctx) return 'no-2d-ctx';
+                    var amber = 0;
+                    if (pos.length >= 2) {
+                        var cx = Math.round(pos[0]), cy = Math.round(pos[1]);
+                        var x0 = Math.max(0, cx - 24), y0 = Math.max(0, cy - 24);
+                        var w = Math.min(canvas.width - x0, 48), h = Math.min(canvas.height - y0, 48);
+                        var d = ctx.getImageData(x0, y0, w, h).data;
+                        for (var i = 0; i < d.length; i += 4) {
+                            if (d[i] > 230 && d[i+1] > 160 && d[i+1] < 215 && d[i+2] < 70) amber++;
+                        }
+                    }
+                    return count + '|' + amber;
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        let parts: Vec<i64> = result
+            .trim_matches('"')
+            .split('|')
+            .filter_map(|s| s.trim().parse::<i64>().ok())
+            .collect();
+        assert_eq!(parts.len(), 2, "expected 'count|amber'; got: {result}");
+        // The fixture's one rule touches a trigger slot (`verdict`), a
+        // governed slot (`approved_by`), and the owning class — all three
+        // ring at rest, not just the governed slot.
+        assert!(
+            parts[0] >= 3,
+            "the rule's trigger slot, governed slot, and class should all be flagged; got count={}",
+            parts[0]
+        );
+        assert!(
+            parts[1] > 0,
+            "the persistent rule ring should paint amber near the node; amber pixels={}",
+            parts[1]
+        );
+
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
 // Proves the layout auto-default end-to-end (feature 09 slice 9): an
 // is_a-heavy schema, with no layout pinned and no persisted choice,
 // must initialize the picker to `hierarchical` via the wasm density

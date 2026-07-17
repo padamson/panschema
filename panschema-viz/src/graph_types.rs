@@ -127,6 +127,12 @@ pub enum KindMetadata {
         slots: Vec<SlotSummary>,
         parents: Vec<String>,
         mixins: Vec<String>,
+        /// The class's conditional rules, each carrying the slots it
+        /// touches split into trigger (precondition) and governed
+        /// (postcondition). Mirrors the writer side; a governed slot's
+        /// node draws a marker glyph derived from these lists.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        rules: Vec<RuleSummary>,
     },
     /// Resolved view of a LinkML slot. `required` / `multivalued`
     /// are the effective-cardinality reconciliation of the bool
@@ -158,6 +164,26 @@ pub enum KindMetadata {
     Enum {
         permissible_values: Vec<PermissibleValueSummary>,
     },
+}
+
+/// One class rule in the graph metadata — its rendered summary plus
+/// the slots it touches, split into trigger (precondition) and governed
+/// (postcondition) sides. Mirrors the writer-side struct so the JSON
+/// round-trips; the viz uses `governed_slots` to place governed-slot
+/// marker glyphs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleSummary {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trigger_slots: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub governed_slots: Vec<String>,
 }
 
 /// One permissible value of an enum in the hover card. Mirrors the

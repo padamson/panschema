@@ -1836,7 +1836,7 @@
             return;
         }
 
-        const LW = 240, LH = 430;
+        const LW = 240, LH = 520;
         const dpr = window.devicePixelRatio || 1;
         lc.width = LW * dpr;
         lc.height = LH * dpr;
@@ -1846,7 +1846,7 @@
         // logical coordinates come out crisp on HiDPI displays.
         lc.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
         try {
-            wasmModule.render_legend(lc);
+            wasmModule.render_legend(lc, dpr);
         } catch (e) {
             console.warn('Legend render failed:', e?.message ?? e);
             toggle.style.display = 'none';

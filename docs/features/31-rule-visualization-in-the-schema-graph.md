@@ -47,8 +47,19 @@ graph hover/pinned card for free. This reshapes the slices below:
   `data-participants` attribute the writer emits; a `Visualization::
   highlight_nodes(ids)` marks the set, verified end-to-end by an e2e test
   (playwright-rs drives the hover and asserts `highlighted_node_count`).
-- **Remaining:** the governed-slot **glyph** (a persistent per-slot marker),
-  and optional ephemeral connectors between highlighted nodes.
+- **Rule-touched marker** — done: every node a rule touches — a trigger *or*
+  governed slot, and the class that declares the rule — wears a persistent
+  thin amber ring at rest (exactly the rule's hover-highlight set, so nothing
+  new appears on hover); hovering a rule entry thickens that rule's
+  participants so the focused rule reads above the baseline. All node rings
+  (persistent, hover, selection) share one `draw_ring` and the `RING_W_*`
+  width constants, and the graph legend gains a "Rings" key drawn on the slot
+  shape at the same widths (dpr-corrected so it isn't thicker than the
+  graph). The writer emits per-rule `triggerSlots`/`governedSlots`; the viz
+  mirrors them and flags each rule-touched node at load, verified by Rust
+  unit tests (the flag; the legend rows) and an e2e test (the ring paints).
+- **Remaining:** optional ephemeral connectors between highlighted nodes
+  (the when → then flow); nice-to-have, not required for the glyph to read.
 
 ## Why Now
 
@@ -98,20 +109,20 @@ for every later slice.
 
 ### Slice 2: Viz — governed-slot glyph and slot-scoped hover card
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Should Have
 
 **Depends on:** Slice 1.
 
 **User Value:** A reader sees which fields are conditional and, on hover,
-reads exactly the rule(s) governing *that* field — "present only when …" —
-rather than the whole class's rule list.
+reads exactly the rule(s) governing *that* field — rather than the whole
+class's rule list.
 
 **Acceptance Criteria:**
-- [ ] A slot node the exporter marks as governed renders a distinct marker glyph, drawn by the same code as the rest of the graph so it scales and reads in grayscale.
-- [ ] Hovering the glyph shows a card scoped to that slot: the rule(s) naming it, phrased slot-first (e.g. "`approved_by` — present only when (`verdict` = `approved`) or (`verdict` = `rejected`)"). A slot governed by several rules lists each.
-- [ ] The card reuses the shared rule projection so it never drifts from the HTML card or the class-node hover.
+- [x] A node the exporter marks as rule-touched (trigger/governed slot, or a rule-declaring class) renders a distinct marker (a persistent amber ring), drawn by the same `draw_ring` and `RING_W_*` widths as the legend key and the hover ring so it scales and reads consistently.
+- [x] Hovering the glyph shows a card scoped to that slot: the slot card's "Rules" section lists every class rule naming the slot, each with the shared "when … then …" summary. A slot governed by several rules lists each. (The graph reuses the slot's HTML card, so the glyph hover and the slot node hover show the same section.)
+- [x] The card and the glyph both derive from the shared rule projection (`crate::rules`), so neither drifts from the HTML card or the class-node hover.
 
 ### Slice 3: Viz — participant highlighting and ephemeral connectors
 
@@ -148,8 +159,8 @@ surface).*
 | Slice | Priority | Depends On | Status |
 |---|---|---|---|
 | Slice 1: exporter participant slots | Must Have | graph-JSON rule metadata | Complete |
-| Slice 2: governed-slot glyph + scoped card | Should Have | Slice 1 | Not Started |
-| Slice 3: participant highlighting + connectors | Should Have | Slices 1–2 | Not Started |
+| Slice 2: governed-slot glyph + scoped card | Should Have | Slice 1 | Complete |
+| Slice 3: participant highlighting + connectors | Should Have | Slices 1–2 | Highlighting done; connectors optional |
 | Slice 4: rules in the pinned card | When we need it | Slice 1, pin-on-click | Deferred |
 
 Slice 1 is self-contained Rust (no wasm) and unblocks the rest. Slices 2–3
@@ -158,11 +169,14 @@ pin-on-click popup redesign.
 
 ## Definition of Done
 
-- [ ] Slices 1–3 acceptance criteria met (a rule-governed slot shows a glyph,
-      a scoped card, and highlights its rule's participants on hover).
-- [ ] The rendered graph is hover-tested on a schema with `any_of` /
-      `value_presence` rules, not just asserted in Rust.
-- [ ] [linkml-coverage.md](../linkml-coverage.md) notes the graph now
+- [x] Slices 1–3 acceptance criteria met (a rule-governed slot shows a ring,
+      a scoped card, and highlights its rule's participants on hover). Only
+      Slice 3's optional ephemeral connectors remain unbuilt.
+- [x] The rendered graph is exercised end-to-end on a schema with a
+      `value_presence` rule (`rules_graph.yaml`): an e2e test scans the
+      canvas pixels for the amber glyph and the hover highlight ring, not
+      just Rust state.
+- [x] [linkml-coverage.md](../linkml-coverage.md) notes the graph now
       surfaces rules; the graph legend explains the glyph.
 
 ## Tracked, deliberately not in this feature

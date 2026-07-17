@@ -17,6 +17,37 @@ use crate::simulation::{CpuSimulation, SimEdge, SimNode};
 /// edge line doesn't show through its interior before the outline is
 /// stroked. Keep in sync with the `fill_rect` clear in `render`.
 const CANVAS_BG: &str = "#1a1a2e";
+/// Amber — the "a rule touches this" accent: the persistent rule ring and
+/// the pronounced rule-hover participant ring.
+const AMBER: &str = "rgba(251, 191, 36, 1.0)";
+/// Blue — the selection ring.
+const SELECTION_BLUE: &str = "rgba(59, 130, 246, 1.0)";
+/// Ring stroke widths (device px), shared by the graph and the legend so
+/// their thickness can't drift. A node touched by a rule wears the thin
+/// persistent ring at rest; hovering a rule thickens its participants; the
+/// selection ring sits between the two.
+const RING_W_RULE: f64 = 2.0;
+const RING_W_HOVER: f64 = 3.5;
+const RING_W_SELECTED: f64 = 3.0;
+/// Ring radius offsets (device px) past the node rim. The amber rule ring
+/// hugs the node; the blue selection ring hugs too when it's the only
+/// ring, but is pushed outside the rule ring when the node has both, so a
+/// selected rule node shows an inner amber ring and an outer blue one
+/// instead of the blue burying the amber.
+const RING_OFF_RULE: f64 = 3.0;
+const RING_OFF_SELECTED: f64 = 4.0;
+const RING_OFF_SELECTED_WITH_RULE: f64 = 7.0;
+
+/// Radius offset for the blue selection ring past the node rim. A node that
+/// also wears a rule ring gets the selection ring pushed outside it (so
+/// both read); otherwise it hugs the node.
+fn selection_ring_offset(in_rule: bool) -> f64 {
+    if in_rule {
+        RING_OFF_SELECTED_WITH_RULE
+    } else {
+        RING_OFF_SELECTED
+    }
+}
 
 /// Base RGB for an edge kind (alpha is applied at draw time for the
 /// focus-mode dim). Per ADR-005: structural kinds (`subclassOf`,
@@ -115,6 +146,40 @@ fn node_shape(kind: Option<&KindMetadata>) -> NodeShape {
         Some(KindMetadata::Enum { .. }) => NodeShape::Diamond,
         None => NodeShape::Rectangle,
     }
+}
+
+/// The legend's ring rows: `(ring color, device-px width, swatch shape,
+/// swatch fill, label)`. Each swatch is a *real* node the ring appears on
+/// — the amber rule rings sit on a green slot pill, the blue selection
+/// ring on a blue class circle — so the key never shows an impossible node
+/// (e.g. a blue pill). The widths are the same `RING_W_*` constants
+/// `render_nodes` strokes with, so the key can't drift from the graph. One
+/// source of truth for the legend and a unit test.
+fn ring_legend_rows() -> [(&'static str, f64, NodeShape, [f32; 4], &'static str); 3] {
+    use crate::graph_types::colors;
+    [
+        (
+            AMBER,
+            RING_W_RULE,
+            NodeShape::Pill,
+            colors::SLOT,
+            "Slot in a rule",
+        ),
+        (
+            AMBER,
+            RING_W_HOVER,
+            NodeShape::Pill,
+            colors::SLOT,
+            "Rule participant (on hover)",
+        ),
+        (
+            SELECTION_BLUE,
+            RING_W_SELECTED,
+            NodeShape::Circle,
+            colors::CLASS,
+            "Selected node",
+        ),
+    ]
 }
 
 /// Which ER crow's-foot terminator a slot's effective cardinality
@@ -687,8 +752,14 @@ impl Canvas2DRenderer {
     /// documents (ADR-005). Drawn at fixed canvas coordinates with no
     /// camera transform and no simulation. The caller sizes the canvas
     /// tall enough to hold every row.
-    pub fn render_legend(&self) {
+    /// `dpr` is the device-pixel ratio the caller pre-scaled the legend
+    /// context by (`setTransform(dpr, …)`). The graph canvas is *not*
+    /// dpr-scaled — it strokes in raw device pixels — so every legend line
+    /// width is divided by `dpr` here to render at the same on-screen
+    /// thickness as the graph, rather than `dpr`× thicker.
+    pub fn render_legend(&self, dpr: f64) {
         use crate::graph_types::colors;
+        let lw = |w: f64| w / dpr;
         const TEXT: &str = "rgba(232, 232, 244, 0.95)";
         const HEADER: &str = "rgba(150, 150, 178, 0.95)";
         const BORDER: &str = "rgba(255, 255, 255, 0.6)";
@@ -739,7 +810,7 @@ impl Canvas2DRenderer {
             self.ctx.fill();
             self.set_dash(*dashed);
             self.ctx.set_stroke_style_str(BORDER);
-            self.ctx.set_line_width(if *dashed { 1.5 } else { 1.0 });
+            self.ctx.set_line_width(lw(if *dashed { 1.5 } else { 1.0 }));
             self.ctx.stroke();
             self.set_dash(false);
             self.ctx.set_fill_style_str(TEXT);
@@ -768,7 +839,7 @@ impl Canvas2DRenderer {
             let color = format!("rgba({r}, {g}, {b}, 0.95)");
             self.set_dash(edge_dashed(*kind));
             self.ctx.set_stroke_style_str(&color);
-            self.ctx.set_line_width(1.5);
+            self.ctx.set_line_width(lw(1.5));
             self.ctx.begin_path();
             self.ctx.move_to(x1, y);
             self.ctx.line_to(x2, y);
@@ -803,7 +874,7 @@ impl Canvas2DRenderer {
         for (glyph, label) in &cards {
             self.set_dash(false);
             self.ctx.set_stroke_style_str(&ccolor);
-            self.ctx.set_line_width(1.5);
+            self.ctx.set_line_width(lw(1.5));
             self.ctx.begin_path();
             self.ctx.move_to(cx1, y);
             self.ctx.line_to(tip_x, y);
@@ -813,10 +884,33 @@ impl Canvas2DRenderer {
             let _ = self.ctx.fill_text(label, label_x, y);
             y += row;
         }
+
+        // --- Rings (overlaid on a node) ---
+        y += 6.0;
+        self.ctx.set_font(HEADER_FONT);
+        self.ctx.set_fill_style_str(HEADER);
+        let _ = self.ctx.fill_text("Rings", 12.0, y);
+        y += row;
+        self.ctx.set_font(BODY_FONT);
+        // Each ring is drawn by the same `draw_ring` as the graph, over the
+        // real node kind it appears on (amber on a green slot pill, blue on
+        // a blue class circle), so the key matches what's on screen and
+        // never shows an impossible node (ADR-005). Widths come from the
+        // same constants `render_nodes` uses and are dpr-corrected via `lw`.
+        let node_r = radius * 0.55;
+        let ring_r = node_r + 3.0;
+        for (color, width, shape, fill, label) in ring_legend_rows() {
+            self.node_path(glyph_x, y, node_r, shape);
+            self.ctx.set_fill_style_str(&rgba(fill));
+            self.ctx.fill();
+            self.draw_ring(glyph_x, y, ring_r, color, lw(width));
+            self.ctx.set_fill_style_str(TEXT);
+            let _ = self.ctx.fill_text(label, label_x, y);
+            y += row;
+        }
     }
 
     /// Render all nodes
-    #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_arguments)]
     fn render_nodes(
         &self,
@@ -847,40 +941,25 @@ impl Canvas2DRenderer {
                 true // No focus, all nodes visible
             };
 
-            // Draw selection highlight ring behind the node
+            // Selection ring (blue). When the node also wears a rule ring,
+            // it sits outside that ring so both read; otherwise it hugs the
+            // node.
             if is_selected {
-                self.ctx.begin_path();
-                self.ctx
-                    .arc(
-                        cx as f64,
-                        cy as f64,
-                        (radius + 4.0) as f64,
-                        0.0,
-                        std::f64::consts::TAU,
-                    )
-                    .ok();
-                self.ctx.set_stroke_style_str("rgba(59, 130, 246, 1.0)"); // Blue selection ring
-                self.ctx.set_line_width(3.0);
-                self.ctx.stroke();
+                let sel_r = radius as f64 + selection_ring_offset(node.in_rule);
+                self.draw_ring(cx as f64, cy as f64, sel_r, SELECTION_BLUE, RING_W_SELECTED);
             }
 
-            // Rule-participant highlight ring (amber), shown while a rule
-            // entry in a card is hovered. Distinct hue from the blue
-            // selection ring so both can coexist.
+            // Rule ring (amber, distinct hue from the blue selection ring so
+            // both coexist). Any node a rule touches wears a persistent thin
+            // ring hugging the node so rule-related fields stand out at
+            // rest; hovering a rule entry in a card thickens that rule's
+            // participant rings in place so the focused rule reads above the
+            // baseline.
+            let rule_r = radius as f64 + RING_OFF_RULE;
             if highlighted_nodes.contains(&i) {
-                self.ctx.begin_path();
-                self.ctx
-                    .arc(
-                        cx as f64,
-                        cy as f64,
-                        (radius + 4.0) as f64,
-                        0.0,
-                        std::f64::consts::TAU,
-                    )
-                    .ok();
-                self.ctx.set_stroke_style_str("rgba(251, 191, 36, 1.0)"); // Amber
-                self.ctx.set_line_width(3.0);
-                self.ctx.stroke();
+                self.draw_ring(cx as f64, cy as f64, rule_r, AMBER, RING_W_HOVER);
+            } else if node.in_rule {
+                self.draw_ring(cx as f64, cy as f64, rule_r, AMBER, RING_W_RULE);
             }
 
             // Convert color to CSS, with reduced alpha if dimmed
@@ -944,6 +1023,19 @@ impl Canvas2DRenderer {
                 self.ctx.fill();
             }
         }
+    }
+
+    /// Stroke a ring of `radius` centered at `(cx, cy)`. Shared by the
+    /// selection ring, the persistent governed-slot ring, and the
+    /// rule-hover participant ring so they can't drift from the legend key.
+    fn draw_ring(&self, cx: f64, cy: f64, radius: f64, color: &str, width: f64) {
+        self.ctx.begin_path();
+        self.ctx
+            .arc(cx, cy, radius, 0.0, std::f64::consts::TAU)
+            .ok();
+        self.ctx.set_stroke_style_str(color);
+        self.ctx.set_line_width(width);
+        self.ctx.stroke();
     }
 
     /// Render node labels
@@ -1172,6 +1264,59 @@ impl Canvas2DRenderer {
 mod tests {
     use super::*;
 
+    // Each legend ring swatch is a *real* node the ring appears on — amber
+    // rings on a green slot pill, the blue selection ring on a blue class
+    // circle — so the key never shows an impossible node like a blue pill.
+    // Widths mirror what `render_nodes` strokes, so the key can't drift.
+    #[test]
+    fn ring_legend_rows_use_real_node_swatches_and_shared_widths() {
+        use crate::graph_types::colors;
+        let rows = ring_legend_rows();
+
+        // The two amber rule rings sit on the green slot pill.
+        assert_eq!(rows[0].2, NodeShape::Pill, "in-rule swatch is a slot pill");
+        assert_eq!(rows[0].3, colors::SLOT, "in-rule swatch fills slot green");
+        assert_eq!(rows[1].2, NodeShape::Pill, "hover swatch is a slot pill");
+
+        // The blue selection ring sits on a blue class circle — never a
+        // blue pill, which is not a real node (classes are circles).
+        assert_eq!(
+            rows[2].2,
+            NodeShape::Circle,
+            "selection swatch is a class circle, not a pill"
+        );
+        assert_eq!(
+            rows[2].3,
+            colors::CLASS,
+            "selection swatch fills class blue"
+        );
+
+        // Widths mirror the constants render_nodes strokes with.
+        assert_eq!(rows[0].1, RING_W_RULE, "persistent rule ring width");
+        assert_eq!(rows[1].1, RING_W_HOVER, "hover participant ring width");
+        assert_eq!(rows[2].1, RING_W_SELECTED, "selection ring width");
+    }
+
+    // A node that is both selected and rule-touched shows both rings: the
+    // selection ring is pushed far enough out that its inner edge clears the
+    // outer edge of the (thickest, hover) rule ring, so the blue never
+    // buries the amber.
+    #[test]
+    fn selection_ring_clears_the_rule_ring_when_a_node_has_both() {
+        // Hugging offsets when only one ring is present.
+        assert_eq!(selection_ring_offset(false), RING_OFF_SELECTED);
+        // Pushed out when the node also wears a rule ring.
+        assert_eq!(selection_ring_offset(true), RING_OFF_SELECTED_WITH_RULE);
+
+        let selection_inner_edge = selection_ring_offset(true) - RING_W_SELECTED / 2.0;
+        let rule_outer_edge = RING_OFF_RULE + RING_W_HOVER / 2.0;
+        assert!(
+            selection_inner_edge > rule_outer_edge,
+            "selection ring (inner edge {selection_inner_edge}) must clear the \
+             rule ring (outer edge {rule_outer_edge}) so both are visible"
+        );
+    }
+
     // Labels track the zoom transform with no upper cap, so a label
     // grows without bound as you zoom in (it doesn't pin to a fixed
     // screen size the way the old clamp did).
@@ -1255,6 +1400,7 @@ mod tests {
             slots: vec![],
             parents: vec![],
             mixins: vec![],
+            rules: vec![],
         };
         let slot = KindMetadata::Slot {
             domains: vec![],

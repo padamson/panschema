@@ -67,11 +67,13 @@ pub fn recommend_default_layout(graph_json: &str) -> String {
 /// Render the notation legend onto a standalone canvas, reusing the
 /// graph's own drawing helpers so the key stays faithful to the
 /// glyphs it documents (ADR-005). The caller sizes the canvas tall
-/// enough for every row.
+/// enough for every row and passes the `device_pixel_ratio` it
+/// pre-scaled the context by, so ring/line widths match the graph's
+/// on-screen thickness rather than rendering `dpr`× thicker.
 #[wasm_bindgen]
-pub fn render_legend(canvas: HtmlCanvasElement) -> Result<(), JsValue> {
+pub fn render_legend(canvas: HtmlCanvasElement, device_pixel_ratio: f64) -> Result<(), JsValue> {
     let renderer = Canvas2DRenderer::new(canvas).map_err(|e| JsValue::from_str(&e))?;
-    renderer.render_legend();
+    renderer.render_legend(device_pixel_ratio);
     Ok(())
 }
 
@@ -487,6 +489,26 @@ impl Visualization {
         }
     }
 
+    /// Number of nodes any class rule touches — slots on either side of a
+    /// rule plus the classes that declare rules, flagged at load. Lets a
+    /// test assert the rule set resolved without reading canvas pixels.
+    pub fn rule_node_count(&self) -> usize {
+        self.simulation.nodes.iter().filter(|n| n.in_rule).count()
+    }
+
+    /// Canvas-space positions of every rule-touched node, flattened as
+    /// `[x0, y0, x1, y1, ...]`. Lets a test scan the pixels around a
+    /// rule node for its persistent ring without guessing coordinates.
+    pub fn rule_node_canvas_positions(&self) -> Vec<f32> {
+        let mut out = Vec::new();
+        for node in self.simulation.nodes.iter().filter(|n| n.in_rule) {
+            let (cx, cy) = self.renderer.world_to_canvas(node.x, node.y);
+            out.push(cx);
+            out.push(cy);
+        }
+        out
+    }
+
     /// Highlight a rule's participant nodes, given space-separated node ids
     /// (`"slot:verdict slot:approved_by class:ImageApproval"`). Unknown ids
     /// are ignored. Called on hover of a rule entry in a card; the
@@ -860,6 +882,7 @@ mod details_json_tests {
                     slots: vec![],
                     parents: vec![],
                     mixins: vec![],
+                    rules: vec![],
                 }),
             },
             0,
@@ -1131,6 +1154,7 @@ mod details_json_tests {
                 ],
                 parents: vec!["Entity".into()],
                 mixins: vec!["Auditable".into()],
+                rules: vec![],
             },
         );
         let json: serde_json::Value =
