@@ -68,6 +68,33 @@ fn generate_docs_for(fixture_path: &str) -> PathBuf {
     output_dir
 }
 
+/// Poll (up to ~12s) until a JS readiness expression is truthy. Robust to
+/// variable CI load — e.g. a page that renders both a schema graph and a
+/// second instance graph, each loading wasm — where a fixed sleep would
+/// race. Returns `true` once ready, `false` if it never became ready.
+async fn wait_until_ready(page: &playwright_rs::Page, ready_expr: &str) -> bool {
+    let js = format!("(function(){{ return ({ready_expr}) ? 'ready' : 'no'; }})()");
+    for _ in 0..60 {
+        let r = page.evaluate_value(&js).await.unwrap_or_default();
+        if r.contains("ready") {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    false
+}
+
+/// The schema graph's wasm viz is ready when `__panschema_viz` exists and
+/// node 0 has a canvas position.
+async fn wait_for_graph_viz_ready(page: &playwright_rs::Page) -> bool {
+    wait_until_ready(
+        page,
+        "window.__panschema_viz && typeof window.__panschema_viz.node_canvas_pos === 'function' \
+         && window.__panschema_viz.node_canvas_pos(0).length >= 2",
+    )
+    .await
+}
+
 /// Start a simple HTTP server serving static files.
 async fn start_server(output_dir: PathBuf, port: u16, shutdown_rx: oneshot::Receiver<()>) {
     use axum::Router;
@@ -1591,9 +1618,12 @@ fn e2e_click_pins_node_card_keeping_selection() {
             "the details panel should be removed"
         );
 
-        // Let the wasm graph load and settle a layout, then click node 0 at
-        // its canvas position through the real click handler.
-        tokio::time::sleep(Duration::from_millis(2500)).await;
+        // Wait for the wasm graph to be interrogable (robust to CI load),
+        // then click node 0 at its canvas position through the real handler.
+        assert!(
+            wait_for_graph_viz_ready(&page).await,
+            "schema graph viz never became ready"
+        );
         let clicked = page
             .evaluate_value(
                 r#"(function(){
@@ -1693,8 +1723,11 @@ fn e2e_pinned_card_is_draggable_by_its_handle() {
             .await
             .expect("goto");
 
-        // Let the wasm graph settle, then pin node 0 through the click handler.
-        tokio::time::sleep(Duration::from_millis(2500)).await;
+        // Wait for the wasm graph to be interrogable, then pin node 0.
+        assert!(
+            wait_for_graph_viz_ready(&page).await,
+            "schema graph viz never became ready"
+        );
         let clicked = page
             .evaluate_value(
                 r#"(function(){
@@ -2003,8 +2036,11 @@ fn e2e_instance_graph_renders_individuals_beneath_the_cards() {
             "three individuals + one object-property assertion; got {counts}"
         );
 
-        // Let the instance viz load its (separate) wasm module and settle.
-        tokio::time::sleep(Duration::from_millis(2500)).await;
+        // Wait for the instance viz to load its (separate) wasm module.
+        assert!(
+            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
+            "instance graph viz never became ready"
+        );
 
         // The viz initialized and its canvas painted the teal individual
         // nodes (RGB ~ 41,184,179) — proof the A-box graph actually renders,
