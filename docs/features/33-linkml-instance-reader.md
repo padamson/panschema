@@ -82,7 +82,7 @@ document root at it (completing the deferred root-`$ref`).
 
 ### Slice 2: First-class `InstanceSet`; move the OWL path + exporter onto it
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Must Have
 
@@ -93,9 +93,9 @@ path and the instance-graph exporter stop reading `panschema:individual*`
 annotations and read the `InstanceSet` instead.
 
 **Acceptance Criteria:**
-- [ ] An `InstanceSet` type: flat records keyed by identifier, each with class, literal slot values, and typed references (id → id, labelled by property).
-- [ ] The OWL reader produces an `InstanceSet` (replacing / alongside the annotation flattening), and `schema_to_instance_graph` consumes an `InstanceSet` — the rendered instance graph is unchanged (the feature-18 e2e still passes).
-- [ ] Test: the OWL fixture yields the same instance graph via the `InstanceSet` path.
+- [x] An `InstanceSet` type (`crate::instances`): flat records keyed by identifier, each with class ids, literal assertions `(property, value)`, and typed `Reference`s (property → target id).
+- [x] `InstanceSet::from_owl_annotations` builds the set from the OWL reader's annotations (resolving object-vs-literal), and `GraphWriter::instance_set_to_graph` renders any `InstanceSet` — `schema_to_instance_graph` is now a thin wrapper over both. The rendered instance graph is unchanged (the feature-18 e2e still passes).
+- [x] Test: the OWL fixture yields the same instance graph via the `InstanceSet` path (`from_owl_annotations_builds_typed_records_with_refs_and_literals` + the unchanged graph/e2e tests).
 
 ### Slice 3: LinkML instance reader (`--instances`)
 
@@ -135,7 +135,7 @@ agent-self-correction signal), not silently dropped.
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | Slice 1: model `tree_root` | Must Have | — | Complete |
-| Slice 2: `InstanceSet` + move OWL/exporter onto it | Must Have | Slice 1 | Not Started |
+| Slice 2: `InstanceSet` + move OWL/exporter onto it | Must Have | Slice 1 | Complete |
 | Slice 3: LinkML instance reader | Must Have | Slices 1–2 | Not Started |
 | Slice 4: instance reference integrity | Should Have | Slice 3 | Not Started |
 

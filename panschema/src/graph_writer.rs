@@ -307,25 +307,10 @@ pub struct GraphEdge {
 /// Returns `(display_uri, unresolved)`.
 ///
 /// [`expand_curie`]: crate::linkml_resolve::expand_curie
-/// Local name of an IRI: the part after the last `#` or `/`, else the
-/// whole string. Mirrors how the HTML individual card resolves a type
-/// IRI to a class id.
-fn local_name(iri: &str) -> &str {
-    iri.rsplit(['#', '/']).next().unwrap_or(iri)
-}
-
-/// Capitalize the first character (ASCII), leaving the rest untouched —
-/// the instance node's display label when the individual has no
-/// `rdfs:label`, matching the HTML individual card's fallback.
-fn capitalize_first(id: &str) -> String {
-    let mut chars = id.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-        None => String::new(),
-    }
-}
-
-fn resolve_node_uri(schema: &SchemaDefinition, uri: Option<&str>) -> (Option<String>, bool) {
+pub(crate) fn resolve_node_uri(
+    schema: &SchemaDefinition,
+    uri: Option<&str>,
+) -> (Option<String>, bool) {
     match uri {
         None => (None, false),
         Some(v) => match crate::linkml_resolve::expand_curie(schema, v) {
@@ -511,124 +496,60 @@ impl GraphWriter {
     /// graph with no nodes when the schema declares no individuals, so the
     /// caller can omit the instance-graph section entirely.
     pub fn schema_to_instance_graph(&self, schema: &SchemaDefinition) -> GraphData {
-        use std::collections::HashMap;
+        let set = crate::instances::InstanceSet::from_owl_annotations(schema);
+        self.instance_set_to_graph(schema, &set)
+    }
 
+    /// Render an [`InstanceSet`](crate::instances::InstanceSet) as the A-box
+    /// graph: one `Individual` node per instance (typed, with its literal
+    /// assertions as hover metadata) and one `Assertion` edge per reference.
+    /// Source-agnostic — the same rendering for OWL-sourced and (later)
+    /// LinkML-data-sourced instances; `schema` supplies only the graph's
+    /// name/title. Empty in → empty out.
+    pub fn instance_set_to_graph(
+        &self,
+        schema: &SchemaDefinition,
+        set: &crate::instances::InstanceSet,
+    ) -> GraphData {
         let mut graph = GraphData::new(schema.name.clone(), schema.title.clone());
 
-        let Some(ids_csv) = schema.annotations.get("panschema:individuals") else {
-            return graph;
-        };
-        let ids: Vec<&str> = ids_csv
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .collect();
+        for inst in &set.instances {
+            let node_id = format!("individual:{}", inst.id);
 
-        // Map each individual's IRI to its node id so an object-property
-        // assertion (whose value is the target's IRI) resolves to an edge.
-        let node_id_of = |id: &str| format!("individual:{id}");
-        let mut iri_to_node: HashMap<&str, String> = HashMap::new();
-        for id in &ids {
-            if let Some(iri) = schema
-                .annotations
-                .get(&format!("panschema:individual:{id}:_iri"))
-            {
-                iri_to_node.insert(iri.as_str(), node_id_of(id));
+            for reference in &inst.references {
+                graph.edges.push(GraphEdge {
+                    source: node_id.clone(),
+                    target: format!("individual:{}", reference.target),
+                    edge_type: EdgeType::Assertion,
+                    label: Some(reference.property.clone()),
+                });
             }
-        }
-
-        for id in &ids {
-            let node_id = node_id_of(id);
-
-            let label = schema
-                .annotations
-                .get(&format!("panschema:individual:{id}:_label"))
-                .cloned()
-                .unwrap_or_else(|| capitalize_first(id));
-
-            // rdf:type IRIs → the class ids the schema actually defines.
-            let types: Vec<String> = schema
-                .annotations
-                .get(&format!("panschema:individual:{id}"))
-                .map(|csv| {
-                    csv.split(',')
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                        .map(local_name)
-                        .filter(|tid| schema.classes.contains_key(*tid))
-                        .map(str::to_string)
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            // Walk this individual's property assertions. An object-valued
-            // one (value == a known individual's IRI) becomes an edge; a
-            // literal-valued one becomes hover metadata.
-            let prefix = format!("panschema:individual:{id}:");
-            let mut literals: Vec<PropertyLiteral> = Vec::new();
-            for (key, value) in &schema.annotations {
-                let Some(prop) = key.strip_prefix(&prefix) else {
-                    continue;
-                };
-                // Skip the reserved sub-keys (`_iri`/`_label`/`_comment`)
-                // and the per-property `:_label` companion keys.
-                if prop.starts_with('_') || prop.ends_with(":_label") {
-                    continue;
-                }
-                let prop_label = schema
-                    .annotations
-                    .get(&format!("{key}:_label"))
-                    .cloned()
-                    .or_else(|| {
-                        schema
-                            .slots
-                            .get(prop)
-                            .and_then(|s| s.annotations.get("panschema:label").cloned())
-                    })
-                    .unwrap_or_else(|| prop.to_string());
-
-                if let Some(target) = iri_to_node.get(value.as_str()) {
-                    graph.edges.push(GraphEdge {
-                        source: node_id.clone(),
-                        target: target.clone(),
-                        edge_type: EdgeType::Assertion,
-                        label: Some(prop_label),
-                    });
-                } else {
-                    literals.push(PropertyLiteral {
-                        property: prop_label,
-                        value: value.clone(),
-                    });
-                }
-            }
-            literals.sort_by(|a, b| a.property.cmp(&b.property));
-
-            let comment = schema
-                .annotations
-                .get(&format!("panschema:individual:{id}:_comment"))
-                .cloned();
-            let (uri, uri_unresolved) = resolve_node_uri(
-                schema,
-                schema
-                    .annotations
-                    .get(&format!("panschema:individual:{id}:_iri"))
-                    .map(String::as_str),
-            );
 
             graph.nodes.push(GraphNode {
                 id: node_id,
-                label,
+                label: inst.label.clone(),
                 node_type: NodeType::Individual,
                 color: NodeType::Individual.color(),
-                description: comment,
-                uri,
-                uri_unresolved,
+                description: inst.description.clone(),
+                uri: inst.iri.clone(),
+                uri_unresolved: inst.uri_unresolved,
                 is_abstract: false,
-                kind_metadata: Some(KindMetadata::Individual { types, literals }),
+                kind_metadata: Some(KindMetadata::Individual {
+                    types: inst.types.clone(),
+                    literals: inst
+                        .literals
+                        .iter()
+                        .map(|(property, value)| PropertyLiteral {
+                            property: property.clone(),
+                            value: value.clone(),
+                        })
+                        .collect(),
+                }),
             });
         }
 
-        // Stable order: nodes by id, edges by (source, target, label).
+        // Stable order: nodes by id (the InstanceSet is already id-sorted),
+        // edges by (source, target, label).
         graph.nodes.sort_by(|a, b| a.id.cmp(&b.id));
         graph.edges.sort_by(|a, b| {
             (&a.source, &a.target, &a.label).cmp(&(&b.source, &b.target, &b.label))
