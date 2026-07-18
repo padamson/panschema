@@ -232,6 +232,57 @@ pub fn dangling_references(schema: &SchemaDefinition) -> Vec<DanglingRef> {
     out
 }
 
+/// A typed instance reference (an A-box object assertion) whose target
+/// identifier names no instance in the data — the A-box analog of a dangling
+/// schema reference. Surfaced so an authoring loop (e.g. an LLM agent building
+/// an instance graph) gets a concrete "fix this" signal instead of a silently
+/// dropped edge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DanglingInstanceRef {
+    /// The referring instance's id.
+    pub referrer: String,
+    /// The property whose value is the missing reference.
+    pub property: String,
+    /// The unresolved target identifier.
+    pub target: String,
+}
+
+impl DanglingInstanceRef {
+    /// A user-facing warning line naming the referring record, the property,
+    /// and the missing target id.
+    pub fn message(&self) -> String {
+        format!(
+            "instance `{}` property `{}` references `{}`, which names no instance in the data",
+            self.referrer, self.property, self.target
+        )
+    }
+}
+
+/// Every typed reference in `set` whose target isn't the id of some instance in
+/// `set`. Deterministic: sorted by referrer id, then property, then target.
+pub fn dangling_instance_references(
+    set: &crate::instances::InstanceSet,
+) -> Vec<DanglingInstanceRef> {
+    use std::collections::HashSet;
+    let ids: HashSet<&str> = set.instances.iter().map(|i| i.id.as_str()).collect();
+    let mut out = Vec::new();
+    for inst in &set.instances {
+        for r in &inst.references {
+            if !ids.contains(r.target.as_str()) {
+                out.push(DanglingInstanceRef {
+                    referrer: inst.id.clone(),
+                    property: r.property.clone(),
+                    target: r.target.clone(),
+                });
+            }
+        }
+    }
+    out.sort_by(|a, b| {
+        (&a.referrer, &a.property, &a.target).cmp(&(&b.referrer, &b.property, &b.target))
+    });
+    out
+}
+
 /// The detection mechanism, parameterized by the ignore-list so tests can
 /// exercise it with fabricated keys decoupled from the real list. Warns
 /// by default: an unmodeled key is reported unless it is in `ignored`.
@@ -735,6 +786,64 @@ mod tests {
         assert!(
             unmodeled_class_constructs(&schema).is_empty(),
             "modeled keys must not warn"
+        );
+    }
+
+    fn instance(id: &str, refs: &[(&str, &str)]) -> crate::instances::Instance {
+        crate::instances::Instance {
+            id: id.to_string(),
+            iri: None,
+            uri_unresolved: false,
+            label: id.to_string(),
+            description: None,
+            types: Vec::new(),
+            literals: Vec::new(),
+            references: refs
+                .iter()
+                .map(|(property, target)| crate::instances::Reference {
+                    property: property.to_string(),
+                    target: target.to_string(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn dangling_instance_reference_is_reported_with_referrer_property_and_target() {
+        // `wineB` listed before `wineA` so the reported order pins the sort.
+        let set = crate::instances::InstanceSet {
+            instances: vec![
+                instance("wineB", &[("produced_by", "ghostTwo")]),
+                instance("wineA", &[("produced_by", "ghostOne")]),
+                instance("realWinery", &[]),
+            ],
+        };
+        let danglers = dangling_instance_references(&set);
+        assert_eq!(danglers.len(), 2, "two references resolve to no instance");
+        // Deterministic: sorted by referrer id, then property, then target.
+        assert_eq!(danglers[0].referrer, "wineA");
+        assert_eq!(danglers[1].referrer, "wineB");
+
+        assert_eq!(danglers[0].property, "produced_by");
+        assert_eq!(danglers[0].target, "ghostOne");
+        let msg = danglers[0].message();
+        assert!(
+            msg.contains("wineA") && msg.contains("produced_by") && msg.contains("ghostOne"),
+            "message must name referrer, property, and missing target; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn resolved_instance_references_do_not_warn() {
+        let set = crate::instances::InstanceSet {
+            instances: vec![
+                instance("wineA", &[("produced_by", "realWinery")]),
+                instance("realWinery", &[]),
+            ],
+        };
+        assert!(
+            dangling_instance_references(&set).is_empty(),
+            "a reference to a defined instance is not dangling"
         );
     }
 }

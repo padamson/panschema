@@ -395,6 +395,19 @@ fn generate(
                 anyhow::anyhow!("parsing instances file {}: {}", inst_path.display(), e)
             })?;
             let set = panschema::instances::InstanceSet::from_linkml_data(&schema, &data);
+            // A reference to an instance the data doesn't define is a dangling
+            // instance reference (the A-box analog of a dangling schema ref) —
+            // the feedback signal an authoring loop uses to self-correct.
+            let danglers = panschema::diagnostics::dangling_instance_references(&set);
+            for d in &danglers {
+                eprintln!("warning: {}", d.message());
+            }
+            if strict && !danglers.is_empty() {
+                anyhow::bail!(
+                    "{} dangling instance reference(s) present; failing because --strict is set",
+                    danglers.len()
+                );
+            }
             writer = writer.with_instances(set);
         }
         if let Some(store) = panschema::labels::open_default_store(

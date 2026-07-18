@@ -121,7 +121,7 @@ increment.
 
 ### Slice 4: Instance reference-integrity diagnostic
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Should Have
 
@@ -131,8 +131,8 @@ increment.
 agent-self-correction signal), not silently dropped.
 
 **Acceptance Criteria:**
-- [ ] A typed reference whose target identifier isn't in the `InstanceSet` produces a diagnostic naming the referring record, the property, and the missing id — routed through the same diagnostics path as dangling schema refs; `--strict` fails on it.
-- [ ] Test: a data file with a dangling instance reference warns (and fails under `--strict`).
+- [x] A typed reference whose target identifier isn't in the `InstanceSet` produces a diagnostic naming the referring record, the property, and the missing id (`diagnostics::dangling_instance_references` → `DanglingInstanceRef`, mirroring the schema-side `DanglingRef`); `generate --instances` warns on each, and `--strict` fails.
+- [x] Test: a data file with a dangling instance reference warns (`dangling_instance_reference_is_reported_with_referrer_property_and_target`) and fails under `--strict` (`dangling_instance_reference_warns_and_fails_under_strict`, driven by a checked-in fixture where a wine's `produced_by` names an undefined winery).
 
 ---
 
@@ -143,7 +143,7 @@ agent-self-correction signal), not silently dropped.
 | Slice 1: model `tree_root` | Must Have | — | Complete |
 | Slice 2: `InstanceSet` + move OWL/exporter onto it | Must Have | Slice 1 | Complete |
 | Slice 3: LinkML instance reader | Must Have | Slices 1–2 | Complete |
-| Slice 4: instance reference integrity | Should Have | Slice 3 | Not Started |
+| Slice 4: instance reference integrity | Should Have | Slice 3 | Complete |
 
 ## Definition of Done
 

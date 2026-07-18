@@ -1,0 +1,9 @@
+wines:
+  - id: chateauMorgon
+    name: Château Morgon
+    color: red
+    produced_by: ghostWinery
+wineries:
+  - id: morgonEstate
+    name: Morgon Estate
+    region: Beaujolais

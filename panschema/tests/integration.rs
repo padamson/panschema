@@ -728,6 +728,54 @@ fn instances_flag_warns_only_for_non_html_formats() {
 }
 
 #[test]
+fn dangling_instance_reference_warns_and_fails_under_strict() {
+    let dir = std::env::temp_dir().join("panschema_instance_dangling_test");
+    let _ = fs::remove_dir_all(&dir);
+
+    // A wine references a winery the data file doesn't define. Without
+    // --strict, generation succeeds but warns, naming the dangling reference.
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--input",
+            "tests/fixtures/wine_catalog.yaml",
+            "--instances",
+            "tests/fixtures/wine_instances_dangling.yaml",
+            "--output",
+            dir.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run panschema");
+    assert!(out.status.success(), "non-strict generation should succeed");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("ghostWinery") && stderr.contains("names no instance"),
+        "the dangling instance reference should warn, naming the missing id; got: {stderr}"
+    );
+
+    // Under --strict the same dangling reference is a hard failure.
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--input",
+            "tests/fixtures/wine_catalog.yaml",
+            "--instances",
+            "tests/fixtures/wine_instances_dangling.yaml",
+            "--output",
+            dir.to_str().unwrap(),
+            "--strict",
+        ])
+        .output()
+        .expect("run panschema");
+    assert!(
+        !out.status.success(),
+        "--strict must fail on a dangling instance reference"
+    );
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn viz_mode_flag_is_recognized() {
     let output_dir = std::env::temp_dir().join("panschema_viz_mode_test");
     let _ = fs::remove_dir_all(&output_dir);
