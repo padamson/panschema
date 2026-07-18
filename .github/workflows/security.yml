@@ -157,7 +157,7 @@ jobs:
 
       # Playwright browsers are also needed for the e2e baseline.
       - name: Setup Node.js (for Playwright)
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
 
@@ -259,7 +259,7 @@ jobs:
         run: wasm-pack build panschema-viz --target web --features webgpu
 
       - name: Setup Node.js (for Playwright)
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
 
