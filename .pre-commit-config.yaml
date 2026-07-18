@@ -1,6 +1,6 @@
 # Pre-commit hooks for panschema
 # Install: cargo install prek && prek install
-# Setup: npx playwright@1.60.0 install (required for E2E tests; must match playwright_rs::PLAYWRIGHT_VERSION)
+# Setup: npx playwright@1.61.1 install (required for E2E tests; must match playwright_rs::PLAYWRIGHT_VERSION)
 # Run manually: prek run --all-files
 
 fail_fast: true

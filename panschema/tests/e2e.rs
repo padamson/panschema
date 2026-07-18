@@ -171,7 +171,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
 
     // 3. Verify sidebar is present
-    let sidebar = page.locator(".sidebar").await;
+    let sidebar = page.locator(".sidebar");
     let sidebar_count = sidebar.count().await.expect("Failed to count sidebars");
     assert!(
         sidebar_count > 0,
@@ -195,7 +195,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     // 6. Verify classes are extracted and displayed (not empty)
     // The section header should show count of 6 (Animal, Cat, Dog, Mammal,
     // Person, Pet)
-    let class_section = page.locator("#classes").await;
+    let class_section = page.locator("#classes");
     let class_section_html = class_section
         .inner_html()
         .await
@@ -208,7 +208,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
 
     // Verify some class links are present
-    let class_links = page.locator(".class-link").await;
+    let class_links = page.locator(".class-link");
     let class_link_count = class_links
         .count()
         .await
@@ -232,7 +232,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
 
     // 6b. Verify class cards are rendered with full content
-    let class_cards = page.locator(".class-card").await;
+    let class_cards = page.locator(".class-card");
     let class_card_count = class_cards
         .count()
         .await
@@ -244,7 +244,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
 
     // Verify class card content: Dog should show description
-    let dog_card = page.locator("#class-Dog").await;
+    let dog_card = page.locator("#class-Dog");
     let dog_card_html = dog_card.inner_html().await.expect("Failed to get Dog card");
     assert!(
         dog_card_html.contains("A domesticated carnivorous mammal"),
@@ -274,7 +274,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
 
     // Mammal should show "Superclass of" (Dog and Cat)
-    let mammal_card = page.locator("#class-Mammal").await;
+    let mammal_card = page.locator("#class-Mammal");
     let mammal_card_html = mammal_card
         .inner_html()
         .await
@@ -291,7 +291,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
 
     // Animal should show "Superclass of" Mammal (root class)
-    let animal_card = page.locator("#class-Animal").await;
+    let animal_card = page.locator("#class-Animal");
     let animal_card_html = animal_card
         .inner_html()
         .await
@@ -303,7 +303,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
 
     // Person should NOT show "Subclass of" (it's a root class)
-    let person_card = page.locator("#class-Person").await;
+    let person_card = page.locator("#class-Person");
     let person_card_html = person_card
         .inner_html()
         .await
@@ -315,7 +315,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
 
     // 6d. Verify slots are extracted and displayed
-    let slot_section = page.locator("#slots").await;
+    let slot_section = page.locator("#slots");
     let slot_section_html = slot_section
         .inner_html()
         .await
@@ -328,7 +328,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
 
     // Verify slot links are present
-    let slot_links = page.locator(".slot-link").await;
+    let slot_links = page.locator(".slot-link");
     let slot_link_count = slot_links
         .count()
         .await
@@ -340,7 +340,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
 
     // 6e. Verify slot cards are rendered with full content
-    let slot_cards = page.locator(".slot-card").await;
+    let slot_cards = page.locator(".slot-card");
     let slot_card_count = slot_cards
         .count()
         .await
@@ -352,7 +352,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
 
     // Verify object-ranged slot card: hasOwner
-    let has_owner_card = page.locator("#slot-hasOwner").await;
+    let has_owner_card = page.locator("#slot-hasOwner");
     let has_owner_html = has_owner_card
         .inner_html()
         .await
@@ -389,7 +389,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
 
     // Verify datatype-ranged slot card: hasAge
-    let has_age_card = page.locator("#slot-hasAge").await;
+    let has_age_card = page.locator("#slot-hasAge");
     let has_age_html = has_age_card
         .inner_html()
         .await
@@ -406,7 +406,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
 
     // Verify inverse slot: owns shows inverseOf characteristic
-    let owns_card = page.locator("#slot-owns").await;
+    let owns_card = page.locator("#slot-owns");
     let owns_html = owns_card
         .inner_html()
         .await
@@ -425,7 +425,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
 
     // Pet is `owl:deprecated true`: its card shows the "Deprecated"
     // badge and the deprecation note.
-    let pet_card = page.locator("#class-Pet").await;
+    let pet_card = page.locator("#class-Pet");
     let pet_html = pet_card.inner_html().await.expect("Failed to get Pet card");
     assert!(
         pet_html.contains(r#"class="deprecated-badge""#),
@@ -468,7 +468,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
 
     // relatedTo is owl:SymmetricProperty + owl:TransitiveProperty: its
     // slot card shows both characteristic badges.
-    let related_card = page.locator("#slot-relatedTo").await;
+    let related_card = page.locator("#slot-relatedTo");
     let related_html = related_card
         .inner_html()
         .await
@@ -483,7 +483,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
 
     // 6f. Verify individuals are extracted and displayed
-    let ind_section = page.locator("#individuals").await;
+    let ind_section = page.locator("#individuals");
     let ind_section_html = ind_section
         .inner_html()
         .await
@@ -496,7 +496,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
 
     // Verify individual links are present
-    let ind_links = page.locator(".individual-link").await;
+    let ind_links = page.locator(".individual-link");
     let ind_link_count = ind_links
         .count()
         .await
@@ -508,7 +508,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
 
     // Verify individual cards are rendered
-    let ind_cards = page.locator(".individual-card").await;
+    let ind_cards = page.locator(".individual-card");
     let ind_card_count = ind_cards
         .count()
         .await
@@ -520,7 +520,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
 
     // Verify individual card content: fido
-    let fido_card = page.locator("#ind-fido").await;
+    let fido_card = page.locator("#ind-fido");
     let fido_card_html = fido_card
         .inner_html()
         .await
@@ -552,7 +552,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
 
     // Verify sidebar has individuals link
-    let ind_sidebar_link = page.locator(".sidebar-link[href='#individuals']").await;
+    let ind_sidebar_link = page.locator(".sidebar-link[href='#individuals']");
     let ind_sidebar_count = ind_sidebar_link
         .count()
         .await
@@ -564,7 +564,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
 
     // 7. Test sidebar navigation links exist and are clickable
-    let classes_link = page.locator(".sidebar-link[href='#classes']").await;
+    let classes_link = page.locator(".sidebar-link[href='#classes']");
     let link_count = classes_link.count().await.expect("Failed to count links");
     assert!(
         link_count > 0,
@@ -596,7 +596,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
 
     // Verify classes section exists (the target of the link)
-    let classes_section = page.locator("#classes").await;
+    let classes_section = page.locator("#classes");
     let section_count = classes_section
         .count()
         .await
@@ -651,7 +651,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     .await
     .expect("Failed to set desktop viewport");
 
-    let mobile_toggle = page.locator(".mobile-menu-toggle").await;
+    let mobile_toggle = page.locator(".mobile-menu-toggle");
     let toggle_visible_desktop = mobile_toggle
         .is_visible()
         .await
@@ -662,7 +662,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         browser_name
     );
 
-    let sidebar = page.locator(".sidebar").await;
+    let sidebar = page.locator(".sidebar");
     let sidebar_visible_desktop = sidebar
         .is_visible()
         .await
@@ -679,14 +679,12 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     tokio::time::sleep(Duration::from_millis(100)).await;
     let animal_box = page
         .locator("#class-Animal")
-        .await
         .bounding_box()
         .await
         .expect("Failed to query Animal card box")
         .expect("Animal class card should have a bounding box");
     let mammal_box = page
         .locator("#class-Mammal")
-        .await
         .bounding_box()
         .await
         .expect("Failed to query Mammal card box")
@@ -707,14 +705,12 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     // 1280px viewport instead of stacking.
     let cat_box = page
         .locator("#class-Cat")
-        .await
         .bounding_box()
         .await
         .expect("Failed to query Cat card box")
         .expect("Cat class card should have a bounding box");
     let dog_box = page
         .locator("#class-Dog")
-        .await
         .bounding_box()
         .await
         .expect("Failed to query Dog card box")
@@ -739,21 +735,18 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     // Animal and Cat (alphabetical neighbors) tile on the same row
     // (within a small Y tolerance) on a 1280px viewport.
     page.locator(r#".view-toggle-btn[data-view="flat"]"#)
-        .await
         .click(None)
         .await
         .expect("Failed to click the Flat toggle");
     tokio::time::sleep(Duration::from_millis(100)).await;
     let animal_flat_box = page
         .locator("#class-Animal")
-        .await
         .bounding_box()
         .await
         .expect("Failed to query Animal card box (flat)")
         .expect("Animal class card should have a bounding box (flat)");
     let cat_flat_box = page
         .locator("#class-Cat")
-        .await
         .bounding_box()
         .await
         .expect("Failed to query Cat card box (flat)")
@@ -768,7 +761,6 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
     // Restore the tree default so later steps see the shipped state.
     page.locator(r#".view-toggle-btn[data-view="tree"]"#)
-        .await
         .click(None)
         .await
         .expect("Failed to click the Tree toggle");
@@ -778,7 +770,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     // default (16:8) within 5% — derived dynamically rather than
     // hard-coded so future default-ratio changes only need to bump
     // this constant.
-    let graph_container = page.locator(".graph-container").await;
+    let graph_container = page.locator(".graph-container");
     let graph_box = graph_container
         .bounding_box()
         .await
@@ -865,7 +857,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     // === GRAPH VISUALIZATION TESTS ===
 
     // 9. Verify graph visualization section exists
-    let graph_section = page.locator("#graph-visualization").await;
+    let graph_section = page.locator("#graph-visualization");
     let graph_section_count = graph_section
         .count()
         .await
@@ -882,7 +874,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     // simulating an actual hover-over-node interaction requires the
     // WASM-driven canvas, which is outside this happy-path test's
     // scope.
-    let hover_card = page.locator("#graph-hover-card").await;
+    let hover_card = page.locator("#graph-hover-card");
     let hover_card_count = hover_card
         .count()
         .await
@@ -908,7 +900,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     // controls strip, defaults on, and persists its off-state to
     // localStorage. Direction is drawn on the WASM canvas, which a
     // DOM test can't pixel-assert; this verifies the control contract.
-    let arrows_btn = page.locator("#graph-arrows").await;
+    let arrows_btn = page.locator("#graph-arrows");
     assert_eq!(
         arrows_btn.count().await.expect("count arrows toggle"),
         1,
@@ -963,7 +955,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     // a non-zero backing-store width means it sized and drew), defaults
     // open on this roomy viewport, and toggles + persists. The glyph
     // pixels can't be DOM-asserted; this verifies the control contract.
-    let legend_toggle = page.locator("#graph-legend-toggle").await;
+    let legend_toggle = page.locator("#graph-legend-toggle");
     assert_eq!(
         legend_toggle.count().await.expect("count legend toggle"),
         1,
@@ -1027,7 +1019,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     .expect("restore legend toggle");
 
     // 10. Verify canvas is present and visible
-    let canvas = page.locator("#graph-canvas").await;
+    let canvas = page.locator("#graph-canvas");
     let canvas_count = canvas.count().await.expect("Failed to count canvas");
     assert!(
         canvas_count > 0,
@@ -1055,7 +1047,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
 
     // 11. Verify node count badge shows correct count
-    let node_count_badge = page.locator("#graph-node-count").await;
+    let node_count_badge = page.locator("#graph-node-count");
     let badge_text = node_count_badge
         .inner_text()
         .await
@@ -1069,7 +1061,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
 
     // 12. Verify graph controls are present
-    let reset_btn = page.locator("#graph-reset").await;
+    let reset_btn = page.locator("#graph-reset");
     let reset_count = reset_btn
         .count()
         .await
@@ -1080,7 +1072,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         browser_name
     );
 
-    let zoom_in = page.locator("#graph-zoom-in").await;
+    let zoom_in = page.locator("#graph-zoom-in");
     let zoom_in_count = zoom_in
         .count()
         .await
@@ -1091,7 +1083,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         browser_name
     );
 
-    let zoom_out = page.locator("#graph-zoom-out").await;
+    let zoom_out = page.locator("#graph-zoom-out");
     let zoom_out_count = zoom_out
         .count()
         .await
@@ -1103,7 +1095,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
 
     // 13. Verify loading indicator is hidden after initialization
-    let loading = page.locator("#graph-loading").await;
+    let loading = page.locator("#graph-loading");
     let loading_visible = loading
         .is_visible()
         .await
@@ -1165,9 +1157,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
 
     // 18. Verify Schema Graph is in sidebar navigation
-    let graph_sidebar_link = page
-        .locator(".sidebar-link[href='#graph-visualization']")
-        .await;
+    let graph_sidebar_link = page.locator(".sidebar-link[href='#graph-visualization']");
     let graph_sidebar_count = graph_sidebar_link
         .count()
         .await
@@ -1199,7 +1189,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // 20. Test zoom button interaction - click zoom in and verify no errors
-    let zoom_in_btn = page.locator("#graph-zoom-in").await;
+    let zoom_in_btn = page.locator("#graph-zoom-in");
     zoom_in_btn
         .click(None)
         .await
@@ -1207,7 +1197,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Verify no error overlay appeared after zoom
-    let error_overlay = page.locator("#graph-error").await;
+    let error_overlay = page.locator("#graph-error");
     let error_visible = error_overlay
         .is_visible()
         .await
@@ -1219,7 +1209,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     );
 
     // 21. Test zoom out button
-    let zoom_out_btn = page.locator("#graph-zoom-out").await;
+    let zoom_out_btn = page.locator("#graph-zoom-out");
     zoom_out_btn
         .click(None)
         .await
@@ -1227,7 +1217,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // 22. Test reset button
-    let reset_button = page.locator("#graph-reset").await;
+    let reset_button = page.locator("#graph-reset");
     reset_button
         .click(None)
         .await
@@ -1260,7 +1250,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
 
     // 24. Verify 2D/3D mode toggle elements exist
     // The mode toggle has 2D and 3D buttons; 3D may be disabled if WebGPU unavailable
-    let mode_toggle = page.locator("#graph-mode-toggle").await;
+    let mode_toggle = page.locator("#graph-mode-toggle");
     let mode_toggle_count = mode_toggle
         .count()
         .await
@@ -1271,7 +1261,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         browser_name
     );
 
-    let mode_2d_btn = page.locator("#graph-mode-2d").await;
+    let mode_2d_btn = page.locator("#graph-mode-2d");
     let mode_2d_count = mode_2d_btn
         .count()
         .await
@@ -1282,7 +1272,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         browser_name
     );
 
-    let mode_3d_btn = page.locator("#graph-mode-3d").await;
+    let mode_3d_btn = page.locator("#graph-mode-3d");
     let mode_3d_count = mode_3d_btn
         .count()
         .await
@@ -1314,7 +1304,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
 
     // 24b. Layout picker: the chrome is present, the implemented
     // variant is selectable, and the rest are disabled.
-    let layout_select = page.locator("#graph-layout-select").await;
+    let layout_select = page.locator("#graph-layout-select");
     let layout_select_count = layout_select
         .count()
         .await
@@ -1347,11 +1337,9 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         "stress",
         "sgd",
     ] {
-        let opt = page
-            .locator(&format!(
-                "#graph-layout-select option[value=\"{implemented}\"]"
-            ))
-            .await;
+        let opt = page.locator(format!(
+            "#graph-layout-select option[value=\"{implemented}\"]"
+        ));
         let count = opt.count().await.expect("Failed to count option");
         assert_eq!(
             count, 1,
@@ -1370,11 +1358,9 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         );
     }
     for unimplemented in &["circular", "radial-tree"] {
-        let opt = page
-            .locator(&format!(
-                "#graph-layout-select option[value=\"{unimplemented}\"]"
-            ))
-            .await;
+        let opt = page.locator(format!(
+            "#graph-layout-select option[value=\"{unimplemented}\"]"
+        ));
         let count = opt.count().await.expect("Failed to count option");
         assert_eq!(
             count, 1,
@@ -1401,9 +1387,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     page.evaluate::<(), ()>("window.__panschema_apply_layout_picker_mode(true)", None)
         .await
         .expect("Failed to force picker into 3D mode");
-    let fd_3d = page
-        .locator("#graph-layout-select option[value=\"force-directed\"]")
-        .await;
+    let fd_3d = page.locator("#graph-layout-select option[value=\"force-directed\"]");
     let fd_disabled = fd_3d
         .get_attribute("disabled")
         .await
@@ -1423,9 +1407,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     ] {
         // In 3D mode every non-force-directed layout (including the
         // 2D-only implemented ones, KK and Hierarchical) is greyed.
-        let opt = page
-            .locator(&format!("#graph-layout-select option[value=\"{layout}\"]"))
-            .await;
+        let opt = page.locator(format!("#graph-layout-select option[value=\"{layout}\"]"));
         let disabled = opt
             .get_attribute("disabled")
             .await
@@ -1611,7 +1593,7 @@ fn e2e_click_pins_node_card_keeping_selection() {
             .expect("goto");
 
         // The old details panel must be gone entirely.
-        let details = page.locator("#graph-details-panel").await;
+        let details = page.locator("#graph-details-panel");
         assert_eq!(
             details.count().await.expect("count"),
             0,
@@ -1645,7 +1627,7 @@ fn e2e_click_pins_node_card_keeping_selection() {
         tokio::time::sleep(Duration::from_millis(200)).await;
 
         // The card is now pinned (persistent) with a visible close button.
-        let card = page.locator("#graph-hover-card").await;
+        let card = page.locator("#graph-hover-card");
         let card_class = card
             .get_attribute("class")
             .await
@@ -1658,7 +1640,6 @@ fn e2e_click_pins_node_card_keeping_selection() {
         assert!(card.is_visible().await.expect("visible"), "pinned card should be visible");
         assert!(
             page.locator("#graph-hover-close")
-                .await
                 .is_visible()
                 .await
                 .expect("close visible"),
@@ -1672,7 +1653,6 @@ fn e2e_click_pins_node_card_keeping_selection() {
 
         // × closes the card but keeps the node selected.
         page.locator("#graph-hover-close")
-            .await
             .click(None)
             .await
             .expect("click close");
@@ -1680,7 +1660,6 @@ fn e2e_click_pins_node_card_keeping_selection() {
         assert!(
             !page
                 .locator("#graph-hover-card")
-                .await
                 .is_visible()
                 .await
                 .expect("visible after close"),
@@ -1820,7 +1799,6 @@ fn e2e_hovering_a_rule_entry_highlights_participant_nodes() {
         // The slot card's rule entry carries the participant node ids.
         let attr = page
             .locator("#slot-approved_by [data-participants]")
-            .await
             .get_attribute("data-participants")
             .await
             .expect("attr")
@@ -2012,7 +1990,6 @@ fn e2e_instance_graph_renders_individuals_beneath_the_cards() {
         // The instance graph canvas exists — a second, distinct canvas.
         assert_eq!(
             page.locator("#instance-graph-canvas")
-                .await
                 .count()
                 .await
                 .expect("count"),
@@ -2112,7 +2089,7 @@ fn e2e_is_a_heavy_schema_auto_defaults_to_hierarchical() {
             .expect("navigate");
         // Give the wasm module time to load and the picker to settle.
         tokio::time::sleep(Duration::from_millis(500)).await;
-        let select = page.locator("#graph-layout-select").await;
+        let select = page.locator("#graph-layout-select");
         let value = select
             .input_value(None)
             .await
@@ -2159,7 +2136,7 @@ fn e2e_renders_enum_and_type_sections() {
             .expect("navigate");
 
         // Enumerations section + card + permissible values.
-        let enum_card = page.locator("#enum-Status").await;
+        let enum_card = page.locator("#enum-Status");
         let enum_html = enum_card
             .inner_html()
             .await
@@ -2170,7 +2147,7 @@ fn e2e_renders_enum_and_type_sections() {
         );
 
         // Types section + card with its pattern constraint.
-        let type_card = page.locator("#type-PhoneNumber").await;
+        let type_card = page.locator("#type-PhoneNumber");
         let type_html = type_card
             .inner_html()
             .await
@@ -2181,7 +2158,7 @@ fn e2e_renders_enum_and_type_sections() {
         );
 
         // Sidebar gained the two nav entries.
-        let nav = page.locator(".sidebar-nav").await;
+        let nav = page.locator(".sidebar-nav");
         let nav_html = nav.inner_html().await.expect("sidebar nav present");
         assert!(
             nav_html.contains("Enumerations") && nav_html.contains("Types"),
@@ -2227,7 +2204,7 @@ fn e2e_renders_linkml_card_features() {
             .expect("navigate");
 
         // Abstract class: NamedThing carries the abstract badge.
-        let abstract_card = page.locator("#class-NamedThing").await;
+        let abstract_card = page.locator("#class-NamedThing");
         let abstract_html = abstract_card
             .inner_html()
             .await
@@ -2239,7 +2216,7 @@ fn e2e_renders_linkml_card_features() {
 
         // Mixins + examples: Person mixes in HasIdentifier and lists a
         // worked example.
-        let person_card = page.locator("#class-Person").await;
+        let person_card = page.locator("#class-Person");
         let person_html = person_card
             .inner_html()
             .await
@@ -2256,7 +2233,7 @@ fn e2e_renders_linkml_card_features() {
 
         // Value bounds: the age slot card surfaces ≥ / ≤ characteristic
         // badges from minimum_value / maximum_value.
-        let age_card = page.locator("#slot-age").await;
+        let age_card = page.locator("#slot-age");
         let age_html = age_card
             .inner_html()
             .await
@@ -2270,7 +2247,7 @@ fn e2e_renders_linkml_card_features() {
 
         // ifabsent default: the membership slot card surfaces a Default row
         // rendering the readable value (`"basic"`).
-        let membership_card = page.locator("#slot-membership").await;
+        let membership_card = page.locator("#slot-membership");
         let membership_html = membership_card
             .inner_html()
             .await
@@ -2450,7 +2427,7 @@ async fn capture_scale_screenshot(
     // some headroom for slower viewports.
     tokio::time::sleep(Duration::from_millis(8000)).await;
 
-    let container = page.locator(".graph-container").await;
+    let container = page.locator(".graph-container");
 
     let screenshot_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()

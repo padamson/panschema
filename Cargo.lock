@@ -3317,9 +3317,8 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
 name = "playwright-rs"
-version = "0.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3317d37f816d9fbd550ba155a146068575a0c97e5af969f5d0895199344fa0b5"
+version = "0.14.0"
+source = "git+https://github.com/padamson/playwright-rust?branch=main#e0a057770682949bdd2fb310f519bda51b51d826"
 dependencies = [
  "async-trait",
  "base64",
@@ -3347,8 +3346,7 @@ dependencies = [
 [[package]]
 name = "playwright-rs-macros"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0dacee5a7346e793f1a4ca72db4b1c0e698c1e21626cdef409e6ec295629c4cd"
+source = "git+https://github.com/padamson/playwright-rust?branch=main#e0a057770682949bdd2fb310f519bda51b51d826"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4189,6 +4187,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aacc4cc499359472b4abe1bf11d0b12e688af9a805fa5e3016f9a386dc2d0214"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.3.0",
+ "digest 0.11.3",
+]
+
+[[package]]
 name = "sha2"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4486,7 +4495,7 @@ dependencies = [
  "rand 0.9.4",
  "regex",
  "rustc-hash 2.1.2",
- "sha1",
+ "sha1 0.10.6",
  "sha2 0.10.9",
  "sparesults",
  "spargebra",
@@ -4933,9 +4942,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-tungstenite"
-version = "0.29.0"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f72a05e828585856dacd553fba484c242c46e391fb0e58917c942ee9202915c"
+checksum = "17a073bfed563fa236697a068031408a93cd9522e08abf9933ead3e73411bd71"
 dependencies = [
  "futures-util",
  "log",
@@ -5190,9 +5199,9 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "tungstenite"
-version = "0.29.0"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c01152af293afb9c7c2a57e4b559c5620b421f6d133261c60dd2d0cdb38e6b8"
+checksum = "e48ac77174b19c110a50ab2128b24215ac9cb40e0e12e093fb602d175c569d22"
 dependencies = [
  "bytes",
  "data-encoding",
@@ -5200,8 +5209,8 @@ dependencies = [
  "httparse",
  "log",
  "native-tls",
- "rand 0.9.4",
- "sha1",
+ "rand 0.10.2",
+ "sha1 0.11.0",
  "thiserror 2.0.18",
 ]
 

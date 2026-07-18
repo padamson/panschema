@@ -109,4 +109,7 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = [
     "https://github.com/likr/egraph-rs",
     "https://github.com/padamson/egraph-rs",
+    # playwright-rs dev-dependency pinned to the maintainer's `main`
+    # branch to dogfood pre-release work (E2E browser tests only).
+    "https://github.com/padamson/playwright-rust",
 ]
