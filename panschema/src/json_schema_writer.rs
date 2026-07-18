@@ -98,10 +98,16 @@ pub fn build_json_schema(schema: &SchemaDefinition) -> Value {
         defs.insert(class_name.clone(), Value::Object(obj));
     }
 
-    json!({
-        "$schema": DIALECT_2020_12,
-        "$defs": Value::Object(defs),
-    })
+    let mut root = serde_json::Map::new();
+    root.insert("$schema".to_string(), json!(DIALECT_2020_12));
+    // When the schema declares a `tree_root` container class, the document
+    // roots at it (a conforming instance is an instance of that class);
+    // otherwise it is `$defs`-only and a consumer refs the class it wants.
+    if let Some((name, _)) = schema.classes.iter().find(|(_, c)| c.tree_root) {
+        root.insert("$ref".to_string(), json!(format!("#/$defs/{name}")));
+    }
+    root.insert("$defs".to_string(), Value::Object(defs));
+    Value::Object(root)
 }
 
 /// The JSON Schema for a single slot: its range's scalar type, wrapped in an
@@ -196,6 +202,22 @@ mod tests {
         assert_eq!(scalar_json_type("string"), json!({ "type": "string" }));
         assert_eq!(scalar_json_type("uri"), json!({ "type": "string" }));
         assert_eq!(scalar_json_type("Wine"), Value::Bool(true));
+    }
+
+    #[test]
+    fn document_roots_at_the_tree_root_class() {
+        // Without a tree_root, the document is $defs-only (no root ref).
+        assert!(build_json_schema(&wine_schema()).get("$ref").is_none());
+
+        // With one, the document root refs it — and stays a valid schema.
+        let mut schema = wine_schema();
+        schema.classes.get_mut("Wine").unwrap().tree_root = true;
+        let doc = build_json_schema(&schema);
+        assert_eq!(doc["$ref"], "#/$defs/Wine");
+        assert!(
+            jsonschema::validator_for(&doc).is_ok(),
+            "a rooted document is still a valid schema"
+        );
     }
 
     #[test]

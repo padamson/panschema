@@ -325,6 +325,12 @@ pub struct ClassDefinition {
     /// Whether this class is abstract (cannot be instantiated directly)
     #[serde(default, skip_serializing_if = "is_false")]
     pub r#abstract: bool,
+    /// Whether this class is the data-tree root — the container that a
+    /// conforming instance-data file is a single instance of. The instance
+    /// reader uses it as the entry point into an A-box, and the JSON-Schema
+    /// writer roots its document at it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub tree_root: bool,
     /// Slots that apply to this class
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub slots: Vec<String>,
@@ -392,6 +398,7 @@ impl ClassDefinition {
             mixins: Vec::new(),
             unmodeled: BTreeMap::new(),
             r#abstract: false,
+            tree_root: false,
             slots: Vec::new(),
             attributes: BTreeMap::new(),
             slot_usage: BTreeMap::new(),

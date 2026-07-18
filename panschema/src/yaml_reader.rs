@@ -108,6 +108,19 @@ mod tests {
     }
 
     #[test]
+    fn class_parses_tree_root_flag() {
+        use crate::linkml::ClassDefinition;
+        // `tree_root: true` is now a modeled field (the reader deserializes
+        // classes with the same serde the schema read uses), and absent
+        // defaults to false.
+        let root: ClassDefinition =
+            serde_yaml::from_str("name: Catalog\ntree_root: true\n").expect("parse");
+        assert!(root.tree_root, "tree_root: true parses onto the IR");
+        let plain: ClassDefinition = serde_yaml::from_str("name: Wine\n").expect("parse");
+        assert!(!plain.tree_root, "absent tree_root defaults to false");
+    }
+
+    #[test]
     fn yaml_reader_parses_sample_schema() {
         let reader = YamlReader::new();
         let schema = reader

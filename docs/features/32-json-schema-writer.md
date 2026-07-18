@@ -76,7 +76,7 @@ scalar-only classes.
 **Acceptance Criteria:**
 - [x] A `JsonSchemaWriter` implements `Writer`, registered in `FormatRegistry` under `json-schema`; `generate --format json-schema` writes a `.json` file, and the format is documented in the CLI help + manifest `[generate.<schema>]`.
 - [x] Each class becomes `#/$defs/<Class>`: an `object` with `properties` for its effective scalar slots (range → JSON Schema `type`/`format`), a `required` array from effective cardinality (`required` or `minimum_cardinality ≥ 1`), and `additionalProperties: false`. A multivalued scalar slot is an `array` of the scalar type.
-- [x] The document is `$defs`-only with the 2020-12 dialect URI in `$schema`. (The `tree_root` root `$ref` is deferred: `tree_root` isn't modeled in the IR yet — see [linkml-coverage.md](../linkml-coverage.md) — so no class can be a root, and the document is always `$defs`-only for now.)
+- [x] The document roots at the `tree_root` class when the schema declares one (shipped once `tree_root` was modeled in [feature 33](33-linkml-instance-reader.md)); otherwise it is `$defs`-only. `$schema` is the 2020-12 dialect URI.
 - [x] **Oracle:** the emitted document compiles in an independent JSON Schema validator (`jsonschema` dev-dep), and a valid scalar instance passes while one with a wrong-typed / missing-required / extra property fails (`accepts_valid_and_rejects_invalid_scalar_instances`, `emitted_document_compiles_as_a_valid_json_schema`).
 
 ### Slice 2: Enums, class `$ref`s, and value constraints
