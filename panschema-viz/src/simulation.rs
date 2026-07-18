@@ -368,7 +368,7 @@ impl CpuSimulation {
     }
 
     /// Get a node's world position (for focus calculations)
-    #[allow(dead_code)] // Used in sub-slice 6.8 (focus mode)
+    #[allow(dead_code)]
     pub fn get_node_position(&self, index: usize) -> Option<(f32, f32)> {
         self.nodes.get(index).map(|n| (n.x, n.y))
     }

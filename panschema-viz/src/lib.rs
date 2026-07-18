@@ -963,7 +963,7 @@ mod details_json_tests {
         // The connection list is the caller's responsibility (the
         // wasm-bindgen wrapper computes it from the simulation
         // edges). The JSON builder must pass it through unchanged so
-        // the consumer can show the count and, in a future slice, the
+        // the consumer can show the count and, when wired, the
         // list itself.
         let node = make_class_node("class:Foo", "Foo");
         let json: serde_json::Value = serde_json::from_str(&build_node_details_json(

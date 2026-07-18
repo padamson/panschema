@@ -11,10 +11,10 @@ pub enum DragState {
     #[default]
     None,
     /// Mouse is over a node (for cursor feedback)
-    #[allow(dead_code)] // Used in sub-slice 6.3
+    #[allow(dead_code)]
     Hovering(usize),
     /// Actively dragging a node
-    #[allow(dead_code)] // Used in sub-slice 6.3
+    #[allow(dead_code)]
     Dragging {
         node: usize,
         /// Starting canvas X coordinate
@@ -30,7 +30,7 @@ pub struct InteractionState {
     /// Currently selected node (for details panel, highlighting)
     pub selected_node: Option<usize>,
     /// Current drag state
-    #[allow(dead_code)] // Used in sub-slice 6.3
+    #[allow(dead_code)]
     pub drag: DragState,
     /// Set of nodes pinned by user (won't move during simulation)
     pub fixed_nodes: HashSet<usize>,
@@ -67,7 +67,7 @@ impl InteractionState {
     }
 
     /// Start dragging a node from the given canvas position.
-    #[allow(dead_code)] // Used in sub-slice 6.3
+    #[allow(dead_code)]
     pub fn start_drag(&mut self, node: usize, x: f32, y: f32) {
         self.drag = DragState::Dragging {
             node,
@@ -81,7 +81,7 @@ impl InteractionState {
     /// End the current drag operation.
     ///
     /// If `keep_fixed` is true, the node will remain fixed after release.
-    #[allow(dead_code)] // Used in sub-slice 6.3
+    #[allow(dead_code)]
     pub fn end_drag(&mut self, keep_fixed: bool) {
         if let DragState::Dragging { node, .. } = self.drag
             && keep_fixed
@@ -92,7 +92,7 @@ impl InteractionState {
     }
 
     /// Toggle the fixed state of a node.
-    #[allow(dead_code)] // Used in sub-slice 6.4
+    #[allow(dead_code)]
     pub fn toggle_fixed(&mut self, node: usize) {
         if self.fixed_nodes.contains(&node) {
             self.fixed_nodes.remove(&node);
@@ -107,13 +107,13 @@ impl InteractionState {
     }
 
     /// Check if a specific node is being dragged.
-    #[allow(dead_code)] // Used in sub-slice 6.3
+    #[allow(dead_code)]
     pub fn is_dragging(&self, node: usize) -> bool {
         matches!(self.drag, DragState::Dragging { node: n, .. } if n == node)
     }
 
     /// Get the index of the node being dragged, if any.
-    #[allow(dead_code)] // Used in sub-slice 6.3
+    #[allow(dead_code)]
     pub fn dragging_node(&self) -> Option<usize> {
         match self.drag {
             DragState::Dragging { node, .. } => Some(node),
@@ -122,7 +122,7 @@ impl InteractionState {
     }
 
     /// Set hover state for a node.
-    #[allow(dead_code)] // Used in sub-slice 6.3
+    #[allow(dead_code)]
     pub fn set_hover(&mut self, node: Option<usize>) {
         match node {
             Some(n) if !matches!(self.drag, DragState::Dragging { .. }) => {
@@ -136,7 +136,7 @@ impl InteractionState {
     }
 
     /// Unfix a node, allowing it to move freely in the simulation.
-    #[allow(dead_code)] // Used in sub-slice 6.7
+    #[allow(dead_code)]
     pub fn unfix_node(&mut self, node: usize) {
         self.fixed_nodes.remove(&node);
     }
