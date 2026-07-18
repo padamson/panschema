@@ -10,6 +10,7 @@ pub mod graph_writer;
 pub mod html_writer;
 pub mod import_resolve;
 pub mod io;
+pub mod json_schema_writer;
 pub mod labels;
 pub mod linkml;
 pub mod linkml_resolve;

@@ -24,6 +24,7 @@ Two different kinds of "support" are tracked separately:
    - **Rust** — [rust_writer.rs](../panschema/src/rust_writer.rs) codegen
    - **Postgres** — [postgres_writer.rs](../panschema/src/postgres_writer.rs) DDL ([feature 24](features/24-postgres-ddl-writer.md))
    - **SHACL** — [shacl_writer.rs](../panschema/src/shacl_writer.rs) validation shapes ([feature 17 slice 4](features/17-class-validation-constructs.md)); a cross-cutting constraints projection (one `sh:NodeShape` per class with property shapes for slot value-constraints), not tracked as a per-construct column in the table below
+   - **JSON Schema** — [json_schema_writer.rs](../panschema/src/json_schema_writer.rs) draft-2020-12 structured-output/validation contract ([feature 32](features/32-json-schema-writer.md)); a cross-cutting projection (one closed `object` per class under `$defs`), not tracked as a per-construct column in the table below
 
 Legend: ● full · ◐ partial / indirect · ○ modeled but inert (silent-drop
 risk) · — not applicable to this writer · ✗ not modeled in the IR.

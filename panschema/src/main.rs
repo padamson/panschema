@@ -57,7 +57,7 @@ struct Cli {
     #[arg(short, long, global = true, default_value = "output")]
     output: PathBuf,
 
-    /// Output format: html, ttl, jsonld, rdfxml, ntriples, graph-json, rust, postgres, shacl
+    /// Output format: html, ttl, jsonld, rdfxml, ntriples, graph-json, rust, postgres, shacl, json-schema
     #[arg(short, long, global = true, default_value = "html")]
     format: String,
 }
@@ -76,7 +76,7 @@ enum Commands {
         #[arg(short, long, default_value = "output")]
         output: PathBuf,
 
-        /// Output format: html, ttl, jsonld, rdfxml, ntriples, graph-json, rust, postgres, shacl
+        /// Output format: html, ttl, jsonld, rdfxml, ntriples, graph-json, rust, postgres, shacl, json-schema
         #[arg(short, long, default_value = "html")]
         format: String,
 
@@ -528,6 +528,7 @@ fn generate_from_manifest(offline: bool, refresh_labels: bool, strict: bool) -> 
             ("rust", &gen_cfg.rust),
             ("postgres", &gen_cfg.postgres),
             ("shacl", &gen_cfg.shacl),
+            ("json-schema", &gen_cfg.json_schema),
             ("ttl", &gen_cfg.ttl),
             ("jsonld", &gen_cfg.jsonld),
             ("rdfxml", &gen_cfg.rdfxml),

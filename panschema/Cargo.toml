@@ -112,6 +112,13 @@ playwright-rs = "0.14"
 html5ever = "0.39.0"
 markup5ever_rcdom = "0.39.0"
 
+# Independent oracle for JsonSchemaWriter output: an actual JSON Schema
+# validator. Checks both that the emitted document is a usable schema
+# (compiles) and that instances validate as expected — the same
+# validation an LLM's structured output or a downstream consumer relies
+# on, not just this codebase's own expectations of the JSON shape.
+jsonschema = { version = "0.26", default-features = false }
+
 # Independent RDF oracle for the RDF/OWL writer family: loads generated
 # TTL into a real, separate triple store and runs SPARQL sanity queries,
 # catching graph-level mistakes sophia's serializer wouldn't (it

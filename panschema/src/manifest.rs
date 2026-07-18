@@ -105,6 +105,9 @@ pub struct GenerateConfig {
     /// SHACL shapes graph output file path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shacl: Option<PathBuf>,
+    /// JSON Schema output file path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub json_schema: Option<PathBuf>,
     /// OWL/Turtle output file path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ttl: Option<PathBuf>,
