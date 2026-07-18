@@ -203,6 +203,16 @@ enum Commands {
     /// Verify that on-disk schemas match the checksums recorded in
     /// `panschema.lock`. Errors on drift.
     Verify,
+    /// Validate a LinkML instance-data file against its schema, reporting every
+    /// constraint violation. Exits non-zero if the data does not conform.
+    Validate {
+        /// Schema file (.yaml, .yml, .ttl) the data must conform to.
+        #[arg(short, long)]
+        input: PathBuf,
+        /// LinkML instance-data file (a `tree_root` container A-box).
+        #[arg(short, long)]
+        data: PathBuf,
+    },
     /// Build versioned HTML docs from a `panschema-publish.toml` with a
     /// `[publishing]` section. Produces `<output>/<tag>/` per version,
     /// `<output>/<edge>/` if edge is configured, and a `<output>/current/`
@@ -1180,6 +1190,37 @@ fn fetch_from_manifest() -> anyhow::Result<()> {
 
 /// `panschema verify`: re-checksum every manifested schema and compare with
 /// the lockfile. Errors with a clear diff on mismatch.
+/// Validate a LinkML instance-data file against its schema, printing every
+/// violation and exiting non-zero when the data does not conform.
+fn validate_data(input: &Path, data_path: &Path) -> anyhow::Result<()> {
+    let registry = FormatRegistry::with_defaults();
+    // Load through the shared path so `imports:` merge and `is_a`/mixin slots
+    // resolve, matching what every other command reads.
+    let no_deps = std::collections::BTreeMap::new();
+    let schema = panschema::import_resolve::load_schema_with_deps(input, &registry, &no_deps)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    let content = std::fs::read_to_string(data_path)
+        .map_err(|e| anyhow::anyhow!("reading data file {}: {}", data_path.display(), e))?;
+    let value: serde_yaml::Value = serde_yaml::from_str(&content)
+        .map_err(|e| anyhow::anyhow!("parsing data file {}: {}", data_path.display(), e))?;
+
+    let violations = panschema::validate::validate_instance_data(&schema, &value);
+    for v in &violations {
+        eprintln!("{v}");
+    }
+    if violations.is_empty() {
+        println!("{} conforms to {}", data_path.display(), input.display());
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "{} validation error(s) in {}",
+            violations.len(),
+            data_path.display()
+        );
+    }
+}
+
 fn verify_from_manifest() -> anyhow::Result<()> {
     use panschema::lockfile::{LOCKFILE_FILENAME, Lockfile, checksum_file};
 
@@ -1397,6 +1438,7 @@ async fn main() -> anyhow::Result<()> {
         }) => release_schema(level, version.as_deref(), git, push, dry_run)?,
         Some(Commands::Fetch) => fetch_from_manifest()?,
         Some(Commands::Verify) => verify_from_manifest()?,
+        Some(Commands::Validate { input, data }) => validate_data(&input, &data)?,
         Some(Commands::Publish {
             manifest,
             output_dir,

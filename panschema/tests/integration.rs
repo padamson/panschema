@@ -728,6 +728,50 @@ fn instances_flag_warns_only_for_non_html_formats() {
 }
 
 #[test]
+fn validate_command_exit_code_reflects_conformance() {
+    // Conforming data validates clean and exits zero.
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "validate",
+            "--input",
+            "tests/fixtures/wine_catalog.yaml",
+            "--data",
+            "tests/fixtures/wine_instances.yaml",
+        ])
+        .output()
+        .expect("run panschema");
+    assert!(
+        out.status.success(),
+        "conforming data should exit zero; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("conforms to"),
+        "clean validation should report conformance"
+    );
+
+    // A dangling reference is a violation: non-zero exit, named on stderr.
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "validate",
+            "--input",
+            "tests/fixtures/wine_catalog.yaml",
+            "--data",
+            "tests/fixtures/wine_instances_dangling.yaml",
+        ])
+        .output()
+        .expect("run panschema");
+    assert!(
+        !out.status.success(),
+        "non-conforming data must exit non-zero"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("ghostWinery"),
+        "the violation should name the dangling reference"
+    );
+}
+
+#[test]
 fn dangling_instance_reference_warns_and_fails_under_strict() {
     let dir = std::env::temp_dir().join("panschema_instance_dangling_test");
     let _ = fs::remove_dir_all(&dir);

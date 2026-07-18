@@ -28,6 +28,7 @@ pub mod rules;
 pub mod rust_writer;
 pub mod shacl_writer;
 pub mod source;
+pub mod validate;
 pub mod yaml_reader;
 
 #[cfg(feature = "gpu")]

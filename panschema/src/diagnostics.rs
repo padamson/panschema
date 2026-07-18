@@ -248,13 +248,19 @@ pub struct DanglingInstanceRef {
 }
 
 impl DanglingInstanceRef {
-    /// A user-facing warning line naming the referring record, the property,
+    /// The problem clause naming the property and missing target, without the
+    /// referrer — for a caller that labels the record its own way.
+    pub fn detail(&self) -> String {
+        format!(
+            "property `{}` references `{}`, which names no instance in the data",
+            self.property, self.target
+        )
+    }
+
+    /// A standalone warning line naming the referring record, the property,
     /// and the missing target id.
     pub fn message(&self) -> String {
-        format!(
-            "instance `{}` property `{}` references `{}`, which names no instance in the data",
-            self.referrer, self.property, self.target
-        )
+        format!("instance `{}` {}", self.referrer, self.detail())
     }
 }
 
