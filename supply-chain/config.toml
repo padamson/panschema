@@ -1232,10 +1232,6 @@ criteria = "safe-to-run"
 version = "1.1.2+spec-1.1.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.toml_writer]]
-version = "1.1.1+spec-1.1.0"
-criteria = "safe-to-deploy"
-
 [[exemptions.tonic]]
 version = "0.14.6"
 criteria = "safe-to-run"
