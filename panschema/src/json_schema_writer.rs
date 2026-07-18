@@ -173,6 +173,32 @@ mod tests {
     }
 
     #[test]
+    fn scalar_ranges_map_to_expected_json_types() {
+        // Numbers, temporals (string + format), and strings each map
+        // distinctly; a non-scalar range (class / enum) is permissive.
+        assert_eq!(scalar_json_type("integer"), json!({ "type": "integer" }));
+        assert_eq!(scalar_json_type("float"), json!({ "type": "number" }));
+        assert_eq!(scalar_json_type("double"), json!({ "type": "number" }));
+        assert_eq!(scalar_json_type("decimal"), json!({ "type": "number" }));
+        assert_eq!(scalar_json_type("boolean"), json!({ "type": "boolean" }));
+        assert_eq!(
+            scalar_json_type("date"),
+            json!({ "type": "string", "format": "date" })
+        );
+        assert_eq!(
+            scalar_json_type("datetime"),
+            json!({ "type": "string", "format": "date-time" })
+        );
+        assert_eq!(
+            scalar_json_type("time"),
+            json!({ "type": "string", "format": "time" })
+        );
+        assert_eq!(scalar_json_type("string"), json!({ "type": "string" }));
+        assert_eq!(scalar_json_type("uri"), json!({ "type": "string" }));
+        assert_eq!(scalar_json_type("Wine"), Value::Bool(true));
+    }
+
+    #[test]
     fn class_becomes_a_closed_typed_object() {
         let doc = build_json_schema(&wine_schema());
         let wine = &doc["$defs"]["Wine"];
