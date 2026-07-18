@@ -564,6 +564,10 @@ pub struct HtmlWriter {
     /// CURIEs (the historical behavior); the CLI generate path wires
     /// a populated store so they render as upstream labels.
     pub label_store: Option<crate::labels::LabelStore>,
+    /// Explicit A-box to render as the instance graph. `None` falls back
+    /// to the OWL worked-example individuals embedded in the schema; the
+    /// `generate --instances` path sets this from a LinkML data file.
+    pub instance_set: Option<crate::instances::InstanceSet>,
 }
 
 /// Parse a `"W:H"` aspect-ratio string. Both components must be positive
@@ -612,6 +616,7 @@ impl HtmlWriter {
             version_context: None,
             site_root_href: None,
             label_store: None,
+            instance_set: None,
         }
     }
 
@@ -624,6 +629,7 @@ impl HtmlWriter {
             version_context: None,
             site_root_href: None,
             label_store: None,
+            instance_set: None,
         }
     }
 
@@ -632,6 +638,15 @@ impl HtmlWriter {
     #[must_use]
     pub fn with_label_store(mut self, store: crate::labels::LabelStore) -> Self {
         self.label_store = Some(store);
+        self
+    }
+
+    /// Attach an explicit A-box (e.g. read from a LinkML instance-data
+    /// file) to render as the instance graph, in place of the schema's
+    /// embedded OWL individuals.
+    #[must_use]
+    pub fn with_instances(mut self, set: crate::instances::InstanceSet) -> Self {
+        self.instance_set = Some(set);
         self
     }
 
@@ -1331,11 +1346,17 @@ impl Writer for HtmlWriter {
         };
 
         // Separate instance (A-box) graph, rendered beneath the Individuals
-        // section. Only emitted when the schema actually has individuals, so
-        // an individual-free schema gets no instance graph. Escaped the same
-        // way as the schema graph JSON (see above).
+        // section. Sourced from an explicit LinkML-data A-box when one is
+        // attached, else from the schema's embedded OWL individuals. Only
+        // emitted when that A-box is non-empty, so an individual-free schema
+        // gets no instance graph. Escaped the same way as the schema graph
+        // JSON (see above).
         let instance_graph_json = if self.include_graph {
-            let instance_data = GraphWriter::new().schema_to_instance_graph(schema);
+            let graph = GraphWriter::new();
+            let instance_data = match &self.instance_set {
+                Some(set) => graph.instance_set_to_graph(schema, set),
+                None => graph.schema_to_instance_graph(schema),
+            };
             if instance_data.nodes.is_empty() {
                 None
             } else {

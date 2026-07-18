@@ -208,9 +208,10 @@
     {%- let count = Some(individuals.len()) %}
     {%- let description = Some("Named individuals defined in this ontology.") %}
     {% include "components/section_header.html" %}
-{%- if individuals.is_empty() %}
+{%- if individuals.is_empty() && instance_graph_json.is_none() %}
     <p class="placeholder-text">No individuals defined in this ontology.</p>
 {%- else %}
+{%- if !individuals.is_empty() %}
     <div class="entity-list">
 {%- for ind in individuals %}
         <a href="#ind-{{ ind.id }}" class="entity-link individual-link">{{ ind.label }}</a>
@@ -227,8 +228,10 @@
         {% include "components/individual_card.html" %}
 {%- endfor %}
     </div>
-{# The worked example as a connected instance graph — a distinct A-box viz,
-   not the schema graph. Only present when the exporter emitted one. #}
+{%- endif %}
+{# The instances as a connected instance graph — a distinct A-box viz, not
+   the schema graph. Present whenever an A-box was supplied (embedded OWL
+   individuals or a LinkML instance-data file). #}
 {%- if let Some(json) = instance_graph_json %}
     <script>
         window.__PANSCHEMA_INSTANCE_GRAPH_DATA__ = {{ json|safe }};

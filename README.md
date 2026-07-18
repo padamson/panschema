@@ -120,6 +120,24 @@ The visualization features:
 - **Keyboard shortcuts**: `R` reset view · `F` focus · `Esc` deselect · `Delete` unpin
 - **Touch support**: Pan, orbit, and pinch-zoom on mobile devices
 
+### Instance graph (A-box)
+
+Beneath the schema graph, the docs can also draw an **instance graph** — the
+records that populate the schema (its A-box), as a distinct force-directed viz.
+It comes from either the schema's embedded OWL individuals, or a separate
+**LinkML instance-data file** passed with `--instances`:
+
+```bash
+# Render a LinkML data file (a tree_root container of records) as the instance graph
+panschema generate --input schema.yaml --instances data.yaml --output docs/
+```
+
+Each record becomes a typed node keyed by its identifier; a class-valued slot
+becomes an edge to the referenced record, and scalar values ride along as node
+metadata — so the JSON an LLM emits against a class's JSON Schema (see
+`generate --format json-schema`) is a LinkML instance you can read straight
+back and visualize, no OWL detour.
+
 ### GPU Visualization (Native - Optional)
 
 For native GPU-accelerated visualization during development:

@@ -68,6 +68,40 @@ fn generate_docs_for(fixture_path: &str) -> PathBuf {
     output_dir
 }
 
+/// Generate docs from a LinkML schema plus a LinkML instance-data file,
+/// rendering the data as the instance graph via `generate --instances`.
+fn generate_docs_with_instances(schema_path: &str, instances_path: &str) -> PathBuf {
+    let output_dir = std::env::temp_dir().join(format!(
+        "panschema_e2e_instances_{}_{}",
+        std::process::id(),
+        schema_path
+            .rsplit('/')
+            .next()
+            .unwrap_or("default")
+            .replace('.', "_")
+    ));
+    let _ = fs::remove_dir_all(&output_dir);
+
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--input",
+            schema_path,
+            "--instances",
+            instances_path,
+            "--output",
+            output_dir.to_str().unwrap(),
+        ])
+        .status()
+        .expect("Failed to execute panschema");
+
+    assert!(
+        status.success(),
+        "panschema failed to generate docs with instances"
+    );
+    output_dir
+}
+
 /// Poll (up to ~12s) until a JS readiness expression is truthy. Robust to
 /// variable CI load — e.g. a page that renders both a schema graph and a
 /// second instance graph, each loading wasm — where a fixed sleep would
@@ -2050,6 +2084,100 @@ fn e2e_instance_graph_renders_individuals_beneath_the_cards() {
         assert!(
             teal > 0,
             "the instance graph should paint teal individual nodes; teal pixels={teal}"
+        );
+
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
+/// The `generate --instances` path renders a LinkML instance-data file as the
+/// instance graph — the schema declares no OWL individuals, so the A-box comes
+/// entirely from the data file — and its own canvas paints the teal nodes.
+#[test]
+fn e2e_instance_graph_renders_from_linkml_data() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let output_dir = generate_docs_with_instances(
+            "tests/fixtures/wine_catalog.yaml",
+            "tests/fixtures/wine_instances.yaml",
+        );
+        let port = find_available_port();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("goto");
+
+        // The instance-graph canvas exists even though the schema has no
+        // OWL individuals — the A-box is the LinkML data file.
+        assert_eq!(
+            page.locator("#instance-graph-canvas")
+                .count()
+                .await
+                .expect("count"),
+            1,
+            "the LinkML instance data should render an instance-graph canvas"
+        );
+
+        // The A-box read from the data file: four records, two reference edges.
+        let counts = page
+            .evaluate_value(
+                r#"(function(){
+                    var d = window.__PANSCHEMA_INSTANCE_GRAPH_DATA__;
+                    return d ? (d.nodes.length + ',' + d.edges.length) : 'none';
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert_eq!(
+            counts.trim().trim_matches('"'),
+            "4,2",
+            "two wines + two wineries + two produced_by edges; got {counts}"
+        );
+
+        assert!(
+            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
+            "instance graph viz never became ready"
+        );
+
+        // The canvas painted the teal individual nodes (RGB ~ 41,184,179) —
+        // proof the LinkML-sourced A-box actually renders.
+        let result = page
+            .evaluate_value(
+                r#"(async function(){
+                    var viz = window.__panschema_instance_viz;
+                    if (!viz) return 'no-viz';
+                    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+                    var c = document.getElementById('instance-graph-canvas');
+                    var ctx = c.getContext('2d');
+                    if (!ctx) return 'no-2d-ctx';
+                    var d = ctx.getImageData(0, 0, c.width, c.height).data;
+                    var teal = 0;
+                    for (var i = 0; i < d.length; i += 4) {
+                        if (d[i] < 100 && d[i+1] > 150 && d[i+1] < 215 && d[i+2] > 150 && d[i+2] < 215) teal++;
+                    }
+                    return 'ok:' + teal;
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        let result = result.trim().trim_matches('"').to_string();
+        assert!(
+            result.starts_with("ok:"),
+            "the instance viz should have initialized; got {result}"
+        );
+        let teal: i64 = result.trim_start_matches("ok:").parse().unwrap_or(0);
+        assert!(
+            teal > 0,
+            "the LinkML instance graph should paint teal individual nodes; teal pixels={teal}"
         );
 
         let _ = shutdown_tx.send(());

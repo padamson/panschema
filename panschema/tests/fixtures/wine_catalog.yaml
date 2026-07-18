@@ -1,0 +1,44 @@
+name: WineCatalog
+id: https://example.org/wine
+description: A tiny wine catalog schema for the LinkML instance-graph example.
+default_prefix: wine
+prefixes:
+  wine: https://example.org/wine/
+  linkml: https://w3id.org/linkml/
+default_range: string
+classes:
+  WineCatalog:
+    description: The data container holding wines and wineries.
+    tree_root: true
+    attributes:
+      wines:
+        description: The wines in this catalog.
+        range: Wine
+        multivalued: true
+      wineries:
+        description: The wineries in this catalog.
+        range: Winery
+        multivalued: true
+  Wine:
+    description: A wine produced by a winery.
+    attributes:
+      id:
+        description: The wine's unique identifier.
+        identifier: true
+      name:
+        description: Display name of the wine.
+      color:
+        description: The wine's color.
+      produced_by:
+        description: The winery that produced this wine.
+        range: Winery
+  Winery:
+    description: A wine producer.
+    attributes:
+      id:
+        description: The winery's unique identifier.
+        identifier: true
+      name:
+        description: Display name of the winery.
+      region:
+        description: The region where the winery is located.

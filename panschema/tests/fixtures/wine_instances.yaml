@@ -1,0 +1,16 @@
+wines:
+  - id: chateauMorgon
+    name: Château Morgon
+    color: red
+    produced_by: morgonEstate
+  - id: napaCabernet
+    name: Napa Cabernet
+    color: red
+    produced_by: napaCellars
+wineries:
+  - id: morgonEstate
+    name: Morgon Estate
+    region: Beaujolais
+  - id: napaCellars
+    name: Napa Cellars
+    region: Napa Valley

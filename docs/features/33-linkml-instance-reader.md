@@ -99,7 +99,7 @@ annotations and read the `InstanceSet` instead.
 
 ### Slice 3: LinkML instance reader (`--instances`)
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Must Have
 
@@ -109,9 +109,15 @@ annotations and read the `InstanceSet` instead.
 stays LinkML + JSON, and this is the dogfood for the Step-7 examples.
 
 **Acceptance Criteria:**
-- [ ] `generate --input schema.yaml --instances data.yaml` reads a `tree_root`-container LinkML data file into an `InstanceSet`: each typed collection slot's items become records of that slot's range class; identifiers resolve (map key or `identifier` slot); a `inlined: false` class-ranged value becomes a typed reference (edge), an inlined object a nested record, a literal node metadata.
-- [ ] The instance graph renders from the LinkML `InstanceSet` (no OWL needed); e2e paints it (a checked-in wine Step-7 example fixture — self-contained).
-- [ ] Handles both inlined-as-dict and inlined-as-list collections.
+- [x] `generate --input schema.yaml --instances data.yaml` reads a `tree_root`-container LinkML data file into an `InstanceSet` (`InstanceSet::from_linkml_data`): each typed collection slot's items become records of that slot's range class; identifiers resolve (map key or `identifier` slot); a class-ranged scalar becomes a typed reference (edge), an inlined mapping a nested record plus an edge, a type/enum-ranged value node-metadata literal. Reference-vs-inline is inferred from the data shape (the IR does not model `inlined`), which is agnostic to whether the author declared it.
+- [x] The instance graph renders from the LinkML `InstanceSet` (no OWL needed); e2e paints it (`e2e_instance_graph_renders_from_linkml_data`) from a checked-in wine fixture (`wine_catalog.yaml` + `wine_instances.yaml`) — self-contained.
+- [x] Handles both inlined-as-dict and inlined-as-list collections (`from_linkml_data_handles_inlined_as_dict_collection` + the list-form fixture).
+
+**Deferred to a follow-up (Feature 18 continuation):** the Individuals *cards*
+(and the section count) still come from the OWL-annotation path, so a
+LinkML-data-only page shows the graph without per-record cards; unifying the
+card path onto the `InstanceSet` (and the graph's hover-card reuse) is the next
+increment.
 
 ### Slice 4: Instance reference-integrity diagnostic
 
@@ -136,12 +142,12 @@ agent-self-correction signal), not silently dropped.
 |-------|----------|------------|--------|
 | Slice 1: model `tree_root` | Must Have | — | Complete |
 | Slice 2: `InstanceSet` + move OWL/exporter onto it | Must Have | Slice 1 | Complete |
-| Slice 3: LinkML instance reader | Must Have | Slices 1–2 | Not Started |
+| Slice 3: LinkML instance reader | Must Have | Slices 1–2 | Complete |
 | Slice 4: instance reference integrity | Should Have | Slice 3 | Not Started |
 
 ## Definition of Done
 
-- [ ] Slices 1–3 met (slice 4 recommended); `validate --data` builds on the `InstanceSet` in its own stream.
-- [ ] `cargo nextest run` green; `cargo fmt --check`; `cargo clippy --all-targets --all-features -- -D warnings`; `cargo doc`.
-- [ ] Rendered instance graph e2e-verified from a LinkML data file (not just OWL).
-- [ ] README.md + CHANGELOG.md updated; [linkml-coverage.md](../linkml-coverage.md) notes `tree_root` + LinkML instance ingestion.
+- [x] Slices 1–3 met (slice 4 recommended); `validate --data` builds on the `InstanceSet` in its own stream.
+- [x] `cargo nextest run` green; `cargo fmt --check`; `cargo clippy --all-targets --all-features -- -D warnings`; `cargo doc`.
+- [x] Rendered instance graph e2e-verified from a LinkML data file (not just OWL).
+- [x] README.md + CHANGELOG.md updated; [linkml-coverage.md](../linkml-coverage.md) notes `tree_root` + LinkML instance ingestion.

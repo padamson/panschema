@@ -72,6 +72,12 @@ enum Commands {
         #[arg(short, long)]
         input: Option<PathBuf>,
 
+        /// LinkML instance-data file (a `tree_root` container A-box) to render
+        /// as the instance graph in the HTML output, in place of the schema's
+        /// embedded OWL individuals.
+        #[arg(long)]
+        instances: Option<PathBuf>,
+
         /// Output path (file for RDF formats, directory for HTML)
         #[arg(short, long, default_value = "output")]
         output: PathBuf,
@@ -280,6 +286,7 @@ struct LabelOptions<'a> {
 #[allow(clippy::too_many_arguments)]
 fn generate(
     input: &Path,
+    instances: Option<&Path>,
     output: &Path,
     format: &str,
     include_graph: bool,
@@ -378,6 +385,18 @@ fn generate(
         let mut writer = HtmlWriter::with_options(include_graph)
             .with_graph_aspect(aw, ah)
             .with_default_layout(layout);
+        // A LinkML instance-data file overrides the schema's embedded OWL
+        // individuals as the source for the instance graph.
+        if let Some(inst_path) = instances {
+            let content = std::fs::read_to_string(inst_path).map_err(|e| {
+                anyhow::anyhow!("reading instances file {}: {}", inst_path.display(), e)
+            })?;
+            let data: serde_yaml::Value = serde_yaml::from_str(&content).map_err(|e| {
+                anyhow::anyhow!("parsing instances file {}: {}", inst_path.display(), e)
+            })?;
+            let set = panschema::instances::InstanceSet::from_linkml_data(&schema, &data);
+            writer = writer.with_instances(set);
+        }
         if let Some(store) = panschema::labels::open_default_store(
             &schema,
             labels.offline,
@@ -509,6 +528,7 @@ fn generate_from_manifest(offline: bool, refresh_labels: bool, strict: bool) -> 
             let html_out = manifest_dir.join(html_out);
             generate(
                 schema_path,
+                None,
                 &html_out,
                 "html",
                 true,
@@ -539,6 +559,7 @@ fn generate_from_manifest(offline: bool, refresh_labels: bool, strict: bool) -> 
             let out = manifest_dir.join(out);
             generate(
                 schema_path,
+                None,
                 &out,
                 format,
                 false,
@@ -1292,6 +1313,7 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Some(Commands::Generate {
             input,
+            instances,
             output,
             format,
             no_graph,
@@ -1309,6 +1331,12 @@ async fn main() -> anyhow::Result<()> {
                     };
                     eprintln!("Graph visualization: {}", mode_str);
                 }
+                if instances.is_some() && format.to_lowercase() != "html" {
+                    eprintln!(
+                        "warning: --instances only affects HTML output; ignored for format `{}`",
+                        format
+                    );
+                }
                 let no_overrides = std::collections::BTreeMap::new();
                 let labels = LabelOptions {
                     offline,
@@ -1317,7 +1345,16 @@ async fn main() -> anyhow::Result<()> {
                 };
                 let no_deps = std::collections::BTreeMap::new();
                 generate(
-                    &input, &output, &format, !no_graph, None, None, &labels, strict, &no_deps,
+                    &input,
+                    instances.as_deref(),
+                    &output,
+                    &format,
+                    !no_graph,
+                    None,
+                    None,
+                    &labels,
+                    strict,
+                    &no_deps,
                 )?;
             }
             None => generate_from_manifest(offline, refresh_labels, strict)?,
@@ -1390,6 +1427,7 @@ async fn main() -> anyhow::Result<()> {
                 let no_deps = std::collections::BTreeMap::new();
                 generate(
                     &input,
+                    None,
                     &cli.output,
                     &cli.format,
                     true,
@@ -1465,6 +1503,7 @@ mod tests {
         match cli.command {
             Some(Commands::Generate {
                 input,
+                instances,
                 output,
                 format,
                 no_graph,
@@ -1474,6 +1513,7 @@ mod tests {
                 strict,
             }) => {
                 assert_eq!(input, Some(PathBuf::from("test.ttl")));
+                assert_eq!(instances, None); // default None (no instance-data file)
                 assert_eq!(output, PathBuf::from("docs"));
                 assert_eq!(format, "html");
                 assert!(!no_graph); // default false (graph enabled)

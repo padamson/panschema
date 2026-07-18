@@ -114,6 +114,19 @@ fn extract_class_card<'a>(html: &'a str, class_id: &str) -> &'a str {
     &html[start..end]
 }
 
+/// Parse a `window.<name> = <json>;` assignment embedded in generated HTML,
+/// returning the JSON value. Robust to trailing content after the value
+/// (parses the first JSON value following the marker).
+fn extract_json_assignment(html: &str, name: &str) -> serde_json::Value {
+    let marker = format!("window.{name} = ");
+    let start = html.find(&marker).expect("assignment marker present") + marker.len();
+    serde_json::Deserializer::from_str(&html[start..])
+        .into_iter::<serde_json::Value>()
+        .next()
+        .expect("a JSON value follows the marker")
+        .expect("the embedded JSON parses")
+}
+
 #[test]
 fn class_card_and_graph_hover_agree_on_slot_usage_refined_range() {
     // Cross-writer consistency: a slot refined via `slot_usage` must
@@ -603,6 +616,115 @@ fn no_graph_flag_disables_graph_visualization() {
 
     // Cleanup
     let _ = fs::remove_dir_all(output_dir);
+}
+
+#[test]
+fn generate_instances_renders_linkml_data_as_the_instance_graph() {
+    let output_dir = std::env::temp_dir().join("panschema_linkml_instances_test");
+    let _ = fs::remove_dir_all(&output_dir);
+
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--input",
+            "tests/fixtures/wine_catalog.yaml",
+            "--instances",
+            "tests/fixtures/wine_instances.yaml",
+            "--output",
+            output_dir.to_str().unwrap(),
+        ])
+        .status()
+        .expect("Failed to execute panschema");
+    assert!(status.success(), "panschema exited with error");
+
+    let html = fs::read_to_string(output_dir.join("index.html")).expect("read index.html");
+
+    // The instance graph is embedded from the LinkML data file, even though
+    // the schema declares no OWL individuals — a canvas and its A-box data.
+    assert!(
+        html.contains("instance-graph-canvas"),
+        "the instance-graph canvas should be present"
+    );
+    assert!(
+        html.contains("__PANSCHEMA_INSTANCE_GRAPH_DATA__"),
+        "the LinkML A-box should be embedded as instance-graph data"
+    );
+
+    // Each record became a typed node; each class-ranged scalar an edge.
+    let data = extract_json_assignment(&html, "__PANSCHEMA_INSTANCE_GRAPH_DATA__");
+    assert_eq!(
+        data["nodes"].as_array().expect("nodes").len(),
+        4,
+        "two wines + two wineries → four instance nodes"
+    );
+    assert_eq!(
+        data["edges"].as_array().expect("edges").len(),
+        2,
+        "each wine's produced_by is a reference edge to its winery"
+    );
+
+    // A record's identifier-keyed reference resolves to the target node's id.
+    let edges = data["edges"].as_array().unwrap();
+    assert!(
+        edges
+            .iter()
+            .any(|e| e["source"] == "individual:chateauMorgon"
+                && e["target"] == "individual:morgonEstate"
+                && e["label"] == "produced_by"),
+        "the produced_by edge should connect the wine to its winery, got {edges:?}"
+    );
+
+    let _ = fs::remove_dir_all(output_dir);
+}
+
+#[test]
+fn instances_flag_warns_only_for_non_html_formats() {
+    let dir = std::env::temp_dir().join("panschema_instances_warn_test");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("mkdir");
+
+    // With --instances on a non-HTML format, the flag is ignored — warn so
+    // the omission isn't silent.
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--input",
+            "tests/fixtures/wine_catalog.yaml",
+            "--instances",
+            "tests/fixtures/wine_instances.yaml",
+            "--format",
+            "ttl",
+            "--output",
+            dir.join("with.ttl").to_str().unwrap(),
+        ])
+        .output()
+        .expect("run panschema");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--instances only affects HTML output"),
+        "a non-HTML format with --instances should warn; got: {stderr}"
+    );
+
+    // The same non-HTML format without --instances does not warn.
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--input",
+            "tests/fixtures/wine_catalog.yaml",
+            "--format",
+            "ttl",
+            "--output",
+            dir.join("without.ttl").to_str().unwrap(),
+        ])
+        .output()
+        .expect("run panschema");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("--instances"),
+        "no --instances warning should appear without the flag; got: {stderr}"
+    );
+
+    let _ = fs::remove_dir_all(dir);
 }
 
 #[test]
