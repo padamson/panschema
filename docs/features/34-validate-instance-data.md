@@ -176,22 +176,36 @@ its own slice (3b) rather than bundled here.
 - [x] `regex` is added as a direct dependency (already covered by the cargo-vet audit imports — no new exemptions). A string value not matching its slot's `pattern` is a violation naming the record, slot, and pattern; matching uses partial (`find`) semantics, consistent with panschema's SHACL `sh:pattern` and Postgres `~` projections. An invalid `pattern` in the schema is reported once per slot, not panicked.
 - [x] Tests cover a pattern match and a miss.
 
-### Slice 4: Identifier uniqueness and `any_of` ranges
+### Slice 4: Identifier uniqueness
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Should Have
 
 **Depends on:** Slice 3.
 
-**User Value:** Two records sharing an identifier, or a polymorphic `any_of`
-value matching none of its branches, is caught — the last common conformance
-gaps for agent-built data.
+**User Value:** Two records sharing an identifier is caught — a common
+agent-data bug.
 
 **Acceptance Criteria:**
-- [ ] Two records of the same class with the same identifier value are reported as a duplicate-identifier violation.
-- [ ] A value at an `any_of`-ranged slot that satisfies none of the branch ranges is a violation; one that satisfies at least one branch passes.
-- [ ] Tests cover a duplicate identifier and an `any_of` miss/hit.
+- [x] Two top-level (collection) records that claim the same identifier are reported as a duplicate-identifier violation. The reader dedupes records by id for display, so it records the collision in `InstanceSet.duplicate_ids` for the validator to read.
+- [x] The same entity inlined in one place and listed as a top-level record (one entity referenced two ways, sharing an id) is *not* a duplicate — only two distinct top-level records are.
+- [x] Tests cover a duplicate identifier and the inlined-same-entity non-duplicate case.
+
+### Slice 4b: `any_of` polymorphic ranges
+
+**Status:** Not Started
+
+**Priority:** Should Have
+
+**Depends on:** Slice 4.
+
+**User Value:** A polymorphic `any_of` value matching none of its branches is
+caught.
+
+**Acceptance Criteria:**
+- [ ] A value at an `any_of`-ranged slot that satisfies none of the branch ranges (each an enum/type/class range) is a violation; one that satisfies at least one branch passes.
+- [ ] Tests cover an `any_of` miss and a hit.
 
 ---
 
@@ -204,7 +218,8 @@ gaps for agent-built data.
 | Slice 2b: range-kind mismatch (reader preserves dropped values) | Should Have | Slice 2 | Complete |
 | Slice 3: enum membership + numeric bounds | Must Have | Slice 2 | Complete |
 | Slice 3b: `pattern` (adds regex dependency) | Should Have | Slice 3 | Complete |
-| Slice 4: identifier uniqueness + `any_of` | Should Have | Slice 3 | Not Started |
+| Slice 4: identifier uniqueness | Should Have | Slice 3 | Complete |
+| Slice 4b: `any_of` polymorphic ranges | Should Have | Slice 4 | Not Started |
 
 ## Definition of Done
 

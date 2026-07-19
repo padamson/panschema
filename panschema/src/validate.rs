@@ -195,6 +195,14 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
         });
     }
 
+    // Identifier uniqueness: an id claimed by more than one record.
+    for id in &set.duplicate_ids {
+        out.push(Violation {
+            record: id.clone(),
+            detail: format!("identifier `{id}` is used by more than one record"),
+        });
+    }
+
     out
 }
 
@@ -284,6 +292,44 @@ wines:
   - id: chateauMorgon
     name: Château Morgon
     produced_by: morgonEstate
+wineries:
+  - id: morgonEstate
+    name: Morgon Estate
+",
+        );
+        assert!(validate_instance_data(&schema(), &d).is_empty());
+    }
+
+    #[test]
+    fn duplicate_identifier_across_records_is_a_violation() {
+        // Three wines claim the same id; the reader dedupes them for display, so
+        // the validator reads the collision from `duplicate_ids`. The clashing
+        // id is reported once, however many records claim it.
+        let d = data(
+            "wines:\n  - id: w1\n    name: A\n  - id: w1\n    name: B\n  - id: w1\n    name: C\n",
+        );
+        let v = validate_instance_data(&schema(), &d);
+        assert_eq!(v.len(), 1, "one duplicated identifier, reported once");
+        assert_eq!(v[0].record, "w1");
+        assert!(
+            v[0].detail.contains("used by more than one record"),
+            "got: {}",
+            v[0].detail
+        );
+    }
+
+    #[test]
+    fn an_inlined_object_sharing_a_top_level_records_id_is_not_a_duplicate() {
+        // The same winery is inlined in a wine and listed as a top-level record;
+        // that's one entity referenced two ways, not two records — no violation.
+        let d = data(
+            "\
+wines:
+  - id: w1
+    name: A
+    produced_by:
+      id: morgonEstate
+      name: Morgon Estate
 wineries:
   - id: morgonEstate
     name: Morgon Estate

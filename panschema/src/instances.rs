@@ -79,6 +79,11 @@ pub struct Instance {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct InstanceSet {
     pub instances: Vec<Instance>,
+    /// Identifiers claimed by more than one top-level (collection) record —
+    /// the reader dedupes records by id for display, so a validator reads
+    /// duplicates here rather than seeing the extra records. Sorted, each id
+    /// listed once. Empty for readers that don't track it (e.g. OWL).
+    pub duplicate_ids: Vec<String>,
 }
 
 impl InstanceSet {
@@ -202,7 +207,12 @@ impl InstanceSet {
         }
 
         instances.sort_by(|a, b| a.id.cmp(&b.id));
-        Self { instances }
+        // The OWL individual list is a set of ids; uniqueness tracking is a
+        // LinkML-data concern (see ADR-008 "uneven reader coverage").
+        Self {
+            instances,
+            duplicate_ids: Vec::new(),
+        }
     }
 
     /// Build from a LinkML **instance-data file**: a `tree_root` container
@@ -227,6 +237,8 @@ impl InstanceSet {
             schema,
             instances: Vec::new(),
             seen: std::collections::HashSet::new(),
+            top_level_seen: std::collections::HashSet::new(),
+            duplicate_ids: Vec::new(),
         };
         for (key, value) in container {
             let Some(slot_name) = key.as_str() else {
@@ -242,8 +254,10 @@ impl InstanceSet {
             }
         }
         loader.instances.sort_by(|a, b| a.id.cmp(&b.id));
+        loader.duplicate_ids.sort();
         Self {
             instances: loader.instances,
+            duplicate_ids: loader.duplicate_ids,
         }
     }
 }
@@ -255,6 +269,10 @@ struct LinkmlLoader<'a> {
     schema: &'a SchemaDefinition,
     instances: Vec<Instance>,
     seen: std::collections::HashSet<String>,
+    /// Ids of top-level (collection) records, to detect a second record
+    /// claiming an identifier already used by another.
+    top_level_seen: std::collections::HashSet<String>,
+    duplicate_ids: Vec<String>,
 }
 
 impl LinkmlLoader<'_> {
@@ -264,15 +282,27 @@ impl LinkmlLoader<'_> {
         match value {
             serde_yaml::Value::Sequence(items) => {
                 for item in items {
-                    self.build_record(class_name, None, item);
+                    if let Some(id) = self.build_record(class_name, None, item) {
+                        self.note_top_level_id(id);
+                    }
                 }
             }
             serde_yaml::Value::Mapping(map) => {
                 for (key, record) in map {
-                    self.build_record(class_name, key.as_str(), record);
+                    if let Some(id) = self.build_record(class_name, key.as_str(), record) {
+                        self.note_top_level_id(id);
+                    }
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Record a top-level record's id; a second use of an id already claimed by
+    /// a top-level record is a duplicate identifier (listed once).
+    fn note_top_level_id(&mut self, id: String) {
+        if !self.top_level_seen.insert(id.clone()) && !self.duplicate_ids.contains(&id) {
+            self.duplicate_ids.push(id);
         }
     }
 

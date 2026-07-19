@@ -824,6 +824,7 @@ mod tests {
                 instance("wineA", &[("produced_by", "ghostOne")]),
                 instance("realWinery", &[]),
             ],
+            ..Default::default()
         };
         let danglers = dangling_instance_references(&set);
         assert_eq!(danglers.len(), 2, "two references resolve to no instance");
@@ -847,6 +848,7 @@ mod tests {
                 instance("wineA", &[("produced_by", "realWinery")]),
                 instance("realWinery", &[]),
             ],
+            ..Default::default()
         };
         assert!(
             dangling_instance_references(&set).is_empty(),
