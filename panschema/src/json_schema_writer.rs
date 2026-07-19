@@ -127,6 +127,17 @@ fn slot_property(slot: &SlotDefinition, schema: &SchemaDefinition) -> Value {
 /// values as a JSON `enum`, a class range as a `$ref` to its `$def`, or a
 /// scalar type with any value constraints (`pattern`, numeric bounds) applied.
 fn slot_value_schema(slot: &SlotDefinition, schema: &SchemaDefinition) -> Value {
+    // A polymorphic `any_of` range: the value must satisfy at least one branch,
+    // which is JSON Schema `anyOf` over each branch's value schema.
+    if !slot.any_of.is_empty() {
+        let branches: Vec<Value> = slot
+            .any_of
+            .iter()
+            .map(|branch| slot_value_schema(branch, schema))
+            .collect();
+        return json!({ "anyOf": branches });
+    }
+
     let range = slot
         .range
         .as_deref()
@@ -429,6 +440,82 @@ enums:
         assert!(
             !validator.is_valid(&serde_json::json!({ "name": "x", "color": "red" })),
             "an extra property should fail under additionalProperties:false"
+        );
+    }
+
+    #[test]
+    fn inherited_slots_flatten_onto_the_subclass() {
+        // Dog is_a Animal; Dog's `$def` must carry Animal's slots directly, so
+        // a consumer validates a Dog without chasing `is_a`.
+        let mut schema: SchemaDefinition = serde_yaml::from_str(
+            "\
+name: zoo
+classes:
+  Animal:
+    attributes:
+      species:
+        range: string
+        required: true
+  Dog:
+    is_a: Animal
+    attributes:
+      breed:
+        range: string
+",
+        )
+        .expect("parse schema");
+        // The reader backfills class names from their map keys; a raw parse
+        // doesn't, and the effective-slot resolver's cycle-guard keys on the
+        // class name — so set them, mirroring the load path.
+        for (name, class) in schema.classes.iter_mut() {
+            class.name = name.clone();
+        }
+        let dog = &build_json_schema(&schema)["$defs"]["Dog"];
+        assert_eq!(dog["properties"]["species"]["type"], "string");
+        assert_eq!(dog["properties"]["breed"]["type"], "string");
+        assert_eq!(dog["required"], json!(["species"]));
+    }
+
+    #[test]
+    fn any_of_range_projects_to_anyof() {
+        let schema: SchemaDefinition = serde_yaml::from_str(
+            "\
+name: cellar
+classes:
+  Wine:
+    tree_root: true
+    attributes:
+      origin:
+        any_of:
+          - range: Region
+          - range: string
+  Region:
+    attributes:
+      id:
+        range: string
+        required: true
+",
+        )
+        .expect("parse schema");
+        let doc = build_json_schema(&schema);
+        assert_eq!(
+            doc["$defs"]["Wine"]["properties"]["origin"],
+            json!({ "anyOf": [ { "$ref": "#/$defs/Region" }, { "type": "string" } ] })
+        );
+
+        // Oracle: either branch validates; a value matching neither fails.
+        let v = jsonschema::validator_for(&doc).expect("document compiles");
+        assert!(
+            v.is_valid(&json!({ "origin": { "id": "beaujolais" } })),
+            "the class-ref branch should validate"
+        );
+        assert!(
+            v.is_valid(&json!({ "origin": "Beaujolais" })),
+            "the string branch should validate"
+        );
+        assert!(
+            !v.is_valid(&json!({ "origin": 42 })),
+            "a value matching neither branch should fail"
         );
     }
 }
