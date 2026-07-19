@@ -3001,6 +3001,7 @@ dependencies = [
  "pollster",
  "postgres",
  "pulldown-cmark",
+ "regex",
  "semver",
  "serde",
  "serde_json",

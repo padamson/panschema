@@ -163,7 +163,7 @@ its own slice (3b) rather than bundled here.
 
 ### Slice 3b: `pattern` validation (adds a regex dependency)
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Should Have
 
@@ -173,8 +173,8 @@ its own slice (3b) rather than bundled here.
 — the last per-value constraint the slot cards advertise.
 
 **Acceptance Criteria:**
-- [ ] A regex engine is added as a direct dependency (with the cargo-vet/deny entries it needs); a string value not matching its slot's `pattern` is a violation naming the record, slot, and pattern. An invalid `pattern` in the schema is reported, not panicked.
-- [ ] Tests cover a pattern miss and a match.
+- [x] `regex` is added as a direct dependency (already covered by the cargo-vet audit imports — no new exemptions). A string value not matching its slot's `pattern` is a violation naming the record, slot, and pattern; matching uses partial (`find`) semantics, consistent with panschema's SHACL `sh:pattern` and Postgres `~` projections. An invalid `pattern` in the schema is reported once per slot, not panicked.
+- [x] Tests cover a pattern match and a miss.
 
 ### Slice 4: Identifier uniqueness and `any_of` ranges
 
@@ -203,7 +203,7 @@ gaps for agent-built data.
 | Slice 2: cardinality | Must Have | Slice 1 | Complete |
 | Slice 2b: range-kind mismatch (reader preserves dropped values) | Should Have | Slice 2 | Not Started |
 | Slice 3: enum membership + numeric bounds | Must Have | Slice 2 | Complete |
-| Slice 3b: `pattern` (adds regex dependency) | Should Have | Slice 3 | Not Started |
+| Slice 3b: `pattern` (adds regex dependency) | Should Have | Slice 3 | Complete |
 | Slice 4: identifier uniqueness + `any_of` | Should Have | Slice 3 | Not Started |
 
 ## Definition of Done

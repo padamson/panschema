@@ -36,6 +36,11 @@ toml = "1"
 toml_edit = "0.25"
 hex = "0.4"
 
+# Instance-data validation: compiling a slot's `pattern` regex to check
+# string values against it. Default features (Unicode-aware `\w`/`\d`,
+# etc.) so a schema's pattern validates with standard regex semantics.
+regex = "1"
+
 # Error handling
 thiserror = "2"
 anyhow = "1"

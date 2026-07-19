@@ -13,6 +13,7 @@
 use crate::instances::{InstanceSet, InstanceValue, ScalarValue, scalar_to_display};
 use crate::linkml::{EnumDefinition, SchemaDefinition};
 use crate::linkml_resolve::{effective_cardinality, resolve_effective_slots};
+use regex::Regex;
 use serde_yaml::Value;
 use std::fmt;
 
@@ -95,13 +96,27 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
                 ));
             }
 
-            // Per-value constraints: enum membership and numeric bounds.
+            // Per-value constraints: enum membership, numeric bounds, pattern.
             let range_enum = slot
                 .range
                 .as_deref()
                 .and_then(|r| schema.enums.get(r).map(|e| (r, e)));
             let has_bound = slot.minimum_value.is_some() || slot.maximum_value.is_some();
-            if range_enum.is_none() && !has_bound {
+            // Compile the slot's pattern once (not per value); an invalid regex
+            // in the schema is reported here rather than crashing the validator.
+            let pattern = match slot.pattern.as_deref() {
+                Some(p) => match Regex::new(p) {
+                    Ok(re) => Some(re),
+                    Err(_) => {
+                        push(format!(
+                            "slot `{slot_name}` (class `{class_name}`) has an invalid pattern `{p}`"
+                        ));
+                        None
+                    }
+                },
+                None => None,
+            };
+            if range_enum.is_none() && !has_bound && pattern.is_none() {
                 continue;
             }
             for value in inst
@@ -120,6 +135,18 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
                     let shown = scalar_to_display(scalar);
                     push(format!(
                         "slot `{slot_name}` (class `{class_name}`) value `{shown}` is not a permissible value of enum `{enum_name}`"
+                    ));
+                }
+                // Pattern: partial match (unanchored `find`), matching the
+                // semantics panschema's SHACL `sh:pattern` and Postgres `~`
+                // projections use.
+                if let Some(re) = &pattern
+                    && let ScalarValue::String(s) = scalar
+                    && !re.is_match(s)
+                {
+                    push(format!(
+                        "slot `{slot_name}` (class `{class_name}`) value `{s}` does not match pattern `{}`",
+                        slot.pattern.as_deref().unwrap_or_default()
                     ));
                 }
                 if has_bound {
@@ -449,6 +476,9 @@ classes:
       level:
         range: float
         minimum_value: 1.0
+      code:
+        range: string
+        pattern: \"^[A-Z]{3}$\"
 enums:
   ColorEnum:
     permissible_values:
@@ -480,6 +510,40 @@ enums:
         assert_eq!(v.len(), 1);
         assert!(
             v[0].detail.contains("below its minimum") && v[0].detail.contains("level"),
+            "got: {}",
+            v[0].detail
+        );
+    }
+
+    #[test]
+    fn value_matching_the_pattern_conforms() {
+        // `code` must match `^[A-Z]{3}$`.
+        assert!(value_violations("items:\n  - id: a\n    code: ABC\n").is_empty());
+    }
+
+    #[test]
+    fn value_not_matching_the_pattern_is_a_violation() {
+        let v = value_violations("items:\n  - id: a\n    code: abcd\n");
+        assert_eq!(v.len(), 1);
+        assert!(
+            v[0].detail.contains("does not match pattern") && v[0].detail.contains("code"),
+            "got: {}",
+            v[0].detail
+        );
+    }
+
+    #[test]
+    fn invalid_pattern_in_the_schema_is_reported_not_panicked() {
+        // `[` is an unterminated character class — the validator reports it
+        // rather than crashing when compiling the regex.
+        let schema: SchemaDefinition = serde_yaml::from_str(
+            "name: P\ndefault_range: string\nclasses:\n  Root:\n    tree_root: true\n    attributes:\n      items:\n        range: Item\n        multivalued: true\n  Item:\n    attributes:\n      id:\n        identifier: true\n      code:\n        range: string\n        pattern: \"[\"\n",
+        )
+        .expect("parse schema");
+        let v = validate_instance_data(&schema, &data("items:\n  - id: a\n    code: x\n"));
+        assert_eq!(v.len(), 1);
+        assert!(
+            v[0].detail.contains("invalid pattern"),
             "got: {}",
             v[0].detail
         );
