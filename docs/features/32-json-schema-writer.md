@@ -105,12 +105,21 @@ scalar-only classes.
 - [x] Inherited/mixed-in slots appear on each class object (effective-slot flattening via the shared `resolve_effective_slots_with_provenance` — the same resolver the Rust/Postgres/SHACL writers use), so a subclass instance validates against its own `$def` without chasing `is_a` (`inherited_slots_flatten_onto_the_subclass`).
 - [x] A polymorphic `any_of` range emits `anyOf` over each branch's value schema (`any_of_range_projects_to_anyof`, oracle-checked: either branch validates, neither fails). Uses `anyOf` rather than `oneOf` — LinkML `any_of` means "satisfies at least one", which is JSON Schema `anyOf`.
 
-**Follow-up (Slice 3b): custom-type resolution + skip diagnostic.** A range that
-is a schema `types:` entry (a custom type over a base, e.g. a pattern-bearing
-string type) currently falls back to the permissive `true` schema rather than
-resolving to its base type + facets. Resolving those (and emitting a
-writer-projection diagnostic for a range that genuinely can't project) is a
-small dedicated slice.
+### Slice 3b: Custom-`types:` resolution
+
+**Status:** Complete
+
+**Priority:** Should Have
+
+**Depends on:** Slice 3.
+
+**Acceptance Criteria:**
+- [x] A range naming a schema `types:` entry resolves to its base scalar by following the `typeof` chain (or the type's `uri` datatype), carrying the type's `pattern`, instead of the permissive `true` fallback (`custom_types_resolve_to_base_scalar_and_facets`, oracle-checked). A `typeof` cycle terminates at `string`; an unrecognized datatype falls back to `string`.
+- [x] Surfaced and fixed a parser bug in the process: `typeof` was read under a non-standard `typeof_` key, so a real schema's type inheritance was silently dropped everywhere (docs/graph/JSON-Schema). Now read from the correct `typeof` key.
+
+A writer-projection diagnostic for a range that genuinely can't project (an
+unresolvable custom type) is a possible later refinement; today such a range is
+the permissive `true` fallback, which never wrongly rejects an instance.
 
 ### Slice 4: LLM-structured-output ergonomics — deferred
 
@@ -132,7 +141,7 @@ demo app.
 | Slice 1: skeleton + scalar objects | Must Have | Reader/Writer arch | Complete |
 | Slice 2: enums, `$ref`, constraints | Must Have | Slice 1 | Complete |
 | Slice 3: inheritance + `any_of` | Should Have | Slices 1–2 | Complete |
-| Slice 3b: custom-type resolution + skip diagnostic | Should Have | Slice 3 | Not Started |
+| Slice 3b: custom-`types:` resolution | Should Have | Slice 3 | Complete |
 | Slice 4: LLM ergonomics + `rig` demo | Could Have | Slices 1–3 | 📋 Deferred |
 
 ## Definition of Done

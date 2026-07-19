@@ -74,4 +74,4 @@ types:
   age_type:
     name: age_type
     description: A non-negative integer representing age
-    typeof_: integer
+    typeof: integer

@@ -672,8 +672,11 @@ pub struct TypeDefinition {
     /// Worked examples; see [`SchemaDefinition::examples`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub examples: Vec<Example>,
-    /// Parent type (for type inheritance)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Parent type (for type inheritance). LinkML spells this `typeof`; the
+    /// field carries a trailing underscore only to dodge the Rust keyword, so
+    /// it must be renamed for (de)serialization — without this, `typeof:` in a
+    /// schema is silently ignored and the type's base is lost.
+    #[serde(rename = "typeof", skip_serializing_if = "Option::is_none")]
     pub typeof_: Option<String>,
     /// URI for the underlying datatype (e.g., xsd:string)
     #[serde(skip_serializing_if = "Option::is_none")]

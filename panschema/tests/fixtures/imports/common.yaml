@@ -39,4 +39,4 @@ types:
   postal_code:
     name: postal_code
     description: A postal code string
-    typeof_: string
+    typeof: string

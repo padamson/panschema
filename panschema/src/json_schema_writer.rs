@@ -8,11 +8,13 @@
 //! instances, and any JSON validator can check instance data against it.
 //!
 //! A scalar range projects to its typed property (with `pattern` / numeric
-//! bounds applied), an enum range to a JSON `enum` of its permissible values,
-//! and a class range to a `$ref` to that class's `$def`. A range that is none
-//! of these — an unrecognised custom type — is emitted permissively (`true`)
-//! so `additionalProperties: false` never rejects an otherwise-valid instance.
-//! Inheritance flattening and `any_of` are not projected yet.
+//! bounds applied), an enum range to a JSON `enum` of its permissible values, a
+//! class range to a `$ref` to that class's `$def`, a custom `types:` range to
+//! its resolved base scalar + facets (following the `typeof` chain or the
+//! type's `uri` datatype), and an `any_of` range to `anyOf` over its branches.
+//! Inherited/mixed-in slots flatten onto each subclass. A range that resolves
+//! to none of these is emitted permissively (`true`) so
+//! `additionalProperties: false` never rejects an otherwise-valid instance.
 
 use std::fs::File;
 use std::io::BufWriter;
@@ -158,10 +160,65 @@ fn slot_value_schema(slot: &SlotDefinition, schema: &SchemaDefinition) -> Value 
     if schema.classes.contains_key(range) {
         return json!({ "$ref": format!("#/$defs/{range}") });
     }
-    // Scalar range → its type, plus any value constraints.
-    let mut base = scalar_json_type(range);
+    // A custom `types:` entry resolves to its base scalar + facets; a built-in
+    // scalar maps directly. Slot-level constraints layer on top of either.
+    let mut base = if schema.types.contains_key(range) {
+        resolve_type_schema(schema, range, &mut Vec::new())
+    } else {
+        scalar_json_type(range)
+    };
     apply_value_constraints(&mut base, slot);
     base
+}
+
+/// Resolve a range naming a schema `types:` entry to a JSON Schema: follow the
+/// `typeof` chain (or the type's `uri` datatype) down to a base scalar, and
+/// carry each type's `pattern` (a nearer type's pattern overrides). A `typeof`
+/// cycle terminates at `string`.
+fn resolve_type_schema(schema: &SchemaDefinition, name: &str, seen: &mut Vec<String>) -> Value {
+    let Some(type_def) = schema.types.get(name) else {
+        // Not a custom type — a built-in scalar name (or unrecognized → `true`).
+        return scalar_json_type(name);
+    };
+    if seen.iter().any(|s| s == name) {
+        return json!({ "type": "string" });
+    }
+    seen.push(name.to_string());
+
+    let mut base = match (&type_def.typeof_, &type_def.uri) {
+        (Some(parent), _) => resolve_type_schema(schema, parent, seen),
+        (None, Some(uri)) => xsd_json_type(uri),
+        (None, None) => json!({ "type": "string" }),
+    };
+    if let Some(pattern) = &type_def.pattern
+        && let Some(obj) = base.as_object_mut()
+    {
+        obj.insert("pattern".to_string(), json!(pattern));
+    }
+    base
+}
+
+/// Map an XSD datatype (a type's `uri`, e.g. `xsd:integer`) to its JSON Schema
+/// type/format, keyed on the local name; unknown datatypes fall back to string.
+fn xsd_json_type(uri: &str) -> Value {
+    let local = uri
+        .rsplit([':', '#', '/'])
+        .next()
+        .unwrap_or(uri)
+        .to_ascii_lowercase();
+    match local.as_str() {
+        "integer" | "int" | "long" | "short" | "nonnegativeinteger" | "positiveinteger"
+        | "negativeinteger" | "nonpositiveinteger" | "unsignedint" | "unsignedlong" => {
+            json!({ "type": "integer" })
+        }
+        "decimal" | "float" | "double" => json!({ "type": "number" }),
+        "boolean" => json!({ "type": "boolean" }),
+        "date" => json!({ "type": "string", "format": "date" }),
+        "datetime" => json!({ "type": "string", "format": "date-time" }),
+        "time" => json!({ "type": "string", "format": "time" }),
+        "anyuri" => json!({ "type": "string", "format": "uri" }),
+        _ => json!({ "type": "string" }),
+    }
 }
 
 /// Add a slot's value constraints to its scalar schema: `pattern` for strings,
@@ -474,6 +531,123 @@ classes:
         assert_eq!(dog["properties"]["species"]["type"], "string");
         assert_eq!(dog["properties"]["breed"]["type"], "string");
         assert_eq!(dog["required"], json!(["species"]));
+    }
+
+    #[test]
+    fn custom_types_resolve_to_base_scalar_and_facets() {
+        let mut schema: SchemaDefinition = serde_yaml::from_str(
+            "\
+name: contacts
+classes:
+  Person:
+    tree_root: true
+    attributes:
+      phone:
+        range: PhoneNumber
+      visits:
+        range: Count
+      home:
+        range: UsPhone
+types:
+  PhoneNumber:
+    typeof: string
+    pattern: '^\\+[0-9]+$'
+  Count:
+    uri: xsd:integer
+  UsPhone:
+    typeof: PhoneNumber
+",
+        )
+        .expect("parse schema");
+        for (name, class) in schema.classes.iter_mut() {
+            class.name = name.clone();
+        }
+        let doc = build_json_schema(&schema);
+        let person = &doc["$defs"]["Person"];
+
+        // A `typeof: string` type with a pattern → string + pattern.
+        assert_eq!(
+            person["properties"]["phone"],
+            json!({ "type": "string", "pattern": "^\\+[0-9]+$" })
+        );
+        // A type carrying only `uri: xsd:integer` → integer.
+        assert_eq!(person["properties"]["visits"], json!({ "type": "integer" }));
+        // A `typeof` chain resolves to the base scalar and inherits the
+        // ancestor's pattern.
+        assert_eq!(
+            person["properties"]["home"],
+            json!({ "type": "string", "pattern": "^\\+[0-9]+$" })
+        );
+
+        let v = jsonschema::validator_for(&doc).expect("document compiles");
+        assert!(
+            v.is_valid(&json!({ "phone": "+1234", "visits": 3 })),
+            "conforming values validate"
+        );
+        assert!(
+            !v.is_valid(&json!({ "phone": "not-a-number" })),
+            "a value violating the custom type's pattern fails"
+        );
+    }
+
+    #[test]
+    fn xsd_datatypes_map_to_expected_json_types() {
+        assert_eq!(xsd_json_type("xsd:integer"), json!({ "type": "integer" }));
+        assert_eq!(xsd_json_type("xsd:long"), json!({ "type": "integer" }));
+        assert_eq!(
+            xsd_json_type("xsd:nonNegativeInteger"),
+            json!({ "type": "integer" })
+        );
+        assert_eq!(xsd_json_type("xsd:decimal"), json!({ "type": "number" }));
+        assert_eq!(xsd_json_type("xsd:double"), json!({ "type": "number" }));
+        assert_eq!(xsd_json_type("xsd:boolean"), json!({ "type": "boolean" }));
+        assert_eq!(
+            xsd_json_type("xsd:date"),
+            json!({ "type": "string", "format": "date" })
+        );
+        assert_eq!(
+            xsd_json_type("xsd:dateTime"),
+            json!({ "type": "string", "format": "date-time" })
+        );
+        assert_eq!(
+            xsd_json_type("xsd:time"),
+            json!({ "type": "string", "format": "time" })
+        );
+        assert_eq!(
+            xsd_json_type("xsd:anyURI"),
+            json!({ "type": "string", "format": "uri" })
+        );
+        // A full IRI is matched on its local name.
+        assert_eq!(
+            xsd_json_type("http://www.w3.org/2001/XMLSchema#integer"),
+            json!({ "type": "integer" })
+        );
+        // An unrecognized datatype falls back to string.
+        assert_eq!(xsd_json_type("xsd:hexBinary"), json!({ "type": "string" }));
+    }
+
+    #[test]
+    fn custom_type_edge_cases_resolve_to_string() {
+        let schema: SchemaDefinition = serde_yaml::from_str(
+            "\
+name: t
+types:
+  Bare: {}
+  Loopy:
+    typeof: Loopy
+",
+        )
+        .expect("parse schema");
+        // A type with neither `typeof` nor `uri` defaults to string.
+        assert_eq!(
+            resolve_type_schema(&schema, "Bare", &mut Vec::new()),
+            json!({ "type": "string" })
+        );
+        // A `typeof` cycle terminates at string rather than recursing forever.
+        assert_eq!(
+            resolve_type_schema(&schema, "Loopy", &mut Vec::new()),
+            json!({ "type": "string" })
+        );
     }
 
     #[test]

@@ -466,7 +466,7 @@ id: https://example.org/x
 name: x
 types:
   age_t:
-    typeof_: integer
+    typeof: integer
 "#,
         )
         .expect("Should parse type without explicit name");
