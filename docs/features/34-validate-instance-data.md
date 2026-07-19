@@ -140,23 +140,41 @@ is expected — is reported precisely, not just as a downstream "absent" symptom
 - [ ] A mapping at a scalar-ranged slot, and a non-reference scalar (e.g. a number) at a class-ranged slot, are each violations naming the record, slot, and expected kind.
 - [ ] Tests cover both mismatches.
 
-### Slice 3: Value-constraint checks — enum, pattern, numeric bounds
+### Slice 3: Value-constraint checks — enum membership, numeric bounds
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Must Have
 
 **Depends on:** Slice 2.
 
-**User Value:** A value that isn't a permissible enum value, doesn't match a
-slot's `pattern`, or falls outside `minimum_value`/`maximum_value` is caught —
-the constraints the class/slot cards advertise are now enforced against data.
+**User Value:** A value that isn't a permissible enum value, or that falls
+outside `minimum_value`/`maximum_value`, is caught — the constraints the
+class/slot cards advertise are now enforced against data.
 
 **Acceptance Criteria:**
-- [ ] An enum-ranged value that isn't one of the range enum's permissible values is a violation naming the record, slot, the value, and (briefly) the allowed set.
-- [ ] A string value that doesn't match its slot's `pattern`, and a numeric value outside `minimum_value`/`maximum_value`, are each violations.
-- [ ] A value whose scalar type can't satisfy a numeric-bounded or pattern-constrained slot is reported rather than panicking.
-- [ ] Tests cover an out-of-enum value, a pattern miss, and an out-of-bounds number.
+- [x] An enum-ranged value that isn't one of the range enum's permissible values (matched against the value key or its `text`) is a violation naming the record, slot, the value, and the enum.
+- [x] A numeric value below `minimum_value` or above `maximum_value` is a violation; a non-numeric value at a numeric-bounded slot is reported (not panicked).
+- [x] Tests cover an out-of-enum value, below-minimum, above-maximum, a non-numeric-at-bounded-slot, and a conforming case. Both checks read the typed `slot_values`, so no re-parsing.
+
+**Note — `pattern` split out.** `pattern` validation needs a regex engine, which
+isn't a direct dependency yet; adding one carries a supply-chain cost, so it is
+its own slice (3b) rather than bundled here.
+
+### Slice 3b: `pattern` validation (adds a regex dependency)
+
+**Status:** Not Started
+
+**Priority:** Should Have
+
+**Depends on:** Slice 3.
+
+**User Value:** A string value that doesn't match its slot's `pattern` is caught
+— the last per-value constraint the slot cards advertise.
+
+**Acceptance Criteria:**
+- [ ] A regex engine is added as a direct dependency (with the cargo-vet/deny entries it needs); a string value not matching its slot's `pattern` is a violation naming the record, slot, and pattern. An invalid `pattern` in the schema is reported, not panicked.
+- [ ] Tests cover a pattern miss and a match.
 
 ### Slice 4: Identifier uniqueness and `any_of` ranges
 
@@ -184,7 +202,8 @@ gaps for agent-built data.
 | Slice 1: command + required-presence + reference integrity | Must Have | — | Complete |
 | Slice 2: cardinality | Must Have | Slice 1 | Complete |
 | Slice 2b: range-kind mismatch (reader preserves dropped values) | Should Have | Slice 2 | Not Started |
-| Slice 3: enum + pattern + numeric bounds | Must Have | Slice 2 | Not Started |
+| Slice 3: enum membership + numeric bounds | Must Have | Slice 2 | Complete |
+| Slice 3b: `pattern` (adds regex dependency) | Should Have | Slice 3 | Not Started |
 | Slice 4: identifier uniqueness + `any_of` | Should Have | Slice 3 | Not Started |
 
 ## Definition of Done

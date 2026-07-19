@@ -10,8 +10,8 @@
 //! checks — fidelity the display-oriented `literals` (stringified) and the
 //! still-incomplete JSON-Schema projection can't provide.
 
-use crate::instances::InstanceSet;
-use crate::linkml::SchemaDefinition;
+use crate::instances::{InstanceSet, InstanceValue, ScalarValue, scalar_to_display};
+use crate::linkml::{EnumDefinition, SchemaDefinition};
 use crate::linkml_resolve::{effective_cardinality, resolve_effective_slots};
 use serde_yaml::Value;
 use std::fmt;
@@ -94,6 +94,59 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
                     "slot `{slot_name}` (class `{class_name}`) has {count} value(s), exceeding its maximum of {max}"
                 ));
             }
+
+            // Per-value constraints: enum membership and numeric bounds.
+            let range_enum = slot
+                .range
+                .as_deref()
+                .and_then(|r| schema.enums.get(r).map(|e| (r, e)));
+            let has_bound = slot.minimum_value.is_some() || slot.maximum_value.is_some();
+            if range_enum.is_none() && !has_bound {
+                continue;
+            }
+            for value in inst
+                .slot_values
+                .iter()
+                .find(|sv| &sv.slot == slot_name)
+                .map(|sv| sv.values.as_slice())
+                .unwrap_or_default()
+            {
+                let InstanceValue::Scalar(scalar) = value else {
+                    continue;
+                };
+                if let Some((enum_name, enum_def)) = range_enum
+                    && !enum_permits(enum_def, scalar)
+                {
+                    let shown = scalar_to_display(scalar);
+                    push(format!(
+                        "slot `{slot_name}` (class `{class_name}`) value `{shown}` is not a permissible value of enum `{enum_name}`"
+                    ));
+                }
+                if has_bound {
+                    match numeric(scalar) {
+                        Some(n) => {
+                            if let Some(min) = slot.minimum_value
+                                && n < min
+                            {
+                                push(format!(
+                                    "slot `{slot_name}` (class `{class_name}`) value {n} is below its minimum of {min}"
+                                ));
+                            }
+                            if let Some(max) = slot.maximum_value
+                                && n > max
+                            {
+                                push(format!(
+                                    "slot `{slot_name}` (class `{class_name}`) value {n} is above its maximum of {max}"
+                                ));
+                            }
+                        }
+                        None => push(format!(
+                            "slot `{slot_name}` (class `{class_name}`) value `{}` is not numeric, but the slot declares a numeric bound",
+                            scalar_to_display(scalar)
+                        )),
+                    }
+                }
+            }
         }
     }
 
@@ -123,6 +176,27 @@ pub fn validate_instance_data(schema: &SchemaDefinition, data: &Value) -> Vec<Vi
     }
     let set = InstanceSet::from_linkml_data(schema, data);
     validate_instances(schema, &set)
+}
+
+/// Whether `scalar`'s string form is one of the enum's permissible values —
+/// matched against either the value key or its `text`.
+fn enum_permits(enum_def: &EnumDefinition, scalar: &ScalarValue) -> bool {
+    let value = scalar_to_display(scalar);
+    enum_def.permissible_values.contains_key(&value)
+        || enum_def
+            .permissible_values
+            .values()
+            .any(|pv| pv.text == value)
+}
+
+/// The numeric value of a scalar for bound-checking, or `None` for a
+/// non-numeric scalar (a string/bool where a bound was declared).
+fn numeric(scalar: &ScalarValue) -> Option<f64> {
+    match scalar {
+        ScalarValue::Integer(i) => Some(*i as f64),
+        ScalarValue::Float(f) => Some(*f),
+        ScalarValue::String(_) | ScalarValue::Boolean(_) => None,
+    }
 }
 
 #[cfg(test)]
@@ -349,5 +423,114 @@ classes:
             "got: {}",
             v[0].detail
         );
+    }
+
+    /// An enum-ranged slot and a `0.0..1.0`-bounded numeric slot.
+    const VALUE_SCHEMA: &str = "\
+name: V
+default_range: string
+classes:
+  Root:
+    tree_root: true
+    attributes:
+      items:
+        range: Item
+        multivalued: true
+  Item:
+    attributes:
+      id:
+        identifier: true
+      color:
+        range: ColorEnum
+      strength:
+        range: float
+        minimum_value: 0.0
+        maximum_value: 1.0
+      level:
+        range: float
+        minimum_value: 1.0
+enums:
+  ColorEnum:
+    permissible_values:
+      red:
+      white:
+";
+
+    fn value_schema() -> SchemaDefinition {
+        serde_yaml::from_str(VALUE_SCHEMA).expect("parse value schema")
+    }
+
+    fn value_violations(yaml: &str) -> Vec<Violation> {
+        validate_instance_data(&value_schema(), &data(yaml))
+    }
+
+    #[test]
+    fn numeric_values_exactly_on_the_bounds_conform() {
+        // strength at exactly its minimum (0.0) and exactly its maximum (1.0)
+        // both conform — pins the `<`/`>` boundaries.
+        assert!(value_violations("items:\n  - id: lo\n    strength: 0.0\n").is_empty());
+        assert!(value_violations("items:\n  - id: hi\n    strength: 1.0\n").is_empty());
+    }
+
+    #[test]
+    fn single_bounded_slot_below_its_only_minimum_is_a_violation() {
+        // `level` declares only a minimum — pins that either bound alone
+        // engages the numeric checks.
+        let v = value_violations("items:\n  - id: a\n    level: 0.5\n");
+        assert_eq!(v.len(), 1);
+        assert!(
+            v[0].detail.contains("below its minimum") && v[0].detail.contains("level"),
+            "got: {}",
+            v[0].detail
+        );
+    }
+
+    #[test]
+    fn enum_and_bounds_conform() {
+        assert!(
+            value_violations("items:\n  - id: a\n    color: red\n    strength: 0.5\n").is_empty()
+        );
+    }
+
+    #[test]
+    fn value_outside_enum_is_a_violation() {
+        let v = value_violations("items:\n  - id: a\n    color: blue\n");
+        assert_eq!(v.len(), 1);
+        assert!(
+            v[0].detail
+                .contains("permissible value of enum `ColorEnum`")
+                && v[0].detail.contains("blue"),
+            "got: {}",
+            v[0].detail
+        );
+    }
+
+    #[test]
+    fn numeric_below_minimum_is_a_violation() {
+        let v = value_violations("items:\n  - id: a\n    strength: -0.5\n");
+        assert_eq!(v.len(), 1);
+        assert!(
+            v[0].detail.contains("below its minimum"),
+            "got: {}",
+            v[0].detail
+        );
+    }
+
+    #[test]
+    fn numeric_above_maximum_is_a_violation() {
+        let v = value_violations("items:\n  - id: a\n    strength: 1.5\n");
+        assert_eq!(v.len(), 1);
+        assert!(
+            v[0].detail.contains("above its maximum"),
+            "got: {}",
+            v[0].detail
+        );
+    }
+
+    #[test]
+    fn non_numeric_value_at_a_bounded_slot_is_reported_not_panicked() {
+        let v = value_violations("items:\n  - id: a\n    strength: high\n");
+        assert_eq!(v.len(), 1);
+        assert!(v[0].detail.contains("not numeric"), "got: {}", v[0].detail);
     }
 }

@@ -454,7 +454,7 @@ fn scalar_value(value: &serde_yaml::Value) -> Option<ScalarValue> {
 }
 
 /// Render a typed scalar as its display string.
-fn scalar_to_display(value: &ScalarValue) -> String {
+pub(crate) fn scalar_to_display(value: &ScalarValue) -> String {
     match value {
         ScalarValue::String(s) => s.clone(),
         ScalarValue::Integer(i) => i.to_string(),
