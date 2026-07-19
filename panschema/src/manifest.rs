@@ -108,6 +108,9 @@ pub struct GenerateConfig {
     /// JSON Schema output file path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub json_schema: Option<PathBuf>,
+    /// OpenAPI 3.1 (`components/schemas`) output file path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openapi: Option<PathBuf>,
     /// OWL/Turtle output file path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ttl: Option<PathBuf>,

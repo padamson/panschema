@@ -17,6 +17,7 @@ pub mod linkml;
 pub mod linkml_resolve;
 pub mod lockfile;
 pub mod manifest;
+pub mod openapi_writer;
 pub mod owl_model;
 pub mod owl_reader;
 pub mod owl_writer;

@@ -27,6 +27,7 @@ Think of it as **pandoc for data modeling** — a single tool that speaks all sc
 - **Loud about gaps**: warns on LinkML constructs it parses but doesn't model (so nothing is silently dropped); `generate --strict` fails the build instead
 - **Postgres DDL**: `generate --format postgres` emits `CREATE TABLE`/`CREATE TYPE` DDL from the same LinkML schema your Rust structs come from — no hand-written SQL to keep in sync
 - **SHACL shapes**: `generate --format shacl` emits a SHACL shapes graph so a schema's value constraints are machine-checkable by any SHACL engine, not just visible in the docs
+- **JSON Schema / OpenAPI**: `generate --format json-schema` (draft 2020-12) and `--format openapi` (3.1 `components/schemas`) emit a structured-output/API contract from the same LinkML source — an LLM's structured output or a generated TS/Swift client shares the model the Rust types come from
 - **Instance-data validation**: `validate --input schema.yaml --data data.yaml` checks a LinkML instance-data file against the schema and exits non-zero on any violation — a conformance gate for CI or an LLM authoring loop
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
@@ -74,9 +75,10 @@ Open http://localhost:3000 to view the documentation.
 | Graph JSON | Full support |
 | SHACL shapes | Full support |
 | Postgres DDL | Partial support (concrete classes, scalars, enums, single-valued class references, and `unique_keys`/`pattern`/value-bound/`rules` constraints) |
+| JSON Schema (draft 2020-12) | Full support |
+| OpenAPI 3.1 (`components/schemas`) | Full support |
 | LinkML YAML | Planned |
 | Markdown | Planned |
-| JSON Schema | Planned |
 
 ## Architecture
 

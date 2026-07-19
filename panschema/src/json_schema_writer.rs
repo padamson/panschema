@@ -64,6 +64,25 @@ impl Writer for JsonSchemaWriter {
 /// come out in `serde_json::Map` (sorted) order, and `required` follows the
 /// resolver's alphabetical slot order, so the output is byte-stable.
 pub fn build_json_schema(schema: &SchemaDefinition) -> Value {
+    let defs = build_class_defs(schema);
+
+    let mut root = serde_json::Map::new();
+    root.insert("$schema".to_string(), json!(DIALECT_2020_12));
+    // When the schema declares a `tree_root` container class, the document
+    // roots at it (a conforming instance is an instance of that class);
+    // otherwise it is `$defs`-only and a consumer refs the class it wants.
+    if let Some((name, _)) = schema.classes.iter().find(|(_, c)| c.tree_root) {
+        root.insert("$ref".to_string(), json!(format!("#/$defs/{name}")));
+    }
+    root.insert("$defs".to_string(), Value::Object(defs));
+    Value::Object(root)
+}
+
+/// Build one closed `object` schema per class, keyed by class name — the
+/// `$defs` map. `$ref`s between classes point at `#/$defs/<Class>`; the OpenAPI
+/// writer retargets those to `#/components/schemas/<Class>`. Deterministic
+/// (`serde_json::Map` and the resolver's slot order are both sorted).
+pub(crate) fn build_class_defs(schema: &SchemaDefinition) -> serde_json::Map<String, Value> {
     let mut defs = serde_json::Map::new();
 
     for (class_name, class_def) in &schema.classes {
@@ -102,16 +121,7 @@ pub fn build_json_schema(schema: &SchemaDefinition) -> Value {
         defs.insert(class_name.clone(), Value::Object(obj));
     }
 
-    let mut root = serde_json::Map::new();
-    root.insert("$schema".to_string(), json!(DIALECT_2020_12));
-    // When the schema declares a `tree_root` container class, the document
-    // roots at it (a conforming instance is an instance of that class);
-    // otherwise it is `$defs`-only and a consumer refs the class it wants.
-    if let Some((name, _)) = schema.classes.iter().find(|(_, c)| c.tree_root) {
-        root.insert("$ref".to_string(), json!(format!("#/$defs/{name}")));
-    }
-    root.insert("$defs".to_string(), Value::Object(defs));
-    Value::Object(root)
+    defs
 }
 
 /// The JSON Schema for a single slot: its value schema (see

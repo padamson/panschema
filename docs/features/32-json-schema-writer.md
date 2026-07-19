@@ -121,6 +121,24 @@ A writer-projection diagnostic for a range that genuinely can't project (an
 unresolvable custom type) is a possible later refinement; today such a range is
 the permissive `true` fallback, which never wrongly rejects an instance.
 
+### Slice 5: OpenAPI 3.1 `components/schemas` wrapper
+
+**Status:** Complete
+
+**Priority:** Should Have
+
+**Depends on:** Slices 1–3.
+
+**User Value:** `generate --format openapi` emits an OpenAPI 3.1 document whose
+`components/schemas` are the class schemas — so a service's TypeScript/Swift
+clients (which generate from OpenAPI) share the LinkML source the Rust DTOs come
+from, instead of the API contract being authored separately and drifting.
+
+**Acceptance Criteria:**
+- [x] A new `openapi` format (registered writer + CLI `--format openapi` + manifest `openapi` output) emits `{ openapi: "3.1.0", info: { title, version }, components: { schemas: {…} } }`. `info.title` is the schema's title (or name); `info.version` its `version` (or `0.0.0`).
+- [x] The component schemas are the JSON-Schema class definitions (OpenAPI 3.1's schema dialect *is* JSON Schema 2020-12 — reused verbatim via `build_class_defs`), with inter-class `$ref`s retargeted from `#/$defs/<Class>` to `#/components/schemas/<Class>`; no `#/$defs/` ref survives.
+- [x] Schema components only (LinkML models the data model, not HTTP operations — `paths` come from the service code `$ref`-ing these). Oracle: each component validates instances via the `jsonschema` crate (`component_schemas_validate_instances`).
+
 ### Slice 4: LLM-structured-output ergonomics — deferred
 
 **Status:** 📋 Deferred — build with the graphRAG demo
@@ -142,6 +160,7 @@ demo app.
 | Slice 2: enums, `$ref`, constraints | Must Have | Slice 1 | Complete |
 | Slice 3: inheritance + `any_of` | Should Have | Slices 1–2 | Complete |
 | Slice 3b: custom-`types:` resolution | Should Have | Slice 3 | Complete |
+| Slice 5: OpenAPI 3.1 `components/schemas` wrapper | Should Have | Slices 1–3 | Complete |
 | Slice 4: LLM ergonomics + `rig` demo | Could Have | Slices 1–3 | 📋 Deferred |
 
 ## Definition of Done

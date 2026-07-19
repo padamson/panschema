@@ -18,6 +18,7 @@ use crate::graph_writer::GraphWriter;
 use crate::html_writer::HtmlWriter;
 use crate::json_schema_writer::JsonSchemaWriter;
 use crate::linkml::SchemaDefinition;
+use crate::openapi_writer::OpenApiWriter;
 use crate::owl_reader::OwlReader;
 use crate::owl_writer::OwlWriter;
 use crate::postgres_writer::PostgresWriter;
@@ -144,6 +145,7 @@ impl FormatRegistry {
         registry.register_writer(Box::new(PostgresWriter::new()));
         registry.register_writer(Box::new(ShaclWriter::new()));
         registry.register_writer(Box::new(JsonSchemaWriter::new()));
+        registry.register_writer(Box::new(OpenApiWriter::new()));
         registry
     }
 
@@ -440,6 +442,14 @@ mod tests {
     }
 
     #[test]
+    fn with_defaults_registers_openapi_writer() {
+        let registry = FormatRegistry::with_defaults();
+
+        assert!(registry.writer_for_format("openapi").is_some());
+        assert!(registry.writer_for_format("OpenAPI").is_some()); // case insensitive
+    }
+
+    #[test]
     fn writer_format_ids_lists_every_registered_writer() {
         // The definitive list `generate --help`'s hand-written format
         // list is checked against, so a writer added to `with_defaults`
@@ -459,6 +469,7 @@ mod tests {
             "postgres",
             "shacl",
             "json-schema",
+            "openapi",
         ] {
             assert!(
                 ids.contains(&expected),
