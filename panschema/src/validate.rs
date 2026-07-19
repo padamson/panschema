@@ -10,9 +10,10 @@
 //! reader already provides.
 
 use crate::instances::InstanceSet;
-use crate::linkml::{ClassDefinition, SchemaDefinition, SlotDefinition};
+use crate::linkml::{SchemaDefinition, SlotDefinition};
 use crate::linkml_resolve::{effective_cardinality, resolve_effective_slots};
 use serde_yaml::Value;
+use std::collections::HashSet;
 use std::fmt;
 
 /// A single way the data fails to conform to the schema.
@@ -31,44 +32,40 @@ impl fmt::Display for Violation {
     }
 }
 
-/// Validate an instance-data tree against `schema`, returning every violation
-/// (empty when the data conforms). Deterministic: violations are ordered by
-/// their walk of the container, then reference-integrity violations, so output
-/// is stable across runs.
+/// Validate an already-read [`InstanceSet`] against `schema`, returning every
+/// violation (empty when the data conforms). This is the **format-agnostic
+/// core** (ADR-008): it consumes the instance model, so any reader's
+/// `InstanceSet` — LinkML data today, OWL individuals or JSON later — validates
+/// through it. Deterministic: violations are ordered by record (the set is
+/// sorted by id), then by slot, then the reference-integrity violations.
 ///
 /// Slice 1 checks: a required slot absent from a record, and a reference whose
-/// target names no record in the data. A data file that isn't a mapping yields
-/// a single structural violation rather than panicking.
-pub fn validate_instance_data(schema: &SchemaDefinition, data: &Value) -> Vec<Violation> {
+/// target names no record in the set.
+pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<Violation> {
     let mut out = Vec::new();
 
-    let Some(container) = data.as_mapping() else {
-        out.push(Violation {
-            record: "(root)".to_string(),
-            detail: "instance data must be a mapping (a tree_root container object)".to_string(),
-        });
-        return out;
-    };
-
-    if let Some(root) = schema.classes.values().find(|c| c.tree_root) {
-        let root_slots = resolve_effective_slots(root, schema);
-        for (key, value) in container {
-            let Some(slot_name) = key.as_str() else {
-                continue;
-            };
-            let Some(range) = root_slots.get(slot_name).and_then(|s| s.range.as_deref()) else {
-                continue;
-            };
-            if let Some(class) = schema.classes.get(range) {
-                check_collection(schema, range, class, value, &mut out);
+    for inst in &set.instances {
+        // A record's class is the collection slot's range that produced it.
+        let Some(class_name) = inst.types.first() else {
+            continue;
+        };
+        let Some(class) = schema.classes.get(class_name) else {
+            continue;
+        };
+        let present: HashSet<&str> = inst.slot_values.iter().map(|sv| sv.slot.as_str()).collect();
+        for (slot_name, slot) in &resolve_effective_slots(class, schema) {
+            if is_required(slot) && !present.contains(slot_name.as_str()) {
+                out.push(Violation {
+                    record: inst.id.clone(),
+                    detail: format!("required slot `{slot_name}` (class `{class_name}`) is absent"),
+                });
             }
         }
     }
 
     // Cross-record reference integrity: a typed reference to an id no record
-    // defines. Reuses the reader's model (stringified ids are sufficient here).
-    let set = InstanceSet::from_linkml_data(schema, data);
-    for d in crate::diagnostics::dangling_instance_references(&set) {
+    // in the set defines.
+    for d in crate::diagnostics::dangling_instance_references(set) {
         out.push(Violation {
             record: d.referrer.clone(),
             detail: d.detail(),
@@ -78,99 +75,24 @@ pub fn validate_instance_data(schema: &SchemaDefinition, data: &Value) -> Vec<Vi
     out
 }
 
-/// A collection value is either a list of records or an identifier-keyed
-/// mapping of records; validate each record of `class`.
-fn check_collection(
-    schema: &SchemaDefinition,
-    class_name: &str,
-    class: &ClassDefinition,
-    value: &Value,
-    out: &mut Vec<Violation>,
-) {
-    match value {
-        Value::Sequence(items) => {
-            for (index, item) in items.iter().enumerate() {
-                check_record(schema, class_name, class, None, index, item, out);
-            }
-        }
-        Value::Mapping(map) => {
-            for (index, (key, record)) in map.iter().enumerate() {
-                check_record(schema, class_name, class, key.as_str(), index, record, out);
-            }
-        }
-        _ => {}
+/// Read a LinkML instance-data tree into the instance model and validate it —
+/// the per-format adapter over [`validate_instances`] (ADR-008). A data file
+/// that isn't a container mapping is a single structural violation rather than
+/// a panic; anything well-formed becomes an [`InstanceSet`] and validates
+/// through the format-agnostic core.
+pub fn validate_instance_data(schema: &SchemaDefinition, data: &Value) -> Vec<Violation> {
+    if data.as_mapping().is_none() {
+        return vec![Violation {
+            record: "(root)".to_string(),
+            detail: "instance data must be a mapping (a tree_root container object)".to_string(),
+        }];
     }
-}
-
-/// Check one record of `class` for required-slot presence. `dict_key`, when
-/// present, is the record's identifier from an identifier-keyed collection (so
-/// a required identifier slot supplied as the map key isn't flagged absent).
-fn check_record(
-    schema: &SchemaDefinition,
-    class_name: &str,
-    class: &ClassDefinition,
-    dict_key: Option<&str>,
-    index: usize,
-    record: &Value,
-    out: &mut Vec<Violation>,
-) {
-    let Some(map) = record.as_mapping() else {
-        // A non-mapping record (a bare scalar where an object is expected) is a
-        // kind mismatch — reported in a later slice; nothing to check here.
-        return;
-    };
-    let slots = resolve_effective_slots(class, schema);
-
-    let identifier = slots
-        .iter()
-        .find(|(_, s)| s.identifier)
-        .map(|(name, _)| name.clone());
-    let record_id = record_identifier(class_name, index, dict_key, &identifier, map);
-
-    for (slot_name, slot) in &slots {
-        if is_required(slot) && !slot_present(map, slot_name, slot, dict_key) {
-            out.push(Violation {
-                record: record_id.clone(),
-                detail: format!("required slot `{slot_name}` (class `{class_name}`) is absent"),
-            });
-        }
-    }
-}
-
-/// A stable label for a record: its identifier value, else the identifier-keyed
-/// map key, else a positional `Class#N`.
-fn record_identifier(
-    class_name: &str,
-    index: usize,
-    dict_key: Option<&str>,
-    identifier: &Option<String>,
-    map: &serde_yaml::Mapping,
-) -> String {
-    dict_key
-        .map(str::to_string)
-        .or_else(|| {
-            identifier
-                .as_deref()
-                .and_then(|n| map.get(n))
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .unwrap_or_else(|| format!("{class_name}#{}", index + 1))
+    let set = InstanceSet::from_linkml_data(schema, data);
+    validate_instances(schema, &set)
 }
 
 fn is_required(slot: &SlotDefinition) -> bool {
     effective_cardinality(slot).required
-}
-
-/// Whether a slot's value is present on a record. The identifier slot counts as
-/// present when supplied as an identifier-keyed collection's map key.
-fn slot_present(
-    map: &serde_yaml::Mapping,
-    slot_name: &str,
-    slot: &SlotDefinition,
-    dict_key: Option<&str>,
-) -> bool {
-    map.contains_key(slot_name) || (slot.identifier && dict_key.is_some())
 }
 
 #[cfg(test)]

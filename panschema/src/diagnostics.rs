@@ -811,6 +811,7 @@ mod tests {
                     target: target.to_string(),
                 })
                 .collect(),
+            slot_values: Vec::new(),
         }
     }
 

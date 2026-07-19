@@ -13,7 +13,9 @@ the schema and get a precise, per-record list of what's wrong — so the agent
 loop, or a human author, can fix the data until it conforms, staying entirely
 in LinkML + JSON.
 
-**Related ADR:** [003 (LinkML as internal representation)](../adr/003-linkml-as-internal-representation.md).
+**Related ADR:** [003 (LinkML as internal representation)](../adr/003-linkml-as-internal-representation.md)
+and [008 (Instance-data reader architecture)](../adr/008-instance-data-reader-architecture.md) — the
+validator consumes the instance model, so any A-box format validates through one path.
 Consumes the instance model and reference-integrity check from
 [feature 33](33-linkml-instance-reader.md); the constraint set it enforces is
 the same one the [JSON-Schema writer](32-json-schema-writer.md) projects and the
@@ -46,15 +48,26 @@ up. (Once that writer is complete, validating generated-JSON-Schema-against-data
 becomes a valuable *cross-check oracle* in the test suite — a follow-up, not the
 product path.)
 
-### Validate the raw data tree, not the display `InstanceSet`
+### Validate the instance model, not the on-disk format ([ADR-008](../adr/008-instance-data-reader-architecture.md))
 
-`InstanceSet` (feature 33) is a *display* model: it stringifies literal values
-and drops their original scalar type, which a `pattern`/bounds/enum check needs.
-The validator walks the **raw `serde_yaml` data tree** against the schema's
-effective slots, and reuses the `InstanceSet` only for the cross-record
-reference-integrity pass (`dangling_instance_references`), where stringified
-ids are sufficient. Extracting a shared container-walk that both the graph
-exporter and the validator drive is a later refactor, not a prerequisite.
+Like a schema in any format becomes the `SchemaDefinition` IR before anything
+consumes it (ADR-004), instance data in any format becomes the `InstanceSet`
+model before validation. The validator has two layers:
+
+- `validate_instances(schema, &InstanceSet)` — the **format-agnostic core**. It
+  checks each record's typed, slot-keyed `slot_values` against its class's
+  effective-slot constraints, plus reference integrity. Any reader's
+  `InstanceSet` — LinkML data, OWL individuals, future JSON — validates through
+  it.
+- `validate_instance_data(schema, &yaml)` — the LinkML **adapter**: it handles
+  structural errors, builds the `InstanceSet` via `from_linkml_data`, then calls
+  the core.
+
+To make this work, `Instance` was enriched (ADR-008) with `slot_values` — the
+complete authored assignments keyed by slot *name* and *typed* (`Scalar` /
+`Reference`), which the earlier display-only `literals` (stringified,
+label-keyed) couldn't serve. The display fields remain a projection alongside
+it.
 
 ### Exit-code semantics
 

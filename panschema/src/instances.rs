@@ -18,6 +18,34 @@ pub struct Reference {
     pub target: String,
 }
 
+/// A format-neutral scalar value read from instance data, retaining its kind so
+/// a validator can check numeric bounds without re-parsing and distinguish a
+/// literal from a reference.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScalarValue {
+    String(String),
+    Integer(i64),
+    Float(f64),
+    Boolean(bool),
+}
+
+/// One authored value of a slot: a scalar literal, or a reference to another
+/// instance by its `id`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum InstanceValue {
+    Scalar(ScalarValue),
+    Reference(String),
+}
+
+/// A slot's authored value(s) on an instance, keyed by slot **name** (not the
+/// display label) so a consumer can resolve the slot's constraints. Multivalued
+/// slots carry several values.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SlotValue {
+    pub slot: String,
+    pub values: Vec<InstanceValue>,
+}
+
 /// One A-box instance: a typed record identified by `id`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Instance {
@@ -34,6 +62,12 @@ pub struct Instance {
     pub literals: Vec<(String, String)>,
     /// Object-valued assertions to other instances.
     pub references: Vec<Reference>,
+    /// The complete authored assignments, keyed by slot name and typed — the
+    /// validation view (see ADR-008). Distinct from the display-oriented
+    /// `literals`/`references`: this includes the identifier and label slots and
+    /// keeps each value's kind. Empty for readers that don't populate it yet
+    /// (e.g. the OWL-individual reader).
+    pub slot_values: Vec<SlotValue>,
 }
 
 /// A flat, id-keyed A-box. Deterministic: instances are sorted by `id`.
@@ -155,6 +189,10 @@ impl InstanceSet {
                 types,
                 literals,
                 references,
+                // OWL-individual validation isn't a wired use case yet; the
+                // display fields above suffice for the instance graph. See
+                // ADR-008 ("uneven reader coverage").
+                slot_values: Vec::new(),
             });
         }
 
@@ -271,18 +309,11 @@ impl LinkmlLoader<'_> {
 
         let mut literals: Vec<(String, String)> = Vec::new();
         let mut references: Vec<Reference> = Vec::new();
+        let mut slot_values: Vec<SlotValue> = Vec::new();
         for (field_key, field_value) in map {
             let Some(field) = field_key.as_str() else {
                 continue;
             };
-            // The identifier, label, and description slots are captured above,
-            // not repeated as literal assertions.
-            if Some(field) == id_slot.as_deref()
-                || Some(field) == label_slot.as_deref()
-                || field == "description"
-            {
-                continue;
-            }
             let slot = slots.get(field);
             let range = slot
                 .and_then(|s| s.range.clone())
@@ -290,16 +321,37 @@ impl LinkmlLoader<'_> {
             let property = slot
                 .and_then(|s| s.annotations.get("panschema:label").cloned())
                 .unwrap_or_else(|| field.to_string());
-            self.collect_field(
+            // The identifier, label, and description slots are recorded in the
+            // typed `slot_values` (the validation view needs their presence) but
+            // not repeated in the display `literals`/`references`, since the id,
+            // label, and description surface as their own fields.
+            let display = Some(field) != id_slot.as_deref()
+                && Some(field) != label_slot.as_deref()
+                && field != "description";
+            self.ingest_field(
+                field,
                 range.as_deref(),
                 &property,
                 field_value,
+                display,
                 &mut literals,
                 &mut references,
+                &mut slot_values,
             );
+        }
+        // An identifier supplied as an identifier-keyed collection's map key is
+        // an authored value too — record it so a validator sees it present.
+        if let (Some(key), Some(id_name)) = (dict_key, id_slot.as_deref())
+            && !slot_values.iter().any(|sv| sv.slot == id_name)
+        {
+            slot_values.push(SlotValue {
+                slot: id_name.to_string(),
+                values: vec![InstanceValue::Scalar(ScalarValue::String(key.to_string()))],
+            });
         }
         literals.sort();
         references.sort_by(|a, b| (&a.property, &a.target).cmp(&(&b.property, &b.target)));
+        slot_values.sort_by(|a, b| a.slot.cmp(&b.slot));
 
         if self.seen.insert(id.clone()) {
             self.instances.push(Instance {
@@ -311,24 +363,40 @@ impl LinkmlLoader<'_> {
                 types: vec![class_name.to_string()],
                 literals,
                 references,
+                slot_values,
             });
         }
         Some(id)
     }
 
-    /// Route one slot value to a literal, a reference edge, or (for an inlined
-    /// mapping) a nested record plus an edge. Recurses over sequence elements.
-    fn collect_field(
+    /// Route one slot value into the typed `slot_values` (always) and, when
+    /// `display`, the display `literals`/`references`. A scalar becomes a
+    /// literal; a class-ranged scalar an id reference, a class-ranged mapping a
+    /// nested record plus a reference. Recurses over sequence elements.
+    #[allow(clippy::too_many_arguments)]
+    fn ingest_field(
         &mut self,
+        slot: &str,
         range: Option<&str>,
         property: &str,
         value: &serde_yaml::Value,
+        display: bool,
         literals: &mut Vec<(String, String)>,
         references: &mut Vec<Reference>,
+        slot_values: &mut Vec<SlotValue>,
     ) {
         if let serde_yaml::Value::Sequence(items) = value {
             for item in items {
-                self.collect_field(range, property, item, literals, references);
+                self.ingest_field(
+                    slot,
+                    range,
+                    property,
+                    item,
+                    display,
+                    literals,
+                    references,
+                    slot_values,
+                );
             }
             return;
         }
@@ -342,24 +410,56 @@ impl LinkmlLoader<'_> {
                 _ => None,
             };
             if let Some(target) = target {
-                references.push(Reference {
-                    property: property.to_string(),
-                    target,
-                });
+                push_slot_value(slot_values, slot, InstanceValue::Reference(target.clone()));
+                if display {
+                    references.push(Reference {
+                        property: property.to_string(),
+                        target,
+                    });
+                }
             }
-        } else if let Some(v) = scalar_to_string(value) {
-            literals.push((property.to_string(), v));
+        } else if let Some(scalar) = scalar_value(value) {
+            if display {
+                literals.push((property.to_string(), scalar_to_display(&scalar)));
+            }
+            push_slot_value(slot_values, slot, InstanceValue::Scalar(scalar));
         }
     }
 }
 
-/// Render a YAML scalar as a display string. Non-scalars yield `None`.
-fn scalar_to_string(value: &serde_yaml::Value) -> Option<String> {
+/// Append `value` to the `slot`'s entry in `slot_values`, grouping a
+/// multivalued slot's elements under one [`SlotValue`].
+fn push_slot_value(slot_values: &mut Vec<SlotValue>, slot: &str, value: InstanceValue) {
+    if let Some(sv) = slot_values.iter_mut().find(|sv| sv.slot == slot) {
+        sv.values.push(value);
+    } else {
+        slot_values.push(SlotValue {
+            slot: slot.to_string(),
+            values: vec![value],
+        });
+    }
+}
+
+/// A format-neutral typed scalar from a YAML value; non-scalars yield `None`.
+fn scalar_value(value: &serde_yaml::Value) -> Option<ScalarValue> {
     match value {
-        serde_yaml::Value::String(s) => Some(s.clone()),
-        serde_yaml::Value::Bool(b) => Some(b.to_string()),
-        serde_yaml::Value::Number(n) => Some(n.to_string()),
+        serde_yaml::Value::String(s) => Some(ScalarValue::String(s.clone())),
+        serde_yaml::Value::Bool(b) => Some(ScalarValue::Boolean(*b)),
+        serde_yaml::Value::Number(n) => n
+            .as_i64()
+            .map(ScalarValue::Integer)
+            .or_else(|| n.as_f64().map(ScalarValue::Float)),
         _ => None,
+    }
+}
+
+/// Render a typed scalar as its display string.
+fn scalar_to_display(value: &ScalarValue) -> String {
+    match value {
+        ScalarValue::String(s) => s.clone(),
+        ScalarValue::Integer(i) => i.to_string(),
+        ScalarValue::Float(f) => f.to_string(),
+        ScalarValue::Boolean(b) => b.to_string(),
     }
 }
 
@@ -501,6 +601,38 @@ wineries:
         // not repeated as literals.
         assert_eq!(wine.literals, [("color".to_string(), "red".to_string())]);
 
+        // The typed, slot-keyed validation view (ADR-008) records *every*
+        // authored slot — including the id and name the display fields consume —
+        // keyed by slot name and sorted, with the class-ranged value as a
+        // reference rather than a scalar.
+        assert_eq!(
+            wine.slot_values,
+            vec![
+                SlotValue {
+                    slot: "color".to_string(),
+                    values: vec![InstanceValue::Scalar(ScalarValue::String(
+                        "red".to_string()
+                    ))],
+                },
+                SlotValue {
+                    slot: "id".to_string(),
+                    values: vec![InstanceValue::Scalar(ScalarValue::String(
+                        "chateauMorgon".to_string()
+                    ))],
+                },
+                SlotValue {
+                    slot: "name".to_string(),
+                    values: vec![InstanceValue::Scalar(ScalarValue::String(
+                        "Château Morgon".to_string()
+                    ))],
+                },
+                SlotValue {
+                    slot: "produced_by".to_string(),
+                    values: vec![InstanceValue::Reference("morgonEstate".to_string())],
+                },
+            ]
+        );
+
         let winery = &set.instances[1];
         assert_eq!(winery.types, ["Winery"]);
         assert_eq!(winery.label, "Morgon Estate");
@@ -524,6 +656,25 @@ wineries:
         assert_eq!(set.instances.len(), 1);
         assert_eq!(set.instances[0].id, "morgonEstate", "the map key is the id");
         assert_eq!(set.instances[0].label, "Morgon Estate");
+        // The identifier supplied as the map key is recorded in slot_values, so
+        // a validator sees the identifier slot present (ADR-008).
+        assert_eq!(
+            set.instances[0].slot_values,
+            vec![
+                SlotValue {
+                    slot: "id".to_string(),
+                    values: vec![InstanceValue::Scalar(ScalarValue::String(
+                        "morgonEstate".to_string()
+                    ))],
+                },
+                SlotValue {
+                    slot: "name".to_string(),
+                    values: vec![InstanceValue::Scalar(ScalarValue::String(
+                        "Morgon Estate".to_string()
+                    ))],
+                },
+            ]
+        );
     }
 
     #[test]
@@ -560,6 +711,8 @@ classes:
         range: boolean
       score:
         range: integer
+      weight:
+        range: float
       tags:
         range: string
         multivalued: true
@@ -575,6 +728,7 @@ nodes:
     description: The first node.
     active: true
     score: 5
+    weight: 1.5
     tags:
       - alpha
       - beta
@@ -613,6 +767,7 @@ nodes:
                 ("score".to_string(), "5".to_string()),
                 ("tags".to_string(), "alpha".to_string()),
                 ("tags".to_string(), "beta".to_string()),
+                ("weight".to_string(), "1.5".to_string()),
             ]
         );
         // A multivalued class-ranged slot yields one reference edge per element,
@@ -628,6 +783,38 @@ nodes:
         assert!(
             a.references.iter().all(|r| r.property == "links"),
             "each edge carries the slot as its property label"
+        );
+
+        // The typed slot_values retain each scalar's kind (bool, integer) and
+        // group a multivalued slot's elements under one entry.
+        let slot = |name: &str| a.slot_values.iter().find(|sv| sv.slot == name).cloned();
+        assert_eq!(
+            slot("active").expect("active").values,
+            [InstanceValue::Scalar(ScalarValue::Boolean(true))]
+        );
+        assert_eq!(
+            slot("score").expect("score").values,
+            [InstanceValue::Scalar(ScalarValue::Integer(5))]
+        );
+        assert_eq!(
+            slot("weight").expect("weight").values,
+            [InstanceValue::Scalar(ScalarValue::Float(1.5))]
+        );
+        assert_eq!(
+            slot("tags").expect("tags").values,
+            [
+                InstanceValue::Scalar(ScalarValue::String("alpha".to_string())),
+                InstanceValue::Scalar(ScalarValue::String("beta".to_string())),
+            ],
+            "a multivalued slot's elements group under one entry"
+        );
+        assert_eq!(
+            slot("links").expect("links").values,
+            [
+                InstanceValue::Reference("b".to_string()),
+                InstanceValue::Reference("c".to_string()),
+                InstanceValue::Reference("d".to_string()),
+            ]
         );
     }
 }
