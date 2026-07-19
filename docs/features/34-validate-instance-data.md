@@ -98,22 +98,47 @@ non-zero when the data doesn't conform, zero when it does.
 - [x] Every violation is printed; the command exits non-zero if there is at least one and zero when the data fully conforms. A data file that isn't a mapping yields a single structural violation rather than panicking.
 - [x] Tests: a conforming data file validates clean (exit zero); a missing-required-slot and a dangling-reference case each fail (unit tests + a CLI exit-code integration test). An identifier supplied as an identifier-keyed collection's map key satisfies its required identifier slot.
 
-### Slice 2: Cardinality and range-kind checks
+### Slice 2: Cardinality checks
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Must Have
 
 **Depends on:** Slice 1.
 
-**User Value:** A single value where the schema expects a list (or vice versa),
-a collection outside its `minimum_cardinality`/`maximum_cardinality`, or a
-class-ranged slot holding a bare scalar that isn't a valid reference, is caught.
+**User Value:** A single value where the schema expects one (a list given to a
+single-valued slot), or a collection outside its
+`minimum_cardinality`/`maximum_cardinality`, is caught.
 
 **Acceptance Criteria:**
-- [ ] A non-multivalued slot given a list, or a multivalued slot's collection outside its effective cardinality bounds, is a violation naming the record, slot, and the bound it broke.
-- [ ] A value's *kind* is checked against the slot's range kind: a class-ranged slot value must be a reference id or an inlined object (not a bare non-reference scalar where the range is a class), and a scalar-ranged slot must not hold a mapping.
-- [ ] Tests cover each: too-many/too-few, single-vs-list mismatch, and a kind mismatch.
+- [x] A non-multivalued slot given more than one value is a violation naming the record and slot; a multivalued slot's value count below `minimum_cardinality` or above `maximum_cardinality` is a violation naming the bound it broke. Counts come from the model's `slot_values` (so a YAML list on a single-valued slot is seen as N values).
+- [x] Tests cover single-valued-given-a-list, below-minimum, and above-maximum, plus a conforming `2..3` case.
+
+**Note — range-kind is deferred.** The other half of a "value kind" check — a
+mapping where a scalar range is declared, or a non-identifier scalar where a
+class range is declared — isn't cleanly detectable from the model today: the
+LinkML reader *drops* a value it can't interpret at a slot's range kind, so it
+never reaches `slot_values` (it surfaces indirectly as an absent required slot).
+Catching it precisely needs the reader to *preserve* mismatched values (a small
+model addition — an "unrecognized value" it records rather than drops). Split
+into its own slice below rather than bundled here.
+
+### Slice 2b: Range-kind mismatch (reader preserves dropped values)
+
+**Status:** Not Started
+
+**Priority:** Should Have
+
+**Depends on:** Slice 2.
+
+**User Value:** A value of the wrong *kind* for its slot's range — an object
+where a scalar is expected, or a non-identifier scalar where a class reference
+is expected — is reported precisely, not just as a downstream "absent" symptom.
+
+**Acceptance Criteria:**
+- [ ] The instance reader records a value it can't interpret at a slot's range kind (rather than dropping it), so the validator can see it.
+- [ ] A mapping at a scalar-ranged slot, and a non-reference scalar (e.g. a number) at a class-ranged slot, are each violations naming the record, slot, and expected kind.
+- [ ] Tests cover both mismatches.
 
 ### Slice 3: Value-constraint checks — enum, pattern, numeric bounds
 
@@ -157,7 +182,8 @@ gaps for agent-built data.
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | Slice 1: command + required-presence + reference integrity | Must Have | — | Complete |
-| Slice 2: cardinality + range-kind | Must Have | Slice 1 | Not Started |
+| Slice 2: cardinality | Must Have | Slice 1 | Complete |
+| Slice 2b: range-kind mismatch (reader preserves dropped values) | Should Have | Slice 2 | Not Started |
 | Slice 3: enum + pattern + numeric bounds | Must Have | Slice 2 | Not Started |
 | Slice 4: identifier uniqueness + `any_of` | Should Have | Slice 3 | Not Started |
 

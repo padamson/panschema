@@ -2,18 +2,18 @@
 //!
 //! Checks a LinkML **instance-data** file (an A-box — a `tree_root` container
 //! of records) against its schema's constraints and reports every violation.
-//! It walks the raw data tree against each class's effective slots directly,
-//! rather than the display-oriented [`crate::instances::InstanceSet`] (which
-//! stringifies values) or the still-incomplete JSON-Schema projection — so it
-//! sees the untouched typed values later slices need for `pattern`/bounds/enum
-//! checks. Cross-record reference integrity reuses the check the instance
-//! reader already provides.
+//! Per ADR-008 it validates the **instance model** ([`InstanceSet`]), not any
+//! on-disk format: [`validate_instances`] is the format-agnostic core, and a
+//! thin per-format adapter ([`validate_instance_data`] for a LinkML file) reads
+//! the data into the model first. The model's typed, slot-keyed `slot_values`
+//! carry the untouched value kinds later slices need for `pattern`/bounds/enum
+//! checks — fidelity the display-oriented `literals` (stringified) and the
+//! still-incomplete JSON-Schema projection can't provide.
 
 use crate::instances::InstanceSet;
-use crate::linkml::{SchemaDefinition, SlotDefinition};
+use crate::linkml::SchemaDefinition;
 use crate::linkml_resolve::{effective_cardinality, resolve_effective_slots};
 use serde_yaml::Value;
-use std::collections::HashSet;
 use std::fmt;
 
 /// A single way the data fails to conform to the schema.
@@ -52,13 +52,47 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
         let Some(class) = schema.classes.get(class_name) else {
             continue;
         };
-        let present: HashSet<&str> = inst.slot_values.iter().map(|sv| sv.slot.as_str()).collect();
         for (slot_name, slot) in &resolve_effective_slots(class, schema) {
-            if is_required(slot) && !present.contains(slot_name.as_str()) {
+            let card = effective_cardinality(slot);
+            let count = inst
+                .slot_values
+                .iter()
+                .find(|sv| &sv.slot == slot_name)
+                .map_or(0, |sv| sv.values.len());
+            let mut push = |detail: String| {
                 out.push(Violation {
                     record: inst.id.clone(),
-                    detail: format!("required slot `{slot_name}` (class `{class_name}`) is absent"),
-                });
+                    detail,
+                })
+            };
+
+            if count == 0 {
+                if card.required {
+                    push(format!(
+                        "required slot `{slot_name}` (class `{class_name}`) is absent"
+                    ));
+                }
+                // No values to size-check.
+                continue;
+            }
+            if !card.multivalued && count > 1 {
+                push(format!(
+                    "single-valued slot `{slot_name}` (class `{class_name}`) has {count} values"
+                ));
+            }
+            if let Some(min) = card.min
+                && (count as u32) < min
+            {
+                push(format!(
+                    "slot `{slot_name}` (class `{class_name}`) has {count} value(s), fewer than its minimum of {min}"
+                ));
+            }
+            if let Some(max) = card.max
+                && (count as u32) > max
+            {
+                push(format!(
+                    "slot `{slot_name}` (class `{class_name}`) has {count} value(s), exceeding its maximum of {max}"
+                ));
             }
         }
     }
@@ -89,10 +123,6 @@ pub fn validate_instance_data(schema: &SchemaDefinition, data: &Value) -> Vec<Vi
     }
     let set = InstanceSet::from_linkml_data(schema, data);
     validate_instances(schema, &set)
-}
-
-fn is_required(slot: &SlotDefinition) -> bool {
-    effective_cardinality(slot).required
 }
 
 #[cfg(test)]
@@ -240,5 +270,84 @@ wineries:
         let violations = validate_instance_data(&schema(), &d);
         assert_eq!(violations.len(), 1);
         assert!(violations[0].detail.contains("must be a mapping"));
+    }
+
+    /// A schema exercising each cardinality bound: a single-valued slot and a
+    /// multivalued slot bounded `2..3`.
+    const CARD_SCHEMA: &str = "\
+name: C
+default_range: string
+classes:
+  Root:
+    tree_root: true
+    attributes:
+      items:
+        range: Item
+        multivalued: true
+  Item:
+    attributes:
+      id:
+        identifier: true
+      color:
+        range: string
+      tags:
+        range: string
+        multivalued: true
+        minimum_cardinality: 2
+        maximum_cardinality: 3
+";
+
+    fn card_schema() -> SchemaDefinition {
+        serde_yaml::from_str(CARD_SCHEMA).expect("parse card schema")
+    }
+
+    #[test]
+    fn cardinality_bounds_conform() {
+        // `tags` at exactly its maximum of 3 conforms — pins the `>` boundary
+        // (a count equal to the max must not be flagged as exceeding it).
+        let d = data("items:\n  - id: a\n    color: red\n    tags: [x, y, z]\n");
+        assert!(
+            validate_instances(
+                &card_schema(),
+                &InstanceSet::from_linkml_data(&card_schema(), &d)
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn single_valued_slot_given_a_list_is_a_violation() {
+        let d = data("items:\n  - id: a\n    color: [red, blue]\n    tags: [x, y]\n");
+        let v = validate_instance_data(&card_schema(), &d);
+        assert_eq!(v.len(), 1, "color is single-valued");
+        assert!(
+            v[0].detail.contains("single-valued") && v[0].detail.contains("color"),
+            "got: {}",
+            v[0].detail
+        );
+    }
+
+    #[test]
+    fn multivalued_below_minimum_is_a_violation() {
+        let d = data("items:\n  - id: a\n    tags: [x]\n");
+        let v = validate_instance_data(&card_schema(), &d);
+        assert_eq!(v.len(), 1, "tags has one value, minimum is two");
+        assert!(
+            v[0].detail.contains("fewer than its minimum") && v[0].detail.contains("tags"),
+            "got: {}",
+            v[0].detail
+        );
+    }
+
+    #[test]
+    fn multivalued_above_maximum_is_a_violation() {
+        let d = data("items:\n  - id: a\n    tags: [w, x, y, z]\n");
+        let v = validate_instance_data(&card_schema(), &d);
+        assert_eq!(v.len(), 1, "tags has four values, maximum is three");
+        assert!(
+            v[0].detail.contains("exceeding its maximum") && v[0].detail.contains("tags"),
+            "got: {}",
+            v[0].detail
+        );
     }
 }
