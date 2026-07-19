@@ -125,7 +125,7 @@ into its own slice below rather than bundled here.
 
 ### Slice 2b: Range-kind mismatch (reader preserves dropped values)
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Should Have
 
@@ -136,9 +136,9 @@ where a scalar is expected, or a non-identifier scalar where a class reference
 is expected — is reported precisely, not just as a downstream "absent" symptom.
 
 **Acceptance Criteria:**
-- [ ] The instance reader records a value it can't interpret at a slot's range kind (rather than dropping it), so the validator can see it.
-- [ ] A mapping at a scalar-ranged slot, and a non-reference scalar (e.g. a number) at a class-ranged slot, are each violations naming the record, slot, and expected kind.
-- [ ] Tests cover both mismatches.
+- [x] The instance reader records a value it can't interpret at a slot's range kind as `InstanceValue::Unexpected(kind)` (rather than dropping it), keeping it out of the display `literals`/`references` so the instance graph is unchanged.
+- [x] A mapping at a scalar-ranged slot, and a non-reference scalar (a number) at a class-ranged slot, are each violations naming the record, slot, the actual kind, and the declared range.
+- [x] Tests cover both mismatches; the instance-graph e2e confirms display output is unaffected.
 
 ### Slice 3: Value-constraint checks — enum membership, numeric bounds
 
@@ -201,7 +201,7 @@ gaps for agent-built data.
 |-------|----------|------------|--------|
 | Slice 1: command + required-presence + reference integrity | Must Have | — | Complete |
 | Slice 2: cardinality | Must Have | Slice 1 | Complete |
-| Slice 2b: range-kind mismatch (reader preserves dropped values) | Should Have | Slice 2 | Not Started |
+| Slice 2b: range-kind mismatch (reader preserves dropped values) | Should Have | Slice 2 | Complete |
 | Slice 3: enum membership + numeric bounds | Must Have | Slice 2 | Complete |
 | Slice 3b: `pattern` (adds regex dependency) | Should Have | Slice 3 | Complete |
 | Slice 4: identifier uniqueness + `any_of` | Should Have | Slice 3 | Not Started |

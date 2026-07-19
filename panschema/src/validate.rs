@@ -116,9 +116,6 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
                 },
                 None => None,
             };
-            if range_enum.is_none() && !has_bound && pattern.is_none() {
-                continue;
-            }
             for value in inst
                 .slot_values
                 .iter()
@@ -126,8 +123,20 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
                 .map(|sv| sv.values.as_slice())
                 .unwrap_or_default()
             {
-                let InstanceValue::Scalar(scalar) = value else {
-                    continue;
+                let scalar = match value {
+                    InstanceValue::Scalar(s) => s,
+                    // A value the reader couldn't fit to the slot's range kind
+                    // (an object where a scalar is declared, or a non-reference
+                    // scalar where a class is) — a range-kind mismatch.
+                    InstanceValue::Unexpected(kind) => {
+                        let range = slot.range.as_deref().unwrap_or("?");
+                        push(format!(
+                            "slot `{slot_name}` (class `{class_name}`) has {kind} value, which isn't valid for its range `{range}`"
+                        ));
+                        continue;
+                    }
+                    // References are checked by the reference-integrity pass.
+                    InstanceValue::Reference(_) => continue,
                 };
                 if let Some((enum_name, enum_def)) = range_enum
                     && !enum_permits(enum_def, scalar)
@@ -530,6 +539,42 @@ enums:
             "got: {}",
             v[0].detail
         );
+    }
+
+    #[test]
+    fn object_where_a_scalar_range_is_declared_is_a_range_kind_violation() {
+        // `code` has range `string`; an object there is the wrong kind.
+        let v = value_violations("items:\n  - id: a\n    code:\n      nested: x\n");
+        assert_eq!(v.len(), 1);
+        assert!(
+            v[0].detail.contains("an object")
+                && v[0].detail.contains("code")
+                && v[0].detail.contains("range `string`"),
+            "got: {}",
+            v[0].detail
+        );
+    }
+
+    #[test]
+    fn non_reference_scalar_where_a_class_range_is_declared_is_a_range_kind_violation() {
+        // `produced_by` has range `Winery` (a class); a bare number can't be a
+        // reference to one.
+        let d = data("wines:\n  - id: w1\n    name: W\n    produced_by: 42\n");
+        let v = validate_instance_data(&schema(), &d);
+        assert_eq!(v.len(), 1);
+        assert!(
+            v[0].detail.contains("a number")
+                && v[0].detail.contains("produced_by")
+                && v[0].detail.contains("range `Winery`"),
+            "got: {}",
+            v[0].detail
+        );
+
+        // A boolean at the same class-ranged slot names its kind distinctly.
+        let d = data("wines:\n  - id: w2\n    name: W\n    produced_by: true\n");
+        let v = validate_instance_data(&schema(), &d);
+        assert_eq!(v.len(), 1);
+        assert!(v[0].detail.contains("a boolean"), "got: {}", v[0].detail);
     }
 
     #[test]

@@ -29,12 +29,17 @@ pub enum ScalarValue {
     Boolean(bool),
 }
 
-/// One authored value of a slot: a scalar literal, or a reference to another
-/// instance by its `id`.
+/// One authored value of a slot: a scalar literal, a reference to another
+/// instance by its `id`, or a value whose YAML kind didn't fit the slot's range
+/// kind (an object where a scalar is declared, or a non-identifier scalar where
+/// a class reference is declared). The mismatch is recorded rather than dropped
+/// so a validator can flag it; the payload is a human phrase for the actual
+/// kind (e.g. `"an object"`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum InstanceValue {
     Scalar(ScalarValue),
     Reference(String),
+    Unexpected(&'static str),
 }
 
 /// A slot's authored value(s) on an instance, keyed by slot **name** (not the
@@ -400,30 +405,75 @@ impl LinkmlLoader<'_> {
             }
             return;
         }
+        // A null carries no value — treat as absent, not a kind mismatch.
+        if matches!(value, serde_yaml::Value::Null) {
+            return;
+        }
         if range.is_some_and(|r| self.schema.classes.contains_key(r)) {
             let class = range.expect("is_some_and guarantees a class range");
-            let target = match value {
+            match value {
                 // A scalar references an existing instance by id.
-                serde_yaml::Value::String(s) => Some(s.clone()),
-                // An inlined mapping is its own record; recurse and edge to it.
-                serde_yaml::Value::Mapping(_) => self.build_record(class, None, value),
-                _ => None,
-            };
-            if let Some(target) = target {
-                push_slot_value(slot_values, slot, InstanceValue::Reference(target.clone()));
-                if display {
-                    references.push(Reference {
-                        property: property.to_string(),
-                        target,
-                    });
+                serde_yaml::Value::String(s) => {
+                    push_slot_value(slot_values, slot, InstanceValue::Reference(s.clone()));
+                    if display {
+                        references.push(Reference {
+                            property: property.to_string(),
+                            target: s.clone(),
+                        });
+                    }
                 }
+                // An inlined mapping is its own record; recurse and edge to it.
+                serde_yaml::Value::Mapping(_) => {
+                    if let Some(target) = self.build_record(class, None, value) {
+                        push_slot_value(
+                            slot_values,
+                            slot,
+                            InstanceValue::Reference(target.clone()),
+                        );
+                        if display {
+                            references.push(Reference {
+                                property: property.to_string(),
+                                target,
+                            });
+                        }
+                    }
+                }
+                // Anything else (a number/boolean) can't be a reference — record
+                // the mismatch rather than dropping it. Not added to the display
+                // references, which stay well-formed.
+                other => push_slot_value(
+                    slot_values,
+                    slot,
+                    InstanceValue::Unexpected(yaml_kind(other)),
+                ),
             }
         } else if let Some(scalar) = scalar_value(value) {
             if display {
                 literals.push((property.to_string(), scalar_to_display(&scalar)));
             }
             push_slot_value(slot_values, slot, InstanceValue::Scalar(scalar));
+        } else {
+            // A non-scalar (an object) where a scalar range is declared — a kind
+            // mismatch, recorded but kept out of the display literals.
+            push_slot_value(
+                slot_values,
+                slot,
+                InstanceValue::Unexpected(yaml_kind(value)),
+            );
         }
+    }
+}
+
+/// A human phrase for a YAML value's kind, for a range-kind-mismatch message.
+/// Only reached for a value that fit neither a scalar nor a reference: a
+/// number/boolean at a class-ranged slot, or an object at a scalar-ranged slot.
+/// (Null is treated as absent, and a sequence is flattened, before this.)
+fn yaml_kind(value: &serde_yaml::Value) -> &'static str {
+    match value {
+        serde_yaml::Value::Bool(_) => "a boolean",
+        serde_yaml::Value::Number(_) => "a number",
+        serde_yaml::Value::Mapping(_) => "an object",
+        _ => "a value",
     }
 }
 
