@@ -1842,8 +1842,12 @@ fn e2e_hovering_a_rule_entry_highlights_participant_nodes() {
             "the rule entry should carry its participant ids; got: {attr}"
         );
 
-        // Let the wasm graph initialize.
-        tokio::time::sleep(Duration::from_millis(2500)).await;
+        // Poll until the wasm graph is loaded and laid out — a fixed sleep
+        // flakes as `no-viz` under CI load.
+        assert!(
+            wait_for_graph_viz_ready(&page).await,
+            "graph viz never became ready"
+        );
 
         // Hovering the rule entry highlights its participant nodes.
         let count = page
@@ -1940,8 +1944,12 @@ fn e2e_rule_touched_nodes_draw_a_persistent_amber_ring() {
             .await
             .expect("goto");
 
-        // Let the wasm graph initialize and settle a layout.
-        tokio::time::sleep(Duration::from_millis(2500)).await;
+        // Poll until the wasm graph is loaded and laid out — a fixed sleep
+        // flakes as `no-viz` under CI load.
+        assert!(
+            wait_for_graph_viz_ready(&page).await,
+            "graph viz never became ready"
+        );
 
         // Assert the governed set resolved and its ring paints: scan the
         // canvas pixels in a box around the governed node for amber. No
