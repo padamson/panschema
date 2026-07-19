@@ -3036,7 +3036,7 @@ mod tests {
             ClassDefinition, ClassRule, RuleConditions, SchemaDefinition, SlotCondition,
             ValuePresence,
         };
-        // cuisineiq's ImageApproval shape: an `any_of` precondition (verdict
+        // A real-world `ImageApproval` shape: an `any_of` precondition (verdict
         // is approved OR rejected) and a `value_presence` postcondition
         // (approved_by must be present). Both must render as trigger and
         // consequence — not vanish, leaving a bare title.

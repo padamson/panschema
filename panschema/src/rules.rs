@@ -219,7 +219,7 @@ mod tests {
 
     #[test]
     fn slot_level_any_of_renders_as_alternatives_in_the_trigger() {
-        // The real cuisineiq `ImageApproval` shape: the `verdict` slot
+        // A real-world `ImageApproval` shape: the `verdict` slot
         // condition is an `any_of` over equals_string values. It must render
         // as a "when" trigger, not vanish (which left "then … is present"
         // with no trigger).

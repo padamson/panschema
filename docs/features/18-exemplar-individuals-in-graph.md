@@ -64,8 +64,8 @@ panschema already *reads* OWL individuals (`owl_reader` extracts
 them as cards, but never as a graph, so a worked example reads as a list rather
 than a scenario. A concrete instance graph makes an abstract ontology click in a
 way the class boxes alone don't — the payoff the N&M "instances" step is built
-around, and the pathfinder several downstream showcases (wine, nimbus, cuisineiq)
-are waiting on for their Step 7.
+around, and the pathfinder the wine showcase and other downstream schema
+showcases are waiting on for their Step 7.
 
 This is deliberately the small, hand-curated exemplar case, **not** an A-box
 inventory — the living-catalog use case stays out of panschema by design. This

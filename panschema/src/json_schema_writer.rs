@@ -7,10 +7,12 @@
 //! Anthropic, or OpenAI structured output) can be constrained to valid
 //! instances, and any JSON validator can check instance data against it.
 //!
-//! Scalar slots project to typed properties; a non-scalar range (class /
-//! enum / custom type) is emitted permissively (`true`) so
-//! `additionalProperties: false` never rejects an otherwise-valid instance.
-//! Enum/class `$ref`s and value-constraint keywords are not projected yet.
+//! A scalar range projects to its typed property (with `pattern` / numeric
+//! bounds applied), an enum range to a JSON `enum` of its permissible values,
+//! and a class range to a `$ref` to that class's `$def`. A range that is none
+//! of these — an unrecognised custom type — is emitted permissively (`true`)
+//! so `additionalProperties: false` never rejects an otherwise-valid instance.
+//! Inheritance flattening and `any_of` are not projected yet.
 
 use std::fs::File;
 use std::io::BufWriter;
@@ -110,17 +112,10 @@ pub fn build_json_schema(schema: &SchemaDefinition) -> Value {
     Value::Object(root)
 }
 
-/// The JSON Schema for a single slot: its range's scalar type, wrapped in an
-/// `array` when the slot is multivalued. A non-scalar range (class / enum /
-/// custom type) is emitted permissively (`true`).
+/// The JSON Schema for a single slot: its value schema (see
+/// [`slot_value_schema`]), wrapped in an `array` when the slot is multivalued.
 fn slot_property(slot: &SlotDefinition, schema: &SchemaDefinition) -> Value {
-    let range = slot
-        .range
-        .as_deref()
-        .or(schema.default_range.as_deref())
-        .unwrap_or("string");
-    let base = scalar_json_type(range);
-
+    let base = slot_value_schema(slot, schema);
     if crate::linkml_resolve::effective_cardinality(slot).multivalued {
         json!({ "type": "array", "items": base })
     } else {
@@ -128,9 +123,58 @@ fn slot_property(slot: &SlotDefinition, schema: &SchemaDefinition) -> Value {
     }
 }
 
+/// The (unwrapped) JSON Schema for a slot's value: an enum's permissible
+/// values as a JSON `enum`, a class range as a `$ref` to its `$def`, or a
+/// scalar type with any value constraints (`pattern`, numeric bounds) applied.
+fn slot_value_schema(slot: &SlotDefinition, schema: &SchemaDefinition) -> Value {
+    let range = slot
+        .range
+        .as_deref()
+        .or(schema.default_range.as_deref())
+        .unwrap_or("string");
+
+    // Enum range → the permissible values as a JSON `enum` (BTreeMap key order,
+    // so the list is deterministic).
+    if let Some(enum_def) = schema.enums.get(range) {
+        let values: Vec<Value> = enum_def
+            .permissible_values
+            .keys()
+            .map(|k| json!(k))
+            .collect();
+        return json!({ "enum": values });
+    }
+    // Class range → a `$ref` to its `$def`.
+    if schema.classes.contains_key(range) {
+        return json!({ "$ref": format!("#/$defs/{range}") });
+    }
+    // Scalar range → its type, plus any value constraints.
+    let mut base = scalar_json_type(range);
+    apply_value_constraints(&mut base, slot);
+    base
+}
+
+/// Add a slot's value constraints to its scalar schema: `pattern` for strings,
+/// `minimum`/`maximum` for numbers. A permissive (`true`) base has no object to
+/// attach to, so it's left as-is.
+fn apply_value_constraints(base: &mut Value, slot: &SlotDefinition) {
+    let Some(obj) = base.as_object_mut() else {
+        return;
+    };
+    if let Some(pattern) = &slot.pattern {
+        obj.insert("pattern".to_string(), json!(pattern));
+    }
+    if let Some(min) = slot.minimum_value {
+        obj.insert("minimum".to_string(), json!(min));
+    }
+    if let Some(max) = slot.maximum_value {
+        obj.insert("maximum".to_string(), json!(max));
+    }
+}
+
 /// Map a LinkML built-in scalar range to its JSON Schema type/format. A range
-/// that isn't a recognised scalar built-in (a class, enum, or custom type)
-/// returns `true` — the "any" schema (not yet tightened to a `$ref` / `enum`).
+/// that isn't a recognised scalar built-in returns `true` — the "any" schema.
+/// Enum and class ranges are handled by [`slot_value_schema`] before this is
+/// reached, so here that fallback covers only unrecognised custom types.
 fn scalar_json_type(range: &str) -> Value {
     match range {
         "integer" | "int" => json!({ "type": "integer" }),
@@ -246,6 +290,116 @@ mod tests {
         assert!(
             jsonschema::validator_for(&doc).is_ok(),
             "the emitted document must be a valid, compilable JSON Schema"
+        );
+    }
+
+    /// A schema exercising an enum range, a class range, and value constraints
+    /// (`pattern`, numeric bounds) — the Slice 2 surface.
+    fn rich_schema() -> SchemaDefinition {
+        serde_yaml::from_str(
+            "\
+name: cellar
+classes:
+  Wine:
+    tree_root: true
+    attributes:
+      name:
+        range: string
+        required: true
+      color:
+        range: ColorEnum
+      strength:
+        range: float
+        minimum_value: 0.0
+        maximum_value: 1.0
+      code:
+        range: string
+        pattern: '^[A-Z]{3}$'
+      region:
+        range: Region
+      grapes:
+        range: Region
+        multivalued: true
+  Region:
+    attributes:
+      id:
+        range: string
+      name:
+        range: string
+enums:
+  ColorEnum:
+    permissible_values:
+      red:
+      white:
+      rose:
+",
+        )
+        .expect("parse rich schema")
+    }
+
+    #[test]
+    fn enum_class_and_constraints_project() {
+        let doc = build_json_schema(&rich_schema());
+        let wine = &doc["$defs"]["Wine"];
+
+        // Enum range → the permissible values as a JSON `enum` (sorted).
+        assert_eq!(
+            wine["properties"]["color"],
+            json!({ "enum": ["red", "rose", "white"] })
+        );
+        // Class range → a `$ref` to its `$def`; multivalued → array of `$ref`.
+        assert_eq!(
+            wine["properties"]["region"],
+            json!({ "$ref": "#/$defs/Region" })
+        );
+        assert_eq!(
+            wine["properties"]["grapes"],
+            json!({ "type": "array", "items": { "$ref": "#/$defs/Region" } })
+        );
+        // Value constraints project onto the scalar base.
+        assert_eq!(
+            wine["properties"]["strength"],
+            json!({ "type": "number", "minimum": 0.0, "maximum": 1.0 })
+        );
+        assert_eq!(
+            wine["properties"]["code"],
+            json!({ "type": "string", "pattern": "^[A-Z]{3}$" })
+        );
+    }
+
+    // Oracle: instances exercising an enum value, a nested class ref, a
+    // pattern, and a numeric bound validate as expected.
+    #[test]
+    fn rich_instances_validate_as_expected() {
+        let doc = build_json_schema(&rich_schema());
+        // Validate against the whole rooted document (Wine is the tree_root, so
+        // the root `$ref`s it) — cross-class `$ref`s resolve within `$defs`,
+        // which a `Wine`-fragment-in-isolation validator couldn't do.
+        let v = jsonschema::validator_for(&doc).expect("the document compiles");
+
+        assert!(
+            v.is_valid(&json!({
+                "name": "Chateau Morgon", "color": "red", "strength": 0.5,
+                "code": "ABC", "region": { "id": "r1", "name": "Beaujolais" },
+                "grapes": [{ "id": "g1", "name": "Gamay" }]
+            })),
+            "a well-formed instance should validate"
+        );
+        assert!(
+            !v.is_valid(&json!({ "name": "x", "color": "teal" })),
+            "an out-of-enum value should fail"
+        );
+        assert!(
+            !v.is_valid(&json!({ "name": "x", "code": "abcd" })),
+            "a pattern mismatch should fail"
+        );
+        assert!(
+            !v.is_valid(&json!({ "name": "x", "strength": 1.5 })),
+            "an out-of-bound number should fail"
+        );
+        assert!(
+            !v.is_valid(&json!({ "name": "x", "region": "not-an-object" })),
+            "a scalar where a class ref is declared should fail"
         );
     }
 

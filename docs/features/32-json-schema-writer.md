@@ -24,8 +24,9 @@ Postgres ([feature 24](24-postgres-ddl-writer.md)), and Rust
 that keeps the graphRAG demo entirely in LinkML and JSON — no OWL/TTL or
 Rust-struct detour. The JSON Schema is what an LLM's structured output is
 enforced against; the JSON it returns *is* a LinkML instance. It also unblocks
-CuisineIQ (a build-time fidelity diff of LinkML components vs its frozen
-OpenAPI contract), which has waited on this writer.
+downstream API consumers that need an OpenAPI/JSON-Schema contract generated
+from the same LinkML the Rust types come from — so a data model backing both
+Rust services and typed API clients isn't authored twice and left to drift.
 
 **Approach:** Vertical Slicing with Outside-In TDD. Each slice's output is
 validated against an independent oracle — the `jsonschema` crate — for *both*
@@ -81,16 +82,16 @@ scalar-only classes.
 
 ### Slice 2: Enums, class `$ref`s, and value constraints
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Must Have
 
 **Depends on:** Slice 1.
 
 **Acceptance Criteria:**
-- [ ] An enum-range slot emits `{"enum": [<permissible values>]}`; a class-range slot emits `{"$ref": "#/$defs/<Class>"}` (array-wrapped when multivalued).
-- [ ] Slot `pattern` → `pattern`; `minimum_value`/`maximum_value` → `minimum`/`maximum`; string length bounds if modeled → `minLength`/`maxLength`.
-- [ ] **Oracle:** instances exercising an enum value, a nested class ref, a pattern, and a numeric bound validate as expected (in-range/valid pass; out-of-enum, pattern-mismatch, out-of-bound fail).
+- [x] An enum-range slot emits `{"enum": [<permissible values>]}` (BTreeMap key order); a class-range slot emits `{"$ref": "#/$defs/<Class>"}`, array-wrapped when multivalued.
+- [x] Slot `pattern` → `pattern`; `minimum_value`/`maximum_value` → `minimum`/`maximum`, applied to the scalar base. (String length bounds aren't modeled in the IR, so `minLength`/`maxLength` are out of scope until they are.)
+- [x] **Oracle:** the enriched document compiles, and instances exercising an enum value, a nested class ref, a pattern, and a numeric bound validate as expected — out-of-enum, pattern-mismatch, out-of-bound, and scalar-where-class-ref-declared all fail (`enum_class_and_constraints_project`, `rich_instances_validate_as_expected`).
 
 ### Slice 3: Inheritance flattening + `any_of`
 
@@ -123,7 +124,7 @@ demo app.
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | Slice 1: skeleton + scalar objects | Must Have | Reader/Writer arch | Complete |
-| Slice 2: enums, `$ref`, constraints | Must Have | Slice 1 | Not Started |
+| Slice 2: enums, `$ref`, constraints | Must Have | Slice 1 | Complete |
 | Slice 3: inheritance + `any_of` | Should Have | Slices 1–2 | Not Started |
 | Slice 4: LLM ergonomics + `rig` demo | Could Have | Slices 1–3 | 📋 Deferred |
 

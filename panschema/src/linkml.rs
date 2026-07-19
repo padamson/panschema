@@ -1115,7 +1115,7 @@ rules:
 
     #[test]
     fn rule_conditions_deserialize_value_presence_and_any_of() {
-        // cuisineiq's ImageApproval shape: an `any_of` precondition (the
+        // A real-world `ImageApproval` shape: an `any_of` precondition (the
         // rule fires when `verdict` is any of several values) and
         // `value_presence` postconditions (a slot must be present once the
         // rule applies). Both were silently dropped before being modeled.
