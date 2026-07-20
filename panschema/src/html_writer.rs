@@ -1328,7 +1328,8 @@ impl Writer for HtmlWriter {
 
         // Generate graph JSON for visualization (only if enabled)
         let (graph_json_string, graph_node_count, graph_edge_count) = if self.include_graph {
-            let graph_data = GraphWriter::new().schema_to_graph(schema);
+            let graph_data =
+                GraphWriter::new().schema_to_graph_with_labels(schema, self.label_store.as_ref());
             let node_count = graph_data.nodes.len();
             let edge_count = graph_data.edges.len();
             // The JSON is embedded in an inline <script>; serde_json does

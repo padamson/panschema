@@ -29,6 +29,12 @@ pub mod colors {
     /// every T-box kind so the instance graph reads apart from the schema.
     pub const INDIVIDUAL: [f32; 4] = [0.161, 0.722, 0.702, 1.0];
 
+    /// External-grounding nodes: muted slate grey, semi-transparent — an
+    /// upstream ontology category a class grounds into via `subclass_of`.
+    /// Deliberately desaturated and faint so it reads as "outside this
+    /// schema", visually secondary to the schema's own nodes.
+    pub const EXTERNAL: [f32; 4] = [0.569, 0.588, 0.643, 0.65];
+
     /// Alpha value for abstract classes
     pub const ABSTRACT_ALPHA: f32 = 0.7;
 }
@@ -44,6 +50,9 @@ pub enum NodeType {
     /// An OWL `NamedIndividual` — an A-box instance, drawn only in the
     /// separate instance graph, never in the schema (T-box) graph.
     Individual,
+    /// An upstream ontology category a class grounds into via `subclass_of`
+    /// — outside this schema, drawn muted/dashed as a shared anchor.
+    External,
 }
 
 impl NodeType {
@@ -55,6 +64,7 @@ impl NodeType {
             NodeType::Enum => colors::ENUM,
             NodeType::Type => colors::TYPE,
             NodeType::Individual => colors::INDIVIDUAL,
+            NodeType::External => colors::EXTERNAL,
         }
     }
 }
@@ -446,10 +456,24 @@ impl GraphWriter {
 
     /// Convert SchemaDefinition to GraphData
     pub fn schema_to_graph(&self, schema: &SchemaDefinition) -> GraphData {
+        self.schema_to_graph_with_labels(schema, None)
+    }
+
+    /// Build the schema (T-box) graph, resolving external `subclass_of`
+    /// grounding labels against a cached upstream [`LabelStore`] when one is
+    /// supplied. Without a store (the standalone `graph-json` output and unit
+    /// tests), external nodes fall back to their CURIE label.
+    ///
+    /// [`LabelStore`]: crate::labels::LabelStore
+    pub fn schema_to_graph_with_labels(
+        &self,
+        schema: &SchemaDefinition,
+        labels: Option<&crate::labels::LabelStore>,
+    ) -> GraphData {
         let mut graph = GraphData::new(schema.name.clone(), schema.title.clone());
 
         // Add class nodes and inheritance edges
-        self.add_classes(schema, &mut graph);
+        self.add_classes(schema, labels, &mut graph);
 
         // Add slot nodes and domain/range edges
         if self.options.include_slots {
@@ -681,8 +705,17 @@ impl GraphWriter {
         }
     }
 
-    /// Add class nodes and their inheritance edges
-    fn add_classes(&self, schema: &SchemaDefinition, graph: &mut GraphData) {
+    /// Add class nodes and their inheritance edges, plus a shared external
+    /// node per distinct `subclass_of` grounding (labelled from `labels`).
+    fn add_classes(
+        &self,
+        schema: &SchemaDefinition,
+        labels: Option<&crate::labels::LabelStore>,
+        graph: &mut GraphData,
+    ) {
+        // Distinct external grounding IRIs already emitted, so two classes
+        // grounded in the same upstream category share one node.
+        let mut external_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         for (name, class_def) in &schema.classes {
             // Get label from annotation or use name
             let label = class_def
@@ -749,7 +782,72 @@ impl GraphWriter {
                     label: None,
                 });
             }
+
+            // Add the external `subclass_of` grounding: an edge to a shared
+            // muted node for the upstream ontology category the class
+            // grounds into. Distinct from internal `is_a` — the target is
+            // outside this schema.
+            if let Some(grounding) = &class_def.subclass_of {
+                self.add_external_grounding(
+                    schema,
+                    name,
+                    grounding,
+                    labels,
+                    &mut external_seen,
+                    graph,
+                );
+            }
         }
+    }
+
+    /// Emit (once per distinct grounding IRI) an external node for the
+    /// upstream ontology category `grounding` names, plus a `SubclassOf`
+    /// edge from `class_name` to it. The node id is the grounding's resolved
+    /// IRI (so classes sharing a grounding share the node); its label is the
+    /// cached upstream `rdfs:label` from `labels`, falling back to the
+    /// authored CURIE when no store is supplied or the label isn't cached.
+    fn add_external_grounding(
+        &self,
+        schema: &SchemaDefinition,
+        class_name: &str,
+        grounding: &str,
+        labels: Option<&crate::labels::LabelStore>,
+        external_seen: &mut std::collections::HashSet<String>,
+        graph: &mut GraphData,
+    ) {
+        let (uri, uri_unresolved) = resolve_node_uri(schema, Some(grounding));
+        // Node identity is the resolved IRI when available, else the authored
+        // CURIE — so unresolvable groundings still dedup by their raw text.
+        let id_key = uri.clone().unwrap_or_else(|| grounding.to_string());
+        let node_id = format!("external:{id_key}");
+
+        if external_seen.insert(node_id.clone()) {
+            // Cached upstream label keyed by the resolved IRI; CURIE fallback.
+            let label = uri
+                .as_deref()
+                .and_then(|iri| labels.and_then(|store| store.lookup(iri)))
+                .and_then(|info| info.label.clone())
+                .unwrap_or_else(|| grounding.to_string());
+
+            graph.nodes.push(GraphNode {
+                id: node_id.clone(),
+                label,
+                node_type: NodeType::External,
+                color: NodeType::External.color(),
+                description: None,
+                uri,
+                uri_unresolved,
+                is_abstract: false,
+                kind_metadata: None,
+            });
+        }
+
+        graph.edges.push(GraphEdge {
+            source: format!("class:{class_name}"),
+            target: node_id,
+            edge_type: EdgeType::SubclassOf,
+            label: None,
+        });
     }
 
     /// Add slot nodes and domain/range/inverse edges
@@ -1111,6 +1209,101 @@ mod tests {
 
         assert_eq!(mixin_edge.source, "class:Person");
         assert_eq!(mixin_edge.target, "class:Named");
+    }
+
+    /// A `subclass_of` grounding draws an edge to a *shared* external node
+    /// (one per distinct grounding IRI). With no label store the node label
+    /// falls back to the authored CURIE, while its `uri` is expanded via the
+    /// schema's prefixes.
+    #[test]
+    fn subclass_of_grounding_produces_shared_external_node() {
+        let mut schema = SchemaDefinition::new("grounded");
+        schema.prefixes.insert(
+            "cco".to_string(),
+            "https://www.commoncoreontologies.org/".to_string(),
+        );
+
+        let mut service = ClassDefinition::new("Service");
+        service.subclass_of = Some("cco:ont00000995".to_string());
+        schema.classes.insert("Service".to_string(), service);
+
+        // A second class grounded in the *same* upstream category shares the
+        // one external node rather than minting its own.
+        let mut endpoint = ClassDefinition::new("Endpoint");
+        endpoint.subclass_of = Some("cco:ont00000995".to_string());
+        schema.classes.insert("Endpoint".to_string(), endpoint);
+
+        let graph = GraphWriter::new().schema_to_graph(&schema);
+
+        let external: Vec<_> = graph
+            .nodes
+            .iter()
+            .filter(|n| n.node_type == NodeType::External)
+            .collect();
+        assert_eq!(
+            external.len(),
+            1,
+            "two classes grounded in the same IRI share one external node"
+        );
+        let node = external[0];
+        assert_eq!(node.label, "cco:ont00000995", "no store → CURIE fallback");
+        assert_eq!(
+            node.uri.as_deref(),
+            Some("https://www.commoncoreontologies.org/ont00000995"),
+            "the grounding CURIE is expanded via the schema's prefixes"
+        );
+        assert!(!node.uri_unresolved);
+
+        let ext_edges: Vec<_> = graph.edges.iter().filter(|e| e.target == node.id).collect();
+        assert_eq!(ext_edges.len(), 2, "an edge from each grounded class");
+        assert!(
+            ext_edges
+                .iter()
+                .all(|e| e.edge_type == EdgeType::SubclassOf)
+        );
+        let sources: std::collections::HashSet<_> =
+            ext_edges.iter().map(|e| e.source.as_str()).collect();
+        assert!(sources.contains("class:Service"));
+        assert!(sources.contains("class:Endpoint"));
+    }
+
+    /// When a label store carries the grounding IRI's cached upstream
+    /// `rdfs:label`, the external node uses that label instead of the CURIE.
+    #[test]
+    fn external_node_label_comes_from_the_label_store() {
+        use crate::labels::{LabelStore, TermInfo};
+        use std::collections::BTreeMap;
+
+        let mut schema = SchemaDefinition::new("grounded");
+        schema.prefixes.insert(
+            "cco".to_string(),
+            "https://www.commoncoreontologies.org/".to_string(),
+        );
+        let mut service = ClassDefinition::new("Service");
+        service.subclass_of = Some("cco:ont00000995".to_string());
+        schema.classes.insert("Service".to_string(), service);
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = LabelStore::open(dir.path()).unwrap();
+        let mut labels = BTreeMap::new();
+        labels.insert(
+            "https://www.commoncoreontologies.org/ont00000995".to_string(),
+            TermInfo {
+                label: Some("Act of Service".to_string()),
+                definitions: vec![],
+            },
+        );
+        store
+            .insert_source("https://www.commoncoreontologies.org/", labels)
+            .unwrap();
+
+        let graph = GraphWriter::new().schema_to_graph_with_labels(&schema, Some(&store));
+        let node = graph
+            .nodes
+            .iter()
+            .find(|n| n.node_type == NodeType::External)
+            .expect("external node");
+        assert_eq!(node.label, "Act of Service", "cached upstream label wins");
     }
 
     // ========== Slot Tests ==========

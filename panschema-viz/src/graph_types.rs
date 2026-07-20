@@ -25,6 +25,11 @@ pub mod colors {
     /// T-box kinds.
     pub const INDIVIDUAL: [f32; 4] = [0.161, 0.722, 0.702, 1.0];
 
+    /// External-grounding nodes: muted slate grey, semi-transparent. Mirrors
+    /// the writer-side constant — an upstream ontology category a class
+    /// grounds into via `subclass_of`, drawn visually secondary.
+    pub const EXTERNAL: [f32; 4] = [0.569, 0.588, 0.643, 0.65];
+
     /// Alpha value for abstract classes
     pub const ABSTRACT_ALPHA: f32 = 0.7;
 }
@@ -40,6 +45,9 @@ pub enum NodeType {
     /// An OWL individual (A-box instance) — drawn only in the instance
     /// graph, never the schema graph.
     Individual,
+    /// An upstream ontology category a class grounds into via `subclass_of`
+    /// — outside this schema, drawn muted/dashed.
+    External,
 }
 
 impl NodeType {
@@ -52,6 +60,7 @@ impl NodeType {
             NodeType::Enum => colors::ENUM,
             NodeType::Type => colors::TYPE,
             NodeType::Individual => colors::INDIVIDUAL,
+            NodeType::External => colors::EXTERNAL,
         }
     }
 }

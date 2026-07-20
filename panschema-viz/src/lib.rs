@@ -255,7 +255,7 @@ impl Visualization {
             return hidden;
         }
         for (i, node) in self.simulation.nodes.iter().enumerate() {
-            let node_type = node_kind_label(node.kind_metadata.as_ref());
+            let node_type = node_kind_label(node.node_type, node.kind_metadata.as_ref());
             if self.interaction.hidden_types.contains(node_type) {
                 hidden.insert(i);
             }
@@ -728,7 +728,8 @@ impl Visualization {
     // Type filtering
     // ========================================================================
 
-    /// Toggle visibility of a node type (Class, Slot, Enum, Type).
+    /// Toggle visibility of a node type (Class, Slot, Enum, Type,
+    /// Individual, External).
     pub fn toggle_type_filter(&mut self, node_type: &str) {
         self.interaction.toggle_type(node_type);
     }
@@ -743,7 +744,8 @@ impl Visualization {
         if index >= self.simulation.nodes.len() {
             return "Unknown".to_string();
         }
-        node_kind_label(self.simulation.nodes[index].kind_metadata.as_ref()).to_string()
+        let node = &self.simulation.nodes[index];
+        node_kind_label(node.node_type, node.kind_metadata.as_ref()).to_string()
     }
 }
 
@@ -757,7 +759,7 @@ pub(crate) fn build_node_details_json(
     is_fixed: bool,
     connections: Vec<String>,
 ) -> String {
-    let node_type = node_kind_label(node.kind_metadata.as_ref());
+    let node_type = node_kind_label(node.node_type, node.kind_metadata.as_ref());
     serde_json::json!({
         "id": node.id,
         "label": node.label,
@@ -824,8 +826,17 @@ fn edge_type_tag(edge_type: crate::graph_types::EdgeType) -> &'static str {
 /// channel: the Class (`0.290`) and Slot (`0.314`) reds are within the
 /// old `0.1` tolerance, so the color match misread every slot as a
 /// "Class". A node with no kind metadata is a `Type` node.
-fn node_kind_label(kind: Option<&crate::graph_types::KindMetadata>) -> &'static str {
-    use crate::graph_types::KindMetadata;
+fn node_kind_label(
+    node_type: crate::graph_types::NodeType,
+    kind: Option<&crate::graph_types::KindMetadata>,
+) -> &'static str {
+    use crate::graph_types::{KindMetadata, NodeType};
+    // An external grounding node carries no kind metadata (which would
+    // otherwise read as "Type"), so its kind is only knowable from
+    // `node_type` — check it first.
+    if node_type == NodeType::External {
+        return "External";
+    }
     match kind {
         Some(KindMetadata::Class { .. }) => "Class",
         Some(KindMetadata::Slot { .. }) => "Slot",
@@ -934,6 +945,31 @@ mod details_json_tests {
         assert!(json["description"].is_null(), "description should be null");
         assert!(json["uri"].is_null(), "uri should be null");
         assert_eq!(json["connections"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn external_grounding_node_reports_external_type() {
+        // An external grounding node carries no kind metadata (which would
+        // otherwise misread as "Type"); its `node_type` is the only signal,
+        // and the hover card / filter must label it "External".
+        let node = SimNode::from_graph_node(
+            &GraphNode {
+                id: "external:https://www.commoncoreontologies.org/ont00000995".to_string(),
+                label: "Act of Service".to_string(),
+                node_type: NodeType::External,
+                color: NodeType::External.color(),
+                description: None,
+                uri: Some("https://www.commoncoreontologies.org/ont00000995".to_string()),
+                uri_unresolved: false,
+                is_abstract: false,
+                kind_metadata: None,
+            },
+            0,
+            1,
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(&build_node_details_json(&node, false, Vec::new())).unwrap();
+        assert_eq!(json["type"], "External");
     }
 
     #[test]

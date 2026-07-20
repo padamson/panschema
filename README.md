@@ -118,6 +118,7 @@ The visualization features:
 - **Pan and zoom**: Mouse drag to pan, scroll wheel to zoom
 - **Labels**: Node and edge labels with automatic positioning
 - **Node selection**: Click a node to view its details (label, type, IRI, connections)
+- **External groundings**: a class's external `subclass_of` grounding draws an edge to a muted, dashed upstream-category node (labelled by its cached upstream `rdfs:label`, CURIE fallback); classes sharing a grounding share one node
 - **Drag to reposition**: Drag any node; release to rejoin the simulation, or shift+release to pin in place
 - **Shift+click to toggle pin**: Pin/unpin nodes so they hold their position
 - **Keyboard shortcuts**: `R` reset view · `F` focus · `Esc` deselect · `Delete` unpin

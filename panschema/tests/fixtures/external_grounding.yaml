@@ -1,0 +1,30 @@
+id: https://example.org/external-grounding
+name: external_grounding
+description: >-
+  A fixture whose classes ground into an upstream ontology via `subclass_of`,
+  exercising the muted external grounding nodes in the schema graph. Two
+  classes share one grounding so the shared-node dedup is visible.
+prefixes:
+  ex: https://example.org/external-grounding/
+  cco: https://www.commoncoreontologies.org/
+default_prefix: ex
+default_range: string
+
+classes:
+  Service:
+    name: Service
+    description: A capability offered at an endpoint. Grounded in an upstream act.
+    subclass_of: cco:ont00000995
+    attributes:
+      name:
+        name: name
+        range: string
+
+  Endpoint:
+    name: Endpoint
+    description: A network address a service is reached at. Same upstream grounding.
+    subclass_of: cco:ont00000995
+    attributes:
+      address:
+        name: address
+        range: string

@@ -9,7 +9,7 @@ use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
 use std::collections::HashSet;
 
 use crate::camera::{BoundingBox, Camera2D};
-use crate::graph_types::{EdgeType, KindMetadata};
+use crate::graph_types::{EdgeType, KindMetadata, NodeType};
 use crate::labels::LabelOptions;
 use crate::simulation::{CpuSimulation, SimEdge, SimNode};
 
@@ -385,19 +385,21 @@ impl Canvas2DRenderer {
             highlighted_nodes,
         );
 
-        // Draw labels on top (if enabled or hovered)
+        // Draw labels on top (if enabled or hovered). A hidden node's label
+        // (and any edge label touching it) is skipped too, so a type filter
+        // clears the labels along with the nodes.
         if labels.show_edge_labels() {
-            self.render_edge_labels(&sim.edges, &sim.nodes, None);
+            self.render_edge_labels(&sim.edges, &sim.nodes, None, hidden_nodes);
         } else if let Some(idx) = hovered_edge {
             // Only render the hovered edge label
-            self.render_edge_labels(&sim.edges, &sim.nodes, Some(idx));
+            self.render_edge_labels(&sim.edges, &sim.nodes, Some(idx), hidden_nodes);
         }
 
         if labels.show_node_labels() {
-            self.render_node_labels(&sim.nodes, None);
+            self.render_node_labels(&sim.nodes, None, hidden_nodes);
         } else if let Some(idx) = hovered_node {
             // Only render the hovered node label
-            self.render_node_labels(&sim.nodes, Some(idx));
+            self.render_node_labels(&sim.nodes, Some(idx), hidden_nodes);
         }
     }
 
@@ -996,8 +998,15 @@ impl Canvas2DRenderer {
                 alpha
             );
 
-            // Shape encodes the node kind (ADR-005); within `radius`.
-            let shape = node_shape(node.kind_metadata.as_ref());
+            // Shape encodes the node kind (ADR-005); within `radius`. An
+            // external grounding node carries no kind metadata but is a
+            // class-like upstream category, so it takes the class circle —
+            // its muted grey fill and dashed border (below) set it apart.
+            let shape = if node.node_type == NodeType::External {
+                NodeShape::Circle
+            } else {
+                node_shape(node.kind_metadata.as_ref())
+            };
             self.node_path(cx as f64, cy as f64, radius as f64, shape);
             self.ctx.set_fill_style_str(&color);
             self.ctx.fill();
@@ -1014,6 +1023,12 @@ impl Canvas2DRenderer {
                 self.ctx.set_stroke_style_str("rgba(59, 130, 246, 1.0)"); // Blue for selected
                 self.ctx.set_line_width(2.0);
                 self.set_dash(false);
+            } else if node.node_type == NodeType::External {
+                // External groundings: faint dashed grey outline — outside
+                // this schema, visually secondary.
+                self.ctx.set_stroke_style_str("rgba(200, 205, 220, 0.6)");
+                self.ctx.set_line_width(1.5);
+                self.set_dash(true);
             } else if node.is_abstract {
                 self.ctx.set_stroke_style_str("rgba(255, 255, 255, 0.55)");
                 self.ctx.set_line_width(1.5);
@@ -1060,7 +1075,12 @@ impl Canvas2DRenderer {
 
     /// Render node labels
     /// If `only_index` is Some, only render that specific node's label (for hover)
-    fn render_node_labels(&self, nodes: &[SimNode], only_index: Option<usize>) {
+    fn render_node_labels(
+        &self,
+        nodes: &[SimNode],
+        only_index: Option<usize>,
+        hidden_nodes: &HashSet<usize>,
+    ) {
         // Labels are sized from each node's on-screen radius (see the
         // per-node `label_font_size` call below), so they stay
         // proportional to the nodes: modest at the fit view, growing as
@@ -1071,6 +1091,12 @@ impl Canvas2DRenderer {
         self.ctx.set_text_baseline("middle");
 
         for (i, node) in nodes.iter().enumerate() {
+            // A type-filtered (hidden) node draws no label, so its text
+            // doesn't linger after the node itself is hidden.
+            if hidden_nodes.contains(&i) {
+                continue;
+            }
+
             // Skip if filtering and this isn't the target
             if let Some(idx) = only_index
                 && i != idx
@@ -1125,7 +1151,13 @@ impl Canvas2DRenderer {
 
     /// Render edge labels at midpoints
     /// If `only_index` is Some, only render that specific edge's label (for hover)
-    fn render_edge_labels(&self, edges: &[SimEdge], nodes: &[SimNode], only_index: Option<usize>) {
+    fn render_edge_labels(
+        &self,
+        edges: &[SimEdge],
+        nodes: &[SimNode],
+        only_index: Option<usize>,
+        hidden_nodes: &HashSet<usize>,
+    ) {
         // Sized like node labels — a multiple of an endpoint node's
         // on-screen radius (computed per edge below) so relation names
         // stay proportional to the graph at any zoom.
@@ -1134,6 +1166,12 @@ impl Canvas2DRenderer {
         self.ctx.set_text_baseline("middle");
 
         for (i, edge) in edges.iter().enumerate() {
+            // An edge touching a hidden node isn't drawn, so its label
+            // isn't either — matches the `render_edges` skip.
+            if hidden_nodes.contains(&edge.source) || hidden_nodes.contains(&edge.target) {
+                continue;
+            }
+
             // Skip if filtering and this isn't the target
             if let Some(idx) = only_index
                 && i != idx

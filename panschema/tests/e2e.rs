@@ -2006,6 +2006,224 @@ fn e2e_rule_touched_nodes_draw_a_persistent_amber_ring() {
     });
 }
 
+/// A class grounded via `subclass_of` into an upstream ontology draws a muted
+/// external node in the schema graph. Asserts the viz reports a node of type
+/// `External` and that its muted grey fill actually paints on the canvas —
+/// distinct from the blue class nodes.
+#[test]
+fn e2e_external_grounding_paints_a_muted_node() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let output_dir = generate_docs_for("tests/fixtures/external_grounding.yaml");
+        let port = find_available_port();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("goto");
+
+        assert!(
+            wait_for_graph_viz_ready(&page).await,
+            "graph viz never became ready"
+        );
+
+        // Find the external node, then sample the canvas around it for the
+        // muted grey fill (roughly equal r/g/b, b highest) — the blue class
+        // fill (b ≫ r) can't match, so grey pixels prove the external node
+        // itself painted.
+        let result = page
+            .evaluate_value(
+                r#"(async function(){
+                    var viz = window.__panschema_viz;
+                    if (!viz || typeof viz.node_count !== 'function') return 'no-viz';
+                    var n = viz.node_count();
+                    var idx = -1;
+                    for (var i = 0; i < n; i++) {
+                        if (viz.get_node_type(i) === 'External') { idx = i; break; }
+                    }
+                    if (idx < 0) return 'no-external';
+                    var pos = viz.node_canvas_pos(idx);
+                    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+                    var canvas = document.getElementById('graph-canvas');
+                    var ctx = canvas.getContext('2d');
+                    if (!ctx) return 'no-2d-ctx';
+                    var cx = Math.round(pos[0]), cy = Math.round(pos[1]);
+                    var x0 = Math.max(0, cx - 24), y0 = Math.max(0, cy - 24);
+                    var w = Math.min(canvas.width - x0, 48), h = Math.min(canvas.height - y0, 48);
+                    var d = ctx.getImageData(x0, y0, w, h).data;
+                    var grey = 0;
+                    for (var i = 0; i < d.length; i += 4) {
+                        var r = d[i], g = d[i+1], b = d[i+2], a = d[i+3];
+                        if (a > 0 && r >= 90 && r <= 205 &&
+                            Math.abs(r - g) < 40 && Math.abs(g - b) < 45 && b >= r) grey++;
+                    }
+                    return 'external|' + grey;
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        let result = result.trim_matches('"');
+        let grey: i64 = result
+            .strip_prefix("external|")
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or_else(|| panic!("expected 'external|<count>'; got: {result}"));
+        assert!(
+            grey > 0,
+            "the external grounding node's muted grey fill should paint; grey pixels={grey}"
+        );
+
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
+/// The "Groundings" control shows only when the graph has external nodes, and
+/// clicking it hides them. Asserts the button is visible for a grounded schema
+/// and that a click flips external visibility off and clears the muted node's
+/// pixels from the canvas.
+#[test]
+fn e2e_groundings_toggle_hides_external_nodes() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let output_dir = generate_docs_for("tests/fixtures/external_grounding.yaml");
+        let port = find_available_port();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("goto");
+
+        assert!(
+            wait_for_graph_viz_ready(&page).await,
+            "graph viz never became ready"
+        );
+
+        // The toggle is revealed only when external nodes exist.
+        let visible = page
+            .evaluate_value(
+                r#"(function(){
+                    var b = document.getElementById('graph-toggle-external');
+                    if (!b) return 'no-button';
+                    return getComputedStyle(b).display !== 'none' ? 'shown' : 'hidden';
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert_eq!(
+            visible.trim_matches('"'),
+            "shown",
+            "the Groundings toggle should be visible for a grounded schema"
+        );
+
+        // Hover the external node so its label renders regardless of zoom
+        // (a hovered label always draws), then toggle groundings off: both the
+        // muted fill and the label must vanish, not linger.
+        let result = page
+            .evaluate_value(
+                r#"(async function(){
+                    var viz = window.__panschema_viz;
+                    if (!viz || typeof viz.node_count !== 'function') return 'no-viz';
+                    var idx = -1, n = viz.node_count();
+                    for (var i = 0; i < n; i++) {
+                        if (viz.get_node_type(i) === 'External') { idx = i; break; }
+                    }
+                    if (idx < 0) return 'no-external';
+                    var canvas = document.getElementById('graph-canvas');
+                    var ctx = canvas.getContext('2d');
+                    function sample(box, pred){
+                        var x0 = Math.max(0, box[0]), y0 = Math.max(0, box[1]);
+                        var w = Math.min(canvas.width - x0, box[2]);
+                        var h = Math.min(canvas.height - y0, box[3]);
+                        if (w <= 0 || h <= 0) return 0;
+                        var d = ctx.getImageData(x0, y0, w, h).data, c = 0;
+                        for (var i = 0; i < d.length; i += 4) {
+                            if (pred(d[i], d[i+1], d[i+2], d[i+3])) c++;
+                        }
+                        return c;
+                    }
+                    var isGrey = function(r,g,b,a){ return a>0 && r>=90 && r<=205 &&
+                        Math.abs(r-g)<40 && Math.abs(g-b)<45 && b>=r; };
+                    // Hovered label text is fully-opaque white on a blue chip;
+                    // count the bright text pixels to the right of the node.
+                    var isText = function(r,g,b,a){ return a>0 && r>=200 && g>=200 && b>=200; };
+                    var raf2 = function(){ return new Promise(r =>
+                        requestAnimationFrame(() => requestAnimationFrame(r))); };
+                    function labelBox(){
+                        var p = viz.node_canvas_pos(idx);
+                        return [Math.round(p[0])+6, Math.round(p[1])-12, 160, 24];
+                    }
+                    function fillBox(){
+                        var p = viz.node_canvas_pos(idx);
+                        return [Math.round(p[0])-24, Math.round(p[1])-24, 48, 48];
+                    }
+                    // Frame the graph so the node is on-canvas. Turn the bulk
+                    // node labels off (they're zoom-gated and would drop at
+                    // this scale) so only a *hovered* node draws its label —
+                    // which renders at a readable size regardless of zoom.
+                    viz.fit_to_bounds(40);
+                    document.getElementById('graph-labels-nodes').click();
+                    await raf2();
+                    var p = viz.node_canvas_pos(idx);
+                    viz.update_hover(p[0], p[1]);
+                    if (typeof viz.render === 'function') viz.render();
+                    await raf2();
+                    var labelBefore = sample(labelBox(), isText);
+                    // Toggle groundings off; the node (and its hovered label) go.
+                    document.getElementById('graph-toggle-external').click();
+                    await raf2();
+                    if (viz.is_type_visible('External')) return 'still-visible';
+                    var greyAfter = sample(fillBox(), isGrey);
+                    var labelAfter = sample(labelBox(), isText);
+                    return labelBefore + '|' + greyAfter + '|' + labelAfter;
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        let result = result.trim_matches('"');
+        let parts: Vec<i64> = result
+            .split('|')
+            .map(|s| {
+                s.trim().parse().unwrap_or_else(|_| {
+                    panic!("expected 'labelBefore|greyAfter|labelAfter'; got: {result}")
+                })
+            })
+            .collect();
+        assert_eq!(parts.len(), 3, "expected three counts; got: {result}");
+        assert!(
+            parts[0] > 0,
+            "the external node's hovered label should paint before toggling off; label pixels={}",
+            parts[0]
+        );
+        assert_eq!(
+            parts[1], 0,
+            "after toggling groundings off, the external node fill should not paint; grey pixels={}",
+            parts[1]
+        );
+        assert_eq!(
+            parts[2], 0,
+            "after toggling groundings off, the external node label should not linger; label pixels={}",
+            parts[2]
+        );
+
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
 /// A schema with OWL individuals renders a separate instance (A-box) graph
 /// beneath the Individuals cards. Asserts the exporter emitted the right
 /// A-box (2 individuals, 1 assertion edge), that it embedded into the page,

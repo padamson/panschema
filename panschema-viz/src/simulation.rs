@@ -3,7 +3,7 @@
 //! Implements a simple force-directed layout algorithm that runs in the browser.
 //! Uses the same physics as the GPU version but runs on CPU for compatibility.
 
-use crate::graph_types::{EdgeType, GraphData, GraphNode, KindMetadata};
+use crate::graph_types::{EdgeType, GraphData, GraphNode, KindMetadata, NodeType};
 use crate::sim_common;
 
 /// A node with position and velocity for simulation
@@ -36,6 +36,11 @@ pub struct SimNode {
     /// domain/range/required/multivalued for slots, and
     /// permissible values for enums.
     pub kind_metadata: Option<KindMetadata>,
+    /// Node kind carried from the [`GraphNode`]. Most kinds are also
+    /// recoverable from `kind_metadata`, but an external grounding node
+    /// carries no metadata, so its kind is only knowable here — the
+    /// renderer reads this to give it its muted/dashed external treatment.
+    pub node_type: NodeType,
     /// `true` when any class rule touches this node — a slot on either
     /// side (trigger or governed) of a rule, or a class that declares a
     /// rule. Set at construction by scanning every class node's rules;
@@ -73,6 +78,7 @@ impl SimNode {
             uri_unresolved: node.uri_unresolved,
             is_abstract: node.is_abstract,
             kind_metadata: node.kind_metadata.clone(),
+            node_type: node.node_type,
             in_rule: false, // Set by from_graph_data once all nodes are known.
             x: radius * angle.cos(),
             y: radius * angle.sin(),

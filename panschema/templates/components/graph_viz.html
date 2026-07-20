@@ -59,6 +59,13 @@
             <button id="graph-legend-toggle" class="graph-btn graph-toggle" title="Show the notation key: what each node shape, edge style, and crow's-foot terminator means. Click to toggle." aria-pressed="false">
                 Legend
             </button>
+            {# Only revealed by JS when the graph actually carries external
+               grounding nodes (a class's `subclass_of` into an upstream
+               ontology). Lets a reader hide those muted anchors to focus on
+               the schema's own classes. #}
+            <button id="graph-toggle-external" class="graph-btn graph-toggle active" style="display: none;" title="Show or hide external grounding nodes — the upstream ontology categories a class grounds into via subclass_of. Click to toggle.">
+                Groundings
+            </button>
             <span class="graph-help" id="graph-help-2d">Drag to pan • Scroll to zoom</span>
             <span class="graph-help" id="graph-help-3d" style="display: none;">Drag to orbit • Shift+drag to pan • Scroll to zoom</span>
         </div>
@@ -728,6 +735,40 @@
     function applyArrowsPref() {
         if (viz && typeof viz.set_arrows === 'function') {
             viz.set_arrows(arrowsEnabled);
+        }
+    }
+
+    // External-grounding visibility toggle. The button is only meaningful
+    // when the graph actually carries external nodes (a class's subclass_of
+    // into an upstream ontology), so it stays hidden otherwise.
+    const externalBtn = document.getElementById('graph-toggle-external');
+    const EXTERNAL_PREF_KEY = 'panschema-show-groundings';
+    const hasExternalNodes = !!(graphData && graphData.nodes
+        && graphData.nodes.some(n => n.node_type === 'external'));
+    let externalVisible = true;
+    try {
+        const stored = localStorage.getItem(EXTERNAL_PREF_KEY);
+        if (stored !== null) externalVisible = stored === '1';
+    } catch (e) { /* localStorage may be unavailable */ }
+    if (externalBtn && hasExternalNodes) {
+        externalBtn.style.display = '';
+        externalBtn.classList.toggle('active', externalVisible);
+        externalBtn.addEventListener('click', () => {
+            externalVisible = !externalVisible;
+            externalBtn.classList.toggle('active', externalVisible);
+            try { localStorage.setItem(EXTERNAL_PREF_KEY, externalVisible ? '1' : '0'); }
+            catch (e) { /* ignore */ }
+            applyExternalPref();
+            if (viz && typeof viz.render === 'function') viz.render();
+        });
+    }
+    // Reconcile a freshly-created viz (which starts with every type visible)
+    // to the persisted preference — flip the filter only when it disagrees.
+    function applyExternalPref() {
+        if (!viz || typeof viz.toggle_type_filter !== 'function'
+            || typeof viz.is_type_visible !== 'function') return;
+        if (viz.is_type_visible('External') !== externalVisible) {
+            viz.toggle_type_filter('External');
         }
     }
 
@@ -1736,6 +1777,9 @@
 
         // Apply saved arrowheads preference
         applyArrowsPref();
+
+        // Apply saved external-grounding visibility preference
+        applyExternalPref();
 
         // Update label button states
         updateLabelButtonStates();
