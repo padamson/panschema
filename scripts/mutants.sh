@@ -22,7 +22,7 @@
 #    tempdir; the real pkg/ outputs don't follow. Empty placeholders
 #    satisfy the includes (mutation testing doesn't exercise the wasm
 #    bytes at runtime).
-# 2. The .mutants.toml `examine_globs` covers the whole panschema
+# 2. The .cargo/mutants.toml `examine_globs` covers the whole panschema
 #    crate (~4800 mutants). `--in-diff` narrows that to just the
 #    lines you touched in your active diff.
 #
@@ -64,9 +64,11 @@ if [[ ! -s "$DIFF" ]]; then
 fi
 
 echo "mutating changes in ${BASE}..HEAD ($(wc -l < "$DIFF") diff lines)"
-# Exclude rationale (`--in-diff` ignores `.mutants.toml`'s examine/exclude
-# globs, so they're repeated at the CLI). Keep this list in sync with
-# `.mutants.toml`'s `exclude_globs`:
+# Exclude rationale. The same globs live in `.cargo/mutants.toml`'s
+# `exclude_globs`; they're repeated at the CLI so a `--in-diff` run
+# never depends on config discovery (the config was silently ignored
+# for months when it lived at the repo root instead of `.cargo/`).
+# Keep this list in sync with `.cargo/mutants.toml`:
 # - `panschema-viz/src/{lib,canvas2d,webgpu,simulation3d,camera,camera3d,interaction,labels,graph_types}.rs`:
 #   wasm-only or otherwise need a browser context to test; mutation
 #   testing on the native target can't catch their mutants.

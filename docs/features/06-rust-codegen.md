@@ -171,7 +171,7 @@ LinkML uses lowerCamelCase (`wasGeneratedBy`); Rust idiom is snake_case. Slot na
 - [x] Fixture sourcing: schema fetched via `panschema add github:padamson/scimantic-schema@0.1.0` into a workspace-local cache (`CARGO_TARGET_TMPDIR/scimantic-fixture-cache/`) rather than a vendored YAML copy. Stays in sync with upstream; dogfoods the consumer flow.
 - [x] Idempotency test: `scimantic_renders_idempotently` renders the schema twice and asserts byte equality.
 - [x] Compile-check + public-API test: `scimantic_question_can_be_constructed_in_downstream_crate` writes a scratch crate with the generated module at `src/scimantic.rs` and a `src/lib.rs` that constructs a `Question` via struct literal. `cargo build` succeeds against `serde` + `chrono` deps.
-- [x] Tests live in `panschema/tests/rust_writer.rs` (separate from the omnibus `tests/integration.rs`); fixture + tempdir setup shared across the six acceptance tests.
+- [x] Tests live in `panschema/tests/integration/rust_writer.rs` (separate from the omnibus `tests/integration.rs`); fixture + tempdir setup shared across the six acceptance tests.
 - [x] Ladder is no longer `#[ignore]`d — every `cargo nextest run` runs it.
 
 **Notes:**
@@ -372,7 +372,7 @@ LinkML uses lowerCamelCase (`wasGeneratedBy`); Rust idiom is snake_case. Slot na
 - 29 inline unit tests cover each helper, full-fixture rendering, and idempotency.
 - Added `syn = { version = "2", features = ["full"] }` as a dev-dependency for `syn::parse_file` validation of the fixture output.
 
-**Acceptance ladder set up:** `panschema/tests/rust_writer.rs` adds five `#[ignore]`d integration tests against the real scimantic-schema v0.1.0, run explicitly with `cargo nextest run -p panschema --test rust_writer -- --ignored`. The cache helper uses `panschema add github:padamson/scimantic-schema@0.1.0` against a workspace-local cache (`CARGO_TARGET_TMPDIR/scimantic-fixture-cache/`), so warmed runs are no-ops and cold runs do one network fetch. State as of this slice:
+**Acceptance ladder set up:** `panschema/tests/integration/rust_writer.rs` adds five `#[ignore]`d integration tests against the real scimantic-schema v0.1.0, run explicitly with `cargo nextest run -p panschema --test integration -E 'test(rust_writer)' --run-ignored=only`. The cache helper uses `panschema add github:padamson/scimantic-schema@0.1.0` against a workspace-local cache (`CARGO_TARGET_TMPDIR/scimantic-fixture-cache/`), so warmed runs are no-ops and cold runs do one network fetch. State as of this slice:
 
 | Test | Promise | Status |
 |---|---|---|

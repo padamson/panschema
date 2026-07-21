@@ -12,7 +12,7 @@ at test time — and I'm told when a new release needs vendoring.
 
 **Related ADR (if applicable):** None — builds on the self-contained Rust
 compile harness (the `codegen.yaml` fixture + scratch-crate `cargo build` in
-`panschema/tests/rust_writer.rs`). The vendored scimantic snapshot from that work
+`panschema/tests/integration/rust_writer.rs`). The vendored scimantic snapshot from that work
 is the first entry.
 
 **Approach:** Vertical Slicing with Outside-In TDD.

@@ -172,7 +172,7 @@ already run native tests — is the remaining 113.
 ### Missed in excluded modules (informational)
 
 These mutants live in modules excluded from the per-push job per
-[`.mutants.toml`](../.mutants.toml) — wasm-only entry points, GPU
+[`.cargo/mutants.toml`](../.cargo/mutants.toml) — wasm-only entry points, GPU
 shader scaffolding, the dev-feature styleguide. Listed here so the
 full run's noise doesn't get re-discovered as "new" each cycle.
 

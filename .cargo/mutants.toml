@@ -1,6 +1,14 @@
 # cargo-mutants configuration
 # Run: cargo mutants
 # Docs: https://mutants.rs/
+#
+# This file MUST live at `.cargo/mutants.toml` — that is the only
+# path cargo-mutants reads. It previously sat at the repo root as
+# `.mutants.toml`, where it was silently ignored: every mutation
+# baseline and mutant run executed the full `cargo test` suite
+# (including the Playwright e2e binary) instead of the intended
+# nextest `--lib` run below, making mutant cycles several times
+# slower and letting e2e flakiness fail the CI mutation job.
 
 # Use nextest for faster test execution
 test_tool = "nextest"

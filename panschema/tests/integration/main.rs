@@ -1,3 +1,11 @@
+// Every `tests/*.rs` file compiles and links as its own test binary
+// against the debug lib; folding the codegen and dogfood suites in as
+// submodules keeps this to one integration binary (plus the
+// browser-dependent `e2e`), so an edit-test cycle pays one link, not
+// three.
+mod dogfood;
+mod rust_writer;
+
 use std::fs;
 use std::path::Path;
 use std::process::Command;
