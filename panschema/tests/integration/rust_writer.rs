@@ -11,7 +11,7 @@
 //! snapshot checked in at `tests/fixtures/dogfood/scimantic-schema/v0.1.0.yaml`,
 //! so these tests also run by default with no network access. Broader
 //! render/compile coverage across every vendored dogfood release lives in
-//! `tests/dogfood.rs`.
+//! the sibling `dogfood` module (`tests/integration/dogfood.rs`).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

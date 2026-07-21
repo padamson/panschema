@@ -13,8 +13,16 @@
 # Use nextest for faster test execution
 test_tool = "nextest"
 
-# Run only unit tests (skip integration tests in tests/ and the e2e Playwright suite)
-additional_cargo_test_args = ["--lib"]
+# Run only unit tests (skip integration tests in tests/ and the e2e
+# Playwright suite). `additional_cargo_args` is appended to every
+# cargo invocation — both the `--no-run` build phase and the test
+# run — so mutant cycles don't even *compile* the integration and
+# e2e test binaries they will never run. (Not
+# `additional_cargo_test_args`: that would add `--lib` only to the
+# run phase, leaving every mutant to rebuild/relink all test
+# targets — and combining both duplicates the flag, which nextest
+# rejects.)
+additional_cargo_args = ["--lib"]
 
 # Examine `panschema` + the host-testable parts of `panschema-viz`.
 # `panschema-viz` is a wasm-targeted crate, but `simulation.rs` and

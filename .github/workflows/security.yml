@@ -135,53 +135,16 @@ jobs:
         with:
           tool: cargo-mutants
 
-      # cargo-mutants builds and runs all test binaries (including the
-      # e2e integration test) for the baseline. The e2e asserts graph
-      # behaviour that depends on the actual WASM (e.g. layout
-      # auto-detection), and html_writer.rs embeds the pkg artifacts via
-      # include_str!/include_bytes!, so the baseline needs a real bundle
-      # — a stub would compile but make the e2e fail. Mirrors test.yml.
-      - name: Install wasm-pack
-        uses: taiki-e/install-action@wasm-pack
-
-      - name: Cache WASM build
-        uses: actions/cache@v6
-        id: wasm-cache
-        with:
-          path: panschema-viz/pkg/
-          key: wasm-${{ runner.os }}-${{ hashFiles('panschema-viz/src/**', 'panschema-viz/Cargo.toml') }}
-
-      - name: Build WASM package
-        if: steps.wasm-cache.outputs.cache-hit != 'true'
-        run: wasm-pack build panschema-viz --target web --features webgpu
-
-      # Playwright browsers are also needed for the e2e baseline.
-      - name: Setup Node.js (for Playwright)
-        uses: actions/setup-node@v7
-        with:
-          node-version: '20'
-
-      - name: Get Playwright version
-        id: playwright-version
-        shell: bash
-        run: echo "version=1.61.1" >> $GITHUB_OUTPUT
-
-      - name: Cache Playwright browsers and driver
-        uses: actions/cache@v6
-        id: playwright-cache
-        with:
-          path: |
-            ~/.cache/ms-playwright
-            ~/.cache/playwright-rust
-          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
-
-      - name: Install Playwright browsers
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: npx playwright@1.61.1 install --with-deps
-
-      - name: Install Playwright dependencies (cached)
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: npx playwright@1.61.1 install-deps
+      # `.cargo/mutants.toml` passes `--lib` to both the build and run
+      # phases, so mutation testing never compiles or runs the
+      # integration/e2e test binaries — no wasm bundle, Node, or
+      # Playwright needed here. html_writer.rs embeds the pkg artifacts
+      # via include_str!/include_bytes!, and empty placeholders satisfy
+      # those for a lib-only build (the wasm bytes are never executed).
+      - name: Stub wasm bundle for lib-only build
+        run: |
+          mkdir -p panschema-viz/pkg
+          touch panschema-viz/pkg/panschema_viz.js panschema-viz/pkg/panschema_viz_bg.wasm
 
       - name: Run mutation testing (unit tests only, panschema crate)
         run: cargo mutants
@@ -238,52 +201,12 @@ jobs:
         with:
           tool: cargo-mutants
 
-      # cargo-mutants builds and runs all test binaries (including the
-      # e2e integration test) for the baseline, which needs both a real
-      # wasm bundle (the e2e asserts graph behaviour that depends on the
-      # actual WASM, e.g. layout auto-detection) and Playwright browsers.
-      # mutants.sh's `touch` only stubs the pkg files if they're absent,
-      # so this real build wins. Mirrors test.yml.
-      - name: Install wasm-pack
-        uses: taiki-e/install-action@wasm-pack
-
-      - name: Cache WASM build
-        uses: actions/cache@v6
-        id: wasm-cache
-        with:
-          path: panschema-viz/pkg/
-          key: wasm-${{ runner.os }}-${{ hashFiles('panschema-viz/src/**', 'panschema-viz/Cargo.toml') }}
-
-      - name: Build WASM package
-        if: steps.wasm-cache.outputs.cache-hit != 'true'
-        run: wasm-pack build panschema-viz --target web --features webgpu
-
-      - name: Setup Node.js (for Playwright)
-        uses: actions/setup-node@v7
-        with:
-          node-version: '20'
-
-      - name: Get Playwright version
-        id: playwright-version
-        shell: bash
-        run: echo "version=1.61.1" >> $GITHUB_OUTPUT
-
-      - name: Cache Playwright browsers and driver
-        uses: actions/cache@v6
-        id: playwright-cache
-        with:
-          path: |
-            ~/.cache/ms-playwright
-            ~/.cache/playwright-rust
-          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
-
-      - name: Install Playwright browsers
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: npx playwright@1.61.1 install --with-deps
-
-      - name: Install Playwright dependencies (cached)
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: npx playwright@1.61.1 install-deps
+      # `.cargo/mutants.toml` passes `--lib` to both the build and run
+      # phases, so the baseline and every mutant compile and run only
+      # the lib test target — no e2e binary, so no wasm bundle, Node,
+      # or Playwright setup here. mutants.sh stubs the pkg/ files
+      # html_writer.rs embeds via include_str!/include_bytes!, which
+      # satisfies a lib-only build (the wasm bytes are never executed).
 
       # Compute the right diff base for this trigger.
       # - pull_request: merge base against the PR target branch
