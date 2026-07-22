@@ -61,6 +61,12 @@ exclude_globs = [
     # `main -> Ok(())` mutant can't be killed; the real logic lives in
     # lib.rs and is mutation-covered there.
     "mdbook-panschema/src/main.rs",
+    # Same rationale for panschema's own CLI entry layer: main.rs is
+    # arg parsing + dispatch into the mutation-covered lib, and its
+    # behavior (exit codes, output) is exercised by the integration
+    # suite, which `--lib` mutant runs don't execute — so every main.rs
+    # mutant would trivially survive regardless of real coverage.
+    "panschema/src/main.rs",
     "panschema-viz/src/lib.rs",
     "panschema-viz/src/canvas2d.rs",
     "panschema-viz/src/webgpu.rs",

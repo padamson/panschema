@@ -79,6 +79,10 @@ echo "mutating changes in ${BASE}..HEAD ($(wc -l < "$DIFF") diff lines)"
 #   Askama's `{% include %}` directly, not these helper functions; the
 #   tests for them are gated to `cargo test` (not `--lib`), so cargo-mutants
 #   with `--lib` would always miss mutants here.
+# - `panschema/src/main.rs` and `mdbook-panschema/src/main.rs`: CLI
+#   entry layers (arg parsing + dispatch); their behavior is covered by
+#   the integration suite, which `--lib` mutant runs don't execute, so
+#   every mutant there would trivially survive.
 # - `panschema/src/gpu/**`: gated behind the optional `gpu` feature, which
 #   no CI job builds or tests (needs a real/software GPU adapter the
 #   runners don't provision). Left in scope, its mutants build with the
@@ -92,6 +96,7 @@ exec cargo mutants --in-diff "$DIFF" --jobs 4 \
   --exclude 'panschema/src/components.rs' \
   --exclude 'panschema/src/gpu/**' \
   --exclude 'mdbook-panschema/src/main.rs' \
+  --exclude 'panschema/src/main.rs' \
   --exclude 'panschema-viz/src/lib.rs' \
   --exclude 'panschema-viz/src/canvas2d.rs' \
   --exclude 'panschema-viz/src/webgpu.rs' \
