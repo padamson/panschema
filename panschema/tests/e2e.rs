@@ -2224,6 +2224,157 @@ fn e2e_groundings_toggle_hides_external_nodes() {
     });
 }
 
+/// Hovering an external grounding node shows the full IRI and the cached
+/// upstream definition, and the legend documents the muted external node.
+/// Self-contained: the upstream "cache" is seeded through the label-store
+/// API into a temp cache root the CLI is pointed at, and `--offline` keeps
+/// generate from fetching — no network.
+#[test]
+fn e2e_external_node_hover_shows_iri_and_definition_and_legend_documents_it() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        // Seed the label cache the way a prior online run would have.
+        let cache_root = std::env::temp_dir().join(format!(
+            "panschema_e2e_labelcache_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&cache_root);
+        {
+            use panschema::labels::{LabelStore, TermInfo};
+            let mut store =
+                LabelStore::open(cache_root.join("labels")).expect("open label store");
+            let mut terms = std::collections::BTreeMap::new();
+            terms.insert(
+                "https://www.commoncoreontologies.org/ont00000995".to_string(),
+                TermInfo {
+                    label: Some("Act of Service".to_string()),
+                    definitions: vec![
+                        "An act in which a service is provided.".to_string(),
+                    ],
+                },
+            );
+            store
+                .insert_source("https://www.commoncoreontologies.org/", terms)
+                .expect("seed label cache");
+        }
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "panschema_e2e_grounding_hover_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&output_dir);
+        let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+            .env("PANSCHEMA_CACHE_ROOT", &cache_root)
+            .args([
+                "generate",
+                "--input",
+                "tests/fixtures/external_grounding.yaml",
+                "--output",
+                output_dir.to_str().unwrap(),
+                "--offline",
+            ])
+            .status()
+            .expect("Failed to execute panschema");
+        assert!(status.success(), "panschema failed to generate docs");
+
+        let port = find_available_port();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("goto");
+
+        assert!(
+            wait_for_graph_viz_ready(&page).await,
+            "graph viz never became ready"
+        );
+
+        // Hover the external node with a real mousemove over the canvas so
+        // the DOM hover card fills, then read its text.
+        let hover_text = page
+            .evaluate_value(
+                r#"(async function(){
+                    var viz = window.__panschema_viz;
+                    if (!viz) return 'no-viz';
+                    var idx = -1, n = viz.node_count();
+                    for (var i = 0; i < n; i++) {
+                        if (viz.get_node_type(i) === 'External') { idx = i; break; }
+                    }
+                    if (idx < 0) return 'no-external';
+                    viz.fit_to_bounds(40);
+                    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+                    var pos = viz.node_canvas_pos(idx);
+                    var canvas = document.getElementById('graph-canvas');
+                    var rect = canvas.getBoundingClientRect();
+                    var dpr = window.devicePixelRatio || 1;
+                    var x = rect.left + pos[0] / dpr, y = rect.top + pos[1] / dpr;
+                    canvas.dispatchEvent(new MouseEvent('mousemove', {clientX: x, clientY: y, bubbles: true}));
+                    await new Promise(r => setTimeout(r, 250));
+                    var content = document.getElementById('graph-hover-content');
+                    return 'HOVER:' + (content ? content.innerText : 'no-content');
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        for expected in [
+            "Act of Service",
+            "https://www.commoncoreontologies.org/ont00000995",
+            "An act in which a service is provided.",
+        ] {
+            assert!(
+                hover_text.contains(expected),
+                "hover card should show {expected:?}; got: {hover_text}"
+            );
+        }
+
+        // The legend (open by default on a wide viewport) documents the
+        // external node: its muted grey swatch at 0.65 alpha over the
+        // #1a1a2e canvas blends to ≈(103,107,123) — a color no other
+        // legend element produces, so finding it proves the row painted.
+        let legend = page
+            .evaluate_value(
+                r#"(function(){
+                    var panel = document.getElementById('graph-legend');
+                    if (!panel) return 'no-panel';
+                    if (getComputedStyle(panel).display === 'none') {
+                        document.getElementById('graph-legend-toggle').click();
+                    }
+                    var lc = document.getElementById('graph-legend-canvas');
+                    var ctx = lc.getContext('2d');
+                    var d = ctx.getImageData(0, 0, lc.width, lc.height).data;
+                    var hits = 0;
+                    for (var i = 0; i < d.length; i += 4) {
+                        if (Math.abs(d[i] - 103) <= 8 && Math.abs(d[i+1] - 107) <= 8
+                            && Math.abs(d[i+2] - 123) <= 8) hits++;
+                    }
+                    return 'LEGEND:' + hits;
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        let hits: i64 = legend
+            .trim_matches('"')
+            .strip_prefix("LEGEND:")
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or_else(|| panic!("expected 'LEGEND:<count>'; got: {legend}"));
+        assert!(
+            hits > 0,
+            "the legend should paint the external grounding swatch; matching pixels={hits}"
+        );
+
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+        let _ = fs::remove_dir_all(cache_root);
+    });
+}
+
 /// A schema with OWL individuals renders a separate instance (A-box) graph
 /// beneath the Individuals cards. Asserts the exporter emitted the right
 /// A-box (2 individuals, 1 assertion edge), that it embedded into the page,

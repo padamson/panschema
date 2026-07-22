@@ -69,16 +69,16 @@ external category node in the rendered schema graph.
 
 ### Slice 2: External node hover + legend
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Should Have
 
 **Depends on:** Slice 1.
 
 **Acceptance Criteria:**
-- [ ] Hovering an external node shows its IRI and cached definition (from the store's `TermInfo`), parallel to the external-slot-range hover.
-- [ ] The graph legend documents the external-category node (and its edge), so the muted/dashed treatment is explained.
-- [ ] e2e verifies the hover content and the legend entry.
+- [x] Hovering an external node shows its IRI and cached definition (from the store's `TermInfo`), parallel to the external-slot-range hover.
+- [x] The graph legend documents the external-category node (and its edge), so the muted/dashed treatment is explained. (The edge is `subclass_of`, already in the legend's edge rows; the new node row documents the muted/dashed circle.)
+- [x] e2e verifies the hover content and the legend entry — self-contained via a label cache seeded through the store API into a temp `PANSCHEMA_CACHE_ROOT`, generated with `--offline`.
 
 ---
 
@@ -87,14 +87,14 @@ external category node in the rendered schema graph.
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | Slice 1: external nodes + edges (writer + viz) | Must Have | — | Complete |
-| Slice 2: hover + legend | Should Have | Slice 1 | Not Started |
+| Slice 2: hover + legend | Should Have | Slice 1 | Complete |
 
 ## Definition of Done
 
-- [ ] Slices 1–2 met; a `subclass_of`-grounded class shows a labelled, muted
+- [x] Slices 1–2 met; a `subclass_of`-grounded class shows a labelled, muted
   external category node and edge in the rendered graph, hover-documented.
-- [ ] `cargo nextest run` green; `cargo fmt --check`; `cargo clippy
+- [x] `cargo nextest run` green; `cargo fmt --check`; `cargo clippy
   --all-targets --all-features -- -D warnings`; `cargo doc`; the graph e2e
   paints the external node (browser-verified, not just unit-green).
-- [ ] README.md + CHANGELOG.md updated; [linkml-coverage.md](../linkml-coverage.md)
+- [x] README.md + CHANGELOG.md updated; [linkml-coverage.md](../linkml-coverage.md)
   flips `subclass_of` (external) from "graph ignores" to drawn.

@@ -822,19 +822,25 @@ impl GraphWriter {
         let node_id = format!("external:{id_key}");
 
         if external_seen.insert(node_id.clone()) {
-            // Cached upstream label keyed by the resolved IRI; CURIE fallback.
-            let label = uri
+            // Cached upstream term keyed by the resolved IRI: its
+            // `rdfs:label` becomes the node label (CURIE fallback) and its
+            // definitions join as the description the hover card surfaces.
+            let term = uri
                 .as_deref()
-                .and_then(|iri| labels.and_then(|store| store.lookup(iri)))
+                .and_then(|iri| labels.and_then(|store| store.lookup(iri)));
+            let label = term
                 .and_then(|info| info.label.clone())
                 .unwrap_or_else(|| grounding.to_string());
+            let description = term
+                .filter(|info| !info.definitions.is_empty())
+                .map(|info| info.definitions.join("\n\n"));
 
             graph.nodes.push(GraphNode {
                 id: node_id.clone(),
                 label,
                 node_type: NodeType::External,
                 color: NodeType::External.color(),
-                description: None,
+                description,
                 uri,
                 uri_unresolved,
                 is_abstract: false,
@@ -1304,6 +1310,66 @@ mod tests {
             .find(|n| n.node_type == NodeType::External)
             .expect("external node");
         assert_eq!(node.label, "Act of Service", "cached upstream label wins");
+    }
+
+    /// The external node's `description` carries the grounding's cached
+    /// upstream definition(s), so the hover card can show what the
+    /// category *is* — multiple cached definitions join as paragraphs,
+    /// and a grounding with nothing cached gets no description.
+    #[test]
+    fn external_node_description_carries_cached_definitions() {
+        use crate::labels::{LabelStore, TermInfo};
+        use std::collections::BTreeMap;
+
+        let mut schema = SchemaDefinition::new("grounded");
+        schema.prefixes.insert(
+            "cco".to_string(),
+            "https://www.commoncoreontologies.org/".to_string(),
+        );
+        let mut service = ClassDefinition::new("Service");
+        service.subclass_of = Some("cco:ont00000995".to_string());
+        schema.classes.insert("Service".to_string(), service);
+        let mut endpoint = ClassDefinition::new("Endpoint");
+        endpoint.subclass_of = Some("cco:ont00000123".to_string());
+        schema.classes.insert("Endpoint".to_string(), endpoint);
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = LabelStore::open(dir.path()).unwrap();
+        let mut labels = BTreeMap::new();
+        labels.insert(
+            "https://www.commoncoreontologies.org/ont00000995".to_string(),
+            TermInfo {
+                label: Some("Act of Service".to_string()),
+                definitions: vec![
+                    "An act in which a service is provided.".to_string(),
+                    "Example: catering.".to_string(),
+                ],
+            },
+        );
+        store
+            .insert_source("https://www.commoncoreontologies.org/", labels)
+            .unwrap();
+
+        let graph = GraphWriter::new().schema_to_graph_with_labels(&schema, Some(&store));
+        let described = graph
+            .nodes
+            .iter()
+            .find(|n| n.id.ends_with("ont00000995"))
+            .expect("grounding with cached definitions");
+        assert_eq!(
+            described.description.as_deref(),
+            Some("An act in which a service is provided.\n\nExample: catering."),
+            "cached definitions join as the node description"
+        );
+        let undescribed = graph
+            .nodes
+            .iter()
+            .find(|n| n.id.ends_with("ont00000123"))
+            .expect("grounding with nothing cached");
+        assert_eq!(
+            undescribed.description, None,
+            "no cached definitions → no description"
+        );
     }
 
     // ========== Slot Tests ==========

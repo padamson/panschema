@@ -155,6 +155,35 @@ fn node_shape(kind: Option<&KindMetadata>) -> NodeShape {
     }
 }
 
+/// The legend's node rows: `(shape, swatch fill, label, dashed outline)`.
+/// One row per node kind the graph can draw — the shapes and fills are
+/// the same constants the graph renders with, so the key can't drift.
+/// One source of truth for the legend and a unit test.
+fn node_legend_rows() -> [(NodeShape, [f32; 4], &'static str, bool); 6] {
+    use crate::graph_types::colors;
+    let abstract_class = [
+        colors::CLASS[0],
+        colors::CLASS[1],
+        colors::CLASS[2],
+        colors::ABSTRACT_ALPHA,
+    ];
+    [
+        (NodeShape::Circle, colors::CLASS, "Class", false),
+        (NodeShape::Pill, colors::SLOT, "Slot", false),
+        (NodeShape::Diamond, colors::ENUM, "Enum", false),
+        (NodeShape::Rectangle, colors::TYPE, "Type", false),
+        (NodeShape::Circle, abstract_class, "Abstract class", true),
+        // Muted dashed circle: an upstream ontology category a class
+        // grounds into via `subclass_of` — outside this schema.
+        (
+            NodeShape::Circle,
+            colors::EXTERNAL,
+            "External grounding",
+            true,
+        ),
+    ]
+}
+
 /// The legend's ring rows: `(ring color, device-px width, swatch shape,
 /// swatch fill, label)`. Each swatch is a *real* node the ring appears on
 /// — the amber rule rings sit on a green slot pill, the blue selection
@@ -780,7 +809,6 @@ impl Canvas2DRenderer {
     /// width is divided by `dpr` here to render at the same on-screen
     /// thickness as the graph, rather than `dpr`× thicker.
     pub fn render_legend(&self, dpr: f64) {
-        use crate::graph_types::colors;
         let lw = |w: f64| w / dpr;
         const TEXT: &str = "rgba(232, 232, 244, 0.95)";
         const HEADER: &str = "rgba(150, 150, 178, 0.95)";
@@ -808,27 +836,9 @@ impl Canvas2DRenderer {
         let _ = self.ctx.fill_text("Nodes", 12.0, y);
         y += row;
         self.ctx.set_font(BODY_FONT);
-        let abstract_class = [
-            colors::CLASS[0],
-            colors::CLASS[1],
-            colors::CLASS[2],
-            colors::ABSTRACT_ALPHA,
-        ];
-        let nodes = [
-            (NodeShape::Circle, rgba(colors::CLASS), "Class", false),
-            (NodeShape::Pill, rgba(colors::SLOT), "Slot", false),
-            (NodeShape::Diamond, rgba(colors::ENUM), "Enum", false),
-            (NodeShape::Rectangle, rgba(colors::TYPE), "Type", false),
-            (
-                NodeShape::Circle,
-                rgba(abstract_class),
-                "Abstract class",
-                true,
-            ),
-        ];
-        for (shape, fill, label, dashed) in &nodes {
+        for (shape, fill, label, dashed) in &node_legend_rows() {
             self.node_path(glyph_x, y, radius, *shape);
-            self.ctx.set_fill_style_str(fill);
+            self.ctx.set_fill_style_str(&rgba(*fill));
             self.ctx.fill();
             self.set_dash(*dashed);
             self.ctx.set_stroke_style_str(BORDER);
@@ -1326,6 +1336,37 @@ mod tests {
     // rings on a green slot pill, the blue selection ring on a blue class
     // circle — so the key never shows an impossible node like a blue pill.
     // Widths mirror what `render_nodes` strokes, so the key can't drift.
+    #[test]
+    fn node_legend_rows_cover_every_drawn_kind_with_graph_constants() {
+        use crate::graph_types::colors;
+        let rows = node_legend_rows();
+        let labels: Vec<&str> = rows.iter().map(|r| r.2).collect();
+        assert_eq!(
+            labels,
+            [
+                "Class",
+                "Slot",
+                "Enum",
+                "Type",
+                "Abstract class",
+                "External grounding"
+            ],
+            "one row per node kind the graph draws"
+        );
+
+        // The external-grounding row is the muted grey circle with the
+        // dashed outline — the same constants the graph renders external
+        // nodes with, so the key can't drift from the graph.
+        let external = rows.last().unwrap();
+        assert_eq!(external.0, NodeShape::Circle, "external swatch is a circle");
+        assert_eq!(
+            external.1,
+            colors::EXTERNAL,
+            "external swatch fills the muted grounding grey"
+        );
+        assert!(external.3, "external swatch outline is dashed");
+    }
+
     #[test]
     fn ring_legend_rows_use_real_node_swatches_and_shared_widths() {
         use crate::graph_types::colors;
