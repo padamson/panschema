@@ -2,7 +2,7 @@
 
 **Feature:** A `validate` subcommand that checks a LinkML **instance-data**
 file (an A-box) against its schema's constraints and reports every violation,
-exiting non-zero when the data doesn't conform. `panschema validate --input
+exiting non-zero when the data doesn't conform. `panschema validate --schema
 schema.yaml --data data.yaml` walks each record against its class's effective
 slots — required/cardinality, range type, enum membership, `pattern`, numeric
 bounds — plus cross-record reference integrity.
@@ -88,12 +88,12 @@ the *rendering* path; `validate` is the dedicated conformance gate.)
 
 **Priority:** Must Have
 
-**User Value:** `panschema validate --input schema.yaml --data data.yaml`
+**User Value:** `panschema validate --schema schema.yaml --data data.yaml`
 reports missing required slots and dangling references per record and exits
 non-zero when the data doesn't conform, zero when it does.
 
 **Acceptance Criteria:**
-- [x] A `validate` subcommand takes `--input <schema>` and `--data <instance-file>`, reads both, and walks each record in the `tree_root` container against its class's effective slots.
+- [x] A `validate` subcommand takes `--schema <schema>` and `--data <instance-file>`, reads both, and walks each record in the `tree_root` container against its class's effective slots.
 - [x] A required slot absent from a record is reported as a violation naming the record, its class, and the missing slot; a reference whose target names no record in the data is reported naming the record, the property, and the missing id (reusing `diagnostics::dangling_instance_references`).
 - [x] Every violation is printed; the command exits non-zero if there is at least one and zero when the data fully conforms. A data file that isn't a mapping yields a single structural violation rather than panicking.
 - [x] Tests: a conforming data file validates clean (exit zero); a missing-required-slot and a dangling-reference case each fail (unit tests + a CLI exit-code integration test). An identifier supplied as an identifier-keyed collection's map key satisfies its required identifier slot.

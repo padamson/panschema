@@ -741,7 +741,7 @@ fn validate_command_exit_code_reflects_conformance() {
     let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "validate",
-            "--input",
+            "--schema",
             "tests/fixtures/wine_catalog.yaml",
             "--data",
             "tests/fixtures/wine_instances.yaml",
@@ -762,7 +762,7 @@ fn validate_command_exit_code_reflects_conformance() {
     let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "validate",
-            "--input",
+            "--schema",
             "tests/fixtures/wine_catalog.yaml",
             "--data",
             "tests/fixtures/wine_instances_dangling.yaml",

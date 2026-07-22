@@ -208,7 +208,7 @@ enum Commands {
     Validate {
         /// Schema file (.yaml, .yml, .ttl) the data must conform to.
         #[arg(short, long)]
-        input: PathBuf,
+        schema: PathBuf,
         /// LinkML instance-data file (a `tree_root` container A-box).
         #[arg(short, long)]
         data: PathBuf,
@@ -1193,12 +1193,12 @@ fn fetch_from_manifest() -> anyhow::Result<()> {
 /// the lockfile. Errors with a clear diff on mismatch.
 /// Validate a LinkML instance-data file against its schema, printing every
 /// violation and exiting non-zero when the data does not conform.
-fn validate_data(input: &Path, data_path: &Path) -> anyhow::Result<()> {
+fn validate_data(schema_path: &Path, data_path: &Path) -> anyhow::Result<()> {
     let registry = FormatRegistry::with_defaults();
     // Load through the shared path so `imports:` merge and `is_a`/mixin slots
     // resolve, matching what every other command reads.
     let no_deps = std::collections::BTreeMap::new();
-    let schema = panschema::import_resolve::load_schema_with_deps(input, &registry, &no_deps)
+    let schema = panschema::import_resolve::load_schema_with_deps(schema_path, &registry, &no_deps)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     let content = std::fs::read_to_string(data_path)
@@ -1211,7 +1211,11 @@ fn validate_data(input: &Path, data_path: &Path) -> anyhow::Result<()> {
         eprintln!("{v}");
     }
     if violations.is_empty() {
-        println!("{} conforms to {}", data_path.display(), input.display());
+        println!(
+            "{} conforms to {}",
+            data_path.display(),
+            schema_path.display()
+        );
         Ok(())
     } else {
         anyhow::bail!(
@@ -1439,7 +1443,7 @@ async fn main() -> anyhow::Result<()> {
         }) => release_schema(level, version.as_deref(), git, push, dry_run)?,
         Some(Commands::Fetch) => fetch_from_manifest()?,
         Some(Commands::Verify) => verify_from_manifest()?,
-        Some(Commands::Validate { input, data }) => validate_data(&input, &data)?,
+        Some(Commands::Validate { schema, data }) => validate_data(&schema, &data)?,
         Some(Commands::Publish {
             manifest,
             output_dir,
