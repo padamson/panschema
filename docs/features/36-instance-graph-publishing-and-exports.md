@@ -28,7 +28,7 @@ then navigation, then publish carriage.
 
 ### Slice 1: A-box in the RDF family
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Must Have
 
@@ -37,20 +37,21 @@ RDF formats) emits a self-contained knowledge graph — schema plus
 individuals — that a triple store loads and SPARQL queries directly.
 
 **Acceptance Criteria:**
-- [ ] With an instance-data file supplied, every RDF-family output
+- [x] With an instance-data file supplied, every RDF-family output
   (`ttl`, `jsonld`, `rdfxml`, `ntriples`) contains one `owl:NamedIndividual`
   per instance: `rdf:type` its class URI, `rdfs:label` from its display
   name, data-property assertions with XSD datatypes derived from the slot's
   range, and object-property assertions for id-resolved references.
-- [ ] Individual IRIs match the HTML/graph exports' identity for the same
-  data (shared minting), so a node in the docs and a subject in the TTL are
-  the same IRI.
-- [ ] The emitted graph is loadable and queryable in a real triple store:
+- [x] Individual IRIs match the HTML/graph exports' identity for the same
+  data (shared minting: `instance_iri_string` is the one derivation; the
+  graph-JSON export adopts it in Slice 2), so a node in the docs and a
+  subject in the TTL are the same IRI.
+- [x] The emitted graph is loadable and queryable in a real triple store:
   a SPARQL query over a loaded fixture returns an individual by type and
   follows an object-property edge to a referenced individual (oxigraph
   oracle, matching the existing RDF verification tier).
-- [ ] Without `--instances`, output is byte-identical to today (T-box only).
-- [ ] `--strict` fails the build on a dangling instance reference; the
+- [x] Without `--instances`, output is byte-identical to today (T-box only).
+- [x] `--strict` fails the build on a dangling instance reference; the
   default warns (the feature-33 diagnostic path).
 
 ### Slice 2: Instance graph JSON export
@@ -166,7 +167,7 @@ exported instance graph from a manifest-driven build (ADR-009 decision 6).
 
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
-| Slice 1: A-box in RDF family | Must Have | — | Not Started |
+| Slice 1: A-box in RDF family | Must Have | — | Complete |
 | Slice 2: instance graph JSON | Must Have | Slice 1 (shared IRI minting) | Not Started |
 | Slice 3: nav + unified cards | Must Have | — | Not Started |
 | Slice 4: publish carries the exemplar | Must Have | Slice 3 | Not Started |

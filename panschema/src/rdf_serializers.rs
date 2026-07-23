@@ -639,6 +639,155 @@ fn make_iri(s: &str) -> IoResult<Iri<String>> {
     Iri::new(s.to_string()).map_err(|e| IoError::Parse(format!("Invalid IRI '{}': {}", s, e)))
 }
 
+/// The OWL graph plus, when supplied, the A-box: every instance in `instances`
+/// emitted as an `owl:NamedIndividual`. With `None` (or an empty set) the
+/// graph is exactly [`build_rdf_graph`]'s.
+pub fn build_rdf_graph_with_instances(
+    schema: &SchemaDefinition,
+    instances: Option<&crate::instances::InstanceSet>,
+) -> IoResult<FastGraph> {
+    let mut graph = build_rdf_graph(schema)?;
+    if let Some(set) = instances {
+        emit_instances(&mut graph, schema, set)?;
+    }
+    Ok(graph)
+}
+
+/// Absolute IRI for an instance — THE shared minting, so the RDF A-box, the
+/// graph exports, and the docs agree on which individual is which. An
+/// instance that already carries a resolved IRI (the OWL-sourced path) keeps
+/// it; otherwise the id mints against the schema's prefixes (default prefix
+/// for a bare id, any declared prefix for a CURIE id), falling back to
+/// `{ontology}#{id}` when no prefix resolves.
+pub fn instance_iri_string(schema: &SchemaDefinition, inst: &crate::instances::Instance) -> String {
+    if let Some(iri) = &inst.iri
+        && !inst.uri_unresolved
+    {
+        return iri.clone();
+    }
+    crate::linkml_resolve::expand_curie(schema, &inst.id)
+        .unwrap_or_else(|| format!("{}#{}", ontology_iri_string(schema), inst.id))
+}
+
+/// Emit each instance as an `owl:NamedIndividual`: `rdf:type` per declared
+/// class, `rdfs:label` from the display name, one data-property triple per
+/// scalar slot value (datatype following the slot's declared range, so an
+/// integer under a float-ranged slot lands as `xsd:double`), and one
+/// object-property triple per id reference, resolved to the referenced
+/// instance's IRI. A reference whose target id names no instance still emits
+/// against the minted target IRI — RDF is open-world, and the dangling
+/// diagnostic (not the writer) owns reporting the gap.
+fn emit_instances(
+    graph: &mut FastGraph,
+    schema: &SchemaDefinition,
+    set: &crate::instances::InstanceSet,
+) -> IoResult<()> {
+    use crate::instances::{InstanceValue, ScalarValue};
+
+    let owl = Namespace::new_unchecked(OWL_NS);
+    let owl_named_individual = owl
+        .get("NamedIndividual")
+        .map_err(|e| IoError::Parse(e.to_string()))?;
+
+    // Slot IRIs and ranges resolve through each class's effective slots
+    // (inherited + inline attributes), cached per class name.
+    let mut slots_by_class: std::collections::BTreeMap<
+        String,
+        std::collections::BTreeMap<String, crate::linkml::SlotDefinition>,
+    > = std::collections::BTreeMap::new();
+    let mut effective_slot = |class_names: &[String], slot_name: &str| {
+        for class_name in class_names {
+            if let Some(class_def) = schema.classes.get(class_name) {
+                let slots = slots_by_class.entry(class_name.clone()).or_insert_with(|| {
+                    crate::linkml_resolve::resolve_effective_slots(class_def, schema)
+                });
+                if let Some(def) = slots.get(slot_name) {
+                    return Some(def.clone());
+                }
+            }
+        }
+        None
+    };
+
+    let iri_by_id: std::collections::BTreeMap<&str, String> = set
+        .instances
+        .iter()
+        .map(|i| (i.id.as_str(), instance_iri_string(schema, i)))
+        .collect();
+
+    for inst in &set.instances {
+        let subject = make_iri(&instance_iri_string(schema, inst))?;
+
+        graph
+            .insert(&subject, rdf::type_, owl_named_individual)
+            .map_err(|e| IoError::Write(e.to_string()))?;
+        for class_name in &inst.types {
+            if let Some(class_def) = schema.classes.get(class_name) {
+                let class_iri = make_iri(&class_iri_string(class_name, class_def, schema))?;
+                graph
+                    .insert(&subject, rdf::type_, &class_iri)
+                    .map_err(|e| IoError::Write(e.to_string()))?;
+            }
+        }
+        if !inst.label.is_empty() {
+            graph
+                .insert(&subject, rdfs::label, inst.label.as_str())
+                .map_err(|e| IoError::Write(e.to_string()))?;
+        }
+
+        for sv in &inst.slot_values {
+            let slot_def = effective_slot(&inst.types, &sv.slot);
+            let predicate = match &slot_def {
+                Some(def) => make_iri(&slot_iri_string(&sv.slot, def, schema))?,
+                None => make_iri(&format!("{}#{}", ontology_iri_string(schema), sv.slot))?,
+            };
+            let range = slot_def.as_ref().and_then(|d| d.range.as_deref());
+            let float_range = matches!(range, Some("float") | Some("double") | Some("decimal"));
+            for value in &sv.values {
+                let InstanceValue::Scalar(scalar) = value else {
+                    // References emit below from `inst.references`; a
+                    // range-kind mismatch has no faithful literal form.
+                    continue;
+                };
+                match scalar {
+                    ScalarValue::String(s) => graph.insert(&subject, &predicate, s.as_str()),
+                    ScalarValue::Boolean(b) => graph.insert(&subject, &predicate, *b),
+                    ScalarValue::Float(f) => graph.insert(&subject, &predicate, *f),
+                    ScalarValue::Integer(i) if float_range => {
+                        graph.insert(&subject, &predicate, *i as f64)
+                    }
+                    ScalarValue::Integer(i) => graph.insert(&subject, &predicate, *i as isize),
+                }
+                .map_err(|e| IoError::Write(e.to_string()))?;
+            }
+        }
+
+        for reference in &inst.references {
+            let predicate = match effective_slot(&inst.types, &reference.property) {
+                Some(def) => make_iri(&slot_iri_string(&reference.property, &def, schema))?,
+                None => make_iri(&format!(
+                    "{}#{}",
+                    ontology_iri_string(schema),
+                    reference.property
+                ))?,
+            };
+            let target_iri_str = iri_by_id
+                .get(reference.target.as_str())
+                .cloned()
+                .unwrap_or_else(|| {
+                    crate::linkml_resolve::expand_curie(schema, &reference.target).unwrap_or_else(
+                        || format!("{}#{}", ontology_iri_string(schema), reference.target),
+                    )
+                });
+            let target = make_iri(&target_iri_str)?;
+            graph
+                .insert(&subject, &predicate, &target)
+                .map_err(|e| IoError::Write(e.to_string()))?;
+        }
+    }
+    Ok(())
+}
+
 /// Build a SHACL shapes graph from the LinkML IR: one `sh:NodeShape` per
 /// class (`sh:targetClass` its IRI) with a `sh:property` shape per effective
 /// slot carrying that slot's value constraints. A separate artifact from the
@@ -1047,23 +1196,29 @@ fn emit_property_shape(
 // ============================================================================
 
 /// Writer for JSON-LD format
-pub struct JsonLdWriter;
+#[derive(Default)]
+pub struct JsonLdWriter {
+    /// Optional A-box: when set, each instance emits as an
+    /// `owl:NamedIndividual` alongside the T-box.
+    instances: Option<crate::instances::InstanceSet>,
+}
 
 impl JsonLdWriter {
     pub fn new() -> Self {
-        Self
+        Self::default()
     }
-}
 
-impl Default for JsonLdWriter {
-    fn default() -> Self {
-        Self::new()
+    /// Attach an A-box; the output becomes a self-contained knowledge
+    /// graph (schema + individuals).
+    pub fn with_instances(mut self, set: crate::instances::InstanceSet) -> Self {
+        self.instances = Some(set);
+        self
     }
 }
 
 impl Writer for JsonLdWriter {
     fn write(&self, schema: &SchemaDefinition, output: &Path) -> IoResult<()> {
-        let graph = build_rdf_graph(schema)?;
+        let graph = build_rdf_graph_with_instances(schema, self.instances.as_ref())?;
 
         use sophia::jsonld::serializer::JsonLdSerializer;
 
@@ -1092,23 +1247,29 @@ impl Writer for JsonLdWriter {
 // ============================================================================
 
 /// Writer for RDF/XML format
-pub struct RdfXmlWriter;
+#[derive(Default)]
+pub struct RdfXmlWriter {
+    /// Optional A-box: when set, each instance emits as an
+    /// `owl:NamedIndividual` alongside the T-box.
+    instances: Option<crate::instances::InstanceSet>,
+}
 
 impl RdfXmlWriter {
     pub fn new() -> Self {
-        Self
+        Self::default()
     }
-}
 
-impl Default for RdfXmlWriter {
-    fn default() -> Self {
-        Self::new()
+    /// Attach an A-box; the output becomes a self-contained knowledge
+    /// graph (schema + individuals).
+    pub fn with_instances(mut self, set: crate::instances::InstanceSet) -> Self {
+        self.instances = Some(set);
+        self
     }
 }
 
 impl Writer for RdfXmlWriter {
     fn write(&self, schema: &SchemaDefinition, output: &Path) -> IoResult<()> {
-        let graph = build_rdf_graph(schema)?;
+        let graph = build_rdf_graph_with_instances(schema, self.instances.as_ref())?;
 
         use sophia::xml::serializer::RdfXmlSerializer;
 
@@ -1135,23 +1296,29 @@ impl Writer for RdfXmlWriter {
 // ============================================================================
 
 /// Writer for N-Triples format
-pub struct NTriplesWriter;
+#[derive(Default)]
+pub struct NTriplesWriter {
+    /// Optional A-box: when set, each instance emits as an
+    /// `owl:NamedIndividual` alongside the T-box.
+    instances: Option<crate::instances::InstanceSet>,
+}
 
 impl NTriplesWriter {
     pub fn new() -> Self {
-        Self
+        Self::default()
     }
-}
 
-impl Default for NTriplesWriter {
-    fn default() -> Self {
-        Self::new()
+    /// Attach an A-box; the output becomes a self-contained knowledge
+    /// graph (schema + individuals).
+    pub fn with_instances(mut self, set: crate::instances::InstanceSet) -> Self {
+        self.instances = Some(set);
+        self
     }
 }
 
 impl Writer for NTriplesWriter {
     fn write(&self, schema: &SchemaDefinition, output: &Path) -> IoResult<()> {
-        let graph = build_rdf_graph(schema)?;
+        let graph = build_rdf_graph_with_instances(schema, self.instances.as_ref())?;
 
         use sophia::turtle::serializer::nt::NTriplesSerializer;
 
@@ -1179,6 +1346,142 @@ mod tests {
     use crate::linkml::{ClassDefinition, SlotDefinition};
     use std::fs;
     use tempfile::TempDir;
+
+    // ========== A-box emission ==========
+
+    /// Build the wine-shaped schema + one grounded instance pair inline:
+    /// a container, a Bottle with an id, a float-ranged score, and a
+    /// reference to a Rack.
+    fn abox_fixture() -> (SchemaDefinition, crate::instances::InstanceSet) {
+        let mut schema = SchemaDefinition::new("cellar");
+        schema.id = Some("https://example.org/cellar".to_string());
+        schema.default_prefix = Some("cellar".to_string());
+        schema.prefixes.insert(
+            "cellar".to_string(),
+            "https://example.org/cellar/".to_string(),
+        );
+        let mut container = ClassDefinition::new("Cellar");
+        container.tree_root = true;
+        let mut bottles = SlotDefinition::new("bottles");
+        bottles.range = Some("Bottle".to_string());
+        bottles.multivalued = true;
+        container.attributes.insert("bottles".to_string(), bottles);
+        let mut racks = SlotDefinition::new("racks");
+        racks.range = Some("Rack".to_string());
+        racks.multivalued = true;
+        container.attributes.insert("racks".to_string(), racks);
+        schema.classes.insert("Cellar".to_string(), container);
+
+        let mut bottle = ClassDefinition::new("Bottle");
+        let mut id = SlotDefinition::new("id");
+        id.identifier = true;
+        bottle.attributes.insert("id".to_string(), id.clone());
+        let mut score = SlotDefinition::new("score");
+        score.range = Some("float".to_string());
+        bottle.attributes.insert("score".to_string(), score);
+        let mut stored_in = SlotDefinition::new("stored_in");
+        stored_in.range = Some("Rack".to_string());
+        bottle.attributes.insert("stored_in".to_string(), stored_in);
+        schema.classes.insert("Bottle".to_string(), bottle);
+
+        let mut rack = ClassDefinition::new("Rack");
+        rack.attributes.insert("id".to_string(), id);
+        schema.classes.insert("Rack".to_string(), rack);
+
+        let data: serde_yaml::Value = serde_yaml::from_str(
+            "bottles:\n  - id: b1\n    score: 4\n    stored_in: r1\nracks:\n  - id: r1\n",
+        )
+        .unwrap();
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        (schema, set)
+    }
+
+    #[test]
+    fn instance_iri_uses_a_resolved_iri_but_never_an_unresolved_one() {
+        let (schema, _) = abox_fixture();
+        let mut inst = crate::instances::Instance {
+            id: "b1".to_string(),
+            iri: Some("https://upstream.example/b1".to_string()),
+            uri_unresolved: false,
+            label: "b1".to_string(),
+            description: None,
+            types: vec![],
+            literals: vec![],
+            references: vec![],
+            slot_values: vec![],
+        };
+        assert_eq!(
+            instance_iri_string(&schema, &inst),
+            "https://upstream.example/b1",
+            "a resolved carried IRI wins over minting"
+        );
+        // An unresolved IRI (a curie whose prefix never expanded) must NOT
+        // be used verbatim — the id mints instead.
+        inst.uri_unresolved = true;
+        assert_eq!(
+            instance_iri_string(&schema, &inst),
+            "https://example.org/cellar/b1",
+            "an unresolved IRI falls back to minting from the id"
+        );
+    }
+
+    #[test]
+    fn integer_value_under_a_float_range_emits_xsd_double() {
+        let (schema, set) = abox_fixture();
+        let graph = build_rdf_graph_with_instances(&schema, Some(&set)).expect("graph");
+        // The authored `score: 4` parses as an integer, but the slot's
+        // declared range is float — the literal must carry xsd:double, not
+        // xsd:integer, or SPARQL numeric joins against other doubles fail.
+        use sophia::api::graph::Graph;
+        use sophia::api::term::Term;
+        use sophia::api::triple::Triple;
+        let subject = make_iri("https://example.org/cellar/b1").unwrap();
+        let predicate = make_iri("https://example.org/cellar#score").unwrap();
+        let mut found_double = false;
+        for t in graph.triples_matching([subject], [predicate], sophia::api::term::matcher::Any) {
+            let t = t.unwrap();
+            let dt = t.o().datatype().map(|d| d.to_string());
+            assert_eq!(
+                dt.as_deref(),
+                Some("http://www.w3.org/2001/XMLSchema#double"),
+                "a float-range slot's integer value must emit as xsd:double"
+            );
+            found_double = true;
+        }
+        assert!(found_double, "the score literal must be present");
+    }
+
+    #[test]
+    fn each_rdf_writer_with_instances_carries_the_abox() {
+        // The three non-Turtle writers must route the attached A-box into
+        // their output (Turtle's is covered by the oxigraph oracle).
+        let (schema, set) = abox_fixture();
+        let temp_dir = TempDir::new().expect("temp dir");
+        let writers: [(Box<dyn Writer>, &str); 3] = [
+            (
+                Box::new(JsonLdWriter::new().with_instances(set.clone())),
+                "out.jsonld",
+            ),
+            (
+                Box::new(RdfXmlWriter::new().with_instances(set.clone())),
+                "out.rdf",
+            ),
+            (
+                Box::new(NTriplesWriter::new().with_instances(set.clone())),
+                "out.nt",
+            ),
+        ];
+        for (writer, name) in writers {
+            let path = temp_dir.path().join(name);
+            writer.write(&schema, &path).expect("write");
+            let content = fs::read_to_string(&path).expect("read");
+            assert!(
+                content.contains("https://example.org/cellar/b1"),
+                "{name} must carry the attached A-box's individual IRI; got:\n{}",
+                &content[..content.len().min(400)]
+            );
+        }
+    }
 
     fn create_test_schema() -> SchemaDefinition {
         let mut schema = SchemaDefinition::new("test");

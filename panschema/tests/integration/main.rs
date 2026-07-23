@@ -686,13 +686,35 @@ fn generate_instances_renders_linkml_data_as_the_instance_graph() {
 }
 
 #[test]
-fn instances_flag_warns_only_for_non_html_formats() {
+fn instances_flag_warns_only_for_formats_that_ignore_it() {
     let dir = std::env::temp_dir().join("panschema_instances_warn_test");
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("mkdir");
 
-    // With --instances on a non-HTML format, the flag is ignored — warn so
-    // the omission isn't silent.
+    // With --instances on a format that consumes neither the graph nor the
+    // A-box (e.g. rust), the flag is ignored — warn so the omission isn't
+    // silent.
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--schema",
+            "tests/fixtures/wine_catalog.yaml",
+            "--instances",
+            "tests/fixtures/wine_instances.yaml",
+            "--format",
+            "rust",
+            "--output",
+            dir.join("with.rs").to_str().unwrap(),
+        ])
+        .output()
+        .expect("run panschema");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--instances only affects HTML and RDF outputs"),
+        "a format that ignores --instances should warn; got: {stderr}"
+    );
+
+    // An RDF format consumes --instances (the A-box emits), so no warning.
     let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "generate",
@@ -709,11 +731,11 @@ fn instances_flag_warns_only_for_non_html_formats() {
         .expect("run panschema");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("--instances only affects HTML output"),
-        "a non-HTML format with --instances should warn; got: {stderr}"
+        !stderr.contains("only affects"),
+        "an RDF format with --instances should not warn; got: {stderr}"
     );
 
-    // The same non-HTML format without --instances does not warn.
+    // The same format without --instances does not warn either.
     let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "generate",
@@ -878,6 +900,82 @@ fn viz_mode_flag_is_recognized() {
 }
 
 // ========== RDF Format Integration Tests ==========
+
+#[test]
+fn rdf_family_with_instances_emits_the_abox() {
+    // Every RDF-family format accepts --instances and carries the A-box:
+    // the minted individual IRI appears in each serialization, so a triple
+    // store loading any of them sees the same knowledge graph.
+    for format in ["ttl", "jsonld", "rdfxml", "ntriples"] {
+        let out_file = std::env::temp_dir().join(format!(
+            "panschema_abox_{}_{}.out",
+            std::process::id(),
+            format
+        ));
+        let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+            .args([
+                "generate",
+                "--schema",
+                "tests/fixtures/wine_catalog.yaml",
+                "--instances",
+                "tests/fixtures/wine_instances.yaml",
+                "--format",
+                format,
+                "--output",
+                out_file.to_str().unwrap(),
+            ])
+            .output()
+            .expect("run panschema");
+        assert!(
+            output.status.success(),
+            "generate --format {format} with instances should succeed; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let content = fs::read_to_string(&out_file).expect("read output");
+        // Pretty TTL compacts the IRI to its CURIE form via the prefix map;
+        // the other serializations carry it absolute.
+        assert!(
+            content.contains("https://example.org/wine/chateauMorgon")
+                || content.contains("wine:chateauMorgon"),
+            "{format} output should carry the minted individual IRI; got:\n{}",
+            &content[..content.len().min(800)]
+        );
+        let _ = fs::remove_file(&out_file);
+    }
+}
+
+#[test]
+fn rdf_with_dangling_instance_reference_fails_under_strict() {
+    let out_file = std::env::temp_dir().join(format!(
+        "panschema_abox_dangling_{}.ttl",
+        std::process::id()
+    ));
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--schema",
+            "tests/fixtures/wine_catalog.yaml",
+            "--instances",
+            "tests/fixtures/wine_instances_dangling.yaml",
+            "--format",
+            "ttl",
+            "--strict",
+            "--output",
+            out_file.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run panschema");
+    assert!(
+        !output.status.success(),
+        "a dangling instance reference must fail the build under --strict"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("dangling instance reference"),
+        "stderr should name the dangling reference; got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let _ = fs::remove_file(&out_file);
+}
 
 #[test]
 fn generates_jsonld_via_cli() {

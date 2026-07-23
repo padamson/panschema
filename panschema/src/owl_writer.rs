@@ -12,28 +12,34 @@ use sophia::turtle::serializer::turtle::{TurtleConfig, TurtleSerializer};
 use crate::io::{IoError, IoResult, Writer};
 use crate::linkml::SchemaDefinition;
 use crate::rdf_serializers::{
-    OWL_NS, RDF_NS, RDFS_NS, XSD_NS, build_rdf_graph, build_turtle_prefix_map,
+    OWL_NS, RDF_NS, RDFS_NS, XSD_NS, build_rdf_graph_with_instances, build_turtle_prefix_map,
 };
 
 /// Writer for OWL ontologies in Turtle (.ttl) format
-pub struct OwlWriter;
+#[derive(Default)]
+pub struct OwlWriter {
+    /// Optional A-box: when set, each instance emits as an
+    /// `owl:NamedIndividual` alongside the T-box.
+    instances: Option<crate::instances::InstanceSet>,
+}
 
 impl OwlWriter {
     /// Create a new OWL writer
     pub fn new() -> Self {
-        Self
+        Self::default()
     }
-}
 
-impl Default for OwlWriter {
-    fn default() -> Self {
-        Self::new()
+    /// Attach an A-box; the output becomes a self-contained knowledge
+    /// graph (schema + individuals).
+    pub fn with_instances(mut self, set: crate::instances::InstanceSet) -> Self {
+        self.instances = Some(set);
+        self
     }
 }
 
 impl Writer for OwlWriter {
     fn write(&self, schema: &SchemaDefinition, output: &Path) -> IoResult<()> {
-        let graph = build_rdf_graph(schema)?;
+        let graph = build_rdf_graph_with_instances(schema, self.instances.as_ref())?;
 
         crate::io::ensure_output_parent(output)?;
         let file = File::create(output).map_err(IoError::Io)?;
@@ -98,7 +104,7 @@ mod tests {
 
     #[test]
     fn owl_writer_has_default() {
-        let writer = OwlWriter;
+        let writer = OwlWriter::default();
         assert_eq!(writer.format_id(), "ttl");
     }
 
@@ -863,6 +869,156 @@ mod tests {
                 }"
             ),
             "an inline attribute must be declared as a datatype property with its domain and range"
+        );
+    }
+
+    // ========== A-box emission (feature 36 slice 1) ==========
+
+    /// Read the checked-in wine catalog schema + instance data — the real
+    /// consumer shape (a `tree_root` container, id-keyed records, a
+    /// cross-class reference) — and render TTL with the A-box attached.
+    fn wine_store() -> oxigraph::store::Store {
+        use crate::yaml_reader::YamlReader;
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let schema = YamlReader::new()
+            .read(&root.join("wine_catalog.yaml"))
+            .expect("read wine schema");
+        let data: serde_yaml::Value = serde_yaml::from_str(
+            &fs::read_to_string(root.join("wine_instances.yaml")).expect("read instances"),
+        )
+        .expect("parse instances");
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            !set.instances.is_empty(),
+            "fixture data must load instances"
+        );
+
+        let temp_dir = TempDir::new().expect("temp dir");
+        let output_path = temp_dir.path().join("output.ttl");
+        OwlWriter::new()
+            .with_instances(set)
+            .write(&schema, &output_path)
+            .expect("write ttl with instances");
+        let ttl = fs::read_to_string(&output_path).expect("read ttl");
+
+        let store = oxigraph::store::Store::new().expect("store");
+        store
+            .load_from_slice(oxigraph::io::RdfFormat::Turtle, &ttl)
+            .unwrap_or_else(|e| panic!("oxigraph rejected generated TTL: {e}\n\nTTL:\n{ttl}"));
+        store
+    }
+
+    #[test]
+    fn instances_emit_typed_labelled_named_individuals() {
+        let store = wine_store();
+        // The instance id minted against the schema's default prefix, typed
+        // as both owl:NamedIndividual and its class IRI, with its display
+        // name as rdfs:label.
+        assert!(
+            ask(
+                &store,
+                "PREFIX owl: <http://www.w3.org/2002/07/owl#>\n\
+                 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n\
+                 ASK { <https://example.org/wine/chateauMorgon> a owl:NamedIndividual ,\n\
+                       <https://example.org/wine#Wine> ;\n\
+                       rdfs:label \"Château Morgon\" }",
+            ),
+            "the wine individual must be typed and labelled"
+        );
+    }
+
+    #[test]
+    fn instances_emit_data_and_object_properties() {
+        let store = wine_store();
+        assert!(
+            ask(
+                &store,
+                "ASK { <https://example.org/wine/chateauMorgon>\n\
+                       <https://example.org/wine#color> \"red\" }",
+            ),
+            "a scalar slot value must emit as a data-property assertion"
+        );
+        // An id reference resolves to the referenced individual's IRI — the
+        // SPARQL join a retrieval loop actually performs.
+        assert!(
+            ask(
+                &store,
+                "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n\
+                 ASK { <https://example.org/wine/chateauMorgon>\n\
+                       <https://example.org/wine#produced_by> ?w .\n\
+                       ?w rdfs:label \"Morgon Estate\" }",
+            ),
+            "an id reference must emit as an object property to the referenced individual"
+        );
+    }
+
+    #[test]
+    fn integer_range_slot_values_carry_xsd_integer() {
+        let mut schema = SchemaDefinition::new("cellar");
+        schema.id = Some("https://example.org/cellar".to_string());
+        schema.default_prefix = Some("cellar".to_string());
+        schema.prefixes.insert(
+            "cellar".to_string(),
+            "https://example.org/cellar/".to_string(),
+        );
+        let mut container = ClassDefinition::new("Cellar");
+        container.tree_root = true;
+        let mut racks = SlotDefinition::new("bottles");
+        racks.range = Some("Bottle".to_string());
+        racks.multivalued = true;
+        container.attributes.insert("bottles".to_string(), racks);
+        schema.classes.insert("Cellar".to_string(), container);
+        let mut bottle = ClassDefinition::new("Bottle");
+        let mut id = SlotDefinition::new("id");
+        id.identifier = true;
+        bottle.attributes.insert("id".to_string(), id);
+        let mut rating = SlotDefinition::new("rating");
+        rating.range = Some("integer".to_string());
+        bottle.attributes.insert("rating".to_string(), rating);
+        schema.classes.insert("Bottle".to_string(), bottle);
+
+        let data: serde_yaml::Value =
+            serde_yaml::from_str("bottles:\n  - id: b1\n    rating: 4\n").unwrap();
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+
+        let temp_dir = TempDir::new().expect("temp dir");
+        let output_path = temp_dir.path().join("output.ttl");
+        OwlWriter::new()
+            .with_instances(set)
+            .write(&schema, &output_path)
+            .expect("write");
+        let ttl = fs::read_to_string(&output_path).expect("read");
+        let store = oxigraph::store::Store::new().unwrap();
+        store
+            .load_from_slice(oxigraph::io::RdfFormat::Turtle, &ttl)
+            .unwrap_or_else(|e| panic!("oxigraph rejected TTL: {e}\n{ttl}"));
+        // A bare `4` in SPARQL is an xsd:integer literal; the match fails if
+        // the value was emitted as a string or double.
+        assert!(
+            ask(
+                &store,
+                "ASK { <https://example.org/cellar/b1> <https://example.org/cellar#rating> 4 }",
+            ),
+            "an integer-range slot value must carry xsd:integer"
+        );
+    }
+
+    #[test]
+    fn writer_without_instances_is_unchanged() {
+        // The A-box attachment must not perturb the T-box-only output.
+        let schema = create_test_schema();
+        let temp_dir = TempDir::new().expect("temp dir");
+        let plain = temp_dir.path().join("plain.ttl");
+        let attached = temp_dir.path().join("attached.ttl");
+        OwlWriter::new().write(&schema, &plain).expect("plain");
+        OwlWriter::new()
+            .with_instances(crate::instances::InstanceSet::default())
+            .write(&schema, &attached)
+            .expect("attached");
+        assert_eq!(
+            fs::read_to_string(&plain).unwrap(),
+            fs::read_to_string(&attached).unwrap(),
+            "an empty instance set must produce byte-identical output"
         );
     }
 }

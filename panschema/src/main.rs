@@ -293,6 +293,33 @@ struct LabelOptions<'a> {
 // A `generate` CLI-command handler: its parameters mirror the subcommand's
 // flags, so the count exceeds clippy's default. (A `GenerateOptions` struct
 // would tidy this — a future cleanup, orthogonal to any one feature.)
+/// Read a LinkML instance-data file into the instance model, surfacing each
+/// dangling instance reference (the A-box analog of a dangling schema ref —
+/// the feedback signal an authoring loop uses to self-correct). Fatal under
+/// `--strict`.
+fn load_instance_set(
+    schema: &panschema::linkml::SchemaDefinition,
+    inst_path: &Path,
+    strict: bool,
+) -> anyhow::Result<panschema::instances::InstanceSet> {
+    let content = std::fs::read_to_string(inst_path)
+        .map_err(|e| anyhow::anyhow!("reading instances file {}: {}", inst_path.display(), e))?;
+    let data: serde_yaml::Value = serde_yaml::from_str(&content)
+        .map_err(|e| anyhow::anyhow!("parsing instances file {}: {}", inst_path.display(), e))?;
+    let set = panschema::instances::InstanceSet::from_linkml_data(schema, &data);
+    let danglers = panschema::diagnostics::dangling_instance_references(&set);
+    for d in &danglers {
+        eprintln!("warning: {}", d.message());
+    }
+    if strict && !danglers.is_empty() {
+        anyhow::bail!(
+            "{} dangling instance reference(s) present; failing because --strict is set",
+            danglers.len()
+        );
+    }
+    Ok(set)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn generate(
     input: &Path,
@@ -398,27 +425,7 @@ fn generate(
         // A LinkML instance-data file overrides the schema's embedded OWL
         // individuals as the source for the instance graph.
         if let Some(inst_path) = instances {
-            let content = std::fs::read_to_string(inst_path).map_err(|e| {
-                anyhow::anyhow!("reading instances file {}: {}", inst_path.display(), e)
-            })?;
-            let data: serde_yaml::Value = serde_yaml::from_str(&content).map_err(|e| {
-                anyhow::anyhow!("parsing instances file {}: {}", inst_path.display(), e)
-            })?;
-            let set = panschema::instances::InstanceSet::from_linkml_data(&schema, &data);
-            // A reference to an instance the data doesn't define is a dangling
-            // instance reference (the A-box analog of a dangling schema ref) —
-            // the feedback signal an authoring loop uses to self-correct.
-            let danglers = panschema::diagnostics::dangling_instance_references(&set);
-            for d in &danglers {
-                eprintln!("warning: {}", d.message());
-            }
-            if strict && !danglers.is_empty() {
-                anyhow::bail!(
-                    "{} dangling instance reference(s) present; failing because --strict is set",
-                    danglers.len()
-                );
-            }
-            writer = writer.with_instances(set);
+            writer = writer.with_instances(load_instance_set(&schema, inst_path, strict)?);
         }
         if let Some(store) = panschema::labels::open_default_store(
             &schema,
@@ -428,6 +435,27 @@ fn generate(
         ) {
             writer = writer.with_label_store(store);
         }
+        writer
+            .write(&schema, output)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+    } else if let (Some(inst_path), "ttl" | "jsonld" | "rdfxml" | "ntriples") =
+        (instances, format.to_lowercase().as_str())
+    {
+        // An RDF-family output with an A-box attached: the instance set flows
+        // into the same graph the T-box serializes from, so the file is a
+        // self-contained knowledge graph.
+        use panschema::io::Writer;
+        let set = load_instance_set(&schema, inst_path, strict)?;
+        let writer: Box<dyn Writer> = match format.to_lowercase().as_str() {
+            "ttl" => Box::new(panschema::owl_writer::OwlWriter::new().with_instances(set)),
+            "jsonld" => {
+                Box::new(panschema::rdf_serializers::JsonLdWriter::new().with_instances(set))
+            }
+            "rdfxml" => {
+                Box::new(panschema::rdf_serializers::RdfXmlWriter::new().with_instances(set))
+            }
+            _ => Box::new(panschema::rdf_serializers::NTriplesWriter::new().with_instances(set)),
+        };
         writer
             .write(&schema, output)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -1390,9 +1418,15 @@ async fn main() -> anyhow::Result<()> {
                     };
                     eprintln!("Graph visualization: {}", mode_str);
                 }
-                if instances.is_some() && format.to_lowercase() != "html" {
+                if instances.is_some()
+                    && !matches!(
+                        format.to_lowercase().as_str(),
+                        "html" | "ttl" | "jsonld" | "rdfxml" | "ntriples"
+                    )
+                {
                     eprintln!(
-                        "warning: --instances only affects HTML output; ignored for format `{}`",
+                        "warning: --instances only affects HTML and RDF outputs; \
+                         ignored for format `{}`",
                         format
                     );
                 }
