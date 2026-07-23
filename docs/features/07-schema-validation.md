@@ -37,7 +37,7 @@ For v0.4.0 we don't need to be a full LinkML metaschema implementation. The valu
 **User Value:** Running `panschema validate schema.yaml` exits 0 on a well-formed schema and exits non-zero with a precise diagnostic when a reference doesn't resolve.
 
 **Acceptance Criteria:**
-- [ ] New `Validate { input: PathBuf }` variant on `Commands` (clap). Same input semantics as `generate --input`: a single LinkML YAML or TTL file.
+- [ ] New `Validate { input: PathBuf }` variant on `Commands` (clap). Same input semantics as `generate --schema`: a single LinkML YAML or TTL file.
 - [ ] Reader dispatch via `FormatRegistry` (consistent with `generate`).
 - [ ] Walks the resolved schema and reports diagnostics for:
   - A class's `is_a` parent that isn't declared as a class.

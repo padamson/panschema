@@ -73,7 +73,7 @@ and Rust — from a fetched schema dependency, so a backend gets its Postgres
 DDL (and TTL/SHACL/graph) from the same manifest that gets its Rust types.
 
 **Acceptance Criteria:**
-- [x] `[generate.<name>]` accepts `postgres`, `shacl`, `ttl`, `jsonld`, `rdfxml`, `ntriples`, and `graph-json` output paths in addition to `html`/`rust`, and `panschema generate` (no `--input`) emits each configured format for each schema.
+- [x] `[generate.<name>]` accepts `postgres`, `shacl`, `ttl`, `jsonld`, `rdfxml`, `ntriples`, and `graph-json` output paths in addition to `html`/`rust`, and `panschema generate` (no `--schema`) emits each configured format for each schema.
 - [x] A configured output whose writer errors fails the command naming the schema and format; an unconfigured format is simply not produced.
 
 ### Slice 2: Cross-package `imports:` across the cache boundary (inline / A1)

@@ -45,13 +45,13 @@ Or download pre-built binaries from [GitHub Releases](https://github.com/padamso
 Generate documentation from an OWL ontology:
 
 ```bash
-panschema generate --input ontology.ttl --output docs/
+panschema generate --schema ontology.ttl --output docs/
 ```
 
 Start a development server with hot reload:
 
 ```bash
-panschema serve --input ontology.ttl
+panschema serve --schema ontology.ttl
 ```
 
 Open http://localhost:3000 to view the documentation.
@@ -104,13 +104,13 @@ The generated HTML documentation includes an animated graph visualization:
 
 ```bash
 # Generate documentation with graph (default)
-panschema generate --input schema.yaml --output docs/
+panschema generate --schema schema.yaml --output docs/
 
 # Disable graph visualization
-panschema generate --input schema.yaml --output docs/ --no-graph
+panschema generate --schema schema.yaml --output docs/ --no-graph
 
 # Force specific visualization mode
-panschema generate --input schema.yaml --output docs/ --viz-mode 2d
+panschema generate --schema schema.yaml --output docs/ --viz-mode 2d
 ```
 
 The visualization features:
@@ -133,7 +133,7 @@ It comes from either the schema's embedded OWL individuals, or a separate
 
 ```bash
 # Render a LinkML data file (a tree_root container of records) as the instance graph
-panschema generate --input schema.yaml --instances data.yaml --output docs/
+panschema generate --schema schema.yaml --instances data.yaml --output docs/
 ```
 
 Each record becomes a typed node keyed by its identifier; a class-valued slot
@@ -183,7 +183,7 @@ This writes `schema-link.js` / `schema-link.css` into the book and wires them in
 If your application is backed by Postgres, `generate --format postgres` emits the `CREATE TABLE` / `CREATE TYPE` DDL for the same LinkML schema your Rust structs come from, so the two never drift apart by hand:
 
 ```bash
-panschema generate --input schema.yaml --output schema.sql --format postgres
+panschema generate --schema schema.yaml --output schema.sql --format postgres
 ```
 
 Coverage today is concrete classes with scalar/enum/single-valued-class-reference slots; a class using `is_a`, a multivalued slot, or `any_of` is skipped with a warning naming why, rather than emitting broken DDL. See [docs/features/24-postgres-ddl-writer.md](docs/features/24-postgres-ddl-writer.md) for the full design and what's still to come.
@@ -263,7 +263,7 @@ first, then vendor and commit.
 ### Manual Verification
 
 ```bash
-panschema serve --input panschema/tests/fixtures/reference.ttl
+panschema serve --schema panschema/tests/fixtures/reference.ttl
 ```
 
 ### UI Component Style Guide

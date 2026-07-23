@@ -60,7 +60,7 @@ fn class_card_surfaces_mixins_slots_and_resolved_xrefs() {
     let _ = fs::remove_dir_all(&output_dir);
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
-            "--input",
+            "--schema",
             "tests/fixtures/class_card_dogfood.yaml",
             "--output",
             output_dir.to_str().unwrap(),
@@ -170,7 +170,7 @@ classes:
 
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
-            "--input",
+            "--schema",
             schema_path.to_str().unwrap(),
             "--output",
             output_dir.to_str().unwrap(),
@@ -230,7 +230,7 @@ fn every_graph_node_has_a_matching_html_card() {
     let _ = fs::remove_dir_all(&output_dir);
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
-            "--input",
+            "--schema",
             "tests/fixtures/reference.ttl",
             "--output",
             output_dir.to_str().unwrap(),
@@ -271,7 +271,7 @@ fn generates_documentation_from_reference_ontology() {
 
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
-            "--input",
+            "--schema",
             "tests/fixtures/reference.ttl",
             "--output",
             output_dir.to_str().unwrap(),
@@ -345,7 +345,7 @@ fn classes_section_renders_is_a_hierarchy_with_flat_toggle() {
 
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
-            "--input",
+            "--schema",
             "tests/fixtures/reference.ttl",
             "--output",
             output_dir.to_str().unwrap(),
@@ -440,7 +440,7 @@ fn generates_documentation_from_linkml_yaml() {
 
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
-            "--input",
+            "--schema",
             "tests/fixtures/sample_schema.yaml",
             "--output",
             output_dir.to_str().unwrap(),
@@ -596,7 +596,7 @@ fn no_graph_flag_disables_graph_visualization() {
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "generate",
-            "--input",
+            "--schema",
             "tests/fixtures/reference.ttl",
             "--output",
             output_dir.to_str().unwrap(),
@@ -634,7 +634,7 @@ fn generate_instances_renders_linkml_data_as_the_instance_graph() {
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "generate",
-            "--input",
+            "--schema",
             "tests/fixtures/wine_catalog.yaml",
             "--instances",
             "tests/fixtures/wine_instances.yaml",
@@ -696,7 +696,7 @@ fn instances_flag_warns_only_for_non_html_formats() {
     let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "generate",
-            "--input",
+            "--schema",
             "tests/fixtures/wine_catalog.yaml",
             "--instances",
             "tests/fixtures/wine_instances.yaml",
@@ -717,7 +717,7 @@ fn instances_flag_warns_only_for_non_html_formats() {
     let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "generate",
-            "--input",
+            "--schema",
             "tests/fixtures/wine_catalog.yaml",
             "--format",
             "ttl",
@@ -789,7 +789,7 @@ fn dangling_instance_reference_warns_and_fails_under_strict() {
     let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "generate",
-            "--input",
+            "--schema",
             "tests/fixtures/wine_catalog.yaml",
             "--instances",
             "tests/fixtures/wine_instances_dangling.yaml",
@@ -809,7 +809,7 @@ fn dangling_instance_reference_warns_and_fails_under_strict() {
     let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "generate",
-            "--input",
+            "--schema",
             "tests/fixtures/wine_catalog.yaml",
             "--instances",
             "tests/fixtures/wine_instances_dangling.yaml",
@@ -836,7 +836,7 @@ fn viz_mode_flag_is_recognized() {
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "generate",
-            "--input",
+            "--schema",
             "tests/fixtures/reference.ttl",
             "--output",
             output_dir.to_str().unwrap(),
@@ -858,7 +858,7 @@ fn viz_mode_flag_is_recognized() {
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "generate",
-            "--input",
+            "--schema",
             "tests/fixtures/reference.ttl",
             "--output",
             output_dir.to_str().unwrap(),
@@ -890,7 +890,7 @@ fn generates_jsonld_via_cli() {
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "generate",
-            "--input",
+            "--schema",
             "tests/fixtures/reference.ttl",
             "--output",
             output_path.to_str().unwrap(),
@@ -929,7 +929,7 @@ fn generates_rdfxml_via_cli() {
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "generate",
-            "--input",
+            "--schema",
             "tests/fixtures/reference.ttl",
             "--output",
             output_path.to_str().unwrap(),
@@ -969,7 +969,7 @@ fn generates_ntriples_via_cli() {
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "generate",
-            "--input",
+            "--schema",
             "tests/fixtures/reference.ttl",
             "--output",
             output_path.to_str().unwrap(),
@@ -1079,7 +1079,7 @@ fn all_rdf_formats_produce_equivalent_content() {
     let _ = fs::remove_dir_all(output_dir);
 }
 
-/// `panschema generate` (no --input) discovers a `panschema.toml`, walks
+/// `panschema generate` (no --schema) discovers a `panschema.toml`, walks
 /// `[schemas]`, and runs the HtmlWriter according to `[generate.<name>]`.
 #[test]
 fn manifest_driven_generate_runs_html_writer_for_path_source() {
@@ -1102,7 +1102,7 @@ html = "docs/"
     )
     .expect("write manifest");
 
-    // Run `panschema generate` from the consumer dir (no --input).
+    // Run `panschema generate` from the consumer dir (no --schema).
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .arg("generate")
         .current_dir(consumer)
@@ -1158,7 +1158,7 @@ sample_schema = { path = "./sample-pkg" }
     );
 }
 
-/// `panschema generate --input X --format html` (without `--no-graph`)
+/// `panschema generate --schema X --format html` (without `--no-graph`)
 /// prints a "Graph visualization:" line to stderr describing the viz
 /// mode. Catches the `format == "html" && !no_graph` predicate from
 /// being inverted or flipped to `||`.
@@ -1171,7 +1171,7 @@ fn cli_generate_html_prints_graph_visualization_mode() {
     let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "generate",
-            "--input",
+            "--schema",
             "tests/fixtures/reference.ttl",
             "--output",
             output_dir.to_str().unwrap(),
@@ -1192,7 +1192,7 @@ fn cli_generate_html_prints_graph_visualization_mode() {
     let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "generate",
-            "--input",
+            "--schema",
             "tests/fixtures/reference.ttl",
             "--output",
             output_dir2.to_str().unwrap(),
@@ -1258,7 +1258,7 @@ classes:
         let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
             .args([
                 "generate",
-                "--input",
+                "--schema",
                 schema_path.to_str().unwrap(),
                 "--output",
                 out_path.to_str().unwrap(),
@@ -1291,7 +1291,7 @@ classes:
     let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "generate",
-            "--input",
+            "--schema",
             schema_path.to_str().unwrap(),
             "--output",
             html_output.to_str().unwrap(),
@@ -1336,7 +1336,7 @@ slots:
         let out_path = tmp.join("out");
         let mut args = vec![
             "generate",
-            "--input",
+            "--schema",
             schema_path.to_str().unwrap(),
             "--output",
             out_path.to_str().unwrap(),
@@ -1402,7 +1402,7 @@ classes:
     let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "generate",
-            "--input",
+            "--schema",
             schema_path.to_str().unwrap(),
             "--output",
             tmp.join("out").to_str().unwrap(),
@@ -3519,7 +3519,7 @@ fn generate_merges_single_import() {
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "generate",
-            "--input",
+            "--schema",
             "tests/fixtures/imports/app.yaml",
             "--format",
             "html",

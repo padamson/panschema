@@ -18,7 +18,7 @@ This feature refactors the existing rontodoc codebase to the new reader/writer a
 
 ```bash
 # Before (v0.1.0)
-rontodoc generate --input reference.ttl --output docs/
+rontodoc generate --schema reference.ttl --output docs/
 
 # After (v0.2.0) - same output, new architecture
 panschema doc reference.ttl --output docs/

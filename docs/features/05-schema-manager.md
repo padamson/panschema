@@ -65,7 +65,7 @@ Three artifacts define the workflow:
 
 **Source protocols (v0.3 minimum):** `path:` (local file/directory), `github:owner/repo@version` (tagged commit). Other protocols (`gitlab:`, `zenodo:`, `https:`, `pypi:`) deferred.
 
-**Commands:** `init`, `add`, `fetch`, `generate`, `verify`, `release`. Existing `panschema generate --input <file>` continues to work as a no-manifest shorthand. `init` and `release` are producer-side; `add`, `fetch`, `verify`, `generate` are consumer-side.
+**Commands:** `init`, `add`, `fetch`, `generate`, `verify`, `release`. Existing `panschema generate --schema <file>` continues to work as a no-manifest shorthand. `init` and `release` are producer-side; `add`, `fetch`, `verify`, `generate` are consumer-side.
 
 **Cache:** `~/.cache/panschema/<source-hash>/<version>/` — XDG-compliant, shared across projects (cargo-style), no auto-eviction in v0.3.
 
@@ -79,7 +79,7 @@ Each slice delivers end-to-end user value: a complete `manifest → fetch → ge
 
 **Status:** ✅ Completed
 
-**User Value:** A consumer can declare a local schema in a manifest and run codegen against it through panschema's manager workflow — no more `--input <file>` for the manifest-aware path.
+**User Value:** A consumer can declare a local schema in a manifest and run codegen against it through panschema's manager workflow — no more `--schema <file>` for the manifest-aware path.
 
 **Acceptance Criteria:**
 
@@ -87,7 +87,7 @@ Each slice delivers end-to-end user value: a complete `manifest → fetch → ge
 - [x] `panschema.toml` parser covering `[schemas]` (with `path:` source) and `[generate.<name>]` (writer-output mapping)
 - [x] `panschema.toml` placement: discovered by walking up from CWD (cargo-style)
 - [x] `panschema generate` walks the manifest, resolves each `path:` source, runs the configured writers, and errors clearly when the `path:` target doesn't exist
-- [x] Existing `panschema generate --input <file>` continues to work as a no-manifest shorthand (backward compatibility)
+- [x] Existing `panschema generate --schema <file>` continues to work as a no-manifest shorthand (backward compatibility)
 - [x] At least one writer wired through the new pipeline (HtmlWriter — already exists, no new generation code on the critical path)
 - [x] Integration test: a fixture consumer project with a `panschema.toml` pointing at a fixture schema, full `generate` produces expected output
 
@@ -259,7 +259,7 @@ This slice deliberately splits into three phases following the project's release
 
 **Phase C — Tag v0.3.0 (after Phase B clears):**
 
-- [ ] README rewritten to lead with the manager workflow as the recommended path; `--input <file>` documented as a shorthand.
+- [ ] README rewritten to lead with the manager workflow as the recommended path; `--schema <file>` documented as a shorthand.
 - [ ] CHANGELOG `[Unreleased]` → `[0.3.0] - <date>` heading change; existing entries roll in unchanged.
 - [ ] Release tag `v0.3.0` cuts after CI green.
 
@@ -347,7 +347,7 @@ each will be handed off to another repo:
 - `publish` module — parser for `panschema-publish.toml` (`PublishConfig`, `SchemaInfo`, `FileMapping`)
 - `manifest` module — parser for `panschema.toml` (`Manifest`, `SchemaDep`, `GenerateConfig`) with `deny_unknown_fields` so unsupported keys fail-fast
 - `manifest::discover_manifest` walks up from CWD, cargo-style
-- `panschema generate` (no `--input`) discovers the manifest and runs HtmlWriter for each `[generate.<name>]` block; resolves paths relative to the manifest's location
+- `panschema generate` (no `--schema`) discovers the manifest and runs HtmlWriter for each `[generate.<name>]` block; resolves paths relative to the manifest's location
 - Clear error when a `path:` target doesn't exist
 - Integration tests: happy path (manifest → fixture schema → HTML output) and the missing-path error
 

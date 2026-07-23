@@ -49,9 +49,9 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 
-    /// Input ontology file (.ttl) - used when no subcommand specified
+    /// Schema file (.ttl, .yaml, .yml) - used when no subcommand specified
     #[arg(short, long, global = true)]
-    input: Option<PathBuf>,
+    schema: Option<PathBuf>,
 
     /// Output path (file for RDF formats, directory for HTML)
     #[arg(short, long, global = true, default_value = "output")]
@@ -64,13 +64,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Generate documentation or convert to other formats. With no `--input`,
+    /// Generate documentation or convert to other formats. With no `--schema`,
     /// discovers a `panschema.toml` (cargo-style walk up from CWD) and runs
     /// codegen for each manifested schema.
     Generate {
-        /// Input ontology file (.ttl, .yaml, .yml). When omitted, uses the manifest.
+        /// Schema file (.ttl, .yaml, .yml). When omitted, uses the manifest.
         #[arg(short, long)]
-        input: Option<PathBuf>,
+        schema: Option<PathBuf>,
 
         /// LinkML instance-data file (a `tree_root` container A-box) to render
         /// as the instance graph in the HTML output, in place of the schema's
@@ -241,9 +241,9 @@ enum Commands {
     },
     /// Start development server with hot reload
     Serve {
-        /// Input ontology file (.ttl, .yaml, .yml)
+        /// Schema file (.ttl, .yaml, .yml)
         #[arg(short, long)]
-        input: PathBuf,
+        schema: PathBuf,
 
         /// Output directory for generated documentation
         #[arg(short, long, default_value = "output")]
@@ -311,7 +311,7 @@ fn generate(
     // Read the input and fold in any `imports:` through the shared load path,
     // so `generate` renders the same merged schema as `serve`/`publish`.
     // `deps` lets an `imports:` entry naming a manifest dependency resolve
-    // across the package boundary; it's empty for a single-file `--input`.
+    // across the package boundary; it's empty for a single-file `--schema`.
     let schema = panschema::import_resolve::load_schema_with_deps(input, &registry, deps)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
@@ -467,7 +467,7 @@ fn load_manifest() -> anyhow::Result<(panschema::manifest::Manifest, PathBuf)> {
     let manifest_path = discover_manifest(&cwd).ok_or_else(|| {
         anyhow::anyhow!(
             "no `panschema.toml` found in `{}` or any ancestor directory. \
-             Create a manifest, or pass `--input <file>` for one-off generate. \
+             Create a manifest, or pass `--schema <file>` for one-off generate. \
              See docs/features/05-schema-manager.md.",
             cwd.display()
         )
@@ -514,7 +514,7 @@ fn resolve_source(
     }
 }
 
-/// `panschema generate` (no --input): walk the manifest and run configured writers.
+/// `panschema generate` (no --schema): walk the manifest and run configured writers.
 fn generate_from_manifest(offline: bool, refresh_labels: bool, strict: bool) -> anyhow::Result<()> {
     use anyhow::Context as _;
     let (manifest, manifest_dir) = load_manifest()?;
@@ -1371,7 +1371,7 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Some(Commands::Generate {
-            input,
+            schema,
             instances,
             output,
             format,
@@ -1380,8 +1380,8 @@ async fn main() -> anyhow::Result<()> {
             offline,
             refresh_labels,
             strict,
-        }) => match input {
-            Some(input) => {
+        }) => match schema {
+            Some(schema_path) => {
                 if format.to_lowercase() == "html" && !no_graph {
                     let mode_str = match viz_mode {
                         VizMode::Auto => "auto (2D fallback, 3D when available)",
@@ -1404,7 +1404,7 @@ async fn main() -> anyhow::Result<()> {
                 };
                 let no_deps = std::collections::BTreeMap::new();
                 generate(
-                    &input,
+                    &schema_path,
                     instances.as_deref(),
                     &output,
                     &format,
@@ -1450,12 +1450,12 @@ async fn main() -> anyhow::Result<()> {
             edge_from_worktree,
         }) => publish_command(&manifest, output_dir.as_deref(), edge_from_worktree)?,
         Some(Commands::Serve {
-            input,
+            schema,
             output,
             port,
             host_all,
         }) => {
-            server::serve(&input, &output, port, host_all).await?;
+            server::serve(&schema, &output, port, host_all).await?;
         }
         Some(Commands::Completions { shell }) => {
             let mut cmd = Cli::command();
@@ -1474,8 +1474,8 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         None => {
-            // Default behavior: generate if input provided (with graph enabled by default)
-            if let Some(input) = cli.input {
+            // Default behavior: generate if a schema is provided (with graph enabled by default)
+            if let Some(schema_path) = cli.schema {
                 let no_overrides = std::collections::BTreeMap::new();
                 let labels = LabelOptions {
                     offline: false,
@@ -1486,7 +1486,7 @@ async fn main() -> anyhow::Result<()> {
                 // `generate`-subcommand flag, so it's off here.
                 let no_deps = std::collections::BTreeMap::new();
                 generate(
-                    &input,
+                    &schema_path,
                     None,
                     &cli.output,
                     &cli.format,
@@ -1515,7 +1515,7 @@ mod tests {
         let cli = Cli::try_parse_from(["panschema"]).unwrap();
         assert_eq!(cli.output, PathBuf::from("output"));
         assert_eq!(cli.format, "html");
-        assert!(cli.input.is_none());
+        assert!(cli.schema.is_none());
         assert!(cli.command.is_none());
     }
 
@@ -1554,7 +1554,7 @@ mod tests {
         let cli = Cli::try_parse_from([
             "panschema",
             "generate",
-            "--input",
+            "--schema",
             "test.ttl",
             "--output",
             "docs",
@@ -1562,7 +1562,7 @@ mod tests {
         .unwrap();
         match cli.command {
             Some(Commands::Generate {
-                input,
+                schema,
                 instances,
                 output,
                 format,
@@ -1572,7 +1572,7 @@ mod tests {
                 refresh_labels,
                 strict,
             }) => {
-                assert_eq!(input, Some(PathBuf::from("test.ttl")));
+                assert_eq!(schema, Some(PathBuf::from("test.ttl")));
                 assert_eq!(instances, None); // default None (no instance-data file)
                 assert_eq!(output, PathBuf::from("docs"));
                 assert_eq!(format, "html");
@@ -1591,7 +1591,7 @@ mod tests {
         let cli = Cli::try_parse_from([
             "panschema",
             "generate",
-            "--input",
+            "--schema",
             "test.ttl",
             "--output",
             "output.jsonld",
@@ -1601,12 +1601,12 @@ mod tests {
         .unwrap();
         match cli.command {
             Some(Commands::Generate {
-                input,
+                schema,
                 output,
                 format,
                 ..
             }) => {
-                assert_eq!(input, Some(PathBuf::from("test.ttl")));
+                assert_eq!(schema, Some(PathBuf::from("test.ttl")));
                 assert_eq!(output, PathBuf::from("output.jsonld"));
                 assert_eq!(format, "jsonld");
             }
@@ -1619,7 +1619,7 @@ mod tests {
         let cli = Cli::try_parse_from([
             "panschema",
             "generate",
-            "--input",
+            "--schema",
             "test.ttl",
             "--viz-mode",
             "2d",
@@ -1635,7 +1635,7 @@ mod tests {
         let cli = Cli::try_parse_from([
             "panschema",
             "generate",
-            "--input",
+            "--schema",
             "test.ttl",
             "--viz-mode",
             "3d",
@@ -1651,9 +1651,14 @@ mod tests {
 
     #[test]
     fn cli_parses_generate_no_graph() {
-        let cli =
-            Cli::try_parse_from(["panschema", "generate", "--input", "test.ttl", "--no-graph"])
-                .unwrap();
+        let cli = Cli::try_parse_from([
+            "panschema",
+            "generate",
+            "--schema",
+            "test.ttl",
+            "--no-graph",
+        ])
+        .unwrap();
         match cli.command {
             Some(Commands::Generate { no_graph, .. }) => {
                 assert!(no_graph);
@@ -1663,13 +1668,13 @@ mod tests {
     }
 
     #[test]
-    fn cli_parses_generate_with_no_input_for_manifest_mode() {
+    fn cli_parses_generate_with_no_schema_for_manifest_mode() {
         let cli = Cli::try_parse_from(["panschema", "generate"]).unwrap();
         match cli.command {
-            Some(Commands::Generate { input, .. }) => {
+            Some(Commands::Generate { schema, .. }) => {
                 assert!(
-                    input.is_none(),
-                    "input should be None to trigger manifest discovery"
+                    schema.is_none(),
+                    "schema should be None to trigger manifest discovery"
                 );
             }
             _ => panic!("Expected Generate command"),
@@ -1681,15 +1686,15 @@ mod tests {
         let cli = Cli::try_parse_from([
             "panschema",
             "serve",
-            "--input",
+            "--schema",
             "test.ttl",
             "--port",
             "8080",
         ])
         .unwrap();
         match cli.command {
-            Some(Commands::Serve { input, port, .. }) => {
-                assert_eq!(input, PathBuf::from("test.ttl"));
+            Some(Commands::Serve { schema, port, .. }) => {
+                assert_eq!(schema, PathBuf::from("test.ttl"));
                 assert_eq!(port, 8080);
             }
             _ => panic!("Expected Serve command"),

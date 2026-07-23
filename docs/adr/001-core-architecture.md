@@ -72,8 +72,8 @@ output/
 ### CLI Design
 
 ```bash
-rontodoc --input ontology.ttl --output docs/
-rontodoc serve --input ontology.ttl --port 3000  # Dev mode
+rontodoc --schema ontology.ttl --output docs/
+rontodoc serve --schema ontology.ttl --port 3000  # Dev mode
 ```
 
 ## Consequences

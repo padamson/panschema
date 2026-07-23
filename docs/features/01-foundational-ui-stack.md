@@ -19,7 +19,7 @@ Minimal compiling project that exercises the full CI/CD pipeline.
 Minimal end-to-end pipeline proving the architecture works.
 
 **Acceptance Criteria:**
-- [x] CLI accepts `--input` flag with path to .ttl file
+- [x] CLI accepts `--schema` flag with path to .ttl file
 - [x] Parser reads Turtle file and extracts basic triples
 - [x] Renderer outputs minimal `index.html` with ontology IRI and label
 - [x] Output written to `--output` directory (default: `output/`)

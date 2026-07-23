@@ -29,7 +29,7 @@ This implementation follows **vertical slicing** - each slice delivers end-to-en
 **User Value:** [What can users do after this slice? One sentence description of end-to-end value.]
 
 **Acceptance Criteria:**
-- [ ] [Criterion 1 - e.g. "CLI accepts --input flag"]
+- [ ] [Criterion 1 - e.g. "CLI accepts --schema flag"]
 - [ ] [Criterion 2 - e.g. "Output valid HTML to stdout"]
 - [ ] [Criterion 3 - e.g. "Error on file not found"]
 

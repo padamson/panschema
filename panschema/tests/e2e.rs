@@ -56,7 +56,7 @@ fn generate_docs_for(fixture_path: &str) -> PathBuf {
 
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
-            "--input",
+            "--schema",
             fixture_path,
             "--output",
             output_dir.to_str().unwrap(),
@@ -85,7 +85,7 @@ fn generate_docs_with_instances(schema_path: &str, instances_path: &str) -> Path
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "generate",
-            "--input",
+            "--schema",
             schema_path,
             "--instances",
             instances_path,
@@ -2267,7 +2267,7 @@ fn e2e_external_node_hover_shows_iri_and_definition_and_legend_documents_it() {
             .env("PANSCHEMA_CACHE_ROOT", &cache_root)
             .args([
                 "generate",
-                "--input",
+                "--schema",
                 "tests/fixtures/external_grounding.yaml",
                 "--output",
                 output_dir.to_str().unwrap(),

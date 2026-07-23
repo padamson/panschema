@@ -224,7 +224,7 @@ cargo test --features gpu --lib
 ```bash
 cargo build
 cargo test --lib graph_writer
-cargo run -- generate --input schema.yaml --output graph.json --format graph-json
+cargo run -- generate --schema schema.yaml --output graph.json --format graph-json
 ```
 
 ---

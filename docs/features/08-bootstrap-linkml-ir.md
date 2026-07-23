@@ -52,7 +52,7 @@ The cost: every downstream that imports `panschema::linkml::*` will face one rou
 
 **Acceptance Criteria:**
 - [ ] Vendor a pinned snapshot of the LinkML metaschema YAML at `panschema/src/linkml/metaschema/meta.yaml` (or similar). Pin to a specific LinkML version (e.g., 1.7.0).
-- [ ] `cargo run --release -- generate --input panschema/src/linkml/metaschema/meta.yaml --format rust --output panschema/src/linkml/generated.rs` produces a Rust module.
+- [ ] `cargo run --release -- generate --schema panschema/src/linkml/metaschema/meta.yaml --format rust --output panschema/src/linkml/generated.rs` produces a Rust module.
 - [ ] The output module compiles as a standalone Rust file (`cargo check` against a scratch crate with `serde` + `chrono` deps).
 - [ ] A `generated.rs.expected` snapshot is committed; `cargo test` regenerates and diffs to catch unintended drift in RustWriter output.
 

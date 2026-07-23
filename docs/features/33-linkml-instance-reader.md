@@ -3,7 +3,7 @@
 **Feature:** Read LinkML **instance data** (an A-box conforming to a schema)
 into a first-class `InstanceSet` — a flat, id-keyed collection of typed
 records with typed references — and render it as the instance graph, the same
-way OWL individuals do today. `generate --input schema.yaml --instances
+way OWL individuals do today. `generate --schema schema.yaml --instances
 data.yaml` ingests a `tree_root`-container LinkML data file; the `InstanceSet`
 becomes the hub every instance consumer (the instance graph, RDF, and later
 `validate --data`) goes through.
@@ -109,7 +109,7 @@ annotations and read the `InstanceSet` instead.
 stays LinkML + JSON, and this is the dogfood for the Step-7 examples.
 
 **Acceptance Criteria:**
-- [x] `generate --input schema.yaml --instances data.yaml` reads a `tree_root`-container LinkML data file into an `InstanceSet` (`InstanceSet::from_linkml_data`): each typed collection slot's items become records of that slot's range class; identifiers resolve (map key or `identifier` slot); a class-ranged scalar becomes a typed reference (edge), an inlined mapping a nested record plus an edge, a type/enum-ranged value node-metadata literal. Reference-vs-inline is inferred from the data shape (the IR does not model `inlined`), which is agnostic to whether the author declared it.
+- [x] `generate --schema schema.yaml --instances data.yaml` reads a `tree_root`-container LinkML data file into an `InstanceSet` (`InstanceSet::from_linkml_data`): each typed collection slot's items become records of that slot's range class; identifiers resolve (map key or `identifier` slot); a class-ranged scalar becomes a typed reference (edge), an inlined mapping a nested record plus an edge, a type/enum-ranged value node-metadata literal. Reference-vs-inline is inferred from the data shape (the IR does not model `inlined`), which is agnostic to whether the author declared it.
 - [x] The instance graph renders from the LinkML `InstanceSet` (no OWL needed); e2e paints it (`e2e_instance_graph_renders_from_linkml_data`) from a checked-in wine fixture (`wine_catalog.yaml` + `wine_instances.yaml`) — self-contained.
 - [x] Handles both inlined-as-dict and inlined-as-list collections (`from_linkml_data_handles_inlined_as_dict_collection` + the list-form fixture).
 

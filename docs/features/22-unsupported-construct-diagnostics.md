@@ -47,7 +47,7 @@ The ignore-list (`IGNORED_CLASS_KEYS` in `crate::diagnostics`) is a denylist tha
 **User Value:** CI can fail a build that would silently drop a constraint.
 
 **Acceptance Criteria:**
-- [x] `generate --strict` exits non-zero when any unmodeled construct is present, after listing them (works for both `--input` and manifest modes).
+- [x] `generate --strict` exits non-zero when any unmodeled construct is present, after listing them (works for both `--schema` and manifest modes).
 - [x] Without `--strict`, the same schema warns and exits zero.
 
 ---

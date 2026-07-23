@@ -172,13 +172,13 @@ html = "docs/scimantic/"
 …this produces HTML documentation under `docs/scimantic/` (paths
 are resolved relative to the manifest's location).
 
-### `--input <file>` shorthand
+### `--schema <file>` shorthand
 
 For one-off generation against a raw schema file, the old form
 still works:
 
 ```bash
-panschema generate --input ./schema.yaml --output ./out/ --format html
+panschema generate --schema ./schema.yaml --output ./out/ --format html
 ```
 
 This bypasses the manifest entirely. Useful for ad-hoc exploration

@@ -313,7 +313,7 @@ Existing in-tree CPU force simulation (slice 7 work in [Feature 02](02-core-onto
 
 **Acceptance Criteria:**
 - [x] `panschema-viz::layout::recommend_default_layout` computes an inheritance-density score — the fraction of edges whose `edge_type` is `SubclassOf` or `Mixin`. At `≥ 0.5` it returns `Hierarchical`; below, `SGD`. The threshold is a constant with a comment naming the tuning corpus (scimantic spine ≈0.7 vs. the mixed reference fixture ≈0.3). Exposed to JS via the `recommend_default_layout(json)` wasm export.
-- [x] The not-pinned default is the `auto` sentinel (`html_writer` default; `panschema generate` emits it when `--input` has no manifest layout). With no `localStorage` choice and no pinned layout, the JS picker resolves `auto` via the wasm recommendation and selects the result.
+- [x] The not-pinned default is the `auto` sentinel (`html_writer` default; `panschema generate` emits it when `--schema` has no manifest layout). With no `localStorage` choice and no pinned layout, the JS picker resolves `auto` via the wasm recommendation and selects the result.
 - [x] An explicit `html_default_layout` in the manifest overrides the auto-detection (the picker's `data-default-layout` wins over `auto`).
 - [x] A persisted `localStorage` choice overrides the auto-detection (checked first in `readGraphLayout`).
 - [x] Unit tests: 8 `is_a` + 2 range → Hierarchical; 2 `is_a` + 8 range (and an edgeless graph) → SGD. E2E both directions: the mixed reference fixture auto-detects to SGD, and an `is_a`-heavy `taxonomy.ttl` fixture auto-detects to Hierarchical (proving the recommendation runs end-to-end, not a silent SGD fallback).
