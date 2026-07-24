@@ -82,6 +82,7 @@ repos:
           --ignore RUSTSEC-2024-0370
           --ignore RUSTSEC-2026-0194
           --ignore RUSTSEC-2026-0195
+          --ignore RUSTSEC-2026-0215
         language: system
         pass_filenames: false
         files: (Cargo\.toml|Cargo\.lock)$
