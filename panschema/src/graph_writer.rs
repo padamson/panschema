@@ -351,6 +351,19 @@ fn resolve_class_slots(schema: &SchemaDefinition, class_name: &str) -> Vec<SlotS
         .collect()
 }
 
+/// Which kind of graph a document holds: the schema (T-box, nodes are
+/// classes/slots/enums/types) or an instance graph (A-box, nodes are
+/// individuals). The wire-format discriminator for a consumer holding a
+/// bare graph file. Defaults to `Schema` so documents predating the field
+/// still deserialize.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphKind {
+    #[default]
+    Schema,
+    Instance,
+}
+
 /// Complete graph data for serialization
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphData {
@@ -369,11 +382,15 @@ pub struct GraphData {
 
     /// Version of the graph format (for future compatibility)
     pub format_version: String,
+
+    /// Schema (T-box) or instance (A-box) graph — see [`GraphKind`].
+    #[serde(default)]
+    pub graph_kind: GraphKind,
 }
 
 impl GraphData {
     /// Format version constant
-    pub const FORMAT_VERSION: &'static str = "1.0";
+    pub const FORMAT_VERSION: &'static str = "1.1";
 
     /// Create new GraphData with metadata
     pub fn new(schema_name: String, schema_title: Option<String>) -> Self {
@@ -383,6 +400,7 @@ impl GraphData {
             nodes: Vec::new(),
             edges: Vec::new(),
             format_version: Self::FORMAT_VERSION.to_string(),
+            graph_kind: GraphKind::default(),
         }
     }
 }
@@ -536,6 +554,7 @@ impl GraphWriter {
         set: &crate::instances::InstanceSet,
     ) -> GraphData {
         let mut graph = GraphData::new(schema.name.clone(), schema.title.clone());
+        graph.graph_kind = GraphKind::Instance;
 
         for inst in &set.instances {
             let node_id = format!("individual:{}", inst.id);
@@ -555,7 +574,14 @@ impl GraphWriter {
                 node_type: NodeType::Individual,
                 color: NodeType::Individual.color(),
                 description: inst.description.clone(),
-                uri: inst.iri.clone(),
+                // An instance that carries its own IRI (the OWL path) keeps
+                // it, unresolved display state and all; one authored as
+                // LinkML data gets the shared minted IRI — the same identity
+                // the RDF A-box emits, so graph traversal and SPARQL agree.
+                uri: inst
+                    .iri
+                    .clone()
+                    .or_else(|| Some(crate::rdf_serializers::instance_iri_string(schema, inst))),
                 uri_unresolved: inst.uri_unresolved,
                 is_abstract: false,
                 kind_metadata: Some(KindMetadata::Individual {
@@ -1052,6 +1078,51 @@ impl Writer for GraphWriter {
     }
 }
 
+/// Writer for the instance (A-box) graph as its own JSON document — a
+/// first-class artifact with its own format id, one invocation per artifact
+/// (the pandoc model; ADR-009). The graph is built from the attached
+/// instance data when supplied, else from the schema's embedded OWL
+/// individuals — the same source precedence the HTML instance section uses.
+#[derive(Default)]
+pub struct InstanceGraphWriter {
+    instances: Option<crate::instances::InstanceSet>,
+}
+
+impl InstanceGraphWriter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Attach the A-box the document is built from; overrides the schema's
+    /// embedded OWL individuals.
+    pub fn with_instances(mut self, set: crate::instances::InstanceSet) -> Self {
+        self.instances = Some(set);
+        self
+    }
+}
+
+impl Writer for InstanceGraphWriter {
+    fn write(&self, schema: &SchemaDefinition, output: &Path) -> IoResult<()> {
+        let writer = GraphWriter::new();
+        let graph = match &self.instances {
+            Some(set) => writer.instance_set_to_graph(schema, set),
+            None => writer.schema_to_instance_graph(schema),
+        };
+
+        let json = serde_json::to_string_pretty(&graph)
+            .map_err(|e| IoError::Write(format!("JSON serialization failed: {}", e)))?;
+
+        crate::io::ensure_output_parent(output)?;
+        std::fs::write(output, json).map_err(IoError::Io)?;
+
+        Ok(())
+    }
+
+    fn format_id(&self) -> &str {
+        "instance-graph-json"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1215,6 +1286,102 @@ mod tests {
 
         assert_eq!(mixin_edge.source, "class:Person");
         assert_eq!(mixin_edge.target, "class:Named");
+    }
+
+    /// The dedicated instance-graph writer renders the *attached* A-box:
+    /// for a schema with no embedded OWL individuals, dropping the
+    /// attachment would fall back to an empty graph.
+    #[test]
+    fn instance_graph_writer_renders_the_attached_abox() {
+        let mut schema = SchemaDefinition::new("cellar");
+        schema.id = Some("https://example.org/cellar".to_string());
+        schema.default_prefix = Some("cellar".to_string());
+        schema.prefixes.insert(
+            "cellar".to_string(),
+            "https://example.org/cellar/".to_string(),
+        );
+        let mut container = ClassDefinition::new("Cellar");
+        container.tree_root = true;
+        let mut bottles = SlotDefinition::new("bottles");
+        bottles.range = Some("Bottle".to_string());
+        bottles.multivalued = true;
+        container.attributes.insert("bottles".to_string(), bottles);
+        schema.classes.insert("Cellar".to_string(), container);
+        let mut bottle = ClassDefinition::new("Bottle");
+        let mut id = SlotDefinition::new("id");
+        id.identifier = true;
+        bottle.attributes.insert("id".to_string(), id);
+        schema.classes.insert("Bottle".to_string(), bottle);
+
+        let data: serde_yaml::Value = serde_yaml::from_str("bottles:\n  - id: b1\n").unwrap();
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let out = temp_dir.path().join("instances.json");
+        InstanceGraphWriter::new()
+            .with_instances(set)
+            .write(&schema, &out)
+            .expect("write");
+        let doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+        assert_eq!(doc["graph_kind"], "instance");
+        assert_eq!(
+            doc["nodes"][0]["uri"], "https://example.org/cellar/b1",
+            "the attached A-box's individual must be in the document"
+        );
+    }
+
+    /// Every graph document declares what kind of graph it is — the wire
+    /// format's discriminator for consumers holding a bare file — and the
+    /// format version reflects the addition.
+    #[test]
+    fn schema_graph_carries_kind_and_bumped_format_version() {
+        let schema = SchemaDefinition::new("kinded");
+        let graph = GraphWriter::new().schema_to_graph(&schema);
+        assert_eq!(graph.graph_kind, GraphKind::Schema);
+        assert_eq!(graph.format_version, "1.1");
+    }
+
+    /// The instance graph document is `instance`-kinded and its nodes carry
+    /// the same minted IRI the RDF A-box uses, so graph-JSON traversal and
+    /// SPARQL agree on which individual is which.
+    #[test]
+    fn instance_graph_carries_instance_kind_and_minted_iris() {
+        let mut schema = SchemaDefinition::new("cellar");
+        schema.id = Some("https://example.org/cellar".to_string());
+        schema.default_prefix = Some("cellar".to_string());
+        schema.prefixes.insert(
+            "cellar".to_string(),
+            "https://example.org/cellar/".to_string(),
+        );
+        let mut container = ClassDefinition::new("Cellar");
+        container.tree_root = true;
+        let mut bottles = SlotDefinition::new("bottles");
+        bottles.range = Some("Bottle".to_string());
+        bottles.multivalued = true;
+        container.attributes.insert("bottles".to_string(), bottles);
+        schema.classes.insert("Cellar".to_string(), container);
+        let mut bottle = ClassDefinition::new("Bottle");
+        let mut id = SlotDefinition::new("id");
+        id.identifier = true;
+        bottle.attributes.insert("id".to_string(), id);
+        schema.classes.insert("Bottle".to_string(), bottle);
+
+        let data: serde_yaml::Value = serde_yaml::from_str("bottles:\n  - id: b1\n").unwrap();
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+
+        let graph = GraphWriter::new().instance_set_to_graph(&schema, &set);
+        assert_eq!(graph.graph_kind, GraphKind::Instance);
+        let node = graph
+            .nodes
+            .iter()
+            .find(|n| n.id == "individual:b1")
+            .unwrap();
+        assert_eq!(
+            node.uri.as_deref(),
+            Some("https://example.org/cellar/b1"),
+            "instance node identity is the shared minted IRI"
+        );
     }
 
     /// A `subclass_of` grounding draws an edge to a *shared* external node

@@ -72,7 +72,8 @@ Open http://localhost:3000 to view the documentation.
 | HTML Documentation | Full support |
 | OWL/Turtle, JSON-LD, RDF/XML, N-Triples | Full support |
 | Rust types | Full support |
-| Graph JSON | Full support |
+| Graph JSON (schema / T-box) | Full support |
+| Instance graph JSON (A-box) | Full support |
 | SHACL shapes | Full support |
 | Postgres DDL | Partial support (concrete classes, scalars, enums, single-valued class references, and `unique_keys`/`pattern`/value-bound/`rules` constraints) |
 | JSON Schema (draft 2020-12) | Full support |
@@ -141,6 +142,24 @@ becomes an edge to the referenced record, and scalar values ride along as node
 metadata — so the JSON an LLM emits against a class's JSON Schema (see
 `generate --format json-schema`) is a LinkML instance you can read straight
 back and visualize, no OWL detour.
+
+The same A-box also exports as machine-readable artifacts, one invocation per
+artifact: fold it into the RDF outputs as `owl:NamedIndividual`s (a
+self-contained knowledge graph a triple store loads directly), or render it as
+a typed, traversable graph document:
+
+```bash
+# Schema + individuals as one Turtle knowledge graph
+panschema generate --schema schema.yaml --instances data.yaml --format ttl --output kg.ttl
+
+# The instance graph as its own graph-JSON document
+panschema generate --schema schema.yaml --instances data.yaml \
+  --format instance-graph-json --output instances.json
+```
+
+Individual IRIs mint identically across the docs, the RDF, and the graph
+JSON, so a SPARQL query and a graph-JSON traversal agree on which node is
+which.
 
 ### GPU Visualization (Native - Optional)
 

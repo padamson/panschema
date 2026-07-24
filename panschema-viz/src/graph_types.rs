@@ -276,6 +276,17 @@ pub struct GraphEdge {
     pub label: Option<String>,
 }
 
+/// Which kind of graph a document holds: the schema (T-box) or an
+/// instance graph (A-box). Mirrors the writer-side discriminator; defaults
+/// to `Schema` so documents predating the field still deserialize.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphKind {
+    #[default]
+    Schema,
+    Instance,
+}
+
 /// Complete graph data for serialization
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphData {
@@ -294,12 +305,16 @@ pub struct GraphData {
 
     /// Version of the graph format (for future compatibility)
     pub format_version: String,
+
+    /// Schema (T-box) or instance (A-box) graph — see [`GraphKind`].
+    #[serde(default)]
+    pub graph_kind: GraphKind,
 }
 
 #[allow(dead_code)]
 impl GraphData {
     /// Format version constant
-    pub const FORMAT_VERSION: &'static str = "1.0";
+    pub const FORMAT_VERSION: &'static str = "1.1";
 
     /// Create new GraphData with metadata
     pub fn new(schema_name: String, schema_title: Option<String>) -> Self {
@@ -309,6 +324,7 @@ impl GraphData {
             nodes: Vec::new(),
             edges: Vec::new(),
             format_version: Self::FORMAT_VERSION.to_string(),
+            graph_kind: GraphKind::default(),
         }
     }
 }

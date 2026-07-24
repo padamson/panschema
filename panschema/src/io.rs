@@ -141,6 +141,7 @@ impl FormatRegistry {
         registry.register_writer(Box::new(RdfXmlWriter::new()));
         registry.register_writer(Box::new(NTriplesWriter::new()));
         registry.register_writer(Box::new(GraphWriter::new()));
+        registry.register_writer(Box::new(crate::graph_writer::InstanceGraphWriter::new()));
         registry.register_writer(Box::new(RustWriter::new()));
         registry.register_writer(Box::new(PostgresWriter::new()));
         registry.register_writer(Box::new(ShaclWriter::new()));
@@ -377,6 +378,12 @@ mod tests {
     }
 
     #[test]
+    fn with_defaults_registers_instance_graph_writer() {
+        let registry = FormatRegistry::with_defaults();
+        assert!(registry.writer_for_format("instance-graph-json").is_some());
+    }
+
+    #[test]
     fn with_defaults_registers_owl_writer() {
         let registry = FormatRegistry::with_defaults();
 
@@ -465,6 +472,7 @@ mod tests {
             "rdfxml",
             "ntriples",
             "graph-json",
+            "instance-graph-json",
             "rust",
             "postgres",
             "shacl",

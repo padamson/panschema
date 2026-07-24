@@ -690,6 +690,7 @@ mod tests {
             schema_name: "test".to_string(),
             schema_title: None,
             format_version: "1.0".to_string(),
+            graph_kind: crate::graph_types::GraphKind::default(),
             nodes: vec![
                 GraphNode {
                     id: "a".to_string(),
@@ -753,6 +754,7 @@ mod tests {
             schema_name: "t".to_string(),
             schema_title: None,
             format_version: "1.0".to_string(),
+            graph_kind: crate::graph_types::GraphKind::default(),
             nodes: vec![
                 GraphNode {
                     id: "class:ImageApproval".to_string(),
@@ -848,6 +850,7 @@ mod tests {
             schema_name: "empty".to_string(),
             schema_title: None,
             format_version: "1.0".to_string(),
+            graph_kind: crate::graph_types::GraphKind::default(),
             nodes: vec![],
             edges: vec![],
         };
@@ -867,6 +870,7 @@ mod tests {
             schema_name: "single".to_string(),
             schema_title: None,
             format_version: "1.0".to_string(),
+            graph_kind: crate::graph_types::GraphKind::default(),
             nodes: vec![GraphNode {
                 id: "only".to_string(),
                 label: "Only Node".to_string(),
@@ -907,6 +911,7 @@ mod tests {
             schema_name: "disconnected".to_string(),
             schema_title: None,
             format_version: "1.0".to_string(),
+            graph_kind: crate::graph_types::GraphKind::default(),
             nodes: vec![
                 GraphNode {
                     id: "a".to_string(),
@@ -968,6 +973,7 @@ mod tests {
             schema_name: "overlap".to_string(),
             schema_title: None,
             format_version: "1.0".to_string(),
+            graph_kind: crate::graph_types::GraphKind::default(),
             nodes: vec![
                 GraphNode {
                     id: "a".to_string(),
@@ -1026,6 +1032,7 @@ mod tests {
             schema_name: "two_fixed".to_string(),
             schema_title: None,
             format_version: "1.0".to_string(),
+            graph_kind: crate::graph_types::GraphKind::default(),
             nodes: vec![
                 GraphNode {
                     id: "a".to_string(),
@@ -1075,6 +1082,7 @@ mod tests {
             schema_name: "test".to_string(),
             schema_title: None,
             format_version: "1.0".to_string(),
+            graph_kind: crate::graph_types::GraphKind::default(),
             nodes: vec![
                 GraphNode {
                     id: "a".to_string(),
@@ -1126,6 +1134,7 @@ mod tests {
             schema_name: "test".to_string(),
             schema_title: None,
             format_version: "1.0".to_string(),
+            graph_kind: crate::graph_types::GraphKind::default(),
             nodes: vec![GraphNode {
                 id: "a".to_string(),
                 label: "A".to_string(),
@@ -1161,6 +1170,7 @@ mod tests {
             schema_name: "ring".to_string(),
             schema_title: None,
             format_version: "1.0".to_string(),
+            graph_kind: crate::graph_types::GraphKind::default(),
             nodes: (0..4)
                 .map(|i| GraphNode {
                     id: format!("n{i}"),
@@ -1228,6 +1238,7 @@ mod tests {
             schema_name: "ring".to_string(),
             schema_title: None,
             format_version: "1.0".to_string(),
+            graph_kind: crate::graph_types::GraphKind::default(),
             nodes,
             edges,
         }
@@ -1263,6 +1274,7 @@ mod tests {
             schema_name: "lopsided".to_string(),
             schema_title: None,
             format_version: "1.0".to_string(),
+            graph_kind: crate::graph_types::GraphKind::default(),
             nodes,
             edges,
         }

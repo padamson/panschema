@@ -130,6 +130,15 @@ pub struct GenerateConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub graph_json: Option<PathBuf>,
+    /// Instance (A-box) graph JSON output file path. Built from the
+    /// schema's embedded OWL individuals; a manifest-declared instance-data
+    /// input arrives with dataset-first support (ADR-009 decision 6).
+    #[serde(
+        rename = "instance-graph-json",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub instance_graph_json: Option<PathBuf>,
 }
 
 /// Canonical layout-algorithm identifiers accepted by

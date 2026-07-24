@@ -56,28 +56,32 @@ individuals — that a triple store loads and SPARQL queries directly.
 
 ### Slice 2: Instance graph JSON export
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Must Have
 
 **User Value:** A retrieval/analysis app gets the A-box as a typed,
 traversable graph document — the same shape the schema graph already ships
-in, distinguishable by a `graph_kind` field.
+in, produced as its own explicitly named artifact.
 
 **Acceptance Criteria:**
-- [ ] `GraphData` carries `graph_kind: "schema" | "instance"`; the
-  `format_version` bumps additively. Existing consumers of schema graph
-  JSON keep deserializing (panschema-viz mirrors the field; both sides
-  change together and the rendered graph is browser-verified).
-- [ ] With an instance-data file supplied, the graph-json output path also
-  emits the instance graph as its own document (individuals as typed nodes
-  with their literal metadata, reference edges labelled by slot), alongside
-  the schema graph document — not merged into it.
-- [ ] Node identity in the instance graph document uses the same IRI
+- [x] `GraphData` carries `graph_kind: "schema" | "instance"`; the
+  `format_version` bumps additively (the field defaults to `schema` on
+  read, so pre-bump documents still parse). panschema-viz mirrors the
+  field; both sides change together and the rendered graph is
+  browser-verified.
+- [x] A new `instance-graph-json` format renders the A-box as its own
+  document at exactly the path `--output` names (individuals as typed
+  nodes with their literal metadata, reference edges labelled by slot) —
+  one invocation, one artifact, per ADR-009's pandoc-model addressing.
+  Source precedence matches the HTML section: `--instances` data wins,
+  else the schema's embedded OWL individuals. The manifest carries it as
+  an `instance-graph-json` key beside `graph-json`.
+- [x] Node identity in the instance graph document uses the same IRI
   minting as Slice 1's RDF, so graph-JSON traversal and SPARQL agree on
   which individual is which.
-- [ ] Without instances, graph-json output is unchanged apart from the new
-  discriminator field.
+- [x] `graph-json` stays the T-box document, always — `--instances` does
+  not graft an A-box onto it (it warns that the flag is ignored there).
 
 ### Slice 3: Instance-graph navigation + unified cards
 
@@ -168,7 +172,7 @@ exported instance graph from a manifest-driven build (ADR-009 decision 6).
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | Slice 1: A-box in RDF family | Must Have | — | Complete |
-| Slice 2: instance graph JSON | Must Have | Slice 1 (shared IRI minting) | Not Started |
+| Slice 2: instance graph JSON | Must Have | Slice 1 (shared IRI minting) | Complete |
 | Slice 3: nav + unified cards | Must Have | — | Not Started |
 | Slice 4: publish carries the exemplar | Must Have | Slice 3 | Not Started |
 | Slice 5: instances in the consumer manifest | Should Have | Slices 1–3 | Not Started |

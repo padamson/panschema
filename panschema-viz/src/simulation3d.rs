@@ -488,6 +488,7 @@ mod tests {
             schema_name: "test".to_string(),
             schema_title: None,
             format_version: "1.0".to_string(),
+            graph_kind: crate::graph_types::GraphKind::default(),
             nodes: vec![
                 GraphNode {
                     id: "a".to_string(),
@@ -571,6 +572,7 @@ mod tests {
             schema_name: "empty".to_string(),
             schema_title: None,
             format_version: "1.0".to_string(),
+            graph_kind: crate::graph_types::GraphKind::default(),
             nodes: vec![],
             edges: vec![],
         };
@@ -590,6 +592,7 @@ mod tests {
             schema_name: "single".to_string(),
             schema_title: None,
             format_version: "1.0".to_string(),
+            graph_kind: crate::graph_types::GraphKind::default(),
             nodes: vec![GraphNode {
                 id: "only".to_string(),
                 label: "Only Node".to_string(),
@@ -627,6 +630,7 @@ mod tests {
             schema_name: "multi".to_string(),
             schema_title: None,
             format_version: "1.0".to_string(),
+            graph_kind: crate::graph_types::GraphKind::default(),
             nodes: (0..10)
                 .map(|i| GraphNode {
                     id: format!("node{}", i),
@@ -675,6 +679,7 @@ mod tests {
             schema_name: "overlap".to_string(),
             schema_title: None,
             format_version: "1.0".to_string(),
+            graph_kind: crate::graph_types::GraphKind::default(),
             nodes: vec![
                 GraphNode {
                     id: "a".to_string(),

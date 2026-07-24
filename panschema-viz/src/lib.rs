@@ -1084,6 +1084,7 @@ mod details_json_tests {
                 schema_name: "x".into(),
                 schema_title: None,
                 format_version: "1.0".into(),
+                graph_kind: crate::graph_types::GraphKind::default(),
                 nodes,
                 edges: vec![edge],
             };

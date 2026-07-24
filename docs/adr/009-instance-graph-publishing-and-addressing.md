@@ -120,14 +120,20 @@ the shared serialization layer:
   supplied: the resulting file is a self-contained knowledge graph (what a
   triple store loads, what the book's SPARQL runs against). `--strict`
   applies (dangling instance references fail the build).
-- **Graph JSON**: stays T-box-only by default. With instances supplied, the
-  instance graph is emitted as a **separate graph document** of the same
-  `GraphData` shape — the A-box is its own artifact, mirroring the two
-  embedded canvases in the HTML. The wire format gains a `graph_kind:
-  "schema" | "instance"` discriminator and the `format_version` bumps
-  (additive; consumers that ignore unknown fields keep working), so a
-  consumer holding a graph file can tell which kind it has. A retrieved
-  subgraph (decision 3) serializes as this same document.
+- **Graph JSON**: `graph-json` stays the T-box document, always. The
+  instance graph is a **separate document with its own format id**,
+  `instance-graph-json` — one invocation produces one explicitly named
+  artifact, the pandoc model, rather than an `--output`-named file plus a
+  silently derived sibling. (Derived-sibling naming is idiomatic for
+  *subordinate* artifacts like sourcemaps; this ADR's own framing makes
+  the instance graph a first-class peer, so it gets a first-class name.)
+  This also mirrors the consumer manifest exactly, which is already
+  artifact-per-key: `[generate.<name>]` carries `instance-graph-json = "…"`
+  beside `graph-json = "…"`. Both documents share the `GraphData` shape;
+  the wire format gains a `graph_kind: "schema" | "instance"`
+  discriminator and the `format_version` bumps (additive; the field
+  defaults to `schema` on read, so pre-bump documents still parse). A
+  retrieved subgraph (decision 3) serializes as this same document.
 
 Large-graph exports (streaming, pagination) are explicitly out of scope
 until a consumer has a large graph; the query-scoped export falls out of

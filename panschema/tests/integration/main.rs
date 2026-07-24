@@ -60,6 +60,7 @@ fn class_card_surfaces_mixins_slots_and_resolved_xrefs() {
     let _ = fs::remove_dir_all(&output_dir);
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
+            "generate",
             "--schema",
             "tests/fixtures/class_card_dogfood.yaml",
             "--output",
@@ -170,6 +171,7 @@ classes:
 
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
+            "generate",
             "--schema",
             schema_path.to_str().unwrap(),
             "--output",
@@ -230,6 +232,7 @@ fn every_graph_node_has_a_matching_html_card() {
     let _ = fs::remove_dir_all(&output_dir);
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
+            "generate",
             "--schema",
             "tests/fixtures/reference.ttl",
             "--output",
@@ -271,6 +274,7 @@ fn generates_documentation_from_reference_ontology() {
 
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
+            "generate",
             "--schema",
             "tests/fixtures/reference.ttl",
             "--output",
@@ -345,6 +349,7 @@ fn classes_section_renders_is_a_hierarchy_with_flat_toggle() {
 
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
+            "generate",
             "--schema",
             "tests/fixtures/reference.ttl",
             "--output",
@@ -440,6 +445,7 @@ fn generates_documentation_from_linkml_yaml() {
 
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
+            "generate",
             "--schema",
             "tests/fixtures/sample_schema.yaml",
             "--output",
@@ -710,7 +716,7 @@ fn instances_flag_warns_only_for_formats_that_ignore_it() {
         .expect("run panschema");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("--instances only affects HTML and RDF outputs"),
+        stderr.contains("--instances only affects the HTML, RDF, and instance-graph-json"),
         "a format that ignores --instances should warn; got: {stderr}"
     );
 
@@ -900,6 +906,95 @@ fn viz_mode_flag_is_recognized() {
 }
 
 // ========== RDF Format Integration Tests ==========
+
+#[test]
+fn instance_graph_json_renders_the_abox_as_its_own_artifact() {
+    // One invocation, one named artifact (the pandoc model): the instance
+    // graph has its own format id, and --output names exactly the file
+    // produced — instance-kinded, nodes carrying the same minted IRIs the
+    // RDF A-box uses.
+    let out_file = std::env::temp_dir().join(format!(
+        "panschema_instancegraph_{}.json",
+        std::process::id()
+    ));
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--schema",
+            "tests/fixtures/wine_catalog.yaml",
+            "--instances",
+            "tests/fixtures/wine_instances.yaml",
+            "--format",
+            "instance-graph-json",
+            "--output",
+            out_file.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run panschema");
+    assert!(
+        output.status.success(),
+        "instance-graph-json should succeed; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let instance_doc: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&out_file).expect("read instance doc"))
+            .expect("parse instance doc");
+    assert_eq!(instance_doc["graph_kind"], "instance");
+    assert_eq!(instance_doc["format_version"], "1.1");
+    let uris: Vec<&str> = instance_doc["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|n| n["uri"].as_str())
+        .collect();
+    assert!(
+        uris.contains(&"https://example.org/wine/chateauMorgon"),
+        "instance nodes should carry minted IRIs; got: {uris:?}"
+    );
+    let _ = fs::remove_file(&out_file);
+}
+
+#[test]
+fn graph_json_stays_a_single_schema_document() {
+    // The schema graph keeps its format id and single-document output —
+    // supplying --instances doesn't graft an A-box onto it.
+    let out_file = std::env::temp_dir().join(format!(
+        "panschema_graphjson_plain_{}.json",
+        std::process::id()
+    ));
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--schema",
+            "tests/fixtures/wine_catalog.yaml",
+            "--instances",
+            "tests/fixtures/wine_instances.yaml",
+            "--format",
+            "graph-json",
+            "--output",
+            out_file.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run panschema");
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("ignored for format `graph-json`"),
+        "graph-json should warn that --instances is ignored; got: {stderr}"
+    );
+    let schema_doc: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&out_file).expect("read")).expect("parse");
+    assert_eq!(schema_doc["graph_kind"], "schema");
+    assert!(
+        schema_doc["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|n| n["node_type"] != "individual"),
+        "the schema document must stay T-box-only"
+    );
+    let _ = fs::remove_file(&out_file);
+}
 
 #[test]
 fn rdf_family_with_instances_emits_the_abox() {

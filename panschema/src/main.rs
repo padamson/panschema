@@ -42,24 +42,18 @@ pub enum VizMode {
 }
 
 /// A universal CLI for schema conversion, documentation, validation, and comparison.
+///
+/// One canonical spelling per action: every invocation goes through a
+/// subcommand (`generate`, `serve`, `validate`, …) — there is no bare
+/// no-subcommand form, so flags belong to exactly one command and each
+/// command's `--help` shows only its own surface.
 #[derive(Parser)]
 #[command(name = "panschema")]
 #[command(version, about, long_about = None)]
+#[command(arg_required_else_help = true)]
 struct Cli {
     #[command(subcommand)]
-    command: Option<Commands>,
-
-    /// Schema file (.ttl, .yaml, .yml) - used when no subcommand specified
-    #[arg(short, long, global = true)]
-    schema: Option<PathBuf>,
-
-    /// Output path (file for RDF formats, directory for HTML)
-    #[arg(short, long, global = true, default_value = "output")]
-    output: PathBuf,
-
-    /// Output format: html, ttl, jsonld, rdfxml, ntriples, graph-json, rust, postgres, shacl, json-schema, openapi
-    #[arg(short, long, global = true, default_value = "html")]
-    format: String,
+    command: Commands,
 }
 
 #[derive(Subcommand)]
@@ -82,7 +76,7 @@ enum Commands {
         #[arg(short, long, default_value = "output")]
         output: PathBuf,
 
-        /// Output format: html, ttl, jsonld, rdfxml, ntriples, graph-json, rust, postgres, shacl, json-schema, openapi
+        /// Output format: html, ttl, jsonld, rdfxml, ntriples, graph-json, instance-graph-json, rust, postgres, shacl, json-schema, openapi
         #[arg(short, long, default_value = "html")]
         format: String,
 
@@ -438,16 +432,23 @@ fn generate(
         writer
             .write(&schema, output)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
-    } else if let (Some(inst_path), "ttl" | "jsonld" | "rdfxml" | "ntriples") =
-        (instances, format.to_lowercase().as_str())
+    } else if let (
+        Some(inst_path),
+        "ttl" | "jsonld" | "rdfxml" | "ntriples" | "instance-graph-json",
+    ) = (instances, format.to_lowercase().as_str())
     {
-        // An RDF-family output with an A-box attached: the instance set flows
-        // into the same graph the T-box serializes from, so the file is a
-        // self-contained knowledge graph.
+        // An output with an A-box attached: RDF formats fold the instance
+        // set into the same graph the T-box serializes from (one
+        // self-contained knowledge graph); instance-graph-json renders the
+        // A-box as its own artifact (one invocation, one named output —
+        // the schema graph stays `graph-json`'s).
         use panschema::io::Writer;
         let set = load_instance_set(&schema, inst_path, strict)?;
         let writer: Box<dyn Writer> = match format.to_lowercase().as_str() {
             "ttl" => Box::new(panschema::owl_writer::OwlWriter::new().with_instances(set)),
+            "instance-graph-json" => {
+                Box::new(panschema::graph_writer::InstanceGraphWriter::new().with_instances(set))
+            }
             "jsonld" => {
                 Box::new(panschema::rdf_serializers::JsonLdWriter::new().with_instances(set))
             }
@@ -606,6 +607,7 @@ fn generate_from_manifest(offline: bool, refresh_labels: bool, strict: bool) -> 
             ("rdfxml", &gen_cfg.rdfxml),
             ("ntriples", &gen_cfg.ntriples),
             ("graph-json", &gen_cfg.graph_json),
+            ("instance-graph-json", &gen_cfg.instance_graph_json),
         ] {
             let Some(out) = out_opt else { continue };
             let out = manifest_dir.join(out);
@@ -1398,7 +1400,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Commands::Generate {
+        Commands::Generate {
             schema,
             instances,
             output,
@@ -1408,7 +1410,7 @@ async fn main() -> anyhow::Result<()> {
             offline,
             refresh_labels,
             strict,
-        }) => match schema {
+        } => match schema {
             Some(schema_path) => {
                 if format.to_lowercase() == "html" && !no_graph {
                     let mode_str = match viz_mode {
@@ -1421,14 +1423,33 @@ async fn main() -> anyhow::Result<()> {
                 if instances.is_some()
                     && !matches!(
                         format.to_lowercase().as_str(),
-                        "html" | "ttl" | "jsonld" | "rdfxml" | "ntriples"
+                        "html" | "ttl" | "jsonld" | "rdfxml" | "ntriples" | "instance-graph-json"
                     )
                 {
                     eprintln!(
-                        "warning: --instances only affects HTML and RDF outputs; \
-                         ignored for format `{}`",
+                        "warning: --instances only affects the HTML, RDF, and \
+                         instance-graph-json outputs; ignored for format `{}`",
                         format
                     );
+                }
+                // The graph-rendering flags shape the HTML artifact only;
+                // like --instances above, deviating from their defaults for
+                // another format is ignored loudly, not silently.
+                if format.to_lowercase() != "html" {
+                    if no_graph {
+                        eprintln!(
+                            "warning: --no-graph only affects HTML output; \
+                             ignored for format `{}`",
+                            format
+                        );
+                    }
+                    if !matches!(viz_mode, VizMode::Auto) {
+                        eprintln!(
+                            "warning: --viz-mode only affects HTML output; \
+                             ignored for format `{}`",
+                            format
+                        );
+                    }
                 }
                 let no_overrides = std::collections::BTreeMap::new();
                 let labels = LabelOptions {
@@ -1452,14 +1473,14 @@ async fn main() -> anyhow::Result<()> {
             }
             None => generate_from_manifest(offline, refresh_labels, strict)?,
         },
-        Some(Commands::Init {
+        Commands::Init {
             name,
             version,
             main,
             linkml,
             from,
             force,
-        }) => init_schema_package(
+        } => init_schema_package(
             name.as_deref(),
             version.as_deref(),
             main.as_deref(),
@@ -1467,72 +1488,44 @@ async fn main() -> anyhow::Result<()> {
             from.as_deref(),
             force,
         )?,
-        Some(Commands::Add { spec, name }) => add_schema(spec, name.as_deref())?,
-        Some(Commands::Release {
+        Commands::Add { spec, name } => add_schema(spec, name.as_deref())?,
+        Commands::Release {
             level,
             version,
             git,
             push,
             dry_run,
-        }) => release_schema(level, version.as_deref(), git, push, dry_run)?,
-        Some(Commands::Fetch) => fetch_from_manifest()?,
-        Some(Commands::Verify) => verify_from_manifest()?,
-        Some(Commands::Validate { schema, data }) => validate_data(&schema, &data)?,
-        Some(Commands::Publish {
+        } => release_schema(level, version.as_deref(), git, push, dry_run)?,
+        Commands::Fetch => fetch_from_manifest()?,
+        Commands::Verify => verify_from_manifest()?,
+        Commands::Validate { schema, data } => validate_data(&schema, &data)?,
+        Commands::Publish {
             manifest,
             output_dir,
             edge_from_worktree,
-        }) => publish_command(&manifest, output_dir.as_deref(), edge_from_worktree)?,
-        Some(Commands::Serve {
+        } => publish_command(&manifest, output_dir.as_deref(), edge_from_worktree)?,
+        Commands::Serve {
             schema,
             output,
             port,
             host_all,
-        }) => {
+        } => {
             server::serve(&schema, &output, port, host_all).await?;
         }
-        Some(Commands::Completions { shell }) => {
+        Commands::Completions { shell } => {
             let mut cmd = Cli::command();
             clap_complete::generate(shell, &mut cmd, "panschema", &mut std::io::stdout());
         }
         #[cfg(feature = "dev")]
-        Some(Commands::Styleguide {
+        Commands::Styleguide {
             output,
             serve,
             port,
-        }) => {
+        } => {
             generate_styleguide(&output)?;
             if serve {
                 println!("Starting style guide server on port {port}...");
                 server::serve_static(&output, port).await?;
-            }
-        }
-        None => {
-            // Default behavior: generate if a schema is provided (with graph enabled by default)
-            if let Some(schema_path) = cli.schema {
-                let no_overrides = std::collections::BTreeMap::new();
-                let labels = LabelOptions {
-                    offline: false,
-                    refresh: false,
-                    overrides: &no_overrides,
-                };
-                // Bare-CLI fallback (no subcommand): strict mode is a
-                // `generate`-subcommand flag, so it's off here.
-                let no_deps = std::collections::BTreeMap::new();
-                generate(
-                    &schema_path,
-                    None,
-                    &cli.output,
-                    &cli.format,
-                    true,
-                    None,
-                    None,
-                    &labels,
-                    false,
-                    &no_deps,
-                )?;
-            } else {
-                println!("panschema: no input specified. Use --help for usage.");
             }
         }
     }
@@ -1545,25 +1538,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cli_parses_with_defaults() {
-        let cli = Cli::try_parse_from(["panschema"]).unwrap();
-        assert_eq!(cli.output, PathBuf::from("output"));
-        assert_eq!(cli.format, "html");
-        assert!(cli.schema.is_none());
-        assert!(cli.command.is_none());
+    fn bare_invocation_requires_a_subcommand() {
+        // There is no bare no-subcommand form: every action has exactly one
+        // spelling. `panschema` alone errors (clap shows help), it does not
+        // silently default to generate.
+        let Err(err) = Cli::try_parse_from(["panschema"]) else {
+            panic!("bare `panschema` should not parse");
+        };
+        assert_eq!(
+            err.kind(),
+            clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+        );
     }
 
     #[test]
     fn help_text_lists_every_registered_writer_format() {
-        // The `--format` help strings are hand-written, disconnected from
-        // `FormatRegistry` — they can silently drift when a writer is
-        // added (this is how `rust` was found missing from both the
-        // top-level and `generate` subcommand help text). Assert every
-        // registered format id actually appears in both.
+        // The `--format` help string is hand-written, disconnected from
+        // `FormatRegistry` — it can silently drift when a writer is added
+        // (this is how `rust` was found missing from the help text).
+        // `generate` owns the only `--format`; assert every registered
+        // format id appears in its help.
         let registry = panschema::io::FormatRegistry::with_defaults();
         let format_ids = registry.writer_format_ids();
 
-        let top_level_help = Cli::command().render_long_help().to_string();
         let generate_help = Cli::command()
             .find_subcommand("generate")
             .expect("generate subcommand")
@@ -1572,10 +1569,6 @@ mod tests {
             .to_string();
 
         for id in &format_ids {
-            assert!(
-                top_level_help.contains(id),
-                "top-level --help must list format `{id}`; got:\n{top_level_help}"
-            );
             assert!(
                 generate_help.contains(id),
                 "generate --help must list format `{id}`; got:\n{generate_help}"
@@ -1595,7 +1588,7 @@ mod tests {
         ])
         .unwrap();
         match cli.command {
-            Some(Commands::Generate {
+            Commands::Generate {
                 schema,
                 instances,
                 output,
@@ -1605,7 +1598,7 @@ mod tests {
                 offline,
                 refresh_labels,
                 strict,
-            }) => {
+            } => {
                 assert_eq!(schema, Some(PathBuf::from("test.ttl")));
                 assert_eq!(instances, None); // default None (no instance-data file)
                 assert_eq!(output, PathBuf::from("docs"));
@@ -1634,12 +1627,12 @@ mod tests {
         ])
         .unwrap();
         match cli.command {
-            Some(Commands::Generate {
+            Commands::Generate {
                 schema,
                 output,
                 format,
                 ..
-            }) => {
+            } => {
                 assert_eq!(schema, Some(PathBuf::from("test.ttl")));
                 assert_eq!(output, PathBuf::from("output.jsonld"));
                 assert_eq!(format, "jsonld");
@@ -1660,7 +1653,7 @@ mod tests {
         ])
         .unwrap();
         match cli.command {
-            Some(Commands::Generate { viz_mode, .. }) => {
+            Commands::Generate { viz_mode, .. } => {
                 assert!(matches!(viz_mode, VizMode::Canvas2D));
             }
             _ => panic!("Expected Generate command"),
@@ -1676,7 +1669,7 @@ mod tests {
         ])
         .unwrap();
         match cli.command {
-            Some(Commands::Generate { viz_mode, .. }) => {
+            Commands::Generate { viz_mode, .. } => {
                 assert!(matches!(viz_mode, VizMode::WebGPU3D));
             }
             _ => panic!("Expected Generate command"),
@@ -1694,7 +1687,7 @@ mod tests {
         ])
         .unwrap();
         match cli.command {
-            Some(Commands::Generate { no_graph, .. }) => {
+            Commands::Generate { no_graph, .. } => {
                 assert!(no_graph);
             }
             _ => panic!("Expected Generate command"),
@@ -1705,7 +1698,7 @@ mod tests {
     fn cli_parses_generate_with_no_schema_for_manifest_mode() {
         let cli = Cli::try_parse_from(["panschema", "generate"]).unwrap();
         match cli.command {
-            Some(Commands::Generate { schema, .. }) => {
+            Commands::Generate { schema, .. } => {
                 assert!(
                     schema.is_none(),
                     "schema should be None to trigger manifest discovery"
@@ -1727,7 +1720,7 @@ mod tests {
         ])
         .unwrap();
         match cli.command {
-            Some(Commands::Serve { schema, port, .. }) => {
+            Commands::Serve { schema, port, .. } => {
                 assert_eq!(schema, PathBuf::from("test.ttl"));
                 assert_eq!(port, 8080);
             }
@@ -1749,11 +1742,11 @@ mod tests {
         ])
         .unwrap();
         match cli.command {
-            Some(Commands::Styleguide {
+            Commands::Styleguide {
                 output,
                 serve,
                 port,
-            }) => {
+            } => {
                 assert_eq!(output, PathBuf::from("styleguide-output"));
                 assert!(serve);
                 assert_eq!(port, 4000);

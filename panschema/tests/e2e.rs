@@ -56,6 +56,7 @@ fn generate_docs_for(fixture_path: &str) -> PathBuf {
 
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
+            "generate",
             "--schema",
             fixture_path,
             "--output",

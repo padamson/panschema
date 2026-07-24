@@ -1103,6 +1103,7 @@ mod tests {
             nodes,
             edges,
             format_version: "1.0".to_string(),
+            graph_kind: crate::graph_types::GraphKind::default(),
         }
     }
 
@@ -1150,6 +1151,7 @@ mod tests {
             schema_name: "ring".into(),
             schema_title: None,
             format_version: "1.0".into(),
+            graph_kind: crate::graph_types::GraphKind::default(),
             nodes,
             edges,
         }
@@ -1182,6 +1184,7 @@ mod tests {
             schema_name: "lopsided".into(),
             schema_title: None,
             format_version: "1.0".into(),
+            graph_kind: crate::graph_types::GraphKind::default(),
             nodes,
             edges,
         }
@@ -1282,6 +1285,7 @@ mod tests {
             schema_name: "two_rings".into(),
             schema_title: None,
             format_version: "1.0".into(),
+            graph_kind: crate::graph_types::GraphKind::default(),
             nodes: Vec::new(),
             edges: Vec::new(),
         };
@@ -1379,6 +1383,7 @@ mod tests {
             schema_name: "empty".into(),
             schema_title: None,
             format_version: "1.0".into(),
+            graph_kind: crate::graph_types::GraphKind::default(),
             nodes: Vec::new(),
             edges: Vec::new(),
         };
@@ -1409,6 +1414,7 @@ mod tests {
             schema_name: "two_rings".into(),
             schema_title: None,
             format_version: "1.0".into(),
+            graph_kind: crate::graph_types::GraphKind::default(),
             nodes: Vec::new(),
             edges: Vec::new(),
         };
@@ -1489,6 +1495,7 @@ mod tests {
             schema_name: "two_node_orphan".into(),
             schema_title: None,
             format_version: "1.0".into(),
+            graph_kind: crate::graph_types::GraphKind::default(),
             nodes: Vec::new(),
             edges: Vec::new(),
         };
@@ -1606,6 +1613,7 @@ mod tests {
             schema_name: "empty".into(),
             schema_title: None,
             format_version: "1.0".into(),
+            graph_kind: crate::graph_types::GraphKind::default(),
             nodes: Vec::new(),
             edges: Vec::new(),
         };
@@ -1650,6 +1658,7 @@ mod tests {
             schema_name: "empty".into(),
             schema_title: None,
             format_version: "1.0".into(),
+            graph_kind: crate::graph_types::GraphKind::default(),
             nodes: Vec::new(),
             edges: Vec::new(),
         };
@@ -1809,6 +1818,7 @@ mod tests {
             schema_name: "tree".into(),
             schema_title: None,
             format_version: "1.0".into(),
+            graph_kind: crate::graph_types::GraphKind::default(),
             nodes,
             edges,
         }
@@ -1904,6 +1914,7 @@ mod tests {
             schema_name: "two_trees".into(),
             schema_title: None,
             format_version: "1.0".into(),
+            graph_kind: crate::graph_types::GraphKind::default(),
             nodes,
             edges,
         };
@@ -2006,6 +2017,7 @@ mod tests {
             schema_name: "empty".into(),
             schema_title: None,
             format_version: "1.0".into(),
+            graph_kind: crate::graph_types::GraphKind::default(),
             nodes: Vec::new(),
             edges: Vec::new(),
         };
