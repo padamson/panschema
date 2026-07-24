@@ -31,6 +31,8 @@ pub enum PublishError {
     MissingVersionField,
     #[error("`{value}` is not a valid semver version")]
     InvalidVersion { value: String },
+    #[error("at most one `[[instances]]` entry may set `exemplar = true`; found: {names}")]
+    MultipleExemplars { names: String },
     #[error(
         "[publishing].current = `{current}` must appear in [publishing].versions = {versions:?} or equal [publishing].edge = {edge:?}"
     )]
@@ -92,6 +94,29 @@ pub struct PublishConfig {
     /// off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub book_link: Option<BookLinkConfig>,
+    /// Zero-or-more instance graphs published alongside the schema
+    /// (`[[instances]]`). The one marked `exemplar` embeds in the schema
+    /// page (ADR-009); each version renders its own ref's data file.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub instances: Vec<InstanceEntry>,
+}
+
+/// One `[[instances]]` entry: a named instance-data file published with
+/// the schema. Unknown keys are rejected so a typo'd setting fails
+/// loudly instead of silently reverting to its default.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstanceEntry {
+    /// Dataset identity (the directory name once sibling instance pages
+    /// exist).
+    pub name: String,
+    /// Path to the LinkML instance-data file, relative to the publish
+    /// spec's location.
+    pub data: PathBuf,
+    /// Embed this dataset in the schema page as the exemplar. At most
+    /// one entry may set it.
+    #[serde(default)]
+    pub exemplar: bool,
 }
 
 /// `[schema]` table — identity and versioning metadata.
@@ -234,6 +259,17 @@ impl FromStr for PublishConfig {
         let cfg: PublishConfig = toml::from_str(s)?;
         if let Some(publishing) = &cfg.publishing {
             publishing.validate()?;
+        }
+        let exemplars: Vec<&str> = cfg
+            .instances
+            .iter()
+            .filter(|e| e.exemplar)
+            .map(|e| e.name.as_str())
+            .collect();
+        if exemplars.len() > 1 {
+            return Err(PublishError::MultipleExemplars {
+                names: exemplars.join(", "),
+            });
         }
         Ok(cfg)
     }
@@ -457,11 +493,23 @@ pub fn publish_versioned(
     let mut cohort = build_cohort_context(publishing);
     cohort.label_sources = publish_cfg.label_sources.clone();
 
+    // Only the exemplar embeds in the schema page today; other entries
+    // await sibling instance pages (ADR-009 deferred) — note them so the
+    // omission isn't silent.
+    let exemplar = publish_cfg.instances.iter().find(|e| e.exemplar);
+    for name in unpublished_instance_names(&publish_cfg.instances) {
+        eprintln!(
+            "note: instance graph `{name}` is declared but not published — \
+             sibling instance pages aren't built yet; only the exemplar embeds"
+        );
+    }
+
     for version in &publishing.versions {
         build_version(
             repo_root,
             version,
             manifest_main,
+            exemplar,
             output_dir,
             &cohort,
             BuildSource::GitRef(version),
@@ -473,7 +521,15 @@ pub fn publish_versioned(
         } else {
             BuildSource::GitRef(edge)
         };
-        build_version(repo_root, edge, manifest_main, output_dir, &cohort, source)?;
+        build_version(
+            repo_root,
+            edge,
+            manifest_main,
+            exemplar,
+            output_dir,
+            &cohort,
+            source,
+        )?;
     }
 
     // current/ is a copy of the configured version's output, not a
@@ -492,10 +548,21 @@ pub fn publish_versioned(
     Ok(())
 }
 
+/// The declared instance graphs `publish` does not yet put on the site:
+/// everything except the exemplar (sibling instance pages are deferred).
+fn unpublished_instance_names(instances: &[InstanceEntry]) -> Vec<&str> {
+    instances
+        .iter()
+        .filter(|e| !e.exemplar)
+        .map(|e| e.name.as_str())
+        .collect()
+}
+
 fn build_version(
     repo_root: &Path,
     label: &str,
     manifest_main: &Path,
+    exemplar: Option<&InstanceEntry>,
     output_dir: &Path,
     cohort: &CohortContext,
     source: BuildSource<'_>,
@@ -505,14 +572,48 @@ fn build_version(
     match source {
         BuildSource::GitRef(ref_) => {
             let extracted = extract_main_at_ref(repo_root, ref_, manifest_main)?;
-            generate_html_for_version(label, extracted.path(), &version_out, cohort)
+            // Each version renders its own ref's data. A ref where the
+            // file doesn't exist (it predates the dataset) publishes
+            // without an instance graph — a note, not an error.
+            let extracted_data = exemplar.and_then(|entry| {
+                match extract_main_at_ref(repo_root, ref_, &entry.data) {
+                    Ok(file) => Some((file, entry)),
+                    Err(_) => {
+                        eprintln!(
+                            "note: {label}: instance data `{}` not present at `{ref_}`; \
+                             publishing this version without an instance graph",
+                            entry.data.display()
+                        );
+                        None
+                    }
+                }
+            });
+            let instances = extracted_data
+                .as_ref()
+                .map(|(file, entry)| (file.path(), entry.data.as_path()));
+            generate_html_for_version(label, extracted.path(), &version_out, cohort, instances)
         }
         BuildSource::WorkingTree => {
             // The manifest's `files.main` is documented as relative
             // to the publish-spec's location; in the supported v1
             // layout that's the repo root. Resolve there.
             let input = repo_root.join(manifest_main);
-            generate_html_for_version(label, &input, &version_out, cohort)
+            let data_path = exemplar.map(|entry| (repo_root.join(&entry.data), entry));
+            let instances = match &data_path {
+                Some((path, entry)) if path.is_file() => {
+                    Some((path.as_path(), entry.data.as_path()))
+                }
+                Some((path, _)) => {
+                    eprintln!(
+                        "note: {label}: instance data `{}` not present in the working tree; \
+                         publishing this version without an instance graph",
+                        path.display()
+                    );
+                    None
+                }
+                None => None,
+            };
+            generate_html_for_version(label, &input, &version_out, cohort, instances)
         }
     }
 }
@@ -573,6 +674,7 @@ fn generate_html_for_version(
     input: &Path,
     output: &Path,
     cohort: &CohortContext,
+    instances: Option<(&Path, &Path)>,
 ) -> Result<(), PublishError> {
     use crate::html_writer::HtmlWriter;
     use crate::io::{FormatRegistry, Writer};
@@ -589,6 +691,29 @@ fn generate_html_for_version(
     let mut writer = HtmlWriter::with_options(true)
         .with_version_context(cohort.context_for(version))
         .with_site_root_href(cohort.site_root_href.clone());
+    // `(read_path, declared_path)`: the file is read from the first (a
+    // per-ref extraction lands in a tempfile) but provenance shows the
+    // declared name.
+    if let Some((data_path, declared)) = instances {
+        let content =
+            std::fs::read_to_string(data_path).map_err(|e| PublishError::GenerateFailed {
+                version: version.to_string(),
+                message: format!("reading instance data {}: {e}", declared.display()),
+            })?;
+        let data: serde_yaml::Value =
+            serde_yaml::from_str(&content).map_err(|e| PublishError::GenerateFailed {
+                version: version.to_string(),
+                message: format!("parsing instance data {}: {e}", declared.display()),
+            })?;
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        for d in crate::diagnostics::dangling_instance_references(&set) {
+            eprintln!("warning: {version}: {}", d.message());
+        }
+        writer = writer.with_instances(set);
+        if let Some(name) = declared.file_name().and_then(|n| n.to_str()) {
+            writer = writer.with_instance_provenance(name.to_string());
+        }
+    }
     if let Some(store) =
         crate::labels::open_default_store(&schema, false, &cohort.label_sources, false)
     {
@@ -1476,6 +1601,7 @@ versions = ["v0.1.0"]
         current: &str,
     ) -> PublishConfig {
         PublishConfig {
+            instances: Vec::new(),
             schema: SchemaInfo {
                 name: "fixture".into(),
                 version: "0.2.0".into(),
@@ -1528,6 +1654,7 @@ versions = ["v0.1.0"]
     fn publish_versioned_errors_when_publishing_section_absent() {
         let repo = make_versioned_linkml_repo();
         let cfg = PublishConfig {
+            instances: Vec::new(),
             schema: SchemaInfo {
                 name: "x".into(),
                 version: "0.1.0".into(),
@@ -1544,6 +1671,217 @@ versions = ["v0.1.0"]
         let err =
             publish_versioned(repo.path(), &cfg, out.path(), false).expect_err("no publishing");
         assert!(matches!(err, PublishError::MissingPublishingSection));
+    }
+
+    #[test]
+    fn parses_instances_entries() {
+        let toml = r#"
+[schema]
+name = "fixture"
+version = "0.1.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+
+[[instances]]
+name = "catalog"
+data = "data/instances.yaml"
+exemplar = true
+
+[[instances]]
+name = "extra"
+data = "data/extra.yaml"
+"#;
+        let cfg: PublishConfig = toml.parse().expect("parses");
+        assert_eq!(cfg.instances.len(), 2);
+        assert!(cfg.instances[0].exemplar);
+        assert_eq!(cfg.instances[0].name, "catalog");
+        assert_eq!(cfg.instances[1].data, PathBuf::from("data/extra.yaml"));
+        assert!(!cfg.instances[1].exemplar);
+    }
+
+    #[test]
+    fn rejects_two_exemplar_instances() {
+        let toml = r#"
+[schema]
+name = "fixture"
+version = "0.1.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+
+[[instances]]
+name = "a"
+data = "a.yaml"
+exemplar = true
+
+[[instances]]
+name = "b"
+data = "b.yaml"
+exemplar = true
+"#;
+        let err = toml.parse::<PublishConfig>().unwrap_err();
+        assert!(
+            err.to_string().contains("exemplar"),
+            "two exemplars must fail naming the conflict; got: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_instances_key() {
+        let toml = r#"
+[schema]
+name = "fixture"
+version = "0.1.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+
+[[instances]]
+name = "a"
+data = "a.yaml"
+exemplur = true
+"#;
+        assert!(toml.parse::<PublishConfig>().is_err());
+    }
+
+    /// A repo whose schema has a `tree_root` container: v0.1.0 predates the
+    /// data file, v0.2.0 (and the worktree) carry it.
+    fn make_repo_with_instance_data() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path();
+        run(path, &["init", "--initial-branch=main", "--quiet"]);
+        run(path, &["config", "user.email", "test@example.com"]);
+        run(path, &["config", "user.name", "Test"]);
+        run(path, &["config", "commit.gpgsign", "false"]);
+        let schema = concat!(
+            "id: https://example.org/wine\n",
+            "name: fixture_wine\n",
+            "version: 0.1.0\n",
+            "prefixes:\n",
+            "  wine: https://example.org/wine/\n",
+            "default_prefix: wine\n",
+            "default_range: string\n",
+            "classes:\n",
+            "  Catalog:\n",
+            "    tree_root: true\n",
+            "    attributes:\n",
+            "      wines:\n",
+            "        range: Wine\n",
+            "        multivalued: true\n",
+            "  Wine:\n",
+            "    attributes:\n",
+            "      id:\n",
+            "        identifier: true\n",
+            "      name:\n",
+            "        range: string\n",
+        );
+        std::fs::write(path.join("schema.yaml"), schema).unwrap();
+        run(path, &["add", "schema.yaml"]);
+        run(path, &["commit", "-m", "release v0.1.0", "--quiet"]);
+        run(path, &["tag", "v0.1.0"]);
+        std::fs::create_dir_all(path.join("data")).unwrap();
+        std::fs::write(
+            path.join("data/instances.yaml"),
+            "wines:\n  - id: morgon\n    name: Morgon\n",
+        )
+        .unwrap();
+        run(path, &["add", "data/instances.yaml"]);
+        run(path, &["commit", "-m", "release v0.2.0", "--quiet"]);
+        run(path, &["tag", "v0.2.0"]);
+        tmp
+    }
+
+    #[test]
+    fn edge_worktree_build_renders_the_working_tree_data() {
+        let repo = make_repo_with_instance_data();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], Some("main"), "v0.2.0");
+        cfg.instances.push(InstanceEntry {
+            name: "catalog".into(),
+            data: PathBuf::from("data/instances.yaml"),
+            exemplar: true,
+        });
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), true).expect("publish succeeds");
+        let edge = std::fs::read_to_string(out.path().join("main/index.html")).unwrap();
+        assert!(
+            edge.contains("ind-morgon"),
+            "the edge build must render the working tree's data file"
+        );
+    }
+
+    #[test]
+    fn only_non_exemplar_entries_are_noted_as_unpublished() {
+        let entries = vec![
+            InstanceEntry {
+                name: "catalog".into(),
+                data: PathBuf::from("a.yaml"),
+                exemplar: true,
+            },
+            InstanceEntry {
+                name: "extra".into(),
+                data: PathBuf::from("b.yaml"),
+                exemplar: false,
+            },
+        ];
+        assert_eq!(
+            unpublished_instance_names(&entries),
+            vec!["extra"],
+            "the exemplar is published; only the rest are noted"
+        );
+    }
+
+    #[test]
+    fn worktree_build_without_the_data_file_publishes_without_the_exemplar() {
+        // The data file is committed for the tags but deleted from the
+        // working tree: the edge/worktree build must note-and-skip, not
+        // fail trying to read a missing file.
+        let repo = make_repo_with_instance_data();
+        std::fs::remove_file(repo.path().join("data/instances.yaml")).unwrap();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], Some("main"), "v0.2.0");
+        cfg.instances.push(InstanceEntry {
+            name: "catalog".into(),
+            data: PathBuf::from("data/instances.yaml"),
+            exemplar: true,
+        });
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), true).expect("publish succeeds");
+        let edge = std::fs::read_to_string(out.path().join("main/index.html")).unwrap();
+        assert!(
+            !edge.contains("ind-morgon"),
+            "a missing working-tree data file publishes without the exemplar"
+        );
+    }
+
+    #[test]
+    fn publish_carries_the_exemplar_per_version() {
+        let repo = make_repo_with_instance_data();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.1.0", "v0.2.0"], None, "v0.2.0");
+        cfg.instances.push(InstanceEntry {
+            name: "catalog".into(),
+            data: PathBuf::from("data/instances.yaml"),
+            exemplar: true,
+        });
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
+
+        // v0.2.0's ref carries the data file → the page embeds the exemplar
+        // (sidebar entry + individual card) with its provenance.
+        let v02 = std::fs::read_to_string(out.path().join("v0.2.0/index.html")).unwrap();
+        assert!(v02.contains("Instance Graph"), "sidebar entry present");
+        assert!(v02.contains("ind-morgon"), "individual card present");
+        assert!(v02.contains("instances.yaml"), "provenance names the file");
+
+        // v0.1.0 predates the data file → published without an instance
+        // graph, not failed.
+        let v01 = std::fs::read_to_string(out.path().join("v0.1.0/index.html")).unwrap();
+        assert!(
+            !v01.contains("ind-morgon"),
+            "a ref without the data file publishes without the exemplar"
+        );
     }
 
     #[test]
@@ -1939,7 +2277,7 @@ versions = ["v0.1.0"]
             label_sources: std::collections::BTreeMap::new(),
         };
 
-        generate_html_for_version("1.0.0", &main, &out, &cohort)
+        generate_html_for_version("1.0.0", &main, &out, &cohort, None)
             .expect("publish generation should succeed");
         let html = std::fs::read_to_string(out.join("index.html")).expect("index.html");
         assert!(

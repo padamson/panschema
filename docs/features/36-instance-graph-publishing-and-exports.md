@@ -110,7 +110,7 @@ authored.
 
 ### Slice 4: `publish` carries the exemplar
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Must Have
 
@@ -119,16 +119,16 @@ graph — the docs a consumer actually deploys stop silently dropping the
 A-box.
 
 **Acceptance Criteria:**
-- [ ] `panschema-publish.toml` accepts zero-or-more `[[instances]]` entries
+- [x] `panschema-publish.toml` accepts zero-or-more `[[instances]]` entries
   (`name`, `data`, optional `exemplar` — at most one exemplar; a second is
   a validation error). Unknown keys fail loudly, matching the manifest's
   existing strictness.
-- [ ] `publish` builds each version with that version's own data: the data
+- [x] `publish` builds each version with that version's own data: the data
   file is extracted at each ref like the schema is; a ref where the file
   doesn't exist publishes that version without an instance graph (a note,
   not an error).
-- [ ] The edge/worktree build renders the working-tree data file.
-- [ ] The exemplar appears embedded in the published schema page with its
+- [x] The edge/worktree build renders the working-tree data file.
+- [x] The exemplar appears embedded in the published schema page with its
   sidebar entry (Slice 3's rendering, through the publish path).
 
 ### Slice 5: Instances in the consumer manifest (dataset-first repos)
@@ -174,7 +174,7 @@ exported instance graph from a manifest-driven build (ADR-009 decision 6).
 | Slice 1: A-box in RDF family | Must Have | — | Complete |
 | Slice 2: instance graph JSON | Must Have | Slice 1 (shared IRI minting) | Complete |
 | Slice 3: nav + unified cards | Must Have | — | Complete |
-| Slice 4: publish carries the exemplar | Must Have | Slice 3 | Not Started |
+| Slice 4: publish carries the exemplar | Must Have | Slice 3 | Complete |
 | Slice 5: instances in the consumer manifest | Should Have | Slices 1–3 | Not Started |
 
 ## Definition of Done
