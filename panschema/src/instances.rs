@@ -224,7 +224,7 @@ impl InstanceSet {
     /// typed [`Reference`] — a scalar referencing another instance by id (a
     /// graph edge), or an inlined mapping becoming its own nested record plus
     /// an edge to it. Handles both list and identifier-keyed-dict collections.
-    pub fn from_linkml_data(schema: &SchemaDefinition, data: &serde_yaml::Value) -> Self {
+    pub fn from_linkml_data(schema: &SchemaDefinition, data: &serde_norway::Value) -> Self {
         let Some(root) = schema.classes.values().find(|c| c.tree_root) else {
             return Self::default();
         };
@@ -278,16 +278,16 @@ struct LinkmlLoader<'a> {
 impl LinkmlLoader<'_> {
     /// A collection value is either a list of records or an identifier-keyed
     /// mapping of records.
-    fn collect_collection(&mut self, class_name: &str, value: &serde_yaml::Value) {
+    fn collect_collection(&mut self, class_name: &str, value: &serde_norway::Value) {
         match value {
-            serde_yaml::Value::Sequence(items) => {
+            serde_norway::Value::Sequence(items) => {
                 for item in items {
                     if let Some(id) = self.build_record(class_name, None, item) {
                         self.note_top_level_id(id);
                     }
                 }
             }
-            serde_yaml::Value::Mapping(map) => {
+            serde_norway::Value::Mapping(map) => {
                 for (key, record) in map {
                     if let Some(id) = self.build_record(class_name, key.as_str(), record) {
                         self.note_top_level_id(id);
@@ -313,7 +313,7 @@ impl LinkmlLoader<'_> {
         &mut self,
         class_name: &str,
         dict_key: Option<&str>,
-        record: &serde_yaml::Value,
+        record: &serde_norway::Value,
     ) -> Option<String> {
         let class = self.schema.classes.get(class_name)?;
         let map = record.as_mapping()?;
@@ -331,7 +331,7 @@ impl LinkmlLoader<'_> {
 
         let string_field = |name: Option<&str>| {
             name.and_then(|n| map.get(n))
-                .and_then(serde_yaml::Value::as_str)
+                .and_then(serde_norway::Value::as_str)
                 .map(str::to_string)
         };
 
@@ -414,13 +414,13 @@ impl LinkmlLoader<'_> {
         slot: &str,
         range: Option<&str>,
         property: &str,
-        value: &serde_yaml::Value,
+        value: &serde_norway::Value,
         display: bool,
         literals: &mut Vec<(String, String)>,
         references: &mut Vec<Reference>,
         slot_values: &mut Vec<SlotValue>,
     ) {
-        if let serde_yaml::Value::Sequence(items) = value {
+        if let serde_norway::Value::Sequence(items) = value {
             for item in items {
                 self.ingest_field(
                     slot,
@@ -436,14 +436,14 @@ impl LinkmlLoader<'_> {
             return;
         }
         // A null carries no value — treat as absent, not a kind mismatch.
-        if matches!(value, serde_yaml::Value::Null) {
+        if matches!(value, serde_norway::Value::Null) {
             return;
         }
         if range.is_some_and(|r| self.schema.classes.contains_key(r)) {
             let class = range.expect("is_some_and guarantees a class range");
             match value {
                 // A scalar references an existing instance by id.
-                serde_yaml::Value::String(s) => {
+                serde_norway::Value::String(s) => {
                     push_slot_value(slot_values, slot, InstanceValue::Reference(s.clone()));
                     if display {
                         references.push(Reference {
@@ -453,7 +453,7 @@ impl LinkmlLoader<'_> {
                     }
                 }
                 // An inlined mapping is its own record; recurse and edge to it.
-                serde_yaml::Value::Mapping(_) => {
+                serde_norway::Value::Mapping(_) => {
                     if let Some(target) = self.build_record(class, None, value) {
                         push_slot_value(
                             slot_values,
@@ -498,11 +498,11 @@ impl LinkmlLoader<'_> {
 /// Only reached for a value that fit neither a scalar nor a reference: a
 /// number/boolean at a class-ranged slot, or an object at a scalar-ranged slot.
 /// (Null is treated as absent, and a sequence is flattened, before this.)
-fn yaml_kind(value: &serde_yaml::Value) -> &'static str {
+fn yaml_kind(value: &serde_norway::Value) -> &'static str {
     match value {
-        serde_yaml::Value::Bool(_) => "a boolean",
-        serde_yaml::Value::Number(_) => "a number",
-        serde_yaml::Value::Mapping(_) => "an object",
+        serde_norway::Value::Bool(_) => "a boolean",
+        serde_norway::Value::Number(_) => "a number",
+        serde_norway::Value::Mapping(_) => "an object",
         _ => "a value",
     }
 }
@@ -521,11 +521,11 @@ fn push_slot_value(slot_values: &mut Vec<SlotValue>, slot: &str, value: Instance
 }
 
 /// A format-neutral typed scalar from a YAML value; non-scalars yield `None`.
-fn scalar_value(value: &serde_yaml::Value) -> Option<ScalarValue> {
+fn scalar_value(value: &serde_norway::Value) -> Option<ScalarValue> {
     match value {
-        serde_yaml::Value::String(s) => Some(ScalarValue::String(s.clone())),
-        serde_yaml::Value::Bool(b) => Some(ScalarValue::Boolean(*b)),
-        serde_yaml::Value::Number(n) => n
+        serde_norway::Value::String(s) => Some(ScalarValue::String(s.clone())),
+        serde_norway::Value::Bool(b) => Some(ScalarValue::Boolean(*b)),
+        serde_norway::Value::Number(n) => n
             .as_i64()
             .map(ScalarValue::Integer)
             .or_else(|| n.as_f64().map(ScalarValue::Float)),
@@ -635,21 +635,21 @@ classes:
 ";
 
     fn wine_schema() -> SchemaDefinition {
-        serde_yaml::from_str(WINE_SCHEMA).expect("parse wine schema")
+        serde_norway::from_str(WINE_SCHEMA).expect("parse wine schema")
     }
 
     #[test]
     fn empty_when_the_data_has_no_container_records() {
         let schema = wine_schema();
-        let data: serde_yaml::Value =
-            serde_yaml::from_str("wines: []\nwineries: []\n").expect("parse data");
+        let data: serde_norway::Value =
+            serde_norway::from_str("wines: []\nwineries: []\n").expect("parse data");
         assert!(InstanceSet::from_linkml_data(&schema, &data).is_empty());
     }
 
     #[test]
     fn from_linkml_data_reads_tree_root_container_records() {
         let schema = wine_schema();
-        let data: serde_yaml::Value = serde_yaml::from_str(
+        let data: serde_norway::Value = serde_norway::from_str(
             "\
 wines:
   - id: chateauMorgon
@@ -723,7 +723,7 @@ wineries:
     fn from_linkml_data_handles_inlined_as_dict_collection() {
         let schema = wine_schema();
         // wineries as an identifier-keyed mapping (CompactDict), not a list.
-        let data: serde_yaml::Value = serde_yaml::from_str(
+        let data: serde_norway::Value = serde_norway::from_str(
             "\
 wineries:
   morgonEstate:
@@ -763,8 +763,8 @@ wineries:
         for class in schema.classes.values_mut() {
             class.tree_root = false;
         }
-        let data: serde_yaml::Value =
-            serde_yaml::from_str("wines:\n  - id: x\n").expect("parse data");
+        let data: serde_norway::Value =
+            serde_norway::from_str("wines:\n  - id: x\n").expect("parse data");
         assert!(InstanceSet::from_linkml_data(&schema, &data).is_empty());
     }
 
@@ -800,8 +800,8 @@ classes:
         range: Node
         multivalued: true
 ";
-        let schema: SchemaDefinition = serde_yaml::from_str(SCHEMA).expect("schema");
-        let data: serde_yaml::Value = serde_yaml::from_str(
+        let schema: SchemaDefinition = serde_norway::from_str(SCHEMA).expect("schema");
+        let data: serde_norway::Value = serde_norway::from_str(
             "\
 nodes:
   - id: a

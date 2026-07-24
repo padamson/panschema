@@ -99,7 +99,7 @@ mod tests {
     use super::*;
 
     fn cellar_schema() -> SchemaDefinition {
-        let mut schema: SchemaDefinition = serde_yaml::from_str(
+        let mut schema: SchemaDefinition = serde_norway::from_str(
             "\
 name: cellar
 title: Wine Cellar

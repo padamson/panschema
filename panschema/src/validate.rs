@@ -14,7 +14,7 @@ use crate::instances::{InstanceSet, InstanceValue, ScalarValue, scalar_to_displa
 use crate::linkml::{EnumDefinition, SchemaDefinition};
 use crate::linkml_resolve::{effective_cardinality, resolve_effective_slots};
 use regex::Regex;
-use serde_yaml::Value;
+use serde_norway::Value;
 use std::fmt;
 
 /// A single way the data fails to conform to the schema.
@@ -277,11 +277,11 @@ classes:
 ";
 
     fn schema() -> SchemaDefinition {
-        serde_yaml::from_str(SCHEMA).expect("parse schema")
+        serde_norway::from_str(SCHEMA).expect("parse schema")
     }
 
     fn data(yaml: &str) -> Value {
-        serde_yaml::from_str(yaml).expect("parse data")
+        serde_norway::from_str(yaml).expect("parse data")
     }
 
     #[test]
@@ -454,7 +454,7 @@ classes:
 ";
 
     fn card_schema() -> SchemaDefinition {
-        serde_yaml::from_str(CARD_SCHEMA).expect("parse card schema")
+        serde_norway::from_str(CARD_SCHEMA).expect("parse card schema")
     }
 
     #[test]
@@ -542,7 +542,7 @@ enums:
 ";
 
     fn value_schema() -> SchemaDefinition {
-        serde_yaml::from_str(VALUE_SCHEMA).expect("parse value schema")
+        serde_norway::from_str(VALUE_SCHEMA).expect("parse value schema")
     }
 
     fn value_violations(yaml: &str) -> Vec<Violation> {
@@ -627,7 +627,7 @@ enums:
     fn invalid_pattern_in_the_schema_is_reported_not_panicked() {
         // `[` is an unterminated character class — the validator reports it
         // rather than crashing when compiling the regex.
-        let schema: SchemaDefinition = serde_yaml::from_str(
+        let schema: SchemaDefinition = serde_norway::from_str(
             "name: P\ndefault_range: string\nclasses:\n  Root:\n    tree_root: true\n    attributes:\n      items:\n        range: Item\n        multivalued: true\n  Item:\n    attributes:\n      id:\n        identifier: true\n      code:\n        range: string\n        pattern: \"[\"\n",
         )
         .expect("parse schema");

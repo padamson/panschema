@@ -1388,7 +1388,7 @@ mod tests {
         rack.attributes.insert("id".to_string(), id);
         schema.classes.insert("Rack".to_string(), rack);
 
-        let data: serde_yaml::Value = serde_yaml::from_str(
+        let data: serde_norway::Value = serde_norway::from_str(
             "bottles:\n  - id: b1\n    score: 4\n    stored_in: r1\nracks:\n  - id: r1\n",
         )
         .unwrap();

@@ -883,7 +883,7 @@ mod tests {
         let schema = YamlReader::new()
             .read(&root.join("wine_catalog.yaml"))
             .expect("read wine schema");
-        let data: serde_yaml::Value = serde_yaml::from_str(
+        let data: serde_norway::Value = serde_norway::from_str(
             &fs::read_to_string(root.join("wine_instances.yaml")).expect("read instances"),
         )
         .expect("parse instances");
@@ -977,8 +977,8 @@ mod tests {
         bottle.attributes.insert("rating".to_string(), rating);
         schema.classes.insert("Bottle".to_string(), bottle);
 
-        let data: serde_yaml::Value =
-            serde_yaml::from_str("bottles:\n  - id: b1\n    rating: 4\n").unwrap();
+        let data: serde_norway::Value =
+            serde_norway::from_str("bottles:\n  - id: b1\n    rating: 4\n").unwrap();
         let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
 
         let temp_dir = TempDir::new().expect("temp dir");

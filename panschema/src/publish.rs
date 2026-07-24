@@ -700,8 +700,8 @@ fn generate_html_for_version(
                 version: version.to_string(),
                 message: format!("reading instance data {}: {e}", declared.display()),
             })?;
-        let data: serde_yaml::Value =
-            serde_yaml::from_str(&content).map_err(|e| PublishError::GenerateFailed {
+        let data: serde_norway::Value =
+            serde_norway::from_str(&content).map_err(|e| PublishError::GenerateFailed {
                 version: version.to_string(),
                 message: format!("parsing instance data {}: {e}", declared.display()),
             })?;

@@ -3487,7 +3487,7 @@ mod tests {
             }
             schema.classes.insert(class.to_string(), c);
         }
-        let data: serde_yaml::Value = serde_yaml::from_str(
+        let data: serde_norway::Value = serde_norway::from_str(
             "bottles:\n  - id: b1\n    name: Morgon\n    stored_in: r1\nracks:\n  - id: r1\n    name: North Rack\n",
         )
         .unwrap();

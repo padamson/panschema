@@ -374,7 +374,7 @@ mod tests {
     /// A schema exercising an enum range, a class range, and value constraints
     /// (`pattern`, numeric bounds) — the Slice 2 surface.
     fn rich_schema() -> SchemaDefinition {
-        serde_yaml::from_str(
+        serde_norway::from_str(
             "\
 name: cellar
 classes:
@@ -514,7 +514,7 @@ enums:
     fn inherited_slots_flatten_onto_the_subclass() {
         // Dog is_a Animal; Dog's `$def` must carry Animal's slots directly, so
         // a consumer validates a Dog without chasing `is_a`.
-        let mut schema: SchemaDefinition = serde_yaml::from_str(
+        let mut schema: SchemaDefinition = serde_norway::from_str(
             "\
 name: zoo
 classes:
@@ -545,7 +545,7 @@ classes:
 
     #[test]
     fn custom_types_resolve_to_base_scalar_and_facets() {
-        let mut schema: SchemaDefinition = serde_yaml::from_str(
+        let mut schema: SchemaDefinition = serde_norway::from_str(
             "\
 name: contacts
 classes:
@@ -638,7 +638,7 @@ types:
 
     #[test]
     fn custom_type_edge_cases_resolve_to_string() {
-        let schema: SchemaDefinition = serde_yaml::from_str(
+        let schema: SchemaDefinition = serde_norway::from_str(
             "\
 name: t
 types:
@@ -662,7 +662,7 @@ types:
 
     #[test]
     fn any_of_range_projects_to_anyof() {
-        let schema: SchemaDefinition = serde_yaml::from_str(
+        let schema: SchemaDefinition = serde_norway::from_str(
             "\
 name: cellar
 classes:

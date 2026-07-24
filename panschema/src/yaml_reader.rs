@@ -29,7 +29,7 @@ impl Reader for YamlReader {
     fn read(&self, input: &Path) -> IoResult<SchemaDefinition> {
         let content = fs::read_to_string(input)?;
         let mut schema: SchemaDefinition =
-            serde_yaml::from_str(&content).map_err(|e| IoError::Parse(e.to_string()))?;
+            serde_norway::from_str(&content).map_err(|e| IoError::Parse(e.to_string()))?;
         backfill_names(&mut schema)?;
         Ok(schema)
     }
@@ -114,9 +114,9 @@ mod tests {
         // classes with the same serde the schema read uses), and absent
         // defaults to false.
         let root: ClassDefinition =
-            serde_yaml::from_str("name: Catalog\ntree_root: true\n").expect("parse");
+            serde_norway::from_str("name: Catalog\ntree_root: true\n").expect("parse");
         assert!(root.tree_root, "tree_root: true parses onto the IR");
-        let plain: ClassDefinition = serde_yaml::from_str("name: Wine\n").expect("parse");
+        let plain: ClassDefinition = serde_norway::from_str("name: Wine\n").expect("parse");
         assert!(!plain.tree_root, "absent tree_root defaults to false");
     }
 

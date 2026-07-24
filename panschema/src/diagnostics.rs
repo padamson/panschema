@@ -429,7 +429,7 @@ mod tests {
     use super::*;
 
     fn parse(yaml: &str) -> SchemaDefinition {
-        serde_yaml::from_str(yaml).expect("parse schema")
+        serde_norway::from_str(yaml).expect("parse schema")
     }
 
     // Fabricated key — never a real LinkML key — so these mechanism

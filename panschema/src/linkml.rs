@@ -381,7 +381,7 @@ pub struct ClassDefinition {
     /// construct — e.g. `unique_keys` — that won't render or emit.
     /// Populated only by the YAML reader; empty otherwise.
     #[serde(flatten, default)]
-    pub unmodeled: BTreeMap<String, serde_yaml::Value>,
+    pub unmodeled: BTreeMap<String, serde_norway::Value>,
 }
 
 impl ClassDefinition {
@@ -746,7 +746,7 @@ mod tests {
         schema.id = Some("https://example.org/schema".to_string());
         schema.description = Some("An example schema".to_string());
 
-        let yaml = serde_yaml::to_string(&schema).unwrap();
+        let yaml = serde_norway::to_string(&schema).unwrap();
         assert!(yaml.contains("name: example"));
         assert!(yaml.contains("id: https://example.org/schema"));
         assert!(yaml.contains("description: An example schema"));
@@ -762,7 +762,7 @@ name: Test
 class_uri: ex:Test
 subclass_of: cco:ont00000958
 ";
-        let class: ClassDefinition = serde_yaml::from_str(yaml).unwrap();
+        let class: ClassDefinition = serde_norway::from_str(yaml).unwrap();
         assert_eq!(class.subclass_of.as_deref(), Some("cco:ont00000958"));
     }
 
@@ -776,7 +776,7 @@ subclass_of: cco:ont00000958
         let mut slot = SlotDefinition::new("name");
         slot.range = Some("string".to_string());
         // `required` defaults to false and stays false.
-        let yaml = serde_yaml::to_string(&slot).unwrap();
+        let yaml = serde_norway::to_string(&slot).unwrap();
         assert!(
             !yaml.contains("required:"),
             "default-false `required` should be skipped; got:\n{yaml}"
@@ -788,7 +788,7 @@ subclass_of: cco:ont00000958
 
         // Sanity-check the inverse: a true bool DOES serialize.
         slot.required = true;
-        let yaml = serde_yaml::to_string(&slot).unwrap();
+        let yaml = serde_norway::to_string(&slot).unwrap();
         assert!(
             yaml.contains("required: true"),
             "true bools must serialize; got:\n{yaml}"
@@ -802,7 +802,7 @@ name: test_schema
 id: https://example.org/test
 description: A test schema
 "#;
-        let schema: SchemaDefinition = serde_yaml::from_str(yaml).unwrap();
+        let schema: SchemaDefinition = serde_norway::from_str(yaml).unwrap();
         assert_eq!(schema.name, "test_schema");
         assert_eq!(schema.id, Some("https://example.org/test".to_string()));
         assert_eq!(schema.description, Some("A test schema".to_string()));
@@ -865,7 +865,7 @@ description: A test schema
         let mut contributor = Contributor::new("Jane Doe");
         contributor.role = Some("author".to_string());
 
-        let yaml = serde_yaml::to_string(&contributor).unwrap();
+        let yaml = serde_norway::to_string(&contributor).unwrap();
         assert!(yaml.contains("name: Jane Doe"));
         assert!(yaml.contains("role: author"));
         // orcid should be omitted when None
@@ -932,7 +932,7 @@ description: A test schema
             .contributors
             .push(Contributor::with_role("Jane Doe", "author"));
 
-        let yaml = serde_yaml::to_string(&schema).unwrap();
+        let yaml = serde_norway::to_string(&schema).unwrap();
         assert!(yaml.contains("created: '2025-01-15'") || yaml.contains("created: 2025-01-15"));
         assert!(yaml.contains("name: Jane Doe"));
     }
@@ -949,7 +949,7 @@ contributors:
 imports:
   - http://purl.obolibrary.org/obo/bfo.owl
 "#;
-        let schema: SchemaDefinition = serde_yaml::from_str(yaml).unwrap();
+        let schema: SchemaDefinition = serde_norway::from_str(yaml).unwrap();
         assert_eq!(schema.created, Some("2025-01-15".to_string()));
         assert_eq!(schema.modified, Some("2026-01-29".to_string()));
         assert_eq!(schema.contributors.len(), 1);
@@ -978,19 +978,19 @@ imports:
 name: LegacyPerson
 deprecated: use Person instead
 ";
-        let class: ClassDefinition = serde_yaml::from_str(yaml).unwrap();
+        let class: ClassDefinition = serde_norway::from_str(yaml).unwrap();
         assert_eq!(class.deprecated.as_deref(), Some("use Person instead"));
 
-        let bare: ClassDefinition = serde_yaml::from_str("name: Person").unwrap();
+        let bare: ClassDefinition = serde_norway::from_str("name: Person").unwrap();
         assert!(bare.deprecated.is_none());
 
         // Set notes serialize; unset ones are skipped.
-        let out = serde_yaml::to_string(&class).unwrap();
+        let out = serde_norway::to_string(&class).unwrap();
         assert!(
             out.contains("deprecated: use Person instead"),
             "got:\n{out}"
         );
-        let bare_out = serde_yaml::to_string(&bare).unwrap();
+        let bare_out = serde_norway::to_string(&bare).unwrap();
         assert!(!bare_out.contains("deprecated:"), "got:\n{bare_out}");
     }
 
@@ -1010,22 +1010,22 @@ see_also:
   - schema:Person
   - https://example.org/person
 ";
-        let class: ClassDefinition = serde_yaml::from_str(yaml).unwrap();
+        let class: ClassDefinition = serde_norway::from_str(yaml).unwrap();
         assert_eq!(class.aliases, vec!["Human", "Individual"]);
         assert_eq!(
             class.see_also,
             vec!["schema:Person", "https://example.org/person"]
         );
 
-        let bare: ClassDefinition = serde_yaml::from_str("name: Person").unwrap();
+        let bare: ClassDefinition = serde_norway::from_str("name: Person").unwrap();
         assert!(bare.aliases.is_empty());
         assert!(bare.see_also.is_empty());
 
         // Populated lists serialize; empty ones are skipped.
-        let out = serde_yaml::to_string(&class).unwrap();
+        let out = serde_norway::to_string(&class).unwrap();
         assert!(out.contains("aliases:"), "got:\n{out}");
         assert!(out.contains("see_also:"), "got:\n{out}");
-        let bare_out = serde_yaml::to_string(&bare).unwrap();
+        let bare_out = serde_norway::to_string(&bare).unwrap();
         assert!(!bare_out.contains("aliases:"), "got:\n{bare_out}");
         assert!(!bare_out.contains("see_also:"), "got:\n{bare_out}");
     }
@@ -1044,7 +1044,7 @@ examples:
     description: an AWS region
   - value: eastus
 ";
-        let class: ClassDefinition = serde_yaml::from_str(yaml).unwrap();
+        let class: ClassDefinition = serde_norway::from_str(yaml).unwrap();
         assert_eq!(class.examples.len(), 2);
         assert_eq!(class.examples[0].value, "us-east-1");
         assert_eq!(
@@ -1054,12 +1054,12 @@ examples:
         assert_eq!(class.examples[1].value, "eastus");
         assert!(class.examples[1].description.is_none());
 
-        let bare: ClassDefinition = serde_yaml::from_str("name: Region").unwrap();
+        let bare: ClassDefinition = serde_norway::from_str("name: Region").unwrap();
         assert!(bare.examples.is_empty());
 
-        let out = serde_yaml::to_string(&class).unwrap();
+        let out = serde_norway::to_string(&class).unwrap();
         assert!(out.contains("examples:"), "got:\n{out}");
-        let bare_out = serde_yaml::to_string(&bare).unwrap();
+        let bare_out = serde_norway::to_string(&bare).unwrap();
         assert!(!bare_out.contains("examples:"), "got:\n{bare_out}");
     }
 
@@ -1087,7 +1087,7 @@ rules:
         on_provider:
           required: true
 ";
-        let class: ClassDefinition = serde_yaml::from_str(yaml).unwrap();
+        let class: ClassDefinition = serde_norway::from_str(yaml).unwrap();
         assert_eq!(class.rules.len(), 1);
         let rule = &class.rules[0];
         assert_eq!(
@@ -1107,12 +1107,12 @@ rules:
         assert!(post.slot_conditions.get("in_environment").unwrap().required);
         assert!(post.slot_conditions.get("on_provider").unwrap().required);
 
-        let bare: ClassDefinition = serde_yaml::from_str("name: Deployment").unwrap();
+        let bare: ClassDefinition = serde_norway::from_str("name: Deployment").unwrap();
         assert!(bare.rules.is_empty());
 
-        let out = serde_yaml::to_string(&class).unwrap();
+        let out = serde_norway::to_string(&class).unwrap();
         assert!(out.contains("rules:"), "got:\n{out}");
-        let bare_out = serde_yaml::to_string(&bare).unwrap();
+        let bare_out = serde_norway::to_string(&bare).unwrap();
         assert!(!bare_out.contains("rules:"), "got:\n{bare_out}");
     }
 
@@ -1141,7 +1141,7 @@ rules:
         approved_at:
           value_presence: PRESENT
 ";
-        let class: ClassDefinition = serde_yaml::from_str(yaml).unwrap();
+        let class: ClassDefinition = serde_norway::from_str(yaml).unwrap();
         let rule = &class.rules[0];
 
         // Both `any_of` alternatives are captured, each with its own
@@ -1185,7 +1185,7 @@ rules:
         );
 
         // Round-trips without losing either field.
-        let out = serde_yaml::to_string(&class).unwrap();
+        let out = serde_norway::to_string(&class).unwrap();
         assert!(
             out.contains("any_of:"),
             "any_of must round-trip; got:\n{out}"
@@ -1215,7 +1215,7 @@ rules:
         approved_by:
           value_presence: PRESENT
 ";
-        let class: ClassDefinition = serde_yaml::from_str(yaml).unwrap();
+        let class: ClassDefinition = serde_norway::from_str(yaml).unwrap();
         let pre = class.rules[0].preconditions.as_ref().unwrap();
         let verdict = pre.slot_conditions.get("verdict").unwrap();
         assert_eq!(
@@ -1227,7 +1227,7 @@ rules:
         assert_eq!(verdict.any_of[1].equals_string.as_deref(), Some("rejected"));
 
         // Round-trips without dropping the nested any_of.
-        let out = serde_yaml::to_string(&class).unwrap();
+        let out = serde_norway::to_string(&class).unwrap();
         assert!(
             out.contains("any_of:"),
             "slot-level any_of must round-trip; got:\n{out}"
@@ -1252,7 +1252,7 @@ unique_keys:
     unique_key_slots:
       - name
 ";
-        let class: ClassDefinition = serde_yaml::from_str(yaml).unwrap();
+        let class: ClassDefinition = serde_norway::from_str(yaml).unwrap();
         assert_eq!(class.unique_keys.len(), 2);
 
         let spk = class
@@ -1269,12 +1269,12 @@ unique_keys:
         assert_eq!(nk.unique_key_slots, vec!["name"]);
         assert!(nk.description.is_none());
 
-        let bare: ClassDefinition = serde_yaml::from_str("name: Offering").unwrap();
+        let bare: ClassDefinition = serde_norway::from_str("name: Offering").unwrap();
         assert!(bare.unique_keys.is_empty());
 
-        let out = serde_yaml::to_string(&class).unwrap();
+        let out = serde_norway::to_string(&class).unwrap();
         assert!(out.contains("unique_keys:"), "got:\n{out}");
-        let bare_out = serde_yaml::to_string(&bare).unwrap();
+        let bare_out = serde_norway::to_string(&bare).unwrap();
         assert!(!bare_out.contains("unique_keys:"), "got:\n{bare_out}");
     }
 
@@ -1303,7 +1303,7 @@ unique_keys:
         class.description = Some("A living creature".to_string());
         class.r#abstract = true;
 
-        let yaml = serde_yaml::to_string(&class).unwrap();
+        let yaml = serde_norway::to_string(&class).unwrap();
         assert!(yaml.contains("name: Animal"));
         assert!(yaml.contains("abstract: true"));
     }
@@ -1364,7 +1364,7 @@ range: Claim
 transitive: true
 symmetric: true
 ";
-        let slot: SlotDefinition = serde_yaml::from_str(yaml).unwrap();
+        let slot: SlotDefinition = serde_norway::from_str(yaml).unwrap();
         assert!(slot.transitive);
         assert!(slot.symmetric);
         assert!(!slot.asymmetric);
@@ -1372,7 +1372,7 @@ symmetric: true
         assert!(!slot.irreflexive);
 
         // default-false characteristics are skipped on serialize; set ones survive.
-        let out = serde_yaml::to_string(&slot).unwrap();
+        let out = serde_norway::to_string(&slot).unwrap();
         assert!(
             out.contains("transitive: true"),
             "set flag must serialize:\n{out}"
@@ -1393,11 +1393,11 @@ range: float
 minimum_value: 0.0
 maximum_value: 1.0
 ";
-        let slot: SlotDefinition = serde_yaml::from_str(yaml).unwrap();
+        let slot: SlotDefinition = serde_norway::from_str(yaml).unwrap();
         assert_eq!(slot.minimum_value, Some(0.0));
         assert_eq!(slot.maximum_value, Some(1.0));
 
-        let bare: SlotDefinition = serde_yaml::from_str("name: x").unwrap();
+        let bare: SlotDefinition = serde_norway::from_str("name: x").unwrap();
         assert!(bare.minimum_value.is_none() && bare.maximum_value.is_none());
     }
 
@@ -1412,16 +1412,16 @@ name: status
 range: ItemStatus
 ifabsent: ItemStatus(planned)
 ";
-        let slot: SlotDefinition = serde_yaml::from_str(yaml).unwrap();
+        let slot: SlotDefinition = serde_norway::from_str(yaml).unwrap();
         assert_eq!(slot.ifabsent.as_deref(), Some("ItemStatus(planned)"));
 
-        let bare: SlotDefinition = serde_yaml::from_str("name: x").unwrap();
+        let bare: SlotDefinition = serde_norway::from_str("name: x").unwrap();
         assert!(bare.ifabsent.is_none());
 
         // Set values serialize; unset ones are skipped.
-        let out = serde_yaml::to_string(&slot).unwrap();
+        let out = serde_norway::to_string(&slot).unwrap();
         assert!(out.contains("ifabsent: ItemStatus(planned)"), "got:\n{out}");
-        let bare_out = serde_yaml::to_string(&bare).unwrap();
+        let bare_out = serde_norway::to_string(&bare).unwrap();
         assert!(!bare_out.contains("ifabsent:"), "got:\n{bare_out}");
     }
 
@@ -1491,7 +1491,7 @@ ifabsent: ItemStatus(planned)
             "http://example.org/Person".to_string(),
         );
 
-        let yaml = serde_yaml::to_string(&class).unwrap();
+        let yaml = serde_norway::to_string(&class).unwrap();
         assert!(yaml.contains("panschema:owl_class_iri"));
     }
 
@@ -1515,10 +1515,10 @@ ifabsent: ItemStatus(planned)
         schema.slots.insert("name".to_string(), name_slot);
 
         // Serialize
-        let yaml = serde_yaml::to_string(&schema).unwrap();
+        let yaml = serde_norway::to_string(&schema).unwrap();
 
         // Deserialize
-        let restored: SchemaDefinition = serde_yaml::from_str(&yaml).unwrap();
+        let restored: SchemaDefinition = serde_norway::from_str(&yaml).unwrap();
 
         assert_eq!(schema, restored);
     }

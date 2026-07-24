@@ -1313,7 +1313,7 @@ mod tests {
         bottle.attributes.insert("id".to_string(), id);
         schema.classes.insert("Bottle".to_string(), bottle);
 
-        let data: serde_yaml::Value = serde_yaml::from_str("bottles:\n  - id: b1\n").unwrap();
+        let data: serde_norway::Value = serde_norway::from_str("bottles:\n  - id: b1\n").unwrap();
         let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
 
         let temp_dir = tempfile::tempdir().unwrap();
@@ -1367,7 +1367,7 @@ mod tests {
         bottle.attributes.insert("id".to_string(), id);
         schema.classes.insert("Bottle".to_string(), bottle);
 
-        let data: serde_yaml::Value = serde_yaml::from_str("bottles:\n  - id: b1\n").unwrap();
+        let data: serde_norway::Value = serde_norway::from_str("bottles:\n  - id: b1\n").unwrap();
         let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
 
         let graph = GraphWriter::new().instance_set_to_graph(&schema, &set);

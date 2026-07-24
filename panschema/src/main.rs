@@ -298,7 +298,7 @@ fn load_instance_set(
 ) -> anyhow::Result<panschema::instances::InstanceSet> {
     let content = std::fs::read_to_string(inst_path)
         .map_err(|e| anyhow::anyhow!("reading instances file {}: {}", inst_path.display(), e))?;
-    let data: serde_yaml::Value = serde_yaml::from_str(&content)
+    let data: serde_norway::Value = serde_norway::from_str(&content)
         .map_err(|e| anyhow::anyhow!("parsing instances file {}: {}", inst_path.display(), e))?;
     let set = panschema::instances::InstanceSet::from_linkml_data(schema, &data);
     // ADR-009's role boundary: an exemplar is a curated teaching artifact,
@@ -1247,7 +1247,7 @@ fn validate_data(schema_path: &Path, data_path: &Path) -> anyhow::Result<()> {
 
     let content = std::fs::read_to_string(data_path)
         .map_err(|e| anyhow::anyhow!("reading data file {}: {}", data_path.display(), e))?;
-    let value: serde_yaml::Value = serde_yaml::from_str(&content)
+    let value: serde_norway::Value = serde_norway::from_str(&content)
         .map_err(|e| anyhow::anyhow!("parsing data file {}: {}", data_path.display(), e))?;
 
     let violations = panschema::validate::validate_instance_data(&schema, &value);
