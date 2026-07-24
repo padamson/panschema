@@ -179,11 +179,11 @@ exported instance graph from a manifest-driven build (ADR-009 decision 6).
 
 ## Definition of Done
 
-- [ ] Slices 1–4 complete (Slice 5 when a dataset-first consumer demands
+- [x] Slices 1–4 complete (Slice 5 when a dataset-first consumer demands
   it): one `InstanceSet` feeds docs, validate, RDF, and graph JSON, with
   IRIs agreeing across outputs; the exemplar is navigable locally and on
   the published site.
-- [ ] `cargo nextest run` green; fmt/clippy/doc clean; wire-format changes
+- [x] `cargo nextest run` green; fmt/clippy/doc clean; wire-format changes
   browser-verified (panschema-viz updated in the same slice).
-- [ ] README.md + CHANGELOG.md updated; linkml-coverage notes the A-box
+- [x] README.md + CHANGELOG.md updated; linkml-coverage notes the A-box
   export coverage.
