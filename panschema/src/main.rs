@@ -301,6 +301,17 @@ fn load_instance_set(
     let data: serde_yaml::Value = serde_yaml::from_str(&content)
         .map_err(|e| anyhow::anyhow!("parsing instances file {}: {}", inst_path.display(), e))?;
     let set = panschema::instances::InstanceSet::from_linkml_data(schema, &data);
+    // ADR-009's role boundary: an exemplar is a curated teaching artifact,
+    // rendered whole. A large A-box still renders, but loudly — the
+    // query-driven path (subgraph extraction) is the intended tool at scale.
+    const EXEMPLAR_SOFT_LIMIT: usize = 500;
+    if set.instances.len() > EXEMPLAR_SOFT_LIMIT {
+        eprintln!(
+            "warning: {} instances exceed the ~{EXEMPLAR_SOFT_LIMIT}-node exemplar guideline; \
+             exemplar instance graphs are curated teaching artifacts — consider a subset",
+            set.instances.len()
+        );
+    }
     let danglers = panschema::diagnostics::dangling_instance_references(&set);
     for d in &danglers {
         eprintln!("warning: {}", d.message());
@@ -420,6 +431,9 @@ fn generate(
         // individuals as the source for the instance graph.
         if let Some(inst_path) = instances {
             writer = writer.with_instances(load_instance_set(&schema, inst_path, strict)?);
+            if let Some(name) = inst_path.file_name().and_then(|n| n.to_str()) {
+                writer = writer.with_instance_provenance(name.to_string());
+            }
         }
         if let Some(store) = panschema::labels::open_default_store(
             &schema,

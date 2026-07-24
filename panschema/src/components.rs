@@ -45,6 +45,9 @@ pub struct PropertyValueSpec {
     pub property_label: String,
     pub property_ref: Option<EntityRef>,
     pub value: String,
+    /// Links the value to another individual's card when the value is a
+    /// reference (mirrors the html_writer field).
+    pub value_ref: Option<EntityRef>,
 }
 
 impl PropertyValueSpec {
@@ -57,6 +60,7 @@ impl PropertyValueSpec {
             property_label: label.into(),
             property_ref,
             value: value.into(),
+            value_ref: None,
         }
     }
 }
@@ -199,6 +203,11 @@ pub struct SidebarComponent<'a> {
     pub graph_node_count: usize,
     /// Number of edges in the graph (for sidebar badge)
     pub graph_edge_count: usize,
+    /// Instance (A-box) graph JSON presence + counts for the
+    /// Instance Graph sidebar entry.
+    pub instance_graph_json: Option<&'a str>,
+    pub instance_node_count: usize,
+    pub instance_edge_count: usize,
 }
 
 /// Namespace table component template.
@@ -399,6 +408,10 @@ pub struct StyleGuideTemplate<'a> {
     pub version_context: Option<&'a panschema::html_writer::VersionContext>,
     /// Matches IndexTemplate. Styleguide page sits at the output root.
     pub site_root_href: &'a str,
+    pub instance_graph_json: Option<&'a str>,
+    pub instance_node_count: usize,
+    pub instance_edge_count: usize,
+    pub instance_provenance: Option<&'a str>,
 }
 
 /// Renders individual components for testing and preview.
@@ -461,6 +474,9 @@ impl ComponentRenderer {
             graph_json: None, // No graph in component preview
             graph_node_count: 0,
             graph_edge_count: 0,
+            instance_graph_json: None,
+            instance_node_count: 0,
+            instance_edge_count: 0,
         };
         Ok(template.render()?)
     }
@@ -823,6 +839,10 @@ impl ComponentRenderer {
             graph_json: None, // No graph in styleguide
             graph_node_count: 0,
             graph_edge_count: 0,
+            instance_graph_json: None,
+            instance_node_count: 0,
+            instance_edge_count: 0,
+            instance_provenance: None,
             sample_class,
             sample_slot,
             sample_data_slot,

@@ -204,13 +204,18 @@
 
 <section id="individuals">
     {%- let id = "individuals" %}
-    {%- let title = "Individuals" %}
+    {%- let title = "Instance Graph" %}
     {%- let count = Some(individuals.len()) %}
-    {%- let description = Some("Named individuals defined in this ontology.") %}
+    {%- let description = Some("The exemplar instance graph (A-box): individuals conforming to this schema.") %}
     {% include "components/section_header.html" %}
 {%- if individuals.is_empty() && instance_graph_json.is_none() %}
     <p class="placeholder-text">No individuals defined in this ontology.</p>
 {%- else %}
+{%- if let Some(src) = instance_provenance %}
+    <p class="instance-provenance">Source: <code class="mono">{{ src }}</code></p>
+{%- else %}
+    <p class="instance-provenance">Source: individuals embedded in the schema</p>
+{%- endif %}
 {%- if !individuals.is_empty() %}
     <div class="entity-list">
 {%- for ind in individuals %}

@@ -38,7 +38,13 @@
                 {{ pv.property_label }}
 {%- endif %}
             </dt>
-            <dd>{{ pv.value }}</dd>
+            <dd>
+{%- if let Some(vr) = pv.value_ref.as_ref() %}
+                <a href="#ind-{{ vr.id }}" class="entity-ref individual-ref">{{ pv.value }}</a>
+{%- else %}
+                {{ pv.value }}
+{%- endif %}
+            </dd>
         </div>
 {%- endfor %}
     </div>

@@ -18,8 +18,8 @@
 {%- if !types.is_empty() %}
         <li><a href="#types" class="sidebar-link{% if active_section == "types" %} active{% endif %}">Types <span class="badge">{{ types.len() }}</span></a></li>
 {%- endif %}
-{%- if !individuals.is_empty() %}
-        <li><a href="#individuals" class="sidebar-link{% if active_section == "individuals" %} active{% endif %}">Individuals <span class="badge">{{ individuals.len() }}</span></a></li>
+{%- if !individuals.is_empty() || instance_graph_json.is_some() %}
+        <li><a href="#individuals" class="sidebar-link{% if active_section == "individuals" %} active{% endif %}">Instance Graph <span class="badge">{{ instance_node_count }} / {{ instance_edge_count }}</span></a></li>
 {%- endif %}
     </ul>
 </nav>

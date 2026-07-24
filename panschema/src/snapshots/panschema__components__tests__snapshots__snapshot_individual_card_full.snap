@@ -1,5 +1,6 @@
 ---
 source: panschema/src/components.rs
+assertion_line: 1444
 expression: html
 ---
 <article class="entity-card individual-card" id="ind-john-doe">
@@ -31,13 +32,17 @@ expression: html
             <dt>
                 <a href="#slot-name" class="entity-ref slot-ref">name</a>
             </dt>
-            <dd>John Doe</dd>
+            <dd>
+                John Doe
+            </dd>
         </div>
         <div class="detail-row">
             <dt>
                 <a href="#slot-member-of" class="entity-ref slot-ref">memberOf</a>
             </dt>
-            <dd>Acme Corp</dd>
+            <dd>
+                Acme Corp
+            </dd>
         </div>
     </div>
 </article>

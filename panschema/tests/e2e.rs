@@ -2505,6 +2505,59 @@ fn e2e_instance_graph_renders_from_linkml_data() {
             "the LinkML instance data should render an instance-graph canvas"
         );
 
+        // The sidebar carries an Instance Graph entry with node/edge badges
+        // that navigates to the section.
+        let sidebar_link = page.locator("a.sidebar-link[href='#individuals']");
+        assert_eq!(
+            sidebar_link.count().await.expect("count"),
+            1,
+            "sidebar should carry an Instance Graph entry"
+        );
+        let link_text = sidebar_link.inner_text().await.expect("link text");
+        assert!(
+            link_text.contains("Instance Graph"),
+            "sidebar entry should be named Instance Graph; got: {link_text}"
+        );
+        assert!(
+            link_text.contains("4 / 2"),
+            "badge should show node/edge counts; got: {link_text}"
+        );
+        sidebar_link.click(None).await.expect("click sidebar");
+        let hash = page
+            .evaluate_value("window.location.hash")
+            .await
+            .unwrap_or_default();
+        assert!(
+            hash.contains("#individuals"),
+            "clicking the entry should navigate to the section; hash = {hash}"
+        );
+
+        // The section states where the A-box came from.
+        let prov = page
+            .locator(".instance-provenance")
+            .inner_text()
+            .await
+            .expect("provenance");
+        assert!(
+            prov.contains("wine_instances.yaml"),
+            "provenance should name the data file; got: {prov}"
+        );
+
+        // LinkML-data instances get cards through the same path as OWL
+        // individuals: typed, with the reference linking to the referenced
+        // individual's card.
+        assert_eq!(
+            page.locator("#ind-chateauMorgon").count().await.expect("count"),
+            1,
+            "a LinkML-data instance should render an individual card"
+        );
+        let ref_link = page.locator("#ind-chateauMorgon a[href='#ind-morgonEstate']");
+        assert_eq!(
+            ref_link.count().await.expect("count"),
+            1,
+            "the produced_by reference should link to the referenced individual's card"
+        );
+
         // The A-box read from the data file: four records, two reference edges.
         let counts = page
             .evaluate_value(

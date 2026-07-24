@@ -85,7 +85,7 @@ in, produced as its own explicitly named artifact.
 
 ### Slice 3: Instance-graph navigation + unified cards
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Must Have
 
@@ -94,18 +94,18 @@ schema section, with a card per individual regardless of how the data was
 authored.
 
 **Acceptance Criteria:**
-- [ ] When the page has an instance graph, the sidebar shows an **Instance
+- [x] When the page has an instance graph, the sidebar shows an **Instance
   Graph** entry with node/edge count badges, after Schema Graph's T-box
   sections; without one, the entry is absent.
-- [ ] The section shows the data's provenance (source file name) alongside
+- [x] The section shows the data's provenance (source file name) alongside
   the canvas.
-- [ ] Per-individual cards render for LinkML-data instances, not just
+- [x] Per-individual cards render for LinkML-data instances, not just
   OWL-embedded individuals (one card path over `InstanceSet`): type, slot
   values, and references as links to the referenced individual's card.
-- [ ] Rendering an exemplar beyond a few hundred nodes warns that exemplars
+- [x] Rendering an exemplar beyond a few hundred nodes warns that exemplars
   are curated teaching artifacts (the ADR-009 role boundary), without
   refusing to render.
-- [ ] Browser e2e: the sidebar entry navigates to the section and the cards
+- [x] Browser e2e: the sidebar entry navigates to the section and the cards
   render for a LinkML-data fixture.
 
 ### Slice 4: `publish` carries the exemplar
@@ -173,7 +173,7 @@ exported instance graph from a manifest-driven build (ADR-009 decision 6).
 |-------|----------|------------|--------|
 | Slice 1: A-box in RDF family | Must Have | — | Complete |
 | Slice 2: instance graph JSON | Must Have | Slice 1 (shared IRI minting) | Complete |
-| Slice 3: nav + unified cards | Must Have | — | Not Started |
+| Slice 3: nav + unified cards | Must Have | — | Complete |
 | Slice 4: publish carries the exemplar | Must Have | Slice 3 | Not Started |
 | Slice 5: instances in the consumer manifest | Should Have | Slices 1–3 | Not Started |
 

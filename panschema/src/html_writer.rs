@@ -419,6 +419,9 @@ pub struct PropertyValueData {
     pub property_label: String,
     pub property_ref: Option<EntityRef>,
     pub value: String,
+    /// When the value is a reference to another individual, links the
+    /// value text to that individual's card.
+    pub value_ref: Option<EntityRef>,
 }
 
 /// Full individual data for rendering individual cards.
@@ -458,6 +461,12 @@ struct IndexTemplate<'a> {
     /// Separate instance (A-box) graph JSON rendered in the Individuals
     /// section (None = the schema declares no individuals).
     instance_graph_json: Option<&'a str>,
+    /// Instance-graph node/edge counts for the sidebar badge.
+    instance_node_count: usize,
+    instance_edge_count: usize,
+    /// Where the A-box came from (the instance-data file name); None for
+    /// individuals embedded in the schema itself.
+    instance_provenance: Option<&'a str>,
     /// Number of nodes in the graph (for sidebar badge)
     graph_node_count: usize,
     /// Number of edges in the graph (for sidebar badge)
@@ -568,6 +577,9 @@ pub struct HtmlWriter {
     /// to the OWL worked-example individuals embedded in the schema; the
     /// `generate --instances` path sets this from a LinkML data file.
     pub instance_set: Option<crate::instances::InstanceSet>,
+    /// Display name of the instance-data source (the file name), shown as
+    /// the instance-graph section's provenance line.
+    pub instance_provenance: Option<String>,
 }
 
 /// Parse a `"W:H"` aspect-ratio string. Both components must be positive
@@ -617,6 +629,7 @@ impl HtmlWriter {
             site_root_href: None,
             label_store: None,
             instance_set: None,
+            instance_provenance: None,
         }
     }
 
@@ -630,6 +643,7 @@ impl HtmlWriter {
             site_root_href: None,
             label_store: None,
             instance_set: None,
+            instance_provenance: None,
         }
     }
 
@@ -647,6 +661,12 @@ impl HtmlWriter {
     #[must_use]
     pub fn with_instances(mut self, set: crate::instances::InstanceSet) -> Self {
         self.instance_set = Some(set);
+        self
+    }
+
+    /// Name the instance-data source for the section's provenance line.
+    pub fn with_instance_provenance(mut self, name: String) -> Self {
+        self.instance_provenance = Some(name);
         self
     }
 
@@ -690,7 +710,93 @@ impl HtmlWriter {
     /// (external references render as CURIEs).
     #[cfg(test)]
     fn build_template_data(schema: &SchemaDefinition) -> TemplateData {
-        Self::build_template_data_with_labels(schema, None)
+        Self::build_template_data_with_labels(schema, None, None)
+    }
+
+    /// Individual card data from the instance model: one entry per
+    /// instance, IRIs from the shared minting (so the card shows the same
+    /// IRI the RDF and graph exports use), scalar values as text, and
+    /// references linked to the referenced individual's card.
+    fn build_individual_data(
+        schema: &SchemaDefinition,
+        set: &crate::instances::InstanceSet,
+    ) -> (Vec<EntityRef>, Vec<IndividualData>) {
+        let mut refs = Vec::new();
+        let mut data = Vec::new();
+        for inst in &set.instances {
+            let types: Vec<EntityRef> = inst
+                .types
+                .iter()
+                .filter_map(|type_id| {
+                    schema.classes.get(type_id).map(|c| EntityRef {
+                        id: type_id.clone(),
+                        label: c
+                            .annotations
+                            .get("panschema:label")
+                            .cloned()
+                            .unwrap_or_else(|| type_id.clone()),
+                    })
+                })
+                .collect();
+
+            let slot_ref = |property: &str| {
+                schema.slots.get(property).map(|slot| EntityRef {
+                    id: property.to_string(),
+                    label: slot
+                        .annotations
+                        .get("panschema:label")
+                        .cloned()
+                        .unwrap_or_else(|| property.to_string()),
+                })
+            };
+
+            let mut property_values = Vec::new();
+            for (property, value) in &inst.literals {
+                let property_ref = slot_ref(property);
+                property_values.push(PropertyValueData {
+                    property_label: property_ref
+                        .as_ref()
+                        .map(|r| r.label.clone())
+                        .unwrap_or_else(|| property.clone()),
+                    property_ref,
+                    value: value.clone(),
+                    value_ref: None,
+                });
+            }
+            for reference in &inst.references {
+                let property_ref = slot_ref(&reference.property);
+                let target = set.instances.iter().find(|i| i.id == reference.target);
+                property_values.push(PropertyValueData {
+                    property_label: property_ref
+                        .as_ref()
+                        .map(|r| r.label.clone())
+                        .unwrap_or_else(|| reference.property.clone()),
+                    property_ref,
+                    value: target
+                        .map(|t| t.label.clone())
+                        .unwrap_or_else(|| reference.target.clone()),
+                    value_ref: target.map(|t| EntityRef {
+                        id: t.id.clone(),
+                        label: t.label.clone(),
+                    }),
+                });
+            }
+            property_values.sort_by(|a, b| a.property_label.cmp(&b.property_label));
+
+            refs.push(EntityRef {
+                id: inst.id.clone(),
+                label: inst.label.clone(),
+            });
+            data.push(IndividualData {
+                id: inst.id.clone(),
+                label: inst.label.clone(),
+                iri: crate::rdf_serializers::instance_iri_string(schema, inst),
+                description: inst.description.clone(),
+                types,
+                property_values,
+            });
+        }
+        (refs, data)
     }
 
     /// Build template data, rendering upstream labels for external
@@ -699,6 +805,7 @@ impl HtmlWriter {
     fn build_template_data_with_labels(
         schema: &SchemaDefinition,
         labels: Option<&crate::labels::LabelStore>,
+        instances: Option<&crate::instances::InstanceSet>,
     ) -> TemplateData {
         let iri = schema.id.clone().unwrap_or_else(|| schema.name.clone());
         let title = schema.title.clone().unwrap_or_else(|| schema.name.clone());
@@ -1086,103 +1193,19 @@ impl HtmlWriter {
         }
 
         // Build individual data from annotations
-        let mut individual_refs = Vec::new();
-        let mut individual_data_list = Vec::new();
-
-        if let Some(individuals_str) = schema.annotations.get("panschema:individuals") {
-            for ind_id in individuals_str.split(',') {
-                let ind_id = ind_id.trim();
-                if ind_id.is_empty() {
-                    continue;
-                }
-
-                // Get type IRIs from annotation
-                let type_key = format!("panschema:individual:{}", ind_id);
-                let type_iris: Vec<String> = schema
-                    .annotations
-                    .get(&type_key)
-                    .map(|s| s.split(',').map(|t| t.trim().to_string()).collect())
-                    .unwrap_or_default();
-
-                // Resolve types to EntityRefs
-                let types: Vec<EntityRef> = type_iris
-                    .iter()
-                    .filter_map(|type_iri| {
-                        // Extract class ID from IRI
-                        let type_id = type_iri
-                            .rfind('#')
-                            .map(|pos| &type_iri[pos + 1..])
-                            .unwrap_or(type_iri);
-
-                        schema.classes.get(type_id).map(|c| {
-                            let type_label = c
-                                .annotations
-                                .get("panschema:label")
-                                .cloned()
-                                .unwrap_or_else(|| type_id.to_string());
-                            EntityRef {
-                                id: type_id.to_string(),
-                                label: type_label,
-                            }
-                        })
-                    })
-                    .collect();
-
-                // Get property values from annotations
-                let mut property_values = Vec::new();
-                let prefix = format!("panschema:individual:{}:", ind_id);
-                for (key, value) in &schema.annotations {
-                    if key.starts_with(&prefix) {
-                        let prop_id = &key[prefix.len()..];
-
-                        let prop_ref = schema.slots.get(prop_id).map(|slot| {
-                            let prop_label = slot
-                                .annotations
-                                .get("panschema:label")
-                                .cloned()
-                                .unwrap_or_else(|| prop_id.to_string());
-                            EntityRef {
-                                id: prop_id.to_string(),
-                                label: prop_label,
-                            }
-                        });
-
-                        let property_label = prop_ref
-                            .as_ref()
-                            .map(|r| r.label.clone())
-                            .unwrap_or_else(|| prop_id.to_string());
-
-                        property_values.push(PropertyValueData {
-                            property_label,
-                            property_ref: prop_ref,
-                            value: value.clone(),
-                        });
-                    }
-                }
-
-                // Sort property values by property_id
-                property_values.sort_by(|a, b| a.property_label.cmp(&b.property_label));
-
-                // For now, use id as label (could be stored in annotation)
-                let label = ind_id.chars().next().map_or(ind_id.to_string(), |c| {
-                    c.to_uppercase().to_string() + &ind_id[1..]
-                });
-
-                individual_refs.push(EntityRef {
-                    id: ind_id.to_string(),
-                    label: label.clone(),
-                });
-
-                individual_data_list.push(IndividualData {
-                    id: ind_id.to_string(),
-                    label,
-                    iri: format!("{}#{}", iri, ind_id),
-                    description: None,
-                    types,
-                    property_values,
-                });
+        // One card path over the instance model (ADR-008/009): the cards
+        // render from an `InstanceSet` regardless of whether the A-box was
+        // authored as embedded OWL individuals or a LinkML data file.
+        let owned_set;
+        let effective_set = match instances {
+            Some(set) => set,
+            None => {
+                owned_set = crate::instances::InstanceSet::from_owl_annotations(schema);
+                &owned_set
             }
-        }
+        };
+        let (individual_refs, individual_data_list) =
+            Self::build_individual_data(schema, effective_set);
 
         // Build enumeration data, sorted by name for stable output.
         let mut enum_refs = Vec::new();
@@ -1324,7 +1347,11 @@ impl Writer for HtmlWriter {
         // Create output directory if it doesn't exist
         fs::create_dir_all(output).map_err(IoError::Io)?;
 
-        let data = Self::build_template_data_with_labels(schema, self.label_store.as_ref());
+        let data = Self::build_template_data_with_labels(
+            schema,
+            self.label_store.as_ref(),
+            self.instance_set.as_ref(),
+        );
 
         // Generate graph JSON for visualization (only if enabled)
         let (graph_json_string, graph_node_count, graph_edge_count) = if self.include_graph {
@@ -1352,23 +1379,25 @@ impl Writer for HtmlWriter {
         // emitted when that A-box is non-empty, so an individual-free schema
         // gets no instance graph. Escaped the same way as the schema graph
         // JSON (see above).
-        let instance_graph_json = if self.include_graph {
+        let (instance_graph_json, instance_node_count, instance_edge_count) = if self.include_graph
+        {
             let graph = GraphWriter::new();
             let instance_data = match &self.instance_set {
                 Some(set) => graph.instance_set_to_graph(schema, set),
                 None => graph.schema_to_instance_graph(schema),
             };
             if instance_data.nodes.is_empty() {
-                None
+                (None, 0, 0)
             } else {
-                Some(
-                    serde_json::to_string(&instance_data)
-                        .map_err(|e| IoError::Write(e.to_string()))?
-                        .replace('<', "\\u003c"),
-                )
+                let nodes = instance_data.nodes.len();
+                let edges = instance_data.edges.len();
+                let json = serde_json::to_string(&instance_data)
+                    .map_err(|e| IoError::Write(e.to_string()))?
+                    .replace('<', "\\u003c");
+                (Some(json), nodes, edges)
             }
         } else {
-            None
+            (None, 0, 0)
         };
 
         let template = IndexTemplate {
@@ -1391,6 +1420,9 @@ impl Writer for HtmlWriter {
             namespaces: &data.namespaces,
             graph_json: graph_json_string.as_deref(),
             instance_graph_json: instance_graph_json.as_deref(),
+            instance_node_count,
+            instance_edge_count,
+            instance_provenance: self.instance_provenance.as_deref(),
             graph_node_count,
             graph_edge_count,
             graph_aspect_w: self.graph_aspect.0,
@@ -3419,6 +3451,81 @@ mod tests {
     }
 
     #[test]
+    fn reference_values_link_to_the_referenced_individuals_card() {
+        use crate::linkml::{ClassDefinition, SlotDefinition};
+        // A two-record A-box with a reference: the card's value must be the
+        // *referenced* record's label, linked to that record's card — a
+        // wrong-target lookup would surface some other instance here.
+        let mut schema = SchemaDefinition::new("cellar");
+        schema.id = Some("https://example.org/cellar".to_string());
+        schema.default_prefix = Some("cellar".to_string());
+        schema.prefixes.insert(
+            "cellar".to_string(),
+            "https://example.org/cellar/".to_string(),
+        );
+        let mut container = ClassDefinition::new("Cellar");
+        container.tree_root = true;
+        for (slot, range) in [("bottles", "Bottle"), ("racks", "Rack")] {
+            let mut sd = SlotDefinition::new(slot);
+            sd.range = Some(range.to_string());
+            sd.multivalued = true;
+            container.attributes.insert(slot.to_string(), sd);
+        }
+        schema.classes.insert("Cellar".to_string(), container);
+        for class in ["Bottle", "Rack"] {
+            let mut c = ClassDefinition::new(class);
+            let mut id = SlotDefinition::new("id");
+            id.identifier = true;
+            c.attributes.insert("id".to_string(), id);
+            let mut name = SlotDefinition::new("name");
+            name.range = Some("string".to_string());
+            c.attributes.insert("name".to_string(), name);
+            if class == "Bottle" {
+                let mut stored_in = SlotDefinition::new("stored_in");
+                stored_in.range = Some("Rack".to_string());
+                c.attributes.insert("stored_in".to_string(), stored_in);
+            }
+            schema.classes.insert(class.to_string(), c);
+        }
+        let data: serde_yaml::Value = serde_yaml::from_str(
+            "bottles:\n  - id: b1\n    name: Morgon\n    stored_in: r1\nracks:\n  - id: r1\n    name: North Rack\n",
+        )
+        .unwrap();
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+
+        let (_, cards) = HtmlWriter::build_individual_data(&schema, &set);
+        let bottle = cards.iter().find(|c| c.id == "b1").expect("bottle card");
+        let stored_in = bottle
+            .property_values
+            .iter()
+            .find(|pv| pv.property_label == "stored_in")
+            .expect("stored_in value");
+        assert_eq!(stored_in.value, "North Rack", "value is the target's label");
+        assert_eq!(
+            stored_in.value_ref.as_ref().map(|r| r.id.as_str()),
+            Some("r1"),
+            "value links to the referenced individual's card"
+        );
+    }
+
+    #[test]
+    fn provenance_line_names_the_instance_data_source() {
+        let reader = OwlReader::new();
+        let schema = reader.read(&reference_ontology_path()).unwrap();
+
+        let writer = HtmlWriter::new().with_instance_provenance("wine_instances.yaml".to_string());
+        let temp_dir = std::env::temp_dir().join("panschema_provenance_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        writer.write(&schema, &temp_dir).expect("write");
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        assert!(
+            html.contains("wine_instances.yaml"),
+            "the section must name the attached provenance"
+        );
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
     fn html_writer_roundtrip_produces_valid_html() {
         // TTL → OwlReader → IR → HtmlWriter → HTML
         let reader = OwlReader::new();
@@ -3902,7 +4009,7 @@ mod tests {
         act.close_mappings = vec!["cco:ont99999999".to_string()];
         schema.classes.insert("Act".to_string(), act);
 
-        let data = HtmlWriter::build_template_data_with_labels(&schema, Some(&store));
+        let data = HtmlWriter::build_template_data_with_labels(&schema, Some(&store), None);
         let card = data.class_data.iter().find(|c| c.id == "Act").unwrap();
 
         assert_eq!(
