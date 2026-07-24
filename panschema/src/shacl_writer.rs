@@ -259,6 +259,231 @@ mod tests {
         schema
     }
 
+    /// A rule schema with one custom pre/post pair on a two-slot class.
+    fn schema_with_rule(
+        pre: crate::linkml::RuleConditions,
+        post: crate::linkml::RuleConditions,
+    ) -> SchemaDefinition {
+        use crate::linkml::ClassRule;
+        let mut schema = SchemaDefinition::new("test");
+        schema.id = Some(EX.to_string());
+        let mut image = ClassDefinition::new("Image");
+        image.class_uri = Some(format!("{EX}#Image"));
+        for slot in ["verdict", "approved_by"] {
+            let mut sd = SlotDefinition::new(slot);
+            sd.range = Some("string".to_string());
+            image.attributes.insert(slot.to_string(), sd);
+        }
+        image.rules.push(ClassRule {
+            title: Some("decided-needs-approver".to_string()),
+            description: None,
+            preconditions: Some(pre),
+            postconditions: Some(post),
+        });
+        schema.classes.insert("Image".to_string(), image);
+        schema
+    }
+
+    fn required_approved_by() -> crate::linkml::RuleConditions {
+        use crate::linkml::{RuleConditions, SlotCondition};
+        RuleConditions {
+            any_of: Vec::new(),
+            slot_conditions: [(
+                "approved_by".to_string(),
+                SlotCondition {
+                    required: true,
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+        }
+    }
+
+    #[test]
+    fn value_presence_present_projects_to_min_count_one() {
+        use crate::linkml::{RuleConditions, SlotCondition, ValuePresence};
+        let schema = schema_with_rule(
+            RuleConditions {
+                any_of: Vec::new(),
+                slot_conditions: [(
+                    "verdict".to_string(),
+                    SlotCondition {
+                        value_presence: Some(ValuePresence::Present),
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            },
+            required_approved_by(),
+        );
+        assert!(
+            crate::rdf_serializers::shacl_skipped_rules(&schema).is_empty(),
+            "a value_presence rule must project, not skip"
+        );
+        let store = render_to_store(&schema);
+        assert!(
+            ask(
+                &store,
+                &format!("ASK {{ <{EX}#ImageShape/rule0/pre/verdict> <{SH}minCount> 1 }}"),
+            ),
+            "PRESENT is `at least one value`: sh:minCount 1"
+        );
+    }
+
+    #[test]
+    fn value_presence_absent_projects_to_max_count_zero() {
+        use crate::linkml::{RuleConditions, SlotCondition, ValuePresence};
+        let schema = schema_with_rule(
+            RuleConditions {
+                any_of: Vec::new(),
+                slot_conditions: [(
+                    "verdict".to_string(),
+                    SlotCondition {
+                        value_presence: Some(ValuePresence::Absent),
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            },
+            required_approved_by(),
+        );
+        let store = render_to_store(&schema);
+        assert!(
+            ask(
+                &store,
+                &format!("ASK {{ <{EX}#ImageShape/rule0/pre/verdict> <{SH}maxCount> 0 }}"),
+            ),
+            "ABSENT is `no values`: sh:maxCount 0"
+        );
+    }
+
+    #[test]
+    fn slot_any_of_projects_to_sh_or_of_alternatives() {
+        use crate::linkml::{RuleConditions, SlotCondition};
+        let schema = schema_with_rule(
+            RuleConditions {
+                any_of: Vec::new(),
+                slot_conditions: [(
+                    "verdict".to_string(),
+                    SlotCondition {
+                        any_of: vec![
+                            SlotCondition {
+                                equals_string: Some("approved".to_string()),
+                                ..Default::default()
+                            },
+                            SlotCondition {
+                                equals_string: Some("rejected".to_string()),
+                                ..Default::default()
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            },
+            required_approved_by(),
+        );
+        assert!(
+            crate::rdf_serializers::shacl_skipped_rules(&schema).is_empty(),
+            "a slot any_of rule must project, not skip"
+        );
+        let store = render_to_store(&schema);
+        // The verdict property shape carries sh:or over two alternatives,
+        // one per allowed value.
+        assert!(
+            ask(
+                &store,
+                &format!(
+                    "PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n\
+                     ASK {{ <{EX}#ImageShape/rule0/pre/verdict> <{SH}or> ?l .\n\
+                           ?l rdf:rest*/rdf:first ?a . ?a <{SH}hasValue> \"approved\" .\n\
+                           ?l rdf:rest*/rdf:first ?b . ?b <{SH}hasValue> \"rejected\" }}"
+                ),
+            ),
+            "each alternative value becomes an sh:or member with sh:hasValue"
+        );
+    }
+
+    #[test]
+    fn rule_level_any_of_projects_alternative_condition_sets() {
+        use crate::linkml::{RuleConditions, SlotCondition};
+        let schema = schema_with_rule(
+            RuleConditions {
+                slot_conditions: Default::default(),
+                any_of: vec![
+                    RuleConditions {
+                        any_of: Vec::new(),
+                        slot_conditions: [(
+                            "verdict".to_string(),
+                            SlotCondition {
+                                equals_string: Some("approved".to_string()),
+                                ..Default::default()
+                            },
+                        )]
+                        .into_iter()
+                        .collect(),
+                    },
+                    RuleConditions {
+                        any_of: Vec::new(),
+                        slot_conditions: [(
+                            "verdict".to_string(),
+                            SlotCondition {
+                                equals_string: Some("rejected".to_string()),
+                                ..Default::default()
+                            },
+                        )]
+                        .into_iter()
+                        .collect(),
+                    },
+                ],
+            },
+            required_approved_by(),
+        );
+        assert!(
+            crate::rdf_serializers::shacl_skipped_rules(&schema).is_empty(),
+            "a rule whose precondition is only any_of must project, not skip"
+        );
+        let store = render_to_store(&schema);
+        // The precondition node shape is an sh:or over alternative
+        // condition-set shapes, each carrying its own property shape.
+        assert!(
+            ask(
+                &store,
+                &format!(
+                    "PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n\
+                     ASK {{ <{EX}#ImageShape/rule0/pre> <{SH}or> ?l .\n\
+                           ?l rdf:rest*/rdf:first ?alt0 .\n\
+                           ?alt0 <{SH}property> ?p0 . ?p0 <{SH}hasValue> \"approved\" .\n\
+                           ?l rdf:rest*/rdf:first ?alt1 .\n\
+                           ?alt1 <{SH}property> ?p1 . ?p1 <{SH}hasValue> \"rejected\" }}"
+                ),
+            ),
+            "alternative condition sets become sh:or members with their own property shapes"
+        );
+    }
+
+    #[test]
+    fn a_condition_with_neither_slots_nor_alternatives_still_skips() {
+        use crate::linkml::RuleConditions;
+        let schema = schema_with_rule(
+            RuleConditions {
+                slot_conditions: Default::default(),
+                any_of: Vec::new(),
+            },
+            required_approved_by(),
+        );
+        let skipped = crate::rdf_serializers::shacl_skipped_rules(&schema);
+        assert_eq!(
+            skipped.len(),
+            1,
+            "an empty condition side has no shape form"
+        );
+    }
+
     #[test]
     fn a_rule_projects_pre_and_post_condition_shapes() {
         let store = render_to_store(&schema_with_conditional_rule());

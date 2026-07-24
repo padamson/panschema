@@ -856,46 +856,25 @@ pub fn build_shacl_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
             let post = rule.postconditions.as_ref().unwrap();
 
             let pre_iri = make_iri(&format!("{shape_iri_str}/rule{i}/pre"))?;
-            for (slot, cond) in &pre.slot_conditions {
-                let def = effective
-                    .iter()
-                    .find(|(n, _)| n.as_str() == slot)
-                    .map(|(_, d)| d)
-                    .expect("skip check guarantees the slot resolves");
-                let ps = make_iri(&format!("{shape_iri_str}/rule{i}/pre/{slot}"))?;
-                let path = make_iri(&slot_iri_string(slot, def, schema))?;
-                emit_property_shape(
-                    &mut graph,
-                    &t,
-                    &pre_iri,
-                    &ps,
-                    &path,
-                    schema,
-                    // A condition carries no `range` of its own; the slot's
-                    // declared range is what types an `equals_number`
-                    // `sh:hasValue` correctly.
-                    PropertyConstraints::from_condition(cond).with_range(def.range.as_deref()),
-                )?;
-            }
+            emit_condition_shape(
+                &mut graph,
+                &t,
+                &pre_iri,
+                &format!("{shape_iri_str}/rule{i}/pre"),
+                pre,
+                &effective,
+                schema,
+            )?;
             let post_iri = make_iri(&format!("{shape_iri_str}/rule{i}/post"))?;
-            for (slot, cond) in &post.slot_conditions {
-                let def = effective
-                    .iter()
-                    .find(|(n, _)| n.as_str() == slot)
-                    .map(|(_, d)| d)
-                    .expect("skip check guarantees the slot resolves");
-                let ps = make_iri(&format!("{shape_iri_str}/rule{i}/post/{slot}"))?;
-                let path = make_iri(&slot_iri_string(slot, def, schema))?;
-                emit_property_shape(
-                    &mut graph,
-                    &t,
-                    &post_iri,
-                    &ps,
-                    &path,
-                    schema,
-                    PropertyConstraints::from_condition(cond).with_range(def.range.as_deref()),
-                )?;
-            }
+            emit_condition_shape(
+                &mut graph,
+                &t,
+                &post_iri,
+                &format!("{shape_iri_str}/rule{i}/post"),
+                post,
+                &effective,
+                schema,
+            )?;
 
             // `[ sh:not <pre> ]` and the two-element list `( notpre post )`,
             // then `<classShape> sh:or ( notpre post )`.
@@ -985,6 +964,12 @@ struct PropertyConstraints<'a> {
     max_cardinality: Option<u32>,
     equals_string: Option<&'a str>,
     equals_number: Option<f64>,
+    /// `value_presence` — PRESENT is "at least one value" (`sh:minCount 1`),
+    /// ABSENT is "no values" (`sh:maxCount 0`).
+    value_presence: Option<crate::linkml::ValuePresence>,
+    /// Slot-level `any_of`: the value satisfies at least one alternative —
+    /// emitted as `sh:or` over per-alternative constraint shapes.
+    any_of: Vec<PropertyConstraints<'a>>,
 }
 
 impl<'a> PropertyConstraints<'a> {
@@ -1012,6 +997,8 @@ impl<'a> PropertyConstraints<'a> {
             max_cardinality: cond.maximum_cardinality,
             equals_string: cond.equals_string.as_deref(),
             equals_number: cond.equals_number,
+            value_presence: cond.value_presence,
+            any_of: cond.any_of.iter().map(Self::from_condition).collect(),
         }
     }
 
@@ -1022,6 +1009,11 @@ impl<'a> PropertyConstraints<'a> {
         if self.range.is_none() {
             self.range = range;
         }
+        self.any_of = self
+            .any_of
+            .into_iter()
+            .map(|alt| alt.with_range(range))
+            .collect();
         self
     }
 }
@@ -1068,27 +1060,91 @@ pub fn shacl_skipped_rules(schema: &SchemaDefinition) -> Vec<ShaclSkippedRule> {
 /// shape. `slot_names` is the class's effective slot set. Shared by
 /// `build_shacl_graph` (skip decision) and [`shacl_skipped_rules`]
 /// (diagnostic), so the two can't disagree.
+/// Emit one side of a rule (pre or post) as a node shape at `cond_iri`:
+/// a property shape per `slot_conditions` entry, plus — when the condition
+/// carries `any_of` alternatives — an `sh:or` over recursively-emitted
+/// alternative condition-set shapes at `{base}/alt{k}`. A shape conforms
+/// when all its property shapes hold AND at least one alternative holds,
+/// which is exactly LinkML's conjunction of `slot_conditions` with `any_of`.
+#[allow(clippy::too_many_arguments)]
+fn emit_condition_shape(
+    graph: &mut FastGraph,
+    t: &ShaclTerms,
+    cond_iri: &Iri<String>,
+    base: &str,
+    conditions: &crate::linkml::RuleConditions,
+    effective: &std::collections::BTreeMap<String, SlotDefinition>,
+    schema: &SchemaDefinition,
+) -> IoResult<()> {
+    for (slot, cond) in &conditions.slot_conditions {
+        let def = effective
+            .get(slot)
+            .expect("skip check guarantees the slot resolves");
+        let ps = make_iri(&format!("{base}/{slot}"))?;
+        let path = make_iri(&slot_iri_string(slot, def, schema))?;
+        emit_property_shape(
+            graph,
+            t,
+            cond_iri,
+            &ps,
+            &path,
+            schema,
+            // A condition carries no `range` of its own; the slot's
+            // declared range is what types an `equals_number`
+            // `sh:hasValue` correctly.
+            PropertyConstraints::from_condition(cond).with_range(def.range.as_deref()),
+        )?;
+    }
+    if !conditions.any_of.is_empty() {
+        let mut alts = Vec::new();
+        for (k, alt) in conditions.any_of.iter().enumerate() {
+            let alt_iri = make_iri(&format!("{base}/alt{k}"))?;
+            emit_condition_shape(
+                graph,
+                t,
+                &alt_iri,
+                &format!("{base}/alt{k}"),
+                alt,
+                effective,
+                schema,
+            )?;
+            alts.push(alt_iri);
+        }
+        emit_or_list(graph, t, cond_iri, base, alts)?;
+    }
+    Ok(())
+}
+
 fn shacl_rule_skip_reason(
     rule: &crate::linkml::ClassRule,
     slot_names: &std::collections::BTreeSet<&str>,
 ) -> Option<String> {
+    fn side_reason(
+        conditions: &crate::linkml::RuleConditions,
+        slot_names: &std::collections::BTreeSet<&str>,
+    ) -> Option<String> {
+        if conditions.slot_conditions.is_empty() && conditions.any_of.is_empty() {
+            return Some(
+                "a precondition or postcondition has neither slot_conditions nor any_of"
+                    .to_string(),
+            );
+        }
+        for slot in conditions.slot_conditions.keys() {
+            if !slot_names.contains(slot.as_str()) {
+                return Some(format!(
+                    "references slot `{slot}`, which the class does not have"
+                ));
+            }
+        }
+        conditions
+            .any_of
+            .iter()
+            .find_map(|alt| side_reason(alt, slot_names))
+    }
+
     match (&rule.preconditions, &rule.postconditions) {
         (Some(pre), Some(post)) => {
-            if pre.slot_conditions.is_empty() || post.slot_conditions.is_empty() {
-                return Some("a precondition or postcondition has no slot_conditions".to_string());
-            }
-            for slot in pre
-                .slot_conditions
-                .keys()
-                .chain(post.slot_conditions.keys())
-            {
-                if !slot_names.contains(slot.as_str()) {
-                    return Some(format!(
-                        "references slot `{slot}`, which the class does not have"
-                    ));
-                }
-            }
-            None
+            side_reason(pre, slot_names).or_else(|| side_reason(post, slot_names))
         }
         _ => Some(
             "a SHACL conditional shape needs both preconditions and postconditions".to_string(),
@@ -1117,7 +1173,21 @@ fn emit_property_shape(
     graph
         .insert(prop_shape, &t.path, path)
         .map_err(|e| IoError::Write(e.to_string()))?;
+    emit_constraint_fields(graph, t, prop_shape, schema, c)
+}
 
+/// Emit `c`'s value constraints onto `node` — the body shared by a full
+/// property shape and each `sh:or` alternative (which applies to the same
+/// value nodes and so carries no `sh:path` of its own). Slot-level
+/// `any_of` recurses here: alternatives become an `sh:or` list of
+/// constraint shapes at `{node}/or{j}`.
+fn emit_constraint_fields(
+    graph: &mut FastGraph,
+    t: &ShaclTerms,
+    prop_shape: &Iri<String>,
+    schema: &SchemaDefinition,
+    c: PropertyConstraints<'_>,
+) -> IoResult<()> {
     if let Some(range) = c.range {
         if let Some(target) = schema.classes.get(range) {
             let target_iri = make_iri(&class_iri_string(range, target, schema))?;
@@ -1138,13 +1208,27 @@ fn emit_property_shape(
     // lower bound; emitting a `sh:minCount` for each would contradict itself.
     // Reconcile to one, with an explicit cardinality winning over the flag —
     // the same precedence `effective_cardinality` gives the HTML view.
-    let effective_min = c.min_cardinality.unwrap_or(u32::from(c.required));
+    // `value_presence` folds into the same bounds: PRESENT is a lower
+    // bound of 1 ("at least one value"), ABSENT an upper bound of 0.
+    let presence_min = u32::from(matches!(
+        c.value_presence,
+        Some(crate::linkml::ValuePresence::Present)
+    ));
+    let effective_min = c
+        .min_cardinality
+        .unwrap_or(u32::from(c.required))
+        .max(presence_min);
     if effective_min > 0 {
         graph
             .insert(prop_shape, &t.min_count, effective_min as i32)
             .map_err(|e| IoError::Write(e.to_string()))?;
     }
-    if let Some(max) = c.max_cardinality {
+    let effective_max = if matches!(c.value_presence, Some(crate::linkml::ValuePresence::Absent)) {
+        Some(0)
+    } else {
+        c.max_cardinality
+    };
+    if let Some(max) = effective_max {
         graph
             .insert(prop_shape, &t.max_count, max as i32)
             .map_err(|e| IoError::Write(e.to_string()))?;
@@ -1187,6 +1271,50 @@ fn emit_property_shape(
                 .insert(prop_shape, &t.has_value, n)
                 .map_err(|e| IoError::Write(e.to_string()))?;
         }
+    }
+    if !c.any_of.is_empty() {
+        let mut alts = Vec::new();
+        for (j, alt) in c.any_of.into_iter().enumerate() {
+            let member = make_iri(&format!("{prop_shape}/or{j}"))?;
+            emit_constraint_fields(graph, t, &member, schema, alt)?;
+            alts.push(member);
+        }
+        emit_or_list(graph, t, prop_shape, &format!("{prop_shape}"), alts)?;
+    }
+    Ok(())
+}
+
+/// Wire `subject sh:or ( members… )` with deterministic named list cells
+/// (`{base}/orcell{j}`) rather than blank nodes, matching the rule shapes'
+/// stable-IRI convention.
+fn emit_or_list(
+    graph: &mut FastGraph,
+    t: &ShaclTerms,
+    subject: &Iri<String>,
+    base: &str,
+    members: Vec<Iri<String>>,
+) -> IoResult<()> {
+    let mut cells = Vec::new();
+    for j in 0..members.len() {
+        cells.push(make_iri(&format!("{base}/orcell{j}"))?);
+    }
+    if let Some(first) = cells.first() {
+        graph
+            .insert(subject, &t.or_, first)
+            .map_err(|e| IoError::Write(e.to_string()))?;
+    }
+    for (j, (cell, member)) in cells.iter().zip(&members).enumerate() {
+        graph
+            .insert(cell, rdf::first, member)
+            .map_err(|e| IoError::Write(e.to_string()))?;
+        match cells.get(j + 1) {
+            Some(next) => graph
+                .insert(cell, rdf::rest, next)
+                .map_err(|e| IoError::Write(e.to_string()))?,
+            None => graph
+                .insert(cell, rdf::rest, rdf::nil)
+                .map_err(|e| IoError::Write(e.to_string()))?,
+        };
     }
     Ok(())
 }
