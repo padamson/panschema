@@ -96,7 +96,7 @@ insta = "1"
 # syntax errors in the writer but ignores semantic issues (undefined
 # types, missing imports). End-to-end compile checks against real
 # downstream consumers cover the semantic class of errors.
-syn = { version = "2", features = ["full"] }
+syn = { version = "3", features = ["full"] }
 
 # Syntactic validation of PostgresWriter output: a Rust binding to
 # `libpg_query`, Postgres's own C parser extracted as a standalone
