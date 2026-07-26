@@ -713,37 +713,11 @@ impl HtmlWriter {
         self
     }
 
-    /// Attach an explicit A-box (e.g. read from a LinkML instance-data
-    /// file) to render as the instance graph, in place of the schema's
-    /// embedded OWL individuals. Replaces any datasets already attached.
-    #[must_use]
-    pub fn with_instances(mut self, set: crate::instances::InstanceSet) -> Self {
-        self.instance_datasets = vec![InstanceDataset::new(String::new(), set)];
-        self
-    }
-
     /// Add a named curated A-box. Several may be attached; the first is
     /// shown by default and the rest are reachable through the selector.
     #[must_use]
     pub fn with_instance_dataset(mut self, dataset: InstanceDataset) -> Self {
         self.instance_datasets.push(dataset);
-        self
-    }
-
-    /// Name the instance-data source of the most recently attached dataset
-    /// for the section's provenance line. Attaching a dataset with
-    /// [`InstanceDataset::with_provenance`] says the same thing in one step
-    /// and is preferred when building several.
-    pub fn with_instance_provenance(mut self, name: String) -> Self {
-        match self.instance_datasets.last_mut() {
-            Some(dataset) => dataset.provenance = Some(name),
-            // No A-box attached: the schema's embedded individuals are the
-            // subject, and the fallback dataset built at render time picks
-            // this up.
-            None => self.instance_datasets.push(
-                InstanceDataset::new(String::new(), Default::default()).with_provenance(name),
-            ),
-        }
         self
     }
 
@@ -1400,22 +1374,13 @@ struct TemplateData {
 }
 
 impl HtmlWriter {
-    /// The datasets to render. An attached A-box that holds no instances
-    /// means no explicit instance data was supplied, so the schema's own
-    /// embedded OWL individuals are the subject — keeping any provenance
-    /// the caller recorded.
+    /// The datasets to render. With none attached, the schema's own embedded
+    /// OWL individuals are the subject.
     fn effective_datasets(&self, schema: &SchemaDefinition) -> Vec<InstanceDataset> {
-        if self
-            .instance_datasets
-            .iter()
-            .all(|d| d.set.instances.is_empty())
-        {
+        if self.instance_datasets.is_empty() {
             return vec![InstanceDataset {
                 name: String::new(),
-                provenance: self
-                    .instance_datasets
-                    .first()
-                    .and_then(|d| d.provenance.clone()),
+                provenance: None,
                 set: crate::instances::InstanceSet::from_owl_annotations(schema),
                 default_selected: true,
             }];
@@ -3950,20 +3915,24 @@ mod tests {
     }
 
     #[test]
-    fn provenance_line_names_the_instance_data_source() {
+    fn schema_embedded_individuals_say_so_in_the_provenance_line() {
+        // No instance-data file attached, so the A-box is the schema's own
+        // individuals — the provenance line must say that rather than name a
+        // file that isn't there.
         let reader = OwlReader::new();
         let schema = reader.read(&reference_ontology_path()).unwrap();
 
-        let writer = HtmlWriter::new().with_instance_provenance("wine_instances.yaml".to_string());
+        let writer = HtmlWriter::new();
         let temp_dir = std::env::temp_dir().join("panschema_provenance_test");
         let _ = fs::remove_dir_all(&temp_dir);
         writer.write(&schema, &temp_dir).expect("write");
         let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
-        assert!(
-            html.contains("wine_instances.yaml"),
-            "the section must name the attached provenance"
-        );
         let _ = fs::remove_dir_all(&temp_dir);
+
+        assert!(
+            html.contains("Source: individuals embedded in the schema"),
+            "the section must attribute the A-box to the schema itself"
+        );
     }
 
     #[test]
