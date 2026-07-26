@@ -73,6 +73,28 @@ These are *curated* graphs: small, hand-picked A-boxes whose job is to
 teach the schema. Production datasets are runtime artifacts, not page
 content.
 
+### Documenting data against someone else's schema
+
+A repository can author *data* rather than classes — its schema is a
+published dependency. Declare the schema under `[schemas]` in
+`panschema.toml` as usual, then point `[generate.<name>].instances` at
+the local A-boxes:
+
+```toml
+[schemas]
+wine = { source = "github:owner/wine-schema", version = "0.3.0" }
+
+[generate.wine]
+html = "site/"
+instances = ["data/preview.yaml", "data/catalog.yaml"]
+```
+
+`panschema generate` then renders the imported schema's docs featuring
+your data — selector, cards, provenance, exports — validated against the
+schema version the lockfile pins. Paths resolve relative to the manifest,
+declaration order drives the selector, and each dataset is labelled by
+its file stem.
+
 ## Scaffolding a new schema package
 
 You don't need to write `panschema-publish.toml` by hand. `panschema

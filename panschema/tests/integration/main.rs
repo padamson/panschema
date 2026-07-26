@@ -842,7 +842,7 @@ fn single_a_box_formats_reject_several_instances_files() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("single instance graph") && stderr.contains("--format html"),
+        stderr.contains("single instance graph") && stderr.contains("HTML"),
         "the error should explain the limit and the alternative; got: {stderr}"
     );
 
@@ -1475,6 +1475,122 @@ html = "docs/"
     assert!(
         html.contains("Sample LinkML Schema"),
         "Missing schema title from manifest-generated HTML"
+    );
+}
+
+/// A repository that authors *data* against a schema published elsewhere: the
+/// schema arrives through `[schemas]`, the A-boxes are local, and
+/// `[generate.<name>].instances` renders the imported schema's docs featuring
+/// them (ADR-009 decision 6).
+#[test]
+fn manifest_instances_render_the_local_a_boxes_with_the_imported_schema() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+
+    // The schema is a dependency package, not a local file.
+    let pkg = consumer.join("wine-pkg");
+    fs::create_dir_all(&pkg).expect("mkdir pkg");
+    fs::copy(
+        "tests/fixtures/wine_catalog.yaml",
+        pkg.join("wine_catalog.yaml"),
+    )
+    .expect("copy schema");
+    fs::write(
+        pkg.join("panschema-publish.toml"),
+        "[schema]\nname = \"wine\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"wine_catalog.yaml\"\n",
+    )
+    .expect("write publish toml");
+
+    // The data is this repository's own.
+    let data = consumer.join("data");
+    fs::create_dir_all(&data).expect("mkdir data");
+    fs::copy(
+        "tests/fixtures/wine_instances_preview.yaml",
+        data.join("preview.yaml"),
+    )
+    .expect("copy preview");
+    fs::copy(
+        "tests/fixtures/wine_instances.yaml",
+        data.join("catalog.yaml"),
+    )
+    .expect("copy catalog");
+
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+wine = { path = "./wine-pkg" }
+
+[generate.wine]
+html = "site/"
+instances = ["data/preview.yaml", "data/catalog.yaml"]
+"#,
+    )
+    .expect("write manifest");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("generate")
+        .current_dir(consumer)
+        .output()
+        .expect("run panschema");
+    assert!(
+        out.status.success(),
+        "manifest-driven generate failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let html = fs::read_to_string(consumer.join("site").join("index.html")).expect("read index");
+    assert!(
+        html.contains(r#"role="tablist""#),
+        "both declared A-boxes should sit behind the selector"
+    );
+    assert!(
+        html.contains(">preview") && html.contains(">catalog"),
+        "each dataset is labelled by its file stem; got a page without both"
+    );
+    assert!(
+        html.contains("Preview Pinot") && html.contains("Château Morgon"),
+        "individuals from both local A-boxes must render"
+    );
+    assert!(
+        html.contains(r#"data-instance-dataset="1" hidden>"#),
+        "the first declared dataset opens"
+    );
+}
+
+/// A manifest naming instance data that isn't there fails loudly, naming the
+/// schema and the path, rather than quietly publishing a T-box-only page.
+#[test]
+fn manifest_instances_path_that_does_not_exist_fails() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    write_sample_pkg(consumer, "sample-pkg");
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+sample_schema = { path = "./sample-pkg" }
+
+[generate.sample_schema]
+html = "docs/"
+instances = ["data/absent.yaml"]
+"#,
+    )
+    .expect("write manifest");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("generate")
+        .current_dir(consumer)
+        .output()
+        .expect("run panschema");
+    assert!(
+        !out.status.success(),
+        "a missing instances path must fail the build"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("sample_schema") && stderr.contains("absent.yaml"),
+        "the error should name the schema and the missing file; got: {stderr}"
     );
 }
 

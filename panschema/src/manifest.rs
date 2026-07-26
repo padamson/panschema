@@ -80,6 +80,15 @@ pub struct GenerateConfig {
     /// HTML documentation output directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub html: Option<PathBuf>,
+    /// Curated instance-data files (A-boxes) to render with this schema, in
+    /// declaration order — the manifest analog of a repeated `--instances`.
+    /// Paths resolve relative to the manifest's location. Several render
+    /// behind the HTML page's in-page selector, each labelled by its file
+    /// stem, with the first shown first. This is what lets a repository that
+    /// authors *data* against a schema published elsewhere document its own
+    /// A-box (ADR-009 decision 6).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub instances: Vec<PathBuf>,
     /// Override the schema graph viz aspect ratio in HTML output. Format
     /// `"W:H"` (e.g. `"16:9"`, `"4:3"`). Only meaningful when `html` is set.
     /// Default is 16:8, chosen so a laptop screen fits the graph + browser
@@ -501,6 +510,45 @@ html = "docs/"
         assert_eq!(
             m.generate.get("my-local").unwrap().html,
             Some(PathBuf::from("docs/"))
+        );
+    }
+
+    #[test]
+    fn parses_generate_instances_as_an_ordered_list() {
+        // The manifest analog of the repeatable `--instances`: several curated
+        // A-boxes, rendered behind the in-page selector in declaration order.
+        let toml = r#"
+[schemas]
+wine = { path = "./wine-pkg" }
+
+[generate.wine]
+html = "site/schema"
+instances = ["data/preview.yaml", "data/worked-example.yaml"]
+"#;
+        let m = toml.parse::<Manifest>().expect("should parse");
+        assert_eq!(
+            m.generate.get("wine").unwrap().instances,
+            vec![
+                PathBuf::from("data/preview.yaml"),
+                PathBuf::from("data/worked-example.yaml")
+            ],
+            "declaration order is preserved — it drives the selector"
+        );
+    }
+
+    #[test]
+    fn generate_instances_defaults_to_none_declared() {
+        let toml = r#"
+[schemas]
+wine = { path = "./wine-pkg" }
+
+[generate.wine]
+html = "site/schema"
+"#;
+        let m = toml.parse::<Manifest>().expect("should parse");
+        assert!(
+            m.generate.get("wine").unwrap().instances.is_empty(),
+            "a manifest that declares no instance data renders the T-box alone"
         );
     }
 

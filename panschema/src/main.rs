@@ -478,8 +478,9 @@ fn generate(
         // HTML page holds several, behind its selector.
         if !rest.is_empty() {
             anyhow::bail!(
-                "--format {format} emits a single instance graph, but {} --instances files were \
-                 given; pass one, or use --format html to carry several on one page",
+                "format `{format}` emits a single instance graph, but {} instance-data files \
+                 were supplied; supply one for this format, or render several on one page as \
+                 HTML",
                 rest.len() + 1
             );
         }
@@ -617,11 +618,17 @@ fn generate_from_manifest(offline: bool, refresh_labels: bool, strict: bool) -> 
             eprintln!("schema `{name}`: no [generate.{name}] block; skipping");
             continue;
         };
+        // Instance-data paths are manifest-relative, like every output path.
+        let instances: Vec<PathBuf> = gen_cfg
+            .instances
+            .iter()
+            .map(|p| manifest_dir.join(p))
+            .collect();
         if let Some(html_out) = &gen_cfg.html {
             let html_out = manifest_dir.join(html_out);
             generate(
                 schema_path,
-                &[],
+                &instances,
                 &html_out,
                 "html",
                 true,
@@ -654,7 +661,7 @@ fn generate_from_manifest(offline: bool, refresh_labels: bool, strict: bool) -> 
             let out = manifest_dir.join(out);
             generate(
                 schema_path,
-                &[],
+                &instances,
                 &out,
                 format,
                 false,

@@ -133,7 +133,7 @@ A-box.
 
 ### Slice 5: Instances in the consumer manifest (dataset-first repos)
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Should Have
 
@@ -142,15 +142,20 @@ a published dependency, not a local file — gets the same documented,
 exported instance graph from a manifest-driven build (ADR-009 decision 6).
 
 **Acceptance Criteria:**
-- [ ] `[generate.<name>]` accepts an `instances` key (path to a LinkML
-  instance-data file), the manifest analog of `generate --instances`; a
-  manifest-driven `generate` renders that schema's docs with the instance
-  graph (Slice 3's section) and feeds the configured exports (Slices 1–2).
-- [ ] It works when the named schema is a fetched dependency (`github:` or
+- [x] `[generate.<name>]` accepts an `instances` key — a **list** of LinkML
+  instance-data files, the manifest analog of the repeatable
+  `generate --instances`. Feature 37 made curated graphs plural, so the key is
+  plural too: several render behind the in-page selector in declaration order,
+  each labelled by its file stem. Paths resolve relative to the manifest, like
+  every output path, and the configured exports (Slices 1–2) receive them too.
+  A format that emits a single A-box rejects several rather than choosing one.
+- [x] It works when the named schema is a fetched dependency (`github:` or
   `path:` source): the data validates and renders against the pinned
-  schema version, and the section's provenance shows the data file.
-- [ ] An `instances` path that doesn't exist fails with a diagnostic naming
-  the manifest entry, matching the manifest's existing strictness.
+  schema version, and the section's provenance shows the data file
+  (`manifest_instances_render_the_local_a_boxes_with_the_imported_schema`).
+- [x] An `instances` path that doesn't exist fails with a diagnostic naming
+  the schema and the path, matching the manifest's existing strictness
+  (`manifest_instances_path_that_does_not_exist_fails`).
 
 ### Deferred (post-36, on demand)
 
