@@ -232,6 +232,32 @@ a violating exemplar can't reach a deployed page unnoticed.
 - [x] One code path decides what "conforming" means, so the standalone
   command and the embedding paths cannot drift.
 
+### Slice 6: A field the class doesn't declare is a violation
+
+**Status:** Complete
+
+**Priority:** Must Have
+
+**Depends on:** Slice 5.
+
+**User Value:** A misspelled slot name is reported instead of quietly becoming
+a new ontology property. Before this, `colour` on a class declaring `color`
+validated clean, rendered in the docs, and emitted as
+`<…#colour> "red"` in RDF — inventing a property in the schema's own namespace
+while the slot actually meant stayed absent.
+
+**Acceptance Criteria:**
+- [x] A field the record's class doesn't declare is a violation naming the
+  record, the field, and the class, and saying what becomes of it — it renders
+  and emits rather than being dropped
+  (`a_field_the_class_does_not_declare_is_a_violation`).
+- [x] It reaches every path the conformance check reaches: the standalone
+  command, `generate --instances`, and `publish`; `--strict` fails.
+- [x] Reported per record, so the same misspelling in several records names
+  each one.
+- [x] No false positives on a real hand-authored A-box (verified against the
+  wine showcase's two curated data files, both still conforming).
+
 ---
 
 ## Slice Priority and Dependencies
@@ -246,6 +272,7 @@ a violating exemplar can't reach a deployed page unnoticed.
 | Slice 4: identifier uniqueness | Should Have | Slice 3 | Complete |
 | Slice 4b: `any_of` polymorphic ranges | Should Have | Slice 4 | Not Started |
 | Slice 5: conformance check on the way into an output | Must Have | Slice 1 | Complete |
+| Slice 6: undeclared fields are violations | Must Have | Slice 5 | Complete |
 
 ## Definition of Done
 

@@ -84,6 +84,22 @@ pub struct InstanceSet {
     /// duplicates here rather than seeing the extra records. Sorted, each id
     /// listed once. Empty for readers that don't track it (e.g. OWL).
     pub duplicate_ids: Vec<String>,
+    /// Fields present in the data that the record's class doesn't declare.
+    /// These are **not** dropped — they render and emit as properties minted
+    /// in the schema's namespace — so a validator needs to see them. Sorted.
+    /// Empty for readers that don't track it (e.g. OWL).
+    pub undeclared_fields: Vec<UndeclaredField>,
+}
+
+/// A field the data carries that its record's class never declared.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct UndeclaredField {
+    /// The record carrying it.
+    pub record: String,
+    /// The class that doesn't declare it.
+    pub class: String,
+    /// The field name as written in the data.
+    pub field: String,
 }
 
 impl InstanceSet {
@@ -212,6 +228,7 @@ impl InstanceSet {
         Self {
             instances,
             duplicate_ids: Vec::new(),
+            undeclared_fields: Vec::new(),
         }
     }
 
@@ -239,6 +256,7 @@ impl InstanceSet {
             seen: std::collections::HashSet::new(),
             top_level_seen: std::collections::HashSet::new(),
             duplicate_ids: Vec::new(),
+            undeclared_fields: Vec::new(),
         };
         for (key, value) in container {
             let Some(slot_name) = key.as_str() else {
@@ -255,9 +273,11 @@ impl InstanceSet {
         }
         loader.instances.sort_by(|a, b| a.id.cmp(&b.id));
         loader.duplicate_ids.sort();
+        loader.undeclared_fields.sort();
         Self {
             instances: loader.instances,
             duplicate_ids: loader.duplicate_ids,
+            undeclared_fields: loader.undeclared_fields,
         }
     }
 }
@@ -273,6 +293,7 @@ struct LinkmlLoader<'a> {
     /// claiming an identifier already used by another.
     top_level_seen: std::collections::HashSet<String>,
     duplicate_ids: Vec<String>,
+    undeclared_fields: Vec<UndeclaredField>,
 }
 
 impl LinkmlLoader<'_> {
@@ -350,6 +371,13 @@ impl LinkmlLoader<'_> {
                 continue;
             };
             let slot = slots.get(field);
+            if slot.is_none() {
+                self.undeclared_fields.push(UndeclaredField {
+                    record: id.clone(),
+                    class: class_name.to_string(),
+                    field: field.to_string(),
+                });
+            }
             let range = slot
                 .and_then(|s| s.range.clone())
                 .or_else(|| self.schema.default_range.clone());

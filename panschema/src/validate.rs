@@ -195,6 +195,20 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
         });
     }
 
+    // A field the class never declared. Not dropped by the reader — it renders
+    // and emits as a property minted in the schema's own namespace — so an
+    // unreported one lets a typo invent an ontology term.
+    for u in &set.undeclared_fields {
+        out.push(Violation {
+            record: u.record.clone(),
+            detail: format!(
+                "field `{}` is not declared by class `{}`; it renders and emits as an \
+                 undeclared property",
+                u.field, u.class
+            ),
+        });
+    }
+
     // Identifier uniqueness: an id claimed by more than one record.
     for id in &set.duplicate_ids {
         out.push(Violation {
@@ -314,6 +328,27 @@ wineries:
         assert!(
             v[0].detail.contains("used by more than one record"),
             "got: {}",
+            v[0].detail
+        );
+    }
+
+    #[test]
+    fn a_field_the_class_does_not_declare_is_a_violation() {
+        // An undeclared field is not dropped: it renders in the docs and is
+        // emitted as an RDF property minted in the schema's own namespace. So a
+        // typo invents an ontology property, and the slot actually meant stays
+        // absent. Report it rather than letting the writers assert it.
+        let d = data("wines:\n  - id: w1\n    name: Morgon\n    colour: red\n");
+        let v = validate_instance_data(&schema(), &d);
+        assert_eq!(
+            v.len(),
+            1,
+            "one undeclared field, reported once; got: {v:?}"
+        );
+        assert_eq!(v[0].record, "w1");
+        assert!(
+            v[0].detail.contains("colour") && v[0].detail.contains("Wine"),
+            "the violation must name the field and the class; got: {}",
             v[0].detail
         );
     }
