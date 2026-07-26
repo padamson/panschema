@@ -239,7 +239,7 @@ version = "0.11.0"
 criteria = "safe-to-run"
 
 [[exemptions.fancy-regex]]
-version = "0.14.0"
+version = "0.18.0"
 criteria = "safe-to-run"
 
 [[exemptions.fastrand]]
@@ -263,7 +263,7 @@ version = "1.1.9"
 criteria = "safe-to-deploy"
 
 [[exemptions.fluent-uri]]
-version = "0.3.2"
+version = "0.4.1"
 criteria = "safe-to-run"
 
 [[exemptions.fraction]]
@@ -499,7 +499,15 @@ version = "0.9.6"
 criteria = "safe-to-deploy"
 
 [[exemptions.jsonschema]]
-version = "0.26.2"
+version = "0.48.5"
+criteria = "safe-to-run"
+
+[[exemptions.jsonschema-regex]]
+version = "0.48.5"
+criteria = "safe-to-run"
+
+[[exemptions.jsonschema-value]]
+version = "0.48.5"
 criteria = "safe-to-run"
 
 [[exemptions.khronos-egl]]
@@ -612,6 +620,10 @@ criteria = "safe-to-run"
 
 [[exemptions.md-5]]
 version = "0.11.0"
+criteria = "safe-to-run"
+
+[[exemptions.micromap]]
+version = "0.3.0"
 criteria = "safe-to-run"
 
 [[exemptions.mime_guess]]
@@ -939,7 +951,7 @@ version = "1.0.25"
 criteria = "safe-to-run"
 
 [[exemptions.referencing]]
-version = "0.26.2"
+version = "0.48.5"
 criteria = "safe-to-run"
 
 [[exemptions.renderdoc-sys]]
@@ -1162,6 +1174,14 @@ criteria = "safe-to-run"
 version = "0.3.0"
 criteria = "safe-to-run"
 
+[[exemptions.strum]]
+version = "0.28.0"
+criteria = "safe-to-run"
+
+[[exemptions.strum_macros]]
+version = "0.28.0"
+criteria = "safe-to-run"
+
 [[exemptions.sync_wrapper]]
 version = "1.0.2"
 criteria = "safe-to-deploy"
@@ -1265,6 +1285,10 @@ criteria = "safe-to-run"
 [[exemptions.typenum]]
 version = "1.20.0"
 criteria = "safe-to-deploy"
+
+[[exemptions.unicode-general-category]]
+version = "1.1.0"
+criteria = "safe-to-run"
 
 [[exemptions.unicode-properties]]
 version = "0.1.4"

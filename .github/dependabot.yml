@@ -8,6 +8,18 @@ updates:
       time: "04:00"
       timezone: "America/New_York"
     open-pull-requests-limit: 10
+    # Wait before proposing a bump. cargo-vet's import sets (Mozilla,
+    # Google, ISRG, ...) have not audited a version that is hours old, so
+    # day-zero bumps are structurally guaranteed to fail Supply Chain
+    # Review — and the only available response is an exemption nobody
+    # audited. A week of lag lets the upstream audits land first. Also
+    # skips releases that get yanked and lets advisories surface before
+    # adoption.
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 3
     groups:
       start-dependencies:
         patterns:
@@ -24,3 +36,7 @@ updates:
       time: "04:00"
       timezone: "America/New_York"
     open-pull-requests-limit: 10
+    # Only `default-days` here: Dependabot's schema rejects the per-semver
+    # keys for github-actions, and one bad entry invalidates this whole file.
+    cooldown:
+      default-days: 7

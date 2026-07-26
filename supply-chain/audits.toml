@@ -337,6 +337,24 @@ user-id = 3618 # David Tolnay (dtolnay)
 start = "2021-05-25"
 end = "2027-05-10"
 
+[[trusted.serde]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-03-01"
+end = "2027-07-26"
+
+[[trusted.serde_core]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2025-09-13"
+end = "2027-07-26"
+
+[[trusted.serde_derive]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-03-01"
+end = "2027-07-26"
+
 [[trusted.serde_json]]
 criteria = "safe-to-deploy"
 user-id = 3618 # David Tolnay (dtolnay)
