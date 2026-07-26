@@ -50,6 +50,10 @@ published layout encodes that pin structurally:
   presentation feature 18 shipped, kept deliberately — the one-page docs are
   the product's signature) and gains a sidebar entry, making it addressable
   as `<version>/index.html#instance-graph`.
+  **Amended 2026-07-26 (feature 37):** that section holds *every* declared
+  curated graph, not just one, behind an in-page selector; `exemplar` now
+  means "the dataset the page opens on" rather than "the only one shown".
+  See the amendment note below.
 - **Additional** instance graphs, when a consumer ever declares more than
   one, become sibling sub-pages: `<output>/<version>/instances/<name>/`.
   Deferred until demanded — every current consumer has exactly zero or one.
@@ -178,6 +182,39 @@ should arrive as "publish where `[[instances]]` entries are the primary
 artifact and the schema is a pinned dependency rather than a local file."
 Deferred until a dataset-first repo wants *versioned publishing* (the
 manifest path above covers building and deploying current docs today).
+
+## Amendment 2026-07-26: curated graphs share the page; arbitrary ones get their own
+
+Decision 1 framed the exemplar/arbitrary split as **embed one vs. nothing**:
+a second `[[instances]]` entry rendered nothing while sibling pages stayed
+deferred. Dogfooding showed the curated case is routinely *plural* — a tiny
+teaching preview that introduces *individual / node / edge* alongside the
+full worked example that answers the competency questions — and that those
+two want to be compared, not navigated between.
+
+So the split becomes **in-page selector for curated graphs vs. sibling pages
+for arbitrary ones**:
+
+- The schema page's Instance Graph section holds every declared curated
+  graph. Declaration order drives the selector; `exemplar = true` picks
+  which one opens (at most one; the first declared wins when none is set).
+  Each carries its own cards, provenance, and node/edge counts, and all
+  payloads ride in the page so switching is client-side.
+- The `~500-node` soft guard now applies **per declared graph**, which is
+  the honest place for it: every curated graph should stay small, and
+  several small ones is the shape this amendment expects.
+- Arbitrary/production graphs are unchanged and still deferred:
+  addressable `<output>/<version>/instances/<name>/` pages plus the
+  query-driven compact viz of decision 3. Nothing here brings whole-graph
+  rendering of a large A-box closer; it is still neighborhood extraction
+  that unlocks that, and still the same operation a retrieval loop wants.
+
+The role boundary is therefore *how many and how big*, not *whether it is
+the blessed one*: a few small graphs live together on the schema page; many
+or large ones get their own space when a consumer needs it.
+
+Implemented as
+[feature 37](../features/37-in-page-instance-graph-selector.md).
 
 ## Consequences
 

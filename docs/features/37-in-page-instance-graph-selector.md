@@ -69,7 +69,7 @@ instance graph, and a reader switches between them without leaving the page.
 
 ### Slice 2: `publish` carries every declared instance graph
 
-**Status:** Not started
+**Status:** Complete
 
 **Priority:** Must Have
 
@@ -78,21 +78,22 @@ repository declares, not just one — so the wine-style "preview plus worked
 example" is what a reader actually gets on the deployed site.
 
 **Acceptance Criteria:**
-- [ ] Every `[[instances]]` entry whose data file exists at a published ref
+- [x] Every `[[instances]]` entry whose data file exists at a published ref
   is built and embedded for that version; a version whose ref predates a
   data file simply omits that graph (skip, don't fail), as with the single
   exemplar today.
-- [ ] `exemplar = true` selects which graph is shown first; at most one
-  entry may set it, and with none set the first declared entry is the
-  default.
-- [ ] The "declared but not published" note is gone — a declared curated
+- [x] `exemplar = true` selects which graph is shown first *without*
+  reordering the selector: declaration order drives the selector, the flag
+  drives which panel opens. At most one entry may set it, and with none set
+  the first declared entry opens.
+- [x] The "declared but not published" note is gone — a declared curated
   graph is published, so there is nothing to warn about.
-- [ ] A single-entry `[[instances]]` with `exemplar = true` publishes
+- [x] A single-entry `[[instances]]` with `exemplar = true` publishes
   exactly as it does today (back-compatible).
 
 ### Slice 3: Documented role boundary
 
-**Status:** Not started
+**Status:** Complete
 
 **Priority:** Should Have
 
@@ -101,12 +102,12 @@ job the selector serves and which one is still deferred, so the next
 consumer request lands in the right place.
 
 **Acceptance Criteria:**
-- [ ] ADR-009 records the amendment: curated graphs share the schema page
+- [x] ADR-009 records the amendment: curated graphs share the schema page
   via the selector; arbitrary graphs remain the deferred sibling-page and
   retrieval-subgraph path.
-- [ ] `exemplar`'s meaning ("default-selected", at most one, first entry
+- [x] `exemplar`'s meaning ("default-selected", at most one, first entry
   wins when unset) is documented where the publish config is documented.
-- [ ] The multi-graph form of `--instances` appears in the CLI docs and
+- [x] The multi-graph form of `--instances` appears in the CLI docs and
   README alongside the single-graph form.
 
 ---
@@ -116,18 +117,18 @@ consumer request lands in the right place.
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | Slice 1: N graphs, switchable | Must Have | Feature 36 slices 2–3 | Complete |
-| Slice 2: publish carries all | Must Have | Slice 1 | Not started |
-| Slice 3: documented boundary | Should Have | Slices 1–2 | Not started |
+| Slice 2: publish carries all | Must Have | Slice 1 | Complete |
+| Slice 3: documented boundary | Should Have | Slices 1–2 | Complete |
 
 ---
 
 ## Definition of Done
 
-- [ ] All Must Have slices complete with acceptance criteria checked
-- [ ] `cargo fmt --check`, `cargo clippy --all-targets --all-features -D warnings`, full test suite, and `cargo doc` clean
-- [ ] Mutation testing on the diff shows no missed mutants
-- [ ] CHANGELOG updated
-- [ ] ADR-009 amended
+- [x] All Must Have slices complete with acceptance criteria checked
+- [x] `cargo fmt --check`, `cargo clippy --all-targets --all-features -D warnings`, full test suite, and `cargo doc` clean
+- [x] Mutation testing on the diff shows no missed mutants
+- [x] CHANGELOG updated
+- [x] ADR-009 amended
 
 ---
 

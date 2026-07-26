@@ -216,16 +216,16 @@
 {%- if instance_datasets.len() > 1 %}
     <div class="instance-dataset-selector" role="tablist" aria-label="Instance graphs">
 {%- for ds in instance_datasets %}
-        <button type="button" role="tab" class="instance-dataset-tab{% if loop.first %} active{% endif %}"
+        <button type="button" role="tab" class="instance-dataset-tab{% if ds.is_default %} active{% endif %}"
                 data-instance-dataset="{{ loop.index0 }}"
-                aria-selected="{% if loop.first %}true{% else %}false{% endif %}">{{ ds.name }}
+                aria-selected="{% if ds.is_default %}true{% else %}false{% endif %}">{{ ds.name }}
             <span class="badge">{{ ds.node_count }} / {{ ds.edge_count }}</span>
         </button>
 {%- endfor %}
     </div>
 {%- endif %}
 {%- for ds in instance_datasets %}
-    <div class="instance-dataset-panel" data-instance-dataset="{{ loop.index0 }}"{% if !loop.first %} hidden{% endif %}>
+    <div class="instance-dataset-panel" data-instance-dataset="{{ loop.index0 }}"{% if !ds.is_default %} hidden{% endif %}>
 {%- if let Some(src) = ds.provenance %}
         <p class="instance-provenance">Source: <code class="mono">{{ src }}</code></p>
 {%- else %}

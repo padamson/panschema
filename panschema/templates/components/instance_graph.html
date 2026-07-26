@@ -56,7 +56,12 @@
     (function () {
         const tabs = Array.from(document.querySelectorAll('.instance-dataset-tab'));
         const panels = Array.from(document.querySelectorAll('.instance-dataset-panel'));
-        window.__panschema_instance_active = 0;
+        // Which dataset opens is decided when the page is rendered, so read it
+        // off the markup rather than assuming the first.
+        const openPanel = panels.find((panel) => !panel.hidden);
+        window.__panschema_instance_active = openPanel
+            ? Number(openPanel.dataset.instanceDataset)
+            : 0;
         tabs.forEach((tab) => {
             tab.addEventListener('click', () => {
                 const index = Number(tab.dataset.instanceDataset);

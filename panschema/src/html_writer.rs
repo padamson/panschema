@@ -439,6 +439,8 @@ pub struct IndividualData {
 /// and its own viz payload.
 struct InstanceDatasetView<'a> {
     name: &'a str,
+    /// Whether this is the dataset the page opens on.
+    is_default: bool,
     /// The name as a JSON string literal, for the payload array.
     name_json: &'a str,
     provenance: Option<&'a str>,
@@ -609,6 +611,9 @@ pub struct InstanceDataset {
     pub provenance: Option<String>,
     /// The individuals themselves.
     pub set: crate::instances::InstanceSet,
+    /// Show this dataset before the reader picks another. At most one
+    /// should be marked; with none marked the first declared wins.
+    pub default_selected: bool,
 }
 
 impl InstanceDataset {
@@ -618,7 +623,15 @@ impl InstanceDataset {
             name: name.into(),
             provenance: None,
             set,
+            default_selected: false,
         }
+    }
+
+    /// Open this dataset first — the `exemplar = true` role.
+    #[must_use]
+    pub fn as_default(mut self) -> Self {
+        self.default_selected = true;
+        self
     }
 
     /// Name the file this A-box was read from, for the provenance line.
@@ -1404,6 +1417,7 @@ impl HtmlWriter {
                     .first()
                     .and_then(|d| d.provenance.clone()),
                 set: crate::instances::InstanceSet::from_owl_annotations(schema),
+                default_selected: true,
             }];
         }
         self.instance_datasets.clone()
@@ -1484,6 +1498,7 @@ impl Writer for HtmlWriter {
                 |(dataset, (refs, cards, json, node_count, edge_count, name_json))| {
                     InstanceDatasetView {
                         name: &dataset.name,
+                        is_default: dataset.default_selected,
                         name_json,
                         provenance: dataset.provenance.as_deref(),
                         individuals: refs,
@@ -1495,9 +1510,22 @@ impl Writer for HtmlWriter {
                 },
             )
             .collect();
+
+        // With nothing marked — or with the marked dataset dropped for having
+        // nothing to show — the first surviving one opens.
+        let mut dataset_views = dataset_views;
+        if !dataset_views.iter().any(|v| v.is_default)
+            && let Some(first) = dataset_views.first_mut()
+        {
+            first.is_default = true;
+        }
+        let dataset_views = dataset_views;
+
         // The sidebar badge describes the dataset the reader sees first.
-        let (instance_node_count, instance_edge_count, instance_individual_count) =
-            dataset_views.first().map_or((0, 0, 0), |v| {
+        let (instance_node_count, instance_edge_count, instance_individual_count) = dataset_views
+            .iter()
+            .find(|v| v.is_default)
+            .map_or((0, 0, 0), |v| {
                 (v.node_count, v.edge_count, v.individuals.len())
             });
 
@@ -3713,6 +3741,89 @@ mod tests {
             html.contains(r#"{"name": "preview""#) && html.contains(r#"{"name": "worked-example""#),
             "each payload entry is labelled with its dataset"
         );
+    }
+
+    #[test]
+    fn the_dataset_marked_default_is_the_one_shown_first() {
+        // `exemplar = true` on a later entry must not have to be reordered to
+        // be the default: declaration order drives the selector, the flag
+        // drives which panel opens.
+        let schema = bottle_rack_schema();
+        let preview = instance_set_from_yaml(&schema, "bottles:\n  - id: b1\n    name: Morgon\n");
+        let worked = instance_set_from_yaml(
+            &schema,
+            "bottles:\n  - id: b2\n    name: Fleurie\n    stored_in: r1\nracks:\n  - id: r1\n    name: North Rack\n",
+        );
+
+        let writer = HtmlWriter::new()
+            .with_instance_dataset(InstanceDataset::new("preview", preview))
+            .with_instance_dataset(InstanceDataset::new("worked-example", worked).as_default());
+        let temp_dir = std::env::temp_dir().join("panschema_default_dataset_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        writer.write(&schema, &temp_dir).expect("write");
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        // Order is unchanged: preview is still the first selector entry.
+        let first_tab = html.find(">preview").expect("preview tab present");
+        let second_tab = html
+            .find(">worked-example")
+            .expect("worked-example tab present");
+        assert!(
+            first_tab < second_tab,
+            "declaration order drives the selector order"
+        );
+
+        // But the second dataset is the open one.
+        assert!(
+            html.contains(r#"data-instance-dataset="0" hidden>"#),
+            "the non-default dataset's panel starts hidden"
+        );
+        assert!(
+            html.contains(r#"data-instance-dataset="1">"#),
+            "the dataset marked default is the visible one"
+        );
+        assert_eq!(
+            html.matches(r#"aria-selected="true""#).count(),
+            1,
+            "exactly one selector entry is selected"
+        );
+
+        // The sidebar badge describes the default dataset: two nodes, one edge.
+        assert!(
+            html.contains("Instance Graph <span class=\"badge\">2 / 1</span>"),
+            "the sidebar badge counts the default dataset's graph"
+        );
+    }
+
+    #[test]
+    fn a_default_dataset_with_nothing_to_show_yields_the_slot() {
+        // The marked dataset holds no records, so it is dropped from the
+        // page; the surviving one must open rather than leaving every panel
+        // hidden and no tab selected.
+        let schema = bottle_rack_schema();
+        let real = instance_set_from_yaml(&schema, "bottles:\n  - id: b1\n    name: Morgon\n");
+        let empty = instance_set_from_yaml(&schema, "bottles: []\n");
+
+        let writer = HtmlWriter::new()
+            .with_instance_dataset(InstanceDataset::new("real", real))
+            .with_instance_dataset(InstanceDataset::new("empty", empty).as_default());
+        let temp_dir = std::env::temp_dir().join("panschema_empty_default_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        writer.write(&schema, &temp_dir).expect("write");
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        assert_eq!(
+            html.matches(r#"class="instance-dataset-panel""#).count(),
+            1,
+            "the empty dataset has nothing to show and is dropped"
+        );
+        assert!(
+            html.contains(r#"data-instance-dataset="0">"#),
+            "the surviving dataset opens"
+        );
+        assert!(html.contains("Morgon"), "its individuals render");
     }
 
     #[test]
