@@ -316,14 +316,17 @@ fn load_instance_set(
             set.instances.len()
         );
     }
-    let danglers = panschema::diagnostics::dangling_instance_references(&set);
-    for d in &danglers {
-        eprintln!("warning: {}", d.message());
+    // The same conformance check `validate --data` runs, so embedding an A-box
+    // into an output can't ship violations the standalone command would have
+    // caught. Supersedes the reference-integrity diagnostic, which it includes.
+    let violations = panschema::validate::validate_instances(schema, &set);
+    for v in &violations {
+        eprintln!("warning: {v}");
     }
-    if strict && !danglers.is_empty() {
+    if strict && !violations.is_empty() {
         anyhow::bail!(
-            "{} dangling instance reference(s) present; failing because --strict is set",
-            danglers.len()
+            "{} instance-data violation(s) present; failing because --strict is set",
+            violations.len()
         );
     }
     Ok(set)

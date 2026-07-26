@@ -693,6 +693,57 @@ fn generate_instances_renders_linkml_data_as_the_instance_graph() {
 }
 
 #[test]
+fn generate_reports_conformance_violations_in_the_instance_data() {
+    // A duplicate identifier is a conformance violation that the
+    // reference-integrity check can't see. Embedding an A-box into an output
+    // must report it, not just dangling references — otherwise a broken
+    // exemplar publishes onto a docs site silently.
+    let dir = std::env::temp_dir().join("panschema_instance_conformance_test");
+    let _ = fs::remove_dir_all(&dir);
+
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--schema",
+            "tests/fixtures/wine_catalog.yaml",
+            "--instances",
+            "tests/fixtures/wine_instances_duplicate_id.yaml",
+            "--output",
+            dir.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run panschema");
+    assert!(out.status.success(), "non-strict generation should succeed");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("chateauMorgon") && stderr.contains("more than one record"),
+        "the duplicate identifier should warn, naming the id; got: {stderr}"
+    );
+
+    // Under --strict the same violation is a hard failure, as a dangling
+    // reference already is.
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--schema",
+            "tests/fixtures/wine_catalog.yaml",
+            "--instances",
+            "tests/fixtures/wine_instances_duplicate_id.yaml",
+            "--output",
+            dir.to_str().unwrap(),
+            "--strict",
+        ])
+        .output()
+        .expect("run panschema");
+    assert!(
+        !out.status.success(),
+        "--strict must fail on a non-conforming A-box"
+    );
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn generate_carries_several_curated_instance_graphs() {
     let output_dir = std::env::temp_dir().join("panschema_multi_instances_test");
     let _ = fs::remove_dir_all(&output_dir);
@@ -1171,10 +1222,12 @@ fn rdf_with_dangling_instance_reference_fails_under_strict() {
         !output.status.success(),
         "a dangling instance reference must fail the build under --strict"
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("dangling instance reference"),
-        "stderr should name the dangling reference; got: {}",
-        String::from_utf8_lossy(&output.stderr)
+        stderr.contains("ghostWinery")
+            && stderr.contains("produced_by")
+            && stderr.contains("names no instance"),
+        "stderr should name the referring slot and the missing target; got: {stderr}"
     );
     let _ = fs::remove_file(&out_file);
 }

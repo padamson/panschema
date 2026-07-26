@@ -700,8 +700,11 @@ fn generate_html_for_version(
                 message: format!("parsing instance data {}: {e}", declared.display()),
             })?;
         let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
-        for d in crate::diagnostics::dangling_instance_references(&set) {
-            eprintln!("warning: {version}: {}", d.message());
+        // Same check as `generate --instances` and `validate --data`: a
+        // curated A-box is published page content, so it gets the conformance
+        // gate rather than only a reference-integrity look.
+        for v in crate::validate::validate_instances(&schema, &set) {
+            eprintln!("warning: {version}: {v}");
         }
         let mut dataset = crate::html_writer::InstanceDataset::new(entry.name.clone(), set);
         if let Some(name) = declared.file_name().and_then(|n| n.to_str()) {
@@ -1813,6 +1816,33 @@ exemplur = true
         assert!(
             edge.contains("ind-morgon"),
             "the edge build must render the working tree's data file"
+        );
+    }
+
+    #[test]
+    fn a_non_conforming_a_box_is_reported_but_still_publishes() {
+        // Conformance violations are a note, not an abort: aborting would make
+        // an already-tagged version unpublishable because of data committed at
+        // that ref. The page still builds, carrying the data as authored.
+        let repo = make_repo_with_instance_data();
+        std::fs::write(
+            repo.path().join("data/instances.yaml"),
+            "wines:\n  - id: morgon\n    name: Morgon\n  - id: morgon\n    name: Morgon Again\n",
+        )
+        .unwrap();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], Some("main"), "v0.2.0");
+        cfg.instances.push(InstanceEntry {
+            name: "catalog".into(),
+            data: PathBuf::from("data/instances.yaml"),
+            exemplar: true,
+        });
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), true)
+            .expect("a violation must not fail the publish");
+        let edge = std::fs::read_to_string(out.path().join("main/index.html")).unwrap();
+        assert!(
+            edge.contains("ind-morgon"),
+            "the page still renders the A-box it was given"
         );
     }
 
