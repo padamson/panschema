@@ -205,44 +205,63 @@
 <section id="individuals">
     {%- let id = "individuals" %}
     {%- let title = "Instance Graph" %}
-    {%- let count = Some(individuals.len()) %}
-    {%- let description = Some("The exemplar instance graph (A-box): individuals conforming to this schema.") %}
+    {%- let count = Some(instance_individual_count) %}
+    {%- let description = Some("Curated instance graphs (A-box): individuals conforming to this schema.") %}
     {% include "components/section_header.html" %}
-{%- if individuals.is_empty() && instance_graph_json.is_none() %}
+{%- if instance_datasets.is_empty() %}
     <p class="placeholder-text">No individuals defined in this ontology.</p>
 {%- else %}
-{%- if let Some(src) = instance_provenance %}
-    <p class="instance-provenance">Source: <code class="mono">{{ src }}</code></p>
+{# Several curated A-boxes share this section: the reader picks one and the
+   cards, provenance, and viz all follow. One needs no selector. #}
+{%- if instance_datasets.len() > 1 %}
+    <div class="instance-dataset-selector" role="tablist" aria-label="Instance graphs">
+{%- for ds in instance_datasets %}
+        <button type="button" role="tab" class="instance-dataset-tab{% if loop.first %} active{% endif %}"
+                data-instance-dataset="{{ loop.index0 }}"
+                aria-selected="{% if loop.first %}true{% else %}false{% endif %}">{{ ds.name }}
+            <span class="badge">{{ ds.node_count }} / {{ ds.edge_count }}</span>
+        </button>
+{%- endfor %}
+    </div>
+{%- endif %}
+{%- for ds in instance_datasets %}
+    <div class="instance-dataset-panel" data-instance-dataset="{{ loop.index0 }}"{% if !loop.first %} hidden{% endif %}>
+{%- if let Some(src) = ds.provenance %}
+        <p class="instance-provenance">Source: <code class="mono">{{ src }}</code></p>
 {%- else %}
-    <p class="instance-provenance">Source: individuals embedded in the schema</p>
+        <p class="instance-provenance">Source: individuals embedded in the schema</p>
 {%- endif %}
-{%- if !individuals.is_empty() %}
-    <div class="entity-list">
-{%- for ind in individuals %}
-        <a href="#ind-{{ ind.id }}" class="entity-link individual-link">{{ ind.label }}</a>
+{%- if !ds.individuals.is_empty() %}
+        <div class="entity-list">
+{%- for ind in ds.individuals %}
+            <a href="#ind-{{ ind.id }}" class="entity-link individual-link">{{ ind.label }}</a>
 {%- endfor %}
-    </div>
-    <div class="individual-cards">
-{%- for ind in individual_data %}
-        {%- let id = ind.id.as_str() %}
-        {%- let label = ind.label.as_str() %}
-        {%- let iri = ind.iri.as_str() %}
-        {%- let description = ind.description.as_deref() %}
-        {%- let types = ind.types.as_slice() %}
-        {%- let property_values = ind.property_values.as_slice() %}
-        {% include "components/individual_card.html" %}
+        </div>
+        <div class="individual-cards">
+{%- for ind in ds.individual_data %}
+            {%- let id = ind.id.as_str() %}
+            {%- let label = ind.label.as_str() %}
+            {%- let iri = ind.iri.as_str() %}
+            {%- let description = ind.description.as_deref() %}
+            {%- let types = ind.types.as_slice() %}
+            {%- let property_values = ind.property_values.as_slice() %}
+            {% include "components/individual_card.html" %}
 {%- endfor %}
-    </div>
+        </div>
 {%- endif %}
+    </div>
+{%- endfor %}
 {# The instances as a connected instance graph — a distinct A-box viz, not
-   the schema graph. Present whenever an A-box was supplied (embedded OWL
-   individuals or a LinkML instance-data file). #}
-{%- if let Some(json) = instance_graph_json %}
+   the schema graph. Every declared dataset's payload rides in one array so
+   switching is client-side; the viz renders the selected entry. #}
     <script>
-        window.__PANSCHEMA_INSTANCE_GRAPH_DATA__ = {{ json|safe }};
+        window.__PANSCHEMA_INSTANCE_GRAPHS__ = [
+{%- for ds in instance_datasets %}
+            {"name": {{ ds.name_json|safe }}, "data": {% match ds.graph_json %}{% when Some with (json) %}{{ json|safe }}{% when None %}null{% endmatch %}}{% if !loop.last %},{% endif %}
+{%- endfor %}
+        ];
     </script>
     {% include "components/instance_graph.html" %}
-{%- endif %}
 {%- endif %}
 </section>
 {% endblock %}
@@ -262,6 +281,31 @@
         display: flex;
         flex-wrap: wrap;
         gap: var(--space-2);
+    }
+
+    .instance-dataset-selector {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--space-2);
+        margin-bottom: var(--space-3);
+    }
+
+    .instance-dataset-tab {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--space-2);
+        padding: var(--space-1) var(--space-3);
+        font: inherit;
+        color: var(--color-text-muted);
+        background-color: var(--color-bg-secondary);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-md);
+        cursor: pointer;
+    }
+
+    .instance-dataset-tab.active {
+        color: var(--color-text);
+        border-color: var(--color-accent, #4b9fd5);
     }
 
     /* Card grids tile to multiple columns on wide viewports; collapse to

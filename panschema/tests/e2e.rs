@@ -103,6 +103,39 @@ fn generate_docs_with_instances(schema_path: &str, instances_path: &str) -> Path
     output_dir
 }
 
+/// Generate docs carrying several curated instance graphs, the
+/// `generate --instances a --instances b` form behind the in-page selector.
+fn generate_docs_with_several_instances(
+    schema_path: &str,
+    instance_paths: &[&str],
+    tag: &str,
+) -> PathBuf {
+    let output_dir = std::env::temp_dir().join(format!(
+        "panschema_e2e_multi_{}_{}",
+        std::process::id(),
+        tag
+    ));
+    let _ = fs::remove_dir_all(&output_dir);
+
+    let mut args = vec!["generate", "--schema", schema_path];
+    for path in instance_paths {
+        args.push("--instances");
+        args.push(path);
+    }
+    args.push("--output");
+    args.push(output_dir.to_str().unwrap());
+
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args(&args)
+        .status()
+        .expect("Failed to execute panschema");
+    assert!(
+        status.success(),
+        "panschema failed to generate docs with several instance graphs"
+    );
+    output_dir
+}
+
 /// Poll (up to ~12s) until a JS readiness expression is truthy. Robust to
 /// variable CI load — e.g. a page that renders both a schema graph and a
 /// second instance graph, each loading wasm — where a fixed sleep would
@@ -2413,7 +2446,8 @@ fn e2e_instance_graph_renders_individuals_beneath_the_cards() {
         let counts = page
             .evaluate_value(
                 r#"(function(){
-                    var d = window.__PANSCHEMA_INSTANCE_GRAPH_DATA__;
+                    var g = window.__PANSCHEMA_INSTANCE_GRAPHS__;
+                    var d = g && g[0] && g[0].data;
                     return d ? (d.nodes.length + ',' + d.edges.length) : 'none';
                 })()"#,
             )
@@ -2464,6 +2498,157 @@ fn e2e_instance_graph_renders_individuals_beneath_the_cards() {
             "the instance graph should paint teal individual nodes; teal pixels={teal}"
         );
 
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
+/// Several curated instance graphs share the schema page: the selector names
+/// each, and picking one swaps the cards, the provenance, and the rendered
+/// graph together. A selector that moved the canvas but left the cards
+/// describing the previous dataset is the defect this pins down.
+#[test]
+fn e2e_instance_dataset_selector_switches_cards_and_graph() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let output_dir = generate_docs_with_several_instances(
+            "tests/fixtures/wine_catalog.yaml",
+            &[
+                "tests/fixtures/wine_instances_preview.yaml",
+                "tests/fixtures/wine_instances.yaml",
+            ],
+            "selector",
+        );
+        let port = find_available_port();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("goto");
+
+        // Both datasets are offered, and the first is the one selected.
+        let tabs = page.locator(".instance-dataset-tab");
+        assert_eq!(
+            tabs.count().await.expect("count"),
+            2,
+            "each declared dataset needs a selector entry"
+        );
+        let selected = page
+            .locator(".instance-dataset-tab[aria-selected='true']")
+            .inner_text()
+            .await
+            .expect("selected tab text");
+        assert!(
+            selected.contains("wine_instances_preview"),
+            "the first declared dataset starts selected; got: {selected}"
+        );
+
+        // The preview's card is visible; the worked example's is not, because
+        // its panel is hidden.
+        assert!(
+            page.locator("#ind-previewWine")
+                .is_visible()
+                .await
+                .unwrap_or(false),
+            "the selected dataset's individual card should be visible"
+        );
+        assert!(
+            !page
+                .locator("#ind-chateauMorgon")
+                .is_visible()
+                .await
+                .unwrap_or(true),
+            "the unselected dataset's cards should be hidden"
+        );
+
+        // Switching: click the second tab. Cards, provenance, and the graph
+        // all follow to the worked example. The tabs are wired independently
+        // of the wasm viz, so this works without waiting for it.
+        page.locator(".instance-dataset-tab[data-instance-dataset='1']")
+            .click(None)
+            .await
+            .expect("click second dataset");
+
+        assert!(
+            page.locator("#ind-chateauMorgon")
+                .is_visible()
+                .await
+                .unwrap_or(false),
+            "the newly selected dataset's cards should be visible"
+        );
+        assert!(
+            !page
+                .locator("#ind-previewWine")
+                .is_visible()
+                .await
+                .unwrap_or(true),
+            "the previously selected dataset's cards should be hidden"
+        );
+        let prov = page
+            .locator(".instance-dataset-panel:not([hidden]) .instance-provenance")
+            .inner_text()
+            .await
+            .expect("provenance");
+        assert!(
+            prov.contains("wine_instances.yaml") && !prov.contains("preview"),
+            "the visible panel names the selected dataset's source; got: {prov}"
+        );
+
+        // The canvas is re-initialized over the newly selected A-box. The viz
+        // may still have been loading when the tab was clicked; whenever it
+        // lands it paints the dataset that is active by then.
+        assert!(
+            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
+            "instance graph viz never became ready"
+        );
+        assert_eq!(
+            page.evaluate_value("window.__panschema_instance_active")
+                .await
+                .unwrap_or_default()
+                .trim()
+                .trim_matches('"'),
+            "1",
+            "the selected dataset is the one the viz was asked to paint"
+        );
+        let painted = page
+            .evaluate_value(
+                r#"(async function(){
+                    var viz = window.__panschema_instance_viz;
+                    if (!viz) return 'no-viz';
+                    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+                    var c = document.getElementById('instance-graph-canvas');
+                    var ctx = c.getContext('2d');
+                    if (!ctx) return 'no-2d-ctx';
+                    var d = ctx.getImageData(0, 0, c.width, c.height).data;
+                    var teal = 0;
+                    for (var i = 0; i < d.length; i += 4) {
+                        if (d[i] < 100 && d[i+1] > 150 && d[i+1] < 215 && d[i+2] > 150 && d[i+2] < 215) teal++;
+                    }
+                    return 'ok:' + teal;
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        let teal: u32 = painted
+            .trim()
+            .trim_matches('"')
+            .strip_prefix("ok:")
+            .unwrap_or("0")
+            .parse()
+            .unwrap_or(0);
+        assert!(
+            teal > 0,
+            "the swapped-in A-box should paint individual nodes; got: {painted}"
+        );
+
+        browser.close().await.ok();
         let _ = shutdown_tx.send(());
         let _ = server_handle.await;
         let _ = fs::remove_dir_all(output_dir);
@@ -2562,7 +2747,8 @@ fn e2e_instance_graph_renders_from_linkml_data() {
         let counts = page
             .evaluate_value(
                 r#"(function(){
-                    var d = window.__PANSCHEMA_INSTANCE_GRAPH_DATA__;
+                    var g = window.__PANSCHEMA_INSTANCE_GRAPHS__;
+                    var d = g && g[0] && g[0].data;
                     return d ? (d.nodes.length + ',' + d.edges.length) : 'none';
                 })()"#,
             )

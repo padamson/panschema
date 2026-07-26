@@ -1,0 +1,13 @@
+# A deliberately tiny A-box: the smallest graph that still shows an
+# individual, a second individual of a different class, and the edge between
+# them. Paired with wine_instances.yaml (the fuller worked example) to
+# exercise carrying several curated instance graphs on one page.
+wines:
+  - id: previewWine
+    name: Preview Pinot
+    color: red
+    produced_by: previewWinery
+wineries:
+  - id: previewWinery
+    name: Preview Vineyard
+    region: Willamette

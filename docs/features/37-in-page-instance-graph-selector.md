@@ -39,7 +39,7 @@ area feel stuck.
 
 ### Slice 1: The page holds N curated graphs, switchable
 
-**Status:** Not started
+**Status:** Complete
 
 **Priority:** Must Have
 
@@ -47,23 +47,23 @@ area feel stuck.
 instance graph, and a reader switches between them without leaving the page.
 
 **Acceptance Criteria:**
-- [ ] `--instances` accepts more than one dataset in a single `generate`
+- [x] `--instances` accepts more than one dataset in a single `generate`
   invocation, each labelled: given two instance-data files, the HTML output's
   Instance Graph section offers both by name.
-- [ ] Selecting a graph re-renders that dataset's viz canvas, its individual
+- [x] Selecting a graph re-renders that dataset's viz canvas, its individual
   cards, its entity list, and its provenance line — the section describes
   exactly one dataset at a time, with no stale content from another.
-- [ ] Switching is client-side: no navigation, no refetch. Every declared
+- [x] Switching is client-side: no navigation, no refetch. Every declared
   graph's payload is present in the page.
-- [ ] Node/edge counts shown for a graph are that graph's own.
-- [ ] With exactly one dataset supplied, the section renders as it does
+- [x] Node/edge counts shown for a graph are that graph's own.
+- [x] With exactly one dataset supplied, the section renders as it does
   today (no selector chrome for a single graph).
-- [ ] The soft "exemplars are teaching artifacts" warning applies per
+- [x] The soft "exemplars are teaching artifacts" warning applies per
   declared graph rather than to a single one, so a large graph is flagged
   whichever slot it occupies.
-- [ ] Individual identity is unchanged: an individual's IRI is the same as
+- [x] Individual identity is unchanged: an individual's IRI is the same as
   the RDF/graph-JSON exports mint for the same data, per dataset.
-- [ ] Browser-verified end to end: with two graphs declared, both labels
+- [x] Browser-verified end to end: with two graphs declared, both labels
   render, the default one is shown first, and switching swaps the rendered
   node set (asserted on a node unique to each graph).
 
@@ -115,7 +115,7 @@ consumer request lands in the right place.
 
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
-| Slice 1: N graphs, switchable | Must Have | Feature 36 slices 2–3 | Not started |
+| Slice 1: N graphs, switchable | Must Have | Feature 36 slices 2–3 | Complete |
 | Slice 2: publish carries all | Must Have | Slice 1 | Not started |
 | Slice 3: documented boundary | Should Have | Slices 1–2 | Not started |
 

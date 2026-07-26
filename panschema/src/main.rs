@@ -68,9 +68,11 @@ enum Commands {
 
         /// LinkML instance-data file (a `tree_root` container A-box) to render
         /// as the instance graph in the HTML output, in place of the schema's
-        /// embedded OWL individuals.
+        /// embedded OWL individuals. Repeat to carry several curated example
+        /// graphs on the page, switchable by the reader; the first is shown
+        /// first. Formats that emit a single A-box take exactly one.
         #[arg(long)]
-        instances: Option<PathBuf>,
+        instances: Vec<PathBuf>,
 
         /// Output path (file for RDF formats, directory for HTML)
         #[arg(short, long, default_value = "output")]
@@ -296,6 +298,8 @@ fn load_instance_set(
     inst_path: &Path,
     strict: bool,
 ) -> anyhow::Result<panschema::instances::InstanceSet> {
+    // Each curated graph is judged on its own size: a teaching preview and a
+    // worked example sit side by side, and either can outgrow the guideline.
     let content = std::fs::read_to_string(inst_path)
         .map_err(|e| anyhow::anyhow!("reading instances file {}: {}", inst_path.display(), e))?;
     let data: serde_norway::Value = serde_norway::from_str(&content)
@@ -328,7 +332,7 @@ fn load_instance_set(
 #[allow(clippy::too_many_arguments)]
 fn generate(
     input: &Path,
-    instances: Option<&Path>,
+    instances: &[PathBuf],
     output: &Path,
     format: &str,
     include_graph: bool,
@@ -429,11 +433,19 @@ fn generate(
             .with_default_layout(layout);
         // A LinkML instance-data file overrides the schema's embedded OWL
         // individuals as the source for the instance graph.
-        if let Some(inst_path) = instances {
-            writer = writer.with_instances(load_instance_set(&schema, inst_path, strict)?);
+        for inst_path in instances {
+            let set = load_instance_set(&schema, inst_path, strict)?;
+            // The file's stem labels the selector; publish names entries
+            // explicitly instead.
+            let label = inst_path
+                .file_stem()
+                .and_then(|n| n.to_str())
+                .unwrap_or("instances");
+            let mut dataset = panschema::html_writer::InstanceDataset::new(label, set);
             if let Some(name) = inst_path.file_name().and_then(|n| n.to_str()) {
-                writer = writer.with_instance_provenance(name.to_string());
+                dataset = dataset.with_provenance(name);
             }
+            writer = writer.with_instance_dataset(dataset);
         }
         if let Some(store) = panschema::labels::open_default_store(
             &schema,
@@ -447,7 +459,7 @@ fn generate(
             .write(&schema, output)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
     } else if let (
-        Some(inst_path),
+        [inst_path, rest @ ..],
         "ttl" | "jsonld" | "rdfxml" | "ntriples" | "instance-graph-json",
     ) = (instances, format.to_lowercase().as_str())
     {
@@ -456,6 +468,18 @@ fn generate(
         // self-contained knowledge graph); instance-graph-json renders the
         // A-box as its own artifact (one invocation, one named output —
         // the schema graph stays `graph-json`'s).
+        //
+        // These formats each describe exactly one A-box, so several
+        // `--instances` files have no unambiguous meaning here — merging
+        // them silently would invent a dataset nobody declared. Only the
+        // HTML page holds several, behind its selector.
+        if !rest.is_empty() {
+            anyhow::bail!(
+                "--format {format} emits a single instance graph, but {} --instances files were \
+                 given; pass one, or use --format html to carry several on one page",
+                rest.len() + 1
+            );
+        }
         use panschema::io::Writer;
         let set = load_instance_set(&schema, inst_path, strict)?;
         let writer: Box<dyn Writer> = match format.to_lowercase().as_str() {
@@ -594,7 +618,7 @@ fn generate_from_manifest(offline: bool, refresh_labels: bool, strict: bool) -> 
             let html_out = manifest_dir.join(html_out);
             generate(
                 schema_path,
-                None,
+                &[],
                 &html_out,
                 "html",
                 true,
@@ -627,7 +651,7 @@ fn generate_from_manifest(offline: bool, refresh_labels: bool, strict: bool) -> 
             let out = manifest_dir.join(out);
             generate(
                 schema_path,
-                None,
+                &[],
                 &out,
                 format,
                 false,
@@ -1434,7 +1458,7 @@ async fn main() -> anyhow::Result<()> {
                     };
                     eprintln!("Graph visualization: {}", mode_str);
                 }
-                if instances.is_some()
+                if !instances.is_empty()
                     && !matches!(
                         format.to_lowercase().as_str(),
                         "html" | "ttl" | "jsonld" | "rdfxml" | "ntriples" | "instance-graph-json"
@@ -1474,7 +1498,7 @@ async fn main() -> anyhow::Result<()> {
                 let no_deps = std::collections::BTreeMap::new();
                 generate(
                     &schema_path,
-                    instances.as_deref(),
+                    &instances,
                     &output,
                     &format,
                     !no_graph,
@@ -1614,7 +1638,7 @@ mod tests {
                 strict,
             } => {
                 assert_eq!(schema, Some(PathBuf::from("test.ttl")));
-                assert_eq!(instances, None); // default None (no instance-data file)
+                assert!(instances.is_empty(), "no instance-data file by default");
                 assert_eq!(output, PathBuf::from("docs"));
                 assert_eq!(format, "html");
                 assert!(!no_graph); // default false (graph enabled)

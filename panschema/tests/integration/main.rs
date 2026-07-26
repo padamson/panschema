@@ -660,12 +660,13 @@ fn generate_instances_renders_linkml_data_as_the_instance_graph() {
         "the instance-graph canvas should be present"
     );
     assert!(
-        html.contains("__PANSCHEMA_INSTANCE_GRAPH_DATA__"),
+        html.contains("__PANSCHEMA_INSTANCE_GRAPHS__"),
         "the LinkML A-box should be embedded as instance-graph data"
     );
 
     // Each record became a typed node; each class-ranged scalar an edge.
-    let data = extract_json_assignment(&html, "__PANSCHEMA_INSTANCE_GRAPH_DATA__");
+    let graphs = extract_json_assignment(&html, "__PANSCHEMA_INSTANCE_GRAPHS__");
+    let data = &graphs.as_array().expect("payload array")[0]["data"];
     assert_eq!(
         data["nodes"].as_array().expect("nodes").len(),
         4,
@@ -689,6 +690,112 @@ fn generate_instances_renders_linkml_data_as_the_instance_graph() {
     );
 
     let _ = fs::remove_dir_all(output_dir);
+}
+
+#[test]
+fn generate_carries_several_curated_instance_graphs() {
+    let output_dir = std::env::temp_dir().join("panschema_multi_instances_test");
+    let _ = fs::remove_dir_all(&output_dir);
+
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--schema",
+            "tests/fixtures/wine_catalog.yaml",
+            "--instances",
+            "tests/fixtures/wine_instances_preview.yaml",
+            "--instances",
+            "tests/fixtures/wine_instances.yaml",
+            "--output",
+            output_dir.to_str().unwrap(),
+        ])
+        .status()
+        .expect("Failed to execute panschema");
+    assert!(status.success(), "panschema exited with error");
+
+    let html = fs::read_to_string(output_dir.join("index.html")).expect("read index.html");
+
+    // Both graphs are declared, so the reader gets a selector naming each by
+    // its file stem, and a content panel per dataset.
+    assert!(
+        html.contains(r#"role="tablist""#),
+        "several datasets must offer a selector"
+    );
+    assert!(
+        html.contains(">wine_instances_preview") && html.contains(">wine_instances"),
+        "each dataset is named after its file; got selector-less page"
+    );
+    assert_eq!(
+        html.matches(r#"class="instance-dataset-panel""#).count(),
+        2,
+        "one content panel per declared dataset"
+    );
+    assert!(
+        html.contains(r#"data-instance-dataset="1" hidden>"#),
+        "only the first dataset shows before the reader picks another"
+    );
+
+    // Individuals from both A-boxes are in the page, each in its own panel.
+    assert!(
+        html.contains("Preview Pinot") && html.contains("Château Morgon"),
+        "both datasets' individual cards must render"
+    );
+
+    // Each payload entry carries its own graph, in declaration order.
+    let graphs = extract_json_assignment(&html, "__PANSCHEMA_INSTANCE_GRAPHS__");
+    let entries = graphs.as_array().expect("payload array");
+    assert_eq!(entries.len(), 2, "one payload per declared dataset");
+    assert_eq!(entries[0]["name"], "wine_instances_preview");
+    assert_eq!(
+        entries[0]["data"]["nodes"].as_array().expect("nodes").len(),
+        2,
+        "the preview carries only its own wine and winery"
+    );
+    assert_eq!(entries[1]["name"], "wine_instances");
+    assert_eq!(
+        entries[1]["data"]["nodes"].as_array().expect("nodes").len(),
+        4,
+        "the worked example carries its own four records"
+    );
+
+    let _ = fs::remove_dir_all(output_dir);
+}
+
+#[test]
+fn single_a_box_formats_reject_several_instances_files() {
+    let dir = std::env::temp_dir().join("panschema_multi_instances_reject_test");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("mkdir");
+
+    // ttl folds one A-box into the emitted graph; several files have no
+    // unambiguous meaning, so the build must say so rather than pick one.
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--schema",
+            "tests/fixtures/wine_catalog.yaml",
+            "--instances",
+            "tests/fixtures/wine_instances_preview.yaml",
+            "--instances",
+            "tests/fixtures/wine_instances.yaml",
+            "--format",
+            "ttl",
+            "--output",
+            dir.join("out.ttl").to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute panschema");
+    assert!(
+        !out.status.success(),
+        "several A-boxes for a single-graph format must fail"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("single instance graph") && stderr.contains("--format html"),
+        "the error should explain the limit and the alternative; got: {stderr}"
+    );
+
+    let _ = fs::remove_dir_all(dir);
 }
 
 #[test]

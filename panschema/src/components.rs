@@ -208,6 +208,8 @@ pub struct SidebarComponent<'a> {
     pub instance_graph_json: Option<&'a str>,
     pub instance_node_count: usize,
     pub instance_edge_count: usize,
+    /// Matches IndexTemplate: whether an A-box is on the page.
+    pub has_instances: bool,
 }
 
 /// Namespace table component template.
@@ -412,6 +414,8 @@ pub struct StyleGuideTemplate<'a> {
     pub instance_node_count: usize,
     pub instance_edge_count: usize,
     pub instance_provenance: Option<&'a str>,
+    /// Matches IndexTemplate: whether an A-box is on the page.
+    pub has_instances: bool,
 }
 
 /// Renders individual components for testing and preview.
@@ -477,6 +481,7 @@ impl ComponentRenderer {
             instance_graph_json: None,
             instance_node_count: 0,
             instance_edge_count: 0,
+            has_instances: !individuals.is_empty(),
         };
         Ok(template.render()?)
     }
@@ -843,6 +848,9 @@ impl ComponentRenderer {
             instance_node_count: 0,
             instance_edge_count: 0,
             instance_provenance: None,
+            // The styleguide previews an individual card, so the sidebar
+            // should show its Instance Graph entry.
+            has_instances: true,
             sample_class,
             sample_slot,
             sample_data_slot,

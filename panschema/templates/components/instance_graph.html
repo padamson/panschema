@@ -1,7 +1,8 @@
 {# Instance (A-box) graph — the ontology's worked-example individuals as a
    connected force graph, rendered by panschema-viz on its own canvas,
-   distinct from the schema (T-box) graph. Data arrives via
-   window.__PANSCHEMA_INSTANCE_GRAPH_DATA__ (set by index.html). #}
+   distinct from the schema (T-box) graph. Every declared dataset's payload
+   arrives via window.__PANSCHEMA_INSTANCE_GRAPHS__ (set by index.html); the
+   selector swaps which one this canvas shows. #}
 <div class="instance-graph-block">
     <h3 class="instance-graph-title">Instance graph</h3>
     <p class="instance-graph-caption">
@@ -47,11 +48,40 @@
     }
 </style>
 
+<script>
+    // Dataset switching is plain DOM work, so it is wired up here rather than
+    // inside the wasm module below: the cards and provenance swap even while
+    // the viz is still loading, or if it fails to load at all. The viz hooks
+    // in by defining `window.__panschemaShowInstanceGraph`.
+    (function () {
+        const tabs = Array.from(document.querySelectorAll('.instance-dataset-tab'));
+        const panels = Array.from(document.querySelectorAll('.instance-dataset-panel'));
+        window.__panschema_instance_active = 0;
+        tabs.forEach((tab) => {
+            tab.addEventListener('click', () => {
+                const index = Number(tab.dataset.instanceDataset);
+                tabs.forEach((t) => {
+                    const on = t === tab;
+                    t.classList.toggle('active', on);
+                    t.setAttribute('aria-selected', on ? 'true' : 'false');
+                });
+                panels.forEach((panel) => {
+                    panel.hidden = Number(panel.dataset.instanceDataset) !== index;
+                });
+                window.__panschema_instance_active = index;
+                if (typeof window.__panschemaShowInstanceGraph === 'function') {
+                    window.__panschemaShowInstanceGraph(index);
+                }
+            });
+        });
+    })();
+</script>
+
 <script type="module">
     (async function () {
-        const data = window.__PANSCHEMA_INSTANCE_GRAPH_DATA__;
+        const graphs = window.__PANSCHEMA_INSTANCE_GRAPHS__ || [];
         const canvas = document.getElementById('instance-graph-canvas');
-        if (!data || !canvas) return;
+        if (!graphs.some((g) => g && g.data) || !canvas) return;
 
         // Load the panschema-viz wasm module. Imported independently of the
         // schema graph's module (a separate instance); sharing one module
@@ -74,16 +104,41 @@
         resize();
 
         let viz;
-        try {
-            // Force-directed variants read the container aspect; SGD gives a
-            // small A-box good cluster separation with no picker needed.
-            viz = new mod.Visualization(canvas, JSON.stringify(data), 16, 9, 'sgd');
-        } catch (e) {
-            console.warn('instance graph: init failed', e?.message ?? e);
-            return;
+        function show(index) {
+            const entry = graphs[index];
+            if (!entry || !entry.data) return false;
+            // A fresh Visualization over the same canvas is how a dataset
+            // swap happens; the outgoing one owns wasm memory, so release it
+            // rather than leaving it to the collector.
+            const previous = viz;
+            try {
+                // Force-directed variants read the container aspect; SGD gives
+                // a small A-box good cluster separation with no picker needed.
+                viz = new mod.Visualization(canvas, JSON.stringify(entry.data), 16, 9, 'sgd');
+            } catch (e) {
+                console.warn('instance graph: init failed', e?.message ?? e);
+                return false;
+            }
+            if (previous && typeof previous.free === 'function') {
+                try {
+                    previous.free();
+                } catch (_) {
+                    /* already released */
+                }
+            }
+            // Exposed for e2e assertions and debugging.
+            window.__panschema_instance_viz = viz;
+            return true;
         }
-        // Exposed for e2e assertions and debugging.
-        window.__panschema_instance_viz = viz;
+
+        window.__panschemaShowInstanceGraph = show;
+        // The reader may have already switched datasets while wasm loaded, so
+        // paint whichever one is active now rather than the first.
+        const active = window.__panschema_instance_active || 0;
+        const initial = graphs[active] && graphs[active].data
+            ? active
+            : graphs.findIndex((g) => g && g.data);
+        if (!show(initial)) return;
 
         // Tick the force simulation and repaint each frame.
         function frame() {
