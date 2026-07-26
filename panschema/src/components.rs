@@ -285,6 +285,9 @@ pub struct SlotCardComponent<'a> {
 #[derive(Template)]
 #[template(path = "components/individual_card.html")]
 pub struct IndividualCardComponent<'a> {
+    /// Matches IndexTemplate's per-dataset anchor namespace. Empty for a
+    /// standalone card preview.
+    pub anchor_prefix: &'a str,
     pub id: &'a str,
     pub label: &'a str,
     pub iri: &'a str,
@@ -590,6 +593,7 @@ impl ComponentRenderer {
         property_values: &[PropertyValueSpec],
     ) -> anyhow::Result<String> {
         let template = IndividualCardComponent {
+            anchor_prefix: "",
             id,
             label,
             iri,

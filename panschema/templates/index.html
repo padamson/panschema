@@ -234,7 +234,7 @@
 {%- if !ds.individuals.is_empty() %}
         <div class="entity-list">
 {%- for ind in ds.individuals %}
-            <a href="#ind-{{ ind.id }}" class="entity-link individual-link">{{ ind.label }}</a>
+            <a href="#{{ ds.anchor_prefix }}ind-{{ ind.id }}" class="entity-link individual-link">{{ ind.label }}</a>
 {%- endfor %}
         </div>
         <div class="individual-cards">
@@ -245,6 +245,7 @@
             {%- let description = ind.description.as_deref() %}
             {%- let types = ind.types.as_slice() %}
             {%- let property_values = ind.property_values.as_slice() %}
+            {%- let anchor_prefix = ds.anchor_prefix.as_str() %}
             {% include "components/individual_card.html" %}
 {%- endfor %}
         </div>

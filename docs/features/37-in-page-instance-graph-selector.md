@@ -134,6 +134,12 @@ consumer request lands in the right place.
 
 ## Things to Watch
 
+- **Overlapping record ids across datasets** (found dogfooding wine, fixed
+  2026-07-26). A preview is usually a *subset* of the worked example, so both
+  panels carry the same individuals. Each dataset therefore renders in its own
+  anchor namespace (`d<i>-ind-<id>`); a lone dataset keeps the bare
+  `ind-<id>` form so existing deep links still resolve. Tests that assert on
+  card anchors must account for the prefix on multi-dataset pages.
 - **Stale-content bugs are the main risk.** The section shows a graph's
   cards, entity list, provenance, and counts; a selector that swaps the
   canvas but leaves any of those describing the previous dataset is the

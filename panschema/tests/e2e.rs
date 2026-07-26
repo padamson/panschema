@@ -2553,7 +2553,7 @@ fn e2e_instance_dataset_selector_switches_cards_and_graph() {
         // The preview's card is visible; the worked example's is not, because
         // its panel is hidden.
         assert!(
-            page.locator("#ind-previewWine")
+            page.locator("#d0-ind-previewWine")
                 .is_visible()
                 .await
                 .unwrap_or(false),
@@ -2561,7 +2561,7 @@ fn e2e_instance_dataset_selector_switches_cards_and_graph() {
         );
         assert!(
             !page
-                .locator("#ind-chateauMorgon")
+                .locator("#d1-ind-chateauMorgon")
                 .is_visible()
                 .await
                 .unwrap_or(true),
@@ -2577,7 +2577,7 @@ fn e2e_instance_dataset_selector_switches_cards_and_graph() {
             .expect("click second dataset");
 
         assert!(
-            page.locator("#ind-chateauMorgon")
+            page.locator("#d1-ind-chateauMorgon")
                 .is_visible()
                 .await
                 .unwrap_or(false),
@@ -2585,7 +2585,7 @@ fn e2e_instance_dataset_selector_switches_cards_and_graph() {
         );
         assert!(
             !page
-                .locator("#ind-previewWine")
+                .locator("#d0-ind-previewWine")
                 .is_visible()
                 .await
                 .unwrap_or(true),

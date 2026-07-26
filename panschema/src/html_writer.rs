@@ -439,6 +439,11 @@ pub struct IndividualData {
 /// and its own viz payload.
 struct InstanceDatasetView<'a> {
     name: &'a str,
+    /// Prefix for this dataset's element ids and in-page anchors. Empty for a
+    /// lone dataset, so its published `#ind-<id>` links keep working; with
+    /// several, a preview that shares records with the worked example would
+    /// otherwise duplicate ids and cross-link into a hidden panel.
+    anchor_prefix: String,
     /// Whether this is the dataset the page opens on.
     is_default: bool,
     /// The name as a JSON string literal, for the payload array.
@@ -1463,6 +1468,7 @@ impl Writer for HtmlWriter {
                 |(dataset, (refs, cards, json, node_count, edge_count, name_json))| {
                     InstanceDatasetView {
                         name: &dataset.name,
+                        anchor_prefix: String::new(),
                         is_default: dataset.default_selected,
                         name_json,
                         provenance: dataset.provenance.as_deref(),
@@ -1476,9 +1482,17 @@ impl Writer for HtmlWriter {
             )
             .collect();
 
+        let mut dataset_views = dataset_views;
+        // Several datasets share one page, and their records may overlap, so
+        // each gets its own anchor namespace. A lone dataset keeps the bare
+        // `ind-<id>` form its deep links already use.
+        if dataset_views.len() > 1 {
+            for (i, view) in dataset_views.iter_mut().enumerate() {
+                view.anchor_prefix = format!("d{i}-");
+            }
+        }
         // With nothing marked — or with the marked dataset dropped for having
         // nothing to show — the first surviving one opens.
-        let mut dataset_views = dataset_views;
         if !dataset_views.iter().any(|v| v.is_default)
             && let Some(first) = dataset_views.first_mut()
         {
@@ -3792,6 +3806,51 @@ mod tests {
     }
 
     #[test]
+    fn datasets_sharing_record_ids_get_distinct_anchors() {
+        // A teaching preview is usually a *subset* of the worked example, so the
+        // same individuals appear in both panels. Emitting `ind-<id>` in each
+        // would duplicate element ids and send a reference link in one panel to
+        // the other panel's card — which is hidden, so the link looks dead.
+        let schema = bottle_rack_schema();
+        let preview = instance_set_from_yaml(
+            &schema,
+            "bottles:\n  - id: b1\n    name: Morgon\n    stored_in: r1\nracks:\n  - id: r1\n    name: North Rack\n",
+        );
+        let worked = instance_set_from_yaml(
+            &schema,
+            "bottles:\n  - id: b1\n    name: Morgon\n    stored_in: r1\nracks:\n  - id: r1\n    name: North Rack\n",
+        );
+
+        let writer = HtmlWriter::new()
+            .with_instance_dataset(InstanceDataset::new("preview", preview))
+            .with_instance_dataset(InstanceDataset::new("worked-example", worked));
+        let temp_dir = std::env::temp_dir().join("panschema_shared_ids_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        writer.write(&schema, &temp_dir).expect("write");
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        let mut counts = std::collections::BTreeMap::new();
+        let mut rest = html.as_str();
+        while let Some(at) = rest.find("id=\"") {
+            rest = &rest[at + 4..];
+            let end = rest.find('"').unwrap_or(0);
+            *counts.entry(&rest[..end]).or_insert(0usize) += 1;
+        }
+        let dupes: Vec<_> = counts.iter().filter(|(_, n)| **n > 1).collect();
+        assert!(
+            dupes.is_empty(),
+            "every element id must be unique across dataset panels; duplicated: {dupes:?}"
+        );
+
+        // Each panel's own links point into its own namespace.
+        assert!(
+            html.contains(r##"href="#d0-ind-b1""##) && html.contains(r##"href="#d1-ind-b1""##),
+            "each panel's entity link must target the card in that same panel"
+        );
+    }
+
+    #[test]
     fn each_dataset_carries_its_own_counts_and_provenance() {
         let schema = bottle_rack_schema();
         let preview = instance_set_from_yaml(&schema, "bottles:\n  - id: b1\n    name: Morgon\n");
@@ -3851,6 +3910,12 @@ mod tests {
             "just the single content panel, with no selector entry"
         );
         assert!(html.contains("Morgon"), "its individuals still render");
+        // A lone dataset keeps the unprefixed anchor form, so `#ind-<id>` deep
+        // links published before the selector existed still resolve.
+        assert!(
+            html.contains(r##"id="ind-b1""##) && html.contains(r##"href="#ind-b1""##),
+            "a single dataset must not namespace its anchors"
+        );
     }
 
     #[test]
