@@ -187,7 +187,7 @@ manifest path above covers building and deploying current docs today).
 
 Decision 1 framed the exemplar/arbitrary split as **embed one vs. nothing**:
 a second `[[instances]]` entry rendered nothing while sibling pages stayed
-deferred. Dogfooding showed the curated case is routinely *plural* — a tiny
+deferred. Consumer demand showed the curated case is routinely *plural* — a tiny
 teaching preview that introduces *individual / node / edge* alongside the
 full worked example that answers the competency questions — and that those
 two want to be compared, not navigated between.

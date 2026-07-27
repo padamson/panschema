@@ -49,7 +49,7 @@ pub enum VizMode {
 /// command's `--help` shows only its own surface.
 #[derive(Parser)]
 #[command(name = "panschema")]
-#[command(version, about, long_about = None)]
+#[command(version = env!("PANSCHEMA_VERSION"), about, long_about = None)]
 #[command(arg_required_else_help = true)]
 struct Cli {
     #[command(subcommand)]

@@ -1482,6 +1482,41 @@ html = "docs/"
 /// schema arrives through `[schemas]`, the A-boxes are local, and
 /// `[generate.<name>].instances` renders the imported schema's docs featuring
 /// them (ADR-009 decision 6).
+/// `--version` has to distinguish a build from `main` from the last release,
+/// or "rebuild from `main` to get the fix" is advice a consumer can't verify.
+/// A tagged release (or a crates.io install, which has no git at all) reports
+/// the bare version; anything else appends the commit it was built from.
+#[test]
+fn version_identifies_a_non_release_build_by_commit() {
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("--version")
+        .output()
+        .expect("run panschema");
+    assert!(out.status.success(), "--version should succeed");
+    let text = String::from_utf8_lossy(&out.stdout);
+    let reported = text
+        .trim()
+        .strip_prefix("panschema ")
+        .unwrap_or_else(|| panic!("unexpected --version output: {text}"));
+
+    let crate_version = env!("CARGO_PKG_VERSION");
+    let Some(suffix) = reported.strip_prefix(crate_version) else {
+        panic!("--version must start with the crate version; got: {reported}");
+    };
+    if suffix.is_empty() {
+        // A tagged release build, or a source tree with no git — both correct.
+        return;
+    }
+    let sha = suffix
+        .strip_prefix(" (")
+        .and_then(|s| s.strip_suffix(')'))
+        .unwrap_or_else(|| panic!("build id must read ` (<sha>)`; got: {suffix:?}"));
+    assert!(
+        sha.len() >= 7 && sha.chars().all(|c| c.is_ascii_hexdigit()),
+        "the build id should be an abbreviated commit sha; got: {sha:?}"
+    );
+}
+
 #[test]
 fn manifest_instances_render_the_local_a_boxes_with_the_imported_schema() {
     let tmp = tempfile::tempdir().expect("tempdir");

@@ -255,8 +255,8 @@ while the slot actually meant stayed absent.
   command, `generate --instances`, and `publish`; `--strict` fails.
 - [x] Reported per record, so the same misspelling in several records names
   each one.
-- [x] No false positives on a real hand-authored A-box (verified against the
-  wine showcase's two curated data files, both still conforming).
+- [x] No false positives on a real hand-authored A-box (verified against a
+  downstream consumer's curated data files, which continue to conform).
 
 ---
 
