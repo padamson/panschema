@@ -9,6 +9,16 @@
         The individuals above as a connected A-box: nodes are individuals
         (teal hexagons), edges are their object-property assertions.
     </p>
+    <div class="instance-graph-toolbar">
+        <label for="instance-graph-layout-select" class="instance-graph-layout-label">Layout</label>
+        <select id="instance-graph-layout-select" class="instance-graph-layout-select">
+            <option value="sgd">SGD (default · fast quality)</option>
+            <option value="stress">Stress majorization (cluster separation)</option>
+            <option value="hierarchical">Hierarchical</option>
+            <option value="force-directed">Force-directed (interactive)</option>
+            <option value="kamada-kawai">Kamada-Kawai (slower init)</option>
+        </select>
+    </div>
     <div class="instance-graph-container">
         <canvas id="instance-graph-canvas"></canvas>
     </div>
@@ -26,6 +36,24 @@
         margin: 0 0 var(--space-2, 8px);
         color: var(--color-text-muted, #9ca3af);
         font-size: var(--font-size-sm, 13px);
+    }
+    .instance-graph-toolbar {
+        display: flex;
+        align-items: center;
+        gap: var(--space-2, 8px);
+        margin-bottom: var(--space-2, 8px);
+    }
+    .instance-graph-layout-label {
+        font-size: var(--font-size-sm, 13px);
+        color: var(--color-text-muted, #9ca3af);
+    }
+    .instance-graph-layout-select {
+        font-size: var(--font-size-sm, 13px);
+        color: var(--color-text, #e5e7eb);
+        background: var(--color-bg-secondary, #2d2d44);
+        border: 1px solid var(--color-border, #374151);
+        border-radius: var(--radius-sm, 4px);
+        padding: 2px 6px;
     }
     .instance-graph-container {
         position: relative;
@@ -125,18 +153,39 @@
         }
         resize();
 
+        // The same layout family the schema graph offers; persisted under
+        // its own key since a good A-box layout can differ from the T-box's.
+        const layoutSelect = document.getElementById('instance-graph-layout-select');
+        const LAYOUT_KEY = 'panschema-instance-graph-layout';
+        function currentLayout() {
+            return (layoutSelect && layoutSelect.value) || 'sgd';
+        }
+        try {
+            const saved = window.localStorage.getItem(LAYOUT_KEY);
+            if (saved && layoutSelect && [...layoutSelect.options].some((o) => o.value === saved)) {
+                layoutSelect.value = saved;
+            }
+        } catch (_) {
+            /* storage unavailable; the default stands */
+        }
+
         let viz;
+        let shownIndex = -1;
+        // Re-fit the camera as the layout settles, as the schema graph does —
+        // collide + repulsion are non-linear, so the extent drifts past the
+        // first fit and a single early fit leaves the graph in a corner.
+        const REFIT_TICKS = [50, 100, 200, 300];
+        let tickCount = 0;
+        let hasFittedBounds = false;
         function show(index) {
             const entry = graphs[index];
             if (!entry || !entry.data) return false;
             // A fresh Visualization over the same canvas is how a dataset
-            // swap happens; the outgoing one owns wasm memory, so release it
-            // rather than leaving it to the collector.
+            // swap (or layout change) happens; the outgoing one owns wasm
+            // memory, so release it rather than leaving it to the collector.
             const previous = viz;
             try {
-                // Force-directed variants read the container aspect; SGD gives
-                // a small A-box good cluster separation with no picker needed.
-                viz = new mod.Visualization(canvas, JSON.stringify(entry.data), 16, 9, 'sgd');
+                viz = new mod.Visualization(canvas, JSON.stringify(entry.data), 16, 9, currentLayout());
             } catch (e) {
                 console.warn('instance graph: init failed', e?.message ?? e);
                 return false;
@@ -148,9 +197,23 @@
                     /* already released */
                 }
             }
+            shownIndex = index;
+            tickCount = 0;
+            hasFittedBounds = false;
             // Exposed for e2e assertions and debugging.
             window.__panschema_instance_viz = viz;
             return true;
+        }
+
+        if (layoutSelect) {
+            layoutSelect.addEventListener('change', () => {
+                try {
+                    window.localStorage.setItem(LAYOUT_KEY, currentLayout());
+                } catch (_) {
+                    /* storage unavailable */
+                }
+                if (shownIndex >= 0) show(shownIndex);
+            });
         }
 
         window.__panschemaShowInstanceGraph = show;
@@ -162,10 +225,19 @@
             : graphs.findIndex((g) => g && g.data);
         if (!show(initial)) return;
 
-        // Tick the force simulation and repaint each frame.
+        // Tick the force simulation and repaint each frame, fitting the
+        // camera to the settling layout at the same checkpoints the schema
+        // graph uses so the graph fills its viewport.
         function frame() {
             try {
                 viz.tick();
+                tickCount++;
+                if (!hasFittedBounds && REFIT_TICKS.includes(tickCount)) {
+                    viz.fit_to_bounds(40);
+                    if (tickCount === REFIT_TICKS[REFIT_TICKS.length - 1]) {
+                        hasFittedBounds = true;
+                    }
+                }
                 viz.render();
             } catch (_) {
                 /* transient during teardown */
@@ -192,6 +264,32 @@
             lastX = e.clientX;
             lastY = e.clientY;
         });
+
+        // Focus-on-hover, matching the schema graph: hovering a node focuses
+        // its neighborhood; leaving clears it.
+        const FOCUS_HOP_DEPTH = 2;
+        let lastFocusedNodeIdx = -1;
+        canvas.addEventListener('mousemove', (e) => {
+            if (dragging || !viz) return;
+            const rect = canvas.getBoundingClientRect();
+            const x = (e.clientX - rect.left) * dpr;
+            const y = (e.clientY - rect.top) * dpr;
+            if (typeof viz.update_hover === 'function') viz.update_hover(x, y);
+            const idx = typeof viz.hovered_node_index === 'function' ? viz.hovered_node_index() : -1;
+            if (idx === lastFocusedNodeIdx) return;
+            if (idx >= 0) {
+                if (typeof viz.focus_node === 'function') viz.focus_node(idx, FOCUS_HOP_DEPTH);
+            } else if (typeof viz.clear_focus === 'function') {
+                viz.clear_focus();
+            }
+            lastFocusedNodeIdx = idx;
+        });
+        canvas.addEventListener('mouseleave', () => {
+            if (!viz) return;
+            if (typeof viz.clear_hover === 'function') viz.clear_hover();
+            if (typeof viz.clear_focus === 'function') viz.clear_focus();
+            lastFocusedNodeIdx = -1;
+        });
         canvas.addEventListener(
             'wheel',
             (e) => {
@@ -201,6 +299,15 @@
             { passive: false }
         );
 
-        window.addEventListener('resize', resize);
+        window.addEventListener('resize', () => {
+            resize();
+            // The viz tracks the canvas size for hit-testing and fit; a
+            // resized canvas without viz.resize leaves both using stale
+            // dimensions.
+            if (viz && typeof viz.resize === 'function') {
+                viz.resize(canvas.width, canvas.height);
+                viz.fit_to_bounds(40);
+            }
+        });
     })();
 </script>

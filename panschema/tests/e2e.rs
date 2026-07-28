@@ -2714,6 +2714,130 @@ fn e2e_instance_dataset_selector_switches_cards_and_graph() {
     });
 }
 
+/// The instance graph is the same explorable component as the schema graph:
+/// it fills its viewport instead of clustering in a corner, offers the layout
+/// picker, and focuses the hovered node's neighborhood.
+#[test]
+fn e2e_instance_graph_is_explorable_like_the_schema_graph() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let output_dir = generate_docs_with_instances(
+            "tests/fixtures/wine_catalog.yaml",
+            "tests/fixtures/wine_instances.yaml",
+        );
+        let port = find_available_port();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("goto");
+
+        assert!(
+            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
+            "instance graph viz never became ready"
+        );
+
+        // Viewport fill: after the layout settles and the camera fits, the
+        // painted content spans a substantial share of the canvas rather than
+        // clustering in one corner.
+        assert!(
+            wait_until_ready(
+                &page,
+                r#"(function(){
+                    var c = document.getElementById('instance-graph-canvas');
+                    if (!c) return false;
+                    var ctx = c.getContext('2d');
+                    if (!ctx) return false;
+                    var d = ctx.getImageData(0, 0, c.width, c.height).data;
+                    var minX = c.width, maxX = 0, minY = c.height, maxY = 0, any = false;
+                    for (var y = 0; y < c.height; y += 4) {
+                        for (var x = 0; x < c.width; x += 4) {
+                            var i = (y * c.width + x) * 4;
+                            // Painted = notably brighter than the dark bg.
+                            if (d[i] + d[i+1] + d[i+2] > 140) {
+                                any = true;
+                                if (x < minX) minX = x;
+                                if (x > maxX) maxX = x;
+                                if (y < minY) minY = y;
+                                if (y > maxY) maxY = y;
+                            }
+                        }
+                    }
+                    if (!any) return false;
+                    return (maxX - minX) > c.width * 0.4 && (maxY - minY) > c.height * 0.4;
+                })()"#
+            )
+            .await,
+            "the settled instance graph should span its viewport, not cluster in a corner"
+        );
+
+        // The layout picker is present with the same options as the schema
+        // graph's, and choosing another implemented layout re-creates the viz.
+        let picker = page.locator("#instance-graph-layout-select");
+        assert_eq!(
+            picker.count().await.expect("picker count"),
+            1,
+            "the instance graph should offer the layout picker"
+        );
+        let switched = page
+            .evaluate_value(
+                r#"(function(){
+                    var s = document.getElementById('instance-graph-layout-select');
+                    window.__instance_viz_before = window.__panschema_instance_viz;
+                    s.value = 'force-directed';
+                    s.dispatchEvent(new Event('change', {bubbles: true}));
+                    return 'changed';
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert!(switched.contains("changed"), "picker change failed: {switched}");
+        assert!(
+            wait_until_ready(
+                &page,
+                "window.__panschema_instance_viz && window.__panschema_instance_viz !== window.__instance_viz_before"
+            )
+            .await,
+            "choosing a layout should re-create the instance viz"
+        );
+
+        // Focus-on-hover: hovering a node focuses its neighborhood, exactly
+        // as the schema graph does.
+        let focused = page
+            .evaluate_value(
+                r#"(function(){
+                    var viz = window.__panschema_instance_viz;
+                    if (!viz || typeof viz.node_canvas_pos !== 'function') return 'no-viz';
+                    var pos = viz.node_canvas_pos(0);
+                    if (!pos || pos.length < 2) return 'no-pos';
+                    var canvas = document.getElementById('instance-graph-canvas');
+                    var rect = canvas.getBoundingClientRect();
+                    var dpr = window.devicePixelRatio || 1;
+                    var x = rect.left + pos[0] / dpr, y = rect.top + pos[1] / dpr;
+                    canvas.dispatchEvent(new MouseEvent('mousemove', {clientX: x, clientY: y, bubbles: true}));
+                    return 'hovered:' + viz.hovered_node_index();
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert!(
+            focused.contains("hovered:0"),
+            "hovering a node should register on the viz; got: {focused}"
+        );
+
+        browser.close().await.ok();
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
 /// The `generate --instances` path renders a LinkML instance-data file as the
 /// instance graph — the schema declares no OWL individuals, so the A-box comes
 /// entirely from the data file — and its own canvas paints the teal nodes.

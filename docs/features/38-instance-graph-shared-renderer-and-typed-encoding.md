@@ -61,7 +61,7 @@ sidebar and selector buttons agree.
 
 ### Slice 2: The instance graph gets the full renderer
 
-**Status:** Not started
+**Status:** Complete
 
 **Priority:** Must Have
 
@@ -70,21 +70,40 @@ drags, zooms, and offers the layout picker — instead of clustering in a
 corner of an empty box.
 
 **Acceptance Criteria:**
-- [ ] The instance-graph canvas lays out to fill its viewport as the schema
-  graph does, rather than occupying a fraction of it.
-- [ ] Drag-to-pan, zoom, focus-on-hover, and the layout picker work on the
-  instance graph.
-- [ ] Switching datasets preserves that behaviour for the newly shown graph.
-- [ ] The schema graph is unchanged.
+- [x] The instance-graph canvas lays out to fill its viewport as the schema
+  graph does, rather than occupying a fraction of it — the camera re-fits at
+  the same settling checkpoints
+  (`e2e_instance_graph_is_explorable_like_the_schema_graph` measures the
+  painted extent).
+- [x] Drag-to-pan, zoom, focus-on-hover (same hop depth as the schema
+  graph), and the layout picker work on the instance graph; the picker's
+  choice persists under its own key, since a good A-box layout can differ
+  from the T-box's.
+- [x] Switching datasets preserves that behaviour for the newly shown graph;
+  a layout change re-creates the view the same way.
+- [x] The schema graph is unchanged.
+- [x] Window resizes reach the visualization (`viz.resize` + re-fit), so
+  hit-testing and camera fit don't run against stale dimensions.
 
-### Slice 3: One adaptive legend, serving both graphs
+**What this slice deliberately does NOT do:** unify the two HTML/JS shells.
+The reusable component is the `panschema-viz` `Visualization` — one
+renderer, generic over the graph document — and this slice drives it fully
+from the instance canvas via the same API calls the schema canvas makes.
+But those calls now exist in *two* template shells (`graph_viz.html` and
+`instance_graph.html`), duplicating the refit checkpoints, hover-focus
+logic, badge formatting, and picker wiring. That duplication is temporary:
+Slice 3 extracts the shared behaviours into one module, because its legend
+AC already demands a single code path serving both canvases.
+
+### Slice 3: One adaptive legend, and one shared graph shell
 
 **Status:** Not started
 
 **Priority:** Should Have
 
-**User Value:** Each graph explains its own symbols, and neither advertises
-a symbol it doesn't use.
+**User Value:** Each graph explains its own symbols, neither advertises a
+symbol it doesn't use — and the page drives both canvases through one
+shared module, so a behaviour fixed once is fixed everywhere.
 
 **Acceptance Criteria:**
 - [ ] The legend enumerates only the node and edge kinds actually present in
@@ -92,6 +111,11 @@ a symbol it doesn't use.
 - [ ] The instance graph has a legend; both graphs' legends come from one
   code path.
 - [ ] A schema with no enums shows no enum entry.
+- [ ] The behaviours Slice 2 duplicated across the two template shells —
+  settle-and-refit, focus-on-hover, badge formatting, layout-picker wiring,
+  resize forwarding — live in one shared module that both canvases call, so
+  the shells hold only their own markup and data sources. A behaviour change
+  in one graph that doesn't appear in the other is a bug, not a divergence.
 
 ### Slice 4: The A-box is typed — each type expands into its instances
 
@@ -136,8 +160,8 @@ with the same symbol the schema graph uses for that type.*
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | Slice 1: consistent graph counts | Must Have | — (independent) | Complete |
-| Slice 2: full renderer for the A-box | Must Have | — | Not started |
-| Slice 3: adaptive legend | Should Have | Slice 2 | Not started |
+| Slice 2: full renderer for the A-box | Must Have | — | Complete |
+| Slice 3: adaptive legend + shared shell | Should Have | Slice 2 | Not started |
 | Slice 4: typed A-box encoding | Must Have | Slice 2 | Not started |
 
 ---
