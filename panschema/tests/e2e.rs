@@ -2714,6 +2714,176 @@ fn e2e_instance_dataset_selector_switches_cards_and_graph() {
     });
 }
 
+/// The instance graph offers the schema graph's inspection affordances:
+/// a hover detail card (the only surface for a shared value's usage count)
+/// and the toolbar toggles, wired once through the shared shell.
+#[test]
+fn e2e_instance_graph_has_hover_card_and_toolbar_parity() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let output_dir = generate_docs_with_instances(
+            "tests/fixtures/typed_wine.yaml",
+            "tests/fixtures/typed_wine_instances.yaml",
+        );
+        let port = find_available_port();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("goto");
+        assert!(
+            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
+            "instance graph viz never became ready"
+        );
+
+        // The toolbar is present with the schema graph's controls.
+        for id in [
+            "instance-graph-reset",
+            "instance-graph-zoom-in",
+            "instance-graph-zoom-out",
+            "instance-graph-labels-all",
+            "instance-graph-labels-nodes",
+            "instance-graph-labels-edges",
+            "instance-graph-focus-on-hover",
+            "instance-graph-arrows",
+        ] {
+            assert_eq!(
+                page.locator(format!("#{id}")).count().await.expect("count"),
+                1,
+                "missing toolbar control #{id}"
+            );
+        }
+
+        // Toggles drive the visualization, not just their own styling.
+        let toggled = page
+            .evaluate_value(
+                r#"(function(){
+                    var viz = window.__panschema_instance_viz;
+                    var before = viz.node_labels_enabled() + ':' + viz.show_arrows();
+                    document.getElementById('instance-graph-labels-nodes').click();
+                    document.getElementById('instance-graph-arrows').click();
+                    var after = viz.node_labels_enabled() + ':' + viz.show_arrows();
+                    return before + ' -> ' + after;
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert!(
+            toggled.contains("true:true -> false:false"),
+            "label and arrow toggles should flip viz state; got: {toggled}"
+        );
+
+        // Focus-on-hover honours its toggle: off means hovering focuses
+        // nothing; back on, hovering focuses the node's neighborhood.
+        let focus = page
+            .evaluate_value(
+                r#"(function(){
+                    var viz = window.__panschema_instance_viz;
+                    var canvas = document.getElementById('instance-graph-canvas');
+                    var rect = canvas.getBoundingClientRect();
+                    var dpr = window.devicePixelRatio || 1;
+                    function hoverNode(i) {
+                        var pos = viz.node_canvas_pos(i);
+                        canvas.dispatchEvent(new MouseEvent('mousemove', {
+                            clientX: rect.left + pos[0] / dpr,
+                            clientY: rect.top + pos[1] / dpr,
+                            bubbles: true
+                        }));
+                    }
+                    document.getElementById('instance-graph-focus-on-hover').click(); // off
+                    hoverNode(0);
+                    var whileOff = viz.focused_node_index();
+                    canvas.dispatchEvent(new MouseEvent('mouseleave', {bubbles: true}));
+                    document.getElementById('instance-graph-focus-on-hover').click(); // on
+                    hoverNode(0);
+                    var whileOn = viz.focused_node_index();
+                    return 'off:' + whileOff + ' on:' + whileOn;
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert!(
+            focus.contains("off:-1") && focus.contains("on:0"),
+            "the focus toggle should gate hover focusing; got: {focus}"
+        );
+
+        // The legend button reflects its state like every other toggle.
+        let legend_state = page
+            .evaluate_value(
+                r#"(function(){
+                    var b = document.getElementById('instance-graph-legend-toggle');
+                    b.click();
+                    var on = b.classList.contains('active') + ':' + b.getAttribute('aria-pressed');
+                    b.click();
+                    var off = b.classList.contains('active') + ':' + b.getAttribute('aria-pressed');
+                    return on + ' / ' + off;
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert!(
+            legend_state.contains("true:true / false:false"),
+            "the legend button should light while open and dim when closed; got: {legend_state}"
+        );
+
+        // The hover card: an individual shows its class; a shared value node
+        // shows its enum and how many individuals chose it — the wire's
+        // usage_count has no other surface.
+        let card = page
+            .evaluate_value(
+                r#"(function(){
+                    var viz = window.__panschema_instance_viz;
+                    var g = (window.__PANSCHEMA_INSTANCE_GRAPHS__ || [])[0];
+                    var canvas = document.getElementById('instance-graph-canvas');
+                    var rect = canvas.getBoundingClientRect();
+                    var dpr = window.devicePixelRatio || 1;
+                    function hoverNode(i) {
+                        var pos = viz.node_canvas_pos(i);
+                        canvas.dispatchEvent(new MouseEvent('mousemove', {
+                            clientX: rect.left + pos[0] / dpr,
+                            clientY: rect.top + pos[1] / dpr,
+                            bubbles: true
+                        }));
+                    }
+                    var redIdx = g.data.nodes.findIndex(function(n){
+                        return n.node_type === 'enum_value' && n.label === 'red';
+                    });
+                    if (redIdx < 0) return 'no-red';
+                    hoverNode(redIdx);
+                    var el = document.getElementById('instance-graph-hover-card');
+                    var value = el && el.style.display !== 'none' ? el.textContent : '(hidden)';
+                    var morgonIdx = g.data.nodes.findIndex(function(n){
+                        return n.id === 'individual:morgon';
+                    });
+                    hoverNode(morgonIdx);
+                    var ind = el && el.style.display !== 'none' ? el.textContent : '(hidden)';
+                    return 'value[' + value + '] individual[' + ind + ']';
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert!(
+            card.contains("WineColorEnum") && card.contains('2'),
+            "the value card should name its enum and usage count; got: {card}"
+        );
+        assert!(
+            card.contains("Morgon") && card.contains("Wine"),
+            "the individual card should show its label and class; got: {card}"
+        );
+
+        browser.close().await.ok();
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
 /// The instance graph is typed: individuals wear their class's circle and
 /// colour, and each enum value in use is one shared diamond node the
 /// choosing individuals link to — checked on the real rendered page, since
@@ -3052,11 +3222,60 @@ fn e2e_instance_graph_is_explorable_like_the_schema_graph() {
                         }
                     }
                     if (!any) return false;
-                    return (maxX - minX) > c.width * 0.4 && (maxY - minY) > c.height * 0.4;
+                    var w = maxX - minX, h = maxY - minY;
+                    var cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+                    // Fitted means wide AND roughly centered — an unfitted
+                    // default view can be wide while sitting in a corner.
+                    return w > c.width * 0.5 && h > c.height * 0.4 &&
+                        Math.abs(cx - c.width / 2) < c.width * 0.25 &&
+                        Math.abs(cy - c.height / 2) < c.height * 0.25;
                 })()"#
             )
             .await,
-            "the settled instance graph should span its viewport, not cluster in a corner"
+            "the settled instance graph should fill and center in its viewport"
+        );
+
+        // Reset recovers from a far pan: after shoving the camera away, the
+        // painted graph returns to a fitted, centered view.
+        page.evaluate_value(
+            "(function(){ window.__panschema_instance_viz.pan(4000, 4000); return 'panned'; })()",
+        )
+        .await
+        .expect("pan");
+        page.locator("#instance-graph-reset")
+            .click(None)
+            .await
+            .expect("click reset");
+        assert!(
+            wait_until_ready(
+                &page,
+                r#"(function(){
+                    var c = document.getElementById('instance-graph-canvas');
+                    var ctx = c.getContext('2d');
+                    if (!ctx) return false;
+                    var d = ctx.getImageData(0, 0, c.width, c.height).data;
+                    var minX = c.width, maxX = 0, minY = c.height, maxY = 0, any = false;
+                    for (var y = 0; y < c.height; y += 4) {
+                        for (var x = 0; x < c.width; x += 4) {
+                            var i = (y * c.width + x) * 4;
+                            if (d[i] + d[i+1] + d[i+2] > 140) {
+                                any = true;
+                                if (x < minX) minX = x;
+                                if (x > maxX) maxX = x;
+                                if (y < minY) minY = y;
+                                if (y > maxY) maxY = y;
+                            }
+                        }
+                    }
+                    if (!any) return false;
+                    var cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+                    return (maxX - minX) > c.width * 0.5 &&
+                        Math.abs(cx - c.width / 2) < c.width * 0.25 &&
+                        Math.abs(cy - c.height / 2) < c.height * 0.25;
+                })()"#
+            )
+            .await,
+            "reset should re-fit and re-center the panned-away graph"
         );
 
         // The layout picker is present with the same options as the schema

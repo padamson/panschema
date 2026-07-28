@@ -173,7 +173,7 @@ with the same symbol the schema graph uses for that type.*
 
 ### Slice 5: Full shell parity — hover card and toolbar controls
 
-**Status:** Not started
+**Status:** Complete
 
 **Priority:** Should Have
 
@@ -194,15 +194,29 @@ so a reader doesn't have to relearn the surface per graph.
   it until a card does.
 
 **Acceptance Criteria:**
-- [ ] Hovering an instance-graph node shows the detail card: an
+- [x] Hovering an instance-graph node shows the detail card: an
   individual's types, literals, and IRI; a shared value node's enum and
-  how many individuals chose it.
-- [ ] Reset / zoom-in / zoom-out buttons, and Labels, Nodes, Edges,
+  how many individuals chose it
+  (`e2e_instance_graph_has_hover_card_and_toolbar_parity`).
+- [x] Reset / zoom-in / zoom-out buttons, and Labels, Nodes, Edges,
   Arrows, and Focus-on-hover toggles work on the instance canvas, with the
-  same persisted preferences behaviour as the schema canvas.
-- [ ] The controls come from the shared shell, not a second copy — one
+  same persisted preferences behaviour as the schema canvas, re-applied
+  whenever a dataset or layout switch re-creates the view.
+- [x] The controls come from the shared shell, not a second copy — one
   wiring serving both canvases.
-- [ ] The schema graph is unchanged.
+- [x] The schema graph is unchanged.
+- [x] Camera fits actually take effect (consumer-found): the instance
+  render loop advances the camera animation each frame, without which
+  every `fit_to_bounds` — the settle-time fill, the reset button, resize
+  re-fits — set a target the camera never reached. The e2e now demands a
+  fitted *and* centered graph, proves reset recovers from a far pan, and
+  was confirmed red without the fix.
+- [x] The legend button reflects its pressed state like every other
+  toggle (consumer-found: it only set `aria-pressed`, never the styled
+  `active` class).
+- [x] The `enum_value` metadata tag is spelled consistently with the
+  `node_type` on the wire (the kind enum's lowercase tagging would have
+  emitted `enumvalue`).
 
 ---
 
@@ -214,14 +228,13 @@ so a reader doesn't have to relearn the surface per graph.
 | Slice 2: full renderer for the A-box | Must Have | — | Complete |
 | Slice 3: adaptive legend + shared shell | Should Have | Slice 2 | Complete |
 | Slice 4: typed A-box encoding | Must Have | Slice 2 | Complete |
-| Slice 5: full shell parity (hover card + toolbar) | Should Have | Slices 3–4 | Not started |
+| Slice 5: full shell parity (hover card + toolbar) | Should Have | Slices 3–4 | Complete |
 
 ---
 
 ## Definition of Done
 
 - [x] All Must Have slices complete with acceptance criteria checked
-  (Slice 5, Should Have, remains open — full shell parity)
 - [x] `cargo fmt --check`, `cargo clippy --all-targets --all-features -D warnings`, full test suite, and `cargo doc` clean
 - [x] Mutation testing on the diff shows no missed mutants
 - [x] Browser tests cover the interaction and encoding claims, not just the markup
@@ -243,6 +256,11 @@ so a reader doesn't have to relearn the surface per graph.
 - **A downstream consumer's preview A-box may be a subset of its worked
   example**, so datasets on one page can share record ids — the per-dataset
   anchor namespacing from feature 37 must survive any card/legend rework.
+- **Camera fits are animated targets.** `fit_to_bounds` only takes effect
+  when the render loop advances the camera animation each frame
+  (`update_animation`); a loop that omits it turns every fit — settle
+  refits, the reset button, resize — into a silent no-op, while a weak
+  painted-extent assertion stays green. Assert fitted *and* centered.
 - **Verify in a browser, not only in generated markup.** Every defect this
   feature responds to was visible on a rendered page and invisible in the
   HTML source.

@@ -213,6 +213,7 @@ pub enum KindMetadata {
     },
     /// One enum value in use by the A-box: the hover card names which enum
     /// it belongs to and how many individuals chose it.
+    #[serde(rename = "enum_value")]
     EnumValue {
         enum_name: String,
         usage_count: usize,

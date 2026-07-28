@@ -144,6 +144,143 @@
             }
         }
 
+        // View buttons: reset re-fits, zoom steps match the schema canvas.
+        function wireViewButtons(getViz, resetBtn, zoomInBtn, zoomOutBtn) {
+            if (resetBtn) {
+                resetBtn.addEventListener('click', () => {
+                    const viz = getViz();
+                    if (viz) viz.fit_to_bounds(REFIT_PADDING);
+                });
+            }
+            if (zoomInBtn) {
+                zoomInBtn.addEventListener('click', () => {
+                    const viz = getViz();
+                    if (viz) viz.zoom(1.2);
+                });
+            }
+            if (zoomOutBtn) {
+                zoomOutBtn.addEventListener('click', () => {
+                    const viz = getViz();
+                    if (viz) viz.zoom(0.8);
+                });
+            }
+        }
+
+        // A persisted on/off toggle button: applies on wire-up, flips on
+        // click, and re-applies to a fresh viz (dataset/layout switches
+        // re-create it). `apply(viz, on)` does the viz-side effect.
+        function wireToggle(btn, getViz, storageKey, apply) {
+            let on = true;
+            try {
+                const stored = window.localStorage.getItem(storageKey);
+                if (stored !== null) on = stored === '1';
+            } catch (_) {
+                /* storage unavailable */
+            }
+            function sync() {
+                if (btn) {
+                    btn.classList.toggle('active', on);
+                    btn.setAttribute('aria-pressed', String(on));
+                }
+                const viz = getViz();
+                if (viz) {
+                    try {
+                        apply(viz, on);
+                    } catch (_) {
+                        /* older bundle without the method */
+                    }
+                }
+            }
+            if (btn) {
+                btn.addEventListener('click', () => {
+                    on = !on;
+                    try {
+                        window.localStorage.setItem(storageKey, on ? '1' : '0');
+                    } catch (_) {
+                        /* storage unavailable */
+                    }
+                    sync();
+                });
+            }
+            sync();
+            return {
+                enabled: () => on,
+                reapply: sync,
+            };
+        }
+
+        // The compact hover card. Content comes from the node's wire data —
+        // the only surface a shared value's usage count has.
+        function escapeText(s) {
+            return String(s).replace(/[&<>"]/g, (c) =>
+                ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]
+            );
+        }
+        function hoverCardHtml(node) {
+            const kind = node.kind_metadata || {};
+            const rows = [];
+            if (kind.kind === 'enum_value') {
+                const n = kind.usageCount ?? 0;
+                rows.push(['Enum', kind.enumName || '—']);
+                rows.push(['Used by', `${n} individual${n === 1 ? '' : 's'}`]);
+            } else {
+                if (Array.isArray(kind.types) && kind.types.length) {
+                    rows.push(['Type', kind.types.join(', ')]);
+                }
+                for (const lit of kind.literals || []) {
+                    rows.push([lit.property, lit.value]);
+                }
+                if (node.uri) rows.push(['IRI', node.uri]);
+            }
+            const kindTag = kind.kind === 'enum_value' ? 'ENUM VALUE' : 'INDIVIDUAL';
+            const body = rows
+                .map(
+                    ([k, v]) =>
+                        `<div class="graph-hover-row"><span class="graph-hover-key">${escapeText(k)}</span>` +
+                        `<span class="graph-hover-val">${escapeText(v)}</span></div>`
+                )
+                .join('');
+            return (
+                `<div class="graph-hover-head"><span class="graph-hover-kind">${kindTag}</span>` +
+                `<strong>${escapeText(node.label)}</strong></div>${body}`
+            );
+        }
+        function makeHoverCard(cardEl, canvas, getNode) {
+            let shownIdx = -1;
+            function hide() {
+                if (cardEl) cardEl.style.display = 'none';
+                shownIdx = -1;
+            }
+            function show(idx, clientX, clientY) {
+                if (!cardEl) return;
+                if (idx < 0) {
+                    hide();
+                    return;
+                }
+                const node = getNode(idx);
+                if (!node) {
+                    hide();
+                    return;
+                }
+                if (idx !== shownIdx) {
+                    cardEl.innerHTML = hoverCardHtml(node);
+                    shownIdx = idx;
+                }
+                cardEl.style.display = 'block';
+                const margin = 12;
+                const rect = canvas.getBoundingClientRect();
+                const w = cardEl.offsetWidth;
+                const h = cardEl.offsetHeight;
+                let x = clientX - rect.left + margin;
+                let y = clientY - rect.top + margin;
+                if (x + w > rect.width) x = Math.max(0, clientX - rect.left - w - margin);
+                if (y + h > rect.height) y = Math.max(0, clientY - rect.top - h - margin);
+                cardEl.style.left = x + 'px';
+                cardEl.style.top = y + 'px';
+            }
+            return { show, hide };
+        }
+
         return {
             setBadge,
             makeRefitter,
@@ -151,6 +288,9 @@
             forwardResize,
             layoutPref,
             renderLegend,
+            wireViewButtons,
+            wireToggle,
+            makeHoverCard,
         };
     })();
 </script>

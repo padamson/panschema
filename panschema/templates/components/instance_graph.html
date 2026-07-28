@@ -10,10 +10,18 @@
         (teal hexagons), edges are their object-property assertions.
     </p>
     <div class="instance-graph-toolbar">
-        <label for="instance-graph-layout-select" class="instance-graph-layout-label">Layout</label>
-        <button type="button" id="instance-graph-legend-toggle" class="instance-graph-legend-toggle"
+        <button type="button" id="instance-graph-reset" class="instance-graph-btn" title="Reset view">⟳</button>
+        <button type="button" id="instance-graph-zoom-in" class="instance-graph-btn" title="Zoom in">+</button>
+        <button type="button" id="instance-graph-zoom-out" class="instance-graph-btn" title="Zoom out">−</button>
+        <button type="button" id="instance-graph-labels-all" class="instance-graph-btn instance-graph-toggle active" aria-pressed="true" title="Toggle all labels">Labels</button>
+        <button type="button" id="instance-graph-labels-nodes" class="instance-graph-btn instance-graph-toggle active" aria-pressed="true" title="Toggle node labels">Nodes</button>
+        <button type="button" id="instance-graph-labels-edges" class="instance-graph-btn instance-graph-toggle active" aria-pressed="true" title="Toggle edge labels">Edges</button>
+        <button type="button" id="instance-graph-focus-on-hover" class="instance-graph-btn instance-graph-toggle active" aria-pressed="true" title="Hover a node to highlight it plus its neighbors; the rest dims. Click to toggle.">Focus on hover</button>
+        <button type="button" id="instance-graph-arrows" class="instance-graph-btn instance-graph-toggle active" aria-pressed="true" title="Show directed arrowheads on assertion edges. Click to toggle.">Arrows</button>
+        <button type="button" id="instance-graph-legend-toggle" class="instance-graph-btn instance-graph-toggle"
                 aria-pressed="false"
                 title="Show the notation key for this instance graph">Legend</button>
+        <label for="instance-graph-layout-select" class="instance-graph-layout-label">Layout</label>
         <select id="instance-graph-layout-select" class="instance-graph-layout-select">
             <option value="sgd">SGD (default · fast quality)</option>
             <option value="stress">Stress majorization (cluster separation)</option>
@@ -24,6 +32,9 @@
     </div>
     <div class="instance-graph-container">
         <canvas id="instance-graph-canvas"></canvas>
+        {# Compact hover card: an individual's types/literals/IRI, or a
+           shared value's enum and usage count (its only surface). #}
+        <div class="instance-graph-hover-card" id="instance-graph-hover-card" style="display: none;"></div>
         {# Adaptive notation key: the viz draws only the rows this A-box
            uses, via the shared shell. Hidden until toggled. #}
         <div class="instance-graph-legend" id="instance-graph-legend" style="display: none;"
@@ -56,7 +67,7 @@
         font-size: var(--font-size-sm, 13px);
         color: var(--color-text-muted, #9ca3af);
     }
-    .instance-graph-legend-toggle {
+    .instance-graph-btn {
         font-size: var(--font-size-sm, 13px);
         color: var(--color-text-muted, #9ca3af);
         background: var(--color-bg-secondary, #2d2d44);
@@ -65,9 +76,47 @@
         padding: 2px 8px;
         cursor: pointer;
     }
-    .instance-graph-legend-toggle[aria-pressed="true"] {
+    .instance-graph-toggle.active {
         color: var(--color-text, #e5e7eb);
         border-color: var(--color-accent, #4b9fd5);
+    }
+    .instance-graph-hover-card {
+        position: absolute;
+        z-index: 20;
+        max-width: 300px;
+        padding: 10px 12px;
+        background: var(--color-bg-secondary, #2d2d44);
+        border: 1px solid var(--color-border, #374151);
+        border-radius: var(--radius-md, 6px);
+        font-size: var(--font-size-sm, 13px);
+        color: var(--color-text, #e5e7eb);
+        pointer-events: none;
+    }
+    .instance-graph-hover-card .graph-hover-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 6px;
+    }
+    .instance-graph-hover-card .graph-hover-kind {
+        font-size: var(--font-size-xs, 10px);
+        letter-spacing: 0.05em;
+        color: var(--color-text-muted, #9ca3af);
+        background: var(--color-bg-primary, #1a1a2e);
+        border-radius: var(--radius-sm, 4px);
+        padding: 1px 6px;
+    }
+    .instance-graph-hover-card .graph-hover-row {
+        display: flex;
+        gap: 8px;
+        margin-top: 2px;
+    }
+    .instance-graph-hover-card .graph-hover-key {
+        color: var(--color-text-muted, #9ca3af);
+        min-width: 64px;
+    }
+    .instance-graph-hover-card .graph-hover-val {
+        overflow-wrap: anywhere;
     }
     .instance-graph-legend {
         position: absolute;
@@ -197,6 +246,65 @@
         let shownIndex = -1;
         const refitter = shell.makeRefitter();
         const hoverFocus = shell.makeHoverFocus();
+        const getViz = () => viz;
+
+        // Toolbar: view buttons plus persisted toggles, each re-applied to
+        // every fresh viz (dataset and layout switches re-create it).
+        shell.wireViewButtons(
+            getViz,
+            document.getElementById('instance-graph-reset'),
+            document.getElementById('instance-graph-zoom-in'),
+            document.getElementById('instance-graph-zoom-out')
+        );
+        const labelsAll = shell.wireToggle(
+            document.getElementById('instance-graph-labels-all'),
+            getViz,
+            'panschema-instance-labels-all',
+            (v, on) => v.set_labels(on)
+        );
+        const labelsNodes = shell.wireToggle(
+            document.getElementById('instance-graph-labels-nodes'),
+            getViz,
+            'panschema-instance-labels-nodes',
+            (v, on) => v.set_node_labels(on)
+        );
+        const labelsEdges = shell.wireToggle(
+            document.getElementById('instance-graph-labels-edges'),
+            getViz,
+            'panschema-instance-labels-edges',
+            (v, on) => v.set_edge_labels(on)
+        );
+        const arrows = shell.wireToggle(
+            document.getElementById('instance-graph-arrows'),
+            getViz,
+            'panschema-instance-arrows',
+            (v, on) => v.set_arrows(on)
+        );
+        const focusToggle = shell.wireToggle(
+            document.getElementById('instance-graph-focus-on-hover'),
+            getViz,
+            'panschema-instance-focus-on-hover',
+            (v, on) => {
+                if (!on && typeof v.clear_focus === 'function') v.clear_focus();
+            }
+        );
+        function reapplyToggles() {
+            labelsAll.reapply();
+            labelsNodes.reapply();
+            labelsEdges.reapply();
+            arrows.reapply();
+        }
+
+        // The hover card reads the shown dataset's wire nodes; simulation
+        // indices match the document's node order.
+        const hoverCard = shell.makeHoverCard(
+            document.getElementById('instance-graph-hover-card'),
+            canvas,
+            (idx) => {
+                const entry = graphs[shownIndex];
+                return entry && entry.data ? entry.data.nodes[idx] : null;
+            }
+        );
 
         // The adaptive notation key for the shown dataset, toggleable.
         const legendToggle = document.getElementById('instance-graph-legend-toggle');
@@ -213,6 +321,7 @@
         if (legendToggle) {
             legendToggle.addEventListener('click', () => {
                 legendOpen = !legendOpen;
+                legendToggle.classList.toggle('active', legendOpen);
                 legendToggle.setAttribute('aria-pressed', legendOpen ? 'true' : 'false');
                 if (legendPanel) legendPanel.style.display = legendOpen ? 'block' : 'none';
                 refreshLegend();
@@ -241,6 +350,8 @@
             shownIndex = index;
             refitter.reset();
             hoverFocus.reset();
+            hoverCard.hide();
+            reapplyToggles();
             // A different dataset can need different legend rows.
             refreshLegend();
             // Exposed for e2e assertions and debugging.
@@ -270,6 +381,10 @@
         function frame() {
             try {
                 viz.tick();
+                // Camera fits are animated targets; without advancing the
+                // animation each frame, fit_to_bounds (settle refits, the
+                // reset button, resize) sets a target that never applies.
+                viz.update_animation();
                 refitter.onTick(viz);
                 viz.render();
             } catch (_) {
@@ -307,12 +422,14 @@
             const y = (e.clientY - rect.top) * dpr;
             if (typeof viz.update_hover === 'function') viz.update_hover(x, y);
             const idx = typeof viz.hovered_node_index === 'function' ? viz.hovered_node_index() : -1;
-            hoverFocus.apply(viz, idx);
+            if (focusToggle.enabled()) hoverFocus.apply(viz, idx);
+            hoverCard.show(idx, e.clientX, e.clientY);
         });
         canvas.addEventListener('mouseleave', () => {
             if (!viz) return;
             if (typeof viz.clear_hover === 'function') viz.clear_hover();
             hoverFocus.apply(viz, -1);
+            hoverCard.hide();
         });
         canvas.addEventListener(
             'wheel',
