@@ -446,6 +446,9 @@ struct InstanceDatasetView<'a> {
     anchor_prefix: String,
     /// Whether this is the dataset the page opens on.
     is_default: bool,
+    /// The dataset's own metadata: the container's scalar values (a data
+    /// file's top-level `title:` / `description:`), in file order.
+    metadata: &'a [(String, String)],
     /// The name as a JSON string literal, for the payload array.
     name_json: &'a str,
     provenance: Option<&'a str>,
@@ -488,6 +491,8 @@ struct IndexTemplate<'a> {
     instance_edge_count: usize,
     /// Whether any A-box is on the page, gating the sidebar entry.
     has_instances: bool,
+    /// How many datasets, for the sidebar's singular/plural label.
+    instance_dataset_count: usize,
     /// Number of nodes in the graph (for sidebar badge)
     graph_node_count: usize,
     /// Number of edges in the graph (for sidebar badge)
@@ -1469,6 +1474,7 @@ impl Writer for HtmlWriter {
                         name: &dataset.name,
                         anchor_prefix: String::new(),
                         is_default: dataset.default_selected,
+                        metadata: &dataset.set.metadata,
                         name_json,
                         provenance: dataset.provenance.as_deref(),
                         individuals: refs,
@@ -1526,6 +1532,7 @@ impl Writer for HtmlWriter {
             instance_node_count,
             instance_edge_count,
             has_instances: !dataset_views.is_empty(),
+            instance_dataset_count: dataset_views.len(),
             graph_node_count,
             graph_edge_count,
             graph_aspect_w: self.graph_aspect.0,
@@ -3683,8 +3690,8 @@ mod tests {
         );
         assert_eq!(
             html.matches("data-instance-dataset=").count(),
-            4,
-            "each dataset needs a selector entry and a content panel"
+            6,
+            "each dataset needs a selector entry plus its metadata and individuals panels"
         );
         assert!(
             html.contains(">preview") && html.contains(">worked-example"),
@@ -3939,8 +3946,8 @@ mod tests {
         );
         assert_eq!(
             html.matches("data-instance-dataset=").count(),
-            1,
-            "just the single content panel, with no selector entry"
+            2,
+            "the metadata and individuals panels, with no selector entry"
         );
         assert!(html.contains("Morgon"), "its individuals still render");
         // A lone dataset keeps the unprefixed anchor form, so `#ind-<id>` deep
@@ -3979,6 +3986,84 @@ mod tests {
         assert!(
             list.contains("Bottle") && list.contains("Rack"),
             "each entry names its class, so same-label individuals read apart; got: {list}"
+        );
+    }
+
+    #[test]
+    fn the_section_reads_graph_first_with_dataset_metadata() {
+        // The section holds the dataset(s); within each, the graph precedes
+        // the individuals, and the dataset's own metadata — the container's
+        // scalar values plus the source — leads. One dataset reads singular,
+        // several plural.
+        use crate::linkml::{ClassDefinition, SlotDefinition};
+        let mut schema = bottle_rack_schema();
+        // The container gains its own scalar slot for the metadata.
+        {
+            let container = schema.classes.get_mut("Cellar").unwrap();
+            let mut title = SlotDefinition::new("title");
+            title.range = Some("string".to_string());
+            container.attributes.insert("title".to_string(), title);
+            let _ = ClassDefinition::new("unused");
+        }
+        let only = instance_set_from_yaml(
+            &schema,
+            "title: North wing cellar\nbottles:\n  - id: b1\n    name: Morgon\n",
+        );
+        let writer = HtmlWriter::new()
+            .with_instance_dataset(InstanceDataset::new("only", only).with_provenance("only.yaml"));
+        let temp_dir = std::env::temp_dir().join("panschema_graph_first_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        writer.write(&schema, &temp_dir).expect("write");
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        // Singular heading for one dataset.
+        assert!(
+            html.contains(">Instance Graph<") || html.contains("Instance Graph\n"),
+            "one dataset reads singular"
+        );
+        assert!(
+            !html.contains("Instance Graphs"),
+            "no plural for one dataset"
+        );
+
+        // Metadata renders, and the order is metadata → graph → individuals.
+        // Match markup, not the stylesheet's class definitions.
+        let meta_at = html
+            .find("North wing cellar")
+            .expect("container title renders");
+        let graph_at = html
+            .find(r#"id="instance-graph-canvas""#)
+            .expect("canvas present");
+        let cards_at = html
+            .find(r#"class="individual-cards""#)
+            .expect("cards present");
+        assert!(
+            meta_at < graph_at && graph_at < cards_at,
+            "order must be metadata ({meta_at}) → graph ({graph_at}) → individuals ({cards_at})"
+        );
+        assert!(
+            html.contains(">Individuals<"),
+            "the cards sit under an Individuals subheading"
+        );
+    }
+
+    #[test]
+    fn several_datasets_read_plural() {
+        let schema = bottle_rack_schema();
+        let a = instance_set_from_yaml(&schema, "bottles:\n  - id: b1\n    name: Morgon\n");
+        let b = instance_set_from_yaml(&schema, "bottles:\n  - id: b2\n    name: Fleurie\n");
+        let writer = HtmlWriter::new()
+            .with_instance_dataset(InstanceDataset::new("a", a))
+            .with_instance_dataset(InstanceDataset::new("b", b));
+        let temp_dir = std::env::temp_dir().join("panschema_plural_heading_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        writer.write(&schema, &temp_dir).expect("write");
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let _ = fs::remove_dir_all(&temp_dir);
+        assert!(
+            html.contains("Instance Graphs"),
+            "several datasets read plural"
         );
     }
 

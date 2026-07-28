@@ -217,6 +217,56 @@ so a reader doesn't have to relearn the surface per graph.
 - [x] The `enum_value` metadata tag is spelled consistently with the
   `node_type` on the wire (the kind enum's lowercase tagging would have
   emitted `enumvalue`).
+- [x] Nodes are draggable, as on the schema canvas (consumer-found: the
+  instance canvas's mousedown was hard-wired to pan and never consulted
+  the renderer's drag API). Grabbing a node moves that node; grabbing
+  empty space still pans; the hover card stands down mid-drag. The e2e
+  asserts the *relative* position of two nodes changes — a pan moves
+  both equally — and was confirmed red without the fix.
+- [x] Clicking a node selects it and pins its card open, as on the schema
+  canvas (consumer-found: the instance canvas had no click wiring, so the
+  card vanished the moment the cursor left the node and a selected node
+  could not be deselected). The pinned card survives the cursor moving
+  away and ignores ephemeral hover; clicking empty space deselects and
+  closes it; a dataset or layout switch clears the pin. The pin state
+  lives in the shared shell's hover-card helper, serving both canvases,
+  and the e2e was confirmed red without the fix.
+
+### Slice 6: Section structure — graph first, then individuals, with dataset metadata
+
+**Status:** Complete
+
+**Priority:** Should Have
+
+**User Value:** The instance section reads like the schema side — the
+overview graph first, then the itemized cards — and each dataset can say
+what it *is*: its own title and description, its source, and its size.
+
+**Structure** (consumer-decided): the section holds the dataset(s); within
+each dataset, the **graph comes first**, then the **individuals**. With one
+dataset the heading is singular and there is no selector; with several the
+heading is plural and the selector switches everything below it. The name
+stays "Instance Graph(s)" rather than "Instance(s)" because an *individual*
+is an instance of a class, while each dataset is an instance *graph* — the
+description line carries the reading.
+
+**Acceptance Criteria:**
+- [x] The section heading reads `Instance Graph` for one dataset and
+  `Instance Graphs` for several (sidebar entry matching), and within the
+  active dataset the graph canvas and its toolbar render *above* the
+  individuals, under `Graph` and `Individuals` subheadings.
+- [x] Each dataset gets a metadata block above its graph: the container's
+  own scalar values (a data file's top-level `title:`, `description:`, …)
+  followed by the source line, which moved into the block. Node/edge
+  counts stay in the graph badge beside the `Graph` subheading, so the
+  block plus badge together say what the dataset is and how big it is.
+- [x] The loader stops dropping the `tree_root` container's scalar slots:
+  they become dataset metadata instead of vanishing. (Previously a data
+  file's top-level `title:` reached nothing at all.)
+- [x] Switching datasets swaps the metadata block with the rest — no stale
+  content from another dataset.
+- [x] Existing anchors and deep links keep resolving; the per-dataset
+  anchor namespacing survives the reorder.
 
 ---
 
@@ -229,6 +279,7 @@ so a reader doesn't have to relearn the surface per graph.
 | Slice 3: adaptive legend + shared shell | Should Have | Slice 2 | Complete |
 | Slice 4: typed A-box encoding | Must Have | Slice 2 | Complete |
 | Slice 5: full shell parity (hover card + toolbar) | Should Have | Slices 3–4 | Complete |
+| Slice 6: graph-first structure + dataset metadata | Should Have | Slice 5 | Complete |
 
 ---
 

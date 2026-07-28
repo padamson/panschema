@@ -25,12 +25,17 @@ use playwright_rs::Playwright;
 use tokio::sync::oneshot;
 
 /// Find an available port for the test server.
-fn find_available_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .expect("Failed to bind to port")
+/// Bind an ephemeral port and keep the socket: handing the live listener to
+/// the server (instead of a port number to re-bind) means no window where a
+/// concurrently starting test can be given the same port and end up serving
+/// this test's browser the wrong site.
+fn bind_ephemeral() -> (TcpListener, u16) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind to port");
+    let port = listener
         .local_addr()
         .expect("Failed to get local address")
-        .port()
+        .port();
+    (listener, port)
 }
 
 /// Generate documentation to a temporary directory.
@@ -142,7 +147,9 @@ fn generate_docs_with_several_instances(
 /// race. Returns `true` once ready, `false` if it never became ready.
 async fn wait_until_ready(page: &playwright_rs::Page, ready_expr: &str) -> bool {
     let js = format!("(function(){{ return ({ready_expr}) ? 'ready' : 'no'; }})()");
-    for _ in 0..60 {
+    // Generous window: the suite launches a browser per test, and a page
+    // can take many seconds to become interactive under that contention.
+    for _ in 0..150 {
         let r = page.evaluate_value(&js).await.unwrap_or_default();
         if r.contains("ready") {
             return true;
@@ -164,15 +171,20 @@ async fn wait_for_graph_viz_ready(page: &playwright_rs::Page) -> bool {
 }
 
 /// Start a simple HTTP server serving static files.
-async fn start_server(output_dir: PathBuf, port: u16, shutdown_rx: oneshot::Receiver<()>) {
+async fn start_server(
+    output_dir: PathBuf,
+    listener: TcpListener,
+    shutdown_rx: oneshot::Receiver<()>,
+) {
     use axum::Router;
     use tower_http::services::ServeDir;
 
     let app = Router::new().fallback_service(ServeDir::new(output_dir));
 
-    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port))
-        .await
-        .expect("Failed to bind server");
+    listener
+        .set_nonblocking(true)
+        .expect("Failed to set nonblocking");
+    let listener = tokio::net::TcpListener::from_std(listener).expect("Failed to adopt listener");
 
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
@@ -1635,12 +1647,12 @@ fn e2e_happy_path() {
     rt.block_on(async {
         // Generate documentation
         let output_dir = generate_docs();
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
 
         // Start server
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
 
         // Give server time to start
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1673,10 +1685,10 @@ fn e2e_click_pins_node_card_keeping_selection() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
         let output_dir = generate_docs();
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch().await.expect("playwright");
@@ -1783,10 +1795,10 @@ fn e2e_pinned_card_is_draggable_by_its_handle() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
         let output_dir = generate_docs();
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch().await.expect("playwright");
@@ -1877,10 +1889,10 @@ fn e2e_hovering_a_rule_entry_highlights_participant_nodes() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
         let output_dir = generate_docs_for("tests/fixtures/rules_graph.yaml");
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch().await.expect("playwright");
@@ -1991,10 +2003,10 @@ fn e2e_rule_touched_nodes_draw_a_persistent_amber_ring() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
         let output_dir = generate_docs_for("tests/fixtures/rules_graph.yaml");
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch().await.expect("playwright");
@@ -2075,10 +2087,10 @@ fn e2e_external_grounding_paints_a_muted_node() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
         let output_dir = generate_docs_for("tests/fixtures/external_grounding.yaml");
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch().await.expect("playwright");
@@ -2153,10 +2165,10 @@ fn e2e_groundings_toggle_hides_external_nodes() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
         let output_dir = generate_docs_for("tests/fixtures/external_grounding.yaml");
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch().await.expect("playwright");
@@ -2337,10 +2349,10 @@ fn e2e_external_node_hover_shows_iri_and_definition_and_legend_documents_it() {
             .expect("Failed to execute panschema");
         assert!(status.success(), "panschema failed to generate docs");
 
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch().await.expect("playwright");
@@ -2445,10 +2457,10 @@ fn e2e_instance_graph_renders_individuals_beneath_the_cards() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
         let output_dir = generate_docs_for("tests/fixtures/instance_graph.ttl");
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch().await.expect("playwright");
@@ -2546,10 +2558,10 @@ fn e2e_instance_dataset_selector_switches_cards_and_graph() {
             ],
             "selector",
         );
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch().await.expect("playwright");
@@ -2725,10 +2737,10 @@ fn e2e_instance_graph_has_hover_card_and_toolbar_parity() {
             "tests/fixtures/typed_wine.yaml",
             "tests/fixtures/typed_wine_instances.yaml",
         );
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch().await.expect("playwright");
@@ -2884,6 +2896,157 @@ fn e2e_instance_graph_has_hover_card_and_toolbar_parity() {
     });
 }
 
+/// Grabbing a node on the instance canvas drags THE NODE, as on the schema
+/// canvas — not the camera. A pan moves every node together; a node drag
+/// changes the dragged node's position relative to the others.
+#[test]
+fn e2e_instance_graph_nodes_are_draggable() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let output_dir = generate_docs_with_instances(
+            "tests/fixtures/typed_wine.yaml",
+            "tests/fixtures/typed_wine_instances.yaml",
+        );
+        let (listener, port) = bind_ephemeral();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("goto");
+        assert!(
+            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
+            "instance graph viz never became ready"
+        );
+
+        let dragged = page
+            .evaluate_value(
+                r#"(function(){
+                    var viz = window.__panschema_instance_viz;
+                    var canvas = document.getElementById('instance-graph-canvas');
+                    var rect = canvas.getBoundingClientRect();
+                    var dpr = window.devicePixelRatio || 1;
+                    function rel() {
+                        var a = viz.node_canvas_pos(0), b = viz.node_canvas_pos(1);
+                        return [a[0] - b[0], a[1] - b[1]];
+                    }
+                    var before = rel();
+                    var pos = viz.node_canvas_pos(0);
+                    var sx = rect.left + pos[0] / dpr, sy = rect.top + pos[1] / dpr;
+                    canvas.dispatchEvent(new MouseEvent('mousedown', {clientX: sx, clientY: sy, bubbles: true}));
+                    window.dispatchEvent(new MouseEvent('mousemove', {clientX: sx + 60, clientY: sy + 40, bubbles: true}));
+                    window.dispatchEvent(new MouseEvent('mouseup', {clientX: sx + 60, clientY: sy + 40, bubbles: true}));
+                    var after = rel();
+                    var moved = Math.hypot(after[0] - before[0], after[1] - before[1]);
+                    return 'relMoved:' + Math.round(moved);
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        let moved: i64 = dragged
+            .trim()
+            .trim_matches('"')
+            .strip_prefix("relMoved:")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(-1);
+        assert!(
+            moved > 20,
+            "grabbing a node should move it relative to its neighbors (a pan moves \
+             everything together); got: {dragged}"
+        );
+
+        browser.close().await.ok();
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
+/// Clicking a node on the instance canvas selects it, as on the schema
+/// canvas: the card pins open (surviving the cursor moving away) until the
+/// node is deselected by clicking empty space.
+#[test]
+fn e2e_instance_graph_click_pins_the_card_and_empty_space_deselects() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let output_dir = generate_docs_with_instances(
+            "tests/fixtures/typed_wine.yaml",
+            "tests/fixtures/typed_wine_instances.yaml",
+        );
+        let (listener, port) = bind_ephemeral();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("goto");
+        assert!(
+            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
+            "instance graph viz never became ready"
+        );
+
+        let states = page
+            .evaluate_value(
+                r#"(function(){
+                    var viz = window.__panschema_instance_viz;
+                    var canvas = document.getElementById('instance-graph-canvas');
+                    var card = document.getElementById('instance-graph-hover-card');
+                    var rect = canvas.getBoundingClientRect();
+                    var dpr = window.devicePixelRatio || 1;
+                    function cardVisible() {
+                        return card && card.style.display !== 'none' && card.style.display !== '';
+                    }
+                    function clickAt(sx, sy) {
+                        var opts = {clientX: sx, clientY: sy, bubbles: true};
+                        canvas.dispatchEvent(new MouseEvent('mousedown', opts));
+                        window.dispatchEvent(new MouseEvent('mouseup', opts));
+                        canvas.dispatchEvent(new MouseEvent('click', opts));
+                    }
+                    var pos = viz.node_canvas_pos(0);
+                    clickAt(rect.left + pos[0] / dpr, rect.top + pos[1] / dpr);
+                    var out = ['sel:' + viz.selected_node_index(), 'card:' + cardVisible()];
+                    canvas.dispatchEvent(new MouseEvent('mousemove',
+                        {clientX: rect.left + 3, clientY: rect.top + 3, bubbles: true}));
+                    out.push('cardAfterMoveAway:' + cardVisible());
+                    clickAt(rect.left + 3, rect.top + 3);
+                    out.push('selAfterEmptyClick:' + viz.selected_node_index());
+                    out.push('cardAfterEmptyClick:' + cardVisible());
+                    return out.join(' ');
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert!(
+            states.contains("sel:0") && states.contains("card:true"),
+            "clicking a node should select it and pin its card open; got: {states}"
+        );
+        assert!(
+            states.contains("cardAfterMoveAway:true"),
+            "the pinned card should survive the cursor moving off the node; got: {states}"
+        );
+        assert!(
+            states.contains("selAfterEmptyClick:-1")
+                && states.contains("cardAfterEmptyClick:false"),
+            "clicking empty space should deselect and close the card; got: {states}"
+        );
+
+        browser.close().await.ok();
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
 /// The instance graph is typed: individuals wear their class's circle and
 /// colour, and each enum value in use is one shared diamond node the
 /// choosing individuals link to — checked on the real rendered page, since
@@ -2897,10 +3060,10 @@ fn e2e_typed_instance_graph_renders_class_symbols_and_shared_values() {
             "tests/fixtures/typed_wine.yaml",
             "tests/fixtures/typed_wine_instances.yaml",
         );
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch().await.expect("playwright");
@@ -3021,10 +3184,10 @@ fn e2e_legends_adapt_to_what_each_graph_contains() {
             "tests/fixtures/wine_catalog.yaml",
             "tests/fixtures/wine_instances.yaml",
         );
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch().await.expect("playwright");
@@ -3177,10 +3340,10 @@ fn e2e_instance_graph_is_explorable_like_the_schema_graph() {
             "tests/fixtures/wine_catalog.yaml",
             "tests/fixtures/wine_instances.yaml",
         );
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch().await.expect("playwright");
@@ -3350,10 +3513,10 @@ fn e2e_instance_graph_renders_from_linkml_data() {
             "tests/fixtures/wine_catalog.yaml",
             "tests/fixtures/wine_instances.yaml",
         );
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch().await.expect("playwright");
@@ -3498,10 +3661,10 @@ fn e2e_is_a_heavy_schema_auto_defaults_to_hierarchical() {
     let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
     rt.block_on(async {
         let output_dir = generate_docs_for("tests/fixtures/taxonomy.ttl");
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch()
@@ -3545,10 +3708,10 @@ fn e2e_renders_enum_and_type_sections() {
     let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
     rt.block_on(async {
         let output_dir = generate_docs_for("tests/fixtures/enum_type.yaml");
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch()
@@ -3613,10 +3776,10 @@ fn e2e_renders_linkml_card_features() {
     let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
     rt.block_on(async {
         let output_dir = generate_docs_for("tests/fixtures/card_features.yaml");
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch()
@@ -3816,11 +3979,11 @@ async fn capture_scale_screenshot(
     .expect("Failed to write synthetic TTL");
 
     let output_dir = generate_docs_for(fixture_path.to_str().unwrap());
-    let port = find_available_port();
+    let (listener, port) = bind_ephemeral();
     let base_url = format!("http://127.0.0.1:{}", port);
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+    let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     let browser = playwright

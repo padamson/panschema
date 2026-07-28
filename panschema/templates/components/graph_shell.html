@@ -247,12 +247,18 @@
         }
         function makeHoverCard(cardEl, canvas, getNode) {
             let shownIdx = -1;
+            // Index of the node whose card a click pinned open (-1 when
+            // none). A pinned card ignores ephemeral hover and mouseleave;
+            // it closes only through unpin().
+            let pinnedIdx = -1;
             function hide() {
+                if (pinnedIdx >= 0) return;
                 if (cardEl) cardEl.style.display = 'none';
                 shownIdx = -1;
             }
             function show(idx, clientX, clientY) {
                 if (!cardEl) return;
+                if (pinnedIdx >= 0) return;
                 if (idx < 0) {
                     hide();
                     return;
@@ -278,7 +284,17 @@
                 cardEl.style.left = x + 'px';
                 cardEl.style.top = y + 'px';
             }
-            return { show, hide };
+            function pin(idx, clientX, clientY) {
+                if (idx < 0) return;
+                pinnedIdx = -1;
+                show(idx, clientX, clientY);
+                pinnedIdx = idx;
+            }
+            function unpin() {
+                pinnedIdx = -1;
+                hide();
+            }
+            return { show, hide, pin, unpin, pinned: () => pinnedIdx };
         }
 
         return {

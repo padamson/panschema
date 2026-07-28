@@ -89,6 +89,11 @@ pub struct InstanceSet {
     /// in the schema's namespace — so a validator needs to see them. Sorted.
     /// Empty for readers that don't track it (e.g. OWL).
     pub undeclared_fields: Vec<UndeclaredField>,
+    /// The `tree_root` container's own scalar values — a data file's
+    /// top-level `title:` / `description:` and the like, describing the
+    /// dataset itself rather than any record. In the data file's order.
+    /// Empty for readers without a container (e.g. OWL).
+    pub metadata: Vec<(String, String)>,
 }
 
 /// A field the data carries that its record's class never declared.
@@ -229,6 +234,7 @@ impl InstanceSet {
             instances,
             duplicate_ids: Vec::new(),
             undeclared_fields: Vec::new(),
+            metadata: Vec::new(),
         }
     }
 
@@ -250,6 +256,7 @@ impl InstanceSet {
         };
         let root_slots = crate::linkml_resolve::resolve_effective_slots(root, schema);
 
+        let mut metadata: Vec<(String, String)> = Vec::new();
         let mut loader = LinkmlLoader {
             schema,
             instances: Vec::new(),
@@ -265,10 +272,14 @@ impl InstanceSet {
             let Some(range) = root_slots.get(slot_name).and_then(|s| s.range.as_deref()) else {
                 continue;
             };
-            // Only class-ranged container slots hold instance records; a scalar
-            // attribute on the container (e.g. a catalog title) is not one.
+            // Class-ranged container slots hold instance records; the
+            // container's scalar attributes (a catalog title, a
+            // description) describe the dataset itself and surface as its
+            // metadata rather than vanishing.
             if schema.classes.contains_key(range) {
                 loader.collect_collection(range, value);
+            } else if let Some(scalar) = scalar_value(value) {
+                metadata.push((slot_name.to_string(), scalar_to_display(&scalar)));
             }
         }
         loader.instances.sort_by(|a, b| a.id.cmp(&b.id));
@@ -278,6 +289,7 @@ impl InstanceSet {
             instances: loader.instances,
             duplicate_ids: loader.duplicate_ids,
             undeclared_fields: loader.undeclared_fields,
+            metadata,
         }
     }
 }
@@ -638,6 +650,10 @@ classes:
   WineCatalog:
     tree_root: true
     attributes:
+      title:
+        range: string
+      description:
+        range: string
       wines:
         range: Wine
         multivalued: true
@@ -664,6 +680,39 @@ classes:
 
     fn wine_schema() -> SchemaDefinition {
         serde_norway::from_str(WINE_SCHEMA).expect("parse wine schema")
+    }
+
+    #[test]
+    fn container_scalar_slots_become_dataset_metadata() {
+        // A data file's top-level `title:`/`description:` describe the
+        // dataset itself. They are not records, but they must not vanish —
+        // they surface as the dataset's metadata.
+        let schema = wine_schema();
+        let data: serde_norway::Value = serde_norway::from_str(
+            "title: Tasting catalog\ndescription: A curated cellar\nwines: []\nwineries: []\n",
+        )
+        .expect("parse data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert_eq!(
+            set.metadata,
+            vec![
+                ("title".to_string(), "Tasting catalog".to_string()),
+                ("description".to_string(), "A curated cellar".to_string()),
+            ],
+            "container scalars, in the data file's order"
+        );
+    }
+
+    #[test]
+    fn a_dataset_without_container_scalars_has_no_metadata() {
+        let schema = wine_schema();
+        let data: serde_norway::Value =
+            serde_norway::from_str("wines: []\nwineries: []\n").expect("parse data");
+        assert!(
+            InstanceSet::from_linkml_data(&schema, &data)
+                .metadata
+                .is_empty()
+        );
     }
 
     #[test]

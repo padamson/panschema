@@ -210,6 +210,8 @@ pub struct SidebarComponent<'a> {
     pub instance_edge_count: usize,
     /// Matches IndexTemplate: whether an A-box is on the page.
     pub has_instances: bool,
+    /// Matches IndexTemplate: dataset count for the plural label.
+    pub instance_dataset_count: usize,
 }
 
 /// Namespace table component template.
@@ -419,6 +421,8 @@ pub struct StyleGuideTemplate<'a> {
     pub instance_provenance: Option<&'a str>,
     /// Matches IndexTemplate: whether an A-box is on the page.
     pub has_instances: bool,
+    /// Matches IndexTemplate: dataset count for the plural label.
+    pub instance_dataset_count: usize,
 }
 
 /// Renders individual components for testing and preview.
@@ -485,6 +489,7 @@ impl ComponentRenderer {
             instance_node_count: 0,
             instance_edge_count: 0,
             has_instances: !individuals.is_empty(),
+            instance_dataset_count: usize::from(!individuals.is_empty()),
         };
         Ok(template.render()?)
     }
@@ -855,6 +860,7 @@ impl ComponentRenderer {
             // The styleguide previews an individual card, so the sidebar
             // should show its Instance Graph entry.
             has_instances: true,
+            instance_dataset_count: 1,
             sample_class,
             sample_slot,
             sample_data_slot,
