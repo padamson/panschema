@@ -74,6 +74,23 @@
                     panel.hidden = Number(panel.dataset.instanceDataset) !== index;
                 });
                 window.__panschema_instance_active = index;
+                // Both badges describe the graph on screen, so both follow the
+                // selection — a sidebar left on its landing value would
+                // disagree with the heading about the same graph. Each button
+                // keeps its own dataset's numbers.
+                const entry = (window.__PANSCHEMA_INSTANCE_GRAPHS__ || [])[index];
+                if (entry && entry.data) {
+                    const nodes = entry.data.nodes.length;
+                    const edges = entry.data.edges.length;
+                    const label = `${nodes} node${nodes === 1 ? '' : 's'}, ${edges} edge${edges === 1 ? '' : 's'}`;
+                    ['instance-graph-count', 'instance-graph-sidebar-count'].forEach((id) => {
+                        const badge = document.getElementById(id);
+                        if (!badge) return;
+                        badge.textContent = `${nodes} / ${edges}`;
+                        badge.title = label;
+                        badge.setAttribute('aria-label', label);
+                    });
+                }
                 if (typeof window.__panschemaShowInstanceGraph === 'function') {
                     window.__panschemaShowInstanceGraph(index);
                 }

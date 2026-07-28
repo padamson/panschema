@@ -654,6 +654,15 @@
     const loading = document.getElementById('graph-loading');
     const error = document.getElementById('graph-error');
     const nodeCount = document.getElementById('graph-node-count');
+    // Graph counts read `nodes / edges` everywhere; the label says which is
+    // which for a reader who hasn't been told the convention.
+    function setGraphBadge(el, nodes, edges) {
+        if (!el) return;
+        const label = `${nodes} node${nodes === 1 ? '' : 's'}, ${edges} edge${edges === 1 ? '' : 's'}`;
+        el.textContent = `${nodes} / ${edges}`;
+        el.title = label;
+        el.setAttribute('aria-label', label);
+    }
     const resetBtn = document.getElementById('graph-reset');
     const zoomInBtn = document.getElementById('graph-zoom-in');
     const zoomOutBtn = document.getElementById('graph-zoom-out');
@@ -1474,7 +1483,7 @@
     // Show static graph info when WASM is not available
     function showStaticFallback() {
         loading.style.display = 'none';
-        nodeCount.textContent = `${graphData.nodes.length} nodes, ${graphData.edges.length} edges`;
+        setGraphBadge(nodeCount, graphData.nodes.length, graphData.edges.length);
 
         // Show canvas first so we can get dimensions
         canvas.style.display = 'block';
@@ -1683,7 +1692,7 @@
             await createVisualization(false);
 
             // Update UI
-            nodeCount.textContent = `${viz.node_count()} nodes, ${viz.edge_count()} edges`;
+            setGraphBadge(nodeCount, viz.node_count(), viz.edge_count());
             updateModeUI();
 
             // Start render loop
@@ -1769,7 +1778,7 @@
 
         // Update node count display
         if (nodeCount) {
-            nodeCount.textContent = `${viz.node_count()} nodes, ${viz.edge_count()} edges`;
+            setGraphBadge(nodeCount, viz.node_count(), viz.edge_count());
         }
 
         // Apply saved label preferences

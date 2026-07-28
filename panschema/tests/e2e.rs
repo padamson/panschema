@@ -550,15 +550,29 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         related_html
     );
 
-    // 6f. Verify individuals are extracted and displayed
+    // 6f. Verify individuals are extracted and displayed. The heading counts
+    // the graph — one individual, no assertions between individuals — rather
+    // than a bare individual count, so it reads like the schema graph's badge.
+    let ind_count = page
+        .locator("#instance-graph-count")
+        .inner_text()
+        .await
+        .expect("instance graph count");
+    assert_eq!(
+        ind_count.trim(),
+        "1 / 0",
+        "[{}] the instance heading should count nodes and edges, got: {}",
+        browser_name,
+        ind_count
+    );
     let ind_section = page.locator("#individuals");
     let ind_section_html = ind_section
         .inner_html()
         .await
         .expect("Failed to get individuals section");
     assert!(
-        ind_section_html.contains(">1<"),
-        "[{}] Individuals section should show count of 1, got: {}",
+        ind_section_html.contains("ind-fido"),
+        "[{}] Individuals section should render the individual's card, got: {}",
         browser_name,
         ind_section_html
     );
@@ -1114,18 +1128,30 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         browser_name
     );
 
-    // 11. Verify node count badge shows correct count
+    // 11. The graph badge reads `nodes / edges`, the same format every graph
+    // count uses, with the spelled-out reading carried as a label.
     let node_count_badge = page.locator("#graph-node-count");
     let badge_text = node_count_badge
         .inner_text()
         .await
         .expect("Failed to get node count badge text");
-    // Reference ontology should have nodes and edges (format: "X nodes, Y edges")
+    let parts: Vec<&str> = badge_text.trim().split(" / ").collect();
     assert!(
-        badge_text.contains("nodes") && badge_text.contains("edges"),
-        "[{}] Node count badge should show nodes and edges count, got: {}",
+        parts.len() == 2 && parts.iter().all(|p| p.parse::<usize>().is_ok()),
+        "[{}] the graph badge should read `nodes / edges`, got: {}",
         browser_name,
         badge_text
+    );
+    let badge_label = node_count_badge
+        .get_attribute("aria-label")
+        .await
+        .unwrap_or_default()
+        .unwrap_or_default();
+    assert!(
+        badge_label.contains("node") && badge_label.contains("edge"),
+        "[{}] the badge needs a label saying which number is which, got: {:?}",
+        browser_name,
+        badge_label
     );
 
     // 12. Verify graph controls are present
@@ -2567,6 +2593,15 @@ fn e2e_instance_dataset_selector_switches_cards_and_graph() {
                 .unwrap_or(true),
             "the unselected dataset's cards should be hidden"
         );
+        assert_eq!(
+            page.locator("#instance-graph-count")
+                .inner_text()
+                .await
+                .expect("heading count")
+                .trim(),
+            "2 / 1",
+            "on load the heading describes the default dataset"
+        );
 
         // Switching: click the second tab. Cards, provenance, and the graph
         // all follow to the worked example. The tabs are wired independently
@@ -2591,6 +2626,30 @@ fn e2e_instance_dataset_selector_switches_cards_and_graph() {
                 .unwrap_or(true),
             "the previously selected dataset's cards should be hidden"
         );
+        // The heading describes the dataset on screen: the worked example has
+        // two nodes and one edge where the preview had one node and none.
+        let heading = page
+            .locator("#instance-graph-count")
+            .inner_text()
+            .await
+            .expect("heading count");
+        assert_eq!(
+            heading.trim(),
+            "4 / 2",
+            "the heading count should follow the selected dataset; got: {heading}"
+        );
+        // The sidebar describes the same graph, so it must not be left showing
+        // the landing dataset's numbers.
+        assert_eq!(
+            page.locator("#instance-graph-sidebar-count")
+                .inner_text()
+                .await
+                .expect("sidebar count")
+                .trim(),
+            "4 / 2",
+            "the sidebar count should agree with the heading after switching"
+        );
+
         let prov = page
             .locator(".instance-dataset-panel:not([hidden]) .instance-provenance")
             .inner_text()

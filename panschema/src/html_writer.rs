@@ -482,11 +482,10 @@ struct IndexTemplate<'a> {
     /// declaration order. Empty when the schema declares no individuals;
     /// the first is the one shown before the reader picks another.
     instance_datasets: &'a [InstanceDatasetView<'a>],
-    /// Default dataset's node/edge counts, for the sidebar badge, and its
-    /// individual count for the section header.
+    /// The default dataset's node/edge counts, reported by both the sidebar
+    /// entry and the section heading. Every graph count reads nodes/edges.
     instance_node_count: usize,
     instance_edge_count: usize,
-    instance_individual_count: usize,
     /// Whether any A-box is on the page, gating the sidebar entry.
     has_instances: bool,
     /// Number of nodes in the graph (for sidebar badge)
@@ -1501,12 +1500,10 @@ impl Writer for HtmlWriter {
         let dataset_views = dataset_views;
 
         // The sidebar badge describes the dataset the reader sees first.
-        let (instance_node_count, instance_edge_count, instance_individual_count) = dataset_views
+        let (instance_node_count, instance_edge_count) = dataset_views
             .iter()
             .find(|v| v.is_default)
-            .map_or((0, 0, 0), |v| {
-                (v.node_count, v.edge_count, v.individuals.len())
-            });
+            .map_or((0, 0), |v| (v.node_count, v.edge_count));
 
         let template = IndexTemplate {
             title: &data.title,
@@ -1528,7 +1525,6 @@ impl Writer for HtmlWriter {
             instance_datasets: &dataset_views,
             instance_node_count,
             instance_edge_count,
-            instance_individual_count,
             has_instances: !dataset_views.is_empty(),
             graph_node_count,
             graph_edge_count,
@@ -3768,10 +3764,11 @@ mod tests {
             "exactly one selector entry is selected"
         );
 
-        // The sidebar badge describes the default dataset: two nodes, one edge.
+        // The sidebar badge describes the default dataset: two nodes, one edge,
+        // and says which number is which.
         assert!(
-            html.contains("Instance Graph <span class=\"badge\">2 / 1</span>"),
-            "the sidebar badge counts the default dataset's graph"
+            html.contains(r##"aria-label="2 nodes, 1 edge""##) && html.contains(">2 / 1<"),
+            "the sidebar badge counts the default dataset's graph, labelled"
         );
     }
 
@@ -3847,6 +3844,42 @@ mod tests {
         assert!(
             html.contains(r##"href="#d0-ind-b1""##) && html.contains(r##"href="#d1-ind-b1""##),
             "each panel's entity link must target the card in that same panel"
+        );
+    }
+
+    #[test]
+    fn the_instance_section_heading_counts_nodes_and_edges() {
+        // The heading used to report the number of individuals, which looks
+        // like a node count and isn't one — it silently omits edges, and it
+        // will diverge outright once the A-box gains nodes that aren't
+        // individuals. Every graph count reads nodes/edges.
+        let schema = bottle_rack_schema();
+        let only = instance_set_from_yaml(
+            &schema,
+            "bottles:\n  - id: b1\n    name: Morgon\n    stored_in: r1\nracks:\n  - id: r1\n    name: North Rack\n",
+        );
+
+        let writer = HtmlWriter::new().with_instance_dataset(InstanceDataset::new("only", only));
+        let temp_dir = std::env::temp_dir().join("panschema_instance_heading_count_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        writer.write(&schema, &temp_dir).expect("write");
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        // Two individuals joined by `stored_in`: two nodes, one edge.
+        let heading = html
+            .split_once(r#"id="instance-graph-count""#)
+            .map(|(_, rest)| rest.chars().take(200).collect::<String>())
+            .expect("the instance heading carries a graph count");
+        assert!(
+            heading.contains("2 / 1"),
+            "the heading must report nodes and edges; got: {heading}"
+        );
+        // And it must say which number is which, for a reader who hasn't
+        // been told the convention.
+        assert!(
+            heading.contains("2 nodes") && heading.contains("1 edge"),
+            "the count needs a readable expansion (tooltip/label); got: {heading}"
         );
     }
 

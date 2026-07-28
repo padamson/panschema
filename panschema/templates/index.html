@@ -203,11 +203,19 @@
 {%- endif %}
 
 <section id="individuals">
-    {%- let id = "individuals" %}
-    {%- let title = "Instance Graph" %}
-    {%- let count = Some(instance_individual_count) %}
-    {%- let description = Some("Curated instance graphs (A-box): individuals conforming to this schema.") %}
-    {% include "components/section_header.html" %}
+    <div class="section-header">
+        <h2 class="section-title">
+            Instance Graph
+{%- if !instance_datasets.is_empty() %}
+            {# The default dataset's counts; the selector updates these. #}
+            <span class="section-count" id="instance-graph-count"
+                  title="{{ instance_node_count }} node{% if instance_node_count != 1 %}s{% endif %}, {{ instance_edge_count }} edge{% if instance_edge_count != 1 %}s{% endif %}"
+                  aria-label="{{ instance_node_count }} node{% if instance_node_count != 1 %}s{% endif %}, {{ instance_edge_count }} edge{% if instance_edge_count != 1 %}s{% endif %}"
+                  >{{ instance_node_count }} / {{ instance_edge_count }}</span>
+{%- endif %}
+        </h2>
+        <p class="section-description">Curated instance graphs (A-box): individuals conforming to this schema.</p>
+    </div>
 {%- if instance_datasets.is_empty() %}
     <p class="placeholder-text">No individuals defined in this ontology.</p>
 {%- else %}
@@ -219,7 +227,9 @@
         <button type="button" role="tab" class="instance-dataset-tab{% if ds.is_default %} active{% endif %}"
                 data-instance-dataset="{{ loop.index0 }}"
                 aria-selected="{% if ds.is_default %}true{% else %}false{% endif %}">{{ ds.name }}
-            <span class="badge">{{ ds.node_count }} / {{ ds.edge_count }}</span>
+            <span class="badge" title="{{ ds.node_count }} node{% if ds.node_count != 1 %}s{% endif %}, {{ ds.edge_count }} edge{% if ds.edge_count != 1 %}s{% endif %}"
+                  aria-label="{{ ds.node_count }} node{% if ds.node_count != 1 %}s{% endif %}, {{ ds.edge_count }} edge{% if ds.edge_count != 1 %}s{% endif %}"
+                  >{{ ds.node_count }} / {{ ds.edge_count }}</span>
         </button>
 {%- endfor %}
     </div>

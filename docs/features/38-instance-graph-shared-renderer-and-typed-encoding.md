@@ -32,7 +32,7 @@ adding class nodes, type edges, and an instance affordance.
 
 ### Slice 1: Graph counts read consistently — independent
 
-**Status:** Not started
+**Status:** Complete
 
 **Priority:** Must Have
 
@@ -46,16 +46,17 @@ which isn't a node count at all but the number of individuals. Only the
 sidebar and selector buttons agree.
 
 **Acceptance Criteria:**
-- [ ] Every graph section reports **nodes and edges** — sidebar entry,
+- [x] Every graph section reports **nodes and edges** — sidebar entry,
   section heading, and each selector button — in one format.
-- [ ] The instance-graph heading reports the graph's nodes and edges, not
+- [x] The instance-graph heading reports the graph's nodes and edges, not
   a count of individuals.
-- [ ] The two numbers are distinguishable without prior knowledge (glyph or
+- [x] The two numbers are distinguishable without prior knowledge (glyph or
   tooltip), on the schema graph as well as the instance graph.
-- [ ] With several curated graphs, the heading describes the **selected**
-  dataset and follows the selector; each button keeps its own dataset's
-  numbers; the sidebar's landing value is the default dataset's.
-- [ ] List sections (Classes, Slots, Enumerations) keep their single count —
+- [x] With several curated graphs, both the heading and the sidebar entry
+  describe the **selected** dataset and follow the selector — two badges for
+  one graph must not disagree — while each button keeps its own dataset's
+  numbers. On load, that selected dataset is the default one.
+- [x] List sections (Classes, Slots, Enumerations) keep their single count —
   a list has one dimension, a graph has two.
 
 ### Slice 2: The instance graph gets the full renderer
@@ -121,6 +122,12 @@ with the same symbol the schema graph uses for that type.*
 - [ ] Individual identity (IRIs) is unchanged, so the docs, RDF, and
   graph-JSON exports still agree.
 - [ ] The legend (Slice 3) reflects the new kinds without separate authoring.
+- [ ] An individual is identifiable by class where it is *listed*, not only
+  where it is drawn: the entity list shows labels alone today, so two
+  individuals of different classes that share a display name are
+  indistinguishable there. (Real case: a region and a wine both labelled
+  `Bordeaux`, a grape and a wine both labelled `Cabernet Sauvignon` — both
+  legitimately modelled, both ambiguous in the list.)
 
 ---
 
@@ -128,7 +135,7 @@ with the same symbol the schema graph uses for that type.*
 
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
-| Slice 1: consistent graph counts | Must Have | — (independent) | Not started |
+| Slice 1: consistent graph counts | Must Have | — (independent) | Complete |
 | Slice 2: full renderer for the A-box | Must Have | — | Not started |
 | Slice 3: adaptive legend | Should Have | Slice 2 | Not started |
 | Slice 4: typed A-box encoding | Must Have | Slice 2 | Not started |
