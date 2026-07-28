@@ -137,7 +137,7 @@ shared module, so a behaviour fixed once is fixed everywhere.
 
 ### Slice 4: The A-box is typed — each type expands into its instances
 
-**Status:** Not started
+**Status:** Complete
 
 **Priority:** Must Have
 
@@ -150,26 +150,59 @@ node type expands, in the instance graph, into its concrete instances, drawn
 with the same symbol the schema graph uses for that type.*
 
 **Acceptance Criteria:**
-- [ ] An individual is drawn with its **class's** symbol and colour, labelled
+- [x] An individual is drawn with its **class's** symbol and colour, labelled
   by the individual's name — not a uniform generic marker.
-- [ ] Each enum value *actually used* becomes one **shared** node with the
+- [x] Each enum value *actually used* becomes one **shared** node with the
   enum's symbol and colour, labelled by the value; every individual using it
   links to that one node, so "which individuals share this value" is visible
   as structure.
-- [ ] Scalar literals stay attributes on the individual, not leaf nodes.
-- [ ] An object-property assertion is an edge labelled by its slot, styled to
+- [x] Scalar literals stay attributes on the individual, not leaf nodes.
+- [x] An object-property assertion is an edge labelled by its slot, styled to
   echo the schema graph's slot glyph, drawn as a plain directed arrow —
   cardinality decorations stay T-box-only, since an assertion is one concrete
   fact.
-- [ ] Individual identity (IRIs) is unchanged, so the docs, RDF, and
+- [x] Individual identity (IRIs) is unchanged, so the docs, RDF, and
   graph-JSON exports still agree.
-- [ ] The legend (Slice 3) reflects the new kinds without separate authoring.
-- [ ] An individual is identifiable by class where it is *listed*, not only
+- [x] The legend (Slice 3) reflects the new kinds without separate authoring.
+- [x] An individual is identifiable by class where it is *listed*, not only
   where it is drawn: the entity list shows labels alone today, so two
   individuals of different classes that share a display name are
   indistinguishable there. (Real case: a region and a wine both labelled
   `Bordeaux`, a grape and a wine both labelled `Cabernet Sauvignon` — both
   legitimately modelled, both ambiguous in the list.)
+
+### Slice 5: Full shell parity — hover card and toolbar controls
+
+**Status:** Not started
+
+**Priority:** Should Have
+
+**User Value:** The instance graph offers the same inspection affordances
+the schema graph does: hover a node for its detail card, and toggle
+labels, node/edge visibility, arrows, and focus-on-hover from a toolbar —
+so a reader doesn't have to relearn the surface per graph.
+
+**Scope notes:**
+- Slice 2 deliberately covered the dogfood asks (fill, drag, zoom, layout
+  picker, focus-on-hover behaviour); this slice is the remainder of the
+  schema shell's chrome, routed through the shared module so each control
+  lands once for both canvases.
+- The **Groundings** toggle is N/A, not deferred: external grounding nodes
+  are a T-box concept, and an A-box has none.
+- The hover card is the piece with semantic urgency: the typed encoding's
+  shared value nodes carry `usage_count` on the wire, and nothing surfaces
+  it until a card does.
+
+**Acceptance Criteria:**
+- [ ] Hovering an instance-graph node shows the detail card: an
+  individual's types, literals, and IRI; a shared value node's enum and
+  how many individuals chose it.
+- [ ] Reset / zoom-in / zoom-out buttons, and Labels, Nodes, Edges,
+  Arrows, and Focus-on-hover toggles work on the instance canvas, with the
+  same persisted preferences behaviour as the schema canvas.
+- [ ] The controls come from the shared shell, not a second copy — one
+  wiring serving both canvases.
+- [ ] The schema graph is unchanged.
 
 ---
 
@@ -180,18 +213,20 @@ with the same symbol the schema graph uses for that type.*
 | Slice 1: consistent graph counts | Must Have | — (independent) | Complete |
 | Slice 2: full renderer for the A-box | Must Have | — | Complete |
 | Slice 3: adaptive legend + shared shell | Should Have | Slice 2 | Complete |
-| Slice 4: typed A-box encoding | Must Have | Slice 2 | Not started |
+| Slice 4: typed A-box encoding | Must Have | Slice 2 | Complete |
+| Slice 5: full shell parity (hover card + toolbar) | Should Have | Slices 3–4 | Not started |
 
 ---
 
 ## Definition of Done
 
-- [ ] All Must Have slices complete with acceptance criteria checked
-- [ ] `cargo fmt --check`, `cargo clippy --all-targets --all-features -D warnings`, full test suite, and `cargo doc` clean
-- [ ] Mutation testing on the diff shows no missed mutants
-- [ ] Browser tests cover the interaction and encoding claims, not just the markup
-- [ ] CHANGELOG updated
-- [ ] ADR-009 amended with the encoding principle
+- [x] All Must Have slices complete with acceptance criteria checked
+  (Slice 5, Should Have, remains open — full shell parity)
+- [x] `cargo fmt --check`, `cargo clippy --all-targets --all-features -D warnings`, full test suite, and `cargo doc` clean
+- [x] Mutation testing on the diff shows no missed mutants
+- [x] Browser tests cover the interaction and encoding claims, not just the markup
+- [x] CHANGELOG updated
+- [x] ADR-009 amended with the encoding principle
 
 ---
 

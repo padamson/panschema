@@ -1098,7 +1098,7 @@ fn instance_graph_json_renders_the_abox_as_its_own_artifact() {
         serde_json::from_str(&fs::read_to_string(&out_file).expect("read instance doc"))
             .expect("parse instance doc");
     assert_eq!(instance_doc["graph_kind"], "instance");
-    assert_eq!(instance_doc["format_version"], "1.1");
+    assert_eq!(instance_doc["format_version"], "1.2");
     let uris: Vec<&str> = instance_doc["nodes"]
         .as_array()
         .unwrap()

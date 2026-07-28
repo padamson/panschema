@@ -136,9 +136,6 @@ pub(crate) enum NodeShape {
     Rectangle,
     Diamond,
     Pill,
-    /// Individual (A-box instance) nodes — a hexagon, distinct from every
-    /// T-box shape.
-    Hexagon,
 }
 
 /// Map a node's resolved kind to its ADR-005 shape. `Class` →
@@ -150,7 +147,12 @@ fn node_shape(kind: Option<&KindMetadata>) -> NodeShape {
         Some(KindMetadata::Class { .. }) => NodeShape::Circle,
         Some(KindMetadata::Slot { .. }) => NodeShape::Pill,
         Some(KindMetadata::Enum { .. }) => NodeShape::Diamond,
-        Some(KindMetadata::Individual { .. }) => NodeShape::Hexagon,
+        // The A-box is the T-box realized: an individual wears its class's
+        // circle, and a shared value node its enum's diamond. In the
+        // separate instance canvas there are no class/enum nodes to
+        // collide with, and labels disambiguate.
+        Some(KindMetadata::Individual { .. }) => NodeShape::Circle,
+        Some(KindMetadata::EnumValue { .. }) => NodeShape::Diamond,
         None => NodeShape::Rectangle,
     }
 }
@@ -164,6 +166,7 @@ pub(crate) enum NodeRowKind {
     Enum,
     Type,
     Individual,
+    EnumValue,
     AbstractClass,
     External,
 }
@@ -172,7 +175,7 @@ pub(crate) enum NodeRowKind {
 /// outline)`. One row per node kind the graph can draw — the shapes and
 /// fills are the same constants the graph renders with, so the key can't
 /// drift. One source of truth for the legend and a unit test.
-pub(crate) fn node_legend_rows() -> [(NodeRowKind, NodeShape, [f32; 4], &'static str, bool); 7] {
+pub(crate) fn node_legend_rows() -> [(NodeRowKind, NodeShape, [f32; 4], &'static str, bool); 8] {
     use crate::graph_types::colors;
     let abstract_class = [
         colors::CLASS[0],
@@ -209,12 +212,20 @@ pub(crate) fn node_legend_rows() -> [(NodeRowKind, NodeShape, [f32; 4], &'static
             "Type",
             false,
         ),
-        // Teal hexagon: one individual in an instance (A-box) graph.
+        // The A-box realizes the T-box: an individual wears its class's
+        // circle, a shared value node its enum's diamond.
         (
             NodeRowKind::Individual,
-            NodeShape::Hexagon,
-            colors::INDIVIDUAL,
+            NodeShape::Circle,
+            colors::CLASS,
             "Individual",
+            false,
+        ),
+        (
+            NodeRowKind::EnumValue,
+            NodeShape::Diamond,
+            colors::ENUM,
+            "Enum value",
             false,
         ),
         (
@@ -847,19 +858,6 @@ impl Canvas2DRenderer {
                 let _ = self.ctx.arc(lx, cy, rr, PI / 2.0, PI * 1.5); // left cap
                 self.ctx.close_path();
             }
-            NodeShape::Hexagon => {
-                // Flat-top hexagon within radius `r`, six vertices at 60°.
-                for i in 0..6 {
-                    let a = PI / 6.0 + TAU * (i as f64) / 6.0;
-                    let (x, y) = (cx + r * a.cos(), cy + r * a.sin());
-                    if i == 0 {
-                        self.ctx.move_to(x, y);
-                    } else {
-                        self.ctx.line_to(x, y);
-                    }
-                }
-                self.ctx.close_path();
-            }
         }
     }
 
@@ -1424,26 +1422,33 @@ mod tests {
                 "Enum",
                 "Type",
                 "Individual",
+                "Enum value",
                 "Abstract class",
                 "External grounding"
             ],
             "one row per node kind the graph draws"
         );
 
-        // The individual row is the teal hexagon `node_shape` maps the
-        // kind to — the instance graph's node, previously absent from
-        // the key entirely.
+        // The A-box realizes the T-box: the individual row wears its
+        // class's circle and colour; the value row its enum's diamond.
         let individual = rows.iter().find(|r| r.3 == "Individual").unwrap();
         assert_eq!(
             individual.1,
-            NodeShape::Hexagon,
-            "individual swatch is a hexagon"
+            NodeShape::Circle,
+            "individual swatch is its class's circle"
         );
         assert_eq!(
             individual.2,
-            colors::INDIVIDUAL,
-            "individual swatch is teal"
+            colors::CLASS,
+            "individual swatch wears the class colour"
         );
+        let value = rows.iter().find(|r| r.3 == "Enum value").unwrap();
+        assert_eq!(
+            value.1,
+            NodeShape::Diamond,
+            "value swatch is its enum's diamond"
+        );
+        assert_eq!(value.2, colors::ENUM, "value swatch wears the enum colour");
 
         // The external-grounding row is the muted grey circle with the
         // dashed outline — the same constants the graph renders external

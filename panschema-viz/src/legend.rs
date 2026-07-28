@@ -19,6 +19,8 @@ pub struct LegendSpec {
     pub enum_: bool,
     pub type_: bool,
     pub individual: bool,
+    /// Shared enum-value nodes (the A-box realizing an enum's diamond).
+    pub enum_value: bool,
     pub external: bool,
     /// Edge kinds present, in canonical order.
     pub edges: Vec<EdgeType>,
@@ -43,6 +45,7 @@ impl LegendSpec {
             enum_: true,
             type_: true,
             individual: true,
+            enum_value: true,
             external: true,
             edges: vec![
                 EdgeType::SubclassOf,
@@ -70,6 +73,7 @@ pub fn legend_spec(sim: &CpuSimulation) -> LegendSpec {
         enum_: false,
         type_: false,
         individual: false,
+        enum_value: false,
         external: false,
         edges: Vec::new(),
         cardinality: false,
@@ -91,6 +95,7 @@ pub fn legend_spec(sim: &CpuSimulation) -> LegendSpec {
             Some(KindMetadata::Slot { .. }) => spec.slot = true,
             Some(KindMetadata::Enum { .. }) => spec.enum_ = true,
             Some(KindMetadata::Individual { .. }) => spec.individual = true,
+            Some(KindMetadata::EnumValue { .. }) => spec.enum_value = true,
             None => spec.type_ = true,
         }
         if node.in_rule {
@@ -149,6 +154,7 @@ pub(crate) fn node_rows_for(
             crate::canvas2d::NodeRowKind::Enum => spec.enum_,
             crate::canvas2d::NodeRowKind::Type => spec.type_,
             crate::canvas2d::NodeRowKind::Individual => spec.individual,
+            crate::canvas2d::NodeRowKind::EnumValue => spec.enum_value,
             crate::canvas2d::NodeRowKind::AbstractClass => spec.abstract_class,
             crate::canvas2d::NodeRowKind::External => spec.external,
         })
@@ -368,6 +374,9 @@ mod tests {
                 }
                 Some(KindMetadata::Individual { .. }) => {
                     expected_nodes.insert("Individual");
+                }
+                Some(KindMetadata::EnumValue { .. }) => {
+                    expected_nodes.insert("Enum value");
                 }
                 None => {
                     expected_nodes.insert("Type");

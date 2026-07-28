@@ -3952,6 +3952,37 @@ mod tests {
     }
 
     #[test]
+    fn entity_list_disambiguates_shared_labels_by_class() {
+        // Two individuals of different classes can legitimately share a
+        // display name; a label-only list makes them indistinguishable.
+        let schema = bottle_rack_schema();
+        let set = instance_set_from_yaml(
+            &schema,
+            "bottles:\n  - id: bx\n    name: Bordeaux\nracks:\n  - id: rx\n    name: Bordeaux\n",
+        );
+
+        let writer = HtmlWriter::new().with_instance_dataset(InstanceDataset::new("only", set));
+        let temp_dir = std::env::temp_dir().join("panschema_entity_class_tag_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        writer.write(&schema, &temp_dir).expect("write");
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        let list = html
+            .split_once(r#"class="entity-list""#)
+            .map(|(_, rest)| {
+                rest.split_once("</div>")
+                    .map(|(a, _)| a.to_string())
+                    .unwrap_or_default()
+            })
+            .expect("entity list present");
+        assert!(
+            list.contains("Bottle") && list.contains("Rack"),
+            "each entry names its class, so same-label individuals read apart; got: {list}"
+        );
+    }
+
+    #[test]
     fn a_schema_with_no_a_box_shows_the_placeholder_and_no_sidebar_entry() {
         // Nothing to show: no instance data attached and no embedded OWL
         // individuals. The section must say so, and the sidebar must not

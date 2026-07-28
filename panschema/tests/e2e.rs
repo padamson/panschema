@@ -2714,7 +2714,131 @@ fn e2e_instance_dataset_selector_switches_cards_and_graph() {
     });
 }
 
+/// The instance graph is typed: individuals wear their class's circle and
+/// colour, and each enum value in use is one shared diamond node the
+/// choosing individuals link to — checked on the real rendered page, since
+/// writer↔viz wire changes can pass every Rust test while the browser
+/// renders nothing.
+#[test]
+fn e2e_typed_instance_graph_renders_class_symbols_and_shared_values() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let output_dir = generate_docs_with_instances(
+            "tests/fixtures/typed_wine.yaml",
+            "tests/fixtures/typed_wine_instances.yaml",
+        );
+        let port = find_available_port();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("goto");
+
+        assert!(
+            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
+            "instance graph viz never became ready"
+        );
+
+        // The wire document carries the typed encoding: two shared value
+        // nodes (red, white — unused rose mints nothing), each red wine
+        // linking to the ONE red node.
+        let wire = page
+            .evaluate_value(
+                r#"(function(){
+                    var g = (window.__PANSCHEMA_INSTANCE_GRAPHS__ || [])[0];
+                    if (!g || !g.data) return 'no-data';
+                    var values = g.data.nodes.filter(function(n){ return n.node_type === 'enum_value'; });
+                    var red = values.find(function(n){ return n.label === 'red'; });
+                    if (!red) return 'no-red:' + JSON.stringify(values);
+                    var redEdges = g.data.edges.filter(function(e){ return e.target === red.id; });
+                    return 'values:' + values.length +
+                        ' redSources:' + redEdges.map(function(e){ return e.source; }).sort().join(',') +
+                        ' labels:' + redEdges.map(function(e){ return e.label; }).join(',') +
+                        ' usage:' + (red.kind_metadata ? red.kind_metadata.usageCount : '?') +
+                        ' version:' + g.data.format_version;
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert!(
+            wire.contains("values:2")
+                && wire.contains("redSources:individual:fleurie,individual:morgon")
+                && wire.contains("labels:color,color")
+                && wire.contains("usage:2")
+                && wire.contains("version:1.2"),
+            "the typed wire encoding should reach the page; got: {wire}"
+        );
+
+        // The legend describes the typed key.
+        let summary = page
+            .evaluate_value(
+                r#"(function(){
+                    var viz = window.__panschema_instance_viz;
+                    return viz && typeof viz.legend_summary_json === 'function'
+                        ? viz.legend_summary_json() : 'no-api';
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert!(
+            summary.contains("Individual") && summary.contains("Enum value"),
+            "the key lists both typed kinds; got: {summary}"
+        );
+
+        // And the canvas actually paints them: class-blue circles for the
+        // wines and enum-purple diamonds for the shared values.
+        let painted = page
+            .evaluate_value(
+                r#"(async function(){
+                    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+                    var c = document.getElementById('instance-graph-canvas');
+                    var ctx = c.getContext('2d');
+                    if (!ctx) return 'no-ctx';
+                    var d = ctx.getImageData(0, 0, c.width, c.height).data;
+                    var blue = 0, purple = 0, teal = 0;
+                    for (var i = 0; i < d.length; i += 4) {
+                        var r = d[i], g = d[i+1], b = d[i+2];
+                        if (r < 110 && g > 110 && g < 180 && b > 180) blue++;
+                        if (r > 120 && r < 190 && g < 120 && b > 140) purple++;
+                        if (r < 100 && g > 150 && g < 215 && b > 150 && b < 215) teal++;
+                    }
+                    return 'blue:' + blue + ' purple:' + purple + ' teal:' + teal;
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        let count_of = |k: &str| -> i64 {
+            painted
+                .split_whitespace()
+                .find_map(|p| p.strip_prefix(&format!("{k}:")))
+                .and_then(|v| v.trim_matches('"').parse().ok())
+                .unwrap_or(-1)
+        };
+        assert!(
+            count_of("blue") > 0 && count_of("purple") > 0,
+            "class-coloured individuals and enum-coloured values should paint; got: {painted}"
+        );
+        assert_eq!(
+            count_of("teal"),
+            0,
+            "no generic teal markers remain; got: {painted}"
+        );
+
+        browser.close().await.ok();
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
 /// Each graph's notation key is adaptive: it lists only the node and edge
+/// kinds that graph actually uses, from one code path serving both canvases./// Each graph's notation key is adaptive: it lists only the node and edge
 /// kinds that graph actually uses, from one code path serving both canvases.
 #[test]
 fn e2e_legends_adapt_to_what_each_graph_contains() {

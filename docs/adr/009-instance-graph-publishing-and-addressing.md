@@ -216,6 +216,44 @@ or large ones get their own space when a consumer needs it.
 Implemented as
 [feature 37](../features/37-in-page-instance-graph-selector.md).
 
+## Amendment 2026-07-28: the typed instance encoding
+
+The instance graph first shipped drawing every individual as one generic
+marker, with the class named only on the card. Consumer review settled the
+encoding contract this amendment records:
+
+> **Each schema-graph node type expands, in the instance graph, into its
+> concrete instances, drawn with the same symbol the schema graph uses for
+> that type.** The A-box is the T-box realized, and it should look like it.
+
+Concretely, in the separate A-box canvas:
+
+- A **class's individuals** wear the class's circle and colour, labelled by
+  the individual's name. No instance marker is needed there — the canvas
+  has no class nodes to collide with, and labels disambiguate. (The
+  deferred *unified* canvas, where classes and individuals share a surface,
+  WILL need an instance affordance — a ring or smaller radius; this
+  amendment deliberately doesn't choose it.)
+- An **enum's used values** each become one shared node with the enum's
+  diamond and colour, labelled by the value; every individual choosing the
+  value links to that one node, so "which individuals share this value"
+  reads as structure. One node per *used* value — an unused permissible
+  value mints nothing.
+- **Scalar literals stay attributes** on the individual's card, not leaf
+  nodes: a node per unique string would bury the graph in leaves. This is
+  the one place the T-box's rectangle is deliberately not echoed.
+- An **object-property assertion** is a slot-labelled plain directed arrow.
+  Cardinality decorations remain T-box-only — an assertion is one concrete
+  fact, not a constraint.
+
+This is a wire-format addition (`format_version` 1.1 → 1.2, a new
+`enum_value` node kind carrying its enum and usage count), mirrored in the
+visualization exactly as decision 4 requires; pre-1.2 documents parse
+unchanged. Identity is untouched: individuals keep the shared minted IRIs.
+
+Implemented as slice 4 of
+[feature 38](../features/38-instance-graph-shared-renderer-and-typed-encoding.md).
+
 ## Consequences
 
 - Three consumer shapes are served by **one model**: a schema repo

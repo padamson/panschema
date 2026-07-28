@@ -244,8 +244,10 @@
 {%- endif %}
 {%- if !ds.individuals.is_empty() %}
         <div class="entity-list">
-{%- for ind in ds.individuals %}
-            <a href="#{{ ds.anchor_prefix }}ind-{{ ind.id }}" class="entity-link individual-link">{{ ind.label }}</a>
+{#- The class tag disambiguates individuals of different classes that
+    share a display name (a region and a wine can both be `Bordeaux`). #}
+{%- for ind in ds.individual_data %}
+            <a href="#{{ ds.anchor_prefix }}ind-{{ ind.id }}" class="entity-link individual-link">{{ ind.label }}{% if let Some(t) = ind.types.first() %}<span class="entity-class-tag">{{ t.label }}</span>{% endif %}</a>
 {%- endfor %}
         </div>
         <div class="individual-cards">
@@ -293,6 +295,12 @@
         display: flex;
         flex-wrap: wrap;
         gap: var(--space-2);
+    }
+
+    .entity-class-tag {
+        margin-left: 6px;
+        font-size: var(--font-size-xs, 11px);
+        color: var(--color-text-muted, #9ca3af);
     }
 
     .instance-dataset-selector {
