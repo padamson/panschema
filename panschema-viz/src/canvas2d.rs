@@ -19,7 +19,7 @@ use crate::simulation::{CpuSimulation, SimEdge, SimNode};
 const CANVAS_BG: &str = "#1a1a2e";
 /// Amber — the "a rule touches this" accent: the persistent rule ring and
 /// the pronounced rule-hover participant ring.
-const AMBER: &str = "rgba(251, 191, 36, 1.0)";
+pub(crate) const AMBER: &str = "rgba(251, 191, 36, 1.0)";
 /// Blue — the selection ring.
 const SELECTION_BLUE: &str = "rgba(59, 130, 246, 1.0)";
 /// Ring stroke widths (device px), shared by the graph and the legend so
@@ -155,11 +155,24 @@ fn node_shape(kind: Option<&KindMetadata>) -> NodeShape {
     }
 }
 
-/// The legend's node rows: `(shape, swatch fill, label, dashed outline)`.
-/// One row per node kind the graph can draw — the shapes and fills are
-/// the same constants the graph renders with, so the key can't drift.
-/// One source of truth for the legend and a unit test.
-fn node_legend_rows() -> [(NodeShape, [f32; 4], &'static str, bool); 6] {
+/// Discriminant tying each node legend row to its [`LegendSpec`] flag, so
+/// filtering can't drift from the row table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NodeRowKind {
+    Class,
+    Slot,
+    Enum,
+    Type,
+    Individual,
+    AbstractClass,
+    External,
+}
+
+/// The legend's node rows: `(kind, shape, swatch fill, label, dashed
+/// outline)`. One row per node kind the graph can draw — the shapes and
+/// fills are the same constants the graph renders with, so the key can't
+/// drift. One source of truth for the legend and a unit test.
+pub(crate) fn node_legend_rows() -> [(NodeRowKind, NodeShape, [f32; 4], &'static str, bool); 7] {
     use crate::graph_types::colors;
     let abstract_class = [
         colors::CLASS[0],
@@ -168,19 +181,72 @@ fn node_legend_rows() -> [(NodeShape, [f32; 4], &'static str, bool); 6] {
         colors::ABSTRACT_ALPHA,
     ];
     [
-        (NodeShape::Circle, colors::CLASS, "Class", false),
-        (NodeShape::Pill, colors::SLOT, "Slot", false),
-        (NodeShape::Diamond, colors::ENUM, "Enum", false),
-        (NodeShape::Rectangle, colors::TYPE, "Type", false),
-        (NodeShape::Circle, abstract_class, "Abstract class", true),
+        (
+            NodeRowKind::Class,
+            NodeShape::Circle,
+            colors::CLASS,
+            "Class",
+            false,
+        ),
+        (
+            NodeRowKind::Slot,
+            NodeShape::Pill,
+            colors::SLOT,
+            "Slot",
+            false,
+        ),
+        (
+            NodeRowKind::Enum,
+            NodeShape::Diamond,
+            colors::ENUM,
+            "Enum",
+            false,
+        ),
+        (
+            NodeRowKind::Type,
+            NodeShape::Rectangle,
+            colors::TYPE,
+            "Type",
+            false,
+        ),
+        // Teal hexagon: one individual in an instance (A-box) graph.
+        (
+            NodeRowKind::Individual,
+            NodeShape::Hexagon,
+            colors::INDIVIDUAL,
+            "Individual",
+            false,
+        ),
+        (
+            NodeRowKind::AbstractClass,
+            NodeShape::Circle,
+            abstract_class,
+            "Abstract class",
+            true,
+        ),
         // Muted dashed circle: an upstream ontology category a class
         // grounds into via `subclass_of` — outside this schema.
         (
+            NodeRowKind::External,
             NodeShape::Circle,
             colors::EXTERNAL,
             "External grounding",
             true,
         ),
+    ]
+}
+
+/// The full edge row table; filtered per spec by [`edge_rows_for`].
+pub(crate) fn edge_legend_rows() -> [(EdgeType, &'static str); 7] {
+    [
+        (EdgeType::SubclassOf, "is_a (subclass of)"),
+        (EdgeType::Mixin, "mixin"),
+        (EdgeType::Domain, "domain"),
+        (EdgeType::Range, "range"),
+        (EdgeType::Inverse, "inverse of"),
+        (EdgeType::TypeOf, "type of"),
+        // One concrete object-property assertion between individuals.
+        (EdgeType::Assertion, "assertion"),
     ]
 }
 
@@ -191,7 +257,7 @@ fn node_legend_rows() -> [(NodeShape, [f32; 4], &'static str, bool); 6] {
 /// (e.g. a blue pill). The widths are the same `RING_W_*` constants
 /// `render_nodes` strokes with, so the key can't drift from the graph. One
 /// source of truth for the legend and a unit test.
-fn ring_legend_rows() -> [(&'static str, f64, NodeShape, [f32; 4], &'static str); 3] {
+pub(crate) fn ring_legend_rows() -> [(&'static str, f64, NodeShape, [f32; 4], &'static str); 3] {
     use crate::graph_types::colors;
     [
         (
@@ -809,6 +875,12 @@ impl Canvas2DRenderer {
     /// width is divided by `dpr` here to render at the same on-screen
     /// thickness as the graph, rather than `dpr`× thicker.
     pub fn render_legend(&self, dpr: f64) {
+        self.render_legend_spec(dpr, &crate::legend::LegendSpec::full());
+    }
+
+    /// Draw only the rows `spec` asks for — the adaptive key. Sections
+    /// with no rows are omitted entirely, header included.
+    pub fn render_legend_spec(&self, dpr: f64, spec: &crate::legend::LegendSpec) {
         let lw = |w: f64| w / dpr;
         const TEXT: &str = "rgba(232, 232, 244, 0.95)";
         const HEADER: &str = "rgba(150, 150, 178, 0.95)";
@@ -818,8 +890,8 @@ impl Canvas2DRenderer {
         let label_x = 64.0;
         let glyph_x = 26.0;
         let radius = 9.0;
-        let row = 21.0;
-        let mut y = 18.0;
+        let row = crate::legend::legend_metrics::ROW;
+        let mut y = crate::legend::legend_metrics::TOP_Y;
 
         self.ctx.set_fill_style_str(CANVAS_BG);
         self.ctx.fill_rect(
@@ -831,12 +903,15 @@ impl Canvas2DRenderer {
         self.ctx.set_text_baseline("middle");
 
         // --- Nodes (shape encodes kind) ---
-        self.ctx.set_font(HEADER_FONT);
-        self.ctx.set_fill_style_str(HEADER);
-        let _ = self.ctx.fill_text("Nodes", 12.0, y);
-        y += row;
+        let node_rows = crate::legend::node_rows_for(spec);
+        if !node_rows.is_empty() {
+            self.ctx.set_font(HEADER_FONT);
+            self.ctx.set_fill_style_str(HEADER);
+            let _ = self.ctx.fill_text("Nodes", 12.0, y);
+            y += row;
+        }
         self.ctx.set_font(BODY_FONT);
-        for (shape, fill, label, dashed) in &node_legend_rows() {
+        for (_, shape, fill, label, dashed) in &node_rows {
             self.node_path(glyph_x, y, radius, *shape);
             self.ctx.set_fill_style_str(&rgba(*fill));
             self.ctx.fill();
@@ -851,20 +926,15 @@ impl Canvas2DRenderer {
         }
 
         // --- Edges (line style + arrowhead encode the relation) ---
-        y += 6.0;
-        self.ctx.set_font(HEADER_FONT);
-        self.ctx.set_fill_style_str(HEADER);
-        let _ = self.ctx.fill_text("Edges", 12.0, y);
-        y += row;
+        let edges = crate::legend::edge_rows_for(spec);
+        if !edges.is_empty() {
+            y += crate::legend::legend_metrics::SECTION_GAP;
+            self.ctx.set_font(HEADER_FONT);
+            self.ctx.set_fill_style_str(HEADER);
+            let _ = self.ctx.fill_text("Edges", 12.0, y);
+            y += row;
+        }
         self.ctx.set_font(BODY_FONT);
-        let edges = [
-            (EdgeType::SubclassOf, "is_a (subclass of)"),
-            (EdgeType::Mixin, "mixin"),
-            (EdgeType::Domain, "domain"),
-            (EdgeType::Range, "range"),
-            (EdgeType::Inverse, "inverse of"),
-            (EdgeType::TypeOf, "type of"),
-        ];
         let (x1, x2) = (12.0, 46.0);
         for (kind, label) in &edges {
             let (r, g, b) = edge_rgb(*kind);
@@ -888,41 +958,46 @@ impl Canvas2DRenderer {
         }
 
         // --- Cardinality (crow's-foot terminators on range edges) ---
-        y += 6.0;
-        self.ctx.set_font(HEADER_FONT);
-        self.ctx.set_fill_style_str(HEADER);
-        let _ = self.ctx.fill_text("Cardinality (range edges)", 12.0, y);
-        y += row;
-        self.ctx.set_font(BODY_FONT);
-        let (cr, cg, cb) = edge_rgb(EdgeType::Range);
-        let ccolor = format!("rgba({cr}, {cg}, {cb}, 0.95)");
-        let cards = [
-            (CardinalityGlyph::MandatoryOne, "1..1  exactly one"),
-            (CardinalityGlyph::OptionalOne, "0..1  at most one"),
-            (CardinalityGlyph::MandatoryMany, "1..*  one or more"),
-            (CardinalityGlyph::OptionalMany, "0..*  any number"),
-        ];
-        let (cx1, tip_x, tr) = (12.0, 40.0, 8.0);
-        for (glyph, label) in &cards {
-            self.set_dash(false);
-            self.ctx.set_stroke_style_str(&ccolor);
-            self.ctx.set_line_width(lw(1.5));
-            self.ctx.begin_path();
-            self.ctx.move_to(cx1, y);
-            self.ctx.line_to(tip_x, y);
-            self.ctx.stroke();
-            self.draw_cardinality(cx1, y, tip_x + tr, y, tr, glyph, &ccolor);
-            self.ctx.set_fill_style_str(TEXT);
-            let _ = self.ctx.fill_text(label, label_x, y);
+        if spec.cardinality {
+            y += crate::legend::legend_metrics::SECTION_GAP;
+            self.ctx.set_font(HEADER_FONT);
+            self.ctx.set_fill_style_str(HEADER);
+            let _ = self.ctx.fill_text("Cardinality (range edges)", 12.0, y);
             y += row;
+            self.ctx.set_font(BODY_FONT);
+            let (cr, cg, cb) = edge_rgb(EdgeType::Range);
+            let ccolor = format!("rgba({cr}, {cg}, {cb}, 0.95)");
+            let cards = [
+                (CardinalityGlyph::MandatoryOne, "1..1  exactly one"),
+                (CardinalityGlyph::OptionalOne, "0..1  at most one"),
+                (CardinalityGlyph::MandatoryMany, "1..*  one or more"),
+                (CardinalityGlyph::OptionalMany, "0..*  any number"),
+            ];
+            let (cx1, tip_x, tr) = (12.0, 40.0, 8.0);
+            for (glyph, label) in &cards {
+                self.set_dash(false);
+                self.ctx.set_stroke_style_str(&ccolor);
+                self.ctx.set_line_width(lw(1.5));
+                self.ctx.begin_path();
+                self.ctx.move_to(cx1, y);
+                self.ctx.line_to(tip_x, y);
+                self.ctx.stroke();
+                self.draw_cardinality(cx1, y, tip_x + tr, y, tr, glyph, &ccolor);
+                self.ctx.set_fill_style_str(TEXT);
+                let _ = self.ctx.fill_text(label, label_x, y);
+                y += row;
+            }
         }
 
         // --- Rings (overlaid on a node) ---
-        y += 6.0;
-        self.ctx.set_font(HEADER_FONT);
-        self.ctx.set_fill_style_str(HEADER);
-        let _ = self.ctx.fill_text("Rings", 12.0, y);
-        y += row;
+        let ring_rows = crate::legend::ring_rows_for(spec);
+        if !ring_rows.is_empty() {
+            y += crate::legend::legend_metrics::SECTION_GAP;
+            self.ctx.set_font(HEADER_FONT);
+            self.ctx.set_fill_style_str(HEADER);
+            let _ = self.ctx.fill_text("Rings", 12.0, y);
+            y += row;
+        }
         self.ctx.set_font(BODY_FONT);
         // Each ring is drawn by the same `draw_ring` as the graph, over the
         // real node kind it appears on (amber on a green slot pill, blue on
@@ -931,7 +1006,7 @@ impl Canvas2DRenderer {
         // same constants `render_nodes` uses and are dpr-corrected via `lw`.
         let node_r = radius * 0.55;
         let ring_r = node_r + 3.0;
-        for (color, width, shape, fill, label) in ring_legend_rows() {
+        for (color, width, shape, fill, label) in ring_rows {
             self.node_path(glyph_x, y, node_r, shape);
             self.ctx.set_fill_style_str(&rgba(fill));
             self.ctx.fill();
@@ -1340,7 +1415,7 @@ mod tests {
     fn node_legend_rows_cover_every_drawn_kind_with_graph_constants() {
         use crate::graph_types::colors;
         let rows = node_legend_rows();
-        let labels: Vec<&str> = rows.iter().map(|r| r.2).collect();
+        let labels: Vec<&str> = rows.iter().map(|r| r.3).collect();
         assert_eq!(
             labels,
             [
@@ -1348,23 +1423,63 @@ mod tests {
                 "Slot",
                 "Enum",
                 "Type",
+                "Individual",
                 "Abstract class",
                 "External grounding"
             ],
             "one row per node kind the graph draws"
         );
 
+        // The individual row is the teal hexagon `node_shape` maps the
+        // kind to — the instance graph's node, previously absent from
+        // the key entirely.
+        let individual = rows.iter().find(|r| r.3 == "Individual").unwrap();
+        assert_eq!(
+            individual.1,
+            NodeShape::Hexagon,
+            "individual swatch is a hexagon"
+        );
+        assert_eq!(
+            individual.2,
+            colors::INDIVIDUAL,
+            "individual swatch is teal"
+        );
+
         // The external-grounding row is the muted grey circle with the
         // dashed outline — the same constants the graph renders external
         // nodes with, so the key can't drift from the graph.
         let external = rows.last().unwrap();
-        assert_eq!(external.0, NodeShape::Circle, "external swatch is a circle");
+        assert_eq!(external.1, NodeShape::Circle, "external swatch is a circle");
         assert_eq!(
-            external.1,
+            external.2,
             colors::EXTERNAL,
             "external swatch fills the muted grounding grey"
         );
-        assert!(external.3, "external swatch outline is dashed");
+        assert!(external.4, "external swatch outline is dashed");
+    }
+
+    #[test]
+    fn row_selectors_filter_by_spec_flags() {
+        use crate::legend::{LegendSpec, edge_rows_for, node_rows_for, ring_rows_for};
+        let mut spec = LegendSpec::full();
+        spec.enum_ = false;
+        spec.individual = false;
+        let labels: Vec<&str> = node_rows_for(&spec).iter().map(|r| r.3).collect();
+        assert!(!labels.contains(&"Enum") && !labels.contains(&"Individual"));
+        assert!(labels.contains(&"Class") && labels.contains(&"External grounding"));
+
+        spec.edges = vec![EdgeType::Assertion];
+        let edge_labels: Vec<&str> = edge_rows_for(&spec).iter().map(|r| r.1).collect();
+        assert_eq!(edge_labels, ["assertion"], "only the present edge kinds");
+
+        spec.rule_rings = false;
+        spec.selection_ring = true;
+        let rings = ring_rows_for(&spec);
+        assert_eq!(rings.len(), 1, "amber rows drop, selection stays");
+        assert_eq!(rings[0].4, "Selected node");
+
+        spec.selection_ring = false;
+        assert!(ring_rows_for(&spec).is_empty(), "no rings at all");
     }
 
     #[test]

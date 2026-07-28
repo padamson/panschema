@@ -97,7 +97,7 @@ AC already demands a single code path serving both canvases.
 
 ### Slice 3: One adaptive legend, and one shared graph shell
 
-**Status:** Not started
+**Status:** Complete
 
 **Priority:** Should Have
 
@@ -106,16 +106,34 @@ symbol it doesn't use — and the page drives both canvases through one
 shared module, so a behaviour fixed once is fixed everywhere.
 
 **Acceptance Criteria:**
-- [ ] The legend enumerates only the node and edge kinds actually present in
-  the graph it describes.
-- [ ] The instance graph has a legend; both graphs' legends come from one
-  code path.
-- [ ] A schema with no enums shows no enum entry.
-- [ ] The behaviours Slice 2 duplicated across the two template shells —
-  settle-and-refit, focus-on-hover, badge formatting, layout-picker wiring,
-  resize forwarding — live in one shared module that both canvases call, so
-  the shells hold only their own markup and data sources. A behaviour change
-  in one graph that doesn't appear in the other is a bug, not a divergence.
+- [x] The legend enumerates only the node and edge kinds actually present in
+  the graph it describes — a spec computed from the simulation (where rule
+  participation is derived), with the row tables as the single source both
+  the drawing and a queryable JSON summary filter through, so an assertion
+  against the summary is an assertion about the drawn key.
+- [x] The instance graph has a legend (toolbar toggle + panel); both graphs'
+  legends come from one code path, and the key gains the two rows it never
+  had — Individual nodes and assertion edges — without which an instance
+  graph wasn't describable at all. The standalone full-key entry point
+  remains for callers with no graph to inspect.
+- [x] A schema with no enums shows no enum entry
+  (`e2e_legends_adapt_to_what_each_graph_contains`; a schema whose slots are
+  inline attributes likewise shows no Slot row, since no pills are drawn).
+- [x] The panel sizes to its rows: the key's extent is computed from the
+  same metrics the drawing walks with, and both shells size the legend
+  canvas from it — a short key doesn't sit in a tall fixed box of dead
+  space (`legend_extent_matches_the_row_count_arithmetic`, and the e2e
+  bounds the panel's slack over the extent).
+- [x] Exactness is tested both directions: a row appears if and only if the
+  graph contains that kind, with the expected sets derived independently by
+  walking the simulation rather than repeating the spec's logic
+  (`legend_rows_are_exactly_the_kinds_present_in_the_graph`).
+- [x] The behaviours Slice 2 duplicated across the two template shells —
+  settle-and-refit, focus-on-hover, badge formatting, layout persistence,
+  resize forwarding, legend rendering — live in one shared page module that
+  both canvases call, so the shells hold only their own markup and data
+  sources. A behaviour change in one graph that doesn't appear in the other
+  is a bug, not a divergence.
 
 ### Slice 4: The A-box is typed — each type expands into its instances
 
@@ -161,7 +179,7 @@ with the same symbol the schema graph uses for that type.*
 |-------|----------|------------|--------|
 | Slice 1: consistent graph counts | Must Have | — (independent) | Complete |
 | Slice 2: full renderer for the A-box | Must Have | — | Complete |
-| Slice 3: adaptive legend + shared shell | Should Have | Slice 2 | Not started |
+| Slice 3: adaptive legend + shared shell | Should Have | Slice 2 | Complete |
 | Slice 4: typed A-box encoding | Must Have | Slice 2 | Not started |
 
 ---

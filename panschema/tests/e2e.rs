@@ -2714,6 +2714,164 @@ fn e2e_instance_dataset_selector_switches_cards_and_graph() {
     });
 }
 
+/// Each graph's notation key is adaptive: it lists only the node and edge
+/// kinds that graph actually uses, from one code path serving both canvases.
+#[test]
+fn e2e_legends_adapt_to_what_each_graph_contains() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        // wine_catalog declares classes and slots but no enums, so the
+        // schema key must not advertise the enum diamond; the instance
+        // graph's key must describe individuals and assertions only.
+        let output_dir = generate_docs_with_instances(
+            "tests/fixtures/wine_catalog.yaml",
+            "tests/fixtures/wine_instances.yaml",
+        );
+        let port = find_available_port();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("goto");
+
+        assert!(
+            wait_until_ready(
+                &page,
+                "!!window.__panschema_instance_viz && !!window.__panschema_viz"
+            )
+            .await,
+            "both graph visualizations should come up"
+        );
+
+        // The summary is built from the same row selectors the drawing
+        // uses, so these assertions are assertions about the drawn key.
+        let instance_summary = page
+            .evaluate_value(
+                r#"(function(){
+                    var viz = window.__panschema_instance_viz;
+                    if (!viz || typeof viz.legend_summary_json !== 'function') return 'no-api';
+                    return viz.legend_summary_json();
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert!(
+            instance_summary.contains("Individual") && instance_summary.contains("assertion"),
+            "the instance key describes individuals and assertions; got: {instance_summary}"
+        );
+        assert!(
+            !instance_summary.contains("\"Class\"") && !instance_summary.contains("Enum"),
+            "the instance key must not advertise schema-only symbols; got: {instance_summary}"
+        );
+        assert!(
+            instance_summary.contains("\"cardinality\":false"),
+            "assertions carry no crow's-feet; got: {instance_summary}"
+        );
+
+        let schema_summary = page
+            .evaluate_value(
+                r#"(function(){
+                    var viz = window.__panschema_viz;
+                    if (!viz || typeof viz.legend_summary_json !== 'function') return 'no-api';
+                    return viz.legend_summary_json();
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        // This fixture's slots are inline attributes, drawn as direct
+        // edges rather than slot pills — so the key lists classes and the
+        // range edges, and nothing else.
+        assert!(
+            schema_summary.contains("\"Class\"") && schema_summary.contains("\"range\""),
+            "the schema key lists the kinds present; got: {schema_summary}"
+        );
+        assert!(
+            !schema_summary.contains("\"Slot\""),
+            "no slot pills are drawn for inline attributes, so no Slot row; got: {schema_summary}"
+        );
+        assert!(
+            !schema_summary.contains("Enum"),
+            "a schema with no enums must not advertise the diamond; got: {schema_summary}"
+        );
+
+        // The instance graph's key is reachable: toggling shows the panel.
+        page.locator("#instance-graph-legend-toggle")
+            .click(None)
+            .await
+            .expect("toggle instance legend");
+        assert!(
+            page.locator("#instance-graph-legend")
+                .is_visible()
+                .await
+                .unwrap_or(false),
+            "the instance legend panel should open on toggle"
+        );
+
+        // The panel sizes to its rows: its height tracks the extent the
+        // viz reports for this key, with no fixed-box dead space below the
+        // last row.
+        let sizing = page
+            .evaluate_value(
+                r#"(function(){
+                    var viz = window.__panschema_instance_viz;
+                    var panel = document.getElementById('instance-graph-legend');
+                    if (!viz || !panel || typeof viz.legend_extent_json !== 'function') return 'no-api';
+                    var extent = JSON.parse(viz.legend_extent_json());
+                    var slack = panel.getBoundingClientRect().height - extent.height;
+                    return 'slack:' + Math.round(slack) + ' extent:' + Math.round(extent.height);
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        let slack: i64 = sizing
+            .trim()
+            .trim_matches('"')
+            .strip_prefix("slack:")
+            .and_then(|s| s.split_whitespace().next())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(i64::MAX);
+        assert!(
+            (0..=12).contains(&slack),
+            "the panel should wrap the key with only border/padding slack; got: {sizing}"
+        );
+
+        // And the two keys genuinely differ in size: the instance key is a
+        // fraction of the schema key's height.
+        let heights = page
+            .evaluate_value(
+                r#"(function(){
+                    var a = window.__panschema_instance_viz, b = window.__panschema_viz;
+                    if (!a || !b) return 'no-viz';
+                    return JSON.parse(a.legend_extent_json()).height + ' vs ' +
+                           JSON.parse(b.legend_extent_json()).height;
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        let parts: Vec<f64> = heights
+            .trim()
+            .trim_matches('"')
+            .split(" vs ")
+            .filter_map(|p| p.parse().ok())
+            .collect();
+        assert!(
+            parts.len() == 2 && parts[0] < parts[1],
+            "the instance key should be shorter than the schema key; got: {heights}"
+        );
+
+        browser.close().await.ok();
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
 /// The instance graph is the same explorable component as the schema graph:
 /// it fills its viewport instead of clustering in a corner, offers the layout
 /// picker, and focuses the hovered node's neighborhood.

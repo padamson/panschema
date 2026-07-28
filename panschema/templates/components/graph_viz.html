@@ -654,14 +654,10 @@
     const loading = document.getElementById('graph-loading');
     const error = document.getElementById('graph-error');
     const nodeCount = document.getElementById('graph-node-count');
-    // Graph counts read `nodes / edges` everywhere; the label says which is
-    // which for a reader who hasn't been told the convention.
+    // Badge formatting lives in the shared shell so every graph count on
+    // the page reads identically.
     function setGraphBadge(el, nodes, edges) {
-        if (!el) return;
-        const label = `${nodes} node${nodes === 1 ? '' : 's'}, ${edges} edge${edges === 1 ? '' : 's'}`;
-        el.textContent = `${nodes} / ${edges}`;
-        el.title = label;
-        el.setAttribute('aria-label', label);
+        window.PanschemaGraphShell.setBadge(el, nodes, edges);
     }
     const resetBtn = document.getElementById('graph-reset');
     const zoomInBtn = document.getElementById('graph-zoom-in');
@@ -671,10 +667,9 @@
     let animationId = null;
     let isDragging = false;
     let lastX = 0, lastY = 0;
-    let tickCount = 0;
-    let hasFittedBounds = false;
-    // Tick counts at which to re-fit the camera while the simulation settles.
-    const REFIT_TICKS = [50, 100, 200, 300];
+    // Settle-and-refit lives in the shared shell; both canvases fit on the
+    // same checkpoints.
+    const refitter = window.PanschemaGraphShell.makeRefitter();
     let is3D = false;
     let wasmModule = null;
     let hasWebGPU = false;
@@ -691,11 +686,9 @@
     // preference survives navigation.
     const focusOnHoverBtn = document.getElementById('graph-focus-on-hover');
     const FOCUS_HOVER_PREF_KEY = 'panschema-focus-on-hover';
+    // Hop depth for click-driven focus, matching the shell's hover focus
+    // so the two affordances dim identically.
     const FOCUS_HOP_DEPTH = 2;
-    // The last node that triggered focus, so the mousemove handler
-    // can skip redundant focus_node calls (which would otherwise
-    // re-walk the BFS expansion on every mousemove tick).
-    let lastFocusedNodeIdx = -1;
     let focusOnHoverEnabled = true;
     try {
         const stored = localStorage.getItem(FOCUS_HOVER_PREF_KEY);
@@ -712,7 +705,7 @@
             // off, otherwise the dimming sticks.
             if (!focusOnHoverEnabled && viz && typeof viz.clear_focus === 'function') {
                 viz.clear_focus();
-                lastFocusedNodeIdx = -1;
+                hoverFocus.reset();
             }
         });
     }
@@ -786,17 +779,12 @@
     // since the last frame. The 2D path uses viz.hovered_node_index;
     // the 3D path uses a separate JS hover system (see
     // updateHoverState below) and isn't currently wired.
+    // The hover→focus mapping (hop depth, clear-on-leave) is the shared
+    // shell's; this wrapper only adds the schema page's enable toggle.
+    const hoverFocus = window.PanschemaGraphShell.makeHoverFocus();
     function applyFocusOnHover(hoveredNodeIdx) {
         if (!viz || !focusOnHoverEnabled) return;
-        if (hoveredNodeIdx === lastFocusedNodeIdx) return;
-        if (hoveredNodeIdx >= 0) {
-            if (typeof viz.focus_node === 'function') {
-                viz.focus_node(hoveredNodeIdx, FOCUS_HOP_DEPTH);
-            }
-        } else if (typeof viz.clear_focus === 'function') {
-            viz.clear_focus();
-        }
-        lastFocusedNodeIdx = hoveredNodeIdx;
+        hoverFocus.apply(viz, hoveredNodeIdx);
     }
 
     // 3D label overlay management
@@ -1725,8 +1713,7 @@
         }
 
         // Reset state
-        tickCount = 0;
-        hasFittedBounds = false;
+        refitter.reset();
 
         // When switching modes, we need a fresh canvas because:
         // - 2D context can't be reused for WebGPU
@@ -1889,21 +1876,26 @@
             return;
         }
 
-        const LW = 240, LH = 545;
-        const dpr = window.devicePixelRatio || 1;
-        lc.width = LW * dpr;
-        lc.height = LH * dpr;
-        lc.style.width = LW + 'px';
-        lc.style.height = LH + 'px';
-        // Pre-scale the shared 2d context so the wasm renderer's fixed
-        // logical coordinates come out crisp on HiDPI displays.
-        lc.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
-        try {
-            wasmModule.render_legend(lc, dpr);
-        } catch (e) {
-            console.warn('Legend render failed:', e?.message ?? e);
-            toggle.style.display = 'none';
-            return;
+        // Adaptive key when the viz offers it — only the rows this graph
+        // uses, in a panel sized to those rows via the shared shell. The
+        // standalone full key in a fixed box is the older-bundle fallback.
+        if (!window.PanschemaGraphShell.renderLegend(viz, lc)) {
+            const LW = 240, LH = 545;
+            const dpr = window.devicePixelRatio || 1;
+            lc.width = LW * dpr;
+            lc.height = LH * dpr;
+            lc.style.width = LW + 'px';
+            lc.style.height = LH + 'px';
+            // Pre-scale the shared 2d context so the wasm renderer's fixed
+            // logical coordinates come out crisp on HiDPI displays.
+            lc.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
+            try {
+                wasmModule.render_legend(lc, dpr);
+            } catch (e) {
+                console.warn('Legend render failed:', e?.message ?? e);
+                toggle.style.display = 'none';
+                return;
+            }
         }
 
         const KEY = 'panschema-graph-legend-open';
@@ -1928,17 +1920,7 @@
             if (viz) {
                 viz.tick();
                 viz.update_animation();
-                tickCount++;
-
-                // Track the layout as it settles — collide + repulsion are
-                // non-linear so it can drift past tick 50.
-                if (!hasFittedBounds && REFIT_TICKS.includes(tickCount)) {
-                    viz.fit_to_bounds(40);
-                    if (tickCount === REFIT_TICKS[REFIT_TICKS.length - 1]) {
-                        hasFittedBounds = true;
-                    }
-                }
-
+                refitter.onTick(viz);
                 viz.render();
 
                 // Update 3D labels overlay (positions track camera movement)
@@ -2360,12 +2342,12 @@
             }
         });
 
-        // Handle resize
+        // Handle resize through the shared shell (viz.resize + re-fit).
         window.addEventListener('resize', () => {
             if (viz && canvas) {
                 canvas.width = canvas.offsetWidth * window.devicePixelRatio;
                 canvas.height = canvas.offsetHeight * window.devicePixelRatio;
-                viz.resize(canvas.width, canvas.height);
+                window.PanschemaGraphShell.forwardResize(viz, canvas);
             }
         });
 

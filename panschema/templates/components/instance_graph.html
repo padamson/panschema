@@ -11,6 +11,9 @@
     </p>
     <div class="instance-graph-toolbar">
         <label for="instance-graph-layout-select" class="instance-graph-layout-label">Layout</label>
+        <button type="button" id="instance-graph-legend-toggle" class="instance-graph-legend-toggle"
+                aria-pressed="false"
+                title="Show the notation key for this instance graph">Legend</button>
         <select id="instance-graph-layout-select" class="instance-graph-layout-select">
             <option value="sgd">SGD (default · fast quality)</option>
             <option value="stress">Stress majorization (cluster separation)</option>
@@ -21,6 +24,12 @@
     </div>
     <div class="instance-graph-container">
         <canvas id="instance-graph-canvas"></canvas>
+        {# Adaptive notation key: the viz draws only the rows this A-box
+           uses, via the shared shell. Hidden until toggled. #}
+        <div class="instance-graph-legend" id="instance-graph-legend" style="display: none;"
+             role="img" aria-label="Instance graph notation key">
+            <canvas id="instance-graph-legend-canvas"></canvas>
+        </div>
     </div>
 </div>
 
@@ -46,6 +55,33 @@
     .instance-graph-layout-label {
         font-size: var(--font-size-sm, 13px);
         color: var(--color-text-muted, #9ca3af);
+    }
+    .instance-graph-legend-toggle {
+        font-size: var(--font-size-sm, 13px);
+        color: var(--color-text-muted, #9ca3af);
+        background: var(--color-bg-secondary, #2d2d44);
+        border: 1px solid var(--color-border, #374151);
+        border-radius: var(--radius-sm, 4px);
+        padding: 2px 8px;
+        cursor: pointer;
+    }
+    .instance-graph-legend-toggle[aria-pressed="true"] {
+        color: var(--color-text, #e5e7eb);
+        border-color: var(--color-accent, #4b9fd5);
+    }
+    .instance-graph-legend {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        background: #1a1a2e;
+        border: 1px solid var(--color-border, #374151);
+        border-radius: var(--radius-md, 6px);
+        overflow: hidden;
+    }
+    /* The canvas carries its own extent-derived style size; the panel
+       wraps it, so the box is exactly as tall as the key's rows. */
+    .instance-graph-legend canvas {
+        display: block;
     }
     .instance-graph-layout-select {
         font-size: var(--font-size-sm, 13px);
@@ -107,16 +143,13 @@
                 // disagree with the heading about the same graph. Each button
                 // keeps its own dataset's numbers.
                 const entry = (window.__PANSCHEMA_INSTANCE_GRAPHS__ || [])[index];
-                if (entry && entry.data) {
-                    const nodes = entry.data.nodes.length;
-                    const edges = entry.data.edges.length;
-                    const label = `${nodes} node${nodes === 1 ? '' : 's'}, ${edges} edge${edges === 1 ? '' : 's'}`;
+                if (entry && entry.data && window.PanschemaGraphShell) {
                     ['instance-graph-count', 'instance-graph-sidebar-count'].forEach((id) => {
-                        const badge = document.getElementById(id);
-                        if (!badge) return;
-                        badge.textContent = `${nodes} / ${edges}`;
-                        badge.title = label;
-                        badge.setAttribute('aria-label', label);
+                        window.PanschemaGraphShell.setBadge(
+                            document.getElementById(id),
+                            entry.data.nodes.length,
+                            entry.data.edges.length
+                        );
                     });
                 }
                 if (typeof window.__panschemaShowInstanceGraph === 'function') {
@@ -155,28 +188,36 @@
 
         // The same layout family the schema graph offers; persisted under
         // its own key since a good A-box layout can differ from the T-box's.
+        const shell = window.PanschemaGraphShell;
         const layoutSelect = document.getElementById('instance-graph-layout-select');
-        const LAYOUT_KEY = 'panschema-instance-graph-layout';
-        function currentLayout() {
-            return (layoutSelect && layoutSelect.value) || 'sgd';
-        }
-        try {
-            const saved = window.localStorage.getItem(LAYOUT_KEY);
-            if (saved && layoutSelect && [...layoutSelect.options].some((o) => o.value === saved)) {
-                layoutSelect.value = saved;
-            }
-        } catch (_) {
-            /* storage unavailable; the default stands */
-        }
+        const layout = shell.layoutPref('panschema-instance-graph-layout', layoutSelect, 'sgd');
+        layout.restore();
 
         let viz;
         let shownIndex = -1;
-        // Re-fit the camera as the layout settles, as the schema graph does —
-        // collide + repulsion are non-linear, so the extent drifts past the
-        // first fit and a single early fit leaves the graph in a corner.
-        const REFIT_TICKS = [50, 100, 200, 300];
-        let tickCount = 0;
-        let hasFittedBounds = false;
+        const refitter = shell.makeRefitter();
+        const hoverFocus = shell.makeHoverFocus();
+
+        // The adaptive notation key for the shown dataset, toggleable.
+        const legendToggle = document.getElementById('instance-graph-legend-toggle');
+        const legendPanel = document.getElementById('instance-graph-legend');
+        const legendCanvas = document.getElementById('instance-graph-legend-canvas');
+        let legendOpen = false;
+        function refreshLegend() {
+            if (!legendOpen || !legendPanel) return;
+            legendPanel.style.display = 'block';
+            if (!shell.renderLegend(viz, legendCanvas)) {
+                legendPanel.style.display = 'none';
+            }
+        }
+        if (legendToggle) {
+            legendToggle.addEventListener('click', () => {
+                legendOpen = !legendOpen;
+                legendToggle.setAttribute('aria-pressed', legendOpen ? 'true' : 'false');
+                if (legendPanel) legendPanel.style.display = legendOpen ? 'block' : 'none';
+                refreshLegend();
+            });
+        }
         function show(index) {
             const entry = graphs[index];
             if (!entry || !entry.data) return false;
@@ -185,7 +226,7 @@
             // memory, so release it rather than leaving it to the collector.
             const previous = viz;
             try {
-                viz = new mod.Visualization(canvas, JSON.stringify(entry.data), 16, 9, currentLayout());
+                viz = new mod.Visualization(canvas, JSON.stringify(entry.data), 16, 9, layout.read());
             } catch (e) {
                 console.warn('instance graph: init failed', e?.message ?? e);
                 return false;
@@ -198,8 +239,10 @@
                 }
             }
             shownIndex = index;
-            tickCount = 0;
-            hasFittedBounds = false;
+            refitter.reset();
+            hoverFocus.reset();
+            // A different dataset can need different legend rows.
+            refreshLegend();
             // Exposed for e2e assertions and debugging.
             window.__panschema_instance_viz = viz;
             return true;
@@ -207,11 +250,7 @@
 
         if (layoutSelect) {
             layoutSelect.addEventListener('change', () => {
-                try {
-                    window.localStorage.setItem(LAYOUT_KEY, currentLayout());
-                } catch (_) {
-                    /* storage unavailable */
-                }
+                layout.save();
                 if (shownIndex >= 0) show(shownIndex);
             });
         }
@@ -231,13 +270,7 @@
         function frame() {
             try {
                 viz.tick();
-                tickCount++;
-                if (!hasFittedBounds && REFIT_TICKS.includes(tickCount)) {
-                    viz.fit_to_bounds(40);
-                    if (tickCount === REFIT_TICKS[REFIT_TICKS.length - 1]) {
-                        hasFittedBounds = true;
-                    }
-                }
+                refitter.onTick(viz);
                 viz.render();
             } catch (_) {
                 /* transient during teardown */
@@ -265,10 +298,8 @@
             lastY = e.clientY;
         });
 
-        // Focus-on-hover, matching the schema graph: hovering a node focuses
-        // its neighborhood; leaving clears it.
-        const FOCUS_HOP_DEPTH = 2;
-        let lastFocusedNodeIdx = -1;
+        // Focus-on-hover through the shared shell, so the hop depth and the
+        // clear-on-leave rule match the schema graph by construction.
         canvas.addEventListener('mousemove', (e) => {
             if (dragging || !viz) return;
             const rect = canvas.getBoundingClientRect();
@@ -276,19 +307,12 @@
             const y = (e.clientY - rect.top) * dpr;
             if (typeof viz.update_hover === 'function') viz.update_hover(x, y);
             const idx = typeof viz.hovered_node_index === 'function' ? viz.hovered_node_index() : -1;
-            if (idx === lastFocusedNodeIdx) return;
-            if (idx >= 0) {
-                if (typeof viz.focus_node === 'function') viz.focus_node(idx, FOCUS_HOP_DEPTH);
-            } else if (typeof viz.clear_focus === 'function') {
-                viz.clear_focus();
-            }
-            lastFocusedNodeIdx = idx;
+            hoverFocus.apply(viz, idx);
         });
         canvas.addEventListener('mouseleave', () => {
             if (!viz) return;
             if (typeof viz.clear_hover === 'function') viz.clear_hover();
-            if (typeof viz.clear_focus === 'function') viz.clear_focus();
-            lastFocusedNodeIdx = -1;
+            hoverFocus.apply(viz, -1);
         });
         canvas.addEventListener(
             'wheel',
@@ -301,13 +325,7 @@
 
         window.addEventListener('resize', () => {
             resize();
-            // The viz tracks the canvas size for hit-testing and fit; a
-            // resized canvas without viz.resize leaves both using stale
-            // dimensions.
-            if (viz && typeof viz.resize === 'function') {
-                viz.resize(canvas.width, canvas.height);
-                viz.fit_to_bounds(40);
-            }
+            shell.forwardResize(viz, canvas);
         });
     })();
 </script>

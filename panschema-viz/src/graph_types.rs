@@ -66,7 +66,7 @@ impl NodeType {
 }
 
 /// Edge type enumeration for semantic categorization
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum EdgeType {
     /// Class inheritance (is_a relationship)

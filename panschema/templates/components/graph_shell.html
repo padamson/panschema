@@ -1,0 +1,156 @@
+{# Shared behaviours for every graph canvas on the page. The wasm
+   Visualization is the one renderer; this module is the one place the
+   page-side wiring around it lives — badge formatting, the settle-and-refit
+   schedule, hover→focus mapping, resize forwarding, layout persistence,
+   and the adaptive legend. Both the schema canvas and the instance canvas
+   call these, so a behaviour fixed here is fixed on every graph. #}
+<script>
+    window.PanschemaGraphShell = (function () {
+        'use strict';
+
+        // Graph counts read `nodes / edges` everywhere; the label says which
+        // is which for a reader who hasn't been told the convention.
+        function setBadge(el, nodes, edges) {
+            if (!el) return;
+            const label = `${nodes} node${nodes === 1 ? '' : 's'}, ${edges} edge${edges === 1 ? '' : 's'}`;
+            el.textContent = `${nodes} / ${edges}`;
+            el.title = label;
+            el.setAttribute('aria-label', label);
+        }
+
+        // Re-fit the camera as the layout settles. Collide + repulsion are
+        // non-linear, so the extent drifts past the first fit; a single
+        // early fit leaves the graph in a corner of its viewport.
+        const REFIT_TICKS = [50, 100, 200, 300];
+        const REFIT_PADDING = 40;
+        function makeRefitter() {
+            let tickCount = 0;
+            let done = false;
+            return {
+                reset() {
+                    tickCount = 0;
+                    done = false;
+                },
+                onTick(viz) {
+                    tickCount++;
+                    if (!done && REFIT_TICKS.includes(tickCount)) {
+                        viz.fit_to_bounds(REFIT_PADDING);
+                        if (tickCount === REFIT_TICKS[REFIT_TICKS.length - 1]) {
+                            done = true;
+                        }
+                    }
+                },
+            };
+        }
+
+        // Hovering a node focuses its neighborhood; leaving clears it. The
+        // hop depth matches on every canvas so focus means one thing.
+        const FOCUS_HOP_DEPTH = 2;
+        function makeHoverFocus() {
+            let last = -1;
+            return {
+                reset() {
+                    last = -1;
+                },
+                apply(viz, hoveredIdx) {
+                    if (!viz || hoveredIdx === last) return;
+                    if (hoveredIdx >= 0) {
+                        if (typeof viz.focus_node === 'function') {
+                            viz.focus_node(hoveredIdx, FOCUS_HOP_DEPTH);
+                        }
+                    } else if (typeof viz.clear_focus === 'function') {
+                        viz.clear_focus();
+                    }
+                    last = hoveredIdx;
+                },
+            };
+        }
+
+        // The viz tracks canvas size for hit-testing and fit; a resized
+        // canvas without viz.resize leaves both using stale dimensions.
+        function forwardResize(viz, canvas) {
+            if (viz && typeof viz.resize === 'function') {
+                viz.resize(canvas.width, canvas.height);
+                viz.fit_to_bounds(REFIT_PADDING);
+            }
+        }
+
+        // Layout choice persists per canvas: a good A-box layout can differ
+        // from the T-box's, so each picker gets its own storage key.
+        function layoutPref(storageKey, select, fallback) {
+            function read() {
+                return (select && select.value) || fallback;
+            }
+            function restore() {
+                try {
+                    const saved = window.localStorage.getItem(storageKey);
+                    if (
+                        saved &&
+                        select &&
+                        [...select.options].some((o) => o.value === saved && !o.disabled)
+                    ) {
+                        select.value = saved;
+                    }
+                } catch (_) {
+                    /* storage unavailable; the markup default stands */
+                }
+            }
+            function save() {
+                try {
+                    window.localStorage.setItem(storageKey, read());
+                } catch (_) {
+                    /* storage unavailable */
+                }
+            }
+            return { read, restore, save };
+        }
+
+        // The adaptive notation key: the viz draws only the rows its graph
+        // uses. Older bundles predate the method — report failure so the
+        // caller can hide the control rather than show a dead button.
+        function renderLegend(viz, legendCanvas) {
+            if (!viz || !legendCanvas || typeof viz.render_legend_onto !== 'function') {
+                return false;
+            }
+            const dpr = window.devicePixelRatio || 1;
+            // The panel sizes to its rows: the viz reports the extent its
+            // adaptive key needs, so a short key doesn't sit in a tall
+            // fixed box of dead space.
+            let w = 240;
+            let h = 320;
+            if (typeof viz.legend_extent_json === 'function') {
+                try {
+                    const extent = JSON.parse(viz.legend_extent_json());
+                    w = extent.width;
+                    h = extent.height;
+                } catch (_) {
+                    /* fall back to the defaults above */
+                }
+            }
+            legendCanvas.style.width = w + 'px';
+            legendCanvas.style.height = h + 'px';
+            legendCanvas.width = Math.max(1, Math.round(w * dpr));
+            legendCanvas.height = Math.max(1, Math.round(h * dpr));
+            // The renderer draws in logical px; pre-scale so HiDPI stays
+            // crisp, as the schema legend does.
+            const ctx = legendCanvas.getContext('2d');
+            if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            try {
+                viz.render_legend_onto(legendCanvas, dpr);
+                return true;
+            } catch (e) {
+                console.warn('graph legend render failed', e?.message ?? e);
+                return false;
+            }
+        }
+
+        return {
+            setBadge,
+            makeRefitter,
+            makeHoverFocus,
+            forwardResize,
+            layoutPref,
+            renderLegend,
+        };
+    })();
+</script>
