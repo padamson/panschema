@@ -132,7 +132,7 @@ jobs:
       # --force); the action handles the already-installed case and is
       # much faster than building from source.
       - name: Install cargo-mutants
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@v2.83.4
         with:
           tool: cargo-mutants
 
@@ -198,7 +198,7 @@ jobs:
       # --force); the action handles the already-installed case and is
       # much faster than building from source.
       - name: Install cargo-mutants
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@v2.83.4
         with:
           tool: cargo-mutants
 

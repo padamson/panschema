@@ -1,0 +1,28 @@
+id: https://example.org/typed-wine
+name: typed_wine
+description: Fixture with an enum-ranged slot, for the typed instance-graph encoding.
+prefixes:
+  typedwine: https://example.org/typed-wine/
+default_prefix: typedwine
+default_range: string
+classes:
+  Catalog:
+    tree_root: true
+    attributes:
+      wines:
+        range: Wine
+        multivalued: true
+  Wine:
+    attributes:
+      id:
+        identifier: true
+      name:
+        range: string
+      color:
+        range: WineColorEnum
+enums:
+  WineColorEnum:
+    permissible_values:
+      red:
+      white:
+      rose:

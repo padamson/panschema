@@ -135,7 +135,21 @@ It comes from either the schema's embedded OWL individuals, or a separate
 ```bash
 # Render a LinkML data file (a tree_root container of records) as the instance graph
 panschema generate --schema schema.yaml --instances data.yaml --output docs/
+
+# Several curated graphs on one page — a small teaching preview and the full
+# worked example — with a selector to switch between them in place
+panschema generate --schema schema.yaml \
+  --instances data/preview.yaml --instances data/worked-example.yaml \
+  --output docs/
 ```
+
+Repeat `--instances` to carry more than one curated graph. Each is labelled by
+its file stem and gets its own cards, provenance line, and node/edge counts;
+the first is shown until the reader picks another, and switching happens in the
+page with no navigation. Curated graphs are teaching artifacts, so keep them
+small — panschema warns per graph past a few hundred nodes. Formats that emit a
+single A-box (`ttl`, `jsonld`, `rdfxml`, `ntriples`, `instance-graph-json`)
+take exactly one file.
 
 Each record becomes a typed node keyed by its identifier; a class-valued slot
 becomes an edge to the referenced record, and scalar values ride along as node

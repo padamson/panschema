@@ -435,6 +435,31 @@ pub struct IndividualData {
     pub property_values: Vec<PropertyValueData>,
 }
 
+/// One curated A-box as the page renders it: its label, its individuals,
+/// and its own viz payload.
+struct InstanceDatasetView<'a> {
+    name: &'a str,
+    /// Prefix for this dataset's element ids and in-page anchors. Empty for a
+    /// lone dataset, so its published `#ind-<id>` links keep working; with
+    /// several, a preview that shares records with the worked example would
+    /// otherwise duplicate ids and cross-link into a hidden panel.
+    anchor_prefix: String,
+    /// Whether this is the dataset the page opens on.
+    is_default: bool,
+    /// The dataset's own metadata: the container's scalar values (a data
+    /// file's top-level `title:` / `description:`), in file order.
+    metadata: &'a [(String, String)],
+    /// The name as a JSON string literal, for the payload array.
+    name_json: &'a str,
+    provenance: Option<&'a str>,
+    individuals: &'a [EntityRef],
+    individual_data: &'a [IndividualData],
+    /// `None` when the graph viz is disabled or this A-box has no nodes.
+    graph_json: Option<&'a str>,
+    node_count: usize,
+    edge_count: usize,
+}
+
 #[derive(Template)]
 #[template(path = "index.html")]
 struct IndexTemplate<'a> {
@@ -452,21 +477,22 @@ struct IndexTemplate<'a> {
     enum_data: &'a [EnumData],
     types: &'a [EntityRef],
     type_data: &'a [TypeData],
-    individuals: &'a [EntityRef],
-    individual_data: &'a [IndividualData],
     namespaces: &'a [Namespace],
     /// Empty slice for class cards that don't have slots yet
     /// Graph data JSON for visualization (None = no graph)
     graph_json: Option<&'a str>,
-    /// Separate instance (A-box) graph JSON rendered in the Individuals
-    /// section (None = the schema declares no individuals).
-    instance_graph_json: Option<&'a str>,
-    /// Instance-graph node/edge counts for the sidebar badge.
+    /// The curated A-boxes rendered in the Instance Graph section, in
+    /// declaration order. Empty when the schema declares no individuals;
+    /// the first is the one shown before the reader picks another.
+    instance_datasets: &'a [InstanceDatasetView<'a>],
+    /// The default dataset's node/edge counts, reported by both the sidebar
+    /// entry and the section heading. Every graph count reads nodes/edges.
     instance_node_count: usize,
     instance_edge_count: usize,
-    /// Where the A-box came from (the instance-data file name); None for
-    /// individuals embedded in the schema itself.
-    instance_provenance: Option<&'a str>,
+    /// Whether any A-box is on the page, gating the sidebar entry.
+    has_instances: bool,
+    /// How many datasets, for the sidebar's singular/plural label.
+    instance_dataset_count: usize,
     /// Number of nodes in the graph (for sidebar badge)
     graph_node_count: usize,
     /// Number of edges in the graph (for sidebar badge)
@@ -573,13 +599,56 @@ pub struct HtmlWriter {
     /// CURIEs (the historical behavior); the CLI generate path wires
     /// a populated store so they render as upstream labels.
     pub label_store: Option<crate::labels::LabelStore>,
-    /// Explicit A-box to render as the instance graph. `None` falls back
-    /// to the OWL worked-example individuals embedded in the schema; the
-    /// `generate --instances` path sets this from a LinkML data file.
-    pub instance_set: Option<crate::instances::InstanceSet>,
-    /// Display name of the instance-data source (the file name), shown as
-    /// the instance-graph section's provenance line.
-    pub instance_provenance: Option<String>,
+    /// Curated A-boxes to render in the Instance Graph section, in
+    /// declaration order. Empty falls back to the OWL worked-example
+    /// individuals embedded in the schema. More than one renders a
+    /// selector; the first is shown by default.
+    pub instance_datasets: Vec<InstanceDataset>,
+}
+
+/// One curated A-box rendered in the Instance Graph section.
+///
+/// A schema page carries a few of these — a small teaching preview, a full
+/// worked example — and the reader switches between them in place. The
+/// name labels the selector entry; it is unused when only one is declared.
+#[derive(Debug, Clone)]
+pub struct InstanceDataset {
+    /// Selector label for this A-box.
+    pub name: String,
+    /// Where the data came from (the instance-data file name), shown as
+    /// the provenance line. `None` for individuals embedded in the schema.
+    pub provenance: Option<String>,
+    /// The individuals themselves.
+    pub set: crate::instances::InstanceSet,
+    /// Show this dataset before the reader picks another. At most one
+    /// should be marked; with none marked the first declared wins.
+    pub default_selected: bool,
+}
+
+impl InstanceDataset {
+    /// A dataset labelled `name`, with no provenance recorded yet.
+    pub fn new(name: impl Into<String>, set: crate::instances::InstanceSet) -> Self {
+        Self {
+            name: name.into(),
+            provenance: None,
+            set,
+            default_selected: false,
+        }
+    }
+
+    /// Open this dataset first — the `exemplar = true` role.
+    #[must_use]
+    pub fn as_default(mut self) -> Self {
+        self.default_selected = true;
+        self
+    }
+
+    /// Name the file this A-box was read from, for the provenance line.
+    #[must_use]
+    pub fn with_provenance(mut self, source: impl Into<String>) -> Self {
+        self.provenance = Some(source.into());
+        self
+    }
 }
 
 /// Parse a `"W:H"` aspect-ratio string. Both components must be positive
@@ -628,8 +697,7 @@ impl HtmlWriter {
             version_context: None,
             site_root_href: None,
             label_store: None,
-            instance_set: None,
-            instance_provenance: None,
+            instance_datasets: Vec::new(),
         }
     }
 
@@ -642,8 +710,7 @@ impl HtmlWriter {
             version_context: None,
             site_root_href: None,
             label_store: None,
-            instance_set: None,
-            instance_provenance: None,
+            instance_datasets: Vec::new(),
         }
     }
 
@@ -655,18 +722,11 @@ impl HtmlWriter {
         self
     }
 
-    /// Attach an explicit A-box (e.g. read from a LinkML instance-data
-    /// file) to render as the instance graph, in place of the schema's
-    /// embedded OWL individuals.
+    /// Add a named curated A-box. Several may be attached; the first is
+    /// shown by default and the rest are reachable through the selector.
     #[must_use]
-    pub fn with_instances(mut self, set: crate::instances::InstanceSet) -> Self {
-        self.instance_set = Some(set);
-        self
-    }
-
-    /// Name the instance-data source for the section's provenance line.
-    pub fn with_instance_provenance(mut self, name: String) -> Self {
-        self.instance_provenance = Some(name);
+    pub fn with_instance_dataset(mut self, dataset: InstanceDataset) -> Self {
+        self.instance_datasets.push(dataset);
         self
     }
 
@@ -710,7 +770,7 @@ impl HtmlWriter {
     /// (external references render as CURIEs).
     #[cfg(test)]
     fn build_template_data(schema: &SchemaDefinition) -> TemplateData {
-        Self::build_template_data_with_labels(schema, None, None)
+        Self::build_template_data_with_labels(schema, None)
     }
 
     /// Individual card data from the instance model: one entry per
@@ -805,7 +865,6 @@ impl HtmlWriter {
     fn build_template_data_with_labels(
         schema: &SchemaDefinition,
         labels: Option<&crate::labels::LabelStore>,
-        instances: Option<&crate::instances::InstanceSet>,
     ) -> TemplateData {
         let iri = schema.id.clone().unwrap_or_else(|| schema.name.clone());
         let title = schema.title.clone().unwrap_or_else(|| schema.name.clone());
@@ -1192,21 +1251,6 @@ impl HtmlWriter {
             });
         }
 
-        // Build individual data from annotations
-        // One card path over the instance model (ADR-008/009): the cards
-        // render from an `InstanceSet` regardless of whether the A-box was
-        // authored as embedded OWL individuals or a LinkML data file.
-        let owned_set;
-        let effective_set = match instances {
-            Some(set) => set,
-            None => {
-                owned_set = crate::instances::InstanceSet::from_owl_annotations(schema);
-                &owned_set
-            }
-        };
-        let (individual_refs, individual_data_list) =
-            Self::build_individual_data(schema, effective_set);
-
         // Build enumeration data, sorted by name for stable output.
         let mut enum_refs = Vec::new();
         let mut enum_data_list = Vec::new();
@@ -1310,8 +1354,6 @@ impl HtmlWriter {
             enum_data: enum_data_list,
             type_refs,
             type_data: type_data_list,
-            individual_refs,
-            individual_data: individual_data_list,
         }
     }
 }
@@ -1338,8 +1380,22 @@ struct TemplateData {
     enum_data: Vec<EnumData>,
     type_refs: Vec<EntityRef>,
     type_data: Vec<TypeData>,
-    individual_refs: Vec<EntityRef>,
-    individual_data: Vec<IndividualData>,
+}
+
+impl HtmlWriter {
+    /// The datasets to render. With none attached, the schema's own embedded
+    /// OWL individuals are the subject.
+    fn effective_datasets(&self, schema: &SchemaDefinition) -> Vec<InstanceDataset> {
+        if self.instance_datasets.is_empty() {
+            return vec![InstanceDataset {
+                name: String::new(),
+                provenance: None,
+                set: crate::instances::InstanceSet::from_owl_annotations(schema),
+                default_selected: true,
+            }];
+        }
+        self.instance_datasets.clone()
+    }
 }
 
 impl Writer for HtmlWriter {
@@ -1347,11 +1403,8 @@ impl Writer for HtmlWriter {
         // Create output directory if it doesn't exist
         fs::create_dir_all(output).map_err(IoError::Io)?;
 
-        let data = Self::build_template_data_with_labels(
-            schema,
-            self.label_store.as_ref(),
-            self.instance_set.as_ref(),
-        );
+        let datasets = self.effective_datasets(schema);
+        let data = Self::build_template_data_with_labels(schema, self.label_store.as_ref());
 
         // Generate graph JSON for visualization (only if enabled)
         let (graph_json_string, graph_node_count, graph_edge_count) = if self.include_graph {
@@ -1373,32 +1426,90 @@ impl Writer for HtmlWriter {
             (None, 0, 0)
         };
 
-        // Separate instance (A-box) graph, rendered beneath the Individuals
-        // section. Sourced from an explicit LinkML-data A-box when one is
-        // attached, else from the schema's embedded OWL individuals. Only
-        // emitted when that A-box is non-empty, so an individual-free schema
-        // gets no instance graph. Escaped the same way as the schema graph
-        // JSON (see above).
-        let (instance_graph_json, instance_node_count, instance_edge_count) = if self.include_graph
-        {
-            let graph = GraphWriter::new();
-            let instance_data = match &self.instance_set {
-                Some(set) => graph.instance_set_to_graph(schema, set),
-                None => graph.schema_to_instance_graph(schema),
-            };
-            if instance_data.nodes.is_empty() {
-                (None, 0, 0)
+        // Each curated A-box gets its own cards and its own viz payload,
+        // rendered as a graph distinct from the schema (T-box) one. A
+        // payload is emitted only for a non-empty A-box, so an
+        // individual-free schema gets no instance graph. Escaped the same
+        // way as the schema graph JSON (see above).
+        let instance_graph = GraphWriter::new();
+        let mut dataset_parts = Vec::with_capacity(datasets.len());
+        for dataset in &datasets {
+            let (individual_refs, individual_data) =
+                Self::build_individual_data(schema, &dataset.set);
+            let (json, node_count, edge_count) = if self.include_graph {
+                let instance_data = instance_graph.instance_set_to_graph(schema, &dataset.set);
+                if instance_data.nodes.is_empty() {
+                    (None, 0, 0)
+                } else {
+                    let nodes = instance_data.nodes.len();
+                    let edges = instance_data.edges.len();
+                    let json = serde_json::to_string(&instance_data)
+                        .map_err(|e| IoError::Write(e.to_string()))?
+                        .replace('<', "\\u003c");
+                    (Some(json), nodes, edges)
+                }
             } else {
-                let nodes = instance_data.nodes.len();
-                let edges = instance_data.edges.len();
-                let json = serde_json::to_string(&instance_data)
-                    .map_err(|e| IoError::Write(e.to_string()))?
-                    .replace('<', "\\u003c");
-                (Some(json), nodes, edges)
+                (None, 0, 0)
+            };
+            let name_json = serde_json::to_string(&dataset.name)
+                .map_err(|e| IoError::Write(e.to_string()))?
+                .replace('<', "\\u003c");
+            dataset_parts.push((
+                individual_refs,
+                individual_data,
+                json,
+                node_count,
+                edge_count,
+                name_json,
+            ));
+        }
+        // A dataset with neither cards nor a payload has nothing to show.
+        let dataset_views: Vec<InstanceDatasetView<'_>> = datasets
+            .iter()
+            .zip(&dataset_parts)
+            .filter(|(_, (refs, _, json, _, _, _))| !refs.is_empty() || json.is_some())
+            .map(
+                |(dataset, (refs, cards, json, node_count, edge_count, name_json))| {
+                    InstanceDatasetView {
+                        name: &dataset.name,
+                        anchor_prefix: String::new(),
+                        is_default: dataset.default_selected,
+                        metadata: &dataset.set.metadata,
+                        name_json,
+                        provenance: dataset.provenance.as_deref(),
+                        individuals: refs,
+                        individual_data: cards,
+                        graph_json: json.as_deref(),
+                        node_count: *node_count,
+                        edge_count: *edge_count,
+                    }
+                },
+            )
+            .collect();
+
+        let mut dataset_views = dataset_views;
+        // Several datasets share one page, and their records may overlap, so
+        // each gets its own anchor namespace. A lone dataset keeps the bare
+        // `ind-<id>` form its deep links already use.
+        if dataset_views.len() > 1 {
+            for (i, view) in dataset_views.iter_mut().enumerate() {
+                view.anchor_prefix = format!("d{i}-");
             }
-        } else {
-            (None, 0, 0)
-        };
+        }
+        // With nothing marked — or with the marked dataset dropped for having
+        // nothing to show — the first surviving one opens.
+        if !dataset_views.iter().any(|v| v.is_default)
+            && let Some(first) = dataset_views.first_mut()
+        {
+            first.is_default = true;
+        }
+        let dataset_views = dataset_views;
+
+        // The sidebar badge describes the dataset the reader sees first.
+        let (instance_node_count, instance_edge_count) = dataset_views
+            .iter()
+            .find(|v| v.is_default)
+            .map_or((0, 0), |v| (v.node_count, v.edge_count));
 
         let template = IndexTemplate {
             title: &data.title,
@@ -1415,14 +1526,13 @@ impl Writer for HtmlWriter {
             enum_data: &data.enum_data,
             types: &data.type_refs,
             type_data: &data.type_data,
-            individuals: &data.individual_refs,
-            individual_data: &data.individual_data,
             namespaces: &data.namespaces,
             graph_json: graph_json_string.as_deref(),
-            instance_graph_json: instance_graph_json.as_deref(),
+            instance_datasets: &dataset_views,
             instance_node_count,
             instance_edge_count,
-            instance_provenance: self.instance_provenance.as_deref(),
+            has_instances: !dataset_views.is_empty(),
+            instance_dataset_count: dataset_views.len(),
             graph_node_count,
             graph_edge_count,
             graph_aspect_w: self.graph_aspect.0,
@@ -3415,13 +3525,14 @@ mod tests {
         let reader = OwlReader::new();
         let schema = reader.read(&reference_ontology_path()).unwrap();
 
-        let data = HtmlWriter::build_template_data(&schema);
+        let set = crate::instances::InstanceSet::from_owl_annotations(&schema);
+        let (refs, cards) = HtmlWriter::build_individual_data(&schema, &set);
 
         // Should have 1 individual
-        assert_eq!(data.individual_refs.len(), 1);
-        assert_eq!(data.individual_data.len(), 1);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(cards.len(), 1);
 
-        let fido = &data.individual_data[0];
+        let fido = &cards[0];
         assert_eq!(fido.id, "fido");
     }
 
@@ -3508,21 +3619,534 @@ mod tests {
         );
     }
 
+    /// Two-class schema (`Bottle` referencing `Rack`) plus the `tree_root`
+    /// container the LinkML data loader keys off, the minimum shape for
+    /// building distinct A-boxes.
+    fn bottle_rack_schema() -> SchemaDefinition {
+        use crate::linkml::{ClassDefinition, SlotDefinition};
+        let mut schema = SchemaDefinition::new("cellar");
+        let mut container = ClassDefinition::new("Cellar");
+        container.tree_root = true;
+        for (slot, range) in [("bottles", "Bottle"), ("racks", "Rack")] {
+            let mut sd = SlotDefinition::new(slot);
+            sd.range = Some(range.to_string());
+            sd.multivalued = true;
+            container.attributes.insert(slot.to_string(), sd);
+        }
+        schema.classes.insert("Cellar".to_string(), container);
+        for class in ["Bottle", "Rack"] {
+            let mut c = ClassDefinition::new(class);
+            let mut id = SlotDefinition::new("id");
+            id.identifier = true;
+            id.range = Some("string".to_string());
+            c.attributes.insert("id".to_string(), id);
+            let mut name = SlotDefinition::new("name");
+            name.range = Some("string".to_string());
+            c.attributes.insert("name".to_string(), name);
+            if class == "Bottle" {
+                let mut stored_in = SlotDefinition::new("stored_in");
+                stored_in.range = Some("Rack".to_string());
+                c.attributes.insert("stored_in".to_string(), stored_in);
+            }
+            schema.classes.insert(class.to_string(), c);
+        }
+        schema
+    }
+
+    fn instance_set_from_yaml(
+        schema: &SchemaDefinition,
+        yaml: &str,
+    ) -> crate::instances::InstanceSet {
+        let data: serde_norway::Value = serde_norway::from_str(yaml).unwrap();
+        crate::instances::InstanceSet::from_linkml_data(schema, &data)
+    }
+
     #[test]
-    fn provenance_line_names_the_instance_data_source() {
+    fn multiple_instance_datasets_render_a_switchable_selector() {
+        let schema = bottle_rack_schema();
+        let preview = instance_set_from_yaml(&schema, "bottles:\n  - id: b1\n    name: Morgon\n");
+        let worked = instance_set_from_yaml(
+            &schema,
+            "bottles:\n  - id: b2\n    name: Fleurie\n    stored_in: r1\nracks:\n  - id: r1\n    name: North Rack\n",
+        );
+
+        let writer = HtmlWriter::new()
+            .with_instance_dataset(InstanceDataset::new("preview", preview))
+            .with_instance_dataset(InstanceDataset::new("worked-example", worked));
+        let temp_dir = std::env::temp_dir().join("panschema_instance_selector_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        writer.write(&schema, &temp_dir).expect("write");
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        assert!(
+            html.contains(r#"role="tablist""#),
+            "several datasets must offer a selector"
+        );
+        assert_eq!(
+            html.matches(r#"role="tab""#).count(),
+            2,
+            "one selector entry per declared dataset"
+        );
+        assert_eq!(
+            html.matches("data-instance-dataset=").count(),
+            6,
+            "each dataset needs a selector entry plus its metadata and individuals panels"
+        );
+        assert!(
+            html.contains(">preview") && html.contains(">worked-example"),
+            "the selector must name every declared dataset"
+        );
+        assert!(
+            html.contains("Morgon") && html.contains("Fleurie") && html.contains("North Rack"),
+            "every dataset's individuals must be present in the page"
+        );
+        assert_eq!(
+            html.matches(r#"class="instance-dataset-panel""#).count(),
+            2,
+            "each dataset gets its own content panel"
+        );
+        assert!(
+            html.contains(r#"data-instance-dataset="0">"#),
+            "the first dataset's panel shows by default"
+        );
+        assert!(
+            html.contains(r#"data-instance-dataset="1" hidden>"#),
+            "every other dataset's panel starts hidden"
+        );
+        assert_eq!(
+            html.matches("__PANSCHEMA_INSTANCE_GRAPHS__ =").count(),
+            1,
+            "every dataset's viz payload rides in one array"
+        );
+        assert!(
+            html.contains(r#"{"name": "preview""#) && html.contains(r#"{"name": "worked-example""#),
+            "each payload entry is labelled with its dataset"
+        );
+    }
+
+    #[test]
+    fn the_dataset_marked_default_is_the_one_shown_first() {
+        // `exemplar = true` on a later entry must not have to be reordered to
+        // be the default: declaration order drives the selector, the flag
+        // drives which panel opens.
+        let schema = bottle_rack_schema();
+        let preview = instance_set_from_yaml(&schema, "bottles:\n  - id: b1\n    name: Morgon\n");
+        let worked = instance_set_from_yaml(
+            &schema,
+            "bottles:\n  - id: b2\n    name: Fleurie\n    stored_in: r1\nracks:\n  - id: r1\n    name: North Rack\n",
+        );
+
+        let writer = HtmlWriter::new()
+            .with_instance_dataset(InstanceDataset::new("preview", preview))
+            .with_instance_dataset(InstanceDataset::new("worked-example", worked).as_default());
+        let temp_dir = std::env::temp_dir().join("panschema_default_dataset_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        writer.write(&schema, &temp_dir).expect("write");
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        // Order is unchanged: preview is still the first selector entry.
+        let first_tab = html.find(">preview").expect("preview tab present");
+        let second_tab = html
+            .find(">worked-example")
+            .expect("worked-example tab present");
+        assert!(
+            first_tab < second_tab,
+            "declaration order drives the selector order"
+        );
+
+        // But the second dataset is the open one.
+        assert!(
+            html.contains(r#"data-instance-dataset="0" hidden>"#),
+            "the non-default dataset's panel starts hidden"
+        );
+        assert!(
+            html.contains(r#"data-instance-dataset="1">"#),
+            "the dataset marked default is the visible one"
+        );
+        assert_eq!(
+            html.matches(r#"aria-selected="true""#).count(),
+            1,
+            "exactly one selector entry is selected"
+        );
+
+        // The sidebar badge describes the default dataset: two nodes, one edge,
+        // and says which number is which.
+        assert!(
+            html.contains(r##"aria-label="2 nodes, 1 edge""##) && html.contains(">2 / 1<"),
+            "the sidebar badge counts the default dataset's graph, labelled"
+        );
+    }
+
+    #[test]
+    fn a_default_dataset_with_nothing_to_show_yields_the_slot() {
+        // The marked dataset holds no records, so it is dropped from the
+        // page; the surviving one must open rather than leaving every panel
+        // hidden and no tab selected.
+        let schema = bottle_rack_schema();
+        let real = instance_set_from_yaml(&schema, "bottles:\n  - id: b1\n    name: Morgon\n");
+        let empty = instance_set_from_yaml(&schema, "bottles: []\n");
+
+        let writer = HtmlWriter::new()
+            .with_instance_dataset(InstanceDataset::new("real", real))
+            .with_instance_dataset(InstanceDataset::new("empty", empty).as_default());
+        let temp_dir = std::env::temp_dir().join("panschema_empty_default_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        writer.write(&schema, &temp_dir).expect("write");
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        assert_eq!(
+            html.matches(r#"class="instance-dataset-panel""#).count(),
+            1,
+            "the empty dataset has nothing to show and is dropped"
+        );
+        assert!(
+            html.contains(r#"data-instance-dataset="0">"#),
+            "the surviving dataset opens"
+        );
+        assert!(html.contains("Morgon"), "its individuals render");
+    }
+
+    #[test]
+    fn datasets_sharing_record_ids_get_distinct_anchors() {
+        // A teaching preview is usually a *subset* of the worked example, so the
+        // same individuals appear in both panels. Emitting `ind-<id>` in each
+        // would duplicate element ids and send a reference link in one panel to
+        // the other panel's card — which is hidden, so the link looks dead.
+        let schema = bottle_rack_schema();
+        let preview = instance_set_from_yaml(
+            &schema,
+            "bottles:\n  - id: b1\n    name: Morgon\n    stored_in: r1\nracks:\n  - id: r1\n    name: North Rack\n",
+        );
+        let worked = instance_set_from_yaml(
+            &schema,
+            "bottles:\n  - id: b1\n    name: Morgon\n    stored_in: r1\nracks:\n  - id: r1\n    name: North Rack\n",
+        );
+
+        let writer = HtmlWriter::new()
+            .with_instance_dataset(InstanceDataset::new("preview", preview))
+            .with_instance_dataset(InstanceDataset::new("worked-example", worked));
+        let temp_dir = std::env::temp_dir().join("panschema_shared_ids_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        writer.write(&schema, &temp_dir).expect("write");
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        let mut counts = std::collections::BTreeMap::new();
+        let mut rest = html.as_str();
+        while let Some(at) = rest.find("id=\"") {
+            rest = &rest[at + 4..];
+            let end = rest.find('"').unwrap_or(0);
+            *counts.entry(&rest[..end]).or_insert(0usize) += 1;
+        }
+        let dupes: Vec<_> = counts.iter().filter(|(_, n)| **n > 1).collect();
+        assert!(
+            dupes.is_empty(),
+            "every element id must be unique across dataset panels; duplicated: {dupes:?}"
+        );
+
+        // Each panel's own links point into its own namespace.
+        assert!(
+            html.contains(r##"href="#d0-ind-b1""##) && html.contains(r##"href="#d1-ind-b1""##),
+            "each panel's entity link must target the card in that same panel"
+        );
+    }
+
+    #[test]
+    fn the_instance_section_heading_counts_nodes_and_edges() {
+        // The heading used to report the number of individuals, which looks
+        // like a node count and isn't one — it silently omits edges, and it
+        // will diverge outright once the A-box gains nodes that aren't
+        // individuals. Every graph count reads nodes/edges.
+        let schema = bottle_rack_schema();
+        let only = instance_set_from_yaml(
+            &schema,
+            "bottles:\n  - id: b1\n    name: Morgon\n    stored_in: r1\nracks:\n  - id: r1\n    name: North Rack\n",
+        );
+
+        let writer = HtmlWriter::new().with_instance_dataset(InstanceDataset::new("only", only));
+        let temp_dir = std::env::temp_dir().join("panschema_instance_heading_count_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        writer.write(&schema, &temp_dir).expect("write");
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        // Two individuals joined by `stored_in`: two nodes, one edge.
+        let heading = html
+            .split_once(r#"id="instance-graph-count""#)
+            .map(|(_, rest)| rest.chars().take(200).collect::<String>())
+            .expect("the instance heading carries a graph count");
+        assert!(
+            heading.contains("2 / 1"),
+            "the heading must report nodes and edges; got: {heading}"
+        );
+        // And it must say which number is which, for a reader who hasn't
+        // been told the convention.
+        assert!(
+            heading.contains("2 nodes") && heading.contains("1 edge"),
+            "the count needs a readable expansion (tooltip/label); got: {heading}"
+        );
+    }
+
+    #[test]
+    fn each_dataset_carries_its_own_counts_and_provenance() {
+        let schema = bottle_rack_schema();
+        let preview = instance_set_from_yaml(&schema, "bottles:\n  - id: b1\n    name: Morgon\n");
+        let worked = instance_set_from_yaml(
+            &schema,
+            "bottles:\n  - id: b2\n    name: Fleurie\n    stored_in: r1\nracks:\n  - id: r1\n    name: North Rack\n",
+        );
+
+        let writer = HtmlWriter::new()
+            .with_instance_dataset(
+                InstanceDataset::new("preview", preview).with_provenance("preview.yaml"),
+            )
+            .with_instance_dataset(
+                InstanceDataset::new("worked-example", worked).with_provenance("worked.yaml"),
+            );
+        let temp_dir = std::env::temp_dir().join("panschema_dataset_counts_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        writer.write(&schema, &temp_dir).expect("write");
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        assert!(
+            html.contains("preview.yaml") && html.contains("worked.yaml"),
+            "each panel names its own source file"
+        );
+        // The one-bottle preview has a single node and no edges; the worked
+        // example has two nodes joined by `stored_in`.
+        assert!(
+            html.contains(">1 / 0<"),
+            "the preview's badge counts its own graph"
+        );
+        assert!(
+            html.contains(">2 / 1<"),
+            "the worked example's badge counts its own graph"
+        );
+    }
+
+    #[test]
+    fn a_single_instance_dataset_renders_without_selector_chrome() {
+        let schema = bottle_rack_schema();
+        let only = instance_set_from_yaml(&schema, "bottles:\n  - id: b1\n    name: Morgon\n");
+
+        let writer = HtmlWriter::new().with_instance_dataset(InstanceDataset::new("only", only));
+        let temp_dir = std::env::temp_dir().join("panschema_single_dataset_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        writer.write(&schema, &temp_dir).expect("write");
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        assert!(
+            !html.contains(r#"role="tablist""#),
+            "one dataset needs no selector"
+        );
+        assert_eq!(
+            html.matches("data-instance-dataset=").count(),
+            2,
+            "the metadata and individuals panels, with no selector entry"
+        );
+        assert!(html.contains("Morgon"), "its individuals still render");
+        // A lone dataset keeps the unprefixed anchor form, so `#ind-<id>` deep
+        // links published before the selector existed still resolve.
+        assert!(
+            html.contains(r##"id="ind-b1""##) && html.contains(r##"href="#ind-b1""##),
+            "a single dataset must not namespace its anchors"
+        );
+    }
+
+    #[test]
+    fn entity_list_disambiguates_shared_labels_by_class() {
+        // Two individuals of different classes can legitimately share a
+        // display name; a label-only list makes them indistinguishable.
+        let schema = bottle_rack_schema();
+        let set = instance_set_from_yaml(
+            &schema,
+            "bottles:\n  - id: bx\n    name: Bordeaux\nracks:\n  - id: rx\n    name: Bordeaux\n",
+        );
+
+        let writer = HtmlWriter::new().with_instance_dataset(InstanceDataset::new("only", set));
+        let temp_dir = std::env::temp_dir().join("panschema_entity_class_tag_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        writer.write(&schema, &temp_dir).expect("write");
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        let list = html
+            .split_once(r#"class="entity-list""#)
+            .map(|(_, rest)| {
+                rest.split_once("</div>")
+                    .map(|(a, _)| a.to_string())
+                    .unwrap_or_default()
+            })
+            .expect("entity list present");
+        assert!(
+            list.contains("Bottle") && list.contains("Rack"),
+            "each entry names its class, so same-label individuals read apart; got: {list}"
+        );
+    }
+
+    #[test]
+    fn the_section_reads_graph_first_with_dataset_metadata() {
+        // The section holds the dataset(s); within each, the graph precedes
+        // the individuals, and the dataset's own metadata — the container's
+        // scalar values plus the source — leads. One dataset reads singular,
+        // several plural.
+        use crate::linkml::{ClassDefinition, SlotDefinition};
+        let mut schema = bottle_rack_schema();
+        // The container gains its own scalar slot for the metadata.
+        {
+            let container = schema.classes.get_mut("Cellar").unwrap();
+            let mut title = SlotDefinition::new("title");
+            title.range = Some("string".to_string());
+            container.attributes.insert("title".to_string(), title);
+            let _ = ClassDefinition::new("unused");
+        }
+        let only = instance_set_from_yaml(
+            &schema,
+            "title: North wing cellar\nbottles:\n  - id: b1\n    name: Morgon\n",
+        );
+        let writer = HtmlWriter::new()
+            .with_instance_dataset(InstanceDataset::new("only", only).with_provenance("only.yaml"));
+        let temp_dir = std::env::temp_dir().join("panschema_graph_first_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        writer.write(&schema, &temp_dir).expect("write");
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        // Singular heading for one dataset.
+        assert!(
+            html.contains(">Instance Graph<") || html.contains("Instance Graph\n"),
+            "one dataset reads singular"
+        );
+        assert!(
+            !html.contains("Instance Graphs"),
+            "no plural for one dataset"
+        );
+
+        // Metadata renders, and the order is metadata → graph → individuals.
+        // Match markup, not the stylesheet's class definitions.
+        let meta_at = html
+            .find("North wing cellar")
+            .expect("container title renders");
+        let graph_at = html
+            .find(r#"id="instance-graph-canvas""#)
+            .expect("canvas present");
+        let cards_at = html
+            .find(r#"class="individual-cards""#)
+            .expect("cards present");
+        assert!(
+            meta_at < graph_at && graph_at < cards_at,
+            "order must be metadata ({meta_at}) → graph ({graph_at}) → individuals ({cards_at})"
+        );
+        assert!(
+            html.contains(">Individuals<"),
+            "the cards sit under an Individuals subheading"
+        );
+    }
+
+    #[test]
+    fn several_datasets_read_plural() {
+        let schema = bottle_rack_schema();
+        let a = instance_set_from_yaml(&schema, "bottles:\n  - id: b1\n    name: Morgon\n");
+        let b = instance_set_from_yaml(&schema, "bottles:\n  - id: b2\n    name: Fleurie\n");
+        let writer = HtmlWriter::new()
+            .with_instance_dataset(InstanceDataset::new("a", a))
+            .with_instance_dataset(InstanceDataset::new("b", b));
+        let temp_dir = std::env::temp_dir().join("panschema_plural_heading_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        writer.write(&schema, &temp_dir).expect("write");
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let _ = fs::remove_dir_all(&temp_dir);
+        assert!(
+            html.contains("Instance Graphs"),
+            "several datasets read plural"
+        );
+    }
+
+    #[test]
+    fn a_schema_with_no_a_box_shows_the_placeholder_and_no_sidebar_entry() {
+        // Nothing to show: no instance data attached and no embedded OWL
+        // individuals. The section must say so, and the sidebar must not
+        // offer an entry that leads nowhere.
+        let schema = bottle_rack_schema();
+
+        let writer = HtmlWriter::new();
+        let temp_dir = std::env::temp_dir().join("panschema_no_abox_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        writer.write(&schema, &temp_dir).expect("write");
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        assert!(
+            html.contains("No individuals defined in this ontology."),
+            "an empty A-box should render the placeholder"
+        );
+        assert!(
+            !html.contains(r#"class="instance-dataset-panel""#),
+            "an empty A-box gets no content panel"
+        );
+        assert!(
+            !html.contains("href=\"#individuals\""),
+            "the sidebar should not link to an empty Instance Graph section"
+        );
+    }
+
+    #[test]
+    fn individual_cards_render_with_the_graph_viz_disabled() {
+        // --no-graph suppresses every viz payload, but the individuals are
+        // still documented: cards, provenance, and the sidebar entry stay.
+        let schema = bottle_rack_schema();
+        let only = instance_set_from_yaml(&schema, "bottles:\n  - id: b1\n    name: Morgon\n");
+
+        let writer = HtmlWriter::with_options(false)
+            .with_instance_dataset(InstanceDataset::new("only", only).with_provenance("only.yaml"));
+        let temp_dir = std::env::temp_dir().join("panschema_no_graph_cards_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        writer.write(&schema, &temp_dir).expect("write");
+        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        assert!(
+            html.contains("Morgon"),
+            "individual cards render without a viz payload"
+        );
+        assert!(
+            html.contains("only.yaml"),
+            "the panel still names its source"
+        );
+        assert!(
+            html.contains("href=\"#individuals\""),
+            "the sidebar still offers the Instance Graph entry"
+        );
+        assert!(
+            !html.contains("No individuals defined in this ontology."),
+            "the placeholder is for an absent A-box, not an absent viz"
+        );
+    }
+
+    #[test]
+    fn schema_embedded_individuals_say_so_in_the_provenance_line() {
+        // No instance-data file attached, so the A-box is the schema's own
+        // individuals — the provenance line must say that rather than name a
+        // file that isn't there.
         let reader = OwlReader::new();
         let schema = reader.read(&reference_ontology_path()).unwrap();
 
-        let writer = HtmlWriter::new().with_instance_provenance("wine_instances.yaml".to_string());
+        let writer = HtmlWriter::new();
         let temp_dir = std::env::temp_dir().join("panschema_provenance_test");
         let _ = fs::remove_dir_all(&temp_dir);
         writer.write(&schema, &temp_dir).expect("write");
         let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
-        assert!(
-            html.contains("wine_instances.yaml"),
-            "the section must name the attached provenance"
-        );
         let _ = fs::remove_dir_all(&temp_dir);
+
+        assert!(
+            html.contains("Source: individuals embedded in the schema"),
+            "the section must attribute the A-box to the schema itself"
+        );
     }
 
     #[test]
@@ -4009,7 +4633,7 @@ mod tests {
         act.close_mappings = vec!["cco:ont99999999".to_string()];
         schema.classes.insert("Act".to_string(), act);
 
-        let data = HtmlWriter::build_template_data_with_labels(&schema, Some(&store), None);
+        let data = HtmlWriter::build_template_data_with_labels(&schema, Some(&store));
         let card = data.class_data.iter().find(|c| c.id == "Act").unwrap();
 
         assert_eq!(

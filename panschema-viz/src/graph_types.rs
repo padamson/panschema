@@ -47,6 +47,10 @@ pub enum NodeType {
     Individual,
     /// An upstream ontology category a class grounds into via `subclass_of`
     /// — outside this schema, drawn muted/dashed.
+    /// One permissible value actually used by the A-box — a shared node
+    /// every individual choosing the value links to, drawn with its enum's
+    /// diamond. Mirrors the writer-side variant; never in a schema graph.
+    EnumValue,
     External,
 }
 
@@ -60,13 +64,14 @@ impl NodeType {
             NodeType::Enum => colors::ENUM,
             NodeType::Type => colors::TYPE,
             NodeType::Individual => colors::INDIVIDUAL,
+            NodeType::EnumValue => colors::ENUM,
             NodeType::External => colors::EXTERNAL,
         }
     }
 }
 
 /// Edge type enumeration for semantic categorization
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum EdgeType {
     /// Class inheritance (is_a relationship)
@@ -193,6 +198,13 @@ pub enum KindMetadata {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         literals: Vec<PropertyLiteral>,
     },
+    /// One enum value in use by the A-box, with the enum it belongs to and
+    /// how many individuals chose it. Mirrors the writer side.
+    #[serde(rename = "enum_value")]
+    EnumValue {
+        enum_name: String,
+        usage_count: usize,
+    },
 }
 
 /// A literal-valued property assertion on an individual, shown on the
@@ -314,7 +326,10 @@ pub struct GraphData {
 #[allow(dead_code)]
 impl GraphData {
     /// Format version constant
-    pub const FORMAT_VERSION: &'static str = "1.1";
+    /// Bumped 1.1 → 1.2 with the typed instance encoding (class-coloured
+    /// individuals, shared `enum_value` nodes). Additive — pre-1.2
+    /// documents parse unchanged.
+    pub const FORMAT_VERSION: &'static str = "1.2";
 
     /// Create new GraphData with metadata
     pub fn new(schema_name: String, schema_title: Option<String>) -> Self {

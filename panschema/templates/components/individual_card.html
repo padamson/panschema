@@ -1,4 +1,4 @@
-<article class="entity-card individual-card" id="ind-{{ id }}">
+<article class="entity-card individual-card" id="{{ anchor_prefix }}ind-{{ id }}">
     <header class="entity-header">
         <div class="entity-badge individual-badge">Individual</div>
         <h3 class="entity-title">{{ label }}</h3>
@@ -40,7 +40,7 @@
             </dt>
             <dd>
 {%- if let Some(vr) = pv.value_ref.as_ref() %}
-                <a href="#ind-{{ vr.id }}" class="entity-ref individual-ref">{{ pv.value }}</a>
+                <a href="#{{ anchor_prefix }}ind-{{ vr.id }}" class="entity-ref individual-ref">{{ pv.value }}</a>
 {%- else %}
                 {{ pv.value }}
 {%- endif %}

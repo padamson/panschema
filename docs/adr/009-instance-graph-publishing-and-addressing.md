@@ -50,6 +50,10 @@ published layout encodes that pin structurally:
   presentation feature 18 shipped, kept deliberately — the one-page docs are
   the product's signature) and gains a sidebar entry, making it addressable
   as `<version>/index.html#instance-graph`.
+  **Amended 2026-07-26 (feature 37):** that section holds *every* declared
+  curated graph, not just one, behind an in-page selector; `exemplar` now
+  means "the dataset the page opens on" rather than "the only one shown".
+  See the amendment note below.
 - **Additional** instance graphs, when a consumer ever declares more than
   one, become sibling sub-pages: `<output>/<version>/instances/<name>/`.
   Deferred until demanded — every current consumer has exactly zero or one.
@@ -178,6 +182,77 @@ should arrive as "publish where `[[instances]]` entries are the primary
 artifact and the schema is a pinned dependency rather than a local file."
 Deferred until a dataset-first repo wants *versioned publishing* (the
 manifest path above covers building and deploying current docs today).
+
+## Amendment 2026-07-26: curated graphs share the page; arbitrary ones get their own
+
+Decision 1 framed the exemplar/arbitrary split as **embed one vs. nothing**:
+a second `[[instances]]` entry rendered nothing while sibling pages stayed
+deferred. Consumer demand showed the curated case is routinely *plural* — a tiny
+teaching preview that introduces *individual / node / edge* alongside the
+full worked example that answers the competency questions — and that those
+two want to be compared, not navigated between.
+
+So the split becomes **in-page selector for curated graphs vs. sibling pages
+for arbitrary ones**:
+
+- The schema page's Instance Graph section holds every declared curated
+  graph. Declaration order drives the selector; `exemplar = true` picks
+  which one opens (at most one; the first declared wins when none is set).
+  Each carries its own cards, provenance, and node/edge counts, and all
+  payloads ride in the page so switching is client-side.
+- The `~500-node` soft guard now applies **per declared graph**, which is
+  the honest place for it: every curated graph should stay small, and
+  several small ones is the shape this amendment expects.
+- Arbitrary/production graphs are unchanged and still deferred:
+  addressable `<output>/<version>/instances/<name>/` pages plus the
+  query-driven compact viz of decision 3. Nothing here brings whole-graph
+  rendering of a large A-box closer; it is still neighborhood extraction
+  that unlocks that, and still the same operation a retrieval loop wants.
+
+The role boundary is therefore *how many and how big*, not *whether it is
+the blessed one*: a few small graphs live together on the schema page; many
+or large ones get their own space when a consumer needs it.
+
+Implemented as
+[feature 37](../features/37-in-page-instance-graph-selector.md).
+
+## Amendment 2026-07-28: the typed instance encoding
+
+The instance graph first shipped drawing every individual as one generic
+marker, with the class named only on the card. Consumer review settled the
+encoding contract this amendment records:
+
+> **Each schema-graph node type expands, in the instance graph, into its
+> concrete instances, drawn with the same symbol the schema graph uses for
+> that type.** The A-box is the T-box realized, and it should look like it.
+
+Concretely, in the separate A-box canvas:
+
+- A **class's individuals** wear the class's circle and colour, labelled by
+  the individual's name. No instance marker is needed there — the canvas
+  has no class nodes to collide with, and labels disambiguate. (The
+  deferred *unified* canvas, where classes and individuals share a surface,
+  WILL need an instance affordance — a ring or smaller radius; this
+  amendment deliberately doesn't choose it.)
+- An **enum's used values** each become one shared node with the enum's
+  diamond and colour, labelled by the value; every individual choosing the
+  value links to that one node, so "which individuals share this value"
+  reads as structure. One node per *used* value — an unused permissible
+  value mints nothing.
+- **Scalar literals stay attributes** on the individual's card, not leaf
+  nodes: a node per unique string would bury the graph in leaves. This is
+  the one place the T-box's rectangle is deliberately not echoed.
+- An **object-property assertion** is a slot-labelled plain directed arrow.
+  Cardinality decorations remain T-box-only — an assertion is one concrete
+  fact, not a constraint.
+
+This is a wire-format addition (`format_version` 1.1 → 1.2, a new
+`enum_value` node kind carrying its enum and usage count), mirrored in the
+visualization exactly as decision 4 requires; pre-1.2 documents parse
+unchanged. Identity is untouched: individuals keep the shared minted IRIs.
+
+Implemented as slice 4 of
+[feature 38](../features/38-instance-graph-shared-renderer-and-typed-encoding.md).
 
 ## Consequences
 

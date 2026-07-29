@@ -1,0 +1,16 @@
+# Two wines claim the same identifier. Conformance-checkable but invisible to
+# the reference-integrity diagnostic, so this is the fixture for "the A-box is
+# validated on the way into an output", not just checked for dangling refs.
+wines:
+  - id: chateauMorgon
+    name: Château Morgon
+    color: red
+    produced_by: morgonEstate
+  - id: chateauMorgon
+    name: Château Morgon (duplicate)
+    color: white
+    produced_by: morgonEstate
+wineries:
+  - id: morgonEstate
+    name: Morgon Estate
+    region: Beaujolais

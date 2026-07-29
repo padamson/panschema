@@ -1,0 +1,10 @@
+# Every e2e test launches its own Chromium; running the whole suite's
+# browsers at once starves page loads and first paints into flaky
+# timeouts. Cap how many run concurrently — the rest of the test run
+# keeps full parallelism.
+[test-groups]
+browser = { max-threads = 6 }
+
+[[profile.default.overrides]]
+filter = "binary(e2e)"
+test-group = "browser"

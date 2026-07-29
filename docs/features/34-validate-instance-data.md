@@ -207,6 +207,57 @@ caught.
 - [ ] A value at an `any_of`-ranged slot that satisfies none of the branch ranges (each an enum/type/class range) is a violation; one that satisfies at least one branch passes.
 - [ ] Tests cover an `any_of` miss and a hit.
 
+### Slice 5: The conformance check runs on the way into an output
+
+**Status:** Complete
+
+**Priority:** Must Have
+
+**Depends on:** Slice 1.
+
+**User Value:** An A-box embedded in generated docs or a published site is
+held to the same conformance bar as one checked by the standalone command, so
+a violating exemplar can't reach a deployed page unnoticed.
+
+**Acceptance Criteria:**
+- [x] Supplying instance data to an output reports every violation the
+  standalone validator reports, not only dangling references — a duplicate
+  identifier, a missing required slot, a bad enum value all surface
+  (`generate_reports_conformance_violations_in_the_instance_data`).
+- [x] `--strict` fails the build on any violation, matching the existing
+  reference-integrity behaviour it subsumes.
+- [x] `publish` applies the same check per version, naming the version, and
+  reports rather than aborts — a note on an old tag must not make it
+  unpublishable.
+- [x] One code path decides what "conforming" means, so the standalone
+  command and the embedding paths cannot drift.
+
+### Slice 6: A field the class doesn't declare is a violation
+
+**Status:** Complete
+
+**Priority:** Must Have
+
+**Depends on:** Slice 5.
+
+**User Value:** A misspelled slot name is reported instead of quietly becoming
+a new ontology property. Before this, `colour` on a class declaring `color`
+validated clean, rendered in the docs, and emitted as
+`<…#colour> "red"` in RDF — inventing a property in the schema's own namespace
+while the slot actually meant stayed absent.
+
+**Acceptance Criteria:**
+- [x] A field the record's class doesn't declare is a violation naming the
+  record, the field, and the class, and saying what becomes of it — it renders
+  and emits rather than being dropped
+  (`a_field_the_class_does_not_declare_is_a_violation`).
+- [x] It reaches every path the conformance check reaches: the standalone
+  command, `generate --instances`, and `publish`; `--strict` fails.
+- [x] Reported per record, so the same misspelling in several records names
+  each one.
+- [x] No false positives on a real hand-authored A-box (verified against a
+  downstream consumer's curated data files, which continue to conform).
+
 ---
 
 ## Slice Priority and Dependencies
@@ -220,6 +271,8 @@ caught.
 | Slice 3b: `pattern` (adds regex dependency) | Should Have | Slice 3 | Complete |
 | Slice 4: identifier uniqueness | Should Have | Slice 3 | Complete |
 | Slice 4b: `any_of` polymorphic ranges | Should Have | Slice 4 | Not Started |
+| Slice 5: conformance check on the way into an output | Must Have | Slice 1 | Complete |
+| Slice 6: undeclared fields are violations | Must Have | Slice 5 | Complete |
 
 ## Definition of Done
 

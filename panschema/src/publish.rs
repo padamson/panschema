@@ -493,23 +493,16 @@ pub fn publish_versioned(
     let mut cohort = build_cohort_context(publishing);
     cohort.label_sources = publish_cfg.label_sources.clone();
 
-    // Only the exemplar embeds in the schema page today; other entries
-    // await sibling instance pages (ADR-009 deferred) — note them so the
-    // omission isn't silent.
-    let exemplar = publish_cfg.instances.iter().find(|e| e.exemplar);
-    for name in unpublished_instance_names(&publish_cfg.instances) {
-        eprintln!(
-            "note: instance graph `{name}` is declared but not published — \
-             sibling instance pages aren't built yet; only the exemplar embeds"
-        );
-    }
+    // Every declared curated graph embeds in the schema page, behind the
+    // in-page selector; `exemplar` picks which one opens.
+    let instances = publish_cfg.instances.as_slice();
 
     for version in &publishing.versions {
         build_version(
             repo_root,
             version,
             manifest_main,
-            exemplar,
+            instances,
             output_dir,
             &cohort,
             BuildSource::GitRef(version),
@@ -525,7 +518,7 @@ pub fn publish_versioned(
             repo_root,
             edge,
             manifest_main,
-            exemplar,
+            instances,
             output_dir,
             &cohort,
             source,
@@ -550,19 +543,11 @@ pub fn publish_versioned(
 
 /// The declared instance graphs `publish` does not yet put on the site:
 /// everything except the exemplar (sibling instance pages are deferred).
-fn unpublished_instance_names(instances: &[InstanceEntry]) -> Vec<&str> {
-    instances
-        .iter()
-        .filter(|e| !e.exemplar)
-        .map(|e| e.name.as_str())
-        .collect()
-}
-
 fn build_version(
     repo_root: &Path,
     label: &str,
     manifest_main: &Path,
-    exemplar: Option<&InstanceEntry>,
+    instances: &[InstanceEntry],
     output_dir: &Path,
     cohort: &CohortContext,
     source: BuildSource<'_>,
@@ -572,48 +557,56 @@ fn build_version(
     match source {
         BuildSource::GitRef(ref_) => {
             let extracted = extract_main_at_ref(repo_root, ref_, manifest_main)?;
-            // Each version renders its own ref's data. A ref where the
-            // file doesn't exist (it predates the dataset) publishes
-            // without an instance graph — a note, not an error.
-            let extracted_data = exemplar.and_then(|entry| {
-                match extract_main_at_ref(repo_root, ref_, &entry.data) {
-                    Ok(file) => Some((file, entry)),
-                    Err(_) => {
-                        eprintln!(
-                            "note: {label}: instance data `{}` not present at `{ref_}`; \
-                             publishing this version without an instance graph",
-                            entry.data.display()
-                        );
-                        None
-                    }
-                }
-            });
-            let instances = extracted_data
-                .as_ref()
-                .map(|(file, entry)| (file.path(), entry.data.as_path()));
-            generate_html_for_version(label, extracted.path(), &version_out, cohort, instances)
+            // Each version renders its own ref's data. A ref where a data
+            // file doesn't exist (it predates that dataset) publishes
+            // without it — a note, not an error.
+            let extracted_data: Vec<_> = instances
+                .iter()
+                .filter_map(
+                    |entry| match extract_main_at_ref(repo_root, ref_, &entry.data) {
+                        Ok(file) => Some((file, entry)),
+                        Err(_) => {
+                            eprintln!(
+                                "note: {label}: instance data `{}` not present at `{ref_}`; \
+                             publishing this version without that instance graph",
+                                entry.data.display()
+                            );
+                            None
+                        }
+                    },
+                )
+                .collect();
+            let datasets: Vec<_> = extracted_data
+                .iter()
+                .map(|(file, entry)| (file.path(), *entry))
+                .collect();
+            generate_html_for_version(label, extracted.path(), &version_out, cohort, &datasets)
         }
         BuildSource::WorkingTree => {
             // The manifest's `files.main` is documented as relative
             // to the publish-spec's location; in the supported v1
             // layout that's the repo root. Resolve there.
             let input = repo_root.join(manifest_main);
-            let data_path = exemplar.map(|entry| (repo_root.join(&entry.data), entry));
-            let instances = match &data_path {
-                Some((path, entry)) if path.is_file() => {
-                    Some((path.as_path(), entry.data.as_path()))
-                }
-                Some((path, _)) => {
-                    eprintln!(
-                        "note: {label}: instance data `{}` not present in the working tree; \
-                         publishing this version without an instance graph",
-                        path.display()
-                    );
-                    None
-                }
-                None => None,
-            };
-            generate_html_for_version(label, &input, &version_out, cohort, instances)
+            let resolved: Vec<_> = instances
+                .iter()
+                .map(|entry| (repo_root.join(&entry.data), entry))
+                .collect();
+            let datasets: Vec<_> = resolved
+                .iter()
+                .filter_map(|(path, entry)| {
+                    if path.is_file() {
+                        Some((path.as_path(), *entry))
+                    } else {
+                        eprintln!(
+                            "note: {label}: instance data `{}` not present in the working tree; \
+                             publishing this version without that instance graph",
+                            path.display()
+                        );
+                        None
+                    }
+                })
+                .collect();
+            generate_html_for_version(label, &input, &version_out, cohort, &datasets)
         }
     }
 }
@@ -674,7 +667,7 @@ fn generate_html_for_version(
     input: &Path,
     output: &Path,
     cohort: &CohortContext,
-    instances: Option<(&Path, &Path)>,
+    instances: &[(&Path, &InstanceEntry)],
 ) -> Result<(), PublishError> {
     use crate::html_writer::HtmlWriter;
     use crate::io::{FormatRegistry, Writer};
@@ -691,10 +684,11 @@ fn generate_html_for_version(
     let mut writer = HtmlWriter::with_options(true)
         .with_version_context(cohort.context_for(version))
         .with_site_root_href(cohort.site_root_href.clone());
-    // `(read_path, declared_path)`: the file is read from the first (a
-    // per-ref extraction lands in a tempfile) but provenance shows the
-    // declared name.
-    if let Some((data_path, declared)) = instances {
+    // The file is read from the first path (a per-ref extraction lands in a
+    // tempfile) while provenance shows the declared name. Declaration order
+    // drives the selector; `exemplar` decides which dataset opens.
+    for (data_path, entry) in instances {
+        let declared = entry.data.as_path();
         let content =
             std::fs::read_to_string(data_path).map_err(|e| PublishError::GenerateFailed {
                 version: version.to_string(),
@@ -706,13 +700,20 @@ fn generate_html_for_version(
                 message: format!("parsing instance data {}: {e}", declared.display()),
             })?;
         let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
-        for d in crate::diagnostics::dangling_instance_references(&set) {
-            eprintln!("warning: {version}: {}", d.message());
+        // Same check as `generate --instances` and `validate --data`: a
+        // curated A-box is published page content, so it gets the conformance
+        // gate rather than only a reference-integrity look.
+        for v in crate::validate::validate_instances(&schema, &set) {
+            eprintln!("warning: {version}: {v}");
         }
-        writer = writer.with_instances(set);
+        let mut dataset = crate::html_writer::InstanceDataset::new(entry.name.clone(), set);
         if let Some(name) = declared.file_name().and_then(|n| n.to_str()) {
-            writer = writer.with_instance_provenance(name.to_string());
+            dataset = dataset.with_provenance(name);
         }
+        if entry.exemplar {
+            dataset = dataset.as_default();
+        }
+        writer = writer.with_instance_dataset(dataset);
     }
     if let Some(store) =
         crate::labels::open_default_store(&schema, false, &cohort.label_sources, false)
@@ -1789,7 +1790,12 @@ exemplur = true
             "wines:\n  - id: morgon\n    name: Morgon\n",
         )
         .unwrap();
-        run(path, &["add", "data/instances.yaml"]);
+        std::fs::write(
+            path.join("data/preview.yaml"),
+            "wines:\n  - id: previewWine\n    name: Preview Pinot\n",
+        )
+        .unwrap();
+        run(path, &["add", "data/instances.yaml", "data/preview.yaml"]);
         run(path, &["commit", "-m", "release v0.2.0", "--quiet"]);
         run(path, &["tag", "v0.2.0"]);
         tmp
@@ -1814,23 +1820,97 @@ exemplur = true
     }
 
     #[test]
-    fn only_non_exemplar_entries_are_noted_as_unpublished() {
-        let entries = vec![
-            InstanceEntry {
-                name: "catalog".into(),
-                data: PathBuf::from("a.yaml"),
-                exemplar: true,
-            },
-            InstanceEntry {
-                name: "extra".into(),
-                data: PathBuf::from("b.yaml"),
-                exemplar: false,
-            },
-        ];
-        assert_eq!(
-            unpublished_instance_names(&entries),
-            vec!["extra"],
-            "the exemplar is published; only the rest are noted"
+    fn a_non_conforming_a_box_is_reported_but_still_publishes() {
+        // Conformance violations are a note, not an abort: aborting would make
+        // an already-tagged version unpublishable because of data committed at
+        // that ref. The page still builds, carrying the data as authored.
+        let repo = make_repo_with_instance_data();
+        std::fs::write(
+            repo.path().join("data/instances.yaml"),
+            "wines:\n  - id: morgon\n    name: Morgon\n  - id: morgon\n    name: Morgon Again\n",
+        )
+        .unwrap();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], Some("main"), "v0.2.0");
+        cfg.instances.push(InstanceEntry {
+            name: "catalog".into(),
+            data: PathBuf::from("data/instances.yaml"),
+            exemplar: true,
+        });
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), true)
+            .expect("a violation must not fail the publish");
+        let edge = std::fs::read_to_string(out.path().join("main/index.html")).unwrap();
+        assert!(
+            edge.contains("ind-morgon"),
+            "the page still renders the A-box it was given"
+        );
+    }
+
+    #[test]
+    fn publish_embeds_every_declared_instance_graph_with_the_exemplar_open() {
+        // Two curated datasets declared, the second marked exemplar: both
+        // must reach the published page, with the exemplar the one that opens.
+        let repo = make_repo_with_instance_data();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], None, "v0.2.0");
+        cfg.instances.push(InstanceEntry {
+            name: "preview".into(),
+            data: PathBuf::from("data/preview.yaml"),
+            exemplar: false,
+        });
+        cfg.instances.push(InstanceEntry {
+            name: "catalog".into(),
+            data: PathBuf::from("data/instances.yaml"),
+            exemplar: true,
+        });
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
+        let html = std::fs::read_to_string(out.path().join("v0.2.0/index.html")).unwrap();
+
+        assert!(
+            html.contains(">preview") && html.contains(">catalog"),
+            "both declared datasets must be offered by name"
+        );
+        assert!(
+            html.contains("ind-previewWine") && html.contains("ind-morgon"),
+            "both datasets' individuals must render"
+        );
+        assert!(
+            html.contains(r#"data-instance-dataset="0" hidden>"#),
+            "the non-exemplar dataset's panel starts hidden"
+        );
+        assert!(
+            html.contains(r#"data-instance-dataset="1">"#),
+            "the exemplar is the dataset that opens"
+        );
+        assert!(
+            !html.contains("declared but not published"),
+            "nothing is left unpublished, so nothing should say so"
+        );
+    }
+
+    #[test]
+    fn publish_skips_a_dataset_absent_at_a_ref_and_keeps_the_rest() {
+        // `data/preview.yaml` lands only in v0.2.0, so publishing v0.1.0 has
+        // to skip it rather than fail — and still carry what does exist.
+        let repo = make_repo_with_instance_data();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.1.0", "v0.2.0"], None, "v0.2.0");
+        cfg.instances.push(InstanceEntry {
+            name: "preview".into(),
+            data: PathBuf::from("data/preview.yaml"),
+            exemplar: false,
+        });
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
+
+        let old_version = std::fs::read_to_string(out.path().join("v0.1.0/index.html")).unwrap();
+        assert!(
+            old_version.contains("No individuals defined in this ontology."),
+            "a ref predating the data file publishes without that instance graph"
+        );
+        let new_version = std::fs::read_to_string(out.path().join("v0.2.0/index.html")).unwrap();
+        assert!(
+            new_version.contains("ind-previewWine"),
+            "the ref that has the file still renders it"
         );
     }
 
@@ -2277,7 +2357,7 @@ exemplur = true
             label_sources: std::collections::BTreeMap::new(),
         };
 
-        generate_html_for_version("1.0.0", &main, &out, &cohort, None)
+        generate_html_for_version("1.0.0", &main, &out, &cohort, &[])
             .expect("publish generation should succeed");
         let html = std::fs::read_to_string(out.join("index.html")).expect("index.html");
         assert!(

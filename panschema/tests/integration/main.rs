@@ -660,12 +660,13 @@ fn generate_instances_renders_linkml_data_as_the_instance_graph() {
         "the instance-graph canvas should be present"
     );
     assert!(
-        html.contains("__PANSCHEMA_INSTANCE_GRAPH_DATA__"),
+        html.contains("__PANSCHEMA_INSTANCE_GRAPHS__"),
         "the LinkML A-box should be embedded as instance-graph data"
     );
 
     // Each record became a typed node; each class-ranged scalar an edge.
-    let data = extract_json_assignment(&html, "__PANSCHEMA_INSTANCE_GRAPH_DATA__");
+    let graphs = extract_json_assignment(&html, "__PANSCHEMA_INSTANCE_GRAPHS__");
+    let data = &graphs.as_array().expect("payload array")[0]["data"];
     assert_eq!(
         data["nodes"].as_array().expect("nodes").len(),
         4,
@@ -689,6 +690,163 @@ fn generate_instances_renders_linkml_data_as_the_instance_graph() {
     );
 
     let _ = fs::remove_dir_all(output_dir);
+}
+
+#[test]
+fn generate_reports_conformance_violations_in_the_instance_data() {
+    // A duplicate identifier is a conformance violation that the
+    // reference-integrity check can't see. Embedding an A-box into an output
+    // must report it, not just dangling references — otherwise a broken
+    // exemplar publishes onto a docs site silently.
+    let dir = std::env::temp_dir().join("panschema_instance_conformance_test");
+    let _ = fs::remove_dir_all(&dir);
+
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--schema",
+            "tests/fixtures/wine_catalog.yaml",
+            "--instances",
+            "tests/fixtures/wine_instances_duplicate_id.yaml",
+            "--output",
+            dir.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run panschema");
+    assert!(out.status.success(), "non-strict generation should succeed");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("chateauMorgon") && stderr.contains("more than one record"),
+        "the duplicate identifier should warn, naming the id; got: {stderr}"
+    );
+
+    // Under --strict the same violation is a hard failure, as a dangling
+    // reference already is.
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--schema",
+            "tests/fixtures/wine_catalog.yaml",
+            "--instances",
+            "tests/fixtures/wine_instances_duplicate_id.yaml",
+            "--output",
+            dir.to_str().unwrap(),
+            "--strict",
+        ])
+        .output()
+        .expect("run panschema");
+    assert!(
+        !out.status.success(),
+        "--strict must fail on a non-conforming A-box"
+    );
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn generate_carries_several_curated_instance_graphs() {
+    let output_dir = std::env::temp_dir().join("panschema_multi_instances_test");
+    let _ = fs::remove_dir_all(&output_dir);
+
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--schema",
+            "tests/fixtures/wine_catalog.yaml",
+            "--instances",
+            "tests/fixtures/wine_instances_preview.yaml",
+            "--instances",
+            "tests/fixtures/wine_instances.yaml",
+            "--output",
+            output_dir.to_str().unwrap(),
+        ])
+        .status()
+        .expect("Failed to execute panschema");
+    assert!(status.success(), "panschema exited with error");
+
+    let html = fs::read_to_string(output_dir.join("index.html")).expect("read index.html");
+
+    // Both graphs are declared, so the reader gets a selector naming each by
+    // its file stem, and a content panel per dataset.
+    assert!(
+        html.contains(r#"role="tablist""#),
+        "several datasets must offer a selector"
+    );
+    assert!(
+        html.contains(">wine_instances_preview") && html.contains(">wine_instances"),
+        "each dataset is named after its file; got selector-less page"
+    );
+    assert_eq!(
+        html.matches(r#"class="instance-dataset-panel""#).count(),
+        2,
+        "one content panel per declared dataset"
+    );
+    assert!(
+        html.contains(r#"data-instance-dataset="1" hidden>"#),
+        "only the first dataset shows before the reader picks another"
+    );
+
+    // Individuals from both A-boxes are in the page, each in its own panel.
+    assert!(
+        html.contains("Preview Pinot") && html.contains("Château Morgon"),
+        "both datasets' individual cards must render"
+    );
+
+    // Each payload entry carries its own graph, in declaration order.
+    let graphs = extract_json_assignment(&html, "__PANSCHEMA_INSTANCE_GRAPHS__");
+    let entries = graphs.as_array().expect("payload array");
+    assert_eq!(entries.len(), 2, "one payload per declared dataset");
+    assert_eq!(entries[0]["name"], "wine_instances_preview");
+    assert_eq!(
+        entries[0]["data"]["nodes"].as_array().expect("nodes").len(),
+        2,
+        "the preview carries only its own wine and winery"
+    );
+    assert_eq!(entries[1]["name"], "wine_instances");
+    assert_eq!(
+        entries[1]["data"]["nodes"].as_array().expect("nodes").len(),
+        4,
+        "the worked example carries its own four records"
+    );
+
+    let _ = fs::remove_dir_all(output_dir);
+}
+
+#[test]
+fn single_a_box_formats_reject_several_instances_files() {
+    let dir = std::env::temp_dir().join("panschema_multi_instances_reject_test");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("mkdir");
+
+    // ttl folds one A-box into the emitted graph; several files have no
+    // unambiguous meaning, so the build must say so rather than pick one.
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--schema",
+            "tests/fixtures/wine_catalog.yaml",
+            "--instances",
+            "tests/fixtures/wine_instances_preview.yaml",
+            "--instances",
+            "tests/fixtures/wine_instances.yaml",
+            "--format",
+            "ttl",
+            "--output",
+            dir.join("out.ttl").to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute panschema");
+    assert!(
+        !out.status.success(),
+        "several A-boxes for a single-graph format must fail"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("single instance graph") && stderr.contains("HTML"),
+        "the error should explain the limit and the alternative; got: {stderr}"
+    );
+
+    let _ = fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -940,7 +1098,7 @@ fn instance_graph_json_renders_the_abox_as_its_own_artifact() {
         serde_json::from_str(&fs::read_to_string(&out_file).expect("read instance doc"))
             .expect("parse instance doc");
     assert_eq!(instance_doc["graph_kind"], "instance");
-    assert_eq!(instance_doc["format_version"], "1.1");
+    assert_eq!(instance_doc["format_version"], "1.2");
     let uris: Vec<&str> = instance_doc["nodes"]
         .as_array()
         .unwrap()
@@ -1064,10 +1222,12 @@ fn rdf_with_dangling_instance_reference_fails_under_strict() {
         !output.status.success(),
         "a dangling instance reference must fail the build under --strict"
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("dangling instance reference"),
-        "stderr should name the dangling reference; got: {}",
-        String::from_utf8_lossy(&output.stderr)
+        stderr.contains("ghostWinery")
+            && stderr.contains("produced_by")
+            && stderr.contains("names no instance"),
+        "stderr should name the referring slot and the missing target; got: {stderr}"
     );
     let _ = fs::remove_file(&out_file);
 }
@@ -1315,6 +1475,157 @@ html = "docs/"
     assert!(
         html.contains("Sample LinkML Schema"),
         "Missing schema title from manifest-generated HTML"
+    );
+}
+
+/// A repository that authors *data* against a schema published elsewhere: the
+/// schema arrives through `[schemas]`, the A-boxes are local, and
+/// `[generate.<name>].instances` renders the imported schema's docs featuring
+/// them (ADR-009 decision 6).
+/// `--version` has to distinguish a build from `main` from the last release,
+/// or "rebuild from `main` to get the fix" is advice a consumer can't verify.
+/// A tagged release (or a crates.io install, which has no git at all) reports
+/// the bare version; anything else appends the commit it was built from.
+#[test]
+fn version_identifies_a_non_release_build_by_commit() {
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("--version")
+        .output()
+        .expect("run panschema");
+    assert!(out.status.success(), "--version should succeed");
+    let text = String::from_utf8_lossy(&out.stdout);
+    let reported = text
+        .trim()
+        .strip_prefix("panschema ")
+        .unwrap_or_else(|| panic!("unexpected --version output: {text}"));
+
+    let crate_version = env!("CARGO_PKG_VERSION");
+    let Some(suffix) = reported.strip_prefix(crate_version) else {
+        panic!("--version must start with the crate version; got: {reported}");
+    };
+    if suffix.is_empty() {
+        // A tagged release build, or a source tree with no git — both correct.
+        return;
+    }
+    let sha = suffix
+        .strip_prefix(" (")
+        .and_then(|s| s.strip_suffix(')'))
+        .unwrap_or_else(|| panic!("build id must read ` (<sha>)`; got: {suffix:?}"));
+    assert!(
+        sha.len() >= 7 && sha.chars().all(|c| c.is_ascii_hexdigit()),
+        "the build id should be an abbreviated commit sha; got: {sha:?}"
+    );
+}
+
+#[test]
+fn manifest_instances_render_the_local_a_boxes_with_the_imported_schema() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+
+    // The schema is a dependency package, not a local file.
+    let pkg = consumer.join("wine-pkg");
+    fs::create_dir_all(&pkg).expect("mkdir pkg");
+    fs::copy(
+        "tests/fixtures/wine_catalog.yaml",
+        pkg.join("wine_catalog.yaml"),
+    )
+    .expect("copy schema");
+    fs::write(
+        pkg.join("panschema-publish.toml"),
+        "[schema]\nname = \"wine\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"wine_catalog.yaml\"\n",
+    )
+    .expect("write publish toml");
+
+    // The data is this repository's own.
+    let data = consumer.join("data");
+    fs::create_dir_all(&data).expect("mkdir data");
+    fs::copy(
+        "tests/fixtures/wine_instances_preview.yaml",
+        data.join("preview.yaml"),
+    )
+    .expect("copy preview");
+    fs::copy(
+        "tests/fixtures/wine_instances.yaml",
+        data.join("catalog.yaml"),
+    )
+    .expect("copy catalog");
+
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+wine = { path = "./wine-pkg" }
+
+[generate.wine]
+html = "site/"
+instances = ["data/preview.yaml", "data/catalog.yaml"]
+"#,
+    )
+    .expect("write manifest");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("generate")
+        .current_dir(consumer)
+        .output()
+        .expect("run panschema");
+    assert!(
+        out.status.success(),
+        "manifest-driven generate failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let html = fs::read_to_string(consumer.join("site").join("index.html")).expect("read index");
+    assert!(
+        html.contains(r#"role="tablist""#),
+        "both declared A-boxes should sit behind the selector"
+    );
+    assert!(
+        html.contains(">preview") && html.contains(">catalog"),
+        "each dataset is labelled by its file stem; got a page without both"
+    );
+    assert!(
+        html.contains("Preview Pinot") && html.contains("Château Morgon"),
+        "individuals from both local A-boxes must render"
+    );
+    assert!(
+        html.contains(r#"data-instance-dataset="1" hidden>"#),
+        "the first declared dataset opens"
+    );
+}
+
+/// A manifest naming instance data that isn't there fails loudly, naming the
+/// schema and the path, rather than quietly publishing a T-box-only page.
+#[test]
+fn manifest_instances_path_that_does_not_exist_fails() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    write_sample_pkg(consumer, "sample-pkg");
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+sample_schema = { path = "./sample-pkg" }
+
+[generate.sample_schema]
+html = "docs/"
+instances = ["data/absent.yaml"]
+"#,
+    )
+    .expect("write manifest");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("generate")
+        .current_dir(consumer)
+        .output()
+        .expect("run panschema");
+    assert!(
+        !out.status.success(),
+        "a missing instances path must fail the build"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("sample_schema") && stderr.contains("absent.yaml"),
+        "the error should name the schema and the missing file; got: {stderr}"
     );
 }
 

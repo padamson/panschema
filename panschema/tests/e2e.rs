@@ -25,12 +25,17 @@ use playwright_rs::Playwright;
 use tokio::sync::oneshot;
 
 /// Find an available port for the test server.
-fn find_available_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .expect("Failed to bind to port")
+/// Bind an ephemeral port and keep the socket: handing the live listener to
+/// the server (instead of a port number to re-bind) means no window where a
+/// concurrently starting test can be given the same port and end up serving
+/// this test's browser the wrong site.
+fn bind_ephemeral() -> (TcpListener, u16) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind to port");
+    let port = listener
         .local_addr()
         .expect("Failed to get local address")
-        .port()
+        .port();
+    (listener, port)
 }
 
 /// Generate documentation to a temporary directory.
@@ -103,13 +108,48 @@ fn generate_docs_with_instances(schema_path: &str, instances_path: &str) -> Path
     output_dir
 }
 
+/// Generate docs carrying several curated instance graphs, the
+/// `generate --instances a --instances b` form behind the in-page selector.
+fn generate_docs_with_several_instances(
+    schema_path: &str,
+    instance_paths: &[&str],
+    tag: &str,
+) -> PathBuf {
+    let output_dir = std::env::temp_dir().join(format!(
+        "panschema_e2e_multi_{}_{}",
+        std::process::id(),
+        tag
+    ));
+    let _ = fs::remove_dir_all(&output_dir);
+
+    let mut args = vec!["generate", "--schema", schema_path];
+    for path in instance_paths {
+        args.push("--instances");
+        args.push(path);
+    }
+    args.push("--output");
+    args.push(output_dir.to_str().unwrap());
+
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args(&args)
+        .status()
+        .expect("Failed to execute panschema");
+    assert!(
+        status.success(),
+        "panschema failed to generate docs with several instance graphs"
+    );
+    output_dir
+}
+
 /// Poll (up to ~12s) until a JS readiness expression is truthy. Robust to
 /// variable CI load — e.g. a page that renders both a schema graph and a
 /// second instance graph, each loading wasm — where a fixed sleep would
 /// race. Returns `true` once ready, `false` if it never became ready.
 async fn wait_until_ready(page: &playwright_rs::Page, ready_expr: &str) -> bool {
     let js = format!("(function(){{ return ({ready_expr}) ? 'ready' : 'no'; }})()");
-    for _ in 0..60 {
+    // Generous window: the suite launches a browser per test, and a page
+    // can take many seconds to become interactive under that contention.
+    for _ in 0..150 {
         let r = page.evaluate_value(&js).await.unwrap_or_default();
         if r.contains("ready") {
             return true;
@@ -131,15 +171,20 @@ async fn wait_for_graph_viz_ready(page: &playwright_rs::Page) -> bool {
 }
 
 /// Start a simple HTTP server serving static files.
-async fn start_server(output_dir: PathBuf, port: u16, shutdown_rx: oneshot::Receiver<()>) {
+async fn start_server(
+    output_dir: PathBuf,
+    listener: TcpListener,
+    shutdown_rx: oneshot::Receiver<()>,
+) {
     use axum::Router;
     use tower_http::services::ServeDir;
 
     let app = Router::new().fallback_service(ServeDir::new(output_dir));
 
-    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port))
-        .await
-        .expect("Failed to bind server");
+    listener
+        .set_nonblocking(true)
+        .expect("Failed to set nonblocking");
+    let listener = tokio::net::TcpListener::from_std(listener).expect("Failed to adopt listener");
 
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
@@ -517,15 +562,29 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         related_html
     );
 
-    // 6f. Verify individuals are extracted and displayed
+    // 6f. Verify individuals are extracted and displayed. The heading counts
+    // the graph — one individual, no assertions between individuals — rather
+    // than a bare individual count, so it reads like the schema graph's badge.
+    let ind_count = page
+        .locator("#instance-graph-count")
+        .inner_text()
+        .await
+        .expect("instance graph count");
+    assert_eq!(
+        ind_count.trim(),
+        "1 / 0",
+        "[{}] the instance heading should count nodes and edges, got: {}",
+        browser_name,
+        ind_count
+    );
     let ind_section = page.locator("#individuals");
     let ind_section_html = ind_section
         .inner_html()
         .await
         .expect("Failed to get individuals section");
     assert!(
-        ind_section_html.contains(">1<"),
-        "[{}] Individuals section should show count of 1, got: {}",
+        ind_section_html.contains("ind-fido"),
+        "[{}] Individuals section should render the individual's card, got: {}",
         browser_name,
         ind_section_html
     );
@@ -1081,18 +1140,30 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         browser_name
     );
 
-    // 11. Verify node count badge shows correct count
+    // 11. The graph badge reads `nodes / edges`, the same format every graph
+    // count uses, with the spelled-out reading carried as a label.
     let node_count_badge = page.locator("#graph-node-count");
     let badge_text = node_count_badge
         .inner_text()
         .await
         .expect("Failed to get node count badge text");
-    // Reference ontology should have nodes and edges (format: "X nodes, Y edges")
+    let parts: Vec<&str> = badge_text.trim().split(" / ").collect();
     assert!(
-        badge_text.contains("nodes") && badge_text.contains("edges"),
-        "[{}] Node count badge should show nodes and edges count, got: {}",
+        parts.len() == 2 && parts.iter().all(|p| p.parse::<usize>().is_ok()),
+        "[{}] the graph badge should read `nodes / edges`, got: {}",
         browser_name,
         badge_text
+    );
+    let badge_label = node_count_badge
+        .get_attribute("aria-label")
+        .await
+        .unwrap_or_default()
+        .unwrap_or_default();
+    assert!(
+        badge_label.contains("node") && badge_label.contains("edge"),
+        "[{}] the badge needs a label saying which number is which, got: {:?}",
+        browser_name,
+        badge_label
     );
 
     // 12. Verify graph controls are present
@@ -1576,12 +1647,12 @@ fn e2e_happy_path() {
     rt.block_on(async {
         // Generate documentation
         let output_dir = generate_docs();
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
 
         // Start server
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
 
         // Give server time to start
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1614,10 +1685,10 @@ fn e2e_click_pins_node_card_keeping_selection() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
         let output_dir = generate_docs();
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch().await.expect("playwright");
@@ -1724,10 +1795,10 @@ fn e2e_pinned_card_is_draggable_by_its_handle() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
         let output_dir = generate_docs();
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch().await.expect("playwright");
@@ -1818,10 +1889,10 @@ fn e2e_hovering_a_rule_entry_highlights_participant_nodes() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
         let output_dir = generate_docs_for("tests/fixtures/rules_graph.yaml");
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch().await.expect("playwright");
@@ -1932,10 +2003,10 @@ fn e2e_rule_touched_nodes_draw_a_persistent_amber_ring() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
         let output_dir = generate_docs_for("tests/fixtures/rules_graph.yaml");
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch().await.expect("playwright");
@@ -2016,10 +2087,10 @@ fn e2e_external_grounding_paints_a_muted_node() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
         let output_dir = generate_docs_for("tests/fixtures/external_grounding.yaml");
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch().await.expect("playwright");
@@ -2094,10 +2165,10 @@ fn e2e_groundings_toggle_hides_external_nodes() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
         let output_dir = generate_docs_for("tests/fixtures/external_grounding.yaml");
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch().await.expect("playwright");
@@ -2278,10 +2349,10 @@ fn e2e_external_node_hover_shows_iri_and_definition_and_legend_documents_it() {
             .expect("Failed to execute panschema");
         assert!(status.success(), "panschema failed to generate docs");
 
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch().await.expect("playwright");
@@ -2386,10 +2457,10 @@ fn e2e_instance_graph_renders_individuals_beneath_the_cards() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
         let output_dir = generate_docs_for("tests/fixtures/instance_graph.ttl");
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch().await.expect("playwright");
@@ -2413,7 +2484,8 @@ fn e2e_instance_graph_renders_individuals_beneath_the_cards() {
         let counts = page
             .evaluate_value(
                 r#"(function(){
-                    var d = window.__PANSCHEMA_INSTANCE_GRAPH_DATA__;
+                    var g = window.__PANSCHEMA_INSTANCE_GRAPHS__;
+                    var d = g && g[0] && g[0].data;
                     return d ? (d.nodes.length + ',' + d.edges.length) : 'none';
                 })()"#,
             )
@@ -2470,6 +2542,966 @@ fn e2e_instance_graph_renders_individuals_beneath_the_cards() {
     });
 }
 
+/// Several curated instance graphs share the schema page: the selector names
+/// each, and picking one swaps the cards, the provenance, and the rendered
+/// graph together. A selector that moved the canvas but left the cards
+/// describing the previous dataset is the defect this pins down.
+#[test]
+fn e2e_instance_dataset_selector_switches_cards_and_graph() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let output_dir = generate_docs_with_several_instances(
+            "tests/fixtures/wine_catalog.yaml",
+            &[
+                "tests/fixtures/wine_instances_preview.yaml",
+                "tests/fixtures/wine_instances.yaml",
+            ],
+            "selector",
+        );
+        let (listener, port) = bind_ephemeral();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("goto");
+
+        // Both datasets are offered, and the first is the one selected.
+        let tabs = page.locator(".instance-dataset-tab");
+        assert_eq!(
+            tabs.count().await.expect("count"),
+            2,
+            "each declared dataset needs a selector entry"
+        );
+        let selected = page
+            .locator(".instance-dataset-tab[aria-selected='true']")
+            .inner_text()
+            .await
+            .expect("selected tab text");
+        assert!(
+            selected.contains("wine_instances_preview"),
+            "the first declared dataset starts selected; got: {selected}"
+        );
+
+        // The preview's card is visible; the worked example's is not, because
+        // its panel is hidden.
+        assert!(
+            page.locator("#d0-ind-previewWine")
+                .is_visible()
+                .await
+                .unwrap_or(false),
+            "the selected dataset's individual card should be visible"
+        );
+        assert!(
+            !page
+                .locator("#d1-ind-chateauMorgon")
+                .is_visible()
+                .await
+                .unwrap_or(true),
+            "the unselected dataset's cards should be hidden"
+        );
+        assert_eq!(
+            page.locator("#instance-graph-count")
+                .inner_text()
+                .await
+                .expect("heading count")
+                .trim(),
+            "2 / 1",
+            "on load the heading describes the default dataset"
+        );
+
+        // Switching: click the second tab. Cards, provenance, and the graph
+        // all follow to the worked example. The tabs are wired independently
+        // of the wasm viz, so this works without waiting for it.
+        page.locator(".instance-dataset-tab[data-instance-dataset='1']")
+            .click(None)
+            .await
+            .expect("click second dataset");
+
+        assert!(
+            page.locator("#d1-ind-chateauMorgon")
+                .is_visible()
+                .await
+                .unwrap_or(false),
+            "the newly selected dataset's cards should be visible"
+        );
+        assert!(
+            !page
+                .locator("#d0-ind-previewWine")
+                .is_visible()
+                .await
+                .unwrap_or(true),
+            "the previously selected dataset's cards should be hidden"
+        );
+        // The heading describes the dataset on screen: the worked example has
+        // two nodes and one edge where the preview had one node and none.
+        let heading = page
+            .locator("#instance-graph-count")
+            .inner_text()
+            .await
+            .expect("heading count");
+        assert_eq!(
+            heading.trim(),
+            "4 / 2",
+            "the heading count should follow the selected dataset; got: {heading}"
+        );
+        // The sidebar describes the same graph, so it must not be left showing
+        // the landing dataset's numbers.
+        assert_eq!(
+            page.locator("#instance-graph-sidebar-count")
+                .inner_text()
+                .await
+                .expect("sidebar count")
+                .trim(),
+            "4 / 2",
+            "the sidebar count should agree with the heading after switching"
+        );
+
+        let prov = page
+            .locator(".instance-dataset-panel:not([hidden]) .instance-provenance")
+            .inner_text()
+            .await
+            .expect("provenance");
+        assert!(
+            prov.contains("wine_instances.yaml") && !prov.contains("preview"),
+            "the visible panel names the selected dataset's source; got: {prov}"
+        );
+
+        // The canvas is re-initialized over the newly selected A-box. The viz
+        // may still have been loading when the tab was clicked; whenever it
+        // lands it paints the dataset that is active by then.
+        assert!(
+            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
+            "instance graph viz never became ready"
+        );
+        assert_eq!(
+            page.evaluate_value("window.__panschema_instance_active")
+                .await
+                .unwrap_or_default()
+                .trim()
+                .trim_matches('"'),
+            "1",
+            "the selected dataset is the one the viz was asked to paint"
+        );
+        let painted = page
+            .evaluate_value(
+                r#"(async function(){
+                    var viz = window.__panschema_instance_viz;
+                    if (!viz) return 'no-viz';
+                    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+                    var c = document.getElementById('instance-graph-canvas');
+                    var ctx = c.getContext('2d');
+                    if (!ctx) return 'no-2d-ctx';
+                    var d = ctx.getImageData(0, 0, c.width, c.height).data;
+                    var teal = 0;
+                    for (var i = 0; i < d.length; i += 4) {
+                        if (d[i] < 100 && d[i+1] > 150 && d[i+1] < 215 && d[i+2] > 150 && d[i+2] < 215) teal++;
+                    }
+                    return 'ok:' + teal;
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        let teal: u32 = painted
+            .trim()
+            .trim_matches('"')
+            .strip_prefix("ok:")
+            .unwrap_or("0")
+            .parse()
+            .unwrap_or(0);
+        assert!(
+            teal > 0,
+            "the swapped-in A-box should paint individual nodes; got: {painted}"
+        );
+
+        browser.close().await.ok();
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
+/// The instance graph offers the schema graph's inspection affordances:
+/// a hover detail card (the only surface for a shared value's usage count)
+/// and the toolbar toggles, wired once through the shared shell.
+#[test]
+fn e2e_instance_graph_has_hover_card_and_toolbar_parity() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let output_dir = generate_docs_with_instances(
+            "tests/fixtures/typed_wine.yaml",
+            "tests/fixtures/typed_wine_instances.yaml",
+        );
+        let (listener, port) = bind_ephemeral();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("goto");
+        assert!(
+            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
+            "instance graph viz never became ready"
+        );
+
+        // The toolbar is present with the schema graph's controls.
+        for id in [
+            "instance-graph-reset",
+            "instance-graph-zoom-in",
+            "instance-graph-zoom-out",
+            "instance-graph-labels-all",
+            "instance-graph-labels-nodes",
+            "instance-graph-labels-edges",
+            "instance-graph-focus-on-hover",
+            "instance-graph-arrows",
+        ] {
+            assert_eq!(
+                page.locator(format!("#{id}")).count().await.expect("count"),
+                1,
+                "missing toolbar control #{id}"
+            );
+        }
+
+        // Toggles drive the visualization, not just their own styling.
+        let toggled = page
+            .evaluate_value(
+                r#"(function(){
+                    var viz = window.__panschema_instance_viz;
+                    var before = viz.node_labels_enabled() + ':' + viz.show_arrows();
+                    document.getElementById('instance-graph-labels-nodes').click();
+                    document.getElementById('instance-graph-arrows').click();
+                    var after = viz.node_labels_enabled() + ':' + viz.show_arrows();
+                    return before + ' -> ' + after;
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert!(
+            toggled.contains("true:true -> false:false"),
+            "label and arrow toggles should flip viz state; got: {toggled}"
+        );
+
+        // Focus-on-hover honours its toggle: off means hovering focuses
+        // nothing; back on, hovering focuses the node's neighborhood.
+        let focus = page
+            .evaluate_value(
+                r#"(function(){
+                    var viz = window.__panschema_instance_viz;
+                    var canvas = document.getElementById('instance-graph-canvas');
+                    var rect = canvas.getBoundingClientRect();
+                    var dpr = window.devicePixelRatio || 1;
+                    function hoverNode(i) {
+                        var pos = viz.node_canvas_pos(i);
+                        canvas.dispatchEvent(new MouseEvent('mousemove', {
+                            clientX: rect.left + pos[0] / dpr,
+                            clientY: rect.top + pos[1] / dpr,
+                            bubbles: true
+                        }));
+                    }
+                    document.getElementById('instance-graph-focus-on-hover').click(); // off
+                    hoverNode(0);
+                    var whileOff = viz.focused_node_index();
+                    canvas.dispatchEvent(new MouseEvent('mouseleave', {bubbles: true}));
+                    document.getElementById('instance-graph-focus-on-hover').click(); // on
+                    hoverNode(0);
+                    var whileOn = viz.focused_node_index();
+                    return 'off:' + whileOff + ' on:' + whileOn;
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert!(
+            focus.contains("off:-1") && focus.contains("on:0"),
+            "the focus toggle should gate hover focusing; got: {focus}"
+        );
+
+        // The legend button reflects its state like every other toggle.
+        let legend_state = page
+            .evaluate_value(
+                r#"(function(){
+                    var b = document.getElementById('instance-graph-legend-toggle');
+                    b.click();
+                    var on = b.classList.contains('active') + ':' + b.getAttribute('aria-pressed');
+                    b.click();
+                    var off = b.classList.contains('active') + ':' + b.getAttribute('aria-pressed');
+                    return on + ' / ' + off;
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert!(
+            legend_state.contains("true:true / false:false"),
+            "the legend button should light while open and dim when closed; got: {legend_state}"
+        );
+
+        // The hover card: an individual shows its class; a shared value node
+        // shows its enum and how many individuals chose it — the wire's
+        // usage_count has no other surface.
+        let card = page
+            .evaluate_value(
+                r#"(function(){
+                    var viz = window.__panschema_instance_viz;
+                    var g = (window.__PANSCHEMA_INSTANCE_GRAPHS__ || [])[0];
+                    var canvas = document.getElementById('instance-graph-canvas');
+                    var rect = canvas.getBoundingClientRect();
+                    var dpr = window.devicePixelRatio || 1;
+                    function hoverNode(i) {
+                        var pos = viz.node_canvas_pos(i);
+                        canvas.dispatchEvent(new MouseEvent('mousemove', {
+                            clientX: rect.left + pos[0] / dpr,
+                            clientY: rect.top + pos[1] / dpr,
+                            bubbles: true
+                        }));
+                    }
+                    var redIdx = g.data.nodes.findIndex(function(n){
+                        return n.node_type === 'enum_value' && n.label === 'red';
+                    });
+                    if (redIdx < 0) return 'no-red';
+                    hoverNode(redIdx);
+                    var el = document.getElementById('instance-graph-hover-card');
+                    var value = el && el.style.display !== 'none' ? el.textContent : '(hidden)';
+                    var morgonIdx = g.data.nodes.findIndex(function(n){
+                        return n.id === 'individual:morgon';
+                    });
+                    hoverNode(morgonIdx);
+                    var ind = el && el.style.display !== 'none' ? el.textContent : '(hidden)';
+                    return 'value[' + value + '] individual[' + ind + ']';
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert!(
+            card.contains("WineColorEnum") && card.contains('2'),
+            "the value card should name its enum and usage count; got: {card}"
+        );
+        assert!(
+            card.contains("Morgon") && card.contains("Wine"),
+            "the individual card should show its label and class; got: {card}"
+        );
+
+        browser.close().await.ok();
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
+/// Grabbing a node on the instance canvas drags THE NODE, as on the schema
+/// canvas — not the camera. A pan moves every node together; a node drag
+/// changes the dragged node's position relative to the others.
+#[test]
+fn e2e_instance_graph_nodes_are_draggable() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let output_dir = generate_docs_with_instances(
+            "tests/fixtures/typed_wine.yaml",
+            "tests/fixtures/typed_wine_instances.yaml",
+        );
+        let (listener, port) = bind_ephemeral();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("goto");
+        assert!(
+            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
+            "instance graph viz never became ready"
+        );
+
+        let dragged = page
+            .evaluate_value(
+                r#"(function(){
+                    var viz = window.__panschema_instance_viz;
+                    var canvas = document.getElementById('instance-graph-canvas');
+                    var rect = canvas.getBoundingClientRect();
+                    var dpr = window.devicePixelRatio || 1;
+                    function rel() {
+                        var a = viz.node_canvas_pos(0), b = viz.node_canvas_pos(1);
+                        return [a[0] - b[0], a[1] - b[1]];
+                    }
+                    var before = rel();
+                    var pos = viz.node_canvas_pos(0);
+                    var sx = rect.left + pos[0] / dpr, sy = rect.top + pos[1] / dpr;
+                    canvas.dispatchEvent(new MouseEvent('mousedown', {clientX: sx, clientY: sy, bubbles: true}));
+                    window.dispatchEvent(new MouseEvent('mousemove', {clientX: sx + 60, clientY: sy + 40, bubbles: true}));
+                    window.dispatchEvent(new MouseEvent('mouseup', {clientX: sx + 60, clientY: sy + 40, bubbles: true}));
+                    var after = rel();
+                    var moved = Math.hypot(after[0] - before[0], after[1] - before[1]);
+                    return 'relMoved:' + Math.round(moved);
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        let moved: i64 = dragged
+            .trim()
+            .trim_matches('"')
+            .strip_prefix("relMoved:")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(-1);
+        assert!(
+            moved > 20,
+            "grabbing a node should move it relative to its neighbors (a pan moves \
+             everything together); got: {dragged}"
+        );
+
+        browser.close().await.ok();
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
+/// Clicking a node on the instance canvas selects it, as on the schema
+/// canvas: the card pins open (surviving the cursor moving away) until the
+/// node is deselected by clicking empty space.
+#[test]
+fn e2e_instance_graph_click_pins_the_card_and_empty_space_deselects() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let output_dir = generate_docs_with_instances(
+            "tests/fixtures/typed_wine.yaml",
+            "tests/fixtures/typed_wine_instances.yaml",
+        );
+        let (listener, port) = bind_ephemeral();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("goto");
+        assert!(
+            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
+            "instance graph viz never became ready"
+        );
+
+        let states = page
+            .evaluate_value(
+                r#"(function(){
+                    var viz = window.__panschema_instance_viz;
+                    var canvas = document.getElementById('instance-graph-canvas');
+                    var card = document.getElementById('instance-graph-hover-card');
+                    var rect = canvas.getBoundingClientRect();
+                    var dpr = window.devicePixelRatio || 1;
+                    function cardVisible() {
+                        return card && card.style.display !== 'none' && card.style.display !== '';
+                    }
+                    function clickAt(sx, sy) {
+                        var opts = {clientX: sx, clientY: sy, bubbles: true};
+                        canvas.dispatchEvent(new MouseEvent('mousedown', opts));
+                        window.dispatchEvent(new MouseEvent('mouseup', opts));
+                        canvas.dispatchEvent(new MouseEvent('click', opts));
+                    }
+                    var pos = viz.node_canvas_pos(0);
+                    clickAt(rect.left + pos[0] / dpr, rect.top + pos[1] / dpr);
+                    var out = ['sel:' + viz.selected_node_index(), 'card:' + cardVisible()];
+                    canvas.dispatchEvent(new MouseEvent('mousemove',
+                        {clientX: rect.left + 3, clientY: rect.top + 3, bubbles: true}));
+                    out.push('cardAfterMoveAway:' + cardVisible());
+                    clickAt(rect.left + 3, rect.top + 3);
+                    out.push('selAfterEmptyClick:' + viz.selected_node_index());
+                    out.push('cardAfterEmptyClick:' + cardVisible());
+                    return out.join(' ');
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert!(
+            states.contains("sel:0") && states.contains("card:true"),
+            "clicking a node should select it and pin its card open; got: {states}"
+        );
+        assert!(
+            states.contains("cardAfterMoveAway:true"),
+            "the pinned card should survive the cursor moving off the node; got: {states}"
+        );
+        assert!(
+            states.contains("selAfterEmptyClick:-1")
+                && states.contains("cardAfterEmptyClick:false"),
+            "clicking empty space should deselect and close the card; got: {states}"
+        );
+
+        browser.close().await.ok();
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
+/// The instance graph is typed: individuals wear their class's circle and
+/// colour, and each enum value in use is one shared diamond node the
+/// choosing individuals link to — checked on the real rendered page, since
+/// writer↔viz wire changes can pass every Rust test while the browser
+/// renders nothing.
+#[test]
+fn e2e_typed_instance_graph_renders_class_symbols_and_shared_values() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let output_dir = generate_docs_with_instances(
+            "tests/fixtures/typed_wine.yaml",
+            "tests/fixtures/typed_wine_instances.yaml",
+        );
+        let (listener, port) = bind_ephemeral();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("goto");
+
+        assert!(
+            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
+            "instance graph viz never became ready"
+        );
+
+        // The wire document carries the typed encoding: two shared value
+        // nodes (red, white — unused rose mints nothing), each red wine
+        // linking to the ONE red node.
+        let wire = page
+            .evaluate_value(
+                r#"(function(){
+                    var g = (window.__PANSCHEMA_INSTANCE_GRAPHS__ || [])[0];
+                    if (!g || !g.data) return 'no-data';
+                    var values = g.data.nodes.filter(function(n){ return n.node_type === 'enum_value'; });
+                    var red = values.find(function(n){ return n.label === 'red'; });
+                    if (!red) return 'no-red:' + JSON.stringify(values);
+                    var redEdges = g.data.edges.filter(function(e){ return e.target === red.id; });
+                    return 'values:' + values.length +
+                        ' redSources:' + redEdges.map(function(e){ return e.source; }).sort().join(',') +
+                        ' labels:' + redEdges.map(function(e){ return e.label; }).join(',') +
+                        ' usage:' + (red.kind_metadata ? red.kind_metadata.usageCount : '?') +
+                        ' version:' + g.data.format_version;
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert!(
+            wire.contains("values:2")
+                && wire.contains("redSources:individual:fleurie,individual:morgon")
+                && wire.contains("labels:color,color")
+                && wire.contains("usage:2")
+                && wire.contains("version:1.2"),
+            "the typed wire encoding should reach the page; got: {wire}"
+        );
+
+        // The legend describes the typed key.
+        let summary = page
+            .evaluate_value(
+                r#"(function(){
+                    var viz = window.__panschema_instance_viz;
+                    return viz && typeof viz.legend_summary_json === 'function'
+                        ? viz.legend_summary_json() : 'no-api';
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert!(
+            summary.contains("Individual") && summary.contains("Enum value"),
+            "the key lists both typed kinds; got: {summary}"
+        );
+
+        // And the canvas actually paints them: class-blue circles for the
+        // wines and enum-purple diamonds for the shared values.
+        let painted = page
+            .evaluate_value(
+                r#"(async function(){
+                    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+                    var c = document.getElementById('instance-graph-canvas');
+                    var ctx = c.getContext('2d');
+                    if (!ctx) return 'no-ctx';
+                    var d = ctx.getImageData(0, 0, c.width, c.height).data;
+                    var blue = 0, purple = 0, teal = 0;
+                    for (var i = 0; i < d.length; i += 4) {
+                        var r = d[i], g = d[i+1], b = d[i+2];
+                        if (r < 110 && g > 110 && g < 180 && b > 180) blue++;
+                        if (r > 120 && r < 190 && g < 120 && b > 140) purple++;
+                        if (r < 100 && g > 150 && g < 215 && b > 150 && b < 215) teal++;
+                    }
+                    return 'blue:' + blue + ' purple:' + purple + ' teal:' + teal;
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        let count_of = |k: &str| -> i64 {
+            painted
+                .split_whitespace()
+                .find_map(|p| p.strip_prefix(&format!("{k}:")))
+                .and_then(|v| v.trim_matches('"').parse().ok())
+                .unwrap_or(-1)
+        };
+        assert!(
+            count_of("blue") > 0 && count_of("purple") > 0,
+            "class-coloured individuals and enum-coloured values should paint; got: {painted}"
+        );
+        assert_eq!(
+            count_of("teal"),
+            0,
+            "no generic teal markers remain; got: {painted}"
+        );
+
+        browser.close().await.ok();
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
+/// Each graph's notation key is adaptive: it lists only the node and edge
+/// kinds that graph actually uses, from one code path serving both canvases./// Each graph's notation key is adaptive: it lists only the node and edge
+/// kinds that graph actually uses, from one code path serving both canvases.
+#[test]
+fn e2e_legends_adapt_to_what_each_graph_contains() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        // wine_catalog declares classes and slots but no enums, so the
+        // schema key must not advertise the enum diamond; the instance
+        // graph's key must describe individuals and assertions only.
+        let output_dir = generate_docs_with_instances(
+            "tests/fixtures/wine_catalog.yaml",
+            "tests/fixtures/wine_instances.yaml",
+        );
+        let (listener, port) = bind_ephemeral();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("goto");
+
+        assert!(
+            wait_until_ready(
+                &page,
+                "!!window.__panschema_instance_viz && !!window.__panschema_viz"
+            )
+            .await,
+            "both graph visualizations should come up"
+        );
+
+        // The summary is built from the same row selectors the drawing
+        // uses, so these assertions are assertions about the drawn key.
+        let instance_summary = page
+            .evaluate_value(
+                r#"(function(){
+                    var viz = window.__panschema_instance_viz;
+                    if (!viz || typeof viz.legend_summary_json !== 'function') return 'no-api';
+                    return viz.legend_summary_json();
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert!(
+            instance_summary.contains("Individual") && instance_summary.contains("assertion"),
+            "the instance key describes individuals and assertions; got: {instance_summary}"
+        );
+        assert!(
+            !instance_summary.contains("\"Class\"") && !instance_summary.contains("Enum"),
+            "the instance key must not advertise schema-only symbols; got: {instance_summary}"
+        );
+        assert!(
+            instance_summary.contains("\"cardinality\":false"),
+            "assertions carry no crow's-feet; got: {instance_summary}"
+        );
+
+        let schema_summary = page
+            .evaluate_value(
+                r#"(function(){
+                    var viz = window.__panschema_viz;
+                    if (!viz || typeof viz.legend_summary_json !== 'function') return 'no-api';
+                    return viz.legend_summary_json();
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        // This fixture's slots are inline attributes, drawn as direct
+        // edges rather than slot pills — so the key lists classes and the
+        // range edges, and nothing else.
+        assert!(
+            schema_summary.contains("\"Class\"") && schema_summary.contains("\"range\""),
+            "the schema key lists the kinds present; got: {schema_summary}"
+        );
+        assert!(
+            !schema_summary.contains("\"Slot\""),
+            "no slot pills are drawn for inline attributes, so no Slot row; got: {schema_summary}"
+        );
+        assert!(
+            !schema_summary.contains("Enum"),
+            "a schema with no enums must not advertise the diamond; got: {schema_summary}"
+        );
+
+        // The instance graph's key is reachable: toggling shows the panel.
+        page.locator("#instance-graph-legend-toggle")
+            .click(None)
+            .await
+            .expect("toggle instance legend");
+        assert!(
+            page.locator("#instance-graph-legend")
+                .is_visible()
+                .await
+                .unwrap_or(false),
+            "the instance legend panel should open on toggle"
+        );
+
+        // The panel sizes to its rows: its height tracks the extent the
+        // viz reports for this key, with no fixed-box dead space below the
+        // last row.
+        let sizing = page
+            .evaluate_value(
+                r#"(function(){
+                    var viz = window.__panschema_instance_viz;
+                    var panel = document.getElementById('instance-graph-legend');
+                    if (!viz || !panel || typeof viz.legend_extent_json !== 'function') return 'no-api';
+                    var extent = JSON.parse(viz.legend_extent_json());
+                    var slack = panel.getBoundingClientRect().height - extent.height;
+                    return 'slack:' + Math.round(slack) + ' extent:' + Math.round(extent.height);
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        let slack: i64 = sizing
+            .trim()
+            .trim_matches('"')
+            .strip_prefix("slack:")
+            .and_then(|s| s.split_whitespace().next())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(i64::MAX);
+        assert!(
+            (0..=12).contains(&slack),
+            "the panel should wrap the key with only border/padding slack; got: {sizing}"
+        );
+
+        // And the two keys genuinely differ in size: the instance key is a
+        // fraction of the schema key's height.
+        let heights = page
+            .evaluate_value(
+                r#"(function(){
+                    var a = window.__panschema_instance_viz, b = window.__panschema_viz;
+                    if (!a || !b) return 'no-viz';
+                    return JSON.parse(a.legend_extent_json()).height + ' vs ' +
+                           JSON.parse(b.legend_extent_json()).height;
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        let parts: Vec<f64> = heights
+            .trim()
+            .trim_matches('"')
+            .split(" vs ")
+            .filter_map(|p| p.parse().ok())
+            .collect();
+        assert!(
+            parts.len() == 2 && parts[0] < parts[1],
+            "the instance key should be shorter than the schema key; got: {heights}"
+        );
+
+        browser.close().await.ok();
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
+/// The instance graph is the same explorable component as the schema graph:
+/// it fills its viewport instead of clustering in a corner, offers the layout
+/// picker, and focuses the hovered node's neighborhood.
+#[test]
+fn e2e_instance_graph_is_explorable_like_the_schema_graph() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let output_dir = generate_docs_with_instances(
+            "tests/fixtures/wine_catalog.yaml",
+            "tests/fixtures/wine_instances.yaml",
+        );
+        let (listener, port) = bind_ephemeral();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("goto");
+
+        assert!(
+            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
+            "instance graph viz never became ready"
+        );
+
+        // Viewport fill: after the layout settles and the camera fits, the
+        // painted content spans a substantial share of the canvas rather than
+        // clustering in one corner.
+        assert!(
+            wait_until_ready(
+                &page,
+                r#"(function(){
+                    var c = document.getElementById('instance-graph-canvas');
+                    if (!c) return false;
+                    var ctx = c.getContext('2d');
+                    if (!ctx) return false;
+                    var d = ctx.getImageData(0, 0, c.width, c.height).data;
+                    var minX = c.width, maxX = 0, minY = c.height, maxY = 0, any = false;
+                    for (var y = 0; y < c.height; y += 4) {
+                        for (var x = 0; x < c.width; x += 4) {
+                            var i = (y * c.width + x) * 4;
+                            // Painted = notably brighter than the dark bg.
+                            if (d[i] + d[i+1] + d[i+2] > 140) {
+                                any = true;
+                                if (x < minX) minX = x;
+                                if (x > maxX) maxX = x;
+                                if (y < minY) minY = y;
+                                if (y > maxY) maxY = y;
+                            }
+                        }
+                    }
+                    if (!any) return false;
+                    var w = maxX - minX, h = maxY - minY;
+                    var cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+                    // Fitted means wide AND roughly centered — an unfitted
+                    // default view can be wide while sitting in a corner.
+                    return w > c.width * 0.5 && h > c.height * 0.4 &&
+                        Math.abs(cx - c.width / 2) < c.width * 0.25 &&
+                        Math.abs(cy - c.height / 2) < c.height * 0.25;
+                })()"#
+            )
+            .await,
+            "the settled instance graph should fill and center in its viewport"
+        );
+
+        // Reset recovers from a far pan: after shoving the camera away, the
+        // painted graph returns to a fitted, centered view.
+        page.evaluate_value(
+            "(function(){ window.__panschema_instance_viz.pan(4000, 4000); return 'panned'; })()",
+        )
+        .await
+        .expect("pan");
+        page.locator("#instance-graph-reset")
+            .click(None)
+            .await
+            .expect("click reset");
+        assert!(
+            wait_until_ready(
+                &page,
+                r#"(function(){
+                    var c = document.getElementById('instance-graph-canvas');
+                    var ctx = c.getContext('2d');
+                    if (!ctx) return false;
+                    var d = ctx.getImageData(0, 0, c.width, c.height).data;
+                    var minX = c.width, maxX = 0, minY = c.height, maxY = 0, any = false;
+                    for (var y = 0; y < c.height; y += 4) {
+                        for (var x = 0; x < c.width; x += 4) {
+                            var i = (y * c.width + x) * 4;
+                            if (d[i] + d[i+1] + d[i+2] > 140) {
+                                any = true;
+                                if (x < minX) minX = x;
+                                if (x > maxX) maxX = x;
+                                if (y < minY) minY = y;
+                                if (y > maxY) maxY = y;
+                            }
+                        }
+                    }
+                    if (!any) return false;
+                    var cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+                    return (maxX - minX) > c.width * 0.5 &&
+                        Math.abs(cx - c.width / 2) < c.width * 0.25 &&
+                        Math.abs(cy - c.height / 2) < c.height * 0.25;
+                })()"#
+            )
+            .await,
+            "reset should re-fit and re-center the panned-away graph"
+        );
+
+        // The layout picker is present with the same options as the schema
+        // graph's, and choosing another implemented layout re-creates the viz.
+        let picker = page.locator("#instance-graph-layout-select");
+        assert_eq!(
+            picker.count().await.expect("picker count"),
+            1,
+            "the instance graph should offer the layout picker"
+        );
+        let switched = page
+            .evaluate_value(
+                r#"(function(){
+                    var s = document.getElementById('instance-graph-layout-select');
+                    window.__instance_viz_before = window.__panschema_instance_viz;
+                    s.value = 'force-directed';
+                    s.dispatchEvent(new Event('change', {bubbles: true}));
+                    return 'changed';
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert!(switched.contains("changed"), "picker change failed: {switched}");
+        assert!(
+            wait_until_ready(
+                &page,
+                "window.__panschema_instance_viz && window.__panschema_instance_viz !== window.__instance_viz_before"
+            )
+            .await,
+            "choosing a layout should re-create the instance viz"
+        );
+
+        // Focus-on-hover: hovering a node focuses its neighborhood, exactly
+        // as the schema graph does.
+        let focused = page
+            .evaluate_value(
+                r#"(function(){
+                    var viz = window.__panschema_instance_viz;
+                    if (!viz || typeof viz.node_canvas_pos !== 'function') return 'no-viz';
+                    var pos = viz.node_canvas_pos(0);
+                    if (!pos || pos.length < 2) return 'no-pos';
+                    var canvas = document.getElementById('instance-graph-canvas');
+                    var rect = canvas.getBoundingClientRect();
+                    var dpr = window.devicePixelRatio || 1;
+                    var x = rect.left + pos[0] / dpr, y = rect.top + pos[1] / dpr;
+                    canvas.dispatchEvent(new MouseEvent('mousemove', {clientX: x, clientY: y, bubbles: true}));
+                    return 'hovered:' + viz.hovered_node_index();
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert!(
+            focused.contains("hovered:0"),
+            "hovering a node should register on the viz; got: {focused}"
+        );
+
+        browser.close().await.ok();
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
 /// The `generate --instances` path renders a LinkML instance-data file as the
 /// instance graph — the schema declares no OWL individuals, so the A-box comes
 /// entirely from the data file — and its own canvas paints the teal nodes.
@@ -2481,10 +3513,10 @@ fn e2e_instance_graph_renders_from_linkml_data() {
             "tests/fixtures/wine_catalog.yaml",
             "tests/fixtures/wine_instances.yaml",
         );
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch().await.expect("playwright");
@@ -2562,7 +3594,8 @@ fn e2e_instance_graph_renders_from_linkml_data() {
         let counts = page
             .evaluate_value(
                 r#"(function(){
-                    var d = window.__PANSCHEMA_INSTANCE_GRAPH_DATA__;
+                    var g = window.__PANSCHEMA_INSTANCE_GRAPHS__;
+                    var d = g && g[0] && g[0].data;
                     return d ? (d.nodes.length + ',' + d.edges.length) : 'none';
                 })()"#,
             )
@@ -2628,10 +3661,10 @@ fn e2e_is_a_heavy_schema_auto_defaults_to_hierarchical() {
     let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
     rt.block_on(async {
         let output_dir = generate_docs_for("tests/fixtures/taxonomy.ttl");
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch()
@@ -2675,10 +3708,10 @@ fn e2e_renders_enum_and_type_sections() {
     let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
     rt.block_on(async {
         let output_dir = generate_docs_for("tests/fixtures/enum_type.yaml");
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch()
@@ -2743,10 +3776,10 @@ fn e2e_renders_linkml_card_features() {
     let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
     rt.block_on(async {
         let output_dir = generate_docs_for("tests/fixtures/card_features.yaml");
-        let port = find_available_port();
+        let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch()
@@ -2946,11 +3979,11 @@ async fn capture_scale_screenshot(
     .expect("Failed to write synthetic TTL");
 
     let output_dir = generate_docs_for(fixture_path.to_str().unwrap());
-    let port = find_available_port();
+    let (listener, port) = bind_ephemeral();
     let base_url = format!("http://127.0.0.1:{}", port);
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let server_handle = tokio::spawn(start_server(output_dir.clone(), port, shutdown_rx));
+    let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     let browser = playwright

@@ -1,0 +1,10 @@
+wines:
+  - id: morgon
+    name: Morgon
+    color: red
+  - id: fleurie
+    name: Fleurie
+    color: red
+  - id: chablis
+    name: Chablis
+    color: white

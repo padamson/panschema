@@ -14,6 +14,7 @@ mod graph_types;
 mod interaction;
 mod labels;
 pub mod layout;
+mod legend;
 mod sim_common;
 mod simulation;
 
@@ -334,6 +335,57 @@ impl Visualization {
     }
 
     /// Fit the graph to fill the canvas with padding
+    /// Draw this graph's adaptive notation key onto `canvas`: only the
+    /// node/edge/ring rows the graph actually uses. The standalone
+    /// [`render_legend`] free function stays the full key for callers
+    /// with no graph to inspect.
+    pub fn render_legend_onto(
+        &self,
+        canvas: HtmlCanvasElement,
+        device_pixel_ratio: f64,
+    ) -> Result<(), JsValue> {
+        let spec = crate::legend::legend_spec(&self.simulation);
+        let renderer = Canvas2DRenderer::new(canvas).map_err(|e| JsValue::from_str(&e))?;
+        renderer.render_legend_spec(device_pixel_ratio, &spec);
+        Ok(())
+    }
+
+    /// The rows the adaptive key shows, as JSON:
+    /// `{"nodes": [...], "edges": [...], "cardinality": bool, "rings": [...]}`.
+    /// Built from the same row selectors the drawing uses, so an assertion
+    /// against this summary is an assertion about the drawn key.
+    pub fn legend_summary_json(&self) -> String {
+        let spec = crate::legend::legend_spec(&self.simulation);
+        let nodes: Vec<&str> = crate::legend::node_rows_for(&spec)
+            .iter()
+            .map(|r| r.3)
+            .collect();
+        let edges: Vec<&str> = crate::legend::edge_rows_for(&spec)
+            .iter()
+            .map(|r| r.1)
+            .collect();
+        let rings: Vec<&str> = crate::legend::ring_rows_for(&spec)
+            .iter()
+            .map(|r| r.4)
+            .collect();
+        serde_json::json!({
+            "nodes": nodes,
+            "edges": edges,
+            "cardinality": spec.cardinality,
+            "rings": rings,
+        })
+        .to_string()
+    }
+
+    /// The logical (CSS-px) size the adaptive key needs, as
+    /// `{"width": .., "height": ..}` — so the shell can size the legend
+    /// panel to its rows instead of reserving a fixed box.
+    pub fn legend_extent_json(&self) -> String {
+        let spec = crate::legend::legend_spec(&self.simulation);
+        let (width, height) = crate::legend::legend_extent(&spec);
+        serde_json::json!({"width": width, "height": height}).to_string()
+    }
+
     pub fn fit_to_bounds(&mut self, padding: f32) {
         self.renderer.fit_to_bounds(&self.simulation.nodes, padding);
     }
@@ -842,6 +894,7 @@ fn node_kind_label(
         Some(KindMetadata::Slot { .. }) => "Slot",
         Some(KindMetadata::Enum { .. }) => "Enum",
         Some(KindMetadata::Individual { .. }) => "Individual",
+        Some(KindMetadata::EnumValue { .. }) => "Enum value",
         None => "Type",
     }
 }

@@ -1,15 +1,46 @@
 {# Instance (A-box) graph — the ontology's worked-example individuals as a
    connected force graph, rendered by panschema-viz on its own canvas,
-   distinct from the schema (T-box) graph. Data arrives via
-   window.__PANSCHEMA_INSTANCE_GRAPH_DATA__ (set by index.html). #}
+   distinct from the schema (T-box) graph. Every declared dataset's payload
+   arrives via window.__PANSCHEMA_INSTANCE_GRAPHS__ (set by index.html); the
+   selector swaps which one this canvas shows. #}
 <div class="instance-graph-block">
-    <h3 class="instance-graph-title">Instance graph</h3>
+    <h3 class="instance-graph-title">Graph</h3>
     <p class="instance-graph-caption">
         The individuals above as a connected A-box: nodes are individuals
         (teal hexagons), edges are their object-property assertions.
     </p>
+    <div class="instance-graph-toolbar">
+        <button type="button" id="instance-graph-reset" class="instance-graph-btn" title="Reset view">⟳</button>
+        <button type="button" id="instance-graph-zoom-in" class="instance-graph-btn" title="Zoom in">+</button>
+        <button type="button" id="instance-graph-zoom-out" class="instance-graph-btn" title="Zoom out">−</button>
+        <button type="button" id="instance-graph-labels-all" class="instance-graph-btn instance-graph-toggle active" aria-pressed="true" title="Toggle all labels">Labels</button>
+        <button type="button" id="instance-graph-labels-nodes" class="instance-graph-btn instance-graph-toggle active" aria-pressed="true" title="Toggle node labels">Nodes</button>
+        <button type="button" id="instance-graph-labels-edges" class="instance-graph-btn instance-graph-toggle active" aria-pressed="true" title="Toggle edge labels">Edges</button>
+        <button type="button" id="instance-graph-focus-on-hover" class="instance-graph-btn instance-graph-toggle active" aria-pressed="true" title="Hover a node to highlight it plus its neighbors; the rest dims. Click to toggle.">Focus on hover</button>
+        <button type="button" id="instance-graph-arrows" class="instance-graph-btn instance-graph-toggle active" aria-pressed="true" title="Show directed arrowheads on assertion edges. Click to toggle.">Arrows</button>
+        <button type="button" id="instance-graph-legend-toggle" class="instance-graph-btn instance-graph-toggle"
+                aria-pressed="false"
+                title="Show the notation key for this instance graph">Legend</button>
+        <label for="instance-graph-layout-select" class="instance-graph-layout-label">Layout</label>
+        <select id="instance-graph-layout-select" class="instance-graph-layout-select">
+            <option value="sgd">SGD (default · fast quality)</option>
+            <option value="stress">Stress majorization (cluster separation)</option>
+            <option value="hierarchical">Hierarchical</option>
+            <option value="force-directed">Force-directed (interactive)</option>
+            <option value="kamada-kawai">Kamada-Kawai (slower init)</option>
+        </select>
+    </div>
     <div class="instance-graph-container">
         <canvas id="instance-graph-canvas"></canvas>
+        {# Compact hover card: an individual's types/literals/IRI, or a
+           shared value's enum and usage count (its only surface). #}
+        <div class="instance-graph-hover-card" id="instance-graph-hover-card" style="display: none;"></div>
+        {# Adaptive notation key: the viz draws only the rows this A-box
+           uses, via the shared shell. Hidden until toggled. #}
+        <div class="instance-graph-legend" id="instance-graph-legend" style="display: none;"
+             role="img" aria-label="Instance graph notation key">
+            <canvas id="instance-graph-legend-canvas"></canvas>
+        </div>
     </div>
 </div>
 
@@ -25,6 +56,89 @@
         margin: 0 0 var(--space-2, 8px);
         color: var(--color-text-muted, #9ca3af);
         font-size: var(--font-size-sm, 13px);
+    }
+    .instance-graph-toolbar {
+        display: flex;
+        align-items: center;
+        gap: var(--space-2, 8px);
+        margin-bottom: var(--space-2, 8px);
+    }
+    .instance-graph-layout-label {
+        font-size: var(--font-size-sm, 13px);
+        color: var(--color-text-muted, #9ca3af);
+    }
+    .instance-graph-btn {
+        font-size: var(--font-size-sm, 13px);
+        color: var(--color-text-muted, #9ca3af);
+        background: var(--color-bg-secondary, #2d2d44);
+        border: 1px solid var(--color-border, #374151);
+        border-radius: var(--radius-sm, 4px);
+        padding: 2px 8px;
+        cursor: pointer;
+    }
+    .instance-graph-toggle.active {
+        color: var(--color-text, #e5e7eb);
+        border-color: var(--color-accent, #4b9fd5);
+    }
+    .instance-graph-hover-card {
+        position: absolute;
+        z-index: 20;
+        max-width: 300px;
+        padding: 10px 12px;
+        background: var(--color-bg-secondary, #2d2d44);
+        border: 1px solid var(--color-border, #374151);
+        border-radius: var(--radius-md, 6px);
+        font-size: var(--font-size-sm, 13px);
+        color: var(--color-text, #e5e7eb);
+        pointer-events: none;
+    }
+    .instance-graph-hover-card .graph-hover-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 6px;
+    }
+    .instance-graph-hover-card .graph-hover-kind {
+        font-size: var(--font-size-xs, 10px);
+        letter-spacing: 0.05em;
+        color: var(--color-text-muted, #9ca3af);
+        background: var(--color-bg-primary, #1a1a2e);
+        border-radius: var(--radius-sm, 4px);
+        padding: 1px 6px;
+    }
+    .instance-graph-hover-card .graph-hover-row {
+        display: flex;
+        gap: 8px;
+        margin-top: 2px;
+    }
+    .instance-graph-hover-card .graph-hover-key {
+        color: var(--color-text-muted, #9ca3af);
+        min-width: 64px;
+    }
+    .instance-graph-hover-card .graph-hover-val {
+        overflow-wrap: anywhere;
+    }
+    .instance-graph-legend {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        background: #1a1a2e;
+        border: 1px solid var(--color-border, #374151);
+        border-radius: var(--radius-md, 6px);
+        overflow: hidden;
+    }
+    /* The canvas carries its own extent-derived style size; the panel
+       wraps it, so the box is exactly as tall as the key's rows. */
+    .instance-graph-legend canvas {
+        display: block;
+    }
+    .instance-graph-layout-select {
+        font-size: var(--font-size-sm, 13px);
+        color: var(--color-text, #e5e7eb);
+        background: var(--color-bg-secondary, #2d2d44);
+        border: 1px solid var(--color-border, #374151);
+        border-radius: var(--radius-sm, 4px);
+        padding: 2px 6px;
     }
     .instance-graph-container {
         position: relative;
@@ -47,11 +161,62 @@
     }
 </style>
 
+<script>
+    // Dataset switching is plain DOM work, so it is wired up here rather than
+    // inside the wasm module below: the cards and provenance swap even while
+    // the viz is still loading, or if it fails to load at all. The viz hooks
+    // in by defining `window.__panschemaShowInstanceGraph`.
+    (function () {
+        const tabs = Array.from(document.querySelectorAll('.instance-dataset-tab'));
+        // A dataset's panels sit on BOTH sides of this script (metadata
+        // above the graph, individuals below), so query at use time rather
+        // than capturing a list the later panels aren't in yet.
+        const panels = () => Array.from(document.querySelectorAll('.instance-dataset-panel'));
+        // Which dataset opens is decided when the page is rendered, so read it
+        // off the markup rather than assuming the first.
+        const openPanel = panels().find((panel) => !panel.hidden);
+        window.__panschema_instance_active = openPanel
+            ? Number(openPanel.dataset.instanceDataset)
+            : 0;
+        tabs.forEach((tab) => {
+            tab.addEventListener('click', () => {
+                const index = Number(tab.dataset.instanceDataset);
+                tabs.forEach((t) => {
+                    const on = t === tab;
+                    t.classList.toggle('active', on);
+                    t.setAttribute('aria-selected', on ? 'true' : 'false');
+                });
+                panels().forEach((panel) => {
+                    panel.hidden = Number(panel.dataset.instanceDataset) !== index;
+                });
+                window.__panschema_instance_active = index;
+                // Both badges describe the graph on screen, so both follow the
+                // selection — a sidebar left on its landing value would
+                // disagree with the heading about the same graph. Each button
+                // keeps its own dataset's numbers.
+                const entry = (window.__PANSCHEMA_INSTANCE_GRAPHS__ || [])[index];
+                if (entry && entry.data && window.PanschemaGraphShell) {
+                    ['instance-graph-count', 'instance-graph-sidebar-count'].forEach((id) => {
+                        window.PanschemaGraphShell.setBadge(
+                            document.getElementById(id),
+                            entry.data.nodes.length,
+                            entry.data.edges.length
+                        );
+                    });
+                }
+                if (typeof window.__panschemaShowInstanceGraph === 'function') {
+                    window.__panschemaShowInstanceGraph(index);
+                }
+            });
+        });
+    })();
+</script>
+
 <script type="module">
     (async function () {
-        const data = window.__PANSCHEMA_INSTANCE_GRAPH_DATA__;
+        const graphs = window.__PANSCHEMA_INSTANCE_GRAPHS__ || [];
         const canvas = document.getElementById('instance-graph-canvas');
-        if (!data || !canvas) return;
+        if (!graphs.some((g) => g && g.data) || !canvas) return;
 
         // Load the panschema-viz wasm module. Imported independently of the
         // schema graph's module (a separate instance); sharing one module
@@ -73,22 +238,160 @@
         }
         resize();
 
-        let viz;
-        try {
-            // Force-directed variants read the container aspect; SGD gives a
-            // small A-box good cluster separation with no picker needed.
-            viz = new mod.Visualization(canvas, JSON.stringify(data), 16, 9, 'sgd');
-        } catch (e) {
-            console.warn('instance graph: init failed', e?.message ?? e);
-            return;
-        }
-        // Exposed for e2e assertions and debugging.
-        window.__panschema_instance_viz = viz;
+        // The same layout family the schema graph offers; persisted under
+        // its own key since a good A-box layout can differ from the T-box's.
+        const shell = window.PanschemaGraphShell;
+        const layoutSelect = document.getElementById('instance-graph-layout-select');
+        const layout = shell.layoutPref('panschema-instance-graph-layout', layoutSelect, 'sgd');
+        layout.restore();
 
-        // Tick the force simulation and repaint each frame.
+        let viz;
+        let shownIndex = -1;
+        // Declared before show(), which resets it and runs during init.
+        let draggingNode = -1;
+        const refitter = shell.makeRefitter();
+        const hoverFocus = shell.makeHoverFocus();
+        const getViz = () => viz;
+
+        // Toolbar: view buttons plus persisted toggles, each re-applied to
+        // every fresh viz (dataset and layout switches re-create it).
+        shell.wireViewButtons(
+            getViz,
+            document.getElementById('instance-graph-reset'),
+            document.getElementById('instance-graph-zoom-in'),
+            document.getElementById('instance-graph-zoom-out')
+        );
+        const labelsAll = shell.wireToggle(
+            document.getElementById('instance-graph-labels-all'),
+            getViz,
+            'panschema-instance-labels-all',
+            (v, on) => v.set_labels(on)
+        );
+        const labelsNodes = shell.wireToggle(
+            document.getElementById('instance-graph-labels-nodes'),
+            getViz,
+            'panschema-instance-labels-nodes',
+            (v, on) => v.set_node_labels(on)
+        );
+        const labelsEdges = shell.wireToggle(
+            document.getElementById('instance-graph-labels-edges'),
+            getViz,
+            'panschema-instance-labels-edges',
+            (v, on) => v.set_edge_labels(on)
+        );
+        const arrows = shell.wireToggle(
+            document.getElementById('instance-graph-arrows'),
+            getViz,
+            'panschema-instance-arrows',
+            (v, on) => v.set_arrows(on)
+        );
+        const focusToggle = shell.wireToggle(
+            document.getElementById('instance-graph-focus-on-hover'),
+            getViz,
+            'panschema-instance-focus-on-hover',
+            (v, on) => {
+                if (!on && typeof v.clear_focus === 'function') v.clear_focus();
+            }
+        );
+        function reapplyToggles() {
+            labelsAll.reapply();
+            labelsNodes.reapply();
+            labelsEdges.reapply();
+            arrows.reapply();
+        }
+
+        // The hover card reads the shown dataset's wire nodes; simulation
+        // indices match the document's node order.
+        const hoverCard = shell.makeHoverCard(
+            document.getElementById('instance-graph-hover-card'),
+            canvas,
+            (idx) => {
+                const entry = graphs[shownIndex];
+                return entry && entry.data ? entry.data.nodes[idx] : null;
+            }
+        );
+
+        // The adaptive notation key for the shown dataset, toggleable.
+        const legendToggle = document.getElementById('instance-graph-legend-toggle');
+        const legendPanel = document.getElementById('instance-graph-legend');
+        const legendCanvas = document.getElementById('instance-graph-legend-canvas');
+        let legendOpen = false;
+        function refreshLegend() {
+            if (!legendOpen || !legendPanel) return;
+            legendPanel.style.display = 'block';
+            if (!shell.renderLegend(viz, legendCanvas)) {
+                legendPanel.style.display = 'none';
+            }
+        }
+        if (legendToggle) {
+            legendToggle.addEventListener('click', () => {
+                legendOpen = !legendOpen;
+                legendToggle.classList.toggle('active', legendOpen);
+                legendToggle.setAttribute('aria-pressed', legendOpen ? 'true' : 'false');
+                if (legendPanel) legendPanel.style.display = legendOpen ? 'block' : 'none';
+                refreshLegend();
+            });
+        }
+        function show(index) {
+            const entry = graphs[index];
+            if (!entry || !entry.data) return false;
+            // A fresh Visualization over the same canvas is how a dataset
+            // swap (or layout change) happens; the outgoing one owns wasm
+            // memory, so release it rather than leaving it to the collector.
+            const previous = viz;
+            try {
+                viz = new mod.Visualization(canvas, JSON.stringify(entry.data), 16, 9, layout.read());
+            } catch (e) {
+                console.warn('instance graph: init failed', e?.message ?? e);
+                return false;
+            }
+            if (previous && typeof previous.free === 'function') {
+                try {
+                    previous.free();
+                } catch (_) {
+                    /* already released */
+                }
+            }
+            shownIndex = index;
+            draggingNode = -1;
+            refitter.reset();
+            hoverFocus.reset();
+            hoverCard.unpin();
+            reapplyToggles();
+            // A different dataset can need different legend rows.
+            refreshLegend();
+            // Exposed for e2e assertions and debugging.
+            window.__panschema_instance_viz = viz;
+            return true;
+        }
+
+        if (layoutSelect) {
+            layoutSelect.addEventListener('change', () => {
+                layout.save();
+                if (shownIndex >= 0) show(shownIndex);
+            });
+        }
+
+        window.__panschemaShowInstanceGraph = show;
+        // The reader may have already switched datasets while wasm loaded, so
+        // paint whichever one is active now rather than the first.
+        const active = window.__panschema_instance_active || 0;
+        const initial = graphs[active] && graphs[active].data
+            ? active
+            : graphs.findIndex((g) => g && g.data);
+        if (!show(initial)) return;
+
+        // Tick the force simulation and repaint each frame, fitting the
+        // camera to the settling layout at the same checkpoints the schema
+        // graph uses so the graph fills its viewport.
         function frame() {
             try {
                 viz.tick();
+                // Camera fits are animated targets; without advancing the
+                // animation each frame, fit_to_bounds (settle refits, the
+                // reset button, resize) sets a target that never applies.
+                viz.update_animation();
+                refitter.onTick(viz);
                 viz.render();
             } catch (_) {
                 /* transient during teardown */
@@ -97,23 +400,82 @@
         }
         requestAnimationFrame(frame);
 
-        // Drag to pan, wheel to zoom — the minimum to explore a small A-box.
+        // Grabbing a node drags the node, as on the schema canvas; grabbing
+        // empty space pans. Wheel zooms. A movement-free press is a click:
+        // on a node it pins the card open; on empty space it deselects.
         let dragging = false;
+        let dragMoved = false;
         let lastX = 0;
         let lastY = 0;
+        function canvasXY(e) {
+            const rect = canvas.getBoundingClientRect();
+            return [(e.clientX - rect.left) * dpr, (e.clientY - rect.top) * dpr];
+        }
         canvas.addEventListener('mousedown', (e) => {
-            dragging = true;
-            lastX = e.clientX;
-            lastY = e.clientY;
+            dragMoved = false;
+            if (viz && typeof viz.start_drag_at === 'function') {
+                const [x, y] = canvasXY(e);
+                draggingNode = viz.start_drag_at(x, y);
+            }
+            if (draggingNode < 0) {
+                dragging = true;
+                lastX = e.clientX;
+                lastY = e.clientY;
+            }
         });
         window.addEventListener('mouseup', () => {
+            if (draggingNode >= 0 && viz && typeof viz.end_drag === 'function') {
+                viz.end_drag(false);
+            }
+            draggingNode = -1;
             dragging = false;
         });
         window.addEventListener('mousemove', (e) => {
+            if (draggingNode >= 0) {
+                dragMoved = true;
+                if (viz && typeof viz.drag_to === 'function') {
+                    const [x, y] = canvasXY(e);
+                    viz.drag_to(x, y);
+                }
+                return;
+            }
             if (!dragging) return;
+            dragMoved = true;
             viz.pan((e.clientX - lastX) * dpr, (e.clientY - lastY) * dpr);
             lastX = e.clientX;
             lastY = e.clientY;
+        });
+        canvas.addEventListener('click', (e) => {
+            if (dragMoved || !viz || typeof viz.select_at !== 'function') return;
+            const [x, y] = canvasXY(e);
+            const idx = viz.select_at(x, y);
+            if (idx >= 0) {
+                hoverCard.pin(idx, e.clientX, e.clientY);
+            } else {
+                if (typeof viz.deselect === 'function') viz.deselect();
+                hoverFocus.apply(viz, -1);
+                hoverCard.unpin();
+            }
+        });
+
+        // Focus-on-hover through the shared shell, so the hop depth and the
+        // clear-on-leave rule match the schema graph by construction.
+        canvas.addEventListener('mousemove', (e) => {
+            // A pinned card wins: ignore ephemeral hover while one is open.
+            if (dragging || draggingNode >= 0 || hoverCard.pinned() >= 0 || !viz) return;
+            const rect = canvas.getBoundingClientRect();
+            const x = (e.clientX - rect.left) * dpr;
+            const y = (e.clientY - rect.top) * dpr;
+            if (typeof viz.update_hover === 'function') viz.update_hover(x, y);
+            const idx = typeof viz.hovered_node_index === 'function' ? viz.hovered_node_index() : -1;
+            if (focusToggle.enabled()) hoverFocus.apply(viz, idx);
+            hoverCard.show(idx, e.clientX, e.clientY);
+        });
+        canvas.addEventListener('mouseleave', () => {
+            if (!viz || hoverCard.pinned() >= 0) return;
+            if (typeof viz.clear_hover === 'function') viz.clear_hover();
+            hoverFocus.apply(viz, -1);
+            hoverCard.hide();
         });
         canvas.addEventListener(
             'wheel',
@@ -124,6 +486,9 @@
             { passive: false }
         );
 
-        window.addEventListener('resize', resize);
+        window.addEventListener('resize', () => {
+            resize();
+            shell.forwardResize(viz, canvas);
+        });
     })();
 </script>

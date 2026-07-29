@@ -50,6 +50,11 @@ pub enum NodeType {
     /// An OWL `NamedIndividual` — an A-box instance, drawn only in the
     /// separate instance graph, never in the schema (T-box) graph.
     Individual,
+    /// One permissible value actually used by the A-box — a shared node in
+    /// the instance graph that every individual choosing the value links
+    /// to, drawn with its enum's symbol (the A-box realizing the T-box's
+    /// enum diamond). Never in the schema graph.
+    EnumValue,
     /// An upstream ontology category a class grounds into via `subclass_of`
     /// — outside this schema, drawn muted/dashed as a shared anchor.
     External,
@@ -64,6 +69,8 @@ impl NodeType {
             NodeType::Enum => colors::ENUM,
             NodeType::Type => colors::TYPE,
             NodeType::Individual => colors::INDIVIDUAL,
+            // Shared value nodes wear their enum's colour.
+            NodeType::EnumValue => colors::ENUM,
             NodeType::External => colors::EXTERNAL,
         }
     }
@@ -203,6 +210,13 @@ pub enum KindMetadata {
         types: Vec<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         literals: Vec<PropertyLiteral>,
+    },
+    /// One enum value in use by the A-box: the hover card names which enum
+    /// it belongs to and how many individuals chose it.
+    #[serde(rename = "enum_value")]
+    EnumValue {
+        enum_name: String,
+        usage_count: usize,
     },
 }
 
@@ -390,7 +404,10 @@ pub struct GraphData {
 
 impl GraphData {
     /// Format version constant
-    pub const FORMAT_VERSION: &'static str = "1.1";
+    /// Bumped 1.1 → 1.2 when the instance graph gained typed nodes
+    /// (class-coloured individuals, shared `enum_value` nodes). Additive:
+    /// pre-1.2 documents parse unchanged.
+    pub const FORMAT_VERSION: &'static str = "1.2";
 
     /// Create new GraphData with metadata
     pub fn new(schema_name: String, schema_title: Option<String>) -> Self {
@@ -556,6 +573,15 @@ impl GraphWriter {
         let mut graph = GraphData::new(schema.name.clone(), schema.title.clone());
         graph.graph_kind = GraphKind::Instance;
 
+        // Shared enum-value nodes: one per (enum, value) actually used,
+        // keyed for determinism; every individual choosing the value links
+        // to the same node, so shared values read as structure.
+        let mut value_nodes: std::collections::BTreeMap<String, (String, String, usize)> =
+            std::collections::BTreeMap::new();
+        // Which of a class's slots are enum-ranged, resolved once per class.
+        let mut enum_slots_by_class: std::collections::BTreeMap<String, Vec<(String, String)>> =
+            std::collections::BTreeMap::new();
+
         for inst in &set.instances {
             let node_id = format!("individual:{}", inst.id);
 
@@ -568,11 +594,60 @@ impl GraphWriter {
                 });
             }
 
+            // Enum-valued slots become slot-labelled edges to the shared
+            // value node for that (enum, value) pair.
+            if let Some(class_name) = inst.types.first() {
+                let enum_slots = enum_slots_by_class
+                    .entry(class_name.clone())
+                    .or_insert_with(|| {
+                        schema
+                            .classes
+                            .get(class_name)
+                            .map(|class| {
+                                crate::linkml_resolve::resolve_effective_slots(class, schema)
+                                    .into_iter()
+                                    .filter_map(|(name, slot)| {
+                                        let range = slot.range.as_deref()?;
+                                        schema
+                                            .enums
+                                            .contains_key(range)
+                                            .then(|| (name, range.to_string()))
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default()
+                    })
+                    .clone();
+                for (slot_name, enum_name) in &enum_slots {
+                    for sv in inst.slot_values.iter().filter(|sv| &sv.slot == slot_name) {
+                        for value in &sv.values {
+                            let crate::instances::InstanceValue::Scalar(scalar) = value else {
+                                continue;
+                            };
+                            let text = crate::instances::scalar_to_display(scalar);
+                            let value_id = format!("enum_value:{enum_name}:{text}");
+                            let entry = value_nodes
+                                .entry(value_id.clone())
+                                .or_insert_with(|| (enum_name.clone(), text, 0));
+                            entry.2 += 1;
+                            graph.edges.push(GraphEdge {
+                                source: node_id.clone(),
+                                target: value_id,
+                                edge_type: EdgeType::Assertion,
+                                label: Some(slot_name.clone()),
+                            });
+                        }
+                    }
+                }
+            }
+
             graph.nodes.push(GraphNode {
                 id: node_id,
                 label: inst.label.clone(),
                 node_type: NodeType::Individual,
-                color: NodeType::Individual.color(),
+                // The A-box is the T-box realized: an individual wears its
+                // class's colour, not a generic instance marker.
+                color: NodeType::Class.color(),
                 description: inst.description.clone(),
                 // An instance that carries its own IRI (the OWL path) keeps
                 // it, unresolved display state and all; one authored as
@@ -594,6 +669,24 @@ impl GraphWriter {
                             value: value.clone(),
                         })
                         .collect(),
+                }),
+            });
+        }
+
+        // The shared value nodes, after the loop so usage counts are final.
+        for (value_id, (enum_name, text, usage_count)) in value_nodes {
+            graph.nodes.push(GraphNode {
+                id: value_id,
+                label: text,
+                node_type: NodeType::EnumValue,
+                color: NodeType::EnumValue.color(),
+                description: None,
+                uri: None,
+                uri_unresolved: false,
+                is_abstract: false,
+                kind_metadata: Some(KindMetadata::EnumValue {
+                    enum_name,
+                    usage_count,
                 }),
             });
         }
@@ -1339,7 +1432,7 @@ mod tests {
         let schema = SchemaDefinition::new("kinded");
         let graph = GraphWriter::new().schema_to_graph(&schema);
         assert_eq!(graph.graph_kind, GraphKind::Schema);
-        assert_eq!(graph.format_version, "1.1");
+        assert_eq!(graph.format_version, "1.2");
     }
 
     /// The instance graph document is `instance`-kinded and its nodes carry
@@ -1381,6 +1474,185 @@ mod tests {
             node.uri.as_deref(),
             Some("https://example.org/cellar/b1"),
             "instance node identity is the shared minted IRI"
+        );
+    }
+
+    /// Builds a wine-like schema (class with an enum-ranged slot and a
+    /// class-ranged reference) plus an A-box read the LinkML-data way, for
+    /// the typed instance-graph encoding tests.
+    fn typed_abox() -> (SchemaDefinition, crate::instances::InstanceSet) {
+        let mut schema = SchemaDefinition::new("cellar");
+        let mut container = ClassDefinition::new("Cellar");
+        container.tree_root = true;
+        for (slot, range) in [("wines", "Wine"), ("racks", "Rack")] {
+            let mut sd = crate::linkml::SlotDefinition::new(slot);
+            sd.range = Some(range.to_string());
+            sd.multivalued = true;
+            container.attributes.insert(slot.to_string(), sd);
+        }
+        schema.classes.insert("Cellar".to_string(), container);
+        for class in ["Wine", "Rack"] {
+            let mut c = ClassDefinition::new(class);
+            let mut id = crate::linkml::SlotDefinition::new("id");
+            id.identifier = true;
+            c.attributes.insert("id".to_string(), id);
+            let mut name = crate::linkml::SlotDefinition::new("name");
+            name.range = Some("string".to_string());
+            c.attributes.insert("name".to_string(), name);
+            if class == "Wine" {
+                let mut notes = crate::linkml::SlotDefinition::new("notes");
+                notes.range = Some("string".to_string());
+                c.attributes.insert("notes".to_string(), notes);
+                let mut color = crate::linkml::SlotDefinition::new("color");
+                color.range = Some("WineColorEnum".to_string());
+                c.attributes.insert("color".to_string(), color);
+                let mut stored_in = crate::linkml::SlotDefinition::new("stored_in");
+                stored_in.range = Some("Rack".to_string());
+                c.attributes.insert("stored_in".to_string(), stored_in);
+            }
+            schema.classes.insert(class.to_string(), c);
+        }
+        let mut colors_enum = crate::linkml::EnumDefinition::new("WineColorEnum");
+        for v in ["red", "white", "rose"] {
+            colors_enum
+                .permissible_values
+                .insert(v.to_string(), crate::linkml::PermissibleValue::new(v));
+        }
+        schema
+            .enums
+            .insert("WineColorEnum".to_string(), colors_enum);
+
+        let data: serde_norway::Value = serde_norway::from_str(
+            "wines:\n  - id: w1\n    name: Morgon\n    notes: earthy\n    color: red\n    stored_in: r1\n  - id: w2\n    name: Fleurie\n    color: red\n  - id: w3\n    name: Chablis\n    color: white\nracks:\n  - id: r1\n    name: North Rack\n",
+        )
+        .unwrap();
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        (schema, set)
+    }
+
+    /// The A-box is the T-box realized: an individual is drawn with its
+    /// class's symbol and colour, not a uniform generic marker.
+    #[test]
+    fn individuals_carry_their_classes_colour() {
+        let (schema, set) = typed_abox();
+        let graph = GraphWriter::new().instance_set_to_graph(&schema, &set);
+        let wine = graph
+            .nodes
+            .iter()
+            .find(|n| n.id == "individual:w1")
+            .expect("wine node");
+        assert_eq!(wine.node_type, NodeType::Individual, "kind stays semantic");
+        assert_eq!(
+            wine.color,
+            NodeType::Class.color(),
+            "an individual wears its class's colour, not the generic marker's"
+        );
+    }
+
+    /// Each enum value actually used becomes ONE shared node with the
+    /// enum's colour; every individual using it links to that node, so
+    /// "which individuals share this value" reads as structure.
+    #[test]
+    fn used_enum_values_become_shared_nodes() {
+        let (schema, set) = typed_abox();
+        let graph = GraphWriter::new().instance_set_to_graph(&schema, &set);
+
+        let value_nodes: Vec<_> = graph
+            .nodes
+            .iter()
+            .filter(|n| n.node_type == NodeType::EnumValue)
+            .collect();
+        let labels: Vec<&str> = value_nodes.iter().map(|n| n.label.as_str()).collect();
+        assert_eq!(
+            value_nodes.len(),
+            2,
+            "two values in use (red, white); the unused `rose` mints nothing; got: {labels:?}"
+        );
+        let red = value_nodes
+            .iter()
+            .find(|n| n.label == "red")
+            .expect("shared red node");
+        assert_eq!(red.color, NodeType::Enum.color(), "coloured like its enum");
+        match &red.kind_metadata {
+            Some(KindMetadata::EnumValue {
+                enum_name,
+                usage_count,
+            }) => {
+                assert_eq!(enum_name, "WineColorEnum");
+                assert_eq!(
+                    *usage_count, 2,
+                    "the shared node counts every individual that chose the value"
+                );
+            }
+            other => panic!("expected enum-value metadata, got {other:?}"),
+        }
+
+        // Both red wines link to the ONE red node, labelled by the slot.
+        let red_edges: Vec<_> = graph.edges.iter().filter(|e| e.target == red.id).collect();
+        let sources: std::collections::BTreeSet<&str> =
+            red_edges.iter().map(|e| e.source.as_str()).collect();
+        assert_eq!(
+            sources,
+            ["individual:w1", "individual:w2"].into_iter().collect(),
+            "every individual using the value links to the shared node"
+        );
+        assert!(
+            red_edges
+                .iter()
+                .all(|e| e.label.as_deref() == Some("color") && e.edge_type == EdgeType::Assertion),
+            "value edges are slot-labelled assertions"
+        );
+    }
+
+    /// Scalar literals stay attributes on the individual — a node per
+    /// unique string would bury the graph in leaves.
+    #[test]
+    fn scalar_literals_do_not_become_nodes() {
+        let (schema, set) = typed_abox();
+        let graph = GraphWriter::new().instance_set_to_graph(&schema, &set);
+        assert!(
+            !graph.nodes.iter().any(|n| n.label == "earthy"),
+            "a string literal must not mint a node"
+        );
+        // The card still carries it as metadata.
+        let wine = graph
+            .nodes
+            .iter()
+            .find(|n| n.id == "individual:w1")
+            .unwrap();
+        match &wine.kind_metadata {
+            Some(KindMetadata::Individual { literals, .. }) => {
+                assert!(
+                    literals.iter().any(|l| l.value == "earthy"),
+                    "the literal stays on the card; got {literals:?}"
+                );
+            }
+            other => panic!("expected individual metadata, got {other:?}"),
+        }
+    }
+
+    /// The typed encoding is a wire-format addition: the version bumps and
+    /// identity is unchanged, so RDF, docs, and graph JSON still agree.
+    #[test]
+    fn typed_instance_graph_bumps_format_version_and_keeps_identity() {
+        let (schema, set) = typed_abox();
+        let graph = GraphWriter::new().instance_set_to_graph(&schema, &set);
+        assert_eq!(graph.format_version, "1.2");
+        let wine = graph
+            .nodes
+            .iter()
+            .find(|n| n.id == "individual:w1")
+            .unwrap();
+        assert_eq!(
+            wine.uri.as_deref(),
+            Some(
+                crate::rdf_serializers::instance_iri_string(
+                    &schema,
+                    set.instances.iter().find(|i| i.id == "w1").unwrap()
+                )
+                .as_str()
+            ),
+            "individual IRIs are unchanged by the typed encoding"
         );
     }
 
