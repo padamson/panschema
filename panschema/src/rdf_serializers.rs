@@ -81,6 +81,28 @@ fn class_iri_string(name: &str, class_def: &ClassDefinition, schema: &SchemaDefi
         .unwrap_or_else(|| format!("{}#{}", ontology_iri_string(schema), name))
 }
 
+/// The IRI of an enum's permissible value, matched against either the value
+/// key or its `text`, or `None` when the enum does not permit it. Mirrors the
+/// derivation used when the enum's individuals are emitted, so the A-box and
+/// the T-box name the same thing.
+fn enum_value_iri(
+    enum_name: &str,
+    enum_def: &crate::linkml::EnumDefinition,
+    authored: &str,
+    schema: &SchemaDefinition,
+) -> Option<String> {
+    let (key, pv) = enum_def
+        .permissible_values
+        .iter()
+        .find(|(key, pv)| key.as_str() == authored || pv.text == authored)?;
+    Some(
+        pv.meaning
+            .as_deref()
+            .map(|m| expand_curie(m, schema))
+            .unwrap_or_else(|| format!("{}/{}", enum_iri_string(enum_name, schema), key)),
+    )
+}
+
 /// Absolute IRI for an enum: `{ontology}#{name}`, mirroring how classes and
 /// slots without an explicit URI are addressed. The IR carries no
 /// `enum_uri`, so there is nothing to prefer over the derived form.
@@ -437,7 +459,14 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
             value_iris.push(value_iri);
         }
         if !value_iris.is_empty() {
-            emit_rdf_list(&mut graph, &enum_iri, owl_one_of, &enum_iri_str, value_iris)?;
+            emit_rdf_list(
+                &mut graph,
+                &enum_iri,
+                owl_one_of,
+                &enum_iri_str,
+                "valuecell",
+                value_iris,
+            )?;
         }
     }
 
@@ -532,7 +561,7 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
                 slot_def
                     .range
                     .as_ref()
-                    .map(|r| schema.classes.contains_key(r))
+                    .map(|r| schema.classes.contains_key(r) || schema.enums.contains_key(r))
                     .unwrap_or(all_union_classes)
             });
 
@@ -613,7 +642,11 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
         // datatype, so emit none rather than fabricating a nonexistent
         // `xsd:{name}` (`xsd_datatype_iri` returns `None` for all of those).
         if let Some(ref range) = slot_def.range {
-            let range_iri_str = if is_object_property {
+            let range_iri_str = if schema.enums.contains_key(range) {
+                // An enum range names the enum's class, now that enums are
+                // emitted; previously this fell through with no range at all.
+                Some(enum_iri_string(range, schema))
+            } else if is_object_property {
                 Some(
                     schema
                         .classes
@@ -622,10 +655,6 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
                         .map(|c| expand_curie(c, schema))
                         .unwrap_or_else(|| format!("{}#{}", ontology_iri_str, range)),
                 )
-            } else if schema.enums.contains_key(range) {
-                // An enum range names the enum's class, now that enums are
-                // emitted; previously this fell through with no range at all.
-                Some(enum_iri_string(range, schema))
             } else {
                 crate::primitives::xsd_datatype_iri(range)
             };
@@ -662,6 +691,7 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
                 &union_node,
                 owl_union_of,
                 &prop_iri_str,
+                "unioncell",
                 members,
             )?;
         }
@@ -862,12 +892,29 @@ fn emit_instances(
             };
             let range = slot_def.as_ref().and_then(|d| d.range.as_deref());
             let float_range = matches!(range, Some("float") | Some("double") | Some("decimal"));
+            // An enum-ranged slot is an object property over the enum's value
+            // individuals, so its values assert as IRIs rather than literals.
+            let range_enum = range.and_then(|r| schema.enums.get(r).map(|e| (r, e)));
             for value in &sv.values {
                 let InstanceValue::Scalar(scalar) = value else {
                     // References emit below from `inst.references`; a
                     // range-kind mismatch has no faithful literal form.
                     continue;
                 };
+                if let Some((enum_name, enum_def)) = range_enum {
+                    let authored = crate::instances::scalar_to_display(scalar);
+                    if let Some(value_iri_str) =
+                        enum_value_iri(enum_name, enum_def, &authored, schema)
+                    {
+                        let object = make_iri(&value_iri_str)?;
+                        graph
+                            .insert(&subject, &predicate, &object)
+                            .map_err(|e| IoError::Write(e.to_string()))?;
+                        continue;
+                    }
+                    // A value the enum doesn't permit: keep it as authored so
+                    // nothing is invented, and let validation report it.
+                }
                 match scalar {
                     ScalarValue::String(s) => graph.insert(&subject, &predicate, s.as_str()),
                     ScalarValue::Boolean(b) => graph.insert(&subject, &predicate, *b),
@@ -1414,6 +1461,7 @@ fn emit_rdf_list<P>(
     subject: &Iri<String>,
     predicate: P,
     base: &str,
+    cell_name: &str,
     members: Vec<Iri<String>>,
 ) -> IoResult<()>
 where
@@ -1421,7 +1469,7 @@ where
 {
     let mut cells = Vec::new();
     for j in 0..members.len() {
-        cells.push(make_iri(&format!("{base}/unioncell{j}"))?);
+        cells.push(make_iri(&format!("{base}/{cell_name}{j}"))?);
     }
     if let Some(first) = cells.first() {
         graph
@@ -1832,10 +1880,21 @@ mod tests {
         schema.enums.insert("OrderStatus".to_string(), status);
 
         let mut order = ClassDefinition::new("Order");
+        let mut id = SlotDefinition::new("id");
+        id.identifier = true;
+        order.attributes.insert("id".to_string(), id);
         let mut slot = SlotDefinition::new("status");
         slot.range = Some("OrderStatus".to_string());
         order.attributes.insert("status".to_string(), slot);
         schema.classes.insert("Order".to_string(), order);
+
+        let mut root = ClassDefinition::new("Book");
+        root.tree_root = true;
+        let mut orders = SlotDefinition::new("orders");
+        orders.range = Some("Order".to_string());
+        orders.multivalued = true;
+        root.attributes.insert("orders".to_string(), orders);
+        schema.classes.insert("Book".to_string(), root);
         schema
     }
 
@@ -1872,6 +1931,82 @@ mod tests {
             one_of.len(),
             1,
             "the enum enumerates its values; got: {one_of:?}"
+        );
+    }
+
+    #[test]
+    fn an_enum_ranged_slot_declares_an_object_property() {
+        // The enum is a class whose values are individuals, so a slot ranged
+        // on it relates individuals — a datatype property with a class range
+        // is a contradiction.
+        let graph = build_rdf_graph(&enum_fixture()).expect("graph");
+        let status = "https://example.org/orders#status";
+        let rdf_type = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+        assert!(
+            has_iri_triple(
+                &graph,
+                status,
+                rdf_type,
+                "http://www.w3.org/2002/07/owl#ObjectProperty"
+            ),
+            "an enum-ranged slot is an object property"
+        );
+        assert!(
+            !has_iri_triple(
+                &graph,
+                status,
+                rdf_type,
+                "http://www.w3.org/2002/07/owl#DatatypeProperty"
+            ),
+            "and not also a datatype property"
+        );
+    }
+
+    #[test]
+    fn an_individuals_enum_value_asserts_the_value_individual() {
+        // The A-box must point at the enum value's individual, not repeat the
+        // value as a literal — otherwise it contradicts the object property.
+        let schema = enum_fixture();
+        let data: serde_norway::Value =
+            serde_norway::from_str("orders:\n  - {id: o1, status: shipped}\n").unwrap();
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        let graph = build_rdf_graph_with_instances(&schema, Some(&set)).expect("graph");
+        assert!(
+            has_iri_triple(
+                &graph,
+                "https://example.org/orders/o1",
+                "https://example.org/orders#status",
+                "https://example.org/orders#OrderStatus/shipped"
+            ),
+            "the assertion names the value's individual"
+        );
+        use sophia::api::graph::Graph;
+        use sophia::api::term::Term;
+        use sophia::api::triple::Triple;
+        let literal_kept = graph.triples().filter_map(Result::ok).any(|t| {
+            t.p()
+                .iri()
+                .is_some_and(|i| i.as_str() == "https://example.org/orders#status")
+                && t.o().lexical_form().is_some_and(|l| l == "shipped")
+        });
+        assert!(!literal_kept, "and does not also assert the bare literal");
+    }
+
+    #[test]
+    fn enumerated_value_list_cells_are_not_named_as_unions() {
+        // The list cells are addressable IRIs, so their names are read by
+        // people; an `owl:oneOf` list is not a union.
+        let graph = build_rdf_graph(&enum_fixture()).expect("graph");
+        let cells = objects_of(
+            &graph,
+            "https://example.org/orders#OrderStatus",
+            "http://www.w3.org/2002/07/owl#oneOf",
+        );
+        assert_eq!(cells.len(), 1, "got: {cells:?}");
+        assert!(
+            !cells[0].contains("union"),
+            "an enumeration's cells must not read as a union; got: {}",
+            cells[0]
         );
     }
 
