@@ -101,7 +101,7 @@ jobs:
     - uses: actions/checkout@v7
 
     - name: Install parse-changelog
-      uses: taiki-e/install-action@v2.83.4
+      uses: taiki-e/install-action@v2.85.1
       with:
         tool: parse-changelog
 
