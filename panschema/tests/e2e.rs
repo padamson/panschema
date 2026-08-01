@@ -3047,6 +3047,106 @@ fn e2e_instance_graph_click_pins_the_card_and_empty_space_deselects() {
     });
 }
 
+/// A click is a click even when the pointer jitters. A trackpad click moves
+/// a pixel or two between press and release, and treating any movement at
+/// all as a drag meant selection silently failed for real hands while
+/// passing for synthetic events dispatched at one coordinate.
+#[test]
+fn e2e_instance_graph_selection_survives_pointer_jitter_and_escape_deselects() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let output_dir = generate_docs_with_instances(
+            "tests/fixtures/typed_wine.yaml",
+            "tests/fixtures/typed_wine_instances.yaml",
+        );
+        let (listener, port) = bind_ephemeral();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("goto");
+        assert!(
+            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
+            "instance graph viz never became ready"
+        );
+
+        let states = page
+            .evaluate_value(
+                r#"(function(){
+                    var viz = window.__panschema_instance_viz;
+                    var canvas = document.getElementById('instance-graph-canvas');
+                    var card = document.getElementById('instance-graph-hover-card');
+                    var rect = canvas.getBoundingClientRect();
+                    var dpr = window.devicePixelRatio || 1;
+                    function shown() {
+                        return card && card.style.display !== 'none' && card.style.display !== '';
+                    }
+                    // A press, a small wobble, then a release — what a real
+                    // trackpad click looks like.
+                    function jitterClick(sx, sy) {
+                        canvas.dispatchEvent(new MouseEvent('mousedown',
+                            {clientX: sx, clientY: sy, bubbles: true}));
+                        window.dispatchEvent(new MouseEvent('mousemove',
+                            {clientX: sx + 2, clientY: sy + 1, bubbles: true}));
+                        window.dispatchEvent(new MouseEvent('mouseup',
+                            {clientX: sx + 2, clientY: sy + 1, bubbles: true}));
+                        canvas.dispatchEvent(new MouseEvent('click',
+                            {clientX: sx + 2, clientY: sy + 1, bubbles: true}));
+                    }
+                    var pos = viz.node_canvas_pos(0);
+                    var nx = rect.left + pos[0] / dpr, ny = rect.top + pos[1] / dpr;
+                    jitterClick(nx, ny);
+                    var out = ['pinnedAfterJitter:' + shown()];
+
+                    // Escape must clear the selection, as on the schema canvas.
+                    document.dispatchEvent(new KeyboardEvent('keydown',
+                        {key: 'Escape', bubbles: true}));
+                    out.push('afterEscape_card:' + shown());
+                    out.push('afterEscape_sel:' + viz.selected_node_index());
+
+                    // Re-pin, then clear by clicking empty space with jitter.
+                    jitterClick(nx, ny);
+                    out.push('rePinned:' + shown());
+                    jitterClick(rect.left + 3, rect.top + 3);
+                    out.push('afterEmptyJitter_card:' + shown());
+                    out.push('afterEmptyJitter_sel:' + viz.selected_node_index());
+                    return out.join(' ');
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+
+        assert!(
+            states.contains("pinnedAfterJitter:true"),
+            "a click that wobbles a couple of pixels must still pin the card; got: {states}"
+        );
+        assert!(
+            states.contains("afterEscape_card:false") && states.contains("afterEscape_sel:-1"),
+            "Escape must deselect and close the card; got: {states}"
+        );
+        assert!(
+            states.contains("rePinned:true"),
+            "clicking the node again must re-pin; got: {states}"
+        );
+        assert!(
+            states.contains("afterEmptyJitter_card:false")
+                && states.contains("afterEmptyJitter_sel:-1"),
+            "a wobbling click on empty space must still deselect; got: {states}"
+        );
+
+        browser.close().await.ok();
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
 /// The instance graph is typed: individuals wear their class's circle and
 /// colour, and each enum value in use is one shared diamond node the
 /// choosing individuals link to — checked on the real rendered page, since

@@ -801,7 +801,9 @@
 
     // Selection tracking
     let selectedNodeIndex = -1;
-    let dragMoved = false; // Track if mouse moved during drag (to distinguish click from drag)
+    // Click-vs-drag discrimination, shared with the instance canvas so the
+    // two cannot drift apart on what counts as a click.
+    const dragGate = window.PanschemaGraphShell.makeDragGate();
 
     // Node dragging state
     let draggingNodeIndex = -1;
@@ -1942,7 +1944,7 @@
         // Mouse drag for panning (2D) or orbit (3D), or node dragging
         canvas.addEventListener('mousedown', (e) => {
             isDragging = true;
-            dragMoved = false; // Reset drag movement tracker
+            dragGate.press(e);
             lastX = e.clientX;
             lastY = e.clientY;
 
@@ -1968,7 +1970,7 @@
 
         // Click to select (only if not dragging a node or camera)
         canvas.addEventListener('click', (e) => {
-            if (dragMoved || !viz) return; // Ignore if we were dragging
+            if (dragGate.moved() || !viz) return; // Ignore if we were dragging
 
             const rect = canvas.getBoundingClientRect();
             const mouseX = e.clientX - rect.left;
@@ -2137,10 +2139,10 @@
                 const dx = e.clientX - lastX;
                 const dy = e.clientY - lastY;
 
-                // Mark that actual movement occurred (to distinguish drag from click)
-                if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
-                    dragMoved = true;
-                }
+                // Mark that actual movement occurred (to distinguish drag
+                // from click). Measured from the press origin by the shared
+                // gate, so a slow drag of small steps still registers.
+                dragGate.move(e);
 
                 // If dragging a node, update its position
                 if (draggingNodeIndex >= 0 && typeof viz.drag_to === 'function') {
@@ -2176,7 +2178,7 @@
         window.addEventListener('mouseup', (e) => {
             // End node drag if we were dragging one
             if (draggingNodeIndex >= 0 && viz && typeof viz.end_drag === 'function') {
-                if (e.shiftKey && !dragMoved) {
+                if (e.shiftKey && !dragGate.moved()) {
                     // Shift+click (no movement): toggle pin
                     if (typeof viz.toggle_fixed === 'function') {
                         viz.toggle_fixed(draggingNodeIndex);
@@ -2184,7 +2186,7 @@
                     viz.end_drag(false);
                 } else {
                     // Shift+drag-release pins at new position; plain release rejoins sim
-                    viz.end_drag(e.shiftKey && dragMoved);
+                    viz.end_drag(e.shiftKey && dragGate.moved());
                 }
                 draggingNodeIndex = -1;
                 canvas.style.cursor = 'grab';

@@ -223,6 +223,17 @@ so a reader doesn't have to relearn the surface per graph.
   empty space still pans; the hover card stands down mid-drag. The e2e
   asserts the *relative* position of two nodes changes — a pan moves
   both equally — and was confirmed red without the fix.
+- [x] A click survives pointer jitter, and Escape deselects (consumer-found:
+  the instance canvas treated *any* pointer movement as a drag, so the
+  couple of pixels a trackpad click wanders suppressed the click entirely —
+  the card never pinned, the node was nudged instead, and clicking away
+  never cleared the selection; Escape was wired on the schema canvas only).
+  Click-versus-drag discrimination and the Escape handler now come from the
+  shared shell, measured from the press origin rather than between
+  consecutive moves, so both canvases agree by construction. The e2e drives
+  a press, a wobble, and a release rather than a single synthetic click —
+  the shape that hid this, since events dispatched at one coordinate never
+  trip the drag flag.
 - [x] Clicking a node selects it and pins its card open, as on the schema
   canvas (consumer-found: the instance canvas had no click wiring, so the
   card vanished the moment the cursor left the node and a selected node

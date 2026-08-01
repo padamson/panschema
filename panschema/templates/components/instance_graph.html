@@ -404,7 +404,9 @@
         // empty space pans. Wheel zooms. A movement-free press is a click:
         // on a node it pins the card open; on empty space it deselects.
         let dragging = false;
-        let dragMoved = false;
+        // Click-vs-drag discrimination comes from the shared shell, so both
+        // canvases agree on how much wobble a click may carry.
+        const dragGate = shell.makeDragGate();
         let lastX = 0;
         let lastY = 0;
         function canvasXY(e) {
@@ -412,7 +414,7 @@
             return [(e.clientX - rect.left) * dpr, (e.clientY - rect.top) * dpr];
         }
         canvas.addEventListener('mousedown', (e) => {
-            dragMoved = false;
+            dragGate.press(e);
             if (viz && typeof viz.start_drag_at === 'function') {
                 const [x, y] = canvasXY(e);
                 draggingNode = viz.start_drag_at(x, y);
@@ -432,7 +434,7 @@
         });
         window.addEventListener('mousemove', (e) => {
             if (draggingNode >= 0) {
-                dragMoved = true;
+                dragGate.move(e);
                 if (viz && typeof viz.drag_to === 'function') {
                     const [x, y] = canvasXY(e);
                     viz.drag_to(x, y);
@@ -440,23 +442,28 @@
                 return;
             }
             if (!dragging) return;
-            dragMoved = true;
+            dragGate.move(e);
             viz.pan((e.clientX - lastX) * dpr, (e.clientY - lastY) * dpr);
             lastX = e.clientX;
             lastY = e.clientY;
         });
+        function clearSelection() {
+            if (!viz) return;
+            if (typeof viz.deselect === 'function') viz.deselect();
+            hoverFocus.apply(viz, -1);
+            hoverCard.unpin();
+        }
         canvas.addEventListener('click', (e) => {
-            if (dragMoved || !viz || typeof viz.select_at !== 'function') return;
+            if (dragGate.moved() || !viz || typeof viz.select_at !== 'function') return;
             const [x, y] = canvasXY(e);
             const idx = viz.select_at(x, y);
             if (idx >= 0) {
                 hoverCard.pin(idx, e.clientX, e.clientY);
             } else {
-                if (typeof viz.deselect === 'function') viz.deselect();
-                hoverFocus.apply(viz, -1);
-                hoverCard.unpin();
+                clearSelection();
             }
         });
+        shell.wireDeselectKey(clearSelection);
 
         // Focus-on-hover through the shared shell, so the hop depth and the
         // clear-on-leave rule match the schema graph by construction.

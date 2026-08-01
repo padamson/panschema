@@ -297,7 +297,50 @@
             return { show, hide, pin, unpin, pinned: () => pinnedIdx };
         }
 
+        // How far the pointer may wander between press and release and still
+        // count as a click. A trackpad click routinely moves a pixel or two,
+        // so treating any movement as a drag makes selection fail for real
+        // hands while passing for synthetic events sent at one coordinate.
+        const DRAG_SLOP_PX = 3;
+
+        // Discriminates a click from a drag. Distance is measured from the
+        // press origin, not between consecutive moves: a slow drag delivers
+        // many small deltas that individually stay under the slop, and
+        // comparing per-move would never register it as a drag at all.
+        function makeDragGate() {
+            let originX = 0;
+            let originY = 0;
+            let moved = false;
+            return {
+                press(e) {
+                    originX = e.clientX;
+                    originY = e.clientY;
+                    moved = false;
+                },
+                move(e) {
+                    if (
+                        Math.abs(e.clientX - originX) > DRAG_SLOP_PX ||
+                        Math.abs(e.clientY - originY) > DRAG_SLOP_PX
+                    ) {
+                        moved = true;
+                    }
+                    return moved;
+                },
+                moved: () => moved,
+            };
+        }
+
+        // Escape clears the current selection, on whichever canvas has one.
+        function wireDeselectKey(deselect) {
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') deselect();
+            });
+        }
+
         return {
+            DRAG_SLOP_PX,
+            makeDragGate,
+            wireDeselectKey,
             setBadge,
             makeRefitter,
             makeHoverFocus,
