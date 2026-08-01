@@ -192,20 +192,55 @@ agent-data bug.
 - [x] The same entity inlined in one place and listed as a top-level record (one entity referenced two ways, sharing an id) is *not* a duplicate — only two distinct top-level records are.
 - [x] Tests cover a duplicate identifier and the inlined-same-entity non-duplicate case.
 
-### Slice 4b: `any_of` polymorphic ranges
+### Slice 4b: `any_of` polymorphic ranges — reader and validator
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Should Have
 
 **Depends on:** Slice 4.
 
-**User Value:** A polymorphic `any_of` value matching none of its branches is
-caught.
+**User Value:** A slot whose range is an `any_of` class union carries real
+references — so the instance graph draws edges, RDF asserts object
+properties, integrity checks fire, and a value pointing at the wrong kind of
+record is caught. Before this the union was invisible to the reader: with no
+outer `range:` to read, values fell through to the schema's `default_range`
+and ingested as string literals, so none of those checks could run.
 
 **Acceptance Criteria:**
-- [ ] A value at an `any_of`-ranged slot that satisfies none of the branch ranges (each an enum/type/class range) is a violation; one that satisfies at least one branch passes.
-- [ ] Tests cover an `any_of` miss and a hit.
+- [x] A value at a slot whose range is a union of classes ingests as a
+  reference, whether the union is declared on the slot or narrowed onto a
+  subclass through `slot_usage` — including when the narrowing is itself a
+  union (`un_narrowed_any_of_union_values_ingest_as_references`,
+  `slot_usage_any_of_narrowing_ingests_references`).
+- [x] A reference at a union-ranged slot whose target's class is none of the
+  union members is a violation naming the permitted classes; a target whose
+  class *descends from* a member through `is_a` conforms
+  (`a_union_reference_outside_the_permitted_classes_is_a_violation`,
+  `a_union_reference_to_a_subclass_of_a_permitted_class_conforms`).
+- [x] A reference naming no record in the set yields exactly one report — the
+  integrity pass's — not a second from the branch check
+  (`a_dangling_union_reference_is_reported_once`).
+- [x] A value that can be neither reference nor literal at a union slot names
+  the permitted classes rather than an unknown range
+  (`an_unusable_value_at_a_union_slot_names_the_permitted_classes`).
+- [x] The RDF family and `instance-graph-json` carry union-slot references as
+  object-property assertions and labelled edges
+  (`a_union_ranged_slot_emits_an_object_property_assertion`,
+  `a_union_ranged_slot_becomes_an_assertion_edge`).
+
+**Notes:**
+- **Ingestion policy.** A union whose members are *all* classes makes string
+  values references. A union mixing classes with types or enums keeps strings
+  as scalars, since a string could legitimately be either — displaying edges
+  only for all-class unions is a documented limitation, not an oversight. An
+  inlined object is built as a record only when exactly one member is a
+  class; with several it is ambiguous which was meant, and the value is
+  reported rather than guessed.
+- Branch checking applies to unions only. A single class range is the slot's
+  own declared range and is left to the existing checks.
+- Union membership walks `is_a`, not mixins: a union branch names a class an
+  instance is expected to *be*.
 
 ### Slice 5: The conformance check runs on the way into an output
 
@@ -316,7 +351,7 @@ generated shapes — real, but not a single-tool check.
 | Slice 3: enum membership + numeric bounds | Must Have | Slice 2 | Complete |
 | Slice 3b: `pattern` (adds regex dependency) | Should Have | Slice 3 | Complete |
 | Slice 4: identifier uniqueness | Should Have | Slice 3 | Complete |
-| Slice 4b: `any_of` polymorphic ranges | Should Have | Slice 4 | Not Started |
+| Slice 4b: `any_of` polymorphic ranges (reader + validator) | Should Have | Slice 4 | Complete |
 | Slice 5: conformance check on the way into an output | Must Have | Slice 1 | Complete |
 | Slice 6: undeclared fields are violations | Must Have | Slice 5 | Complete |
 | Slice 7: class-level `rules` enforced | Should Have | Slice 5 | Complete |

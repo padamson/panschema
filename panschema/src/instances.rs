@@ -7,7 +7,8 @@
 //! (`from_owl_annotations`); the LinkML instance-data reader populates the
 //! same model.
 
-use crate::linkml::SchemaDefinition;
+use crate::linkml::{SchemaDefinition, SlotDefinition};
+use std::collections::BTreeMap;
 
 /// A typed reference from one instance to another — an object-property
 /// assertion whose value is another instance's identifier (a graph edge).
@@ -350,7 +351,16 @@ impl LinkmlLoader<'_> {
     ) -> Option<String> {
         let class = self.schema.classes.get(class_name)?;
         let map = record.as_mapping()?;
-        let slots = crate::linkml_resolve::resolve_effective_slots(class, self.schema);
+        // Resolved *with provenance* so each slot's induced range is available:
+        // an `any_of` union has several range targets and no scalar `range:`,
+        // so reading `range` alone would see nothing and fall back to the
+        // schema's default_range — silently turning references into literals.
+        let resolved =
+            crate::linkml_resolve::resolve_effective_slots_with_provenance(class, self.schema);
+        let slots: BTreeMap<String, SlotDefinition> = resolved
+            .iter()
+            .map(|(name, rs)| (name.clone(), rs.definition.clone()))
+            .collect();
 
         let id_slot = slots
             .iter()
@@ -390,9 +400,21 @@ impl LinkmlLoader<'_> {
                     field: field.to_string(),
                 });
             }
-            let range = slot
-                .and_then(|s| s.range.clone())
-                .or_else(|| self.schema.default_range.clone());
+            // The slot's range targets: the induced set when the schema
+            // supplies one (a union contributes every member), else the
+            // declared scalar range, else the schema default.
+            let induced = resolved
+                .get(field)
+                .map(|rs| rs.induced.ranges.clone())
+                .unwrap_or_default();
+            let ranges: Vec<String> = if induced.is_empty() {
+                slot.and_then(|s| s.range.clone())
+                    .or_else(|| self.schema.default_range.clone())
+                    .into_iter()
+                    .collect()
+            } else {
+                induced
+            };
             let property = slot
                 .and_then(|s| s.annotations.get("panschema:label").cloned())
                 .unwrap_or_else(|| field.to_string());
@@ -405,7 +427,7 @@ impl LinkmlLoader<'_> {
                 && field != "description";
             self.ingest_field(
                 field,
-                range.as_deref(),
+                &ranges,
                 &property,
                 field_value,
                 display,
@@ -449,10 +471,20 @@ impl LinkmlLoader<'_> {
     /// literal; a class-ranged scalar an id reference, a class-ranged mapping a
     /// nested record plus a reference. Recurses over sequence elements.
     #[allow(clippy::too_many_arguments)]
+    /// Record one authored field value, classified by the slot's range
+    /// targets.
+    ///
+    /// A union of classes makes string values references, so the instance
+    /// graph draws edges and the integrity pass can check the targets. A
+    /// union mixing classes with types or enums keeps strings as scalars —
+    /// a string could legitimately be either, and validate resolves the
+    /// ambiguity per branch. An inlined object is only built when exactly
+    /// one range target is a class; with several it is ambiguous which one
+    /// the author meant.
     fn ingest_field(
         &mut self,
         slot: &str,
-        range: Option<&str>,
+        ranges: &[String],
         property: &str,
         value: &serde_norway::Value,
         display: bool,
@@ -464,7 +496,7 @@ impl LinkmlLoader<'_> {
             for item in items {
                 self.ingest_field(
                     slot,
-                    range,
+                    ranges,
                     property,
                     item,
                     display,
@@ -479,57 +511,66 @@ impl LinkmlLoader<'_> {
         if matches!(value, serde_norway::Value::Null) {
             return;
         }
-        if range.is_some_and(|r| self.schema.classes.contains_key(r)) {
-            let class = range.expect("is_some_and guarantees a class range");
-            match value {
-                // A scalar references an existing instance by id.
-                serde_norway::Value::String(s) => {
-                    push_slot_value(slot_values, slot, InstanceValue::Reference(s.clone()));
-                    if display {
-                        references.push(Reference {
-                            property: property.to_string(),
-                            target: s.clone(),
-                        });
-                    }
+
+        let class_targets: Vec<&String> = ranges
+            .iter()
+            .filter(|r| self.schema.classes.contains_key(*r))
+            .collect();
+        let all_classes = !class_targets.is_empty() && class_targets.len() == ranges.len();
+
+        let reference_to =
+            |target: String, references: &mut Vec<Reference>, slot_values: &mut Vec<SlotValue>| {
+                push_slot_value(slot_values, slot, InstanceValue::Reference(target.clone()));
+                if display {
+                    references.push(Reference {
+                        property: property.to_string(),
+                        target,
+                    });
                 }
-                // An inlined mapping is its own record; recurse and edge to it.
-                serde_norway::Value::Mapping(_) => {
-                    if let Some(target) = self.build_record(class, None, value) {
-                        push_slot_value(
-                            slot_values,
-                            slot,
-                            InstanceValue::Reference(target.clone()),
-                        );
-                        if display {
-                            references.push(Reference {
-                                property: property.to_string(),
-                                target,
-                            });
-                        }
-                    }
+            };
+
+        match value {
+            // An inlined mapping is its own record; recurse and edge to it.
+            // Ambiguous when several class targets could be its type.
+            serde_norway::Value::Mapping(_) if class_targets.len() == 1 => {
+                let class = class_targets[0].clone();
+                if let Some(target) = self.build_record(&class, None, value) {
+                    reference_to(target, references, slot_values);
                 }
-                // Anything else (a number/boolean) can't be a reference — record
-                // the mismatch rather than dropping it. Not added to the display
-                // references, which stay well-formed.
-                other => push_slot_value(
-                    slot_values,
-                    slot,
-                    InstanceValue::Unexpected(yaml_kind(other)),
-                ),
             }
-        } else if let Some(scalar) = scalar_value(value) {
-            if display {
-                literals.push((property.to_string(), scalar_to_display(&scalar)));
-            }
-            push_slot_value(slot_values, slot, InstanceValue::Scalar(scalar));
-        } else {
-            // A non-scalar (an object) where a scalar range is declared — a kind
-            // mismatch, recorded but kept out of the display literals.
-            push_slot_value(
+            serde_norway::Value::Mapping(_) if !class_targets.is_empty() => push_slot_value(
                 slot_values,
                 slot,
                 InstanceValue::Unexpected(yaml_kind(value)),
-            );
+            ),
+            // A string at an all-class range references a record by id.
+            serde_norway::Value::String(text) if all_classes => {
+                reference_to(text.clone(), references, slot_values);
+            }
+            // A number or boolean can never be a reference — record the
+            // mismatch rather than dropping it, keeping the display
+            // references well-formed.
+            other if all_classes => push_slot_value(
+                slot_values,
+                slot,
+                InstanceValue::Unexpected(yaml_kind(other)),
+            ),
+            // Scalar range, or a union mixing classes with types/enums: keep
+            // the value as authored and let validation judge the branches.
+            other => {
+                if let Some(scalar) = scalar_value(other) {
+                    if display {
+                        literals.push((property.to_string(), scalar_to_display(&scalar)));
+                    }
+                    push_slot_value(slot_values, slot, InstanceValue::Scalar(scalar));
+                } else {
+                    push_slot_value(
+                        slot_values,
+                        slot,
+                        InstanceValue::Unexpected(yaml_kind(other)),
+                    );
+                }
+            }
         }
     }
 }
@@ -603,6 +644,7 @@ fn capitalize_first(id: &str) -> String {
 mod tests {
     use super::*;
     use crate::io::Reader;
+    use crate::linkml::ClassDefinition;
     use crate::owl_reader::OwlReader;
 
     #[test]
@@ -680,6 +722,191 @@ classes:
 
     fn wine_schema() -> SchemaDefinition {
         serde_norway::from_str(WINE_SCHEMA).expect("parse wine schema")
+    }
+
+    /// A schema shaped like a provenance layer whose acts and states point at
+    /// each other through `any_of` class unions with no outer `range:` — the
+    /// polymorphic-range case. `qualifies` is never narrowed; `hasInput` is
+    /// narrowed per subclass, once to a scalar range and once to a smaller
+    /// union.
+    const UNION_SCHEMA: &str = "\
+name: provenance
+default_range: string
+slots:
+  hasInput:
+    multivalued: true
+    any_of:
+      - range: Question
+      - range: SourceDocument
+  qualifies:
+    any_of:
+      - range: Claim
+      - range: Method
+classes:
+  ProvenanceRecord:
+    tree_root: true
+    attributes:
+      acts: {range: Act, multivalued: true}
+      searches: {range: LiteratureSearch, multivalued: true}
+      extractions: {range: Extraction, multivalued: true}
+      states: {range: State, multivalued: true}
+      questions: {range: Question, multivalued: true}
+      docs: {range: SourceDocument, multivalued: true}
+      claims: {range: Claim, multivalued: true}
+      hypotheses: {range: Hypothesis, multivalued: true}
+      methods: {range: Method, multivalued: true}
+  Act:
+    attributes:
+      id: {identifier: true}
+    slots: [hasInput]
+  LiteratureSearch:
+    is_a: Act
+    slot_usage:
+      hasInput: {range: Question}
+  Extraction:
+    is_a: Act
+    slot_usage:
+      hasInput:
+        any_of:
+          - range: SourceDocument
+          - range: Question
+  State:
+    attributes:
+      id: {identifier: true}
+    slots: [qualifies]
+  Question:
+    attributes:
+      id: {identifier: true}
+  SourceDocument:
+    attributes:
+      id: {identifier: true}
+  Claim:
+    attributes:
+      id: {identifier: true}
+  Hypothesis:
+    is_a: Claim
+  Method:
+    attributes:
+      id: {identifier: true}
+";
+
+    /// Parse a fixture the way the reader delivers a schema: names back-filled
+    /// from their map keys. Deserializing the literal alone leaves every
+    /// `name` empty, which is not a shape production code ever sees.
+    fn union_schema() -> SchemaDefinition {
+        let mut schema: SchemaDefinition =
+            serde_norway::from_str(UNION_SCHEMA).expect("parse union schema");
+        let named: Vec<(String, ClassDefinition)> = schema
+            .classes
+            .iter()
+            .map(|(key, class)| {
+                let mut c = class.clone();
+                c.name = key.clone();
+                (key.clone(), c)
+            })
+            .collect();
+        schema.classes = named.into_iter().collect();
+        schema
+    }
+
+    fn union_set(yaml: &str) -> InstanceSet {
+        let data: serde_norway::Value = serde_norway::from_str(yaml).expect("parse data");
+        InstanceSet::from_linkml_data(&union_schema(), &data)
+    }
+
+    fn find<'a>(set: &'a InstanceSet, id: &str) -> &'a Instance {
+        set.instances
+            .iter()
+            .find(|i| i.id == id)
+            .unwrap_or_else(|| {
+                panic!(
+                    "no record `{id}`; available: {:?}",
+                    set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+                )
+            })
+    }
+
+    const UNION_DATA: &str = "\
+acts:
+  - {id: a1, hasInput: [q1, d1]}
+states:
+  - {id: s1, qualifies: c1}
+questions:
+  - {id: q1}
+docs:
+  - {id: d1}
+claims:
+  - {id: c1}
+";
+
+    #[test]
+    fn un_narrowed_any_of_union_values_ingest_as_references() {
+        let set = union_set(UNION_DATA);
+        let a1 = find(&set, "a1");
+        let mut targets: Vec<&str> = a1.references.iter().map(|r| r.target.as_str()).collect();
+        targets.sort_unstable();
+        assert_eq!(
+            targets,
+            vec!["d1", "q1"],
+            "an any_of union of classes makes its values references, not literals"
+        );
+        let has_input = a1
+            .slot_values
+            .iter()
+            .find(|sv| sv.slot == "hasInput")
+            .expect("hasInput recorded");
+        assert!(
+            has_input
+                .values
+                .iter()
+                .all(|v| matches!(v, InstanceValue::Reference(_))),
+            "got: {:?}",
+            has_input.values
+        );
+
+        let s1 = find(&set, "s1");
+        assert_eq!(
+            s1.references
+                .iter()
+                .map(|r| (r.property.as_str(), r.target.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("qualifies", "c1")],
+            "a never-narrowed union slot references too"
+        );
+    }
+
+    #[test]
+    fn slot_usage_any_of_narrowing_ingests_references() {
+        let set = union_set(
+            "\
+searches:
+  - {id: ls1, hasInput: q1}
+extractions:
+  - {id: ex1, hasInput: [d1]}
+questions:
+  - {id: q1}
+docs:
+  - {id: d1}
+",
+        );
+        assert_eq!(
+            find(&set, "ls1")
+                .references
+                .iter()
+                .map(|r| r.target.as_str())
+                .collect::<Vec<_>>(),
+            vec!["q1"],
+            "a slot_usage scalar narrowing still yields a reference"
+        );
+        assert_eq!(
+            find(&set, "ex1")
+                .references
+                .iter()
+                .map(|r| r.target.as_str())
+                .collect::<Vec<_>>(),
+            vec!["d1"],
+            "a slot_usage any_of narrowing yields a reference"
+        );
     }
 
     #[test]

@@ -1580,6 +1580,78 @@ mod tests {
     }
 
     #[test]
+    fn a_union_ranged_slot_emits_an_object_property_assertion() {
+        // A slot whose range is an `any_of` class union carries references,
+        // not literals — so the A-box must contain an object-property
+        // assertion between the two individuals, not a string.
+        let mut schema = SchemaDefinition::new("prov");
+        schema.id = Some("https://example.org/prov".to_string());
+        schema.default_prefix = Some("prov".to_string());
+        schema
+            .prefixes
+            .insert("prov".to_string(), "https://example.org/prov/".to_string());
+        schema.default_range = Some("string".to_string());
+
+        let mut id = SlotDefinition::new("id");
+        id.identifier = true;
+        let mut qualifies = SlotDefinition::new("qualifies");
+        let mut claim_branch = SlotDefinition::new("");
+        claim_branch.range = Some("Claim".to_string());
+        let mut method_branch = SlotDefinition::new("");
+        method_branch.range = Some("Method".to_string());
+        qualifies.any_of = vec![claim_branch, method_branch];
+
+        let mut root = ClassDefinition::new("Root");
+        root.tree_root = true;
+        for (name, range) in [("states", "State"), ("claims", "Claim")] {
+            let mut s = SlotDefinition::new(name);
+            s.range = Some(range.to_string());
+            s.multivalued = true;
+            root.attributes.insert(name.to_string(), s);
+        }
+        schema.classes.insert("Root".to_string(), root);
+
+        let mut state = ClassDefinition::new("State");
+        state.attributes.insert("id".to_string(), id.clone());
+        state.attributes.insert("qualifies".to_string(), qualifies);
+        schema.classes.insert("State".to_string(), state);
+
+        let mut claim = ClassDefinition::new("Claim");
+        claim.attributes.insert("id".to_string(), id.clone());
+        schema.classes.insert("Claim".to_string(), claim);
+
+        // Both union members must be declared classes; an undeclared member
+        // would make this a mixed union, whose strings stay literals.
+        let mut method = ClassDefinition::new("Method");
+        method.attributes.insert("id".to_string(), id);
+        schema.classes.insert("Method".to_string(), method);
+
+        let data: serde_norway::Value =
+            serde_norway::from_str("states:\n  - {id: s1, qualifies: c1}\nclaims:\n  - {id: c1}\n")
+                .unwrap();
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        let graph = build_rdf_graph_with_instances(&schema, Some(&set)).expect("graph");
+
+        use sophia::api::graph::Graph;
+        use sophia::api::triple::Triple;
+        let subject = make_iri("https://example.org/prov/s1").unwrap();
+        let predicate = make_iri("https://example.org/prov#qualifies").unwrap();
+        let linked = graph
+            .triples_matching([subject], [predicate], sophia::api::term::matcher::Any)
+            .filter_map(Result::ok)
+            .any(|t| {
+                use sophia::api::term::Term;
+                t.o()
+                    .iri()
+                    .is_some_and(|i| i.to_string().contains("prov/c1"))
+            });
+        assert!(
+            linked,
+            "a union-ranged slot must assert an object property to the referenced individual"
+        );
+    }
+
+    #[test]
     fn each_rdf_writer_with_instances_carries_the_abox() {
         // The three non-Turtle writers must route the attached A-box into
         // their output (Turtle's is covered by the oxigraph oracle).

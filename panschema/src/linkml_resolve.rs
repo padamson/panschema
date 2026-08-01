@@ -141,20 +141,28 @@ pub fn resolve_effective_slots_with_provenance(
     resolve_slots_walk(class, schema, &mut visited)
 }
 
-/// Recursive worker for [`resolve_effective_slots`]. `visited` holds
-/// the class names currently on the recursion stack so a circular
-/// `is_a` or `mixin` chain terminates (silently dropping the
-/// would-be-cyclic contribution) rather than overflowing.
+/// Recursive worker for [`resolve_effective_slots`]. `visited` holds the
+/// classes currently on the recursion stack so a circular `is_a` or `mixin`
+/// chain terminates (silently dropping the would-be-cyclic contribution)
+/// rather than overflowing.
+///
+/// Classes are identified by address rather than by `name`, because a name
+/// is not reliably unique: a schema deserialized without the reader's
+/// name back-fill leaves every name empty, which under name-keying made
+/// each class look like a repeat of the last and silently truncated the
+/// `is_a` chain — inherited slots, identifiers included, went missing. The
+/// map owns its classes for the whole walk, so their addresses are stable
+/// and distinguish them whatever their names say.
 fn resolve_slots_walk(
     class: &ClassDefinition,
     schema: &SchemaDefinition,
-    visited: &mut BTreeSet<String>,
+    visited: &mut BTreeSet<usize>,
 ) -> BTreeMap<String, ResolvedSlot> {
     let mut slots: BTreeMap<String, ResolvedSlot> = BTreeMap::new();
 
     // Mark this class as in-progress. If insert returns false, we've
     // already visited this class along the current path — stop.
-    if !visited.insert(class.name.clone()) {
+    if !visited.insert(std::ptr::from_ref(class) as usize) {
         return slots;
     }
 
@@ -248,7 +256,7 @@ fn resolve_slots_walk(
 
     // Pop this class on the way out — sibling/cousin paths to it
     // through different ancestors are NOT cycles.
-    visited.remove(&class.name);
+    visited.remove(&(std::ptr::from_ref(class) as usize));
     slots
 }
 
@@ -1156,5 +1164,51 @@ mod tests {
     fn expand_curie_returns_none_for_empty_input() {
         let schema = schema_with_prov_default();
         assert!(expand_curie(&schema, "").is_none());
+    }
+
+    #[test]
+    fn inheritance_resolves_even_when_class_names_are_unset() {
+        // A schema built by any route that leaves `ClassDefinition.name`
+        // empty — deserializing a literal without the reader's name
+        // back-fill, or constructing one by hand — must still resolve
+        // `is_a`. Keying the cycle guard on the name made every class
+        // collide under the empty string, so a parent looked already
+        // visited and its slots, including an inherited identifier,
+        // silently vanished from the child.
+        let mut schema = SchemaDefinition::new("unnamed");
+        let mut parent = ClassDefinition::new("");
+        parent.attributes.insert("id".to_string(), {
+            let mut s = SlotDefinition::new("");
+            s.identifier = true;
+            s
+        });
+        let mut child = ClassDefinition::new("");
+        child.is_a = Some("Parent".to_string());
+        assert_eq!(parent.name, "", "fixture premise: names are unset");
+        assert_eq!(child.name, "", "fixture premise: names are unset");
+        schema.classes.insert("Parent".to_string(), parent);
+        schema.classes.insert("Child".to_string(), child);
+
+        let resolved =
+            resolve_effective_slots(schema.classes.get("Child").expect("Child"), &schema);
+        assert!(
+            resolved.contains_key("id"),
+            "the child must inherit the parent's identifier; got: {:?}",
+            resolved.keys().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn an_is_a_cycle_still_terminates() {
+        // The guard's real job. Two classes naming each other as parent
+        // must not recurse forever, with or without names set.
+        let mut schema = SchemaDefinition::new("cyclic");
+        let mut a = ClassDefinition::new("");
+        a.is_a = Some("B".to_string());
+        let mut b = ClassDefinition::new("");
+        b.is_a = Some("A".to_string());
+        schema.classes.insert("A".to_string(), a);
+        schema.classes.insert("B".to_string(), b);
+        let _ = resolve_effective_slots(schema.classes.get("A").expect("A"), &schema);
     }
 }

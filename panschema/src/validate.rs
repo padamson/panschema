@@ -14,7 +14,7 @@ use crate::instances::{InstanceSet, InstanceValue, ScalarValue, scalar_to_displa
 use crate::linkml::{
     EnumDefinition, RuleConditions, SchemaDefinition, SlotCondition, ValuePresence,
 };
-use crate::linkml_resolve::{effective_cardinality, resolve_effective_slots};
+use crate::linkml_resolve::{effective_cardinality, resolve_effective_slots_with_provenance};
 use regex::Regex;
 use serde_norway::Value;
 use std::fmt;
@@ -46,6 +46,12 @@ impl fmt::Display for Violation {
 /// target names no record in the set.
 pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<Violation> {
     let mut out = Vec::new();
+    // Each record's class, for resolving what a reference actually points at.
+    let class_of: std::collections::BTreeMap<&str, &str> = set
+        .instances
+        .iter()
+        .filter_map(|i| i.types.first().map(|t| (i.id.as_str(), t.as_str())))
+        .collect();
 
     for inst in &set.instances {
         // A record's class is the collection slot's range that produced it.
@@ -55,7 +61,10 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
         let Some(class) = schema.classes.get(class_name) else {
             continue;
         };
-        for (slot_name, slot) in &resolve_effective_slots(class, schema) {
+        for (slot_name, rs) in &resolve_effective_slots_with_provenance(class, schema) {
+            let slot = &rs.definition;
+            // A union slot has several range targets and no scalar `range:`.
+            let ranges = &rs.induced.ranges;
             let card = effective_cardinality(slot);
             let count = inst
                 .slot_values
@@ -131,14 +140,33 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
                     // (an object where a scalar is declared, or a non-reference
                     // scalar where a class is) — a range-kind mismatch.
                     InstanceValue::Unexpected(kind) => {
-                        let range = slot.range.as_deref().unwrap_or("?");
+                        let range = if ranges.is_empty() {
+                            slot.range.as_deref().unwrap_or("?").to_string()
+                        } else {
+                            ranges.join(" or ")
+                        };
                         push(format!(
                             "slot `{slot_name}` (class `{class_name}`) has {kind} value, which isn't valid for its range `{range}`"
                         ));
                         continue;
                     }
-                    // References are checked by the reference-integrity pass.
-                    InstanceValue::Reference(_) => continue,
+                    // Existence is the integrity pass's job; what this checks
+                    // is whether the target's class satisfies one branch of a
+                    // union range. A target that names no record is skipped so
+                    // one problem yields one report.
+                    InstanceValue::Reference(target) => {
+                        if ranges.len() > 1
+                            && let Some(actual) = class_of.get(target.as_str())
+                            && !ranges.iter().any(|r| class_satisfies(schema, actual, r))
+                        {
+                            push(format!(
+                                "slot `{slot_name}` (class `{class_name}`) references `{target}`, \
+                                 a `{actual}`, which is none of `{}`",
+                                ranges.join("`, `")
+                            ));
+                        }
+                        continue;
+                    }
                 };
                 if let Some((enum_name, enum_def)) = range_enum
                     && !enum_permits(enum_def, scalar)
@@ -391,6 +419,29 @@ fn slot_condition_failure(cond: &SlotCondition, values: &[InstanceValue]) -> Opt
         }
     }
     None
+}
+
+/// Whether `class` satisfies a range naming `target`: the same class, or a
+/// descendant of it through `is_a`. Mixins are not walked — a union branch
+/// names a class an instance is expected to *be*, and `is_a` is the relation
+/// that answers that.
+fn class_satisfies(schema: &SchemaDefinition, class: &str, target: &str) -> bool {
+    let mut current = class;
+    let mut hops = 0;
+    loop {
+        if current == target {
+            return true;
+        }
+        // Bounded so a malformed `is_a` cycle cannot spin here.
+        hops += 1;
+        if hops > schema.classes.len() {
+            return false;
+        }
+        match schema.classes.get(current).and_then(|c| c.is_a.as_deref()) {
+            Some(parent) => current = parent,
+            None => return false,
+        }
+    }
 }
 
 /// Whether `scalar`'s string form is one of the enum's permissible values —
@@ -986,6 +1037,116 @@ classes:
             "deployments:\n  - id: d1\n    status: actual\n    in_environment: prod\n    on_provider: aws\n",
         );
         assert!(v.is_empty(), "the rule is satisfied; got: {v:?}");
+    }
+
+    /// A slot whose range is an `any_of` class union, in the shape a
+    /// provenance layer writes it: `qualifies` accepts a Claim or a Method,
+    /// and `Hypothesis is_a Claim`.
+    const UNION_SCHEMA: &str = "
+id: https://example.org/union
+name: union
+default_range: string
+slots:
+  qualifies:
+    any_of:
+      - range: Claim
+      - range: Method
+classes:
+  Root:
+    tree_root: true
+    attributes:
+      states: {range: State, multivalued: true}
+      claims: {range: Claim, multivalued: true}
+      hypotheses: {range: Hypothesis, multivalued: true}
+      methods: {range: Method, multivalued: true}
+      questions: {range: Question, multivalued: true}
+  State:
+    attributes:
+      id: {identifier: true}
+    slots: [qualifies]
+  Claim:
+    attributes:
+      id: {identifier: true}
+  Hypothesis:
+    is_a: Claim
+  Method:
+    attributes:
+      id: {identifier: true}
+  Question:
+    attributes:
+      id: {identifier: true}
+";
+
+    fn union_schema() -> SchemaDefinition {
+        let mut schema: SchemaDefinition =
+            serde_norway::from_str(UNION_SCHEMA).expect("parse union schema");
+        let named: Vec<(String, crate::linkml::ClassDefinition)> = schema
+            .classes
+            .iter()
+            .map(|(key, class)| {
+                let mut c = class.clone();
+                c.name = key.clone();
+                (key.clone(), c)
+            })
+            .collect();
+        schema.classes = named.into_iter().collect();
+        schema
+    }
+
+    fn union_violations(yaml: &str) -> Vec<Violation> {
+        validate_instance_data(&union_schema(), &data(yaml))
+    }
+
+    #[test]
+    fn a_union_reference_outside_the_permitted_classes_is_a_violation() {
+        let v =
+            union_violations("states:\n  - {id: s1, qualifies: q1}\nquestions:\n  - {id: q1}\n");
+        assert_eq!(
+            v.len(),
+            1,
+            "a Question is neither a Claim nor a Method; got: {v:?}"
+        );
+        assert!(
+            v[0].detail.contains("Claim") && v[0].detail.contains("Method"),
+            "the message should name the permitted classes; got: {}",
+            v[0].detail
+        );
+    }
+
+    #[test]
+    fn a_union_reference_to_a_permitted_class_conforms() {
+        let v = union_violations("states:\n  - {id: s1, qualifies: c1}\nclaims:\n  - {id: c1}\n");
+        assert!(v.is_empty(), "a Claim is a permitted branch; got: {v:?}");
+    }
+
+    #[test]
+    fn a_union_reference_to_a_subclass_of_a_permitted_class_conforms() {
+        let v =
+            union_violations("states:\n  - {id: s1, qualifies: h1}\nhypotheses:\n  - {id: h1}\n");
+        assert!(
+            v.is_empty(),
+            "Hypothesis is_a Claim, so it satisfies the Claim branch; got: {v:?}"
+        );
+    }
+
+    #[test]
+    fn a_dangling_union_reference_is_reported_once() {
+        // The integrity pass already reports a target that names no record.
+        // The branch check must not pile a second violation on top of it.
+        let v = union_violations("states:\n  - {id: s1, qualifies: nope}\n");
+        assert_eq!(v.len(), 1, "exactly one report for one problem; got: {v:?}");
+        assert!(v[0].detail.contains("nope"), "got: {}", v[0].detail);
+    }
+
+    #[test]
+    fn an_unusable_value_at_a_union_slot_names_the_permitted_classes() {
+        let v = union_violations("states:\n  - {id: s1, qualifies: 42}\n");
+        assert_eq!(v.len(), 1, "got: {v:?}");
+        assert!(
+            v[0].detail.contains("Claim") && v[0].detail.contains("Method"),
+            "a range-kind mismatch at a union slot should name the members, not `?`; got: {}",
+            v[0].detail
+        );
     }
 
     #[test]

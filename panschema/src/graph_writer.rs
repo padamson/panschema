@@ -1439,6 +1439,64 @@ mod tests {
     /// the same minted IRI the RDF A-box uses, so graph-JSON traversal and
     /// SPARQL agree on which individual is which.
     #[test]
+    fn a_union_ranged_slot_becomes_an_assertion_edge() {
+        // A slot whose range is an `any_of` class union carries references,
+        // so the instance graph must draw an edge between the two records
+        // rather than dropping the value into node metadata as a literal.
+        let mut schema = SchemaDefinition::new("prov");
+        schema.default_range = Some("string".to_string());
+        let mut id = SlotDefinition::new("id");
+        id.identifier = true;
+
+        let mut qualifies = SlotDefinition::new("qualifies");
+        let mut claim_branch = SlotDefinition::new("");
+        claim_branch.range = Some("Claim".to_string());
+        let mut method_branch = SlotDefinition::new("");
+        method_branch.range = Some("Method".to_string());
+        qualifies.any_of = vec![claim_branch, method_branch];
+
+        let mut root = ClassDefinition::new("Root");
+        root.tree_root = true;
+        for (name, range) in [("states", "State"), ("claims", "Claim")] {
+            let mut s = SlotDefinition::new(name);
+            s.range = Some(range.to_string());
+            s.multivalued = true;
+            root.attributes.insert(name.to_string(), s);
+        }
+        schema.classes.insert("Root".to_string(), root);
+
+        let mut state = ClassDefinition::new("State");
+        state.attributes.insert("id".to_string(), id.clone());
+        state.attributes.insert("qualifies".to_string(), qualifies);
+        schema.classes.insert("State".to_string(), state);
+
+        for name in ["Claim", "Method"] {
+            let mut c = ClassDefinition::new(name);
+            c.attributes.insert("id".to_string(), id.clone());
+            schema.classes.insert(name.to_string(), c);
+        }
+
+        let data: serde_norway::Value =
+            serde_norway::from_str("states:\n  - {id: s1, qualifies: c1}\nclaims:\n  - {id: c1}\n")
+                .unwrap();
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        let graph = GraphWriter::new().instance_set_to_graph(&schema, &set);
+
+        assert!(
+            graph
+                .edges
+                .iter()
+                .any(|e| e.label.as_deref() == Some("qualifies")),
+            "a union-ranged reference must draw a labelled assertion edge; got: {:?}",
+            graph
+                .edges
+                .iter()
+                .map(|e| (&e.source, &e.target, &e.label))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn instance_graph_carries_instance_kind_and_minted_iris() {
         let mut schema = SchemaDefinition::new("cellar");
         schema.id = Some("https://example.org/cellar".to_string());
