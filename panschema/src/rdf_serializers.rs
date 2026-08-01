@@ -1948,7 +1948,11 @@ mod tests {
         let mut members = Vec::new();
         let mut cell = list_head[0].clone();
         let nil = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
-        while cell != nil {
+        // Bounded so a malformed list fails the assertion rather than hanging.
+        for _ in 0..8 {
+            if cell == nil {
+                break;
+            }
             members.extend(objects_of(
                 &graph,
                 &cell,
@@ -1962,6 +1966,7 @@ mod tests {
             assert_eq!(rest.len(), 1, "a well-formed list cell has one rest");
             cell = rest[0].clone();
         }
+        assert_eq!(cell, nil, "the list terminates");
         members.sort();
         assert_eq!(
             members,

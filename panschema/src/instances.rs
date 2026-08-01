@@ -531,18 +531,14 @@ impl LinkmlLoader<'_> {
 
         match value {
             // An inlined mapping is its own record; recurse and edge to it.
-            // Ambiguous when several class targets could be its type.
+            // With several class targets it is ambiguous which one the author
+            // meant, so it falls through to be recorded as unusable.
             serde_norway::Value::Mapping(_) if class_targets.len() == 1 => {
                 let class = class_targets[0].clone();
                 if let Some(target) = self.build_record(&class, None, value) {
                     reference_to(target, references, slot_values);
                 }
             }
-            serde_norway::Value::Mapping(_) if !class_targets.is_empty() => push_slot_value(
-                slot_values,
-                slot,
-                InstanceValue::Unexpected(yaml_kind(value)),
-            ),
             // A string at an all-class range references a record by id.
             serde_norway::Value::String(text) if all_classes => {
                 reference_to(text.clone(), references, slot_values);

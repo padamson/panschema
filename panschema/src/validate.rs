@@ -1436,10 +1436,13 @@ classes:
             v[0].detail
         );
 
-        let v = rule_violations(
-            "reviews:\n  - id: r1\n    verdict: approved\n    approved_by: pat\n    score: 3\n",
-        );
-        assert!(v.is_empty(), "a fully satisfied rule conforms; got: {v:?}");
+        // Both boundary values conform: the bounds are inclusive.
+        for score in [1, 3, 5] {
+            let v = rule_violations(&format!(
+                "reviews:\n  - id: r1\n    verdict: approved\n    approved_by: pat\n    score: {score}\n"
+            ));
+            assert!(v.is_empty(), "score {score} is within 1..=5; got: {v:?}");
+        }
     }
 
     #[test]
