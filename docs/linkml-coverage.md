@@ -131,7 +131,7 @@ focused subset of the structural ones.
 | `identifier` | ● | ● | ● | ○ | ○ | ●◨ | characteristic badge; not surfaced in RDF/Rust; Postgres: the effective `identifier` slot becomes the primary key (feature 24 slice 1 ✅, syntax-verified) |
 | `inverse` | ● | ● | ● | ● | ○ | ✗ | "Inverse of"; edge; `owl:inverseOf` |
 | `slot_uri` | ● | ● | ● | ● | ✗ | ✗ | card IRI; node URI; subject IRI |
-| `any_of` | ● | ● | ● | ○ | ● | ◐ | union on card; one range edge per member; `#[serde(untagged)]` enum; Postgres detects and skips a class with a polymorphic `any_of` slot (diagnostic) — no clean single mapping, deferred indefinitely ([feature 24 slice 7](features/24-postgres-ddl-writer.md)) |
+| `any_of` | ● | ● | ● | ● | ● | ◐ | union on card; one range edge per member; `#[serde(untagged)]` enum; a union whose members are all classes emits in RDF as an `owl:ObjectProperty` whose `rdfs:range` is a class expression over `owl:unionOf` of the members — and instance values at such a slot ingest as references, so the A-box asserts object properties rather than literals ([feature 34 slice 4b](features/34-validate-instance-data.md) ✅); Postgres detects and skips a class with a polymorphic `any_of` slot (diagnostic) — no clean single mapping, deferred indefinitely ([feature 24 slice 7](features/24-postgres-ddl-writer.md)) |
 | `*_mappings` (5) | ● | ● | ○ | ● | ○ | ✗ | see Common metadata |
 | `symmetric` `asymmetric` `reflexive` `irreflexive` `transitive` | ● | ● | — | ● | — | — | OWL relationship characteristics: card badge + `owl:<Name>Property` axiom; round-trips (OWL reader reads the axioms back into the flags); not applicable to relational modeling |
 | `ifabsent` | ● | ● | — | — | ● | ✗ | schema-encoded default. Rust: enum and scalar (`int`/`float`/`double`/`string`/boolean) forms generate a non-`Option` field with `#[serde(default)]` + default fn; HTML "Default" row shows the value; Postgres doesn't yet emit a column `DEFAULT` from it |
@@ -150,7 +150,7 @@ renders an enum card per enum; the graph hover reuses it.
 |---|:--:|:--:|:--:|:--:|:--:|:--:|---|
 | `EnumDefinition.name` | ● | ● | ● | ✗ | ● | ●◨ | `#enum-` card; node; Rust enum (keyword names → raw identifiers); Postgres `CREATE TYPE ... AS ENUM` name ([feature 24 slice 1](features/24-postgres-ddl-writer.md) ✅, syntax-verified via `pg_query`) |
 | `EnumDefinition.description` | ● | ● | ● | ✗ | ● | ✗ | card; tooltip; doc-comment |
-| `permissible_values` | ● | ● | ● | ✗ | ● | ●◨ | card list; graph hover; Rust variants (keyword names → raw identifiers). No RDF representation; Postgres enum value list (feature 24 slice 1 ✅, syntax-verified) |
+| `permissible_values` | ● | ● | ● | ● | ● | ●◨ | card list; graph hover; Rust variants (keyword names → raw identifiers). RDF emits the enum as an `owl:Class` closed by `owl:oneOf` over its values, each a labelled `owl:NamedIndividual` of that class (a value's `meaning:` CURIE supplies its IRI when given), and an enum-ranged slot now takes that class as its `rdfs:range` instead of emitting none; Postgres enum value list (feature 24 slice 1 ✅, syntax-verified) |
 | `PermissibleValue.text` | ● | ● | ● | ✗ | ● | ●◨ | card; variant ident; Postgres enum value literal (feature 24 slice 1 ✅, syntax-verified) |
 | `PermissibleValue.description` | ● | ● | ● | ✗ | ● | ✗ | |
 | `PermissibleValue.meaning` | ● | ● | ● | ✗ | ○ | ✗ | CURIE-expanded hyperlink on the card + graph; Rust ignores |

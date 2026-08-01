@@ -81,6 +81,13 @@ fn class_iri_string(name: &str, class_def: &ClassDefinition, schema: &SchemaDefi
         .unwrap_or_else(|| format!("{}#{}", ontology_iri_string(schema), name))
 }
 
+/// Absolute IRI for an enum: `{ontology}#{name}`, mirroring how classes and
+/// slots without an explicit URI are addressed. The IR carries no
+/// `enum_uri`, so there is nothing to prefer over the derived form.
+fn enum_iri_string(name: &str, schema: &SchemaDefinition) -> String {
+    format!("{}#{}", ontology_iri_string(schema), name)
+}
+
 /// Absolute IRI for a slot: its `slot_uri` (CURIE-expanded) or
 /// `{ontology}#{name}`. Shared by the OWL graph and the SHACL shapes graph.
 fn slot_iri_string(name: &str, slot_def: &SlotDefinition, schema: &SchemaDefinition) -> String {
@@ -283,6 +290,9 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
     let owl_deprecated = owl
         .get("deprecated")
         .map_err(|e| IoError::Parse(e.to_string()))?;
+    let owl_union_of = owl
+        .get("unionOf")
+        .map_err(|e| IoError::Parse(e.to_string()))?;
     let rdfs_subclass_of = rdfs::subClassOf;
 
     for (name, class_def) in &schema.classes {
@@ -367,6 +377,70 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
         )?;
     }
 
+    // Enums. A permissible value set is a class whose members are the named
+    // individuals it enumerates, so a consumer can read the allowed values
+    // off the ontology instead of only out of the docs. `owl:oneOf` closes
+    // the set; a value's `meaning:` CURIE, when given, is its IRI.
+    let owl_named_individual_t = owl
+        .get("NamedIndividual")
+        .map_err(|e| IoError::Parse(e.to_string()))?;
+    let owl_one_of = owl
+        .get("oneOf")
+        .map_err(|e| IoError::Parse(e.to_string()))?;
+    for (enum_name, enum_def) in &schema.enums {
+        let enum_iri_str = enum_iri_string(enum_name, schema);
+        let enum_iri = make_iri(&enum_iri_str)?;
+        graph
+            .insert(&enum_iri, rdf::type_, owl_class)
+            .map_err(|e| IoError::Write(e.to_string()))?;
+        graph
+            .insert(&enum_iri, rdfs::label, enum_name.as_str())
+            .map_err(|e| IoError::Write(e.to_string()))?;
+        if let Some(description) = &enum_def.description {
+            graph
+                .insert(&enum_iri, rdfs::comment, description.as_str())
+                .map_err(|e| IoError::Write(e.to_string()))?;
+        }
+        if enum_def.deprecated.is_some() {
+            graph
+                .insert(&enum_iri, owl_deprecated, true)
+                .map_err(|e| IoError::Write(e.to_string()))?;
+        }
+
+        let mut value_iris = Vec::new();
+        for (key, pv) in &enum_def.permissible_values {
+            let value_iri_str = pv
+                .meaning
+                .as_deref()
+                .map(|m| expand_curie(m, schema))
+                .unwrap_or_else(|| format!("{enum_iri_str}/{key}"));
+            let value_iri = make_iri(&value_iri_str)?;
+            graph
+                .insert(&value_iri, rdf::type_, owl_named_individual_t)
+                .map_err(|e| IoError::Write(e.to_string()))?;
+            graph
+                .insert(&value_iri, rdf::type_, &enum_iri)
+                .map_err(|e| IoError::Write(e.to_string()))?;
+            let label = if pv.text.is_empty() {
+                key.as_str()
+            } else {
+                pv.text.as_str()
+            };
+            graph
+                .insert(&value_iri, rdfs::label, label)
+                .map_err(|e| IoError::Write(e.to_string()))?;
+            if let Some(description) = &pv.description {
+                graph
+                    .insert(&value_iri, rdfs::comment, description.as_str())
+                    .map_err(|e| IoError::Write(e.to_string()))?;
+            }
+            value_iris.push(value_iri);
+        }
+        if !value_iris.is_empty() {
+            emit_rdf_list(&mut graph, &enum_iri, owl_one_of, &enum_iri_str, value_iris)?;
+        }
+    }
+
     // Properties (slots)
     let owl_object_property = owl
         .get("ObjectProperty")
@@ -437,6 +511,18 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
         let prop_iri_str = slot_iri_string(name, slot_def, schema);
         let prop_iri = make_iri(&prop_iri_str)?;
 
+        // An `any_of` union whose every member names a class. Such a slot has
+        // no scalar `range:`, so without this it would fall through as a
+        // datatype property while its instances assert IRI objects.
+        let union_classes: Vec<&String> = slot_def
+            .any_of
+            .iter()
+            .filter_map(|branch| branch.range.as_ref())
+            .filter(|r| schema.classes.contains_key(*r))
+            .collect();
+        let all_union_classes =
+            !slot_def.any_of.is_empty() && union_classes.len() == slot_def.any_of.len();
+
         // Determine property type
         let is_object_property = slot_def
             .annotations
@@ -447,7 +533,7 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
                     .range
                     .as_ref()
                     .map(|r| schema.classes.contains_key(r))
-                    .unwrap_or(false)
+                    .unwrap_or(all_union_classes)
             });
 
         // rdf:type
@@ -536,6 +622,10 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
                         .map(|c| expand_curie(c, schema))
                         .unwrap_or_else(|| format!("{}#{}", ontology_iri_str, range)),
                 )
+            } else if schema.enums.contains_key(range) {
+                // An enum range names the enum's class, now that enums are
+                // emitted; previously this fell through with no range at all.
+                Some(enum_iri_string(range, schema))
             } else {
                 crate::primitives::xsd_datatype_iri(range)
             };
@@ -545,6 +635,35 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
                     .insert(&prop_iri, rdfs::range, &range_iri)
                     .map_err(|e| IoError::Write(e.to_string()))?;
             }
+        } else if all_union_classes {
+            // No single range to name: the slot accepts any member of the
+            // union, which OWL states as a class expression over `owl:unionOf`.
+            let members = union_classes
+                .iter()
+                .map(|member| {
+                    let iri = schema
+                        .classes
+                        .get(*member)
+                        .and_then(|c| c.class_uri.as_deref())
+                        .map(|c| expand_curie(c, schema))
+                        .unwrap_or_else(|| format!("{ontology_iri_str}#{member}"));
+                    make_iri(&iri)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let union_node = make_iri(&format!("{prop_iri_str}/range"))?;
+            graph
+                .insert(&prop_iri, rdfs::range, &union_node)
+                .map_err(|e| IoError::Write(e.to_string()))?;
+            graph
+                .insert(&union_node, rdf::type_, owl_class)
+                .map_err(|e| IoError::Write(e.to_string()))?;
+            emit_rdf_list(
+                &mut graph,
+                &union_node,
+                owl_union_of,
+                &prop_iri_str,
+                members,
+            )?;
         }
 
         // owl:inverseOf
@@ -1287,6 +1406,44 @@ fn emit_constraint_fields(
 /// Wire `subject sh:or ( members… )` with deterministic named list cells
 /// (`{base}/orcell{j}`) rather than blank nodes, matching the rule shapes'
 /// stable-IRI convention.
+/// Attach an RDF list of `members` to `subject` under `predicate`. List cells
+/// are minted from `base` rather than blank nodes, matching how this module
+/// already writes SHACL's `sh:or` lists, so the output stays addressable.
+fn emit_rdf_list<P>(
+    graph: &mut FastGraph,
+    subject: &Iri<String>,
+    predicate: P,
+    base: &str,
+    members: Vec<Iri<String>>,
+) -> IoResult<()>
+where
+    P: sophia::api::term::Term + Copy,
+{
+    let mut cells = Vec::new();
+    for j in 0..members.len() {
+        cells.push(make_iri(&format!("{base}/unioncell{j}"))?);
+    }
+    if let Some(first) = cells.first() {
+        graph
+            .insert(subject, predicate, first)
+            .map_err(|e| IoError::Write(e.to_string()))?;
+    }
+    for (j, (cell, member)) in cells.iter().zip(&members).enumerate() {
+        graph
+            .insert(cell, rdf::first, member)
+            .map_err(|e| IoError::Write(e.to_string()))?;
+        match cells.get(j + 1) {
+            Some(next) => graph
+                .insert(cell, rdf::rest, next)
+                .map_err(|e| IoError::Write(e.to_string()))?,
+            None => graph
+                .insert(cell, rdf::rest, rdf::nil)
+                .map_err(|e| IoError::Write(e.to_string()))?,
+        };
+    }
+    Ok(())
+}
+
 fn emit_or_list(
     graph: &mut FastGraph,
     t: &ShaclTerms,
@@ -1579,11 +1736,9 @@ mod tests {
         assert!(found_double, "the score literal must be present");
     }
 
-    #[test]
-    fn a_union_ranged_slot_emits_an_object_property_assertion() {
-        // A slot whose range is an `any_of` class union carries references,
-        // not literals — so the A-box must contain an object-property
-        // assertion between the two individuals, not a string.
+    /// A schema whose `qualifies` slot ranges over an `any_of` union of two
+    /// classes — the T-box and A-box shapes a union carries.
+    fn union_tbox_fixture() -> SchemaDefinition {
         let mut schema = SchemaDefinition::new("prov");
         schema.id = Some("https://example.org/prov".to_string());
         schema.default_prefix = Some("prov".to_string());
@@ -1626,6 +1781,204 @@ mod tests {
         method.attributes.insert("id".to_string(), id);
         schema.classes.insert("Method".to_string(), method);
 
+        schema
+    }
+
+    /// Whether `graph` holds a triple with this subject/predicate/object IRI.
+    fn has_iri_triple(graph: &FastGraph, subject: &str, predicate: &str, object: &str) -> bool {
+        use sophia::api::graph::Graph;
+        use sophia::api::term::Term;
+        use sophia::api::triple::Triple;
+        graph.triples().filter_map(Result::ok).any(|t| {
+            t.s().iri().is_some_and(|i| i.as_str() == subject)
+                && t.p().iri().is_some_and(|i| i.as_str() == predicate)
+                && t.o().iri().is_some_and(|i| i.as_str() == object)
+        })
+    }
+
+    /// The object IRIs of every `subject predicate ?o` triple.
+    fn objects_of(graph: &FastGraph, subject: &str, predicate: &str) -> Vec<String> {
+        use sophia::api::graph::Graph;
+        use sophia::api::term::Term;
+        use sophia::api::triple::Triple;
+        graph
+            .triples()
+            .filter_map(Result::ok)
+            .filter(|t| {
+                t.s().iri().is_some_and(|i| i.as_str() == subject)
+                    && t.p().iri().is_some_and(|i| i.as_str() == predicate)
+            })
+            .filter_map(|t| t.o().iri().map(|i| i.to_string()))
+            .collect()
+    }
+
+    /// A schema with one enum and a slot ranged on it.
+    fn enum_fixture() -> SchemaDefinition {
+        use crate::linkml::{EnumDefinition, PermissibleValue};
+        let mut schema = SchemaDefinition::new("orders");
+        schema.id = Some("https://example.org/orders".to_string());
+        schema.default_prefix = Some("orders".to_string());
+        schema.prefixes.insert(
+            "orders".to_string(),
+            "https://example.org/orders/".to_string(),
+        );
+        let mut status = EnumDefinition::new("OrderStatus");
+        status.description = Some("How far along an order is".to_string());
+        for (key, desc) in [("open", "Not yet shipped"), ("shipped", "On its way")] {
+            let mut pv = PermissibleValue::new(key);
+            pv.description = Some(desc.to_string());
+            status.permissible_values.insert(key.to_string(), pv);
+        }
+        schema.enums.insert("OrderStatus".to_string(), status);
+
+        let mut order = ClassDefinition::new("Order");
+        let mut slot = SlotDefinition::new("status");
+        slot.range = Some("OrderStatus".to_string());
+        order.attributes.insert("status".to_string(), slot);
+        schema.classes.insert("Order".to_string(), order);
+        schema
+    }
+
+    #[test]
+    fn an_enum_becomes_a_class_whose_permissible_values_are_individuals() {
+        // Enums were absent from RDF entirely: a consumer loading the
+        // ontology could not see what values a status may take.
+        let graph = build_rdf_graph(&enum_fixture()).expect("graph");
+        let enum_iri = "https://example.org/orders#OrderStatus";
+        let rdf_type = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+        assert!(
+            has_iri_triple(
+                &graph,
+                enum_iri,
+                rdf_type,
+                "http://www.w3.org/2002/07/owl#Class"
+            ),
+            "the enum is a class"
+        );
+        for value in ["open", "shipped"] {
+            let value_iri = format!("https://example.org/orders#OrderStatus/{value}");
+            assert!(
+                has_iri_triple(
+                    &graph,
+                    &value_iri,
+                    rdf_type,
+                    "http://www.w3.org/2002/07/owl#NamedIndividual"
+                ) && has_iri_triple(&graph, &value_iri, rdf_type, enum_iri),
+                "`{value}` is a named individual of the enum"
+            );
+        }
+        let one_of = objects_of(&graph, enum_iri, "http://www.w3.org/2002/07/owl#oneOf");
+        assert_eq!(
+            one_of.len(),
+            1,
+            "the enum enumerates its values; got: {one_of:?}"
+        );
+    }
+
+    #[test]
+    fn an_enum_ranged_slot_ranges_over_the_enum_class() {
+        let graph = build_rdf_graph(&enum_fixture()).expect("graph");
+        assert!(
+            has_iri_triple(
+                &graph,
+                "https://example.org/orders#status",
+                "http://www.w3.org/2000/01/rdf-schema#range",
+                "https://example.org/orders#OrderStatus"
+            ),
+            "an enum-ranged slot ranges over the enum's class"
+        );
+    }
+
+    #[test]
+    fn a_union_of_classes_declares_an_object_property() {
+        // The A-box asserts IRI objects for this slot, so the T-box must
+        // declare it an object property — a datatype declaration alongside
+        // IRI objects is a contradiction an OWL reasoner will reject.
+        let graph = build_rdf_graph(&union_tbox_fixture()).expect("graph");
+        let qualifies = "https://example.org/prov#qualifies";
+        assert!(
+            has_iri_triple(
+                &graph,
+                qualifies,
+                "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+                "http://www.w3.org/2002/07/owl#ObjectProperty"
+            ),
+            "a union of classes is an object property"
+        );
+        assert!(
+            !has_iri_triple(
+                &graph,
+                qualifies,
+                "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+                "http://www.w3.org/2002/07/owl#DatatypeProperty"
+            ),
+            "and must not also be declared a datatype property"
+        );
+    }
+
+    #[test]
+    fn a_union_of_classes_ranges_over_an_owl_union() {
+        // `rdfs:range` names a class expression whose `owl:unionOf` list
+        // holds every member, so a consumer can see what the slot accepts.
+        let graph = build_rdf_graph(&union_tbox_fixture()).expect("graph");
+        let ranges = objects_of(
+            &graph,
+            "https://example.org/prov#qualifies",
+            "http://www.w3.org/2000/01/rdf-schema#range",
+        );
+        assert_eq!(
+            ranges.len(),
+            1,
+            "one range, a union expression; got: {ranges:?}"
+        );
+        let union_node = &ranges[0];
+        assert!(
+            has_iri_triple(
+                &graph,
+                union_node,
+                "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+                "http://www.w3.org/2002/07/owl#Class"
+            ),
+            "the range is a class expression"
+        );
+        let list_head = objects_of(&graph, union_node, "http://www.w3.org/2002/07/owl#unionOf");
+        assert_eq!(list_head.len(), 1, "one union list; got: {list_head:?}");
+
+        // Walk the RDF list and collect its members.
+        let mut members = Vec::new();
+        let mut cell = list_head[0].clone();
+        let nil = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
+        while cell != nil {
+            members.extend(objects_of(
+                &graph,
+                &cell,
+                "http://www.w3.org/1999/02/22-rdf-syntax-ns#first",
+            ));
+            let rest = objects_of(
+                &graph,
+                &cell,
+                "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest",
+            );
+            assert_eq!(rest.len(), 1, "a well-formed list cell has one rest");
+            cell = rest[0].clone();
+        }
+        members.sort();
+        assert_eq!(
+            members,
+            vec![
+                "https://example.org/prov#Claim".to_string(),
+                "https://example.org/prov#Method".to_string()
+            ],
+            "the union lists both member classes"
+        );
+    }
+
+    #[test]
+    fn a_union_ranged_slot_emits_an_object_property_assertion() {
+        // A slot whose range is an `any_of` class union carries references,
+        // not literals — so the A-box must contain an object-property
+        // assertion between the two individuals, not a string.
+        let schema = union_tbox_fixture();
         let data: serde_norway::Value =
             serde_norway::from_str("states:\n  - {id: s1, qualifies: c1}\nclaims:\n  - {id: c1}\n")
                 .unwrap();

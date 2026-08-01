@@ -427,14 +427,13 @@ fn slot_condition_failure(cond: &SlotCondition, values: &[InstanceValue]) -> Opt
 /// that answers that.
 fn class_satisfies(schema: &SchemaDefinition, class: &str, target: &str) -> bool {
     let mut current = class;
-    let mut hops = 0;
+    // Revisiting a class means a malformed `is_a` cycle; stop rather than spin.
+    let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
     loop {
         if current == target {
             return true;
         }
-        // Bounded so a malformed `is_a` cycle cannot spin here.
-        hops += 1;
-        if hops > schema.classes.len() {
+        if !seen.insert(current) {
             return false;
         }
         match schema.classes.get(current).and_then(|c| c.is_a.as_deref()) {
@@ -956,6 +955,9 @@ classes:
       reviews:
         range: Review
         multivalued: true
+      shipments: {range: Shipment, multivalued: true}
+      batches: {range: Batch, multivalued: true}
+      tickets: {range: Ticket, multivalued: true}
   Deployment:
     attributes:
       id:
@@ -1002,6 +1004,67 @@ classes:
             score:
               minimum_value: 1
               maximum_value: 5
+  Shipment:
+    attributes:
+      id: {identifier: true}
+      status: {range: string}
+      cancelled_on: {range: string}
+      weight: {range: integer}
+    rules:
+      - title: an open shipment is not cancelled
+        preconditions:
+          slot_conditions: {status: {equals_string: open}}
+        postconditions:
+          slot_conditions:
+            cancelled_on: {value_presence: ABSENT}
+      - title: express shipments weigh exactly five
+        preconditions:
+          slot_conditions: {status: {equals_string: express}}
+        postconditions:
+          slot_conditions:
+            weight: {equals_number: 5}
+  Batch:
+    attributes:
+      id: {identifier: true}
+      kind: {range: string}
+      items: {range: string, multivalued: true}
+      code: {range: string}
+      score: {range: integer}
+    rules:
+      - title: a bulk batch carries two or three items
+        preconditions:
+          slot_conditions: {kind: {equals_string: bulk}}
+        postconditions:
+          slot_conditions:
+            items: {minimum_cardinality: 2, maximum_cardinality: 3}
+      - title: a coded batch matches the code pattern
+        preconditions:
+          slot_conditions: {kind: {equals_string: coded}}
+        postconditions:
+          slot_conditions:
+            code: {pattern: \"^B-[0-9]+$\"}
+      - title: a scored batch meets the floor
+        preconditions:
+          slot_conditions: {kind: {equals_string: scored}}
+        postconditions:
+          slot_conditions:
+            score: {minimum_value: 10}
+  Ticket:
+    attributes:
+      id: {identifier: true}
+      tier: {range: string}
+      owner: {range: string}
+      escalated_to: {range: string}
+    rules:
+      - title: an escalated tier names someone
+        preconditions:
+          any_of:
+            - slot_conditions: {tier: {equals_string: gold}}
+            - slot_conditions: {tier: {equals_string: platinum}}
+        postconditions:
+          any_of:
+            - slot_conditions: {owner: {value_presence: PRESENT}}
+            - slot_conditions: {escalated_to: {value_presence: PRESENT}}
 ";
 
     fn rule_schema() -> SchemaDefinition {
@@ -1060,6 +1123,8 @@ classes:
       hypotheses: {range: Hypothesis, multivalued: true}
       methods: {range: Method, multivalued: true}
       questions: {range: Question, multivalued: true}
+      notes: {range: Note, multivalued: true}
+      loops: {range: Loop, multivalued: true}
   State:
     attributes:
       id: {identifier: true}
@@ -1075,6 +1140,16 @@ classes:
   Question:
     attributes:
       id: {identifier: true}
+  Note:
+    attributes:
+      id: {identifier: true}
+      about: {range: Claim}
+  Loop:
+    is_a: Knot
+    attributes:
+      id: {identifier: true}
+  Knot:
+    is_a: Loop
 ";
 
     fn union_schema() -> SchemaDefinition {
@@ -1130,6 +1205,30 @@ classes:
     }
 
     #[test]
+    fn a_single_class_range_is_not_branch_checked() {
+        // Branch checking is a union concern. A slot with one declared class
+        // range keeps the behaviour it had before unions were understood, so
+        // a mismatch there is not reported by this check.
+        let v = union_violations("notes:\n  - {id: n1, about: q1}\nquestions:\n  - {id: q1}\n");
+        assert!(
+            v.is_empty(),
+            "a single class range is out of scope for branch checking; got: {v:?}"
+        );
+    }
+
+    #[test]
+    fn an_is_a_cycle_does_not_hang_the_branch_check() {
+        // Two classes naming each other as parent must terminate the ancestor
+        // walk rather than spin.
+        let v = union_violations("loops:\n  - {id: l1}\nstates:\n  - {id: s1, qualifies: l1}\n");
+        assert_eq!(
+            v.len(),
+            1,
+            "a Loop is neither a Claim nor a Method; got: {v:?}"
+        );
+    }
+
+    #[test]
     fn a_dangling_union_reference_is_reported_once() {
         // The integrity pass already reports a target that names no record.
         // The branch check must not pile a second violation on top of it.
@@ -1147,6 +1246,120 @@ classes:
             "a range-kind mismatch at a union slot should name the members, not `?`; got: {}",
             v[0].detail
         );
+    }
+
+    #[test]
+    fn a_postcondition_value_presence_absent_forbids_a_value() {
+        let v =
+            rule_violations("shipments:\n  - {id: p1, status: open, cancelled_on: 2026-01-01}\n");
+        assert_eq!(
+            v.len(),
+            1,
+            "an open shipment must not be cancelled; got: {v:?}"
+        );
+        assert!(
+            v[0].detail.contains("must be absent"),
+            "got: {}",
+            v[0].detail
+        );
+        assert!(
+            rule_violations("shipments:\n  - {id: p1, status: open}\n").is_empty(),
+            "absent satisfies ABSENT"
+        );
+    }
+
+    #[test]
+    fn a_postcondition_equals_number_is_enforced() {
+        assert!(
+            rule_violations("shipments:\n  - {id: p1, status: express, weight: 5}\n").is_empty(),
+            "the exact value satisfies equals_number"
+        );
+        let v = rule_violations("shipments:\n  - {id: p1, status: express, weight: 6}\n");
+        assert_eq!(v.len(), 1, "got: {v:?}");
+        assert!(v[0].detail.contains("must equal 5"), "got: {}", v[0].detail);
+    }
+
+    #[test]
+    fn a_postcondition_cardinality_is_enforced_at_both_bounds() {
+        // The boundary counts conform; one either side does not.
+        for n in [2, 3] {
+            let items = (0..n)
+                .map(|i| format!("i{i}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            assert!(
+                rule_violations(&format!(
+                    "batches:\n  - {{id: b1, kind: bulk, items: [{items}]}}\n"
+                ))
+                .is_empty(),
+                "{n} items is within two-to-three"
+            );
+        }
+        let v = rule_violations("batches:\n  - {id: b1, kind: bulk, items: [i0]}\n");
+        assert_eq!(v.len(), 1, "got: {v:?}");
+        assert!(v[0].detail.contains("fewer than"), "got: {}", v[0].detail);
+        let v = rule_violations("batches:\n  - {id: b1, kind: bulk, items: [i0, i1, i2, i3]}\n");
+        assert_eq!(v.len(), 1, "got: {v:?}");
+        assert!(v[0].detail.contains("more than"), "got: {}", v[0].detail);
+    }
+
+    #[test]
+    fn a_postcondition_pattern_is_enforced() {
+        assert!(
+            rule_violations("batches:\n  - {id: b1, kind: coded, code: B-12}\n").is_empty(),
+            "a matching code conforms"
+        );
+        let v = rule_violations("batches:\n  - {id: b1, kind: coded, code: X-1}\n");
+        assert_eq!(v.len(), 1, "got: {v:?}");
+        assert!(
+            v[0].detail.contains("does not match required pattern"),
+            "got: {}",
+            v[0].detail
+        );
+    }
+
+    #[test]
+    fn a_postcondition_with_only_a_minimum_still_bounds_the_value() {
+        // A one-sided bound must be checked; the value exactly on the floor
+        // conforms, and one below it does not.
+        assert!(
+            rule_violations("batches:\n  - {id: b1, kind: scored, score: 10}\n").is_empty(),
+            "a value exactly on the floor conforms"
+        );
+        let v = rule_violations("batches:\n  - {id: b1, kind: scored, score: 9}\n");
+        assert_eq!(v.len(), 1, "got: {v:?}");
+        assert!(
+            v[0].detail.contains("below the required minimum"),
+            "got: {}",
+            v[0].detail
+        );
+    }
+
+    #[test]
+    fn condition_set_alternatives_gate_a_rule_on_either_side() {
+        // `any_of` over whole condition sets, on both halves of the rule:
+        // either tier fires it, and either named party satisfies it.
+        for tier in ["gold", "platinum"] {
+            let v = rule_violations(&format!("tickets:\n  - {{id: t1, tier: {tier}}}\n"));
+            assert_eq!(v.len(), 1, "`{tier}` fires the rule; got: {v:?}");
+            assert!(
+                v[0].detail
+                    .contains("satisfies none of its postcondition alternatives"),
+                "got: {}",
+                v[0].detail
+            );
+        }
+        assert!(
+            rule_violations("tickets:\n  - {id: t1, tier: bronze}\n").is_empty(),
+            "a tier matching no alternative leaves the rule dormant"
+        );
+        for named in ["owner: pat", "escalated_to: sam"] {
+            assert!(
+                rule_violations(&format!("tickets:\n  - {{id: t1, tier: gold, {named}}}\n"))
+                    .is_empty(),
+                "`{named}` satisfies one postcondition alternative"
+            );
+        }
     }
 
     #[test]

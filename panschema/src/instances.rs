@@ -876,6 +876,51 @@ claims:
     }
 
     #[test]
+    fn an_inlined_object_at_a_multi_class_union_is_reported_not_guessed() {
+        // With several class members it is ambiguous which one an inlined
+        // object instantiates, so the value is recorded as unusable rather
+        // than silently built as one of them.
+        let set = union_set("acts:\n  - {id: a1, hasInput: [{id: x1}]}\n");
+        let a1 = find(&set, "a1");
+        let has_input = a1
+            .slot_values
+            .iter()
+            .find(|sv| sv.slot == "hasInput")
+            .expect("hasInput recorded");
+        assert!(
+            matches!(has_input.values.as_slice(), [InstanceValue::Unexpected(_)]),
+            "an ambiguous inlined object is recorded as unusable; got: {:?}",
+            has_input.values
+        );
+        assert!(
+            a1.references.is_empty(),
+            "and draws no edge; got: {:?}",
+            a1.references
+        );
+        assert!(
+            !set.instances.iter().any(|i| i.id == "x1"),
+            "nor is a record invented for it"
+        );
+    }
+
+    #[test]
+    fn an_inlined_object_at_a_single_class_range_is_built() {
+        // The unambiguous counterpart: exactly one class member, so the
+        // object is built and linked.
+        let set = union_set("searches:\n  - {id: ls1, hasInput: {id: q9}}\n");
+        assert_eq!(
+            find(&set, "ls1")
+                .references
+                .iter()
+                .map(|r| r.target.as_str())
+                .collect::<Vec<_>>(),
+            vec!["q9"],
+            "a single class target makes the inlined object a record"
+        );
+        assert!(set.instances.iter().any(|i| i.id == "q9"), "and it exists");
+    }
+
+    #[test]
     fn slot_usage_any_of_narrowing_ingests_references() {
         let set = union_set(
             "\
