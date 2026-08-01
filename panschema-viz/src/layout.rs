@@ -31,15 +31,14 @@ pub enum LayoutAlgorithm {
     /// In-tree CPU force simulation tuned for viewport filling and
     /// readable labels.
     ForceDirected,
-    /// Sugiyama-style layered layout for `is_a` / `subClassOf` DAGs.
-    /// Planned implementation: `rust-sugiyama`.
+    /// Sugiyama-style layered layout for `is_a` / `subClassOf` DAGs,
+    /// via `rust-sugiyama`.
     Hierarchical,
-    /// Stress majorization. Planned implementation: `egraph-rs`.
+    /// Stress majorization, via `egraph-rs`.
     Stress,
-    /// Kamada-Kawai energy minimization. Planned implementation:
-    /// `egraph-rs`.
+    /// Kamada-Kawai energy minimization, via `egraph-rs`.
     KamadaKawai,
-    /// Stochastic Gradient Descent. Planned implementation: `egraph-rs`.
+    /// Stochastic Gradient Descent, via `egraph-rs`. The default.
     Sgd,
     /// Uniform-on-a-circle (or ellipse for non-square aspects).
     /// Planned implementation: in-tree.

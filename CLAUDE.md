@@ -52,7 +52,7 @@ panschema/                        # workspace root
 │       ├── e2e.rs                # browser tests with Playwright
 │       └── integration.rs        # CLI integration tests
 ├── panschema-viz/                # WASM force-graph visualization (embedded in HTML output)
-├── mdbook-panschema/             # mdBook preprocessor embedding rendered schema components
+├── mdbook-panschema/             # installs a book→schema toolbar link (mdbook-panschema install)
 ├── docs/                         # adr/, features/, templates/, ROADMAP.md, linkml-coverage.md
 ├── scripts/                      # mutants.sh, dev-install.sh, ...
 ├── CHANGELOG.md                  # Keep updated with changes
