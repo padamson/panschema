@@ -11,7 +11,9 @@
 //! still-incomplete JSON-Schema projection can't provide.
 
 use crate::instances::{InstanceSet, InstanceValue, ScalarValue, scalar_to_display};
-use crate::linkml::{EnumDefinition, SchemaDefinition};
+use crate::linkml::{
+    EnumDefinition, RuleConditions, SchemaDefinition, SlotCondition, ValuePresence,
+};
 use crate::linkml_resolve::{effective_cardinality, resolve_effective_slots};
 use regex::Regex;
 use serde_norway::Value;
@@ -184,6 +186,45 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
                 }
             }
         }
+
+        // Conditional constraints: a rule whose precondition holds imposes its
+        // postcondition on this record. Rules are read off the class directly,
+        // as every other projection of `rules` does.
+        for (i, rule) in class.rules.iter().enumerate() {
+            let applies = rule
+                .preconditions
+                .as_ref()
+                .is_none_or(|pre| conditions_hold(pre, inst));
+            if !applies {
+                continue;
+            }
+            let Some(post) = &rule.postconditions else {
+                continue;
+            };
+            let label = rule.title.clone().unwrap_or_else(|| format!("#{}", i + 1));
+            for (slot_name, cond) in &post.slot_conditions {
+                let values = slot_values(inst, slot_name);
+                if let Some(reason) = slot_condition_failure(cond, values) {
+                    out.push(Violation {
+                        record: inst.id.clone(),
+                        detail: format!(
+                            "rule `{label}` (class `{class_name}`) applies, but slot \
+                             `{slot_name}` {reason}"
+                        ),
+                    });
+                }
+            }
+            if !post.any_of.is_empty() && !post.any_of.iter().any(|alt| conditions_hold(alt, inst))
+            {
+                out.push(Violation {
+                    record: inst.id.clone(),
+                    detail: format!(
+                        "rule `{label}` (class `{class_name}`) applies, but the record \
+                         satisfies none of its postcondition alternatives"
+                    ),
+                });
+            }
+        }
     }
 
     // Cross-record reference integrity: a typed reference to an id no record
@@ -234,6 +275,122 @@ pub fn validate_instance_data(schema: &SchemaDefinition, data: &Value) -> Vec<Vi
     }
     let set = InstanceSet::from_linkml_data(schema, data);
     validate_instances(schema, &set)
+}
+
+/// A record's values for `slot`, or an empty slice when it has none.
+fn slot_values<'a>(inst: &'a crate::instances::Instance, slot: &str) -> &'a [InstanceValue] {
+    inst.slot_values
+        .iter()
+        .find(|sv| sv.slot == slot)
+        .map(|sv| sv.values.as_slice())
+        .unwrap_or_default()
+}
+
+/// Whether a rule condition holds for a record: every entry in its
+/// `slot_conditions` must hold, and — when present — at least one `any_of`
+/// alternative must too.
+fn conditions_hold(cond: &RuleConditions, inst: &crate::instances::Instance) -> bool {
+    if !cond.any_of.is_empty() && !cond.any_of.iter().any(|alt| conditions_hold(alt, inst)) {
+        return false;
+    }
+    cond.slot_conditions
+        .iter()
+        .all(|(slot, sc)| slot_condition_failure(sc, slot_values(inst, slot)).is_none())
+}
+
+/// Why `cond` does not hold for a slot's `values`, phrased as a clause that
+/// completes "slot `x` …", or `None` when it holds.
+///
+/// One function serves both halves of a rule: a precondition only asks
+/// whether this is `None`, while a postcondition turns the reason into the
+/// violation's text. A condition's `range` is a type assertion rather than a
+/// value test and is not evaluated here — the slot's own declared range is
+/// already checked for every record.
+fn slot_condition_failure(cond: &SlotCondition, values: &[InstanceValue]) -> Option<String> {
+    if cond.required && values.is_empty() {
+        return Some("is required but absent".to_string());
+    }
+    match cond.value_presence {
+        Some(ValuePresence::Present) if values.is_empty() => {
+            return Some("must have a value but is absent".to_string());
+        }
+        Some(ValuePresence::Absent) if !values.is_empty() => {
+            return Some("must be absent but has a value".to_string());
+        }
+        _ => {}
+    }
+    if let Some(min) = cond.minimum_cardinality
+        && (values.len() as u32) < min
+    {
+        return Some(format!(
+            "has {} value(s), fewer than the required minimum of {min}",
+            values.len()
+        ));
+    }
+    if let Some(max) = cond.maximum_cardinality
+        && (values.len() as u32) > max
+    {
+        return Some(format!(
+            "has {} value(s), more than the permitted maximum of {max}",
+            values.len()
+        ));
+    }
+    if !cond.any_of.is_empty()
+        && !cond
+            .any_of
+            .iter()
+            .any(|alt| slot_condition_failure(alt, values).is_none())
+    {
+        return Some("satisfies none of the permitted alternatives".to_string());
+    }
+    for value in values {
+        let InstanceValue::Scalar(scalar) = value else {
+            continue;
+        };
+        let shown = scalar_to_display(scalar);
+        if let Some(want) = &cond.equals_string
+            && &shown != want
+        {
+            return Some(format!("is `{shown}`, but must equal `{want}`"));
+        }
+        if let Some(want) = cond.equals_number
+            && numeric(scalar) != Some(want)
+        {
+            return Some(format!("is `{shown}`, but must equal {want}"));
+        }
+        if cond.minimum_value.is_some() || cond.maximum_value.is_some() {
+            let Some(n) = numeric(scalar) else {
+                return Some(format!(
+                    "value `{shown}` is not numeric, but a bound is required"
+                ));
+            };
+            if let Some(min) = cond.minimum_value
+                && n < min
+            {
+                return Some(format!("value {n} is below the required minimum of {min}"));
+            }
+            if let Some(max) = cond.maximum_value
+                && n > max
+            {
+                return Some(format!("value {n} is above the required maximum of {max}"));
+            }
+        }
+        if let Some(p) = &cond.pattern {
+            match Regex::new(p) {
+                Ok(re) => {
+                    if let ScalarValue::String(text) = scalar
+                        && !re.is_match(text)
+                    {
+                        return Some(format!(
+                            "value `{text}` does not match required pattern `{p}`"
+                        ));
+                    }
+                }
+                Err(_) => return Some(format!("is constrained by an invalid pattern `{p}`")),
+            }
+        }
+    }
+    None
 }
 
 /// Whether `scalar`'s string form is one of the enum's permissible values —
@@ -722,5 +879,203 @@ enums:
         let v = value_violations("items:\n  - id: a\n    strength: high\n");
         assert_eq!(v.len(), 1);
         assert!(v[0].detail.contains("not numeric"), "got: {}", v[0].detail);
+    }
+
+    /// Conditional-requirement rules, in the shape a consumer schema actually
+    /// writes them: a precondition matching one slot's value makes other slots
+    /// required. Mirrors a deployment catalogue where an `actual` deployment
+    /// must name its environment and provider, while a `planned` one need not.
+    const RULE_SCHEMA: &str = "
+id: https://example.org/rules
+name: rules
+default_range: string
+enums:
+  DeploymentStatus:
+    permissible_values:
+      planned:
+      actual:
+      possible:
+classes:
+  Catalog:
+    tree_root: true
+    attributes:
+      deployments:
+        range: Deployment
+        multivalued: true
+      reviews:
+        range: Review
+        multivalued: true
+  Deployment:
+    attributes:
+      id:
+        identifier: true
+      status:
+        range: DeploymentStatus
+      in_environment:
+        range: string
+      on_provider:
+        range: string
+    rules:
+      - title: actual deployments are bound
+        preconditions:
+          slot_conditions:
+            status:
+              equals_string: actual
+        postconditions:
+          slot_conditions:
+            in_environment:
+              required: true
+            on_provider:
+              required: true
+  Review:
+    attributes:
+      id:
+        identifier: true
+      verdict:
+        range: string
+      approved_by:
+        range: string
+      score:
+        range: integer
+    rules:
+      - preconditions:
+          slot_conditions:
+            verdict:
+              any_of:
+                - equals_string: approved
+                - equals_string: rejected
+        postconditions:
+          slot_conditions:
+            approved_by:
+              value_presence: PRESENT
+            score:
+              minimum_value: 1
+              maximum_value: 5
+";
+
+    fn rule_schema() -> SchemaDefinition {
+        serde_norway::from_str(RULE_SCHEMA).expect("parse rule schema")
+    }
+
+    fn rule_violations(yaml: &str) -> Vec<Violation> {
+        validate_instance_data(&rule_schema(), &data(yaml))
+    }
+
+    #[test]
+    fn a_record_failing_a_rules_postcondition_is_a_violation() {
+        let v = rule_violations("deployments:\n  - id: d1\n    status: actual\n");
+        assert_eq!(
+            v.len(),
+            2,
+            "an actual deployment missing both bindings violates the rule twice; got: {v:?}"
+        );
+        assert!(
+            v.iter().any(|x| x.detail.contains("in_environment"))
+                && v.iter().any(|x| x.detail.contains("on_provider")),
+            "both governed slots should be named; got: {v:?}"
+        );
+        assert!(
+            v.iter().all(|x| x.record == "d1"),
+            "violations belong to the offending record; got: {v:?}"
+        );
+    }
+
+    #[test]
+    fn a_record_satisfying_a_rules_postcondition_conforms() {
+        let v = rule_violations(
+            "deployments:\n  - id: d1\n    status: actual\n    in_environment: prod\n    on_provider: aws\n",
+        );
+        assert!(v.is_empty(), "the rule is satisfied; got: {v:?}");
+    }
+
+    #[test]
+    fn an_untitled_rule_is_named_by_its_position() {
+        let v = rule_violations("deployments:\n  - id: d1\n    status: actual\n");
+        assert!(
+            v.iter()
+                .all(|x| x.detail.contains("actual deployments are bound")),
+            "a titled rule is named by its title; got: {v:?}"
+        );
+        let mut schema = rule_schema();
+        schema
+            .classes
+            .get_mut("Deployment")
+            .expect("Deployment")
+            .rules[0]
+            .title = None;
+        let d = data("deployments:\n  - id: d1\n    status: actual\n");
+        let v = validate_instance_data(&schema, &d);
+        assert!(
+            v.iter().all(|x| x.detail.contains("`#1`")),
+            "an untitled rule falls back to its 1-based position; got: {v:?}"
+        );
+    }
+
+    #[test]
+    fn a_precondition_any_of_fires_on_either_alternative() {
+        // `approved` and `rejected` both trigger the rule; `pending` does not.
+        for verdict in ["approved", "rejected"] {
+            let v = rule_violations(&format!(
+                "reviews:\n  - id: r1\n    verdict: {verdict}\n    score: 3\n"
+            ));
+            assert_eq!(
+                v.len(),
+                1,
+                "`{verdict}` should fire the rule, leaving approved_by absent; got: {v:?}"
+            );
+            assert!(
+                v[0].detail.contains("approved_by") && v[0].detail.contains("absent"),
+                "got: {}",
+                v[0].detail
+            );
+        }
+        let v = rule_violations("reviews:\n  - id: r1\n    verdict: pending\n");
+        assert!(
+            v.is_empty(),
+            "`pending` matches neither alternative, so the rule stays dormant; got: {v:?}"
+        );
+    }
+
+    #[test]
+    fn a_postcondition_value_presence_and_bounds_are_enforced() {
+        let v = rule_violations(
+            "reviews:\n  - id: r1\n    verdict: approved\n    approved_by: pat\n    score: 9\n",
+        );
+        assert_eq!(v.len(), 1, "score 9 exceeds the rule's maximum; got: {v:?}");
+        assert!(
+            v[0].detail.contains("above the required maximum"),
+            "got: {}",
+            v[0].detail
+        );
+
+        let v = rule_violations(
+            "reviews:\n  - id: r1\n    verdict: approved\n    approved_by: pat\n    score: 0\n",
+        );
+        assert_eq!(
+            v.len(),
+            1,
+            "score 0 is below the rule's minimum; got: {v:?}"
+        );
+        assert!(
+            v[0].detail.contains("below the required minimum"),
+            "got: {}",
+            v[0].detail
+        );
+
+        let v = rule_violations(
+            "reviews:\n  - id: r1\n    verdict: approved\n    approved_by: pat\n    score: 3\n",
+        );
+        assert!(v.is_empty(), "a fully satisfied rule conforms; got: {v:?}");
+    }
+
+    #[test]
+    fn a_record_whose_precondition_does_not_hold_is_left_alone() {
+        // The whole point of a conditional requirement: a planned deployment
+        // may omit the bindings an actual one must carry.
+        let v = rule_violations("deployments:\n  - id: d1\n    status: planned\n");
+        assert!(
+            v.is_empty(),
+            "the precondition does not match, so the rule does not apply; got: {v:?}"
+        );
     }
 }

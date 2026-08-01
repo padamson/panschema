@@ -260,6 +260,52 @@ while the slot actually meant stayed absent.
 
 ---
 
+### Slice 7: Class-level `rules` are enforced
+
+**Status:** Complete
+
+**Priority:** Should Have
+
+**Depends on:** Slice 5.
+
+**User Value:** A conditional requirement written as a LinkML `rule` is
+machine-checked by the same command that checks everything else. Before this,
+a rule rendered in the docs and projected to SHACL but `validate` skipped it,
+so the only way to check one was to run an external SHACL engine over
+generated shapes — real, but not a single-tool check.
+
+**Acceptance Criteria:**
+- [x] A record whose class carries a rule whose precondition holds, and which
+  fails the postcondition, is a violation naming the rule, the class, and the
+  slot that failed
+  (`a_record_failing_a_rules_postcondition_is_a_violation`).
+- [x] A record whose precondition does *not* hold is left alone — the point of
+  a conditional requirement is that the unconditioned case may omit what the
+  conditioned case must carry
+  (`a_record_whose_precondition_does_not_hold_is_left_alone`).
+- [x] A record satisfying the postcondition conforms
+  (`a_record_satisfying_a_rules_postcondition_conforms`).
+- [x] The condition facets the SHACL projection already covers are enforced
+  here too, so the two checks agree on what a rule means: `equals_string` /
+  `equals_number`, `value_presence`, `required`, and both `any_of` forms
+  (whole-condition alternatives and single-slot value alternatives). Numeric
+  bounds, `pattern`, and cardinality inside a condition are enforced as well.
+- [x] A rule is named by its `title`, or by its 1-based position when
+  untitled (`an_untitled_rule_is_named_by_its_position`).
+- [x] It reaches every path the conformance check reaches, since it runs
+  inside the shared core: the standalone command, `generate --instances`, and
+  `publish`; `--strict` fails.
+
+**Notes:**
+- A `range:` inside a slot condition is a type assertion rather than a value
+  test and is not evaluated; the slot's own declared range is already checked
+  for every record.
+- Rules are read off the class directly, matching every other projection of
+  `rules` — inherited rules are not resolved by any of them, so this
+  introduces no new inheritance semantics.
+
+---
+
 ## Slice Priority and Dependencies
 
 | Slice | Priority | Depends On | Status |
@@ -273,6 +319,7 @@ while the slot actually meant stayed absent.
 | Slice 4b: `any_of` polymorphic ranges | Should Have | Slice 4 | Not Started |
 | Slice 5: conformance check on the way into an output | Must Have | Slice 1 | Complete |
 | Slice 6: undeclared fields are violations | Must Have | Slice 5 | Complete |
+| Slice 7: class-level `rules` enforced | Should Have | Slice 5 | Complete |
 
 ## Definition of Done
 
