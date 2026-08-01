@@ -1877,6 +1877,13 @@ mod tests {
             pv.description = Some(desc.to_string());
             status.permissible_values.insert(key.to_string(), pv);
         }
+        // A value whose display text differs from its map key, so the two
+        // ways of naming a permissible value are distinguishable.
+        let mut on_hold = PermissibleValue::new("On hold");
+        on_hold.description = Some("Paused by the customer".to_string());
+        status
+            .permissible_values
+            .insert("on_hold".to_string(), on_hold);
         schema.enums.insert("OrderStatus".to_string(), status);
 
         let mut order = ClassDefinition::new("Order");
@@ -1990,6 +1997,29 @@ mod tests {
                 && t.o().lexical_form().is_some_and(|l| l == "shipped")
         });
         assert!(!literal_kept, "and does not also assert the bare literal");
+    }
+
+    #[test]
+    fn an_enum_value_resolves_by_either_its_key_or_its_text() {
+        // A permissible value can be named in data by its map key or by its
+        // display text; both must reach the same individual.
+        let schema = enum_fixture();
+        for authored in ["on_hold", "On hold"] {
+            let data: serde_norway::Value =
+                serde_norway::from_str(&format!("orders:\n  - {{id: o1, status: {authored}}}\n"))
+                    .unwrap();
+            let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+            let graph = build_rdf_graph_with_instances(&schema, Some(&set)).expect("graph");
+            assert!(
+                has_iri_triple(
+                    &graph,
+                    "https://example.org/orders/o1",
+                    "https://example.org/orders#status",
+                    "https://example.org/orders#OrderStatus/on_hold"
+                ),
+                "`{authored}` must resolve to the value's individual"
+            );
+        }
     }
 
     #[test]
