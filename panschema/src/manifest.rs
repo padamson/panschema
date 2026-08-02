@@ -1172,4 +1172,46 @@ x = { path = "./x-pkg" }
         let m = Manifest::from_path(tmp.path()).expect("read");
         assert!(m.schemas.contains_key("x"));
     }
+
+    #[test]
+    fn key_names_lists_every_accepted_generate_key() {
+        // The agent-facing reference asserts against this list, so an empty
+        // or truncated one would make that check pass vacuously. Pin the
+        // whole set, and pin it by the TOML spelling rather than the Rust
+        // field name — the two differ for several keys, and the TOML
+        // spelling is what a manifest author has to type.
+        let keys = GenerateConfig::key_names();
+        let expected = [
+            "html",
+            "instances",
+            "html_graph_aspect",
+            "html_default_layout",
+            "rust",
+            "postgres",
+            "shacl",
+            "json_schema",
+            "openapi",
+            "ttl",
+            "jsonld",
+            "rdfxml",
+            "ntriples",
+            "graph-json",
+            "instance-graph-json",
+        ];
+        for key in expected {
+            assert!(
+                keys.iter().any(|k| k == key),
+                "`{key}` is an accepted [generate] key but key_names() omits it; got: {keys:?}"
+            );
+        }
+        assert_eq!(
+            keys.len(),
+            expected.len(),
+            "key_names() should list exactly the accepted keys; got: {keys:?}"
+        );
+        assert!(
+            keys.iter().all(|k| !k.is_empty()),
+            "no key may be empty; got: {keys:?}"
+        );
+    }
 }
