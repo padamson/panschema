@@ -83,6 +83,7 @@ Input → Reader → LinkML IR → [Filters] → Writer → Output
 - **Round-trip OWL ↔ LinkML conversion** (`panschema convert`).
 - **JSON Schema reader + writer** (`JsonSchemaReader`, `JsonSchemaWriter`).
 - **`Filter` trait** for user-customizable IR transformations.
+- **Cross-graph instance identity** ([feature 41](features/41-cross-graph-instance-identity.md)): make "many datasets per schema" safe. Every individual currently mints into the *schema's* namespace regardless of dataset, so two datasets sharing an id silently merge. Filed and co-designed by three consuming repos, whose convergent finding is that instance data splits into per-dataset scoped facts and globally-shared reference vocabulary — a blanket per-dataset namespace would break already-published cross-dataset competency questions. Also covers external-IRI references (a record pointing into another graph) and cross-dataset collision detection.
 - **Schema diff + migration generation** ([feature 39](features/39-schema-diff-and-migration-generation.md)): `panschema diff` reports a semantic, format-agnostic delta between two schema versions with a compatibility verdict (fulfilling the "comparison" half of the project's own description); `panschema migrate` renders the same delta as a versioned Postgres migration file. Specced 2026-07-28 — the delta layer is greenfield in the LinkML ecosystem, which has no schema-diff of any kind, while the diff→versioned-migration *pipeline* is mature prior art worth borrowing from rather than reinventing.
 
 ### v1.0.0 — Production Ready
@@ -134,6 +135,8 @@ Input → Reader → LinkML IR → [Filters] → Writer → Output
 | 36 | [Instance-Graph Publishing and Exports](features/36-instance-graph-publishing-and-exports.md) | A-box through RDF + `instance-graph-json`, navigable docs section, `publish [[instances]]`, manifest `instances` key | **Shipped for v0.3.0 (slices 1–5)** |
 | 37 | [In-page Instance-Graph Selector](features/37-in-page-instance-graph-selector.md) | Several curated A-boxes on one schema page, switchable client-side; `exemplar` = default-selected | **Shipped for v0.3.0** |
 | 38 | [Instance Graph: Shared Renderer + Typed Encoding](features/38-instance-graph-shared-renderer-and-typed-encoding.md) | Consistent graph badges, full renderer + toolbar + hover card on the A-box canvas, adaptive auto-sized legends, typed encoding (class-symbol individuals, shared enum-value nodes), graph-first section with per-dataset metadata | **Shipped for v0.3.0 (slices 1–6)** |
+| 41 | [Cross-Graph Instance Identity](features/41-cross-graph-instance-identity.md) | Per-class dataset scoping (scoped facts vs global vocabulary), cross-dataset collision detection, external-IRI references, `tree_root` record emission | **Specced, not started** |
+| 40 | [Agent-Facing Skill That Cannot Drift](features/40-agent-facing-skill-that-cannot-drift.md) | A shipped Claude Code skill whose examples CI executes and whose coverage the code's own enumerations assert | **In progress: slice 1 shipped** |
 | 39 | [Schema Diff + Migration Generation](features/39-schema-diff-and-migration-generation.md) | `diff` reports a semantic schema delta with a compatibility verdict; `migrate` renders it as a versioned Postgres migration file (append-only, never applied by panschema) | **Specced, not started** |
 
 ## Delivery Approach
