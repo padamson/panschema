@@ -84,12 +84,30 @@ and no card — six of seven records emitted.
 - [ ] The root's own scalar slots remain available as dataset metadata, as
   they are today; emitting the record does not remove them from the
   metadata block.
+- [ ] **Its class-ranged collection slots emit as references like any other
+  slot's**, so the RDF states which records the root contains and under
+  which predicate — `deployments` rather than an untyped association.
 - [ ] Its scalar values and references behave exactly as any other record's.
 
 **Notes:**
 - The discriminator is a signal already in the schema. A pure vessel has no
   identifier; a domain root does. No new flag, no manifest key.
 - This is also the scope anchor slice 4 needs, which is why it comes first.
+- **On containment edges — be truest to the data model.** A collection slot
+  on the root is a *declared slot with a class range*, no different from one
+  on any other class; suppressing its edges because the class happens to be
+  `tree_root` would special-case the model to serve a rendering concern.
+  Two weaker arguments were considered and rejected: that the IRI could
+  encode containment once scoping lands (it cannot until slice 4, and
+  conveying a relation through IRI structure is what triples exist to
+  avoid), and that containment is file structure rather than an assertion
+  (it is a declared slot, and dropping it loses the predicate name too).
+- **The graph will hub, and that is the visualization's problem to solve.**
+  A root with many records becomes a high-degree node. The renderer already
+  owns affordances for this — focus mode with its hop depth, type filters,
+  layout selection — and reducing clutter there is the right layer. Watch
+  it on a large A-box and improve the view if it bites; do not distort the
+  data to pre-empt it.
 
 ---
 
