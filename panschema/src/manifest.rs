@@ -151,6 +151,38 @@ pub struct GenerateConfig {
     pub instance_graph_json: Option<PathBuf>,
 }
 
+impl GenerateConfig {
+    /// Every key a `[generate.<name>]` table accepts, as it must be spelled
+    /// in TOML. Derived by round-tripping a fully-populated value through
+    /// serde, so a renamed or added field cannot slip past the reference
+    /// docs that assert against this list.
+    pub fn key_names() -> Vec<String> {
+        let populated = GenerateConfig {
+            html: Some(PathBuf::from("x")),
+            instances: vec![PathBuf::from("x")],
+            html_graph_aspect: Some("16:9".to_string()),
+            html_default_layout: Some("sgd".to_string()),
+            rust: Some(PathBuf::from("x")),
+            postgres: Some(PathBuf::from("x")),
+            shacl: Some(PathBuf::from("x")),
+            json_schema: Some(PathBuf::from("x")),
+            openapi: Some(PathBuf::from("x")),
+            ttl: Some(PathBuf::from("x")),
+            jsonld: Some(PathBuf::from("x")),
+            rdfxml: Some(PathBuf::from("x")),
+            ntriples: Some(PathBuf::from("x")),
+            graph_json: Some(PathBuf::from("x")),
+            instance_graph_json: Some(PathBuf::from("x")),
+        };
+        let toml = toml::to_string(&populated).expect("GenerateConfig serializes");
+        toml.lines()
+            .filter_map(|line| line.split_once('='))
+            .map(|(key, _)| key.trim().to_string())
+            .filter(|key| !key.is_empty())
+            .collect()
+    }
+}
+
 /// Canonical layout-algorithm identifiers accepted by
 /// [`GenerateConfig::html_default_layout`]. Kept in sync with
 /// `panschema-viz`'s `layout::LayoutAlgorithm::ALL` — when a new
