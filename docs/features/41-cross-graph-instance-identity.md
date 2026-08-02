@@ -62,7 +62,7 @@ not cross. That is the presentation-layer half of this exact lesson;
 
 ### Slice 1: The `tree_root` record is emitted when it is a real individual
 
-**Status:** Not started
+**Status:** Complete
 
 **Priority:** Must Have
 
@@ -75,19 +75,19 @@ Today the container record is dropped from every output: nimbus authored
 and no card — six of seven records emitted.
 
 **Acceptance Criteria:**
-- [ ] When the `tree_root` class declares an `identifier` slot, its record
+- [x] When the `tree_root` class declares an `identifier` slot, its record
   emits as an individual everywhere the other records do: RDF, the instance
   graph, and the cards.
-- [ ] When it does not, nothing changes — a pure container with no
+- [x] When it does not, nothing changes — a pure container with no
   identifier stays unemitted, so a catalogue-style root does not start
   producing a spurious node.
-- [ ] The root's own scalar slots remain available as dataset metadata, as
+- [x] The root's own scalar slots remain available as dataset metadata, as
   they are today; emitting the record does not remove them from the
   metadata block.
-- [ ] **Its class-ranged collection slots emit as references like any other
+- [x] **Its class-ranged collection slots emit as references like any other
   slot's**, so the RDF states which records the root contains and under
   which predicate — `deployments` rather than an untyped association.
-- [ ] Its scalar values and references behave exactly as any other record's.
+- [x] Its scalar values and references behave exactly as any other record's.
 
 **Notes:**
 - The discriminator is a signal already in the schema. A pure vessel has no
@@ -233,7 +233,7 @@ node. Build when a real pair needs joining, not before.
 
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
-| Slice 1: `tree_root` record emission | Must Have | — | Not started |
+| Slice 1: `tree_root` record emission | Must Have | — | Complete |
 | Slice 2: external-IRI references | Must Have | — | Not started |
 | Slice 3: cross-dataset collision detection | Must Have | — | Not started |
 | Slice 4: per-class dataset scoping | Must Have | Slices 1, 3 | Not started |

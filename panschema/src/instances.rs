@@ -249,7 +249,7 @@ impl InstanceSet {
     /// graph edge), or an inlined mapping becoming its own nested record plus
     /// an edge to it. Handles both list and identifier-keyed-dict collections.
     pub fn from_linkml_data(schema: &SchemaDefinition, data: &serde_norway::Value) -> Self {
-        let Some(root) = schema.classes.values().find(|c| c.tree_root) else {
+        let Some((root_name, root)) = schema.classes.iter().find(|(_, c)| c.tree_root) else {
             return Self::default();
         };
         let Some(container) = data.as_mapping() else {
@@ -266,21 +266,67 @@ impl InstanceSet {
             duplicate_ids: Vec::new(),
             undeclared_fields: Vec::new(),
         };
+        // What each container slot held, so a root that is itself a record
+        // can reference the records it contains under that slot's name.
+        let mut contained: Vec<(String, Vec<String>)> = Vec::new();
+        // The root's own non-collection fields, replayed through the normal
+        // record builder rather than reimplementing id/label/scalar handling.
+        let mut root_fields = serde_norway::Mapping::new();
+
         for (key, value) in container {
             let Some(slot_name) = key.as_str() else {
                 continue;
             };
-            let Some(range) = root_slots.get(slot_name).and_then(|s| s.range.as_deref()) else {
+            let Some(slot) = root_slots.get(slot_name) else {
                 continue;
             };
+            // Resolve the range the way record ingestion does — a slot that
+            // leans on `default_range` (an `identifier` usually does) has no
+            // explicit range of its own, and skipping those would drop both
+            // the root's id and any such scalar from the metadata.
+            let range = slot
+                .range
+                .clone()
+                .or_else(|| schema.default_range.clone())
+                .unwrap_or_default();
             // Class-ranged container slots hold instance records; the
             // container's scalar attributes (a catalog title, a
             // description) describe the dataset itself and surface as its
             // metadata rather than vanishing.
-            if schema.classes.contains_key(range) {
-                loader.collect_collection(range, value);
+            if schema.classes.contains_key(&range) {
+                let ids = loader.collect_collection(&range, value);
+                contained.push((slot_name.to_string(), ids));
             } else if let Some(scalar) = scalar_value(value) {
                 metadata.push((slot_name.to_string(), scalar_to_display(&scalar)));
+                root_fields.insert(key.clone(), value.clone());
+            }
+        }
+
+        // A container that declares an identifier is a domain individual —
+        // nimbus's `Enterprise`, not wine's catalogue vessel — so it emits
+        // as a record in its own right, referencing what it contains. A
+        // vessel has no identifier and stays unemitted.
+        if root_slots.values().any(|slot| slot.identifier) {
+            let root_value = serde_norway::Value::Mapping(root_fields);
+            if let Some(root_id) = loader.build_record(root_name, None, &root_value)
+                && let Some(inst) = loader.instances.iter_mut().find(|i| i.id == root_id)
+            {
+                for (slot, ids) in &contained {
+                    for id in ids {
+                        inst.references.push(Reference {
+                            property: slot.clone(),
+                            target: id.clone(),
+                        });
+                        push_slot_value(
+                            &mut inst.slot_values,
+                            slot,
+                            InstanceValue::Reference(id.clone()),
+                        );
+                    }
+                }
+                inst.references
+                    .sort_by(|a, b| (&a.property, &a.target).cmp(&(&b.property, &b.target)));
+                inst.slot_values.sort_by(|a, b| a.slot.cmp(&b.slot));
             }
         }
         loader.instances.sort_by(|a, b| a.id.cmp(&b.id));
@@ -312,11 +358,15 @@ struct LinkmlLoader<'a> {
 impl LinkmlLoader<'_> {
     /// A collection value is either a list of records or an identifier-keyed
     /// mapping of records.
-    fn collect_collection(&mut self, class_name: &str, value: &serde_norway::Value) {
+    /// Build every record in a container slot, returning their ids in order
+    /// so an emitted root can reference the records it holds.
+    fn collect_collection(&mut self, class_name: &str, value: &serde_norway::Value) -> Vec<String> {
+        let mut ids = Vec::new();
         match value {
             serde_norway::Value::Sequence(items) => {
                 for item in items {
                     if let Some(id) = self.build_record(class_name, None, item) {
+                        ids.push(id.clone());
                         self.note_top_level_id(id);
                     }
                 }
@@ -324,12 +374,14 @@ impl LinkmlLoader<'_> {
             serde_norway::Value::Mapping(map) => {
                 for (key, record) in map {
                     if let Some(id) = self.build_record(class_name, key.as_str(), record) {
+                        ids.push(id.clone());
                         self.note_top_level_id(id);
                     }
                 }
             }
             _ => {}
         }
+        ids
     }
 
     /// Record a top-level record's id; a second use of an id already claimed by
@@ -834,6 +886,125 @@ docs:
 claims:
   - {id: c1}
 ";
+
+    /// A container that is a real domain individual — it declares an
+    /// identifier — in the shape nimbus's `Enterprise` root takes.
+    const ROOT_SCHEMA: &str = "\
+name: estate
+default_range: string
+classes:
+  Enterprise:
+    tree_root: true
+    attributes:
+      id: {identifier: true}
+      name: {range: string}
+      deployments: {range: Deployment, multivalued: true}
+  Deployment:
+    attributes:
+      id: {identifier: true}
+";
+
+    fn root_schema(with_identifier: bool) -> SchemaDefinition {
+        let mut schema: SchemaDefinition =
+            serde_norway::from_str(ROOT_SCHEMA).expect("parse root schema");
+        let named: Vec<(String, ClassDefinition)> = schema
+            .classes
+            .iter()
+            .map(|(key, class)| {
+                let mut c = class.clone();
+                c.name = key.clone();
+                (key.clone(), c)
+            })
+            .collect();
+        schema.classes = named.into_iter().collect();
+        if !with_identifier {
+            // A pure vessel: same container, no identifier slot.
+            let root = schema.classes.get_mut("Enterprise").expect("Enterprise");
+            root.attributes.remove("id");
+        }
+        schema
+    }
+
+    const ROOT_DATA: &str = "\
+id: acme
+name: Acme Corp
+deployments:
+  - {id: d1}
+  - {id: d2}
+";
+
+    #[test]
+    fn a_tree_root_that_declares_an_identifier_is_itself_a_record() {
+        let data: serde_norway::Value = serde_norway::from_str(ROOT_DATA).expect("parse");
+        let set = InstanceSet::from_linkml_data(&root_schema(true), &data);
+
+        let root = set
+            .instances
+            .iter()
+            .find(|i| i.id == "acme")
+            .unwrap_or_else(|| {
+                panic!(
+                    "the root must emit as a record; got: {:?}",
+                    set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+                )
+            });
+        assert_eq!(root.types, vec!["Enterprise".to_string()]);
+        assert_eq!(root.label, "Acme Corp", "its label slot still applies");
+        assert_eq!(
+            set.instances.len(),
+            3,
+            "the root joins the records it contains, without duplicating them"
+        );
+    }
+
+    #[test]
+    fn the_root_references_the_records_it_contains() {
+        // A collection slot on the root is a declared slot with a class
+        // range like any other, so it draws edges under its own predicate.
+        let data: serde_norway::Value = serde_norway::from_str(ROOT_DATA).expect("parse");
+        let set = InstanceSet::from_linkml_data(&root_schema(true), &data);
+        let root = set.instances.iter().find(|i| i.id == "acme").expect("root");
+        let mut edges: Vec<(&str, &str)> = root
+            .references
+            .iter()
+            .map(|r| (r.property.as_str(), r.target.as_str()))
+            .collect();
+        edges.sort_unstable();
+        assert_eq!(
+            edges,
+            vec![("deployments", "d1"), ("deployments", "d2")],
+            "each contained record is referenced under the slot that holds it"
+        );
+    }
+
+    #[test]
+    fn a_container_without_an_identifier_stays_unemitted() {
+        // A pure vessel — wine's catalogue shape — must not start producing
+        // a spurious node just because the root is now emittable.
+        let data: serde_norway::Value = serde_norway::from_str(ROOT_DATA).expect("parse");
+        let set = InstanceSet::from_linkml_data(&root_schema(false), &data);
+        assert_eq!(
+            set.instances.len(),
+            2,
+            "only the contained records; got: {:?}",
+            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+        );
+        assert!(!set.instances.iter().any(|i| i.id == "acme"));
+    }
+
+    #[test]
+    fn an_emitted_root_keeps_its_scalars_as_dataset_metadata() {
+        // Emitting the record must not cost the metadata block its content.
+        let data: serde_norway::Value = serde_norway::from_str(ROOT_DATA).expect("parse");
+        let set = InstanceSet::from_linkml_data(&root_schema(true), &data);
+        assert!(
+            set.metadata
+                .iter()
+                .any(|(k, v)| k == "name" && v == "Acme Corp"),
+            "got: {:?}",
+            set.metadata
+        );
+    }
 
     #[test]
     fn un_narrowed_any_of_union_values_ingest_as_references() {
