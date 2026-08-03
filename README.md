@@ -157,6 +157,21 @@ metadata — so the JSON an LLM emits against a class's JSON Schema (see
 `generate --format json-schema`) is a LinkML instance you can read straight
 back and visualize, no OWL detour.
 
+Whether the container itself becomes an individual is your call, made by
+giving it an identifier. A `tree_root` class that declares an `identifier`
+slot emits as a record like any other — RDF individual, graph node, card —
+with references to what it contains; one that declares none emits nothing,
+and its scalars surface as dataset metadata instead. A vessel that exists
+only because a file needs a root stays silent; a domain root — an enterprise,
+a study, a tenant — becomes the anchor another graph can point at.
+
+A class-valued slot may also name something *outside* this data file: write
+an absolute IRI or a CURIE against a prefix the schema declares, and it is
+read as a cross-graph reference — an IRI object in RDF, exempt from the
+dangling-reference check, drawn as a muted node, and listed in a summary of
+what leaves the dataset. A bare identifier always means a record in this
+file, and is still checked as one.
+
 The same A-box also exports as machine-readable artifacts, one invocation per
 artifact: fold it into the RDF outputs as `owl:NamedIndividual`s (a
 self-contained knowledge graph a triple store loads directly), or render it as

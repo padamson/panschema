@@ -58,6 +58,16 @@ draws an instance graph beneath the docs, folds individuals into the RDF
 output, and runs the same conformance check `validate` runs — so nothing
 ships violations.
 
+**Whether the root itself becomes an individual is your decision, made by
+giving it an identifier.** A `tree_root` class that declares an
+`identifier: true` slot emits as an individual like any other record — RDF,
+graph node, card — and its collection slots draw references to what it
+holds. One that declares none emits nothing, and its scalars surface only as
+dataset metadata. So a bare vessel that exists because a file needs a root
+stays silent, while a domain root (an enterprise, a study, a tenant) becomes
+the anchor another graph can reference. Adding an identifier later changes
+the output; that is the intended signal, not a side effect.
+
 ## Keeping this skill honest
 
 The manifest example in `references/manifest.md` is **extracted and executed
