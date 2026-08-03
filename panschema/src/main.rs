@@ -323,6 +323,9 @@ fn load_instance_set(
     for v in &violations {
         eprintln!("warning: {v}");
     }
+    if let Some(summary) = set.external_reference_summary() {
+        eprintln!("note: {summary}");
+    }
     if strict && !violations.is_empty() {
         anyhow::bail!(
             "{} instance-data violation(s) present; failing because --strict is set",
@@ -1284,7 +1287,15 @@ fn validate_data(schema_path: &Path, data_path: &Path) -> anyhow::Result<()> {
     let value: serde_norway::Value = serde_norway::from_str(&content)
         .map_err(|e| anyhow::anyhow!("parsing data file {}: {}", data_path.display(), e))?;
 
-    let violations = panschema::validate::validate_instance_data(&schema, &value);
+    let violations = match panschema::validate::instance_set_for(&schema, &value) {
+        Ok(set) => {
+            if let Some(summary) = set.external_reference_summary() {
+                eprintln!("note: {summary}");
+            }
+            panschema::validate::validate_instances(&schema, &set)
+        }
+        Err(v) => vec![v],
+    };
     for v in &violations {
         eprintln!("{v}");
     }

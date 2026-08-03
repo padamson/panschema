@@ -356,7 +356,7 @@ mod tests {
         let mut expected_nodes = std::collections::BTreeSet::new();
         for n in &s.nodes {
             if n.node_type == NodeType::External {
-                expected_nodes.insert("External grounding");
+                expected_nodes.insert("Outside this graph");
                 continue;
             }
             match &n.kind_metadata {

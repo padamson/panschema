@@ -274,6 +274,12 @@ pub fn dangling_instance_references(
     let mut out = Vec::new();
     for inst in &set.instances {
         for r in &inst.references {
+            // A reference that points outside this dataset names no record
+            // here by design; reporting it as dangling would make every
+            // cross-graph edge an error.
+            if r.external {
+                continue;
+            }
             if !ids.contains(r.target.as_str()) {
                 out.push(DanglingInstanceRef {
                     referrer: inst.id.clone(),
@@ -807,6 +813,7 @@ mod tests {
             references: refs
                 .iter()
                 .map(|(property, target)| crate::instances::Reference {
+                    external: false,
                     property: property.to_string(),
                     target: target.to_string(),
                 })

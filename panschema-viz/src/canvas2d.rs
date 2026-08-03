@@ -235,13 +235,14 @@ pub(crate) fn node_legend_rows() -> [(NodeRowKind, NodeShape, [f32; 4], &'static
             "Abstract class",
             true,
         ),
-        // Muted dashed circle: an upstream ontology category a class
-        // grounds into via `subclass_of` — outside this schema.
+        // Muted dashed circle: something this graph names but does not
+        // define — an upstream ontology category a class grounds into via
+        // `subclass_of`, or a record belonging to another dataset.
         (
             NodeRowKind::External,
             NodeShape::Circle,
             colors::EXTERNAL,
-            "External grounding",
+            "Outside this graph",
             true,
         ),
     ]
@@ -1424,7 +1425,7 @@ mod tests {
                 "Individual",
                 "Enum value",
                 "Abstract class",
-                "External grounding"
+                "Outside this graph"
             ],
             "one row per node kind the graph draws"
         );
@@ -1471,7 +1472,7 @@ mod tests {
         spec.individual = false;
         let labels: Vec<&str> = node_rows_for(&spec).iter().map(|r| r.3).collect();
         assert!(!labels.contains(&"Enum") && !labels.contains(&"Individual"));
-        assert!(labels.contains(&"Class") && labels.contains(&"External grounding"));
+        assert!(labels.contains(&"Class") && labels.contains(&"Outside this graph"));
 
         spec.edges = vec![EdgeType::Assertion];
         let edge_labels: Vec<&str> = edge_rows_for(&spec).iter().map(|r| r.1).collect();

@@ -25,6 +25,13 @@ bare no-subcommand form.
   constructs, dangling references, and instance-data violations. It does
   *not* promote unprojected-construct, Postgres-skip, or SHACL-skip
   warnings to errors.
+- **Pointing at a record in another graph.** In instance data, a
+  class-ranged value that is an absolute IRI or a CURIE against a prefix the
+  schema declares (`catalog:aws`) is an *external reference*: it emits as an
+  IRI in RDF, is exempt from the dangling check, and is listed in a
+  cross-graph summary. A **bare** id always means "a record in this file"
+  and is still dangling-checked — including one carrying an undeclared
+  prefix, which is read as a typo, not as a link outward.
 - `--offline` / `--refresh-labels` — control upstream label fetching for
   external groundings. Fail-open: unreachable sources fall back to CURIEs.
 - `--no-graph`, `--viz-mode` — HTML only; warn if used with another format.

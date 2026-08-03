@@ -113,7 +113,7 @@ and no card — six of seven records emitted.
 
 ### Slice 2: External-IRI references
 
-**Status:** Not started
+**Status:** Complete
 
 **Priority:** Must Have
 
@@ -123,23 +123,32 @@ string that loses its linkage — and it blocks a downstream eval framework
 today.
 
 **Acceptance Criteria:**
-- [ ] A value at a class-ranged slot that is an absolute IRI, or a CURIE
+- [x] A value at a class-ranged slot that is an absolute IRI, or a CURIE
   against a declared prefix, is treated as an **external reference**: it
   emits as an IRI object in RDF rather than a literal.
-- [ ] Such a value is **exempt from the dangling-reference error** — it
+- [x] Such a value is **exempt from the dangling-reference error** — it
   names no record in the file by design.
-- [ ] External references are **reported in a summary** rather than passing
+- [x] External references are **reported in a summary** rather than passing
   silently, so an unresolvable target stays visible instead of becoming an
   unchecked edge.
-- [ ] They are distinguishable in the instance graph from intra-dataset
+- [x] They are distinguishable in the instance graph from intra-dataset
   references, so a reader can see which edges leave the graph.
-- [ ] A bare id continues to mean an intra-dataset reference and is still
+- [x] A bare id continues to mean an intra-dataset reference and is still
   dangling-checked; this adds a case, it does not reinterpret the existing
   one.
 
 **Notes:**
 - Independent of scoping, which is why it can ship before slice 4 and
   unblock the consumer waiting on it.
+- **An undeclared prefix is not a licence to skip checks.** `mystery:foo`
+  stays an intra-dataset reference and is still dangling-checked; treating
+  any colon as "outside" would let a typo silently disable the one check
+  that catches it.
+- **The muted node is the existing external-grounding rendering, reused.**
+  A schema graph already draws what it names but does not define this way;
+  a record in another dataset is the same fact at the A-box layer, so the
+  legend row is retitled to cover both rather than a second notion of
+  "outside" being invented.
 
 ---
 
@@ -234,7 +243,7 @@ node. Build when a real pair needs joining, not before.
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | Slice 1: `tree_root` record emission | Must Have | — | Complete |
-| Slice 2: external-IRI references | Must Have | — | Not started |
+| Slice 2: external-IRI references | Must Have | — | Complete |
 | Slice 3: cross-dataset collision detection | Must Have | — | Not started |
 | Slice 4: per-class dataset scoping | Must Have | Slices 1, 3 | Not started |
 | Slice 5: co-reference across schemas | Could Have | Slice 2 | Deferred |

@@ -1759,6 +1759,44 @@ mod tests {
     }
 
     #[test]
+    fn a_cross_graph_reference_emits_as_an_iri_object_not_a_literal() {
+        // The whole point of a cross-graph edge is that another graph can
+        // join on it. A literal `"catalog:aws"` joins with nothing.
+        let (mut schema, _) = abox_fixture();
+        schema.prefixes.insert(
+            "catalog".to_string(),
+            "https://example.org/catalog/".to_string(),
+        );
+        let data: serde_norway::Value =
+            serde_norway::from_str("bottles:\n  - id: b1\n    stored_in: 'catalog:vault'\n")
+                .unwrap();
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        let graph = build_rdf_graph_with_instances(&schema, Some(&set)).expect("graph");
+
+        use sophia::api::graph::Graph;
+        use sophia::api::term::Term;
+        use sophia::api::triple::Triple;
+        let subject = make_iri("https://example.org/cellar/b1").unwrap();
+        let predicate = make_iri("https://example.org/cellar#stored_in").unwrap();
+        let objects: Vec<String> = graph
+            .triples_matching([subject], [predicate], sophia::api::term::matcher::Any)
+            .map(|t| {
+                let t = t.unwrap();
+                assert!(
+                    t.o().is_iri(),
+                    "a cross-graph target must be an IRI object, not a literal"
+                );
+                t.o().iri().expect("iri").to_string()
+            })
+            .collect();
+        assert_eq!(
+            objects,
+            vec!["https://example.org/catalog/vault".to_string()],
+            "and the CURIE expands against the prefix the schema declares"
+        );
+    }
+
+    #[test]
     fn integer_value_under_a_float_range_emits_xsd_double() {
         let (schema, set) = abox_fixture();
         let graph = build_rdf_graph_with_instances(&schema, Some(&set)).expect("graph");

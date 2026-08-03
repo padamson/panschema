@@ -295,14 +295,24 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
 /// a panic; anything well-formed becomes an [`InstanceSet`] and validates
 /// through the format-agnostic core.
 pub fn validate_instance_data(schema: &SchemaDefinition, data: &Value) -> Vec<Violation> {
+    match instance_set_for(schema, data) {
+        Ok(set) => validate_instances(schema, &set),
+        Err(v) => vec![v],
+    }
+}
+
+/// The set `validate_instance_data` checks, or the violation that stops the
+/// data being loadable at all. Callers that want to report on more than
+/// violations — cross-graph references, say — take this and validate the set
+/// themselves rather than building it twice.
+pub fn instance_set_for(schema: &SchemaDefinition, data: &Value) -> Result<InstanceSet, Violation> {
     if data.as_mapping().is_none() {
-        return vec![Violation {
+        return Err(Violation {
             record: "(root)".to_string(),
             detail: "instance data must be a mapping (a tree_root container object)".to_string(),
-        }];
+        });
     }
-    let set = InstanceSet::from_linkml_data(schema, data);
-    validate_instances(schema, &set)
+    Ok(InstanceSet::from_linkml_data(schema, data))
 }
 
 /// A record's values for `slot`, or an empty slice when it has none.
@@ -1170,6 +1180,31 @@ classes:
 
     fn union_violations(yaml: &str) -> Vec<Violation> {
         validate_instance_data(&union_schema(), &data(yaml))
+    }
+
+    #[test]
+    fn a_cross_graph_reference_is_not_reported_as_dangling() {
+        // The whole point of slice 2: a record may point into another graph.
+        // Before this, such a target was either an error or a bare string.
+        let mut schema = union_schema();
+        schema.prefixes.insert(
+            "catalog".to_string(),
+            "https://example.org/catalog/".to_string(),
+        );
+        let d = data("states:\n  - {id: s1, qualifies: 'catalog:claim-7'}\n");
+        let v = validate_instance_data(&schema, &d);
+        assert!(
+            v.is_empty(),
+            "a CURIE against a declared prefix points outside by design; got: {v:?}"
+        );
+    }
+
+    #[test]
+    fn a_bare_id_naming_no_record_is_still_dangling() {
+        // The exemption must not swallow the check it sits beside.
+        let v = union_violations("states:\n  - {id: s1, qualifies: nope}\n");
+        assert_eq!(v.len(), 1, "got: {v:?}");
+        assert!(v[0].detail.contains("nope"), "got: {}", v[0].detail);
     }
 
     #[test]

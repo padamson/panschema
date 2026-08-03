@@ -966,6 +966,33 @@ fn validate_command_exit_code_reflects_conformance() {
 }
 
 #[test]
+fn cross_graph_reference_validates_clean_and_is_summarised() {
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "validate",
+            "--schema",
+            "tests/fixtures/wine_catalog.yaml",
+            "--data",
+            "tests/fixtures/wine_instances_cross_graph.yaml",
+        ])
+        .output()
+        .expect("run panschema");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "a reference into another graph is not a violation; stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("names no instance"),
+        "and must not be reported as dangling; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("cross-graph reference(s)") && stderr.contains("wine:morgonEstateGlobal"),
+        "but it must be summarised, naming its target; got: {stderr}"
+    );
+}
+
+#[test]
 fn dangling_instance_reference_warns_and_fails_under_strict() {
     let dir = std::env::temp_dir().join("panschema_instance_dangling_test");
     let _ = fs::remove_dir_all(&dir);

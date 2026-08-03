@@ -582,13 +582,42 @@ impl GraphWriter {
         let mut enum_slots_by_class: std::collections::BTreeMap<String, Vec<(String, String)>> =
             std::collections::BTreeMap::new();
 
+        // Cross-graph reference targets, deduped: many records may point at
+        // the same external entity, and it should draw as one node.
+        let mut external_targets: std::collections::BTreeMap<
+            String,
+            (String, Option<String>, bool),
+        > = std::collections::BTreeMap::new();
+
         for inst in &set.instances {
             let node_id = format!("individual:{}", inst.id);
 
             for reference in &inst.references {
+                // A target outside this dataset has no record here to draw,
+                // so it gets a shared external node — the same muted
+                // treatment a schema-graph grounding gets, and for the same
+                // reason: it is real, it is elsewhere, and the reader should
+                // see the edge leaves.
+                let target = if reference.external {
+                    // Keyed by the resolved IRI when the CURIE expands, so a
+                    // target written both ways is one node, as on the schema
+                    // side.
+                    let (uri, uri_unresolved) =
+                        resolve_node_uri(schema, Some(reference.target.as_str()));
+                    let id = format!(
+                        "external:{}",
+                        uri.clone().unwrap_or_else(|| reference.target.clone())
+                    );
+                    external_targets
+                        .entry(id.clone())
+                        .or_insert_with(|| (reference.target.clone(), uri, uri_unresolved));
+                    id
+                } else {
+                    format!("individual:{}", reference.target)
+                };
                 graph.edges.push(GraphEdge {
                     source: node_id.clone(),
-                    target: format!("individual:{}", reference.target),
+                    target,
                     edge_type: EdgeType::Assertion,
                     label: Some(reference.property.clone()),
                 });
@@ -688,6 +717,22 @@ impl GraphWriter {
                     enum_name,
                     usage_count,
                 }),
+            });
+        }
+
+        // Cross-graph targets, drawn muted like a schema-graph grounding so a
+        // reader can see which edges leave this dataset.
+        for (node_id, (label, uri, uri_unresolved)) in external_targets {
+            graph.nodes.push(GraphNode {
+                id: node_id,
+                label,
+                node_type: NodeType::External,
+                color: NodeType::External.color(),
+                description: None,
+                uri,
+                uri_unresolved,
+                is_abstract: false,
+                kind_metadata: None,
             });
         }
 
@@ -1438,6 +1483,84 @@ mod tests {
     /// The instance graph document is `instance`-kinded and its nodes carry
     /// the same minted IRI the RDF A-box uses, so graph-JSON traversal and
     /// SPARQL agree on which individual is which.
+    #[test]
+    fn a_cross_graph_reference_draws_a_muted_external_node() {
+        // An edge that leaves the dataset should be visible as leaving it,
+        // not silently absent because its target has no record here.
+        let mut schema = SchemaDefinition::new("estate");
+        schema.default_range = Some("string".to_string());
+        schema.prefixes.insert(
+            "catalog".to_string(),
+            "https://example.org/catalog/".to_string(),
+        );
+        let mut id = SlotDefinition::new("id");
+        id.identifier = true;
+
+        let mut root = ClassDefinition::new("Root");
+        root.tree_root = true;
+        let mut deployments = SlotDefinition::new("deployments");
+        deployments.range = Some("Deployment".to_string());
+        deployments.multivalued = true;
+        root.attributes
+            .insert("deployments".to_string(), deployments);
+        schema.classes.insert("Root".to_string(), root);
+
+        let mut dep = ClassDefinition::new("Deployment");
+        dep.attributes.insert("id".to_string(), id.clone());
+        let mut on_provider = SlotDefinition::new("on_provider");
+        on_provider.range = Some("Provider".to_string());
+        dep.attributes
+            .insert("on_provider".to_string(), on_provider);
+        schema.classes.insert("Deployment".to_string(), dep);
+
+        let mut provider = ClassDefinition::new("Provider");
+        provider.attributes.insert("id".to_string(), id);
+        schema.classes.insert("Provider".to_string(), provider);
+
+        // The same target written two ways — CURIE and expanded IRI — must
+        // land on one node, or a cross-graph entity splits by spelling.
+        let data: serde_norway::Value = serde_norway::from_str(
+            "deployments:\n  - {id: d1, on_provider: 'catalog:aws'}\n  \
+             - {id: d2, on_provider: 'https://example.org/catalog/aws'}\n",
+        )
+        .unwrap();
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        let graph = GraphWriter::new().instance_set_to_graph(&schema, &set);
+
+        let external: Vec<&GraphNode> = graph
+            .nodes
+            .iter()
+            .filter(|n| n.node_type == NodeType::External)
+            .collect();
+        assert_eq!(
+            external.len(),
+            1,
+            "one external target draws one muted node; got: {:?}",
+            graph
+                .nodes
+                .iter()
+                .map(|n| (&n.id, &n.node_type))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(external[0].label, "catalog:aws");
+        assert_eq!(
+            external[0].uri.as_deref(),
+            Some("https://example.org/catalog/aws"),
+            "the node carries the expanded IRI, so its link dereferences"
+        );
+        assert!(
+            !external[0].uri_unresolved,
+            "a CURIE that expanded is not an unresolved URI"
+        );
+        assert!(
+            graph
+                .edges
+                .iter()
+                .any(|e| e.target == external[0].id && e.label.as_deref() == Some("on_provider")),
+            "and the edge points at it under its own predicate"
+        );
+    }
+
     #[test]
     fn a_union_ranged_slot_becomes_an_assertion_edge() {
         // A slot whose range is an `any_of` class union carries references,

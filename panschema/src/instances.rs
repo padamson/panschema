@@ -17,6 +17,11 @@ pub struct Reference {
     pub property: String,
     /// The target instance's `id` (not its IRI).
     pub target: String,
+    /// The target lies outside this dataset — an absolute IRI, or a CURIE
+    /// against a prefix the schema declares. Such a reference names no
+    /// record here by design, so it is exempt from the dangling check and
+    /// reported as a cross-graph edge instead of an error.
+    pub external: bool,
 }
 
 /// A format-neutral scalar value read from instance data, retaining its kind so
@@ -95,6 +100,9 @@ pub struct InstanceSet {
     /// dataset itself rather than any record. In the data file's order.
     /// Empty for readers without a container (e.g. OWL).
     pub metadata: Vec<(String, String)>,
+    /// References pointing outside this dataset, kept visible rather than
+    /// silently unchecked. Sorted.
+    pub external_references: Vec<ExternalReference>,
 }
 
 /// A field the data carries that its record's class never declared.
@@ -192,6 +200,8 @@ impl InstanceSet {
                     references.push(Reference {
                         property: prop_label,
                         target: target.to_string(),
+                        // Resolved against this schema's own individuals.
+                        external: false,
                     });
                 } else {
                     literals.push((prop_label, value.clone()));
@@ -236,6 +246,7 @@ impl InstanceSet {
             duplicate_ids: Vec::new(),
             undeclared_fields: Vec::new(),
             metadata: Vec::new(),
+            external_references: Vec::new(),
         }
     }
 
@@ -316,6 +327,7 @@ impl InstanceSet {
                         inst.references.push(Reference {
                             property: slot.clone(),
                             target: id.clone(),
+                            external: false,
                         });
                         push_slot_value(
                             &mut inst.slot_values,
@@ -332,12 +344,53 @@ impl InstanceSet {
         loader.instances.sort_by(|a, b| a.id.cmp(&b.id));
         loader.duplicate_ids.sort();
         loader.undeclared_fields.sort();
+        let mut external_references: Vec<ExternalReference> = loader
+            .instances
+            .iter()
+            .flat_map(|inst| {
+                inst.references
+                    .iter()
+                    .filter(|r| r.external)
+                    .map(|r| ExternalReference {
+                        referrer: inst.id.clone(),
+                        property: r.property.clone(),
+                        target: r.target.clone(),
+                    })
+            })
+            .collect();
+        external_references.sort();
+        external_references.dedup();
+
         Self {
             instances: loader.instances,
             duplicate_ids: loader.duplicate_ids,
             undeclared_fields: loader.undeclared_fields,
             metadata,
+            external_references,
         }
+    }
+
+    /// A human-readable account of every reference that leaves this dataset,
+    /// or `None` when none do.
+    ///
+    /// These edges cannot be resolved here — their targets are records of
+    /// another graph — so naming them is the only way an unresolvable one
+    /// stays visible rather than passing as a silently unchecked link.
+    pub fn external_reference_summary(&self) -> Option<String> {
+        if self.external_references.is_empty() {
+            return None;
+        }
+        let mut out = format!(
+            "{} cross-graph reference(s) leave this dataset and are not checked here:",
+            self.external_references.len()
+        );
+        for r in &self.external_references {
+            out.push_str(&format!(
+                "\n  `{}` references `{}` via `{}`",
+                r.referrer, r.target, r.property
+            ));
+        }
+        Some(out)
     }
 }
 
@@ -570,13 +623,16 @@ impl LinkmlLoader<'_> {
             .collect();
         let all_classes = !class_targets.is_empty() && class_targets.len() == ranges.len();
 
+        let schema = self.schema;
         let reference_to =
             |target: String, references: &mut Vec<Reference>, slot_values: &mut Vec<SlotValue>| {
+                let external = points_outside_dataset(schema, &target);
                 push_slot_value(slot_values, slot, InstanceValue::Reference(target.clone()));
                 if display {
                     references.push(Reference {
                         property: property.to_string(),
                         target,
+                        external,
                     });
                 }
             };
@@ -620,6 +676,31 @@ impl LinkmlLoader<'_> {
                 }
             }
         }
+    }
+}
+
+/// A reference whose target lies outside this dataset.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct ExternalReference {
+    pub referrer: String,
+    pub property: String,
+    pub target: String,
+}
+
+/// Whether a reference target names something outside this dataset: an
+/// absolute IRI, or a CURIE against a prefix the schema declares.
+///
+/// A bare id — even one matching no record — is deliberately **not** external:
+/// it is a promise about *this* dataset, and breaking that promise is the
+/// dangling-reference error. An undeclared prefix is likewise no licence to
+/// skip checks; it is far likelier a typo than an intended cross-graph link.
+pub fn points_outside_dataset(schema: &SchemaDefinition, target: &str) -> bool {
+    if target.contains("://") {
+        return true;
+    }
+    match target.split_once(':') {
+        Some((prefix, _)) => schema.prefixes.contains_key(prefix),
+        None => false,
     }
 }
 
@@ -932,6 +1013,149 @@ deployments:
   - {id: d1}
   - {id: d2}
 ";
+
+    /// A schema whose records can point outside their own dataset, in the
+    /// shape a cross-graph reference takes: a declared prefix for the other
+    /// graph, plus bare ids for records in this one.
+    const XREF_SCHEMA: &str = "\
+id: https://example.org/estate
+name: estate
+default_range: string
+prefixes:
+  catalog: https://example.org/catalog/
+classes:
+  Root:
+    tree_root: true
+    attributes:
+      deployments: {range: Deployment, multivalued: true}
+      providers: {range: Provider, multivalued: true}
+  Deployment:
+    attributes:
+      id: {identifier: true}
+      on_provider: {range: Provider}
+  Provider:
+    attributes:
+      id: {identifier: true}
+";
+
+    fn xref_set(yaml: &str) -> InstanceSet {
+        let mut schema: SchemaDefinition =
+            serde_norway::from_str(XREF_SCHEMA).expect("parse xref schema");
+        let named: Vec<(String, ClassDefinition)> = schema
+            .classes
+            .iter()
+            .map(|(k, c)| {
+                let mut c = c.clone();
+                c.name = k.clone();
+                (k.clone(), c)
+            })
+            .collect();
+        schema.classes = named.into_iter().collect();
+        let data: serde_norway::Value = serde_norway::from_str(yaml).expect("parse data");
+        InstanceSet::from_linkml_data(&schema, &data)
+    }
+
+    #[test]
+    fn a_curie_against_a_declared_prefix_is_an_external_reference() {
+        let set = xref_set("deployments:\n  - {id: d1, on_provider: 'catalog:aws'}\n");
+        let d1 = set.instances.iter().find(|i| i.id == "d1").expect("d1");
+        let r = d1.references.first().expect("a reference");
+        assert!(
+            r.external,
+            "a CURIE against a declared prefix points outside this dataset; got: {r:?}"
+        );
+        assert!(
+            set.external_references
+                .iter()
+                .any(|e| e.target == "catalog:aws" && e.referrer == "d1"),
+            "and it is summarised rather than passing silently; got: {:?}",
+            set.external_references
+        );
+    }
+
+    #[test]
+    fn an_absolute_iri_is_an_external_reference() {
+        let set =
+            xref_set("deployments:\n  - {id: d1, on_provider: 'https://other.example/aws'}\n");
+        let r = set
+            .instances
+            .iter()
+            .find(|i| i.id == "d1")
+            .and_then(|i| i.references.first())
+            .expect("a reference");
+        assert!(r.external, "an absolute IRI is outside by construction");
+    }
+
+    #[test]
+    fn a_bare_id_is_not_external_even_when_it_names_no_record() {
+        // The distinction this slice adds must not swallow the existing
+        // dangling case: a bare id is a promise about *this* dataset.
+        let set = xref_set("deployments:\n  - {id: d1, on_provider: nope}\n");
+        let r = set
+            .instances
+            .iter()
+            .find(|i| i.id == "d1")
+            .and_then(|i| i.references.first())
+            .expect("a reference");
+        assert!(!r.external, "a bare id stays an intra-dataset reference");
+        assert!(
+            set.external_references.is_empty(),
+            "and is not summarised as external; got: {:?}",
+            set.external_references
+        );
+    }
+
+    #[test]
+    fn the_summary_names_every_cross_graph_target_and_its_referrer() {
+        let set = xref_set(
+            "deployments:\n  - {id: d1, on_provider: 'catalog:aws'}\n  \
+             - {id: d2, on_provider: 'https://other.example/gcp'}\n",
+        );
+        let summary = set
+            .external_reference_summary()
+            .expect("references leave the dataset, so there is a summary");
+        assert!(
+            summary.starts_with("2 cross-graph reference(s)"),
+            "it leads with how many edges go unchecked; got: {summary}"
+        );
+        for expected in [
+            "`d1` references `catalog:aws` via `on_provider`",
+            "`d2` references `https://other.example/gcp` via `on_provider`",
+        ] {
+            assert!(
+                summary.contains(expected),
+                "an unresolvable target stays visible: expected {expected} in {summary}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_dataset_with_no_cross_graph_edges_has_no_summary() {
+        let set =
+            xref_set("providers:\n  - {id: aws}\ndeployments:\n  - {id: d1, on_provider: aws}\n");
+        assert!(
+            set.external_reference_summary().is_none(),
+            "silence is right when nothing leaves the dataset"
+        );
+    }
+
+    #[test]
+    fn an_undeclared_prefix_is_not_treated_as_external() {
+        // `mystery:` is not in the schema's prefixes, so this is a typo in a
+        // bare id rather than a deliberate cross-graph link — it must stay
+        // dangling-checked rather than being waved through.
+        let set = xref_set("deployments:\n  - {id: d1, on_provider: 'mystery:aws'}\n");
+        let r = set
+            .instances
+            .iter()
+            .find(|i| i.id == "d1")
+            .and_then(|i| i.references.first())
+            .expect("a reference");
+        assert!(
+            !r.external,
+            "an undeclared prefix is not a licence to skip checks"
+        );
+    }
 
     #[test]
     fn a_tree_root_that_declares_an_identifier_is_itself_a_record() {
