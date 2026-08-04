@@ -21,6 +21,10 @@ bare no-subcommand form.
 
 - `--instances <PATH>` — repeatable. Several are only meaningful for `html`;
   the single-A-box formats reject more than one.
+- `--data <PATH>` (`validate`) — also repeatable. Each file is validated on
+  its own, then the set is checked for ids that mint to the same IRI across
+  files. That overlap is **reported, not an error** — a preview that is a
+  subset of a worked example shares records on purpose.
 - `--strict` — **narrower than it sounds.** It fails on unmodeled
   constructs, dangling references, and instance-data violations. It does
   *not* promote unprojected-construct, Postgres-skip, or SHACL-skip

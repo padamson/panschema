@@ -685,8 +685,8 @@ fn generate_html_for_version(
         .with_version_context(cohort.context_for(version))
         .with_site_root_href(cohort.site_root_href.clone());
     // The file is read from the first path (a per-ref extraction lands in a
-    // tempfile) while provenance shows the declared name. Declaration order
-    // drives the selector; `exemplar` decides which dataset opens.
+    // tempfile) while provenance shows the declared name.
+    let mut loaded: Vec<(String, crate::instances::InstanceSet, &InstanceEntry)> = Vec::new();
     for (data_path, entry) in instances {
         let declared = entry.data.as_path();
         let content =
@@ -706,8 +706,27 @@ fn generate_html_for_version(
         for v in crate::validate::validate_instances(&schema, &set) {
             eprintln!("warning: {version}: {v}");
         }
+        loaded.push((declared.display().to_string(), set, entry));
+    }
+
+    // `publish` already knows the full declared set, so the cross-dataset
+    // check costs nothing to run here. Reported, not fatal: published pairs
+    // routinely share records on purpose.
+    let borrowed: Vec<(&str, &crate::instances::InstanceSet)> = loaded
+        .iter()
+        .map(|(label, set, _)| (label.as_str(), set))
+        .collect();
+    for c in crate::diagnostics::cross_dataset_iri_collisions(&schema, &borrowed) {
+        eprintln!("note: {version}: {}", c.message());
+    }
+
+    // Declaration order drives the selector; `exemplar` decides which opens.
+    for (declared, set, entry) in loaded {
         let mut dataset = crate::html_writer::InstanceDataset::new(entry.name.clone(), set);
-        if let Some(name) = declared.file_name().and_then(|n| n.to_str()) {
+        if let Some(name) = std::path::Path::new(&declared)
+            .file_name()
+            .and_then(|n| n.to_str())
+        {
             dataset = dataset.with_provenance(name);
         }
         if entry.exemplar {

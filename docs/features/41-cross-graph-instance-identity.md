@@ -154,7 +154,7 @@ today.
 
 ### Slice 3: Cross-dataset collision detection
 
-**Status:** Not started
+**Status:** Complete
 
 **Priority:** Must Have
 
@@ -163,12 +163,12 @@ both define `api-gateway` are reported instead of quietly becoming one
 individual.
 
 **Acceptance Criteria:**
-- [ ] `validate` accepts repeated `--data` and reports every id that mints
+- [x] `validate` accepts repeated `--data` and reports every id that mints
   to the same IRI across the given files, naming the id and each file.
-- [ ] A single `--data` behaves exactly as it does now.
-- [ ] `publish` performs the same check across its declared `[[instances]]`
+- [x] A single `--data` behaves exactly as it does now.
+- [x] `publish` performs the same check across its declared `[[instances]]`
   entries without being asked — it already knows the full set.
-- [ ] Deliberately shared records — wine's preview being a subset of its
+- [x] Deliberately shared records — wine's preview being a subset of its
   worked example — are reportable but not automatically an error, since
   sharing is legitimate there. The check states what overlaps; policy about
   whether that is wrong belongs to the author.
@@ -177,6 +177,12 @@ individual.
 - Ordered before scoping deliberately: it makes the hazard observable
   first, and afterwards it is the natural regression test that scoping
   actually separated what it claimed to.
+- **Keyed on the minted IRI, not the id.** A bare id and its CURIE form are
+  the same individual; keying on the id would miss exactly the pair the
+  check exists to find.
+- **Repetition within one dataset is not reported here.** Identifier
+  uniqueness already owns it, and reporting it twice would make one problem
+  look like two.
 
 ---
 
@@ -244,7 +250,7 @@ node. Build when a real pair needs joining, not before.
 |-------|----------|------------|--------|
 | Slice 1: `tree_root` record emission | Must Have | — | Complete |
 | Slice 2: external-IRI references | Must Have | — | Complete |
-| Slice 3: cross-dataset collision detection | Must Have | — | Not started |
+| Slice 3: cross-dataset collision detection | Must Have | — | Complete |
 | Slice 4: per-class dataset scoping | Must Have | Slices 1, 3 | Not started |
 | Slice 5: co-reference across schemas | Could Have | Slice 2 | Deferred |
 

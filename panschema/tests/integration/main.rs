@@ -966,6 +966,59 @@ fn validate_command_exit_code_reflects_conformance() {
 }
 
 #[test]
+fn validate_reports_ids_that_mint_one_iri_across_two_data_files() {
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "validate",
+            "--schema",
+            "tests/fixtures/wine_catalog.yaml",
+            "--data",
+            "tests/fixtures/wine_instances.yaml",
+            "--data",
+            "tests/fixtures/wine_instances_second_dataset.yaml",
+        ])
+        .output()
+        .expect("run panschema");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("minted by more than one dataset")
+            && stderr.contains("chateauMorgon")
+            && stderr.contains("wine_instances.yaml")
+            && stderr.contains("wine_instances_second_dataset.yaml"),
+        "the collision names the id and both files; got: {stderr}"
+    );
+    assert!(
+        out.status.success(),
+        "sharing records across datasets can be deliberate, so it reports \
+         rather than fails; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn a_single_data_file_reports_no_collisions() {
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "validate",
+            "--schema",
+            "tests/fixtures/wine_catalog.yaml",
+            "--data",
+            "tests/fixtures/wine_instances.yaml",
+        ])
+        .output()
+        .expect("run panschema");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("minted by more than one dataset"),
+        "one dataset can collide with nothing; got: {stderr}"
+    );
+    assert!(out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("conforms to"),
+        "and the single-file report is unchanged"
+    );
+}
+
+#[test]
 fn cross_graph_reference_validates_clean_and_is_summarised() {
     let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
@@ -3883,6 +3936,97 @@ fn init_output_shows_field_provenance() {
 /// `publish.rs::tests` — those exercise the library function;
 /// this one exercises the CLI wrapper that's intentionally
 /// `#[mutants::skip]`'d in `main.rs`.
+#[test]
+fn publish_reports_collisions_across_its_declared_instances_entries() {
+    // publish already knows the full declared set, so the cross-dataset check
+    // runs without being asked.
+    fn git(cwd: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(cwd)
+            .args(args)
+            .status()
+            .expect("git on PATH");
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = tmp.path();
+
+    git(repo, &["init", "--initial-branch=main", "--quiet"]);
+    git(repo, &["config", "user.email", "test@example.com"]);
+    git(repo, &["config", "user.name", "Test"]);
+    git(repo, &["config", "commit.gpgsign", "false"]);
+    fs::write(
+        repo.join("schema.yaml"),
+        "id: https://example.org/v0.1.0\n\
+         name: publish_collision_fixture\n\
+         version: 0.1.0\n\
+         prefixes:\n  schema: https://example.org/\n\
+         default_prefix: schema\n\
+         default_range: string\n\
+         classes:\n\
+        \x20 Catalog:\n    tree_root: true\n    attributes:\n\
+        \x20     things: {range: Thing, multivalued: true}\n\
+        \x20 Thing:\n    attributes:\n      id: {identifier: true}\n",
+    )
+    .unwrap();
+    // Both datasets define `shared` — one individual once loaded together.
+    fs::write(repo.join("preview.yaml"), "things:\n  - id: shared\n").unwrap();
+    fs::write(
+        repo.join("full.yaml"),
+        "things:\n  - id: shared\n  - id: extra\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.join("panschema-publish.toml"),
+        r#"[schema]
+name = "publish_collision_fixture"
+version = "0.1.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+
+[[instances]]
+name = "Preview"
+data = "preview.yaml"
+
+[[instances]]
+name = "Worked example"
+data = "full.yaml"
+exemplar = true
+
+[publishing]
+versions = ["v0.1.0"]
+current = "v0.1.0"
+output_dir = "site"
+"#,
+    )
+    .unwrap();
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-m", "release v0.1.0", "--quiet"]);
+    git(repo, &["tag", "v0.1.0"]);
+
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("publish")
+        .current_dir(repo)
+        .output()
+        .expect("panschema");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "deliberate overlap does not fail a publish; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("minted by more than one dataset")
+            && stderr.contains("shared")
+            && stderr.contains("preview.yaml")
+            && stderr.contains("full.yaml"),
+        "publish reports the overlap, naming both declared datasets; got: {stderr}"
+    );
+}
+
 #[test]
 fn cli_publish_builds_per_version_subdirs_and_current_alias() {
     fn git(cwd: &Path, args: &[&str]) {

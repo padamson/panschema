@@ -295,6 +295,70 @@ pub fn dangling_instance_references(
     out
 }
 
+/// One IRI that more than one dataset mints, and who minted it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IriCollision {
+    /// The IRI two or more datasets both produce.
+    pub iri: String,
+    /// Each dataset that mints it, paired with the id it used. Sorted by
+    /// dataset, then id; one entry per (dataset, id) pair.
+    pub occurrences: Vec<(String, String)>,
+}
+
+impl IriCollision {
+    /// A warning line naming the IRI and every dataset that mints it.
+    pub fn message(&self) -> String {
+        let where_ = self
+            .occurrences
+            .iter()
+            .map(|(dataset, id)| format!("`{id}` in {dataset}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("{} is minted by more than one dataset: {where_}", self.iri)
+    }
+}
+
+/// Every IRI that two or more of `datasets` both mint — the records that
+/// silently become one individual when the datasets are loaded together.
+///
+/// Keyed on the minted IRI rather than the id, so a bare id and its CURIE
+/// form are recognised as the same individual. Repetition *within* one
+/// dataset is not a collision here; identifier uniqueness owns that, and
+/// reporting it twice would make one problem look like two.
+///
+/// Overlap is not automatically wrong — a teaching preview that is a strict
+/// subset of a worked example shares records on purpose — so this states what
+/// overlaps and leaves the policy to the author.
+pub fn cross_dataset_iri_collisions(
+    schema: &crate::linkml::SchemaDefinition,
+    datasets: &[(&str, &crate::instances::InstanceSet)],
+) -> Vec<IriCollision> {
+    use std::collections::BTreeMap;
+    // IRI -> (dataset, id) pairs, deduplicated and ordered by the map.
+    let mut minted: BTreeMap<String, std::collections::BTreeSet<(String, String)>> =
+        BTreeMap::new();
+    for (label, set) in datasets {
+        for inst in &set.instances {
+            let iri = crate::rdf_serializers::instance_iri_string(schema, inst);
+            minted
+                .entry(iri)
+                .or_default()
+                .insert(((*label).to_string(), inst.id.clone()));
+        }
+    }
+    minted
+        .into_iter()
+        .filter_map(|(iri, occurrences)| {
+            let datasets_involved: std::collections::BTreeSet<&String> =
+                occurrences.iter().map(|(dataset, _)| dataset).collect();
+            (datasets_involved.len() > 1).then(|| IriCollision {
+                iri,
+                occurrences: occurrences.into_iter().collect(),
+            })
+        })
+        .collect()
+}
+
 /// The detection mechanism, parameterized by the ignore-list so tests can
 /// exercise it with fabricated keys decoupled from the real list. Warns
 /// by default: an unmodeled key is reported unless it is in `ignored`.
@@ -845,6 +909,106 @@ mod tests {
         assert!(
             msg.contains("wineA") && msg.contains("produced_by") && msg.contains("ghostOne"),
             "message must name referrer, property, and missing target; got: {msg}"
+        );
+    }
+
+    fn collision_schema() -> SchemaDefinition {
+        let mut schema = SchemaDefinition::new("cellar");
+        schema.id = Some("https://example.org/cellar".to_string());
+        schema.default_prefix = Some("cellar".to_string());
+        schema.prefixes.insert(
+            "cellar".to_string(),
+            "https://example.org/cellar/".to_string(),
+        );
+        schema
+    }
+
+    fn dataset(ids: &[&str]) -> crate::instances::InstanceSet {
+        crate::instances::InstanceSet {
+            instances: ids.iter().map(|id| instance(id, &[])).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn an_id_used_by_two_datasets_is_reported_with_both_dataset_names() {
+        // The silent merge this makes visible: loaded together, these two
+        // `api-gateway` records are one individual.
+        let schema = collision_schema();
+        let acme = dataset(&["api-gateway", "billing"]);
+        let contoso = dataset(&["api-gateway", "search"]);
+        let collisions = cross_dataset_iri_collisions(
+            &schema,
+            &[("acme.yaml", &acme), ("contoso.yaml", &contoso)],
+        );
+        assert_eq!(
+            collisions.len(),
+            1,
+            "only the shared id collides; got: {collisions:?}"
+        );
+        let c = &collisions[0];
+        assert_eq!(c.iri, "https://example.org/cellar/api-gateway");
+        assert_eq!(
+            c.occurrences,
+            vec![
+                ("acme.yaml".to_string(), "api-gateway".to_string()),
+                ("contoso.yaml".to_string(), "api-gateway".to_string()),
+            ],
+            "each dataset that mints the IRI is named, with the id it used"
+        );
+        let msg = c.message();
+        assert!(
+            msg.contains("api-gateway")
+                && msg.contains("acme.yaml")
+                && msg.contains("contoso.yaml"),
+            "the message names the id and every file; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn an_id_repeated_inside_one_dataset_is_not_a_cross_dataset_collision() {
+        // That is the identifier-uniqueness check's job; reporting it here too
+        // would double-report one problem as two.
+        let schema = collision_schema();
+        let one = dataset(&["api-gateway", "api-gateway"]);
+        assert!(
+            cross_dataset_iri_collisions(&schema, &[("one.yaml", &one)]).is_empty(),
+            "a single dataset can collide with nothing"
+        );
+    }
+
+    #[test]
+    fn two_spellings_that_mint_one_iri_collide_even_though_the_ids_differ() {
+        // Keying on the minted IRI rather than the id is the point: a bare id
+        // and its CURIE form are the same individual.
+        let schema = collision_schema();
+        let bare = dataset(&["gamay"]);
+        let curie = dataset(&["cellar:gamay"]);
+        let collisions =
+            cross_dataset_iri_collisions(&schema, &[("bare.yaml", &bare), ("curie.yaml", &curie)]);
+        assert_eq!(
+            collisions.len(),
+            1,
+            "different ids minting one IRI still merge; got: {collisions:?}"
+        );
+        assert_eq!(
+            collisions[0].occurrences,
+            vec![
+                ("bare.yaml".to_string(), "gamay".to_string()),
+                ("curie.yaml".to_string(), "cellar:gamay".to_string()),
+            ],
+            "and the report shows which spelling each dataset used"
+        );
+    }
+
+    #[test]
+    fn datasets_that_share_nothing_are_reported_as_nothing() {
+        let schema = collision_schema();
+        let a = dataset(&["merlot"]);
+        let b = dataset(&["gamay"]);
+        assert!(
+            cross_dataset_iri_collisions(&schema, &[("a.yaml", &a), ("b.yaml", &b)]).is_empty(),
+            "distinct ids across datasets are not a collision"
         );
     }
 

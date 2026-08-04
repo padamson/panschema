@@ -1,0 +1,10 @@
+# A second catalog that reuses `chateauMorgon` for a different wine — the
+# silent-merge hazard: loaded together with the first, they are one individual.
+wines:
+  - id: chateauMorgon
+    name: Château Morgon (other cellar)
+    color: white
+wineries:
+  - id: otherEstate
+    name: Other Estate
+    region: Loire

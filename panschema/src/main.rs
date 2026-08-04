@@ -206,8 +206,10 @@ enum Commands {
         #[arg(short, long)]
         schema: PathBuf,
         /// LinkML instance-data file (a `tree_root` container A-box).
-        #[arg(short, long)]
-        data: PathBuf,
+        /// Repeatable: several datasets are each validated, and ids that mint
+        /// to the same IRI across them are reported.
+        #[arg(short, long, required = true)]
+        data: Vec<PathBuf>,
     },
     /// Build versioned HTML docs from a `panschema-publish.toml` with a
     /// `[publishing]` section. Produces `<output>/<tag>/` per version,
@@ -1272,9 +1274,11 @@ fn fetch_from_manifest() -> anyhow::Result<()> {
 
 /// `panschema verify`: re-checksum every manifested schema and compare with
 /// the lockfile. Errors with a clear diff on mismatch.
-/// Validate a LinkML instance-data file against its schema, printing every
-/// violation and exiting non-zero when the data does not conform.
-fn validate_data(schema_path: &Path, data_path: &Path) -> anyhow::Result<()> {
+/// Validate LinkML instance-data files against their schema, printing every
+/// violation and exiting non-zero when the data does not conform. Given more
+/// than one file, each is validated on its own and the set is then checked for
+/// ids that mint to the same IRI across files.
+fn validate_data(schema_path: &Path, data_paths: &[PathBuf]) -> anyhow::Result<()> {
     let registry = FormatRegistry::with_defaults();
     // Load through the shared path so `imports:` merge and `is_a`/mixin slots
     // resolve, matching what every other command reads.
@@ -1282,35 +1286,68 @@ fn validate_data(schema_path: &Path, data_path: &Path) -> anyhow::Result<()> {
     let schema = panschema::import_resolve::load_schema_with_deps(schema_path, &registry, &no_deps)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-    let content = std::fs::read_to_string(data_path)
-        .map_err(|e| anyhow::anyhow!("reading data file {}: {}", data_path.display(), e))?;
-    let value: serde_norway::Value = serde_norway::from_str(&content)
-        .map_err(|e| anyhow::anyhow!("parsing data file {}: {}", data_path.display(), e))?;
+    // One file's violations read as its own list; several need labelling, or a
+    // reader cannot tell which dataset each line came from.
+    let label_lines = data_paths.len() > 1;
+    let mut violation_count = 0usize;
+    let mut sets: Vec<(String, panschema::instances::InstanceSet)> = Vec::new();
 
-    let violations = match panschema::validate::instance_set_for(&schema, &value) {
-        Ok(set) => {
-            if let Some(summary) = set.external_reference_summary() {
-                eprintln!("note: {summary}");
+    for data_path in data_paths {
+        let content = std::fs::read_to_string(data_path)
+            .map_err(|e| anyhow::anyhow!("reading data file {}: {}", data_path.display(), e))?;
+        let value: serde_norway::Value = serde_norway::from_str(&content)
+            .map_err(|e| anyhow::anyhow!("parsing data file {}: {}", data_path.display(), e))?;
+
+        let violations = match panschema::validate::instance_set_for(&schema, &value) {
+            Ok(set) => {
+                if let Some(summary) = set.external_reference_summary() {
+                    eprintln!("note: {summary}");
+                }
+                let violations = panschema::validate::validate_instances(&schema, &set);
+                sets.push((data_path.display().to_string(), set));
+                violations
             }
-            panschema::validate::validate_instances(&schema, &set)
+            Err(v) => vec![v],
+        };
+        for v in &violations {
+            if label_lines {
+                eprintln!("{}: {v}", data_path.display());
+            } else {
+                eprintln!("{v}");
+            }
         }
-        Err(v) => vec![v],
-    };
-    for v in &violations {
-        eprintln!("{v}");
+        violation_count += violations.len();
     }
-    if violations.is_empty() {
-        println!(
-            "{} conforms to {}",
-            data_path.display(),
-            schema_path.display()
-        );
+
+    // Overlap across datasets is legitimate when it is deliberate — a teaching
+    // preview that is a subset of a worked example — so this reports rather
+    // than fails, and the author decides.
+    let borrowed: Vec<(&str, &panschema::instances::InstanceSet)> = sets
+        .iter()
+        .map(|(label, set)| (label.as_str(), set))
+        .collect();
+    for c in panschema::diagnostics::cross_dataset_iri_collisions(&schema, &borrowed) {
+        eprintln!("note: {}", c.message());
+    }
+
+    if violation_count == 0 {
+        for data_path in data_paths {
+            println!(
+                "{} conforms to {}",
+                data_path.display(),
+                schema_path.display()
+            );
+        }
         Ok(())
+    } else if let [only] = data_paths {
+        anyhow::bail!(
+            "{violation_count} validation error(s) in {}",
+            only.display()
+        );
     } else {
         anyhow::bail!(
-            "{} validation error(s) in {}",
-            violations.len(),
-            data_path.display()
+            "{violation_count} validation error(s) across {} data files",
+            data_paths.len()
         );
     }
 }
