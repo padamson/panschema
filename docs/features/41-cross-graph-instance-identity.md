@@ -203,9 +203,16 @@ distinct per dataset while shared vocabulary stays shared.
   the whole of the remaining gap — a *shared* dataset already joins, because
   a CURIE id (`id: catalog:aws`) expands against the schema's prefixes, so
   the reference/scoped refactor needs nothing further from panschema.
-- [x] A record in a dataset whose root **bears an identifier** mints under
-  that root's IRI, so `acme/api-gateway` and `contoso/api-gateway` are
-  distinct individuals.
+- [x] A record identified by a **`key` slot** — LinkML's container-unique
+  form — mints under its dataset root's IRI, so `acme/api-gateway` and
+  `contoso/api-gateway` are distinct individuals.
+- [x] A record identified by an **`identifier` slot** — globally unique,
+  per the metamodel — mints unscoped in the schema namespace: the same
+  individual whichever dataset states facts about it. *(Amended 2026-08-04:
+  scoping originally keyed on `identifier`; the spec-conformance audit
+  surfaced that LinkML reserves `identifier` for global uniqueness and
+  `key` for exactly the per-container case this slice needed, so scoping
+  moved to `key` and `identifier` recovered its meaning.)*
 - [x] A record in a dataset whose root is a **vessel** — no identifier —
   mints exactly as it does today. This is what makes scoping off by
   default.

@@ -135,7 +135,8 @@ focused subset of the structural ones.
 | `*_mappings` (5) | ● | ● | ○ | ● | ○ | ✗ | see Common metadata |
 | `symmetric` `asymmetric` `reflexive` `irreflexive` `transitive` | ● | ● | — | ● | — | — | OWL relationship characteristics: card badge + `owl:<Name>Property` axiom; round-trips (OWL reader reads the axioms back into the flags); not applicable to relational modeling |
 | `ifabsent` | ● | ● | — | — | ● | ✗ | schema-encoded default. Rust: enum and scalar (`int`/`float`/`double`/`string`/boolean) forms generate a non-`Option` field with `#[serde(default)]` + default fn; HTML "Default" row shows the value; Postgres doesn't yet emit a column `DEFAULT` from it |
-| `key` `designates_type` `subproperty_of` `singular_name` `recommended` `slot_group` `unit` `implicit_prefix` `readonly` `shared` `list_elements_unique`/`_ordered` | ✗ | — | — | — | — | — | not modeled. `subproperty_of` (`rdfs:subPropertyOf`) would further enrich RDF/OWL |
+| `key` | ● | ○ | ○ | ○ | ○ | ●◨ | identifies records within their container: the record-id slot for instance data (scoping per dataset — see feature 41), and the Postgres primary key when no `identifier` exists. Not yet surfaced as a card badge |
+| `designates_type` `subproperty_of` `singular_name` `recommended` `slot_group` `unit` `implicit_prefix` `readonly` `shared` `list_elements_unique`/`_ordered` | ✗ | — | — | — | — | — | not modeled. `subproperty_of` (`rdfs:subPropertyOf`) would further enrich RDF/OWL |
 | `minimum_value` `maximum_value` | ● | ● | — | ○ | — | ●◨ | numeric value bounds: `≥`/`≤` card badge (feature 14 slice 2); RDF `owl:withRestrictions` facet deferred (slice 2b); Postgres emits one inline `CHECK (col >= min AND col <= max)`, or just the set side ([feature 24 slice 2](features/24-postgres-ddl-writer.md) ✅, syntax-verified via `pg_query`) |
 | `equals_string` `equals_string_in` `equals_number` `equals_expression` `exact_cardinality` `has_member` `all_members` `structured_pattern` `range_expression` `all_of` `exactly_one_of` `none_of` `array` | ✗ | — | — | — | — | — | not modeled. Value/boolean-expression constraints (a validation-feature family) |
 
@@ -260,8 +261,12 @@ URIs-and-mappings), not against this file's own claims. Ranked by impact.
    change to every consumer's emitted IRIs — the cheapest moment is before
    v0.3.0, while nothing published depends on the fragment form.
 
-2. **`identifier` means globally unique; the container-scoped construct is
-   `key`.** The metamodel: an identifier value cannot recur *anywhere*; a
+2. ~~**`identifier` means globally unique; the container-scoped construct is
+   `key`.**~~ **Resolved 2026-08-04:** `key` is modeled, identifies records,
+   and is what per-dataset scoping keys on; `identifier` recovered its
+   global meaning — an identifier-carrying record mints unscoped in the
+   schema namespace, the same individual wherever it appears. Original
+   finding: The metamodel: an identifier value cannot recur *anywhere*; a
    `key` value must be unique only within its container. Per-dataset scoping
    deliberately gives `identifier` key-like semantics (unique per dataset,
    scope from the root's IRI) because consumers' data reuses generic ids

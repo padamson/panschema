@@ -26,10 +26,10 @@ classes:
       providers: {range: Provider, multivalued: true}
   Deployment:
     attributes:
-      id: {identifier: true}
+      id: {key: true}
       name: {}
       on_provider: {range: Provider}
   Provider:
     attributes:
-      id: {identifier: true}
+      id: {key: true}
       name: {}

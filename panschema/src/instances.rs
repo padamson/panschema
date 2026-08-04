@@ -371,15 +371,29 @@ impl InstanceSet {
                 inst.slot_values.sort_by(|a, b| a.slot.cmp(&b.slot));
             }
         }
-        // The root individual is the scope, so its records mint beneath it
-        // while the root itself stays the anchor. A vessel root yields no
-        // scope, which is what keeps scoping off by default.
+        // The root individual is the scope, and a record identified by a
+        // `key` slot — unique within its container, per LinkML — mints
+        // beneath it, so the same key in two datasets is two individuals. A
+        // record identified by `identifier` claims global uniqueness and
+        // mints unscoped in the schema namespace, so the same id anywhere is
+        // one individual. A vessel root yields no scope at all.
         if let Some(root_id) = &emitted_root_id
             && let Some(root_inst) = loader.instances.iter().find(|i| &i.id == root_id)
         {
             let scope = crate::rdf_serializers::instance_iri_string(schema, root_inst);
+            let mut class_has_key: std::collections::BTreeMap<String, bool> =
+                std::collections::BTreeMap::new();
             for inst in &mut loader.instances {
-                if &inst.id != root_id {
+                let keyed = inst.types.first().is_some_and(|class_name| {
+                    *class_has_key.entry(class_name.clone()).or_insert_with(|| {
+                        schema.classes.get(class_name).is_some_and(|class| {
+                            crate::linkml_resolve::resolve_effective_slots(class, schema)
+                                .values()
+                                .any(|slot| slot.key && !slot.identifier)
+                        })
+                    })
+                });
+                if keyed && &inst.id != root_id {
                     inst.scope = Some(scope.clone());
                 }
             }
@@ -573,9 +587,12 @@ impl LinkmlLoader<'_> {
             .map(|(name, rs)| (name.clone(), rs.definition.clone()))
             .collect();
 
+        // A record is identified by its `identifier` slot or, failing that,
+        // its `key` slot — LinkML's globally- and container-unique forms.
         let id_slot = slots
             .iter()
             .find(|(_, s)| s.identifier)
+            .or_else(|| slots.iter().find(|(_, s)| s.key))
             .map(|(name, _)| name.clone());
         // A name/label/title slot supplies the display label, LinkML-conventionally.
         let label_slot = slots
@@ -1287,10 +1304,10 @@ classes:
       providers: {range: Provider, multivalued: true}
   Deployment:
     attributes:
-      id: {identifier: true}
+      id: {key: true}
   Provider:
     attributes:
-      id: {identifier: true}
+      id: {key: true}
 ";
 
     fn two_root_set(yaml: &str) -> InstanceSet {
@@ -1345,6 +1362,79 @@ classes:
             "https://example.org/catalog/".to_string(),
         );
         schema
+    }
+
+    #[test]
+    fn key_records_scope_per_dataset_while_identifier_records_stay_global() {
+        // The LinkML split: `key` is unique within its container, so two
+        // estates' same-keyed deployments are two individuals; `identifier`
+        // is unique everywhere, so an identifier-carrying record is the same
+        // individual whichever dataset states facts about it.
+        let mut schema = SchemaDefinition::new("estate");
+        schema.id = Some("https://example.org/estate".to_string());
+        schema.default_prefix = Some("estate".to_string());
+        schema.prefixes.insert(
+            "estate".to_string(),
+            "https://example.org/estate/".to_string(),
+        );
+        schema.default_range = Some("string".to_string());
+
+        let mut root = ClassDefinition::new("Enterprise");
+        root.tree_root = true;
+        let mut root_id = SlotDefinition::new("id");
+        root_id.identifier = true;
+        root.attributes.insert("id".to_string(), root_id);
+        for (slot_name, range) in [("deployments", "Deployment"), ("providers", "Provider")] {
+            let mut slot = SlotDefinition::new(slot_name);
+            slot.range = Some(range.to_string());
+            slot.multivalued = true;
+            root.attributes.insert(slot_name.to_string(), slot);
+        }
+        schema.classes.insert("Enterprise".to_string(), root);
+
+        // Deployment identifies by key (container-scoped); Provider by
+        // identifier (global).
+        let mut dep = ClassDefinition::new("Deployment");
+        let mut key = SlotDefinition::new("id");
+        key.key = true;
+        dep.attributes.insert("id".to_string(), key);
+        schema.classes.insert("Deployment".to_string(), dep);
+        let mut provider = ClassDefinition::new("Provider");
+        let mut ident = SlotDefinition::new("id");
+        ident.identifier = true;
+        provider.attributes.insert("id".to_string(), ident);
+        // A plain slot alongside the identifier: only a `key` slot makes a
+        // class scope, not the mere presence of non-identifying slots.
+        provider
+            .attributes
+            .insert("name".to_string(), SlotDefinition::new("name"));
+        schema.classes.insert("Provider".to_string(), provider);
+        let read = |yaml: &str| {
+            let data: serde_norway::Value = serde_norway::from_str(yaml).unwrap();
+            InstanceSet::from_linkml_data(&schema, &data)
+        };
+        let acme = read("id: acme\ndeployments:\n  - id: api-gateway\nproviders:\n  - id: aws\n");
+        let contoso =
+            read("id: contoso\ndeployments:\n  - id: api-gateway\nproviders:\n  - id: aws\n");
+        let iri_of = |set: &InstanceSet, id: &str| {
+            let inst = set.instances.iter().find(|i| i.id == id).expect("record");
+            crate::rdf_serializers::instance_iri_string(&schema, inst)
+        };
+        assert_ne!(
+            iri_of(&acme, "api-gateway"),
+            iri_of(&contoso, "api-gateway"),
+            "key-identified records are unique per container, so they scope"
+        );
+        assert_eq!(
+            iri_of(&acme, "aws"),
+            iri_of(&contoso, "aws"),
+            "identifier-identified records are globally unique, so they merge"
+        );
+        assert_eq!(
+            iri_of(&acme, "aws"),
+            "https://example.org/estate/aws",
+            "and the global record mints in the schema namespace, unscoped"
+        );
     }
 
     #[test]

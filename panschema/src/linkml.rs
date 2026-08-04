@@ -476,6 +476,12 @@ pub struct SlotDefinition {
     /// Whether this slot uniquely identifies instances
     #[serde(default, skip_serializing_if = "is_false")]
     pub identifier: bool,
+    /// Whether this slot identifies instances uniquely **within their
+    /// container** — LinkML's locally-scoped counterpart to `identifier`,
+    /// which claims global uniqueness. A class may declare one or the other,
+    /// not both.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub key: bool,
     /// URI for semantic interpretation (e.g., owl:ObjectProperty IRI)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slot_uri: Option<String>,
@@ -547,6 +553,7 @@ impl SlotDefinition {
             maximum_cardinality: None,
             pattern: None,
             identifier: false,
+            key: false,
             slot_uri: None,
             inverse: None,
             symmetric: false,

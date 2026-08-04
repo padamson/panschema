@@ -1105,15 +1105,20 @@ mod tests {
 
         let mut root = crate::linkml::ClassDefinition::new("Enterprise");
         root.tree_root = true;
-        root.attributes.insert("id".to_string(), id.clone());
+        root.attributes.insert("id".to_string(), id);
         let mut providers = crate::linkml::SlotDefinition::new("providers");
         providers.range = Some("Provider".to_string());
         providers.multivalued = true;
         root.attributes.insert("providers".to_string(), providers);
         schema.classes.insert("Enterprise".to_string(), root);
 
+        // Contained records bear a `key` — unique within their container —
+        // which is what makes them scope apart per dataset; the root's
+        // `identifier` stays global, since the root IS the scope.
+        let mut key = crate::linkml::SlotDefinition::new("id");
+        key.key = true;
         let mut provider = crate::linkml::ClassDefinition::new("Provider");
-        provider.attributes.insert("id".to_string(), id);
+        provider.attributes.insert("id".to_string(), key);
         provider.attributes.insert(
             "name".to_string(),
             crate::linkml::SlotDefinition::new("name"),
@@ -1274,7 +1279,7 @@ mod tests {
         root.tree_root = true;
         let mut id = crate::linkml::SlotDefinition::new("id");
         id.identifier = true;
-        root.attributes.insert("id".to_string(), id.clone());
+        root.attributes.insert("id".to_string(), id);
         let mut deployments = crate::linkml::SlotDefinition::new("deployments");
         deployments.range = Some("Deployment".to_string());
         deployments.multivalued = true;
@@ -1282,7 +1287,9 @@ mod tests {
             .insert("deployments".to_string(), deployments);
         schema.classes.insert("Enterprise".to_string(), root);
         let mut dep = crate::linkml::ClassDefinition::new("Deployment");
-        dep.attributes.insert("id".to_string(), id);
+        let mut key = crate::linkml::SlotDefinition::new("id");
+        key.key = true;
+        dep.attributes.insert("id".to_string(), key);
         schema.classes.insert("Deployment".to_string(), dep);
 
         let read = |yaml: &str| {

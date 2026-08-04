@@ -10,7 +10,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use crate::io::{IoError, IoResult, Writer};
-use crate::linkml::{ClassDefinition, SchemaDefinition};
+use crate::linkml::{ClassDefinition, SchemaDefinition, SlotDefinition};
 
 /// Writer for Postgres DDL (`CREATE TABLE` / `CREATE TYPE`).
 pub struct PostgresWriter;
@@ -105,11 +105,12 @@ fn render(schema: &SchemaDefinition) -> String {
         let effective = crate::linkml_resolve::resolve_effective_slots(class, schema);
         let (pk_col, pk_type) = class_primary_key(class, schema);
 
-        // The identifier-marked slot (if any) becomes the primary key
-        // column instead of a synthetic one.
+        // The identifier- or key-marked slot (if any) becomes the primary
+        // key column instead of a synthetic one — a `key` is unique within
+        // its container, and a table is the container here.
         let pk_slot = effective
             .iter()
-            .find(|(_, slot)| slot.identifier)
+            .find(|(_, slot)| identifies_records(slot))
             .map(|(name, _)| name.clone());
 
         writeln!(out, "CREATE TABLE {} (", quote_ident(&table)).ok();
@@ -260,6 +261,14 @@ fn column_checks(col: &str, slot: &crate::linkml::SlotDefinition) -> String {
     checks
 }
 
+/// Whether this slot identifies its class's records — LinkML's globally
+/// unique `identifier` or its container-unique `key`. The one predicate the
+/// primary-key choice, the column map, and rendering all share, so they
+/// cannot disagree about which slot names a record.
+fn identifies_records(slot: &SlotDefinition) -> bool {
+    slot.identifier || slot.key
+}
+
 /// Every effective slot of `class` mapped to the column name it becomes:
 /// the identifier slot to the primary-key column, a single-valued
 /// class-range slot to its `{slot}_{target_pk}` foreign-key column, and any
@@ -271,7 +280,7 @@ fn slot_column_map(class: &ClassDefinition, schema: &SchemaDefinition) -> BTreeM
     let (pk_col, _) = class_primary_key(class, schema);
     let pk_slot = effective
         .iter()
-        .find(|(_, slot)| slot.identifier)
+        .find(|(_, slot)| identifies_records(slot))
         .map(|(name, _)| name.clone());
 
     let mut map = BTreeMap::new();
@@ -514,7 +523,7 @@ fn compute_skips(schema: &SchemaDefinition) -> BTreeMap<String, String> {
 /// every table falls back to.
 fn class_primary_key(class: &ClassDefinition, schema: &SchemaDefinition) -> (String, String) {
     let effective = crate::linkml_resolve::resolve_effective_slots(class, schema);
-    match effective.iter().find(|(_, slot)| slot.identifier) {
+    match effective.iter().find(|(_, slot)| identifies_records(slot)) {
         Some((name, slot)) => {
             let col = crate::casing::snake_case(name);
             let sql_type = sql_type_for_slot_range(slot.range.as_deref(), schema);
@@ -763,6 +772,35 @@ mod tests {
         assert!(
             out.contains("\"id\" uuid PRIMARY KEY DEFAULT gen_random_uuid()"),
             "expected a synthesized uuid primary key; got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn key_slot_becomes_the_primary_key_when_no_identifier_exists() {
+        // A `key` is unique within its container, and the table is the
+        // container — so it is the natural primary key.
+        let mut class = ClassDefinition::new("LineItem");
+        let mut line_no = SlotDefinition::new("line_no");
+        line_no.range = Some("string".to_string());
+        line_no.key = true;
+        class.attributes.insert("line_no".to_string(), line_no);
+        let schema = schema_with_class(class);
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            out.contains("\"line_no\" text PRIMARY KEY"),
+            "expected the key slot to become the primary key; got:\n{out}"
+        );
+        assert!(
+            !out.contains("\"id\" uuid PRIMARY KEY"),
+            "must not also synthesize a uuid primary key; got:\n{out}"
+        );
+        assert_eq!(
+            out.matches("\"line_no\"").count(),
+            1,
+            "the key column appears once — as the PK, not again as a \
+             regular column; got:\n{out}"
         );
     }
 
