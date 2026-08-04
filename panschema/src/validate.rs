@@ -278,6 +278,20 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
         });
     }
 
+    // A dataset read against no root yielded nothing, and "nothing" is
+    // indistinguishable from "conforms" unless it is said out loud.
+    if let Some(candidates) = &set.root_candidates {
+        out.push(Violation {
+            record: "(root)".to_string(),
+            detail: format!(
+                "the data conforms to none of this schema's `tree_root` classes, or to \
+                 more than one equally: {}. Name the collections of exactly one of them \
+                 so the dataset can be read.",
+                candidates.join(", ")
+            ),
+        });
+    }
+
     // Identifier uniqueness: an id claimed by more than one record.
     for id in &set.duplicate_ids {
         out.push(Violation {
@@ -477,6 +491,7 @@ fn numeric(scalar: &ScalarValue) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::linkml::{ClassDefinition, SlotDefinition};
 
     const SCHEMA: &str = "\
 name: WineCatalog
@@ -1180,6 +1195,75 @@ classes:
 
     fn union_violations(yaml: &str) -> Vec<Violation> {
         validate_instance_data(&union_schema(), &data(yaml))
+    }
+
+    #[test]
+    fn data_matching_no_tree_root_is_a_violation_naming_the_candidates() {
+        // The old behaviour read such a file against whichever root sorted
+        // first and reported nothing, so an empty result looked like a pass.
+        let mut schema = SchemaDefinition::new("estate");
+        schema.default_range = Some("string".to_string());
+        for name in ["Enterprise", "ProviderCatalog"] {
+            let mut root = ClassDefinition::new(name);
+            root.tree_root = true;
+            let mut slot = SlotDefinition::new(if name == "Enterprise" {
+                "deployments"
+            } else {
+                "providers"
+            });
+            slot.range = Some("Thing".to_string());
+            slot.multivalued = true;
+            root.attributes.insert(slot.name.clone(), slot);
+            schema.classes.insert(name.to_string(), root);
+        }
+        let mut thing = ClassDefinition::new("Thing");
+        let mut id = SlotDefinition::new("id");
+        id.identifier = true;
+        thing.attributes.insert("id".to_string(), id);
+        schema.classes.insert("Thing".to_string(), thing);
+
+        let data: serde_norway::Value = serde_norway::from_str("widgets:\n  - id: w1\n").unwrap();
+        let violations = validate_instance_data(&schema, &data);
+        let detail = violations
+            .iter()
+            .map(|v| v.detail.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            detail.contains("Enterprise") && detail.contains("ProviderCatalog"),
+            "the violation names both candidate roots; got: {detail}"
+        );
+    }
+
+    #[test]
+    fn data_matching_one_of_several_roots_validates_clean() {
+        let mut schema = SchemaDefinition::new("estate");
+        schema.default_range = Some("string".to_string());
+        for (name, slot_name) in [
+            ("Enterprise", "deployments"),
+            ("ProviderCatalog", "providers"),
+        ] {
+            let mut root = ClassDefinition::new(name);
+            root.tree_root = true;
+            let mut slot = SlotDefinition::new(slot_name);
+            slot.range = Some("Thing".to_string());
+            slot.multivalued = true;
+            root.attributes.insert(slot_name.to_string(), slot);
+            schema.classes.insert(name.to_string(), root);
+        }
+        let mut thing = ClassDefinition::new("Thing");
+        let mut id = SlotDefinition::new("id");
+        id.identifier = true;
+        thing.attributes.insert("id".to_string(), id);
+        schema.classes.insert("Thing".to_string(), thing);
+
+        let data: serde_norway::Value =
+            serde_norway::from_str("providers:\n  - id: aws\n").unwrap();
+        assert!(
+            validate_instance_data(&schema, &data).is_empty(),
+            "a file that names one root's collections conforms; got: {:?}",
+            validate_instance_data(&schema, &data)
+        );
     }
 
     #[test]

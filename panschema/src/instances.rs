@@ -103,6 +103,15 @@ pub struct InstanceSet {
     /// References pointing outside this dataset, kept visible rather than
     /// silently unchecked. Sorted.
     pub external_references: Vec<ExternalReference>,
+    /// The `tree_root` class this dataset was read against, when one was
+    /// chosen. `None` for a schema with no root, or when the choice was
+    /// ambiguous — see `root_candidates`.
+    pub root: Option<String>,
+    /// When a schema declares several `tree_root` classes and the data
+    /// conforms to none of them, or to more than one equally well: the
+    /// candidates, for a caller to report. `None` when there was nothing to
+    /// choose between.
+    pub root_candidates: Option<Vec<String>>,
 }
 
 /// A field the data carries that its record's class never declared.
@@ -247,6 +256,8 @@ impl InstanceSet {
             undeclared_fields: Vec::new(),
             metadata: Vec::new(),
             external_references: Vec::new(),
+            root: None,
+            root_candidates: None,
         }
     }
 
@@ -260,11 +271,21 @@ impl InstanceSet {
     /// graph edge), or an inlined mapping becoming its own nested record plus
     /// an edge to it. Handles both list and identifier-keyed-dict collections.
     pub fn from_linkml_data(schema: &SchemaDefinition, data: &serde_norway::Value) -> Self {
-        let Some((root_name, root)) = schema.classes.iter().find(|(_, c)| c.tree_root) else {
-            return Self::default();
-        };
         let Some(container) = data.as_mapping() else {
             return Self::default();
+        };
+        let (root_name, root) = match select_tree_root(schema, container) {
+            RootSelection::None => return Self::default(),
+            RootSelection::Ambiguous(candidates) => {
+                return Self {
+                    root_candidates: Some(candidates),
+                    ..Self::default()
+                };
+            }
+            RootSelection::Chosen(name) => match schema.classes.get_key_value(&name) {
+                Some(pair) => pair,
+                None => return Self::default(),
+            },
         };
         let root_slots = crate::linkml_resolve::resolve_effective_slots(root, schema);
 
@@ -367,6 +388,8 @@ impl InstanceSet {
             undeclared_fields: loader.undeclared_fields,
             metadata,
             external_references,
+            root: Some(root_name.clone()),
+            root_candidates: None,
         }
     }
 
@@ -392,6 +415,66 @@ impl InstanceSet {
         }
         Some(out)
     }
+}
+
+/// Which `tree_root` a data file was read against.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RootSelection {
+    /// The schema declares no `tree_root`, so there is nothing to read.
+    None,
+    /// One root was chosen, by name.
+    Chosen(String),
+    /// Several roots exist and the data distinguishes none of them — it
+    /// conforms to no root, or to two equally well. The candidates, sorted.
+    Ambiguous(Vec<String>),
+}
+
+/// Choose the `tree_root` a data file conforms to.
+///
+/// A schema with one root always yields it, whatever the file holds — a
+/// container key the root does not declare has always been skipped rather
+/// than being fatal, and that stays true.
+///
+/// With several roots, the file's own top-level keys decide: the root that
+/// declares the most of them wins. A schema whose roots hold disjoint
+/// collections — an estate's deployments against a catalogue's providers —
+/// is decided by the first key either way. Nothing is written into the data
+/// and no configuration is consulted, so a dataset stays portable.
+///
+/// A tie is **not** broken. Picking the alphabetically-first root and reading
+/// on is the bug this replaces: a catalogue read against an estate root
+/// yields a plausible, wrong, near-empty dataset.
+pub fn select_tree_root(
+    schema: &SchemaDefinition,
+    container: &serde_norway::Mapping,
+) -> RootSelection {
+    let roots: Vec<(&String, &crate::linkml::ClassDefinition)> =
+        schema.classes.iter().filter(|(_, c)| c.tree_root).collect();
+    match roots.as_slice() {
+        [] => return RootSelection::None,
+        [(name, _)] => return RootSelection::Chosen((*name).clone()),
+        _ => {}
+    }
+
+    let keys: Vec<&str> = container.keys().filter_map(|k| k.as_str()).collect();
+    let mut scored: Vec<(usize, &String)> = roots
+        .iter()
+        .map(|(name, class)| {
+            let slots = crate::linkml_resolve::resolve_effective_slots(class, schema);
+            let matched = keys.iter().filter(|k| slots.contains_key(**k)).count();
+            (matched, *name)
+        })
+        .collect();
+    scored.sort_by_key(|(matched, _)| std::cmp::Reverse(*matched));
+
+    let best = scored[0].0;
+    let winners = scored.iter().filter(|(score, _)| *score == best).count();
+    if best == 0 || winners > 1 {
+        let mut candidates: Vec<String> = roots.iter().map(|(name, _)| (*name).clone()).collect();
+        candidates.sort();
+        return RootSelection::Ambiguous(candidates);
+    }
+    RootSelection::Chosen(scored[0].1.clone())
 }
 
 /// Walks a LinkML instance-data tree, accumulating typed records.
@@ -1154,6 +1237,178 @@ classes:
         assert!(
             !r.external,
             "an undeclared prefix is not a licence to skip checks"
+        );
+    }
+
+    /// Two roots holding disjoint collections — the shape all four consumers
+    /// described: a scoped estate root and a shared reference root.
+    const TWO_ROOT_SCHEMA: &str = "
+id: https://example.org/estate
+name: estate
+default_prefix: estate
+prefixes:
+  estate: https://example.org/estate/
+default_range: string
+classes:
+  Enterprise:
+    tree_root: true
+    attributes:
+      id: {identifier: true}
+      deployments: {range: Deployment, multivalued: true}
+  ProviderCatalog:
+    tree_root: true
+    attributes:
+      id: {identifier: true}
+      providers: {range: Provider, multivalued: true}
+  Deployment:
+    attributes:
+      id: {identifier: true}
+  Provider:
+    attributes:
+      id: {identifier: true}
+";
+
+    fn two_root_set(yaml: &str) -> InstanceSet {
+        let mut schema: SchemaDefinition =
+            serde_norway::from_str(TWO_ROOT_SCHEMA).expect("parse two-root schema");
+        let named: Vec<(String, ClassDefinition)> = schema
+            .classes
+            .iter()
+            .map(|(k, c)| {
+                let mut c = c.clone();
+                c.name = k.clone();
+                (k.clone(), c)
+            })
+            .collect();
+        schema.classes = named.into_iter().collect();
+        let data: serde_norway::Value = serde_norway::from_str(yaml).expect("parse data");
+        InstanceSet::from_linkml_data(&schema, &data)
+    }
+
+    #[test]
+    fn each_dataset_is_read_against_the_root_its_keys_conform_to() {
+        // `Enterprise` sorts before `ProviderCatalog`, so reading a catalogue
+        // against the first root by sort order is exactly the old bug.
+        let catalog = two_root_set("id: aws-catalog\nproviders:\n  - id: aws\n  - id: gcp\n");
+        assert_eq!(
+            catalog.root.as_deref(),
+            Some("ProviderCatalog"),
+            "the catalogue's keys name ProviderCatalog; got: {:?}",
+            catalog.root
+        );
+        let ids: Vec<&str> = catalog.instances.iter().map(|i| i.id.as_str()).collect();
+        assert!(
+            ids.contains(&"aws") && ids.contains(&"gcp"),
+            "and its records are read, not silently dropped; got: {ids:?}"
+        );
+
+        let estate = two_root_set("id: acme\ndeployments:\n  - id: d1\n");
+        assert_eq!(
+            estate.root.as_deref(),
+            Some("Enterprise"),
+            "and an estate file still reads as Enterprise"
+        );
+    }
+
+    #[test]
+    fn a_reference_root_mints_its_records_in_the_schema_namespace_not_its_own() {
+        // Documents the state root selection leaves behind: the catalogue's
+        // records mint under the schema's default prefix, so an estate that
+        // references `catalog:aws` points at an IRI the catalogue never
+        // produces, and the refactor yields a disconnected graph. Per-dataset
+        // scoping is what closes this; when it does, this test changes.
+        let catalog = two_root_set("id: aws-catalog\nproviders:\n  - id: aws\n");
+        let mut schema: SchemaDefinition =
+            serde_norway::from_str(TWO_ROOT_SCHEMA).expect("parse two-root schema");
+        schema.prefixes.insert(
+            "catalog".to_string(),
+            "https://example.org/catalog/".to_string(),
+        );
+        let aws = catalog
+            .instances
+            .iter()
+            .find(|i| i.id == "aws")
+            .expect("the catalogue's provider");
+        assert_eq!(
+            crate::rdf_serializers::instance_iri_string(&schema, aws),
+            "https://example.org/estate/aws",
+            "the record mints in the schema namespace, NOT under the catalogue \
+             root's own scope — so `catalog:aws` from another dataset does not \
+             resolve to it yet"
+        );
+    }
+
+    #[test]
+    fn a_file_matching_no_root_names_the_candidates_instead_of_guessing() {
+        let orphan = two_root_set("widgets:\n  - id: w1\n");
+        assert!(
+            orphan.instances.is_empty(),
+            "nothing is invented from a file that conforms to no root"
+        );
+        let ambiguity = orphan
+            .root_candidates
+            .as_ref()
+            .expect("an unmatched file records the candidates it could not choose between");
+        assert!(
+            ambiguity.contains(&"Enterprise".to_string())
+                && ambiguity.contains(&"ProviderCatalog".to_string()),
+            "both roots are named so the author can see the choice; got: {ambiguity:?}"
+        );
+        assert!(
+            orphan.root.is_none(),
+            "and no root is claimed when none was chosen"
+        );
+    }
+
+    #[test]
+    fn a_file_matching_two_roots_equally_is_reported_not_resolved_by_sort_order() {
+        // `id` alone is a slot of both roots, so nothing distinguishes them.
+        let tie = two_root_set("id: ambiguous\n");
+        assert!(
+            tie.root.is_none(),
+            "a tie must not be broken silently; got: {:?}",
+            tie.root
+        );
+        assert!(
+            tie.root_candidates.is_some(),
+            "the tie is reported for the author to resolve"
+        );
+    }
+
+    #[test]
+    fn a_single_root_schema_still_reads_a_file_with_keys_it_does_not_declare() {
+        // Long-standing behaviour: unknown container keys are skipped, not
+        // fatal. Adding selection must not turn that into an error.
+        // No key the root declares at all: the sole root is still the root,
+        // and the file simply reads as empty. Treating "nothing matched" as
+        // ambiguity would make a one-root schema start erroring on data it
+        // has always accepted.
+        let barren = xref_set("unknown_key: 3\n");
+        assert_eq!(
+            barren.root.as_deref(),
+            Some("Root"),
+            "one root is chosen whatever the file holds; got: {:?}",
+            barren.root
+        );
+        assert!(
+            barren.root_candidates.is_none(),
+            "and nothing is reported as ambiguous when there is one candidate"
+        );
+
+        let set = xref_set("providers:\n  - id: aws\nunknown_key: 3\n");
+        assert!(
+            set.root_candidates.is_none(),
+            "one root leaves nothing to choose between"
+        );
+        assert_eq!(
+            set.root.as_deref(),
+            Some("Root"),
+            "the sole root is still the root"
+        );
+        assert_eq!(
+            set.instances.iter().filter(|i| i.id == "aws").count(),
+            1,
+            "and the records it does declare are still read"
         );
     }
 

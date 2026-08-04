@@ -198,6 +198,11 @@ individual.
 distinct per dataset while shared vocabulary stays shared.
 
 **Acceptance Criteria:**
+- [ ] **A reference root's records mint under that root's own scope**, so a
+  scoped dataset referencing `catalog:aws` resolves to the very individual
+  the catalogue dataset defines. Today they mint into the schema namespace
+  and nothing joins — the concrete gap that makes the endorsed refactor
+  produce a silently disconnected graph.
 - [ ] An individual of a **scoped** class mints into a per-dataset
   namespace, so the same id in two datasets yields two distinct IRIs.
 - [ ] An individual of a **global** class mints into the schema namespace,
@@ -231,6 +236,66 @@ distinct per dataset while shared vocabulary stays shared.
 
 ---
 
+### Slice 6: Per-dataset `tree_root` selection
+
+**Status:** Complete
+
+**Priority:** Must Have
+
+**User Value:** A schema can hold both a scoped root and a reference root —
+`Enterprise` plus `ProviderCatalog`, `WineCatalog` plus `WineReference`,
+`ProvenanceRecord` plus `Bibliography` — and each dataset is read against
+the one it actually conforms to. Without this the refactor slice 4's design
+depends on cannot be authored at all: panschema takes whichever root sorts
+first and reads every dataset against it.
+
+Four consumers asked for this independently, each for the same reason: the
+classes their shared dataset would hold are the model's hub, so a separate
+schema would duplicate or import them. One schema with two roots is the only
+shape that does not distort the model.
+
+**Acceptance Criteria:**
+- [x] A schema may declare more than one `tree_root` class without becoming
+  ambiguous: each dataset is read against the root its own top-level keys
+  conform to, not against a fixed choice.
+- [x] A single-`tree_root` schema behaves exactly as it does today, including
+  a data file carrying keys the root does not declare.
+- [x] When a schema has several roots, the one chosen for each dataset is
+  **reported**, so an author can see which reading they got rather than
+  inferring it from the output.
+- [x] A file that matches **no** root, or matches two equally well, is a
+  clear error naming the candidate roots — never a silent guess that yields
+  an empty or half-read dataset.
+- [x] The selection is made from the data as authored. Nothing is written
+  into the data file and no manifest key is required, so a dataset stays
+  portable and already-authored files keep working.
+
+**Notes:**
+- **Why inference rather than a declaration.** The roots consumers described
+  hold disjoint collections — an estate's services versus a catalogue's
+  providers — so the data says which root it is. Inferring costs no
+  configuration, works identically for `--instances` and a manifest, and
+  keeps the "modelling lives in the LinkML" line: which dataset is which is
+  a fact about the file, not a fact about the model.
+- **An explicit override stays available if inference proves insufficient.**
+  Adding one later is additive; shipping a required key now could not be
+  withdrawn. The error message is what makes the gap visible if it appears.
+- **Silence was the actual bug.** The old code picked the first root by sort
+  order and read on, so a catalogue file read against an estate root
+  produced a plausible, wrong, near-empty dataset. Erroring loudly is most
+  of this slice's value.
+- **A vacuous pass is the residual hazard**, which is why `validate` reports
+  the record count alongside the chosen root: a dataset read against the
+  wrong root has no violations *and* no records, and "conforms" alone cannot
+  be told apart from a real pass.
+- **This slice does not by itself make the refactor work.** A reference
+  root's records still mint into the schema's namespace rather than the
+  root's own, so a scoped dataset referencing `catalog:aws` points at an IRI
+  the catalogue dataset never produces — both halves valid, nothing joined.
+  Slice 4 closes it; until then, consumers should hold off refactoring.
+
+---
+
 ### Slice 5: Co-reference across schemas
 
 **Status:** Deferred
@@ -252,6 +317,7 @@ node. Build when a real pair needs joining, not before.
 | Slice 2: external-IRI references | Must Have | — | Complete |
 | Slice 3: cross-dataset collision detection | Must Have | — | Complete |
 | Slice 4: per-class dataset scoping | Must Have | Slices 1, 3 | Not started |
+| Slice 6: per-dataset `tree_root` selection | Must Have | — | Complete |
 | Slice 5: co-reference across schemas | Could Have | Slice 2 | Deferred |
 
 ---
@@ -264,6 +330,10 @@ node. Build when a real pair needs joining, not before.
 - **Preserve bare-id forward compatibility.** Applying the scope at
   generation time rather than storing it in data is what keeps every
   already-authored dataset working. It was requested explicitly.
+- **Slice 4's adoption depends on slice 6.** Scoping can ship without root
+  selection, but the refactor it exists to enable cannot be authored until a
+  schema can carry two roots — so shipping 4 alone would leave four repos
+  unable to use it.
 - **Two repos are holding their follow-up open against this**, deliberately:
   one to verify the global/scoped distinction is honoured when scoping
   lands, one because external references gate its eval framework. Both

@@ -995,6 +995,42 @@ fn validate_reports_ids_that_mint_one_iri_across_two_data_files() {
 }
 
 #[test]
+fn validate_names_the_root_each_dataset_was_read_against() {
+    // Both roots declare `id` and `name`, so only the collections decide. A
+    // wrong-root read would conform vacuously with zero records, which is why
+    // the reading and the count are on the success line.
+    for (data, expected_root, records) in [
+        (
+            "two_root_catalog_data.yaml",
+            "ProviderCatalog",
+            "2 record(s)",
+        ),
+        ("two_root_estate_data.yaml", "Enterprise", "2 record(s)"),
+    ] {
+        let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+            .args([
+                "validate",
+                "--schema",
+                "tests/fixtures/two_root_estate.yaml",
+                "--data",
+                &format!("tests/fixtures/{data}"),
+            ])
+            .output()
+            .expect("run panschema");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "{data} should conform; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            stdout.contains(expected_root) && stdout.contains(records),
+            "{data} must report its root and record count; got: {stdout}"
+        );
+    }
+}
+
+#[test]
 fn a_single_data_file_reports_no_collisions() {
     let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([

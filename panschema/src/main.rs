@@ -328,6 +328,16 @@ fn load_instance_set(
     if let Some(summary) = set.external_reference_summary() {
         eprintln!("note: {summary}");
     }
+    // With several roots in play, which one a dataset was read against is a
+    // real choice — show it rather than leaving it to be inferred from output.
+    if schema.classes.values().filter(|c| c.tree_root).count() > 1
+        && let Some(root) = &set.root
+    {
+        eprintln!(
+            "note: {} read against `tree_root` class `{root}`",
+            inst_path.display()
+        );
+    }
     if strict && !violations.is_empty() {
         anyhow::bail!(
             "{} instance-data violation(s) present; failing because --strict is set",
@@ -1331,12 +1341,32 @@ fn validate_data(schema_path: &Path, data_paths: &[PathBuf]) -> anyhow::Result<(
     }
 
     if violation_count == 0 {
+        // With several roots in play, "conforms" alone is ambiguous: a file
+        // read against the wrong root conforms vacuously, having ingested
+        // nothing. Name the reading on the line the author actually reads.
+        let several_roots = schema.classes.values().filter(|c| c.tree_root).count() > 1;
+        let root_of = |path: &Path| -> Option<&str> {
+            sets.iter()
+                .find(|(label, _)| label == &path.display().to_string())
+                .and_then(|(_, set)| set.root.as_deref())
+        };
         for data_path in data_paths {
-            println!(
-                "{} conforms to {}",
-                data_path.display(),
-                schema_path.display()
-            );
+            match root_of(data_path).filter(|_| several_roots) {
+                Some(root) => println!(
+                    "{} conforms to {} (read against `{root}`, {} record(s))",
+                    data_path.display(),
+                    schema_path.display(),
+                    sets.iter()
+                        .find(|(label, _)| label == &data_path.display().to_string())
+                        .map(|(_, set)| set.instances.len())
+                        .unwrap_or(0)
+                ),
+                None => println!(
+                    "{} conforms to {}",
+                    data_path.display(),
+                    schema_path.display()
+                ),
+            }
         }
         Ok(())
     } else if let [only] = data_paths {

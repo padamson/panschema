@@ -1,0 +1,34 @@
+# A schema carrying both a scoped root (Enterprise) and a shared reference
+# root (ProviderCatalog). Both declare `id` and `name`, so only their
+# collection slots distinguish one dataset from the other — the shape four
+# consumer schemas described.
+id: https://example.org/nimbus
+name: nimbus
+default_prefix: nimbus
+prefixes:
+  nimbus: https://example.org/nimbus/
+  catalog: https://example.org/catalog/
+default_range: string
+classes:
+  Enterprise:
+    tree_root: true
+    description: One enterprise's estate, from that enterprise's viewpoint.
+    attributes:
+      id: {identifier: true}
+      name: {}
+      deployments: {range: Deployment, multivalued: true}
+  ProviderCatalog:
+    tree_root: true
+    description: Provider vocabulary shared across enterprises.
+    attributes:
+      id: {identifier: true}
+      name: {}
+      providers: {range: Provider, multivalued: true}
+  Deployment:
+    attributes:
+      id: {identifier: true}
+      on_provider: {range: Provider}
+  Provider:
+    attributes:
+      id: {identifier: true}
+      name: {}

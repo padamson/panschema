@@ -58,6 +58,12 @@ draws an instance graph beneath the docs, folds individuals into the RDF
 output, and runs the same conformance check `validate` runs — so nothing
 ships violations.
 
+**A schema may declare several `tree_root` classes** — typically a scoped
+root plus a shared reference root. Each data file is read against the root
+whose slots its own top-level keys name, so the roots need distinct
+collections; a file matching none of them, or two equally, is a validation
+error naming the candidates rather than a silently empty dataset.
+
 **Whether the root itself becomes an individual is your decision, made by
 giving it an identifier.** A `tree_root` class that declares an
 `identifier: true` slot emits as an individual like any other record — RDF,

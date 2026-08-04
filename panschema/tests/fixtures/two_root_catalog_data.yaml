@@ -1,0 +1,5 @@
+id: aws-catalog
+name: Provider catalogue
+providers:
+  - id: aws
+    name: Amazon Web Services

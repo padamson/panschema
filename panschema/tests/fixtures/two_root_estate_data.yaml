@@ -1,0 +1,7 @@
+# The estate points at the catalogue's provider by CURIE — a cross-graph
+# reference, since `aws` is a record of the catalogue dataset, not this one.
+id: acme
+name: Acme Corp
+deployments:
+  - id: api-gateway
+    on_provider: catalog:aws
