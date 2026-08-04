@@ -1,0 +1,11 @@
+# Each estate defines the shared provider locally instead of referencing the
+# catalogue — the unintended split scoping introduces. The deployments differ,
+# so only `aws` should be reported.
+id: acme
+name: Acme Corp
+deployments:
+  - id: api-gateway
+    name: Acme public API gateway
+providers:
+  - id: aws
+    name: Amazon Web Services

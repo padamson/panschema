@@ -1339,6 +1339,11 @@ fn validate_data(schema_path: &Path, data_paths: &[PathBuf]) -> anyhow::Result<(
     for c in panschema::diagnostics::cross_dataset_iri_collisions(&schema, &borrowed) {
         eprintln!("note: {}", c.message());
     }
+    // The inverse hazard, which scoping introduces and the collision check
+    // cannot see: one entity each dataset defined for itself.
+    for split in panschema::diagnostics::cross_dataset_unintended_splits(&schema, &borrowed) {
+        eprintln!("note: {}", split.message());
+    }
 
     if violation_count == 0 {
         // With several roots in play, "conforms" alone is ambiguous: a file

@@ -27,6 +27,7 @@ classes:
   Deployment:
     attributes:
       id: {identifier: true}
+      name: {}
       on_provider: {range: Provider}
   Provider:
     attributes:

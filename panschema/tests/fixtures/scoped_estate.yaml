@@ -1,0 +1,25 @@
+# One scoped root. Each estate file holds its own deployments and providers,
+# which is what makes the unintended split possible: a provider that ought to
+# be shared gets defined locally by every estate.
+id: https://example.org/nimbus
+name: nimbus
+default_prefix: nimbus
+prefixes:
+  nimbus: https://example.org/nimbus/
+default_range: string
+classes:
+  Enterprise:
+    tree_root: true
+    attributes:
+      id: {identifier: true}
+      name: {}
+      deployments: {range: Deployment, multivalued: true}
+      providers: {range: Provider, multivalued: true}
+  Deployment:
+    attributes:
+      id: {identifier: true}
+      name: {}
+  Provider:
+    attributes:
+      id: {identifier: true}
+      name: {}

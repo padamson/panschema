@@ -719,6 +719,9 @@ fn generate_html_for_version(
     for c in crate::diagnostics::cross_dataset_iri_collisions(&schema, &borrowed) {
         eprintln!("note: {version}: {}", c.message());
     }
+    for split in crate::diagnostics::cross_dataset_unintended_splits(&schema, &borrowed) {
+        eprintln!("note: {version}: {}", split.message());
+    }
 
     // Declaration order drives the selector; `exemplar` decides which opens.
     for (declared, set, entry) in loaded {

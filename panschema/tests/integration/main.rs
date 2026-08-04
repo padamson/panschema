@@ -995,6 +995,36 @@ fn validate_reports_ids_that_mint_one_iri_across_two_data_files() {
 }
 
 #[test]
+fn validate_reports_an_entity_two_scoped_datasets_each_defined() {
+    // Scoping's inverse hazard: `aws` should have been one shared record, so
+    // the two estates now hold two distinct providers. The collision check
+    // cannot see this — after scoping there is no collision left to find.
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "validate",
+            "--schema",
+            "tests/fixtures/scoped_estate.yaml",
+            "--data",
+            "tests/fixtures/two_root_split_acme.yaml",
+            "--data",
+            "tests/fixtures/two_root_split_contoso.yaml",
+        ])
+        .output()
+        .expect("run panschema");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "a split is reported, not fatal");
+    assert!(
+        stderr.contains("`aws`") && stderr.contains("defined identically"),
+        "the shared provider each estate defined locally is reported; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("`api-gateway`"),
+        "but the services that genuinely differ are not — warning about those \
+         would fire on every separation scoping got right; got: {stderr}"
+    );
+}
+
+#[test]
 fn rendered_docs_carry_scoped_and_shared_iris_side_by_side() {
     // The consumer shape: one page holding a scoped estate and the shared
     // catalogue it references. The estate's record must be scoped under its

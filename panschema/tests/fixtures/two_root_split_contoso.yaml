@@ -1,0 +1,11 @@
+# Each estate defines the shared provider locally instead of referencing the
+# catalogue — the unintended split scoping introduces. The deployments differ,
+# so only `aws` should be reported.
+id: contoso
+name: Contoso Ltd
+deployments:
+  - id: api-gateway
+    name: Contoso internal gateway
+providers:
+  - id: aws
+    name: Amazon Web Services

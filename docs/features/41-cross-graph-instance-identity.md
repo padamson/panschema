@@ -307,6 +307,55 @@ shape that does not distort the model.
 
 ---
 
+### Slice 7: The unintended-split diagnostic
+
+**Status:** Complete
+
+**Priority:** Must Have
+
+**Depends on:** Slice 4.
+
+**User Value:** Scoping introduces the inverse of a collision. A shared
+entity left defined in two scoped datasets no longer merges — it silently
+becomes two individuals, each dataset internally valid. Slice 3's collision
+check cannot see it, because after scoping there is no collision left to
+find. Four consumers endorsed this guard; two called it load-bearing.
+
+**Acceptance Criteria:**
+- [x] Records with the same id and the same class, in datasets that scope
+  apart, are reported as possibly denoting one entity — naming the id, the
+  class, and each dataset.
+- [x] **Records that differ in content are not reported.** Two estates'
+  `api-gateway` are different services that share a generic name; warning
+  about them would fire on every correct separation.
+- [x] It is a report, not an error. Splitting is legitimate; only the
+  author knows which.
+- [x] It runs wherever the collision check runs — repeated `--data` on
+  `validate`, and `publish` across its declared `[[instances]]`.
+
+**Notes:**
+- **This deliberately refines what the consumers asked for.** They specified
+  same id + same class + different scopes. Implemented literally, that fires
+  on acme's `api-gateway` versus contoso's — nimbus's own reported case of
+  generic ids recurring across estates by design — so the signal would drown
+  in the noise of scoping working correctly. Requiring the records to be
+  *indistinguishable in content* is what makes it mean something: two files
+  defining `aws` with the same name are plausibly one provider; two files
+  defining differently-configured services are plausibly not.
+- The trade is false negatives: two datasets describing the same entity with
+  differing detail stay quiet. That is the right way to be wrong for a
+  heuristic whose whole value is being believed when it does fire.
+- **Thin records do fire, and that is honest.** Two records carrying only an
+  id genuinely have nothing to tell them apart, so the report says "defined
+  identically" — the basis it fired on — leaving the author to add
+  distinguishing detail or share the record.
+- **Comparison is over the authored assignments, not the display literals.**
+  A slot serving as a record's label never reaches `literals`, so comparing
+  those would call every same-named record identical and fire on everything.
+  Caught by the differing-content test before the diagnostic ever ran.
+
+---
+
 ### Slice 5: Co-reference across schemas
 
 **Status:** Deferred
@@ -329,6 +378,7 @@ node. Build when a real pair needs joining, not before.
 | Slice 3: cross-dataset collision detection | Must Have | — | Complete |
 | Slice 4: per-dataset scoping | Must Have | Slices 1, 3, 6 | Consumer check pending |
 | Slice 6: per-dataset `tree_root` selection | Must Have | — | Complete |
+| Slice 7: unintended-split diagnostic | Must Have | Slice 4 | Complete |
 | Slice 5: co-reference across schemas | Could Have | Slice 2 | Deferred |
 
 ---

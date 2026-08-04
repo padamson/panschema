@@ -359,6 +359,99 @@ pub fn cross_dataset_iri_collisions(
         .collect()
 }
 
+/// One entity that two or more datasets each define locally, so scoping has
+/// split it into distinct individuals.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnintendedSplit {
+    /// The id each dataset used.
+    pub id: String,
+    /// The class they all instantiate.
+    pub class: String,
+    /// The datasets defining it, sorted.
+    pub datasets: Vec<String>,
+}
+
+impl UnintendedSplit {
+    /// A warning line naming the record and every dataset defining it.
+    pub fn message(&self) -> String {
+        format!(
+            "`{}` (class `{}`) is defined identically by {}, which scope apart — \
+             so they are now distinct individuals. If they denote one entity, \
+             move it to a shared dataset and reference it by CURIE.",
+            self.id,
+            self.class,
+            self.datasets.join(", ")
+        )
+    }
+}
+
+/// Records that scoping has split: the same id, of the same class, defined in
+/// datasets that mint it to different IRIs.
+///
+/// This is the inverse of [`cross_dataset_iri_collisions`] and the hazard
+/// scoping introduces — after scoping there is no collision left for that
+/// check to find, so a shared entity left in two scoped datasets becomes two
+/// individuals silently, each dataset internally valid.
+///
+/// **Records whose content differs are not reported.** Two estates'
+/// `api-gateway` are different services that share a generic name, and
+/// warning about them would fire on every separation scoping got right.
+/// Requiring the records to be indistinguishable is what makes a report worth
+/// believing; the cost is silence when one entity is described with differing
+/// detail.
+pub fn cross_dataset_unintended_splits(
+    schema: &crate::linkml::SchemaDefinition,
+    datasets: &[(&str, &crate::instances::InstanceSet)],
+) -> Vec<UnintendedSplit> {
+    use std::collections::BTreeMap;
+    // (id, class) -> dataset -> (minted IRI, comparable content)
+    type Seen = BTreeMap<String, (String, (String, Vec<crate::instances::SlotValue>))>;
+    let mut by_record: BTreeMap<(String, String), Seen> = BTreeMap::new();
+
+    for (label, set) in datasets {
+        for inst in &set.instances {
+            let Some(class) = inst.types.first() else {
+                continue;
+            };
+            let iri = crate::rdf_serializers::instance_iri_string(schema, inst);
+            // The authored assignments, not the display literals: a slot
+            // serving as the record's label never reaches `literals`, so
+            // comparing those would call every same-named record identical.
+            let mut assignments = inst.slot_values.clone();
+            assignments.sort_by(|a, b| a.slot.cmp(&b.slot));
+            let content = (inst.label.clone(), assignments);
+            by_record
+                .entry((inst.id.clone(), class.clone()))
+                .or_default()
+                .insert((*label).to_string(), (iri, content));
+        }
+    }
+
+    by_record
+        .into_iter()
+        .filter_map(|((id, class), seen)| {
+            if seen.len() < 2 {
+                return None;
+            }
+            let mut values = seen.values();
+            let (first_iri, first_content) = values.next()?;
+            // Same IRI means they already merged — the collision check owns
+            // that, and reporting it here too would double-report one problem.
+            if values.clone().all(|(iri, _)| iri == first_iri) {
+                return None;
+            }
+            if !values.all(|(_, content)| content == first_content) {
+                return None;
+            }
+            Some(UnintendedSplit {
+                id,
+                class,
+                datasets: seen.into_keys().collect(),
+            })
+        })
+        .collect()
+}
+
 /// The detection mechanism, parameterized by the ignore-list so tests can
 /// exercise it with fabricated keys decoupled from the real list. Warns
 /// by default: an unmodeled key is reported unless it is in `ignored`.
@@ -999,6 +1092,174 @@ mod tests {
                 ("curie.yaml".to_string(), "cellar:gamay".to_string()),
             ],
             "and the report shows which spelling each dataset used"
+        );
+    }
+
+    /// A schema whose root bears an identifier, so its datasets scope apart —
+    /// the precondition for an unintended split.
+    fn scoped_schema() -> SchemaDefinition {
+        let mut schema = collision_schema();
+        schema.default_range = Some("string".to_string());
+        let mut id = crate::linkml::SlotDefinition::new("id");
+        id.identifier = true;
+
+        let mut root = crate::linkml::ClassDefinition::new("Enterprise");
+        root.tree_root = true;
+        root.attributes.insert("id".to_string(), id.clone());
+        let mut providers = crate::linkml::SlotDefinition::new("providers");
+        providers.range = Some("Provider".to_string());
+        providers.multivalued = true;
+        root.attributes.insert("providers".to_string(), providers);
+        schema.classes.insert("Enterprise".to_string(), root);
+
+        let mut provider = crate::linkml::ClassDefinition::new("Provider");
+        provider.attributes.insert("id".to_string(), id);
+        provider.attributes.insert(
+            "name".to_string(),
+            crate::linkml::SlotDefinition::new("name"),
+        );
+        schema.classes.insert("Provider".to_string(), provider);
+        schema
+    }
+
+    fn scoped_set(schema: &SchemaDefinition, yaml: &str) -> crate::instances::InstanceSet {
+        let data: serde_norway::Value = serde_norway::from_str(yaml).unwrap();
+        crate::instances::InstanceSet::from_linkml_data(schema, &data)
+    }
+
+    #[test]
+    fn one_entity_defined_in_two_scoped_datasets_is_reported_as_a_possible_split() {
+        // The hazard scoping introduces: `aws` is one company, but each estate
+        // defined it locally, so the two no longer merge and nothing collides.
+        let schema = scoped_schema();
+        let acme = scoped_set(
+            &schema,
+            "id: acme\nproviders:\n  - {id: aws, name: Amazon Web Services}\n",
+        );
+        let contoso = scoped_set(
+            &schema,
+            "id: contoso\nproviders:\n  - {id: aws, name: Amazon Web Services}\n",
+        );
+        let splits = cross_dataset_unintended_splits(
+            &schema,
+            &[("acme.yaml", &acme), ("contoso.yaml", &contoso)],
+        );
+        assert_eq!(splits.len(), 1, "one entity, one report; got: {splits:?}");
+        assert_eq!(splits[0].id, "aws");
+        assert_eq!(splits[0].class, "Provider");
+        assert_eq!(
+            splits[0].datasets,
+            vec!["acme.yaml".to_string(), "contoso.yaml".to_string()]
+        );
+        let msg = splits[0].message();
+        assert!(
+            msg.contains("aws") && msg.contains("acme.yaml") && msg.contains("contoso.yaml"),
+            "the message names the id and both datasets; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn same_named_records_that_differ_in_content_are_not_reported() {
+        // Two estates' `api-gateway` are different services sharing a generic
+        // name — the case scoping exists to separate. Warning here would fire
+        // on every correct separation and drown the real signal.
+        let schema = scoped_schema();
+        let acme = scoped_set(
+            &schema,
+            "id: acme\nproviders:\n  - {id: gw, name: Acme gateway}\n",
+        );
+        let contoso = scoped_set(
+            &schema,
+            "id: contoso\nproviders:\n  - {id: gw, name: Contoso gateway}\n",
+        );
+        assert!(
+            cross_dataset_unintended_splits(
+                &schema,
+                &[("acme.yaml", &acme), ("contoso.yaml", &contoso)]
+            )
+            .is_empty(),
+            "records that differ in content are two things, not one split"
+        );
+    }
+
+    #[test]
+    fn a_split_across_three_datasets_names_all_three() {
+        // Three estates each defining `aws` locally is the same mistake, more
+        // so — and the report must name every dataset holding a copy, since
+        // the fix is to move it out of all of them.
+        let schema = scoped_schema();
+        let sets: Vec<_> = ["acme", "contoso", "initech"]
+            .iter()
+            .map(|est| {
+                scoped_set(
+                    &schema,
+                    &format!("id: {est}\nproviders:\n  - {{id: aws, name: Amazon Web Services}}\n"),
+                )
+            })
+            .collect();
+        let labelled: Vec<(&str, &crate::instances::InstanceSet)> = vec![
+            ("acme.yaml", &sets[0]),
+            ("contoso.yaml", &sets[1]),
+            ("initech.yaml", &sets[2]),
+        ];
+        let splits = cross_dataset_unintended_splits(&schema, &labelled);
+        assert_eq!(splits.len(), 1, "one entity, one report; got: {splits:?}");
+        assert_eq!(
+            splits[0].datasets,
+            vec![
+                "acme.yaml".to_string(),
+                "contoso.yaml".to_string(),
+                "initech.yaml".to_string()
+            ],
+            "every dataset holding a copy is named"
+        );
+    }
+
+    #[test]
+    fn records_with_nothing_to_tell_them_apart_are_reported() {
+        // Honest about the heuristic's edge: two thin records carrying only an
+        // id really do have nothing distinguishing them, so this fires. The
+        // report says "defined identically", which is exactly what is true —
+        // the author adds detail or shares the record.
+        let schema = scoped_schema();
+        let acme = scoped_set(&schema, "id: acme\nproviders:\n  - {id: gw}\n");
+        let contoso = scoped_set(&schema, "id: contoso\nproviders:\n  - {id: gw}\n");
+        let splits = cross_dataset_unintended_splits(
+            &schema,
+            &[("acme.yaml", &acme), ("contoso.yaml", &contoso)],
+        );
+        assert_eq!(
+            splits.len(),
+            1,
+            "indistinguishable records are reported, thin or not"
+        );
+        assert!(
+            splits[0].message().contains("defined identically"),
+            "and the message states the basis it fired on; got: {}",
+            splits[0].message()
+        );
+    }
+
+    #[test]
+    fn records_that_did_not_scope_apart_are_left_to_the_collision_check() {
+        // Same scope means they already denote one individual — that is the
+        // collision case, and reporting it here too would double-report.
+        let schema = scoped_schema();
+        let preview = scoped_set(
+            &schema,
+            "id: acme\nproviders:\n  - {id: aws, name: Amazon Web Services}\n",
+        );
+        let full = scoped_set(
+            &schema,
+            "id: acme\nproviders:\n  - {id: aws, name: Amazon Web Services}\n",
+        );
+        assert!(
+            cross_dataset_unintended_splits(
+                &schema,
+                &[("preview.yaml", &preview), ("full.yaml", &full)]
+            )
+            .is_empty(),
+            "records sharing a scope have not split"
         );
     }
 
