@@ -238,6 +238,60 @@ The structural answer to columns **IR** drifting from the spec is
 metaschema so every field is modeled by construction. It does not fill the
 render columns; those stay per-writer work tracked here.
 
+## Spec-conformance findings (audited 2026-08-04)
+
+Checked against the LinkML metamodel docs (tree_root, slots, inlining,
+URIs-and-mappings), not against this file's own claims. Ranked by impact.
+
+1. **T-box fallback IRIs diverge from LinkML's rule.** When `class_uri` /
+   `slot_uri` is absent, LinkML mints `{default_prefix}:{Name}` — e.g.
+   `https://example.org/nimbus/Provider`. panschema mints
+   `{schema.id}#{Name}` — `https://example.org/nimbus#Provider`
+   (`class_iri_string` / `slot_iri_string` / `enum_iri_string`). Every
+   element without an explicit URI therefore gets a *different IRI* than
+   linkml-runtime or gen-owl would produce for the same schema, so
+   cross-tool RDF joins fail silently. panschema is also internally split:
+   **instance** ids already expand via `default_prefix` (conforming), so the
+   A-box follows the spec while the T-box does not. Aligning is a breaking
+   change to every consumer's emitted IRIs — the cheapest moment is before
+   v0.3.0, while nothing published depends on the fragment form.
+
+2. **`identifier` means globally unique; the container-scoped construct is
+   `key`.** The metamodel: an identifier value cannot recur *anywhere*; a
+   `key` value must be unique only within its container. Per-dataset scoping
+   deliberately gives `identifier` key-like semantics (unique per dataset,
+   scope from the root's IRI) because consumers' data reuses generic ids
+   across datasets. Under strict LinkML that data is non-conforming and the
+   idiomatic modeling is `key` — which panschema does not model. Recorded as
+   a **deliberate deviation**; modeling `key` would let spec-conscious
+   authors express the same thing idiomatically, with `identifier` keeping
+   its global meaning.
+
+3. **More than one `tree_root` deviates from a metamodel "should".** The
+   spec: "each schema should have at most one tree root." Per-dataset root
+   selection intentionally supports several, because a separate reference
+   schema would duplicate or import the model's hub classes. Advisory, not
+   normative — but upstream LinkML tooling may warn on or mishandle a
+   two-root schema, so a consumer round-tripping through linkml-runtime
+   should expect friction there.
+
+4. **Inlining is inferred from data shape; the spec's flags are not
+   modeled.** LinkML: a class-ranged slot whose range has no identifier is
+   *always* inlined; with one, it defaults to a reference unless `inlined:
+   true`; `inlined_as_list` selects list vs identifier-keyed dict; and a
+   one-extra-slot class may serialize as a **SimpleDict**
+   (`{key: primary_value}`). panschema reads list and keyed-dict forms by
+   shape, does not consult `inlined`/`inlined_as_list`, and does not read
+   the SimpleDict form at all — a conforming LinkML file using it would
+   lose those records. Reading permissively is defensible; not reading
+   SimpleDict is a gap.
+
+Confirmed conforming, for the record: declared `class_uri`/`slot_uri` are
+honored and CURIE-expanded; bare instance ids resolve via `default_prefix`
+and CURIE ids via declared prefixes, exactly the documented identifier
+behavior; and the guidance that identifiers be `uriorcurie`-shaped is what
+the shared-dataset CURIE convention leans on.
+
 ## Maintaining this matrix
 
 Regenerate by diffing the IR ([linkml.rs](../panschema/src/linkml.rs))
