@@ -54,7 +54,7 @@ that actually reached consumers, and they cost nothing per change.
 
 ### Slice 1: The skill, with its examples executed and its coverage asserted
 
-**Status:** Not started
+**Status:** Complete
 
 **Priority:** Must Have
 
@@ -64,24 +64,24 @@ reference cannot silently rot, because CI runs its examples and checks it
 mentions everything the code offers.
 
 **Acceptance Criteria:**
-- [ ] A skill ships in-repo with a description written as *triggers* (when
+- [x] A skill ships in-repo with a description written as *triggers* (when
   to reach for panschema), not as a description of the tool — discovery is
   the harder half.
-- [ ] Reference material is split so depth loads on demand rather than
+- [x] Reference material is split so depth loads on demand rather than
   bloating the agent's context: at minimum the CLI surface, the manifest
   schema, and the output formats.
-- [ ] **The manifest reference's example is executed by a test.** The test
+- [x] **The manifest reference's example is executed by a test.** The test
   extracts the fenced TOML from the reference file itself — not a copy —
   builds a package around it, runs generation, and asserts the expected
   artifacts appear. A documented example that stops working fails CI.
-- [ ] **Every output format the registry knows is mentioned in the formats
+- [x] **Every output format the registry knows is mentioned in the formats
   reference**, asserted against `FormatRegistry`, so a new writer cannot
   ship undocumented.
-- [ ] **Every CLI subcommand is mentioned in the CLI reference**, asserted
+- [x] **Every CLI subcommand is mentioned in the CLI reference**, asserted
   against the parser.
-- [ ] **Every `[generate.<name>]` key is mentioned in the manifest
+- [x] **Every `[generate.<name>]` key is mentioned in the manifest
   reference**, asserted against the config type's own field names.
-- [ ] The reference states the traps that have actually bitten consumers:
+- [x] The reference states the traps that have actually bitten consumers:
   `path` versus `source`; `[generate]` needing a matching `[schemas]`;
   `postgres` (not `sql`), `json_schema` (underscore) versus the hyphenated
   CLI flag, `graph-json`/`instance-graph-json` (hyphens); and that
