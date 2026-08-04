@@ -920,7 +920,7 @@ mod tests {
                 "PREFIX owl: <http://www.w3.org/2002/07/owl#>\n\
                  PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n\
                  ASK { <https://example.org/wine/chateauMorgon> a owl:NamedIndividual ,\n\
-                       <https://example.org/wine#Wine> ;\n\
+                       <https://example.org/wine/Wine> ;\n\
                        rdfs:label \"Château Morgon\" }",
             ),
             "the wine individual must be typed and labelled"
@@ -934,7 +934,7 @@ mod tests {
             ask(
                 &store,
                 "ASK { <https://example.org/wine/chateauMorgon>\n\
-                       <https://example.org/wine#color> \"red\" }",
+                       <https://example.org/wine/color> \"red\" }",
             ),
             "a scalar slot value must emit as a data-property assertion"
         );
@@ -945,7 +945,7 @@ mod tests {
                 &store,
                 "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n\
                  ASK { <https://example.org/wine/chateauMorgon>\n\
-                       <https://example.org/wine#produced_by> ?w .\n\
+                       <https://example.org/wine/produced_by> ?w .\n\
                        ?w rdfs:label \"Morgon Estate\" }",
             ),
             "an id reference must emit as an object property to the referenced individual"
@@ -997,7 +997,7 @@ mod tests {
         assert!(
             ask(
                 &store,
-                "ASK { <https://example.org/cellar/b1> <https://example.org/cellar#rating> 4 }",
+                "ASK { <https://example.org/cellar/b1> <https://example.org/cellar/rating> 4 }",
             ),
             "an integer-range slot value must carry xsd:integer"
         );

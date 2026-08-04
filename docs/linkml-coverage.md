@@ -243,7 +243,11 @@ render columns; those stay per-writer work tracked here.
 Checked against the LinkML metamodel docs (tree_root, slots, inlining,
 URIs-and-mappings), not against this file's own claims. Ranked by impact.
 
-1. **T-box fallback IRIs diverge from LinkML's rule.** When `class_uri` /
+1. ~~**T-box fallback IRIs diverge from LinkML's rule.**~~ **Resolved
+   2026-08-04:** the fallback now expands `{default_prefix}:{Name}` exactly
+   as linkml-runtime does, unified across every site that names a class or
+   slot; the fragment form survives only for schemas with no usable
+   `default_prefix`. Original finding: When `class_uri` /
    `slot_uri` is absent, LinkML mints `{default_prefix}:{Name}` — e.g.
    `https://example.org/nimbus/Provider`. panschema mints
    `{schema.id}#{Name}` — `https://example.org/nimbus#Provider`

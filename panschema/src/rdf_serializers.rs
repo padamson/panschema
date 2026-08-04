@@ -78,6 +78,28 @@ fn class_iri_string(name: &str, class_def: &ClassDefinition, schema: &SchemaDefi
         .class_uri
         .as_deref()
         .map(|c| expand_curie(c, schema))
+        .unwrap_or_else(|| fallback_element_iri(name, schema))
+}
+
+/// Absolute IRI for a class referenced by name — its declaration's
+/// `class_uri` when it has one, else the shared fallback. The one derivation
+/// for every site that holds a class *name* rather than its definition
+/// (parents, domains, ranges, union members, inverses), so none of them can
+/// drift from what the class's own declaration emits.
+fn class_iri_by_name(name: &str, schema: &SchemaDefinition) -> String {
+    match schema.classes.get(name) {
+        Some(class_def) => class_iri_string(name, class_def, schema),
+        None => fallback_element_iri(name, schema),
+    }
+}
+
+/// LinkML's default URI for an element that declares none:
+/// `{default_prefix}:{name}`, expanded — the same rule linkml-runtime
+/// applies, so the two tools mint identical IRIs for the same schema. A
+/// schema without a usable `default_prefix` falls back to `{id}#{name}`,
+/// since LinkML has nothing to expand against there either.
+fn fallback_element_iri(name: &str, schema: &SchemaDefinition) -> String {
+    crate::linkml_resolve::expand_curie(schema, name)
         .unwrap_or_else(|| format!("{}#{}", ontology_iri_string(schema), name))
 }
 
@@ -103,11 +125,11 @@ fn enum_value_iri(
     )
 }
 
-/// Absolute IRI for an enum: `{ontology}#{name}`, mirroring how classes and
-/// slots without an explicit URI are addressed. The IR carries no
-/// `enum_uri`, so there is nothing to prefer over the derived form.
+/// Absolute IRI for an enum, mirroring how classes and slots without an
+/// explicit URI are addressed. The IR carries no `enum_uri`, so there is
+/// nothing to prefer over the derived form.
 fn enum_iri_string(name: &str, schema: &SchemaDefinition) -> String {
-    format!("{}#{}", ontology_iri_string(schema), name)
+    fallback_element_iri(name, schema)
 }
 
 /// Absolute IRI for a slot: its `slot_uri` (CURIE-expanded) or
@@ -117,7 +139,7 @@ fn slot_iri_string(name: &str, slot_def: &SlotDefinition, schema: &SchemaDefinit
         .slot_uri
         .as_deref()
         .map(|s| expand_curie(s, schema))
-        .unwrap_or_else(|| format!("{}#{}", ontology_iri_string(schema), name))
+        .unwrap_or_else(|| fallback_element_iri(name, schema))
 }
 
 /// Expand a CURIE-shaped name (`prefix:local`) against `schema.prefixes`
@@ -355,12 +377,7 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
         // as multiple inheritance; in OWL that maps to one rdfs:subClassOf
         // edge per parent, including each mixin.
         for parent in class_def.is_a.iter().chain(class_def.mixins.iter()) {
-            let parent_iri_str = schema
-                .classes
-                .get(parent)
-                .and_then(|c| c.class_uri.as_deref())
-                .map(|c| expand_curie(c, schema))
-                .unwrap_or_else(|| format!("{}#{}", ontology_iri_str, parent));
+            let parent_iri_str = class_iri_by_name(parent, schema);
             let parent_iri = make_iri(&parent_iri_str)?;
             graph
                 .insert(&class_iri, rdfs_subclass_of, &parent_iri)
@@ -624,12 +641,7 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
         // domain-less behavior).
         let domain_name = slot_def.domain.as_deref().or(domain_class.as_deref());
         if let Some(domain) = domain_name {
-            let domain_iri_str = schema
-                .classes
-                .get(domain)
-                .and_then(|c| c.class_uri.as_deref())
-                .map(|c| expand_curie(c, schema))
-                .unwrap_or_else(|| format!("{}#{}", ontology_iri_str, domain));
+            let domain_iri_str = class_iri_by_name(domain, schema);
             let domain_iri = make_iri(&domain_iri_str)?;
             graph
                 .insert(&prop_iri, rdfs::domain, &domain_iri)
@@ -647,14 +659,7 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
                 // emitted; previously this fell through with no range at all.
                 Some(enum_iri_string(range, schema))
             } else if is_object_property {
-                Some(
-                    schema
-                        .classes
-                        .get(range)
-                        .and_then(|c| c.class_uri.as_deref())
-                        .map(|c| expand_curie(c, schema))
-                        .unwrap_or_else(|| format!("{}#{}", ontology_iri_str, range)),
-                )
+                Some(class_iri_by_name(range, schema))
             } else {
                 crate::primitives::xsd_datatype_iri(range)
             };
@@ -669,15 +674,7 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
             // union, which OWL states as a class expression over `owl:unionOf`.
             let members = union_classes
                 .iter()
-                .map(|member| {
-                    let iri = schema
-                        .classes
-                        .get(*member)
-                        .and_then(|c| c.class_uri.as_deref())
-                        .map(|c| expand_curie(c, schema))
-                        .unwrap_or_else(|| format!("{ontology_iri_str}#{member}"));
-                    make_iri(&iri)
-                })
+                .map(|member| make_iri(&class_iri_by_name(member, schema)))
                 .collect::<Result<Vec<_>, _>>()?;
             let union_node = make_iri(&format!("{prop_iri_str}/range"))?;
             graph
@@ -696,14 +693,13 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
             )?;
         }
 
-        // owl:inverseOf
+        // owl:inverseOf — the inverse names another slot, so it derives the
+        // way that slot's own declaration would.
         if let Some(ref inverse) = slot_def.inverse {
-            let inverse_iri_str = schema
-                .slots
-                .get(inverse)
-                .and_then(|s| s.slot_uri.as_deref())
-                .map(|s| expand_curie(s, schema))
-                .unwrap_or_else(|| format!("{}#{}", ontology_iri_str, inverse));
+            let inverse_iri_str = match schema.slots.get(inverse) {
+                Some(inv_def) => slot_iri_string(inverse, inv_def, schema),
+                None => fallback_element_iri(inverse, schema),
+            };
             let inverse_iri = make_iri(&inverse_iri_str)?;
             graph
                 .insert(&prop_iri, owl_inverse_of, &inverse_iri)
@@ -748,7 +744,13 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
                 .annotations
                 .get(&iri_key)
                 .cloned()
-                .unwrap_or_else(|| format!("{}#{}", ontology_iri_str, ind_id));
+                .unwrap_or_else(|| {
+                    // Same rule as instance ids: default_prefix expansion,
+                    // fragment only when the schema gives nothing to expand
+                    // against.
+                    crate::linkml_resolve::expand_curie(schema, ind_id)
+                        .unwrap_or_else(|| format!("{}#{}", ontology_iri_str, ind_id))
+                });
             let ind_iri = make_iri(&ind_iri_str)?;
 
             // rdf:type owl:NamedIndividual
@@ -1743,6 +1745,45 @@ mod tests {
     }
 
     #[test]
+    fn an_undeclared_class_uri_mints_via_default_prefix_like_linkml_does() {
+        // LinkML's rule: an element without an explicit URI gets
+        // `{default_prefix}:{Name}`. Minting anything else means the same
+        // schema yields different IRIs here than through linkml-runtime, and
+        // cross-tool joins fail silently.
+        let (schema, _) = abox_fixture();
+        let bottle = schema.classes.get("Bottle").expect("Bottle");
+        assert_eq!(
+            class_iri_string("Bottle", bottle, &schema),
+            "https://example.org/cellar/Bottle",
+            "class fallback expands against default_prefix, not id#fragment"
+        );
+        let score = bottle.attributes.get("score").expect("score");
+        assert_eq!(
+            slot_iri_string("score", score, &schema),
+            "https://example.org/cellar/score",
+            "slot fallback follows the same rule"
+        );
+        assert_eq!(
+            enum_iri_string("Color", &schema),
+            "https://example.org/cellar/Color",
+            "enum fallback follows the same rule"
+        );
+    }
+
+    #[test]
+    fn without_a_default_prefix_the_fragment_fallback_remains() {
+        // A schema that declares no default_prefix gives LinkML nothing to
+        // expand against either; the fragment form is the stable fallback.
+        let mut schema = SchemaDefinition::new("bare");
+        schema.id = Some("https://example.org/bare".to_string());
+        let class = ClassDefinition::new("Thing");
+        assert_eq!(
+            class_iri_string("Thing", &class, &schema),
+            "https://example.org/bare#Thing"
+        );
+    }
+
+    #[test]
     fn instance_iri_uses_a_resolved_iri_but_never_an_unresolved_one() {
         let (schema, _) = abox_fixture();
         let mut inst = crate::instances::Instance {
@@ -1791,7 +1832,7 @@ mod tests {
         use sophia::api::term::Term;
         use sophia::api::triple::Triple;
         let subject = make_iri("https://example.org/cellar/b1").unwrap();
-        let predicate = make_iri("https://example.org/cellar#stored_in").unwrap();
+        let predicate = make_iri("https://example.org/cellar/stored_in").unwrap();
         let objects: Vec<String> = graph
             .triples_matching([subject], [predicate], sophia::api::term::matcher::Any)
             .map(|t| {
@@ -1821,7 +1862,7 @@ mod tests {
         use sophia::api::term::Term;
         use sophia::api::triple::Triple;
         let subject = make_iri("https://example.org/cellar/b1").unwrap();
-        let predicate = make_iri("https://example.org/cellar#score").unwrap();
+        let predicate = make_iri("https://example.org/cellar/score").unwrap();
         let mut found_double = false;
         for t in graph.triples_matching([subject], [predicate], sophia::api::term::matcher::Any) {
             let t = t.unwrap();
@@ -1962,7 +2003,7 @@ mod tests {
         // Enums were absent from RDF entirely: a consumer loading the
         // ontology could not see what values a status may take.
         let graph = build_rdf_graph(&enum_fixture()).expect("graph");
-        let enum_iri = "https://example.org/orders#OrderStatus";
+        let enum_iri = "https://example.org/orders/OrderStatus";
         let rdf_type = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
         assert!(
             has_iri_triple(
@@ -1974,7 +2015,7 @@ mod tests {
             "the enum is a class"
         );
         for value in ["open", "shipped"] {
-            let value_iri = format!("https://example.org/orders#OrderStatus/{value}");
+            let value_iri = format!("https://example.org/orders/OrderStatus/{value}");
             assert!(
                 has_iri_triple(
                     &graph,
@@ -1999,7 +2040,7 @@ mod tests {
         // on it relates individuals — a datatype property with a class range
         // is a contradiction.
         let graph = build_rdf_graph(&enum_fixture()).expect("graph");
-        let status = "https://example.org/orders#status";
+        let status = "https://example.org/orders/status";
         let rdf_type = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
         assert!(
             has_iri_triple(
@@ -2034,8 +2075,8 @@ mod tests {
             has_iri_triple(
                 &graph,
                 "https://example.org/orders/o1",
-                "https://example.org/orders#status",
-                "https://example.org/orders#OrderStatus/shipped"
+                "https://example.org/orders/status",
+                "https://example.org/orders/OrderStatus/shipped"
             ),
             "the assertion names the value's individual"
         );
@@ -2045,7 +2086,7 @@ mod tests {
         let literal_kept = graph.triples().filter_map(Result::ok).any(|t| {
             t.p()
                 .iri()
-                .is_some_and(|i| i.as_str() == "https://example.org/orders#status")
+                .is_some_and(|i| i.as_str() == "https://example.org/orders/status")
                 && t.o().lexical_form().is_some_and(|l| l == "shipped")
         });
         assert!(!literal_kept, "and does not also assert the bare literal");
@@ -2066,8 +2107,8 @@ mod tests {
                 has_iri_triple(
                     &graph,
                     "https://example.org/orders/o1",
-                    "https://example.org/orders#status",
-                    "https://example.org/orders#OrderStatus/on_hold"
+                    "https://example.org/orders/status",
+                    "https://example.org/orders/OrderStatus/on_hold"
                 ),
                 "`{authored}` must resolve to the value's individual"
             );
@@ -2081,7 +2122,7 @@ mod tests {
         let graph = build_rdf_graph(&enum_fixture()).expect("graph");
         let cells = objects_of(
             &graph,
-            "https://example.org/orders#OrderStatus",
+            "https://example.org/orders/OrderStatus",
             "http://www.w3.org/2002/07/owl#oneOf",
         );
         assert_eq!(cells.len(), 1, "got: {cells:?}");
@@ -2098,9 +2139,9 @@ mod tests {
         assert!(
             has_iri_triple(
                 &graph,
-                "https://example.org/orders#status",
+                "https://example.org/orders/status",
                 "http://www.w3.org/2000/01/rdf-schema#range",
-                "https://example.org/orders#OrderStatus"
+                "https://example.org/orders/OrderStatus"
             ),
             "an enum-ranged slot ranges over the enum's class"
         );
@@ -2112,7 +2153,7 @@ mod tests {
         // declare it an object property — a datatype declaration alongside
         // IRI objects is a contradiction an OWL reasoner will reject.
         let graph = build_rdf_graph(&union_tbox_fixture()).expect("graph");
-        let qualifies = "https://example.org/prov#qualifies";
+        let qualifies = "https://example.org/prov/qualifies";
         assert!(
             has_iri_triple(
                 &graph,
@@ -2140,7 +2181,7 @@ mod tests {
         let graph = build_rdf_graph(&union_tbox_fixture()).expect("graph");
         let ranges = objects_of(
             &graph,
-            "https://example.org/prov#qualifies",
+            "https://example.org/prov/qualifies",
             "http://www.w3.org/2000/01/rdf-schema#range",
         );
         assert_eq!(
@@ -2188,8 +2229,8 @@ mod tests {
         assert_eq!(
             members,
             vec![
-                "https://example.org/prov#Claim".to_string(),
-                "https://example.org/prov#Method".to_string()
+                "https://example.org/prov/Claim".to_string(),
+                "https://example.org/prov/Method".to_string()
             ],
             "the union lists both member classes"
         );
@@ -2210,7 +2251,7 @@ mod tests {
         use sophia::api::graph::Graph;
         use sophia::api::triple::Triple;
         let subject = make_iri("https://example.org/prov/s1").unwrap();
-        let predicate = make_iri("https://example.org/prov#qualifies").unwrap();
+        let predicate = make_iri("https://example.org/prov/qualifies").unwrap();
         let linked = graph
             .triples_matching([subject], [predicate], sophia::api::term::matcher::Any)
             .filter_map(Result::ok)
