@@ -79,6 +79,12 @@ pub struct Instance {
     /// keeps each value's kind. Empty for readers that don't populate it yet
     /// (e.g. the OWL-individual reader).
     pub slot_values: Vec<SlotValue>,
+    /// The IRI of the `tree_root` individual this record belongs to, when the
+    /// dataset has one. A bare id mints beneath it, so the same id in two
+    /// datasets denotes two individuals. Applied when the data is read and
+    /// never written back to it, so already-authored files need no rework.
+    /// `None` for a vessel-rooted dataset, which mints as it always has.
+    pub scope: Option<String>,
 }
 
 /// A flat, id-keyed A-box. Deterministic: instances are sorted by `id`.
@@ -244,6 +250,7 @@ impl InstanceSet {
                 // display fields above suffice for the instance graph. See
                 // ADR-008 ("uneven reader coverage").
                 slot_values: Vec::new(),
+                scope: None,
             });
         }
 
@@ -338,11 +345,13 @@ impl InstanceSet {
         // nimbus's `Enterprise`, not wine's catalogue vessel — so it emits
         // as a record in its own right, referencing what it contains. A
         // vessel has no identifier and stays unemitted.
+        let mut emitted_root_id: Option<String> = None;
         if root_slots.values().any(|slot| slot.identifier) {
             let root_value = serde_norway::Value::Mapping(root_fields);
             if let Some(root_id) = loader.build_record(root_name, None, &root_value)
                 && let Some(inst) = loader.instances.iter_mut().find(|i| i.id == root_id)
             {
+                emitted_root_id = Some(root_id.clone());
                 for (slot, ids) in &contained {
                     for id in ids {
                         inst.references.push(Reference {
@@ -362,6 +371,20 @@ impl InstanceSet {
                 inst.slot_values.sort_by(|a, b| a.slot.cmp(&b.slot));
             }
         }
+        // The root individual is the scope, so its records mint beneath it
+        // while the root itself stays the anchor. A vessel root yields no
+        // scope, which is what keeps scoping off by default.
+        if let Some(root_id) = &emitted_root_id
+            && let Some(root_inst) = loader.instances.iter().find(|i| &i.id == root_id)
+        {
+            let scope = crate::rdf_serializers::instance_iri_string(schema, root_inst);
+            for inst in &mut loader.instances {
+                if &inst.id != root_id {
+                    inst.scope = Some(scope.clone());
+                }
+            }
+        }
+
         loader.instances.sort_by(|a, b| a.id.cmp(&b.id));
         loader.duplicate_ids.sort();
         loader.undeclared_fields.sort();
@@ -649,6 +672,8 @@ impl LinkmlLoader<'_> {
                 literals,
                 references,
                 slot_values,
+                // Set once the dataset's root is known, not here.
+                scope: None,
             });
         }
         Some(id)
@@ -1310,20 +1335,154 @@ classes:
         );
     }
 
-    #[test]
-    fn a_reference_root_mints_its_records_in_the_schema_namespace_not_its_own() {
-        // Documents the state root selection leaves behind: the catalogue's
-        // records mint under the schema's default prefix, so an estate that
-        // references `catalog:aws` points at an IRI the catalogue never
-        // produces, and the refactor yields a disconnected graph. Per-dataset
-        // scoping is what closes this; when it does, this test changes.
-        let catalog = two_root_set("id: aws-catalog\nproviders:\n  - id: aws\n");
+    /// The schema, with `catalog:` declared, that both halves of the
+    /// reference/scoped split resolve against.
+    fn two_root_schema_with_catalog_prefix() -> SchemaDefinition {
         let mut schema: SchemaDefinition =
             serde_norway::from_str(TWO_ROOT_SCHEMA).expect("parse two-root schema");
         schema.prefixes.insert(
             "catalog".to_string(),
             "https://example.org/catalog/".to_string(),
         );
+        schema
+    }
+
+    #[test]
+    fn records_of_an_identified_root_mint_under_that_root() {
+        // acme's api-gateway and contoso's are different services that happen
+        // to share a local name. Distinct entities need distinct IRIs.
+        let schema = two_root_schema_with_catalog_prefix();
+        let acme = two_root_set("id: acme\ndeployments:\n  - id: api-gateway\n");
+        let contoso = two_root_set("id: contoso\ndeployments:\n  - id: api-gateway\n");
+        let iri_of = |set: &InstanceSet| {
+            let inst = set
+                .instances
+                .iter()
+                .find(|i| i.id == "api-gateway")
+                .expect("the deployment");
+            crate::rdf_serializers::instance_iri_string(&schema, inst)
+        };
+        assert_eq!(iri_of(&acme), "https://example.org/estate/acme/api-gateway");
+        assert_eq!(
+            iri_of(&contoso),
+            "https://example.org/estate/contoso/api-gateway"
+        );
+        assert_ne!(
+            iri_of(&acme),
+            iri_of(&contoso),
+            "two estates' same-named services must not be one individual"
+        );
+    }
+
+    #[test]
+    fn a_record_named_by_an_absolute_iri_escapes_its_dataset_scope() {
+        // A record grounded in an external standard — a DOI, an ORCID, a
+        // FoodOn or ChEBI term — already denotes one thing worldwide. Nesting
+        // it under the dataset that mentions it would mint a private copy and
+        // break exactly the cross-schema co-reference those standards exist
+        // for.
+        let schema = two_root_schema_with_catalog_prefix();
+        for authored in [
+            "https://doi.org/10.1000/xyz",
+            "urn:uuid:8f1a0e2c-0000-4000-8000-000000000000",
+        ] {
+            let set = two_root_set(&format!("id: acme\ndeployments:\n  - id: '{authored}'\n"));
+            let inst = set
+                .instances
+                .iter()
+                .find(|i| i.id == authored)
+                .unwrap_or_else(|| panic!("the record named {authored}"));
+            assert_eq!(
+                crate::rdf_serializers::instance_iri_string(&schema, inst),
+                authored,
+                "an externally-grounded id is used as authored, not scoped \
+                 beneath the dataset that mentions it"
+            );
+        }
+    }
+
+    #[test]
+    fn the_root_itself_stays_the_anchor_rather_than_nesting_under_its_own_scope() {
+        let schema = two_root_schema_with_catalog_prefix();
+        let acme = two_root_set("id: acme\ndeployments:\n  - id: api-gateway\n");
+        let root = acme
+            .instances
+            .iter()
+            .find(|i| i.id == "acme")
+            .expect("the root record");
+        assert_eq!(
+            crate::rdf_serializers::instance_iri_string(&schema, root),
+            "https://example.org/estate/acme",
+            "the root IS the scope, so it does not nest inside itself"
+        );
+    }
+
+    #[test]
+    fn two_datasets_sharing_a_root_id_keep_denoting_the_same_individuals() {
+        // A teaching preview that subsets a worked example shares records on
+        // purpose. Same root id, same scope, no opt-out needed.
+        let schema = two_root_schema_with_catalog_prefix();
+        let preview = two_root_set("id: acme\ndeployments:\n  - id: api-gateway\n");
+        let full = two_root_set("id: acme\ndeployments:\n  - id: api-gateway\n  - id: billing\n");
+        let iri_of = |set: &InstanceSet, id: &str| {
+            let inst = set.instances.iter().find(|i| i.id == id).expect("record");
+            crate::rdf_serializers::instance_iri_string(&schema, inst)
+        };
+        assert_eq!(
+            iri_of(&preview, "api-gateway"),
+            iri_of(&full, "api-gateway"),
+            "the shared record stays one individual across the pair"
+        );
+    }
+
+    #[test]
+    fn records_of_a_vessel_root_mint_exactly_as_before() {
+        // Scoping is off by default: a root with no identifier is not a
+        // scope-bearing entity, so nothing about its records changes.
+        let mut schema: SchemaDefinition =
+            serde_norway::from_str(XREF_SCHEMA).expect("parse xref schema");
+        schema.default_prefix = Some("estate".to_string());
+        schema.prefixes.insert(
+            "estate".to_string(),
+            "https://example.org/estate/".to_string(),
+        );
+        let set = xref_set("providers:\n  - id: aws\n");
+        let aws = set.instances.iter().find(|i| i.id == "aws").expect("aws");
+        assert_eq!(
+            crate::rdf_serializers::instance_iri_string(&schema, aws),
+            "https://example.org/estate/aws",
+            "a vessel root introduces no scope segment"
+        );
+    }
+
+    #[test]
+    fn a_shared_record_authored_by_curie_mints_where_other_datasets_point() {
+        // The reference/scoped refactor's join: a catalogue record named by
+        // CURIE emits the very IRI a scoped dataset's `catalog:aws` resolves
+        // to. LinkML's own rule — a CURIE identifier expands against the
+        // schema's prefixes — is what makes this work with no scoping.
+        let catalog = two_root_set("id: catalog:main\nproviders:\n  - id: catalog:aws\n");
+        let schema = two_root_schema_with_catalog_prefix();
+        let aws = catalog
+            .instances
+            .iter()
+            .find(|i| i.id == "catalog:aws")
+            .expect("the catalogue's provider");
+        assert_eq!(
+            crate::rdf_serializers::instance_iri_string(&schema, aws),
+            "https://example.org/catalog/aws",
+            "a CURIE-named shared record mints into the shared namespace"
+        );
+    }
+
+    #[test]
+    fn the_same_record_authored_bare_mints_elsewhere_and_does_not_join() {
+        // The silent half of the same contract: authored bare, the record
+        // lands in the schema's namespace, so a `catalog:aws` reference
+        // resolves to nothing this dataset produced — both halves valid,
+        // nothing joined. Documented because the failure is invisible.
+        let catalog = two_root_set("id: aws-catalog\nproviders:\n  - id: aws\n");
+        let schema = two_root_schema_with_catalog_prefix();
         let aws = catalog
             .instances
             .iter()
@@ -1331,10 +1490,9 @@ classes:
             .expect("the catalogue's provider");
         assert_eq!(
             crate::rdf_serializers::instance_iri_string(&schema, aws),
-            "https://example.org/estate/aws",
-            "the record mints in the schema namespace, NOT under the catalogue \
-             root's own scope — so `catalog:aws` from another dataset does not \
-             resolve to it yet"
+            "https://example.org/estate/aws-catalog/aws",
+            "a bare id scopes under its own dataset's root, NOT into the \
+             shared namespace — so `catalog:aws` does not resolve to it"
         );
     }
 

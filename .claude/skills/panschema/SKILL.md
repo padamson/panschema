@@ -58,6 +58,16 @@ draws an instance graph beneath the docs, folds individuals into the RDF
 output, and runs the same conformance check `validate` runs — so nothing
 ships violations.
 
+**A dataset whose root carries an identifier is a scope.** Its records mint
+beneath the root's IRI (`.../acme/api-gateway`), so the same id in two
+datasets is two individuals. A root without an identifier is a vessel and its
+records mint unscoped, exactly as before. To share a record *across*
+datasets, put it in its own dataset and give it a **CURIE id**
+(`id: catalog:aws`): a CURIE expands against the schema's prefixes and is
+left unscoped, so every dataset referencing `catalog:aws` gets the one
+individual. Authored bare instead, that record scopes under its own dataset
+and the reference silently resolves to nothing.
+
 **A schema may declare several `tree_root` classes** — typically a scoped
 root plus a shared reference root. Each data file is read against the root
 whose slots its own top-level keys name, so the roots need distinct

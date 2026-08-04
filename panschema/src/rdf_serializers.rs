@@ -814,6 +814,19 @@ pub fn instance_iri_string(schema: &SchemaDefinition, inst: &crate::instances::I
     {
         return iri.clone();
     }
+    // A record named by CURIE or absolute IRI carries its own namespace — a
+    // shared-vocabulary record, or one belonging to another graph — so its
+    // dataset's scope does not apply to it. That asymmetry is what lets a
+    // scoped dataset and a shared one live under the same mechanism.
+    let names_its_own_namespace = inst.id.contains("://")
+        || inst.id.starts_with("urn:")
+        || inst
+            .id
+            .split_once(':')
+            .is_some_and(|(prefix, _)| schema.prefixes.contains_key(prefix));
+    if !names_its_own_namespace && let Some(scope) = &inst.scope {
+        return format!("{scope}/{}", inst.id);
+    }
     crate::linkml_resolve::expand_curie(schema, &inst.id)
         .unwrap_or_else(|| format!("{}#{}", ontology_iri_string(schema), inst.id))
 }
@@ -1742,6 +1755,7 @@ mod tests {
             literals: vec![],
             references: vec![],
             slot_values: vec![],
+            scope: None,
         };
         assert_eq!(
             instance_iri_string(&schema, &inst),

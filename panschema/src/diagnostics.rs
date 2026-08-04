@@ -883,6 +883,7 @@ mod tests {
                 })
                 .collect(),
             slot_values: Vec::new(),
+            scope: None,
         }
     }
 
@@ -998,6 +999,44 @@ mod tests {
                 ("curie.yaml".to_string(), "cellar:gamay".to_string()),
             ],
             "and the report shows which spelling each dataset used"
+        );
+    }
+
+    #[test]
+    fn scoping_retires_the_collision_two_estates_used_to_report() {
+        // The regression slice 3 exists to be: once each dataset scopes under
+        // its own root, the same id in two estates is two individuals, so
+        // there is no longer a collision to report.
+        let mut schema = collision_schema();
+        schema.default_range = Some("string".to_string());
+        let mut root = crate::linkml::ClassDefinition::new("Enterprise");
+        root.tree_root = true;
+        let mut id = crate::linkml::SlotDefinition::new("id");
+        id.identifier = true;
+        root.attributes.insert("id".to_string(), id.clone());
+        let mut deployments = crate::linkml::SlotDefinition::new("deployments");
+        deployments.range = Some("Deployment".to_string());
+        deployments.multivalued = true;
+        root.attributes
+            .insert("deployments".to_string(), deployments);
+        schema.classes.insert("Enterprise".to_string(), root);
+        let mut dep = crate::linkml::ClassDefinition::new("Deployment");
+        dep.attributes.insert("id".to_string(), id);
+        schema.classes.insert("Deployment".to_string(), dep);
+
+        let read = |yaml: &str| {
+            let data: serde_norway::Value = serde_norway::from_str(yaml).unwrap();
+            crate::instances::InstanceSet::from_linkml_data(&schema, &data)
+        };
+        let acme = read("id: acme\ndeployments:\n  - id: api-gateway\n");
+        let contoso = read("id: contoso\ndeployments:\n  - id: api-gateway\n");
+        assert!(
+            cross_dataset_iri_collisions(
+                &schema,
+                &[("acme.yaml", &acme), ("contoso.yaml", &contoso)]
+            )
+            .is_empty(),
+            "two scoped estates sharing a service name no longer merge"
         );
     }
 

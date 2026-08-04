@@ -186,9 +186,9 @@ individual.
 
 ---
 
-### Slice 4: Per-class dataset scoping
+### Slice 4: Per-dataset scoping
 
-**Status:** Not started
+**Status:** Complete except the consumer-verified competency-question check
 
 **Priority:** Must Have
 
@@ -198,41 +198,49 @@ individual.
 distinct per dataset while shared vocabulary stays shared.
 
 **Acceptance Criteria:**
-- [ ] **A reference root's records mint under that root's own scope**, so a
-  scoped dataset referencing `catalog:aws` resolves to the very individual
-  the catalogue dataset defines. Today they mint into the schema namespace
-  and nothing joins — the concrete gap that makes the endorsed refactor
-  produce a silently disconnected graph.
-- [ ] An individual of a **scoped** class mints into a per-dataset
-  namespace, so the same id in two datasets yields two distinct IRIs.
-- [ ] An individual of a **global** class mints into the schema namespace,
-  so the same id in two datasets yields **one** IRI — nimbus's `aws` and
-  scimantic's `src-ghosh-2022` deliberately merge.
-- [ ] Which classes are global is declared in the schema, not the manifest:
-  it is a fact about the model, not about a deployment.
-- [ ] **Bare ids stay forward-compatible.** The scope is applied at
+- [x] Bare ids in **two different datasets** stop denoting one individual:
+  acme's `api-gateway` and contoso's `api-gateway` become distinct. This is
+  the whole of the remaining gap — a *shared* dataset already joins, because
+  a CURIE id (`id: catalog:aws`) expands against the schema's prefixes, so
+  the reference/scoped refactor needs nothing further from panschema.
+- [x] A record in a dataset whose root **bears an identifier** mints under
+  that root's IRI, so `acme/api-gateway` and `contoso/api-gateway` are
+  distinct individuals.
+- [x] A record in a dataset whose root is a **vessel** — no identifier —
+  mints exactly as it does today. This is what makes scoping off by
+  default.
+- [x] **Two datasets sharing a root id share a scope**, so a teaching
+  preview and the worked example it subsets keep denoting the same
+  individuals with no opt-out needed.
+- [x] Scoping applies **uniformly to every class**, with no global/scoped
+  designation anywhere. Sharing is expressed by putting the shared records
+  in their own dataset and naming them by CURIE, not by annotating classes.
+- [x] **Bare ids stay forward-compatible.** The scope is applied at
   generation time and never written into the data file, so datasets
   authored before this ships need no rework. This property is explicitly
   requested by the filing repo and must not be traded away.
-- [ ] Scoping is **off by default**: a schema that designates nothing
+- [x] Scoping is **off by default**: a schema that designates nothing
   behaves exactly as today, so wine's and scimantic's deliberately shared
   pairs are unaffected.
-- [ ] With scoping on, slice 3's collision check reports no collisions for
+- [x] With scoping on, slice 3's collision check reports no collisions for
   scoped classes across datasets, and still reports genuine ones for global
   classes.
 - [ ] nimbus's cross-enterprise competency questions remain answerable
   across two estates — the concrete acceptance test for the global set.
 
 **Notes:**
-- **Open: how the dataset scope is derived.** The elegant candidate is the
-  `tree_root` individual's IRI from slice 1 — the root record *is* the
-  scope, and nimbus's one-file-per-enterprise shape says so directly. That
-  needs no new configuration. Decide against the alternative of naming the
-  scope in the manifest before building.
-- **Open: how global classes are designated.** nimbus's ratio (3 of 13)
-  argues for marking the exceptions rather than the rule. A class-level
-  annotation keeps the fact with the model; confirm no consumer's ratio
-  inverts this before committing.
+- **Settled: the scope is the `tree_root` individual's IRI.** The root
+  record *is* the scope; nimbus's one-file-per-enterprise shape says so
+  directly, and it needs no configuration. The manifest alternative was
+  rejected — a deployment fact would then decide identity.
+- **Settled: there is no global/scoped class designation.** All five
+  consumers declined it. cuisineiq's finding retired it outright:
+  `GroceryItemKind` holds both a shared catalogue item and one user's custom
+  item, so a class-level flag *cannot express* the boundary. Dataset
+  membership expresses both for free.
+- **Sharing needs no scoping machinery at all.** A shared dataset's records
+  are named by CURIE and already mint into the shared namespace, so this
+  slice owes only the scoped half.
 
 ---
 
@@ -288,11 +296,14 @@ shape that does not distort the model.
   the record count alongside the chosen root: a dataset read against the
   wrong root has no violations *and* no records, and "conforms" alone cannot
   be told apart from a real pass.
-- **This slice does not by itself make the refactor work.** A reference
-  root's records still mint into the schema's namespace rather than the
-  root's own, so a scoped dataset referencing `catalog:aws` points at an IRI
-  the catalogue dataset never produces — both halves valid, nothing joined.
-  Slice 4 closes it; until then, consumers should hold off refactoring.
+- **The shared half of the refactor already works, via CURIE ids.** A
+  catalogue authored with `id: catalog:aws` emits `catalog:aws`, which an
+  estate's `on_provider: catalog:aws` resolves to — verified end to end.
+  Authored *bare*, the same record mints into the schema namespace and
+  nothing joins, silently; that asymmetry is the thing to document rather
+  than a defect to fix, since it follows LinkML's own rule that a bare
+  identifier is a relative IRI against `default_prefix` while a CURIE
+  expands. What slice 4 still owes is the **scoped** half.
 
 ---
 
@@ -316,7 +327,7 @@ node. Build when a real pair needs joining, not before.
 | Slice 1: `tree_root` record emission | Must Have | — | Complete |
 | Slice 2: external-IRI references | Must Have | — | Complete |
 | Slice 3: cross-dataset collision detection | Must Have | — | Complete |
-| Slice 4: per-class dataset scoping | Must Have | Slices 1, 3 | Not started |
+| Slice 4: per-dataset scoping | Must Have | Slices 1, 3, 6 | Consumer check pending |
 | Slice 6: per-dataset `tree_root` selection | Must Have | — | Complete |
 | Slice 5: co-reference across schemas | Could Have | Slice 2 | Deferred |
 

@@ -995,6 +995,49 @@ fn validate_reports_ids_that_mint_one_iri_across_two_data_files() {
 }
 
 #[test]
+fn rendered_docs_carry_scoped_and_shared_iris_side_by_side() {
+    // The consumer shape: one page holding a scoped estate and the shared
+    // catalogue it references. The estate's record must be scoped under its
+    // root, the shared record must not be, and the estate's reference must
+    // resolve to the IRI the catalogue actually mints.
+    let dir = std::env::temp_dir().join("panschema_scoped_render_test");
+    let _ = fs::remove_dir_all(&dir);
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--schema",
+            "tests/fixtures/two_root_estate.yaml",
+            "--instances",
+            "tests/fixtures/two_root_estate_data.yaml",
+            "--instances",
+            "tests/fixtures/two_root_shared_data.yaml",
+            "--output",
+            dir.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run panschema");
+    assert!(
+        out.status.success(),
+        "generation should succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let html = fs::read_to_string(dir.join("index.html")).expect("rendered page");
+    assert!(
+        html.contains("https://example.org/nimbus/acme/api-gateway"),
+        "the estate's record renders scoped under its root"
+    );
+    assert!(
+        html.contains("https://example.org/catalog/aws"),
+        "the shared record renders in the shared namespace, unscoped"
+    );
+    assert!(
+        !html.contains("nimbus/acme/catalog"),
+        "and the CURIE-named shared record is never nested under a scope"
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn validate_names_the_root_each_dataset_was_read_against() {
     // Both roots declare `id` and `name`, so only the collections decide. A
     // wrong-root read would conform vacuously with zero records, which is why

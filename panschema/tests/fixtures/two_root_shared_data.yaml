@@ -1,0 +1,8 @@
+# The shared dataset, authored the way a shared dataset must be: CURIE ids,
+# so its records mint into the shared namespace and stay unscoped. Every
+# scoped dataset referencing `catalog:aws` resolves to the record below.
+id: catalog:main
+name: Provider catalogue
+providers:
+  - id: catalog:aws
+    name: Amazon Web Services
