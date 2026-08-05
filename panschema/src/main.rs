@@ -211,6 +211,28 @@ enum Commands {
         #[arg(short, long, required = true)]
         data: Vec<PathBuf>,
     },
+    /// Write the schema's Postgres DDL as a versioned migration file.
+    ///
+    /// This command only writes files. It never connects to a database and
+    /// has no apply or rollback mode — running the migrations is the
+    /// migration runner's job.
+    ///
+    /// With no `--schema`, discovers a `panschema.toml` and emits for each
+    /// schema whose `[generate.<name>]` block declares a `migrations`
+    /// directory.
+    ///
+    /// A generated migration is a draft to review, not an authoritative
+    /// artifact. Read it before you apply it.
+    Migrate {
+        /// Schema file (.ttl, .yaml, .yml). When omitted, uses the manifest.
+        #[arg(short, long)]
+        schema: Option<PathBuf>,
+
+        /// Directory to write the migration into. Required with `--schema`;
+        /// the manifest supplies it otherwise.
+        #[arg(short, long)]
+        migrations: Option<PathBuf>,
+    },
     /// Build versioned HTML docs from a `panschema-publish.toml` with a
     /// `[publishing]` section. Produces `<output>/<tag>/` per version,
     /// `<output>/<edge>/` if edge is configured, and a `<output>/current/`
@@ -598,6 +620,145 @@ fn resolve_source(
             )
         }
     }
+}
+
+/// The version every first migration carries. A runner rejects a migration
+/// whose version is at or below the highest already applied, so emission is
+/// append-only from here and never renumbers what came before.
+const FIRST_MIGRATION_VERSION: u32 = 1;
+
+/// The filename a versioned runner discovers: `V<version>__<name>.sql`.
+///
+/// The name half must be word characters only — a runner's discovery
+/// pattern is `^([U|V])(\d+(?:\.\d+)?)__(\w+)`, and a file it cannot parse
+/// is skipped in silence rather than reported. Snake-casing the schema name
+/// keeps it inside that set.
+fn migration_filename(schema_name: &str, version: u32) -> String {
+    format!(
+        "V{version}__{}.sql",
+        panschema::casing::snake_case(schema_name)
+    )
+}
+
+/// Write `schema`'s DDL into `migrations_dir` as the first migration.
+///
+/// Three outcomes, and the distinction between the last two is the point:
+/// an empty directory gets the migration; a directory already holding
+/// exactly this migration is a no-op, so re-running is safe; a directory
+/// holding anything else is refused, because emitting an incremental
+/// migration against existing history is a later slice and guessing here
+/// would produce a file a runner might apply.
+fn emit_initial_migration(
+    schema_path: &Path,
+    migrations_dir: &Path,
+    deps: &std::collections::BTreeMap<String, PathBuf>,
+) -> anyhow::Result<()> {
+    let registry = FormatRegistry::with_defaults();
+    let schema = panschema::import_resolve::load_schema_with_deps(schema_path, &registry, deps)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    // The DDL covers the classes the Postgres writer can project; the rest
+    // are already reported by the shared warning path that `generate` uses,
+    // so surface them here too rather than emitting a thinner script in
+    // silence.
+    for skipped in panschema::postgres_writer::skipped_classes(&schema) {
+        eprintln!(
+            "warning: class `{}` has no postgres table: {}",
+            skipped.class, skipped.reason
+        );
+    }
+    for skipped in panschema::postgres_writer::skipped_rules(&schema) {
+        eprintln!(
+            "warning: rule `{}` on class `{}` is not emitted as a postgres CHECK: {}",
+            skipped.rule, skipped.class, skipped.reason
+        );
+    }
+
+    let filename = migration_filename(&schema.name, FIRST_MIGRATION_VERSION);
+    let body = panschema::postgres_writer::render_migration_body(&schema);
+    let target = migrations_dir.join(&filename);
+
+    let existing = existing_migrations(migrations_dir)?;
+    match existing.as_slice() {
+        [] => {}
+        [only] if only == &filename && std::fs::read_to_string(&target)? == body => {
+            println!(
+                "{} already records this schema; nothing to write.",
+                target.display()
+            );
+            return Ok(());
+        }
+        _ => {
+            anyhow::bail!(
+                "{} is not empty: it already contains {}. \
+                 panschema only writes the first migration into an empty directory; \
+                 emitting an incremental migration against existing history is not \
+                 supported yet.",
+                migrations_dir.display(),
+                existing.join(", ")
+            );
+        }
+    }
+
+    std::fs::create_dir_all(migrations_dir)?;
+    std::fs::write(&target, &body)?;
+    println!("Wrote {}", target.display());
+    Ok(())
+}
+
+/// Migration filenames already in `dir`, sorted. A missing directory reads
+/// as empty — that is the ordinary first run, not an error.
+fn existing_migrations(dir: &Path) -> anyhow::Result<Vec<String>> {
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut names: Vec<String> = std::fs::read_dir(dir)?
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.ends_with(".sql"))
+        .collect();
+    names.sort();
+    Ok(names)
+}
+
+/// `panschema migrate` (no --schema): emit for each manifested schema that
+/// declares a migrations directory.
+fn migrate_from_manifest() -> anyhow::Result<()> {
+    use anyhow::Context as _;
+    let (manifest, manifest_dir) = load_manifest()?;
+
+    if manifest.schemas.is_empty() {
+        eprintln!("Manifest has no `[schemas]` entries; nothing to do.");
+        return Ok(());
+    }
+
+    let mut deps: std::collections::BTreeMap<String, PathBuf> = std::collections::BTreeMap::new();
+    for (name, dep) in &manifest.schemas {
+        let panschema::source::Resolved { schema_path, .. } =
+            resolve_source(name, dep, &manifest_dir)?;
+        deps.insert(name.clone(), schema_path);
+    }
+
+    let mut emitted_anything = false;
+    for name in manifest.schemas.keys() {
+        let Some(dir) = manifest
+            .generate
+            .get(name)
+            .and_then(|cfg| cfg.migrations.as_ref())
+        else {
+            continue;
+        };
+        emit_initial_migration(&deps[name], &manifest_dir.join(dir), &deps)
+            .with_context(|| format!("schema `{name}`"))?;
+        emitted_anything = true;
+    }
+
+    if !emitted_anything {
+        eprintln!(
+            "No migrations emitted. Add `migrations = \"<dir>/\"` to an `[generate.<schema>]` block."
+        );
+    }
+    Ok(())
 }
 
 /// `panschema generate` (no --schema): walk the manifest and run configured writers.
@@ -1630,6 +1791,17 @@ async fn main() -> anyhow::Result<()> {
         Commands::Fetch => fetch_from_manifest()?,
         Commands::Verify => verify_from_manifest()?,
         Commands::Validate { schema, data } => validate_data(&schema, &data)?,
+        Commands::Migrate { schema, migrations } => match (schema, migrations) {
+            (Some(schema_path), Some(dir)) => {
+                emit_initial_migration(&schema_path, &dir, &std::collections::BTreeMap::new())?;
+            }
+            (Some(_), None) => anyhow::bail!("--migrations <dir> is required with --schema"),
+            (None, Some(_)) => anyhow::bail!(
+                "--migrations names the directory for one schema, so it needs --schema; \
+                 a manifest run takes the directory from each `[generate.<name>].migrations`"
+            ),
+            (None, None) => migrate_from_manifest()?,
+        },
         Commands::Publish {
             manifest,
             output_dir,

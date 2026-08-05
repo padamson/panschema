@@ -71,10 +71,17 @@ are manifest-relative.
 | `ntriples` | N-Triples |
 | `graph-json` | Schema graph wire format — **hyphen** |
 | `instance-graph-json` | A-box graph wire format — **hyphen** |
+| `migrations` | **A directory** of versioned migration files. Written by `panschema migrate`, *not* by `generate` |
 
 Note the naming is not uniform: `json_schema` and `html_graph_aspect` use
 underscores, `graph-json` and `instance-graph-json` use hyphens. With
 `deny_unknown_fields`, guessing wrong is a parse error.
+
+`migrations` is the odd one out in a second way. Every other key names an
+output regenerated from scratch on each run, so `generate` owns it. A
+migration directory is append-only — a runner checksums each file it has
+applied and aborts when the bytes change — so `generate` never writes there.
+Run `panschema migrate` to add to it.
 
 ## `[label_sources]`
 

@@ -149,6 +149,13 @@ pub struct GenerateConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub instance_graph_json: Option<PathBuf>,
+    /// Directory holding this schema's versioned migration files.
+    ///
+    /// Unlike every other key here, this names a directory of append-only
+    /// artifacts rather than a file regenerated on each run, so `generate`
+    /// leaves it alone — `panschema migrate` is what writes into it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migrations: Option<PathBuf>,
 }
 
 impl GenerateConfig {
@@ -173,6 +180,7 @@ impl GenerateConfig {
             ntriples: Some(PathBuf::from("x")),
             graph_json: Some(PathBuf::from("x")),
             instance_graph_json: Some(PathBuf::from("x")),
+            migrations: Some(PathBuf::from("x")),
         };
         let toml = toml::to_string(&populated).expect("GenerateConfig serializes");
         toml.lines()
@@ -1197,6 +1205,7 @@ x = { path = "./x-pkg" }
             "ntriples",
             "graph-json",
             "instance-graph-json",
+            "migrations",
         ];
         for key in expected {
             assert!(

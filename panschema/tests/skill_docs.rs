@@ -141,6 +141,7 @@ fn every_subcommand_is_documented() {
     for sub in [
         "generate",
         "validate",
+        "migrate",
         "publish",
         "serve",
         "init",

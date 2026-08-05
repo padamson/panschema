@@ -26,6 +26,7 @@ Think of it as **pandoc for data modeling** — a single tool that speaks all sc
 - **mdbook integration**: `mdbook-panschema install` adds a maintained toolbar link from an mdbook book to its schema docs
 - **Loud about gaps**: warns on LinkML constructs it parses but doesn't model (so nothing is silently dropped); `generate --strict` fails the build instead
 - **Postgres DDL**: `generate --format postgres` emits `CREATE TABLE`/`CREATE TYPE` DDL from the same LinkML schema your Rust structs come from — no hand-written SQL to keep in sync
+- **Versioned migrations**: `migrate --schema schema.yaml --migrations db/migrations/` writes that DDL as a migration file a checksumming runner can apply — deterministic bytes, append-only, and no database connection
 - **SHACL shapes**: `generate --format shacl` emits a SHACL shapes graph so a schema's value constraints are machine-checkable by any SHACL engine, not just visible in the docs
 - **JSON Schema / OpenAPI**: `generate --format json-schema` (draft 2020-12) and `--format openapi` (3.1 `components/schemas`) emit a structured-output/API contract from the same LinkML source — an LLM's structured output or a generated TS/Swift client shares the model the Rust types come from
 - **Instance-data validation**: `validate --schema schema.yaml --data data.yaml` checks a LinkML instance-data file against the schema and exits non-zero on any violation — a conformance gate for CI or an LLM authoring loop
@@ -251,7 +252,16 @@ panschema generate --schema schema.yaml --output schema.sql --format postgres
 
 Coverage today is concrete classes with scalar/enum/single-valued-class-reference slots; a class using `is_a`, a multivalued slot, or `any_of` is skipped with a warning naming why, rather than emitting broken DDL. See [docs/features/24-postgres-ddl-writer.md](docs/features/24-postgres-ddl-writer.md) for the full design and what's still to come.
 
-panschema doesn't do migrations — `schema.sql` describes the *current* desired schema, not a diff. Pair it with a dedicated schema-diff tool that introspects your live database and applies the delta:
+`schema.sql` describes the *current* desired schema, not a diff, so it is useful exactly once — on an empty database. For a database that already has tables, `panschema migrate` writes the DDL as a versioned migration file instead:
+
+```bash
+panschema migrate --schema schema.yaml --migrations db/migrations/
+# writes db/migrations/V1__my_schema.sql
+```
+
+The file lands in the layout a checksumming versioned runner (`refinery` and its family) discovers, and the SQL is byte-identical across runs and machines — no timestamp, no tool version — because such a runner hashes the raw text and aborts a deploy when the hash changes. Re-running against an unchanged schema is a no-op, and a directory that already holds other migrations is refused rather than guessed at. panschema writes migration files and never connects to a database; applying them is the runner's job, and the generated SQL is a draft to review, not an authoritative artifact.
+
+Today `migrate` emits the *initial* migration. Incremental migrations, and a `diff` command that reports a schema delta with a compatibility verdict, are specced in [docs/features/39-schema-diff-and-migration-generation.md](docs/features/39-schema-diff-and-migration-generation.md). Until those land, a tool that introspects your live database covers the incremental case:
 
 ```bash
 # Declarative, idempotent apply (no migration-file history)

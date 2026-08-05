@@ -136,7 +136,7 @@ diff side ship complete while that design is still being argued.
 
 ### Slice 1: `migrate` emits the initial migration
 
-**Status:** Not started
+**Status:** Complete
 
 **Priority:** Must Have
 
@@ -145,24 +145,24 @@ database gets its first migration file, in the layout a runner expects,
 without hand-writing DDL or hand-naming files.
 
 **Acceptance Criteria:**
-- [ ] `panschema migrate --schema <file> --migrations <dir>` writes the
+- [x] `panschema migrate --schema <file> --migrations <dir>` writes the
   schema's full DDL as the first versioned migration in that directory, and
   reports the path it wrote.
-- [ ] The emitted file's name carries a version and a descriptive name in
+- [x] The emitted file's name carries a version and a descriptive name in
   the layout a versioned runner discovers, and the version is the first.
-- [ ] Running the same command twice against an unchanged schema is a
+- [x] Running the same command twice against an unchanged schema is a
   no-op that reports the migration already exists — it does not write a
   second file and does not rewrite the first.
-- [ ] The emitted SQL is byte-identical across runs and across machines:
+- [x] The emitted SQL is byte-identical across runs and across machines:
   regenerating into an empty directory from the same schema produces the
   same bytes, with no timestamp, tool version, or other varying content.
-- [ ] Emitting into a directory that already contains migrations refuses
+- [x] Emitting into a directory that already contains migrations refuses
   rather than guessing, and says the directory is not empty.
-- [ ] A manifest can declare a migrations directory for a schema, so a
+- [x] A manifest can declare a migrations directory for a schema, so a
   manifest-driven run emits migrations alongside its other outputs.
-- [ ] `--help` states that the command writes files and never connects to
+- [x] `--help` states that the command writes files and never connects to
   a database.
-- [ ] ADR 010 records the declarative-source / versioned-artifact hybrid
+- [x] ADR 010 records the declarative-source / versioned-artifact hybrid
   and the append-only immutability rule.
 
 **Notes:**
@@ -171,6 +171,16 @@ without hand-writing DDL or hand-naming files.
 - A consumer whose database already exists (tables created by some other
   tool) needs a baseline story — adopt-existing-database is deliberately
   out of scope here and is called out in *Open Questions*.
+- **"A manifest-driven run" is `panschema migrate` with no `--schema`, not
+  `generate`.** The manifest declares the directory in the same
+  `[generate.<name>]` block as every other output, but `generate` skips the
+  key. Folding an append-only artifact into the regenerate-everything
+  command would make either `generate` refuse on its second run or docs
+  builds append migrations as a side effect. ADR 010 decision 4 records the
+  reasoning.
+- The refusal and the no-op are distinguished by content, not by filename
+  alone: a directory holding exactly the migration this schema would write,
+  byte for byte, is the no-op; anything else refuses.
 
 ---
 

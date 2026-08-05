@@ -4,6 +4,7 @@
 // browser-dependent `e2e`), so an edit-test cycle pays one link, not
 // three.
 mod dogfood;
+mod migrate;
 mod rust_writer;
 
 use std::fs;
