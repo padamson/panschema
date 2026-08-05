@@ -546,6 +546,19 @@ impl LinkmlLoader<'_> {
             }
             serde_norway::Value::Mapping(map) => {
                 for (key, record) in map {
+                    // A scalar entry is LinkML's compact (SimpleDict) form:
+                    // the key maps straight to the class's one non-key slot.
+                    // Expand it into the ordinary shape and build as usual,
+                    // so downstream never sees the compaction.
+                    let expanded;
+                    let record = if record.as_mapping().is_none()
+                        && let Some(widened) = self.expand_simple_dict_entry(class_name, record)
+                    {
+                        expanded = widened;
+                        &expanded
+                    } else {
+                        record
+                    };
                     if let Some(id) = self.build_record(class_name, key.as_str(), record) {
                         ids.push(id.clone());
                         self.note_top_level_id(id);
@@ -555,6 +568,31 @@ impl LinkmlLoader<'_> {
             _ => {}
         }
         ids
+    }
+
+    /// LinkML's SimpleDict form widened to the ordinary record shape: a
+    /// scalar dict entry fills the class's **one** slot beyond its
+    /// key/identifier. With zero or several candidate slots there is no fact
+    /// about which one the scalar fills, so nothing is invented and the
+    /// entry stays unread.
+    fn expand_simple_dict_entry(
+        &self,
+        class_name: &str,
+        value: &serde_norway::Value,
+    ) -> Option<serde_norway::Value> {
+        let class = self.schema.classes.get(class_name)?;
+        let slots = crate::linkml_resolve::resolve_effective_slots(class, self.schema);
+        let mut non_identifying = slots
+            .iter()
+            .filter(|(_, slot)| !slot.identifier && !slot.key)
+            .map(|(name, _)| name);
+        let primary = non_identifying.next()?;
+        if non_identifying.next().is_some() {
+            return None;
+        }
+        let mut map = serde_norway::Mapping::new();
+        map.insert(serde_norway::Value::String(primary.clone()), value.clone());
+        Some(serde_norway::Value::Mapping(map))
     }
 
     /// Record a top-level record's id; a second use of an id already claimed by
@@ -1362,6 +1400,93 @@ classes:
             "https://example.org/catalog/".to_string(),
         );
         schema
+    }
+
+    #[test]
+    fn a_simple_dict_collection_reads_as_records_not_silence() {
+        // LinkML's compact form: when a class has exactly one slot beyond its
+        // key, a dict entry may map the key straight to that value —
+        // `prefixes: {dcterms: http://…}` is the canonical example. This was
+        // silently dropped before: a conforming file lost its records.
+        let mut schema = SchemaDefinition::new("estate");
+        schema.default_range = Some("string".to_string());
+        let mut root = ClassDefinition::new("Root");
+        root.tree_root = true;
+        let mut providers = SlotDefinition::new("providers");
+        providers.range = Some("Provider".to_string());
+        providers.multivalued = true;
+        root.attributes.insert("providers".to_string(), providers);
+        schema.classes.insert("Root".to_string(), root);
+        let mut provider = ClassDefinition::new("Provider");
+        let mut key = SlotDefinition::new("id");
+        key.key = true;
+        provider.attributes.insert("id".to_string(), key);
+        provider
+            .attributes
+            .insert("name".to_string(), SlotDefinition::new("name"));
+        schema.classes.insert("Provider".to_string(), provider);
+
+        let data: serde_norway::Value =
+            serde_norway::from_str("providers:\n  aws: Amazon Web Services\n  gcp: Google Cloud\n")
+                .unwrap();
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert_eq!(
+            set.instances.len(),
+            2,
+            "both compact entries become records; got: {:?}",
+            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+        );
+        let aws = set.instances.iter().find(|i| i.id == "aws").expect("aws");
+        assert_eq!(
+            aws.label, "Amazon Web Services",
+            "the mapped value lands in the class's one non-key slot — here \
+             `name`, which supplies the display label"
+        );
+        assert!(
+            aws.slot_values.iter().any(|sv| sv.slot == "name"
+                && sv.values.iter().any(|v| matches!(
+                    v,
+                    InstanceValue::Scalar(ScalarValue::String(s)) if s == "Amazon Web Services"
+                ))),
+            "and the authored assignment carries it; got: {:?}",
+            aws.slot_values
+        );
+    }
+
+    #[test]
+    fn a_scalar_dict_entry_against_a_wider_class_is_not_guessed_into_a_record() {
+        // The compact form is only defined for exactly-one-extra-slot
+        // classes. With two, there is no fact about which slot the scalar
+        // fills, so nothing is invented.
+        let mut schema = SchemaDefinition::new("estate");
+        schema.default_range = Some("string".to_string());
+        let mut root = ClassDefinition::new("Root");
+        root.tree_root = true;
+        let mut providers = SlotDefinition::new("providers");
+        providers.range = Some("Provider".to_string());
+        providers.multivalued = true;
+        root.attributes.insert("providers".to_string(), providers);
+        schema.classes.insert("Root".to_string(), root);
+        let mut provider = ClassDefinition::new("Provider");
+        let mut key = SlotDefinition::new("id");
+        key.key = true;
+        provider.attributes.insert("id".to_string(), key);
+        provider
+            .attributes
+            .insert("name".to_string(), SlotDefinition::new("name"));
+        provider
+            .attributes
+            .insert("region".to_string(), SlotDefinition::new("region"));
+        schema.classes.insert("Provider".to_string(), provider);
+
+        let data: serde_norway::Value =
+            serde_norway::from_str("providers:\n  aws: Amazon Web Services\n").unwrap();
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            set.instances.is_empty(),
+            "an ambiguous compact entry builds nothing; got: {:?}",
+            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+        );
     }
 
     #[test]

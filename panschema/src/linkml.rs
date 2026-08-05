@@ -482,6 +482,17 @@ pub struct SlotDefinition {
     /// not both.
     #[serde(default, skip_serializing_if = "is_false")]
     pub key: bool,
+    /// Whether class-ranged values are written inline (nested objects) or as
+    /// references. LinkML's default depends on the range class: always
+    /// inlined without an identifier/key, referenced with one. `None` when
+    /// the schema doesn't say. Modeled but not yet enforced when reading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inlined: Option<bool>,
+    /// When inlined and multivalued: `true` for a list of objects, `false`
+    /// for a dict keyed by the identifier/key. `None` when unspecified.
+    /// Modeled but not yet enforced when reading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inlined_as_list: Option<bool>,
     /// URI for semantic interpretation (e.g., owl:ObjectProperty IRI)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slot_uri: Option<String>,
@@ -554,6 +565,8 @@ impl SlotDefinition {
             pattern: None,
             identifier: false,
             key: false,
+            inlined: None,
+            inlined_as_list: None,
             slot_uri: None,
             inverse: None,
             symmetric: false,
@@ -722,6 +735,28 @@ fn is_false(b: &bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn identity_and_inlining_flags_round_trip_through_yaml() {
+        // The declared shape of instance data lives in the schema; losing
+        // any of these on read would make a conforming file unreadable.
+        let slot: SlotDefinition = serde_norway::from_str(
+            "name: parts\nkey: true\ninlined: true\ninlined_as_list: false\n",
+        )
+        .expect("parse slot");
+        assert!(slot.key, "key parses");
+        assert_eq!(slot.inlined, Some(true), "inlined parses");
+        assert_eq!(slot.inlined_as_list, Some(false), "inlined_as_list parses");
+
+        let unspecified: SlotDefinition =
+            serde_norway::from_str("name: parts\n").expect("parse bare slot");
+        assert_eq!(
+            unspecified.inlined, None,
+            "an unspecified flag stays None — LinkML's default depends on the \
+             range class, so a false here would assert something the schema \
+             never said"
+        );
+    }
 
     // ========== SchemaDefinition Tests ==========
 

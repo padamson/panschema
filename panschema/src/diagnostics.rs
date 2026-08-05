@@ -94,6 +94,29 @@ pub fn schema_load_diagnostics(schema: &SchemaDefinition) -> Vec<String> {
             .map(|u| u.message()),
     );
     out.extend(dangling_references(schema).iter().map(|d| d.message()));
+    // The metamodel recommends at most one `tree_root` per schema. Several
+    // are supported here — each dataset is read against the root it conforms
+    // to — but the deviation from that "should" is stated, because upstream
+    // LinkML tooling may warn on the schema or pick one root arbitrarily.
+    let roots: Vec<&String> = schema
+        .classes
+        .iter()
+        .filter(|(_, c)| c.tree_root)
+        .map(|(name, _)| name)
+        .collect();
+    if roots.len() > 1 {
+        out.push(format!(
+            "schema declares {} `tree_root` classes ({}); the LinkML metamodel \
+             recommends at most one — panschema reads each dataset against the \
+             root it conforms to, but other LinkML tooling may not",
+            roots.len(),
+            roots
+                .iter()
+                .map(|r| format!("`{r}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
     out
 }
 
@@ -1022,6 +1045,47 @@ mod tests {
             instances: ids.iter().map(|id| instance(id, &[])).collect(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_schema_with_several_tree_roots_warns_once_naming_them() {
+        // The metamodel: "each schema should have at most one tree root."
+        // Two roots are deliberate here (a scoped root plus a reference
+        // root), but the deviation from that "should" gets said out loud,
+        // since upstream LinkML tooling may not honor per-dataset selection.
+        let mut schema = collision_schema();
+        for name in ["Enterprise", "ProviderCatalog"] {
+            let mut class = crate::linkml::ClassDefinition::new(name);
+            class.tree_root = true;
+            schema.classes.insert(name.to_string(), class);
+        }
+        let warnings = schema_load_diagnostics(&schema);
+        let root_warnings: Vec<&String> = warnings
+            .iter()
+            .filter(|w| w.contains("tree_root"))
+            .collect();
+        assert_eq!(root_warnings.len(), 1, "one warning, not one per root");
+        let msg = root_warnings[0];
+        assert!(
+            msg.contains("Enterprise")
+                && msg.contains("ProviderCatalog")
+                && msg.contains("at most one"),
+            "it names the roots and the metamodel's recommendation; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_single_tree_root_draws_no_root_warning() {
+        let mut schema = collision_schema();
+        let mut class = crate::linkml::ClassDefinition::new("Catalog");
+        class.tree_root = true;
+        schema.classes.insert("Catalog".to_string(), class);
+        assert!(
+            !schema_load_diagnostics(&schema)
+                .iter()
+                .any(|w| w.contains("tree_root")),
+            "one root is the recommended shape; nothing to say"
+        );
     }
 
     #[test]

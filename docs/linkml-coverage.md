@@ -276,7 +276,11 @@ URIs-and-mappings), not against this file's own claims. Ranked by impact.
    authors express the same thing idiomatically, with `identifier` keeping
    its global meaning.
 
-3. **More than one `tree_root` deviates from a metamodel "should".** The
+3. ~~**More than one `tree_root` deviates from a metamodel "should".**~~
+   **Addressed 2026-08-04:** loading a multi-root schema now warns once,
+   naming the roots and the metamodel's recommendation; deliberately not an
+   error and not promoted by `--strict`. The interop caveat stands.
+   Original finding: The
    spec: "each schema should have at most one tree root." Per-dataset root
    selection intentionally supports several, because a separate reference
    schema would duplicate or import the model's hub classes. Advisory, not
@@ -284,8 +288,14 @@ URIs-and-mappings), not against this file's own claims. Ranked by impact.
    two-root schema, so a consumer round-tripping through linkml-runtime
    should expect friction there.
 
-4. **Inlining is inferred from data shape; the spec's flags are not
-   modeled.** LinkML: a class-ranged slot whose range has no identifier is
+4. ~~**Inlining is inferred from data shape; the spec's flags are not
+   modeled.**~~ **Half-addressed 2026-08-04:** `inlined`/`inlined_as_list`
+   are modeled (tri-state, as declared), and the SimpleDict form is read —
+   a scalar dict entry expands into the class's one non-identifying slot,
+   closing the silent-data-loss hole. **Still open, deliberately:**
+   enforcing the flags in `validate` (data that inlines without declaring
+   `inlined: true` would newly flag), and reading remains shape-inferred.
+   Original finding: LinkML: a class-ranged slot whose range has no identifier is
    *always* inlined; with one, it defaults to a reference unless `inlined:
    true`; `inlined_as_list` selects list vs identifier-keyed dict; and a
    one-extra-slot class may serialize as a **SimpleDict**
