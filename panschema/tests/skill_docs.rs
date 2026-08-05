@@ -21,9 +21,7 @@ fn repo_root() -> PathBuf {
 }
 
 fn skill_ref(name: &str) -> String {
-    let path = repo_root()
-        .join(".claude/skills/panschema/references")
-        .join(name);
+    let path = repo_root().join("skills/panschema/references").join(name);
     fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
 }
 
@@ -164,12 +162,12 @@ fn every_subcommand_is_documented() {
 /// unreachable in a session that only loads SKILL.md.
 #[test]
 fn the_skill_links_every_reference() {
-    let skill = fs::read_to_string(repo_root().join(".claude/skills/panschema/SKILL.md"))
-        .expect("SKILL.md");
+    let skill =
+        fs::read_to_string(repo_root().join("skills/panschema/SKILL.md")).expect("SKILL.md");
     for name in ["cli.md", "manifest.md", "formats.md"] {
         assert!(skill.contains(name), "SKILL.md must link references/{name}");
     }
-    let refs = repo_root().join(".claude/skills/panschema/references");
+    let refs = repo_root().join("skills/panschema/references");
     for entry in fs::read_dir(&refs).expect("references dir") {
         let file = entry.expect("dir entry").file_name();
         let name = file.to_string_lossy();
@@ -179,4 +177,45 @@ fn the_skill_links_every_reference() {
         );
     }
     let _ = Path::new("");
+}
+
+/// The plugin is how consumers install and update the skill, so its declared
+/// version is what they pin against. Drift from the crate version would ship
+/// a plugin claiming to be a release it isn't.
+#[test]
+fn the_plugin_manifest_version_tracks_the_crate_version() {
+    let manifest = fs::read_to_string(repo_root().join(".claude-plugin/plugin.json"))
+        .expect("read plugin.json");
+    let plugin_version = manifest
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("\"version\":"))
+        .map(|v| v.trim().trim_matches(|c| c == '"' || c == ',').to_string())
+        .expect("plugin.json declares a version");
+
+    let cargo = fs::read_to_string(repo_root().join("panschema/Cargo.toml")).expect("read Cargo");
+    let crate_version = cargo
+        .lines()
+        .find_map(|l| l.strip_prefix("version = "))
+        .map(|v| v.trim().trim_matches('"').to_string())
+        .expect("Cargo.toml declares a version");
+
+    assert_eq!(
+        plugin_version, crate_version,
+        "the plugin version must track the crate version — bump both together"
+    );
+}
+
+/// The skill has to live where the plugin ships it from. A copy left under
+/// `.claude/skills/` would be project-local (visible only when working *in*
+/// panschema) and would drift from the distributed one.
+#[test]
+fn the_skill_ships_from_the_plugin_directory_only() {
+    assert!(
+        repo_root().join("skills/panschema/SKILL.md").is_file(),
+        "the plugin's skill directory holds the skill"
+    );
+    assert!(
+        !repo_root().join(".claude/skills/panschema").exists(),
+        "and no project-local duplicate shadows it"
+    );
 }

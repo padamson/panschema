@@ -40,6 +40,21 @@ cargo install panschema
 
 Or download pre-built binaries from [GitHub Releases](https://github.com/padamson/panschema/releases).
 
+### Working with an AI coding agent
+
+panschema ships a Claude Code skill that teaches an agent the CLI, the
+manifest format, and the traps that have actually bitten consumers. Install
+it as a plugin so it updates with the tool instead of rotting as a copy:
+
+```
+/plugin marketplace add padamson/panschema
+/plugin install panschema@panschema
+```
+
+`/plugin update panschema` picks up later releases. The plugin's version
+tracks the crate's, enforced by a test, so the skill an agent reads
+describes the panschema you have installed.
+
 ## Quick Start
 
 Generate documentation from an OWL ontology:

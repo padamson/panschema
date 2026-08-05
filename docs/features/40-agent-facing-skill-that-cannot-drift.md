@@ -99,20 +99,33 @@ mentions everything the code offers.
 
 ### Slice 2: Packaging and consumer adoption
 
-**Status:** Not started
+**Status:** Complete
 
 **Priority:** Should Have
 
 **Depends on:** Slice 1.
 
+**Notes:**
+- **The mechanism is the one the sibling tools already use** — a plugin in
+  a marketplace the repo hosts itself, matching mdbook-listings. A
+  hand-rolled copy into `~/.claude/skills/` was tried first and rejected:
+  it invented a mechanism nothing else uses, needed a checkout on every
+  consumer machine, and created a second copy free to drift.
+- **`skills/` not `.claude/skills/`.** The latter is project-local — it
+  would make the skill visible only when working *inside* panschema, which
+  is backwards for a skill written for consuming repos. A test asserts the
+  duplicate does not come back.
+- **Two tests hold the packaging true**: the plugin version must equal the
+  crate version, and the skill must live only in the plugin directory.
+
 **User Value:** Consuming repos can install the skill in one step and get
 updates with the tool, rather than copying a snapshot that rots.
 
 **Acceptance Criteria:**
-- [ ] The skill is installable by consumers through the same mechanism the
+- [x] The skill is installable by consumers through the same mechanism the
   sibling tools use, so enabling every tool is one step.
-- [ ] Installation is documented where a consumer will look.
-- [ ] A consumer that has installed it can be pointed at a released version
+- [x] Installation is documented where a consumer will look.
+- [x] A consumer that has installed it can be pointed at a released version
   rather than a copied file.
 
 ---

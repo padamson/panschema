@@ -1,0 +1,17 @@
+{
+  "name": "panschema",
+  "owner": {
+    "name": "Paul Adamson",
+    "email": "paul@seekingeta.ai"
+  },
+  "description": "Marketplace hosting the panschema schema-tooling plugin.",
+  "plugins": [
+    {
+      "name": "panschema",
+      "source": "./",
+      "description": "Convert, document, and validate LinkML and OWL schemas with panschema, and wire a panschema.toml manifest in a consuming repo.",
+      "homepage": "https://github.com/padamson/panschema",
+      "license": "MIT"
+    }
+  ]
+}

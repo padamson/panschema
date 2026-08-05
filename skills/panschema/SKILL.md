@@ -94,6 +94,20 @@ subcommand, and `[generate]` key the code offers is mentioned in these
 references. A doc example that stops working, or a new feature that ships
 undocumented, fails CI.
 
-That covers example rot and undocumented features. It does **not** verify
-that prose is accurate — if you find a statement here that contradicts the
-code, the statement is the bug; fix it in the same change.
+## Installing and updating
+
+This skill ships as a Claude Code plugin from panschema's own marketplace,
+so it is installed and updated with the tool rather than copied:
+
+    /plugin marketplace add padamson/panschema
+    /plugin install panschema@panschema
+
+Then `/plugin update panschema` picks up new releases. The plugin's version
+tracks the crate's — a test fails the build if they drift — so the skill you
+have describes the panschema you have.
+
+The binary is separate: install it with `cargo install --git
+https://github.com/padamson/panschema panschema` (or from a local checkout
+with `./scripts/dev-install.sh`, which also rebuilds the viz bundle).
+`panschema --version` prints the commit for a non-release build, so you can
+tell what you are actually running.
