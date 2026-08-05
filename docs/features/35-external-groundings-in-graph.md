@@ -30,8 +30,9 @@ a browser e2e (a green Rust suite alone can't prove the viz renders it).
 
 - **The `subclass_of` field is the hook.** panschema already models
   `ClassDefinition.subclass_of: Option<String>` (distinct from `is_a`, the
-  internal parent). nimbus grounds each class in exactly one external category
-  via `subclass_of`, so this is the field to draw — no new IR.
+  internal parent). A consumer schema grounds each class in exactly one
+  external category via `subclass_of`, so this is the field to draw — no new
+  IR.
 - **One external node per distinct grounding IRI, shared.** Two classes grounded
   in the same category share one external node (so the graph reads as a small
   set of upstream anchors, not a copy per class). Node id is the resolved IRI.

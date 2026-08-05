@@ -342,7 +342,7 @@ impl InstanceSet {
         }
 
         // A container that declares an identifier is a domain individual —
-        // nimbus's `Enterprise`, not wine's catalogue vessel — so it emits
+        // an `Enterprise`, not wine's catalogue vessel — so it emits
         // as a record in its own right, referencing what it contains. A
         // vessel has no identifier and stays unemitted.
         let mut emitted_root_id: Option<String> = None;
@@ -1132,7 +1132,7 @@ claims:
 ";
 
     /// A container that is a real domain individual — it declares an
-    /// identifier — in the shape nimbus's `Enterprise` root takes.
+    /// identifier — in the shape an estate's `Enterprise` root takes.
     const ROOT_SCHEMA: &str = "\
 name: estate
 default_range: string

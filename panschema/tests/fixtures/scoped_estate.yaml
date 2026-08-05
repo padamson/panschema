@@ -1,11 +1,11 @@
 # One scoped root. Each estate file holds its own deployments and providers,
 # which is what makes the unintended split possible: a provider that ought to
 # be shared gets defined locally by every estate.
-id: https://example.org/nimbus
-name: nimbus
-default_prefix: nimbus
+id: https://example.org/estate
+name: estate
+default_prefix: estate
 prefixes:
-  nimbus: https://example.org/nimbus/
+  estate: https://example.org/estate/
 default_range: string
 classes:
   Enterprise:

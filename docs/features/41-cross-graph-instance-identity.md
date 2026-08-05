@@ -17,9 +17,9 @@ in one graph to be able to point at a record in another.
 
 ## What three consumers reported
 
-Filed from nimbus after an empirical trace of `instance_iri_string`;
-scimantic, nimbus, and the ontology template each contributed their real
-dataset shape. The design below is theirs, not invented here.
+Filed from an infrastructure-vocabulary consumer after an empirical trace
+of `instance_iri_string`; scimantic, that consumer, and the ontology
+template each contributed their real dataset shape. The design below is theirs, not invented here.
 
 **The convergent finding — and the reason the obvious fix is wrong.**
 Two consumers, in unrelated domains, independently reported that instance
@@ -28,19 +28,20 @@ data splits in two:
 | | Must **not** merge across datasets | Must **merge** across datasets |
 |---|---|---|
 | scimantic | study-scoped acts, states, results (`interval-2026-08`) | bibliographic entities — `src-ghosh-2022` cited by two studies *is* one document; `paul-adamson` running both *is* one agent |
-| nimbus | the enterprise's own estate — `Service`, `Deployment`, `Endpoint`, … (9 classes) | provider-neutral vocabulary — `ServiceType`, `Provider`, `Region` (3 classes) |
+| the infrastructure consumer | an enterprise's own estate — nine classes of services, deployments, and endpoints | provider-neutral vocabulary — three classes naming service types, providers, and regions |
 
-nimbus's generalisation: **instance data is reference/vocabulary
+That consumer's generalisation: **instance data is reference/vocabulary
 individuals (global) plus scoped facts (per-dataset).** Two independent
 consumers converging on the same shape from different domains is the
 strongest signal in the note.
 
 **Blanket per-dataset namespacing would break published behaviour**, not
-hypothetical behaviour. nimbus names competency questions already in ch01:
-CQ2/CQ3 (which providers offer a given service type — portability) and CQ14
-(which services depend on a given provider or region — outage blast radius,
-*inherently* cross-enterprise). If `Provider`/`Region`/`ServiceType`
-namespace apart per enterprise, none of those can be asked.
+hypothetical behaviour. That consumer already publishes competency
+questions of two kinds: which providers offer a given service type
+(portability), and which services depend on a given provider or region
+(outage blast radius, *inherently* cross-enterprise). If the
+provider-neutral vocabulary namespaces apart per enterprise, none of those
+can be asked.
 
 **Namespacing must also stay optional.** Wine's two curated graphs
 deliberately *share* records — the preview is a strict subset of the worked
@@ -66,13 +67,13 @@ not cross. That is the presentation-layer half of this exact lesson;
 
 **Priority:** Must Have
 
-**User Value:** A domain root — nimbus's `Enterprise`, grounded in CCO
+**User Value:** A domain root — an `Enterprise` grounded in CCO
 Organization — appears in its own A-box instead of vanishing, so it can be
 described, linked, and used as the anchor other graphs reference.
 
-Today the container record is dropped from every output: nimbus authored
-`acme` with an id and a name and got no individual in RDF, no graph node,
-and no card — six of seven records emitted.
+Today the container record is dropped from every output: a consumer
+authored `acme` with an id and a name and got no individual in RDF, no
+graph node, and no card — six of seven records emitted.
 
 **Acceptance Criteria:**
 - [x] When the `tree_root` class declares an `identifier` slot, its record
@@ -232,18 +233,18 @@ distinct per dataset while shared vocabulary stays shared.
 - [x] With scoping on, slice 3's collision check reports no collisions for
   scoped classes across datasets, and still reports genuine ones for global
   classes.
-- [ ] nimbus's cross-enterprise competency questions remain answerable
+- [ ] The filing consumer's cross-enterprise competency questions remain answerable
   across two estates — the concrete acceptance test for the global set.
 
 **Notes:**
 - **Settled: the scope is the `tree_root` individual's IRI.** The root
-  record *is* the scope; nimbus's one-file-per-enterprise shape says so
+  record *is* the scope; the one-file-per-enterprise shape says so
   directly, and it needs no configuration. The manifest alternative was
   rejected — a deployment fact would then decide identity.
 - **Settled: there is no global/scoped class designation.** All five
-  consumers declined it. cuisineiq's finding retired it outright:
-  `GroceryItemKind` holds both a shared catalogue item and one user's custom
-  item, so a class-level flag *cannot express* the boundary. Dataset
+  consumers declined it. A fifth consumer's finding retired it outright: one
+  of its classes holds both a shared catalogue entry and one user's private
+  variant, so a class-level flag *cannot express* the boundary. Dataset
   membership expresses both for free.
 - **Sharing needs no scoping machinery at all.** A shared dataset's records
   are named by CURIE and already mint into the shared namespace, so this
@@ -343,7 +344,7 @@ find. Four consumers endorsed this guard; two called it load-bearing.
 **Notes:**
 - **This deliberately refines what the consumers asked for.** They specified
   same id + same class + different scopes. Implemented literally, that fires
-  on acme's `api-gateway` versus contoso's — nimbus's own reported case of
+  on acme's `api-gateway` versus contoso's — the filing consumer's own case of
   generic ids recurring across estates by design — so the signal would drown
   in the noise of scoping working correctly. Requiring the records to be
   *indistinguishable in content* is what makes it mean something: two files

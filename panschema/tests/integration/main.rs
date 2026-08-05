@@ -1054,7 +1054,7 @@ fn rendered_docs_carry_scoped_and_shared_iris_side_by_side() {
     );
     let html = fs::read_to_string(dir.join("index.html")).expect("rendered page");
     assert!(
-        html.contains("https://example.org/nimbus/acme/api-gateway"),
+        html.contains("https://example.org/estate/acme/api-gateway"),
         "the estate's record renders scoped under its root"
     );
     assert!(
@@ -1062,7 +1062,7 @@ fn rendered_docs_carry_scoped_and_shared_iris_side_by_side() {
         "the shared record renders in the shared namespace, unscoped"
     );
     assert!(
-        !html.contains("nimbus/acme/catalog"),
+        !html.contains("estate/acme/catalog"),
         "and the CURIE-named shared record is never nested under a scope"
     );
     let _ = fs::remove_dir_all(dir);

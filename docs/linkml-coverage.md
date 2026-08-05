@@ -125,7 +125,7 @@ focused subset of the structural ones.
 | `range` | ● | ● | ● | ● | ● | ●◨ | "Range" row; edge; `rdfs:range` (a scalar's XSD datatype or a class range's IRI; an **enum** range emits no `rdfs:range` — enums have no RDF form yet, so it's guarded rather than fabricating a nonexistent `xsd:{EnumName}`); field type; Postgres column type — scalar mapping, enum type, or FK to the target's primary key (feature 24 slice 1 ✅, syntax-verified) |
 | `domain` | ● | ◐ | ● | ● | ○ | ◐ | HTML infers from class membership; `rdfs:domain`; Rust uses class-side `slots:`; Postgres likewise determines table membership via the shared resolver rather than modeling `domain` distinctly |
 | `required` | ● | ● | ● | ○ | ● | ●◨ | characteristic badge; `Option<T>` framing; Postgres `NOT NULL`, derived from the *effective* lower bound so an explicit `minimum_cardinality ≥ 1` also drives it (feature 24 slice 1 ✅, syntax-verified). SHACL reconciles `required` and `minimum_cardinality` into a single `sh:minCount` (explicit cardinality wins) rather than emitting a contradictory pair |
-| `multivalued` | ● | ● | ● | ○ | ● | ◐ | characteristic badge; `Vec<T>` framing; Postgres detects and skips a class with a multivalued slot (diagnostic, not silent) — array columns (scalar range) and linking tables (class range) are [feature 24 slices 4-5](features/24-postgres-ddl-writer.md), not yet built |
+| `multivalued` | ● | ● | ● | ○ | ● | ◐ | characteristic badge; `Vec<T>` framing; Postgres emits an **array column** for a scalar or enum range (`text[]`, `integer[]`, enum arrays — [feature 24 slice 4](features/24-postgres-ddl-writer.md) ✅, syntax-verified), and detects and skips a class with a multivalued **class** range, naming that kind in the diagnostic (linking tables are [slice 5](features/24-postgres-ddl-writer.md), designed but not built). A `pattern` or value bound on a multivalued slot is per-element and has no `CHECK` form over an array column, so it is dropped and reported rather than emitted. List **order is not preserved** in either form |
 | `minimum_cardinality` `maximum_cardinality` | ● | ● | ● | ○ | ● | ◐ | `min..max` badge; effective-cardinality overlay. Postgres projects `minimum_cardinality` indirectly — `min ≥ 1` folds into the column's `NOT NULL` via the shared effective-cardinality view; `maximum_cardinality` has no column form yet (a `> 1` upper bound is the multivalued/array case, [feature 24 slices 4-5](features/24-postgres-ddl-writer.md)) |
 | `pattern` | ● | ● | ● | ○ | ○ | ●◨ | "Pattern" row (truncated + tooltip); not enforced in RDF/Rust; Postgres emits an inline `CHECK (col ~ 'pattern')` (single quotes escaped) ([feature 24 slice 2](features/24-postgres-ddl-writer.md) ✅, syntax-verified via `pg_query`) |
 | `identifier` | ● | ● | ● | ○ | ○ | ●◨ | characteristic badge; not surfaced in RDF/Rust; Postgres: the effective `identifier` slot becomes the primary key (feature 24 slice 1 ✅, syntax-verified) |
@@ -250,8 +250,8 @@ URIs-and-mappings), not against this file's own claims. Ranked by impact.
    slot; the fragment form survives only for schemas with no usable
    `default_prefix`. Original finding: When `class_uri` /
    `slot_uri` is absent, LinkML mints `{default_prefix}:{Name}` — e.g.
-   `https://example.org/nimbus/Provider`. panschema mints
-   `{schema.id}#{Name}` — `https://example.org/nimbus#Provider`
+   `https://example.org/estate/Provider`. panschema mints
+   `{schema.id}#{Name}` — `https://example.org/estate#Provider`
    (`class_iri_string` / `slot_iri_string` / `enum_iri_string`). Every
    element without an explicit URI therefore gets a *different IRI* than
    linkml-runtime or gen-owl would produce for the same schema, so

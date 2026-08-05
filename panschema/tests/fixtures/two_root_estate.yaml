@@ -2,11 +2,11 @@
 # root (ProviderCatalog). Both declare `id` and `name`, so only their
 # collection slots distinguish one dataset from the other — the shape four
 # consumer schemas described.
-id: https://example.org/nimbus
-name: nimbus
-default_prefix: nimbus
+id: https://example.org/estate
+name: estate
+default_prefix: estate
 prefixes:
-  nimbus: https://example.org/nimbus/
+  estate: https://example.org/estate/
   catalog: https://example.org/catalog/
 default_range: string
 classes:

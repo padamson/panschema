@@ -252,20 +252,20 @@ database constraint, not just a rendered sentence.
 - [x] A class is taken out of scope only for a multivalued **class-range** slot, and the diagnostic says so, rather than reporting every multivalued slot as unsupported.
 
 **Notes:**
-- **This slice unblocks no class in either dogfood consumer, and that is
-  worth recording rather than discovering twice.** Wine has no multivalued
-  scalar slots at all — every one of its multivalued slots has a class
-  range. cuisineiq has exactly one (`GroceryItemKind.food_xref`), but that
-  class *also* carries a multivalued class-range slot (`images`), so it stays
+- **This slice unblocks no class in either schema it was checked against,
+  and that is worth recording rather than discovering twice.** Wine has no
+  multivalued scalar slots at all — every one of its multivalued slots has
+  a class range. The other consumer schema has exactly one, on a class that
+  *also* carries a multivalued class-range slot, so that class stays
   skipped. Both schemas emit the same table count as before.
 - The earlier diagnostic reported only the alphabetically-first multivalued
-  slot, which is what made `GroceryItemKind` look like an array-column
-  problem when a linking table was the real blocker. Naming the *kind* of
+  slot, so a class blocked by a linking-table problem could report a scalar
+  slot's name and read as an array-column problem. Naming the *kind* of
   multivalued slot is therefore a fix in its own right, independent of the
   array columns.
 - So slice 5 is the one that delivers: it unblocks all four skipped wine
-  classes and all eight skipped cuisineiq classes. This slice is still a
-  prerequisite for `GroceryItemKind`, which needs both.
+  classes, and every skipped class in the other consumer schema. This slice
+  stays a prerequisite for the one class that carries both forms.
 - `required` on a multivalued slot means `NOT NULL`, which permits an empty
   array. "At least one element" would need a `cardinality()` check keyed off
   `minimum_cardinality`; not attempted here.
@@ -274,12 +274,121 @@ database constraint, not just a rendered sentence.
 
 ### Slice 5: Multivalued class-range slots as linking tables
 
-**Status:** Not Started
+**Status:** Designed, not started
 
-**Priority:** Could Have — the first of the genuinely hard relational-
-design slices; scope the linking-table shape (naming, extra columns,
-cardinality direction) as its own design pass when picked up, informed
-by LinkML's `relmodel_transformer` conventions.
+**Priority:** Should Have — raised from Could Have. It is the slice that
+returns every class the Postgres projection currently skips for a
+multivalued slot, across both consumer schemas; slice 4 returned none.
+
+#### Design pass (2026-08-05)
+
+**The question.** A multivalued class-range slot is either composition
+(the parent owns its children, one-to-many) or association (the children
+are shared, many-to-many). SQL renders those differently — a foreign key
+on the child table versus a linking table — so the writer has to decide
+which it is looking at.
+
+**What LinkML itself says.** Inlining is not primarily an authored flag —
+it is *inferred*, and the rule is recorded in this repo's own spec audit
+(`docs/linkml-coverage.md`): a class-ranged slot whose range has **no**
+identifier is always inlined; with one, it defaults to a **reference**
+unless `inlined: true`. So the metamodel does distinguish composition from
+association, without either schema opting in:
+
+| | wine | the other consumer schema |
+|---|---|---|
+| `inlined` / `inlined_as_list` authored | no | no |
+| Target classes carry an identifier | yes — one shared `identifier` slot | no — none declared anywhere |
+| Therefore, by LinkML's rule | reference → **association** | always inlined → **owned** |
+
+That is a real signal and it points at two different SQL shapes: a
+child-side foreign key for owned children, a linking table for shared ones.
+It is worth stating because the obvious test — "does the schema declare
+`inlined`?" — returns no everywhere and makes the metamodel look silent
+when it is not.
+
+**The child-side foreign key is ruled out by the fixtures, on both sides of
+that split.**
+
+- *Association side.* In wine, `Grape` is the range of **two** multivalued
+  slots — `WineCatalog.grapes` and `Wine.made_from_grape`. One parent
+  column means a grape belongs to one catalog *or* one wine. The domain is
+  a blend made from more than one grape variety; unrepresentable.
+- *Owned side.* In the other consumer schema, one target class is the range
+  of a multivalued slot on **two different parent classes**. Even granting
+  that its records are owned, they are owned by two distinct owners, so a
+  single parent column cannot say which. Expressing it needs two nullable
+  foreign keys and an exactly-one-set `CHECK` — the polymorphic-parent
+  problem this feature already defers for `any_of` (slice 7).
+
+So the composition/association distinction is real, and it still does not
+yield a child-side foreign key for either consumer. One shape serves both.
+
+**Decision: a linking table for every multivalued class-range slot.**
+
+The two failure modes are not symmetric, and that is what settles it. A
+linking table where the domain wanted one-to-many is a *missing
+constraint* — the data is all representable, and tightening it later is a
+`UNIQUE` on one column. A child-side foreign key where the domain wanted
+many-to-many is *data that cannot be stored* — discovered in production,
+and fixed only by a migration. For a tool whose output is append-only
+migrations that a runner refuses to rewrite, emitting the shape that
+cannot represent the domain is the more expensive mistake by a wide
+margin. Prefer the shape that permits more when ownership is undeclared.
+
+**Shape**, following this writer's own existing conventions rather than
+`relmodel_transformer`'s — feature 28 records that reading its source
+turned up a hardcoded `_id` foreign-key suffix that ignores the target's
+real primary key, which slice 1 already deviates from deliberately:
+
+- **Table:** `<owner_table>_<slot>` — `wine_catalog_grapes`,
+  `wine_made_from_grape`, `grocery_list_entries`. Naming by *slot*, not by
+  target class, keeps two slots onto the same class distinct, which wine
+  requires.
+- **Columns:** `<owner_table>_<owner_pk>` and `<slot>_<target_pk>`, reusing
+  the `<name>_<target_pk>` convention slice 1 uses for single-valued
+  foreign keys, so a target keyed on `code` yields `..._code`, never a
+  fabricated `_id`.
+- **Primary key:** composite over both columns, which also forbids the same
+  pair twice.
+- **Foreign keys:** `<linking_table>_<side>_fkey`, both `NOT NULL`.
+
+**Cascade.** Six classes are currently skipped only because they reference
+a skipped class (`GroceryListEntry`, `IngredientRequirement`, `Purchase`,
+`SubstitutionClaim`, `PairingRecommendation`, `VintageAssessment`). They
+return as ordinary tables once their targets do.
+
+**List order: no ordinal column, because LinkML does not treat these as
+ordered.** The question is whether a multivalued slot's list order is
+meaningful, and the metamodel answers it rather than leaving it to taste:
+
+- A slot whose target has an identifier is a **reference** — a collection
+  of identifiers, where position carries no meaning.
+- An inlined slot's canonical form is an **identifier-keyed dict**, which
+  is unordered by construction. `inlined_as_list: true` is the explicit
+  opt-in to an ordered list, and it is the non-default.
+- Where order is part of the domain, LinkML modelers say so with a slot.
+  One of the consumer schemas does exactly this: a slot documented as
+  "ordered by their positions," whose target class carries an explicit
+  position slot to hold that order.
+
+Neither consumer schema sets `inlined_as_list`. So an ordinal column would
+be inventing an ordering the source model does not claim, and duplicating
+one the source model states explicitly where it does.
+
+If an ordinal is ever wanted, the trigger is **`inlined_as_list: true`** —
+LinkML's own "this is an ordered list, not a keyed collection" signal — not
+a heuristic over slot names like `position`/`order`/`index`. A name-matching
+rule would make the emitted schema change silently on a slot rename, and it
+would be inventing a mechanism where the metamodel already has one.
+
+**Acceptance Criteria:**
+- [ ] A multivalued class-range slot emits a linking table named for the owning table and the slot, with both foreign keys `NOT NULL` and a composite primary key.
+- [ ] The foreign-key columns reference each side's real primary key, including a non-`id` key such as a `key: true` column.
+- [ ] Two multivalued slots whose ranges are the same class produce two distinct linking tables.
+- [ ] A class is no longer skipped for a multivalued class-range slot, and the classes that cascaded off it return too.
+- [ ] The emitted script parses as valid Postgres and its foreign keys resolve to tables the same script creates.
+- [ ] List order is documented as not preserved, in the feature doc and the coverage table.
 
 ---
 
