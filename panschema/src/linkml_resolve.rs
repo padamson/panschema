@@ -356,8 +356,23 @@ fn merge_slot_override(target: &mut SlotDefinition, source: &SlotDefinition) {
     if source.multivalued {
         target.multivalued = true;
     }
+    // LinkML's two uniqueness forms are mutually exclusive: `identifier` is
+    // globally unique, `key` is unique within its container. So an override
+    // that sets one clears the other. Without the clear, a class narrowing a
+    // shared `identifier` slot to a `key` ends up carrying both, and a
+    // consumer asking "are these records scoped to their dataset?" — which
+    // reads `key && !identifier` — sees neither form and scopes nothing.
+    //
+    // This is what lets a schema share one id slot across its record classes
+    // and still split reference entities from scoped ones per class, which is
+    // the only way to express that split short of splitting the slot in two.
     if source.identifier {
         target.identifier = true;
+        target.key = false;
+    }
+    if source.key {
+        target.key = true;
+        target.identifier = false;
     }
 }
 
@@ -756,6 +771,79 @@ mod tests {
                 .as_deref(),
             Some("Parent"),
             "a refined inherited slot still points at its origin"
+        );
+    }
+
+    /// A schema that shares one id slot across its record classes can only
+    /// say "this class's records belong to their dataset" per class — i.e.
+    /// through `slot_usage`. Dropping `key` there leaves such a schema no
+    /// way to split reference entities from scoped ones without splitting
+    /// the slot, which is a modeling change forced by the tool.
+    #[test]
+    fn slot_usage_can_mark_a_shared_id_slot_as_a_key_for_one_class() {
+        let mut schema = SchemaDefinition::new("s");
+        let mut shared = SlotDefinition::new("id");
+        shared.identifier = true;
+        schema.slots.insert("id".into(), shared);
+
+        // Reference entity: stays on the shared identifier, global.
+        let mut grape = ClassDefinition::new("Grape");
+        grape.slots.push("id".into());
+        schema.classes.insert("Grape".into(), grape);
+
+        // Scoped record: the same slot, narrowed to a per-container key.
+        let mut assessment = ClassDefinition::new("VintageAssessment");
+        assessment.slots.push("id".into());
+        let mut scoped = SlotDefinition::new("id");
+        scoped.key = true;
+        assessment.slot_usage.insert("id".into(), scoped);
+        schema
+            .classes
+            .insert("VintageAssessment".into(), assessment);
+
+        let resolved = resolve_effective_slots(&schema.classes["VintageAssessment"], &schema);
+        assert!(
+            resolved["id"].key,
+            "`key: true` set through slot_usage must survive resolution; got: {:?}",
+            resolved["id"]
+        );
+        assert!(
+            !resolved["id"].identifier,
+            "narrowing a global identifier to a per-container key must clear \
+             `identifier` — the two are LinkML's mutually exclusive uniqueness \
+             forms, and a slot carrying both scopes as neither; got: {:?}",
+            resolved["id"]
+        );
+
+        let reference = resolve_effective_slots(&schema.classes["Grape"], &schema);
+        assert!(
+            reference["id"].identifier && !reference["id"].key,
+            "a class that did not override must keep the base slot's identity; got: {:?}",
+            reference["id"]
+        );
+    }
+
+    /// The mirror of the case above: a base `key` narrowed to a global
+    /// `identifier` must clear `key`, or the slot again carries both.
+    #[test]
+    fn slot_usage_promoting_a_key_to_an_identifier_clears_the_key() {
+        let mut schema = SchemaDefinition::new("s");
+        let mut shared = SlotDefinition::new("id");
+        shared.key = true;
+        schema.slots.insert("id".into(), shared);
+
+        let mut global = ClassDefinition::new("Grape");
+        global.slots.push("id".into());
+        let mut promote = SlotDefinition::new("id");
+        promote.identifier = true;
+        global.slot_usage.insert("id".into(), promote);
+        schema.classes.insert("Grape".into(), global);
+
+        let resolved = resolve_effective_slots(&schema.classes["Grape"], &schema);
+        assert!(
+            resolved["id"].identifier && !resolved["id"].key,
+            "promoting a key to an identifier must clear `key`; got: {:?}",
+            resolved["id"]
         );
     }
 

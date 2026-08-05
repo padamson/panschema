@@ -284,6 +284,47 @@ migrations = "db/migrations/"
     );
 }
 
+/// A schema sharing one `id` slot across its record classes splits
+/// reference entities from per-dataset records through `slot_usage`. Both
+/// halves must reach the emitted DDL: the scoped class keys on its own
+/// column, and the class that did not override keeps the shared identifier.
+#[test]
+fn a_slot_usage_key_becomes_the_primary_key_in_the_emitted_migration() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let migrations = tmp.path().join("migrations");
+    // The command runs with its cwd in the tempdir, so the fixture needs an
+    // absolute path.
+    let schema = Path::new("tests/fixtures/shared_id_scoping.yaml")
+        .canonicalize()
+        .expect("fixture exists");
+
+    let out = migrate(
+        tmp.path(),
+        &[
+            "--schema",
+            schema.to_str().unwrap(),
+            "--migrations",
+            migrations.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "migrate failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let (_, body) = sole_migration(&migrations);
+    assert!(
+        body.contains(r#""id" text PRIMARY KEY"#),
+        "the class whose slot_usage sets `key: true` should key on that column, \
+         not on a synthetic surrogate; got:\n{body}"
+    );
+    assert!(
+        !body.contains("gen_random_uuid"),
+        "no class here needs a surrogate key; got:\n{body}"
+    );
+}
+
 /// The command writes files. Someone reaching for it needs to know from
 /// `--help` alone that it will not touch their database.
 #[test]

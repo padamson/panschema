@@ -1,0 +1,40 @@
+# Wine's identity shape: one `id` slot shared across record classes,
+# with `slot_usage` splitting reference entities (global) from records that
+# belong to their dataset (scoped per container). Expressing that split per
+# class is only possible through `slot_usage` on a shared slot.
+
+name: shared_id_scoping
+id: https://example.org/scope-test
+prefixes:
+  linkml: https://w3id.org/linkml/
+  st: https://example.org/scope-test/
+default_prefix: st
+default_range: string
+
+slots:
+  id:
+    identifier: true
+    range: string
+  name:
+    range: string
+
+classes:
+  Catalog:
+    tree_root: true
+    slots: [id, name]
+    attributes:
+      grapes:
+        range: Grape
+        multivalued: true
+      assessments:
+        range: VintageAssessment
+        multivalued: true
+
+  Grape:
+    slots: [id, name]
+
+  VintageAssessment:
+    slots: [id, name]
+    slot_usage:
+      id:
+        key: true

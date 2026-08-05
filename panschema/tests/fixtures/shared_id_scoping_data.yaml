@@ -1,0 +1,8 @@
+id: sommelier-a
+name: Sommelier A catalog
+grapes:
+  - id: zinfandel
+    name: Zinfandel
+assessments:
+  - id: va-napa-zin-2018
+    name: Napa Zinfandel 2018
