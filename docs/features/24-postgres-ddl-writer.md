@@ -242,12 +242,33 @@ database constraint, not just a rendered sentence.
 
 ### Slice 4: Multivalued scalar slots as array columns
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Should Have
 
 **Acceptance Criteria:**
-- [ ] A multivalued slot with a scalar range emits a Postgres array column (`text[]`, `integer[]`, ...) instead of being skipped.
+- [x] A multivalued slot with a scalar range emits a Postgres array column (`text[]`, `integer[]`, ...) instead of being skipped. Enum ranges come along unchanged — an enum range already renders as a declared type name, and an array of it is that name with `[]`.
+- [x] A `pattern` or value bound on a multivalued slot is dropped rather than emitted, and is named in a diagnostic. Those constraints are per-element and have no `CHECK` form over an array: `arr ~ 'p'` is not an operator, and the `unnest` subquery that would express it is not allowed inside a `CHECK`. Emitting one produces a script that parses and then fails when the database runs it — which the `pg_query` oracle cannot catch, since it checks grammar rather than types.
+- [x] A class is taken out of scope only for a multivalued **class-range** slot, and the diagnostic says so, rather than reporting every multivalued slot as unsupported.
+
+**Notes:**
+- **This slice unblocks no class in either dogfood consumer, and that is
+  worth recording rather than discovering twice.** Wine has no multivalued
+  scalar slots at all — every one of its multivalued slots has a class
+  range. cuisineiq has exactly one (`GroceryItemKind.food_xref`), but that
+  class *also* carries a multivalued class-range slot (`images`), so it stays
+  skipped. Both schemas emit the same table count as before.
+- The earlier diagnostic reported only the alphabetically-first multivalued
+  slot, which is what made `GroceryItemKind` look like an array-column
+  problem when a linking table was the real blocker. Naming the *kind* of
+  multivalued slot is therefore a fix in its own right, independent of the
+  array columns.
+- So slice 5 is the one that delivers: it unblocks all four skipped wine
+  classes and all eight skipped cuisineiq classes. This slice is still a
+  prerequisite for `GroceryItemKind`, which needs both.
+- `required` on a multivalued slot means `NOT NULL`, which permits an empty
+  array. "At least one element" would need a `cardinality()` check keyed off
+  `minimum_cardinality`; not attempted here.
 
 ---
 
@@ -321,8 +342,8 @@ computing the delta.
 | Slice 1: core DDL | Must Have | None | Completed |
 | Slice 2: `unique_keys`/`pattern`/value bounds | Must Have | Slice 1 | Completed |
 | Slice 3: `rules` as `CHECK` | Should Have | Slice 1 | Completed |
-| Slice 4: multivalued scalars as arrays | Should Have | Slice 1 | Not Started |
-| Slice 5: multivalued class-refs as linking tables | Could Have | Slice 1 | Not Started |
+| Slice 4: multivalued scalars as arrays | Should Have | Slice 1 | Complete |
+| Slice 5: multivalued class-refs as linking tables | Could Have | Slice 1, 4 | Not Started — the one that unblocks both dogfood consumers |
 | Slice 6: `is_a` inheritance strategy | Could Have | Slice 1 | Not Started |
 | Slice 7: `any_of` polymorphic ranges | Won't Have | Slice 1 | 📋 Deferred |
 

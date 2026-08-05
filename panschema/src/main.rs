@@ -436,6 +436,12 @@ fn generate(
                 skipped.rule, skipped.class, skipped.reason
             );
         }
+        for skipped in panschema::postgres_writer::skipped_constraints(&schema) {
+            eprintln!(
+                "warning: constraint on slot `{}` of class `{}` is not emitted: {}",
+                skipped.slot, skipped.class, skipped.reason
+            );
+        }
     }
 
     // The SHACL writer projects most `rules` as conditional shapes, but a
@@ -671,6 +677,12 @@ fn emit_initial_migration(
         eprintln!(
             "warning: rule `{}` on class `{}` is not emitted as a postgres CHECK: {}",
             skipped.rule, skipped.class, skipped.reason
+        );
+    }
+    for skipped in panschema::postgres_writer::skipped_constraints(&schema) {
+        eprintln!(
+            "warning: constraint on slot `{}` of class `{}` is not emitted: {}",
+            skipped.slot, skipped.class, skipped.reason
         );
     }
 

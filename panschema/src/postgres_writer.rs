@@ -179,8 +179,18 @@ fn render_body(schema: &SchemaDefinition) -> String {
                     ),
                 });
             } else {
-                let sql_type = sql_type_for_slot_range(range, schema);
-                let checks = column_checks(col, slot);
+                // A multivalued scalar becomes an array of its element type.
+                // Its value constraints are per-element and have no CHECK
+                // form over an array, so they are dropped here and reported
+                // by `skipped_constraints`.
+                let sql_type = match slot.multivalued {
+                    true => format!("{}[]", sql_type_for_slot_range(range, schema)),
+                    false => sql_type_for_slot_range(range, schema),
+                };
+                let checks = match slot.multivalued {
+                    true => String::new(),
+                    false => column_checks(col, slot),
+                };
                 lines.push(format!(
                     "    {} {sql_type}{not_null}{checks}",
                     quote_ident(col)
@@ -277,6 +287,16 @@ fn column_checks(col: &str, slot: &crate::linkml::SlotDefinition) -> String {
         checks.push_str(&format!(" CHECK ({b})"));
     }
     checks
+}
+
+/// Whether the slot's range names a class in this schema, as opposed to a
+/// scalar or an enum. The distinction decides both the column form (foreign
+/// key or linking table, versus a plain or array column) and whether a
+/// multivalued slot is in scope at all.
+fn is_class_range(slot: &SlotDefinition, schema: &SchemaDefinition) -> bool {
+    slot.range
+        .as_deref()
+        .is_some_and(|r| schema.classes.contains_key(r))
 }
 
 /// Whether this slot identifies its class's records — LinkML's globally
@@ -401,6 +421,61 @@ pub fn skipped_classes(schema: &SchemaDefinition) -> Vec<SkippedClass> {
         .collect()
 }
 
+/// A slot-level value constraint [`render`] can't project to a `CHECK`, and
+/// why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkippedConstraint {
+    pub class: String,
+    pub slot: String,
+    pub reason: String,
+}
+
+/// Value constraints [`render`] drops, with a diagnostic naming each.
+///
+/// A `pattern` or a `minimum_value`/`maximum_value` on a **multivalued**
+/// slot constrains each element, and Postgres has no `CHECK` form for that
+/// over an array column: `arr ~ 'p'` is not an operator, and the subquery
+/// over `unnest` that would express it is not allowed inside a `CHECK`.
+/// Emitting one anyway yields a script that parses and then fails when the
+/// database runs it, which is the worst of the three options. So the
+/// constraint is dropped and named here instead.
+pub fn skipped_constraints(schema: &SchemaDefinition) -> Vec<SkippedConstraint> {
+    let skips = compute_skips(schema);
+    let mut out = Vec::new();
+    for (class_name, class) in &schema.classes {
+        if class.r#abstract || skips.contains_key(class_name) {
+            continue;
+        }
+        let effective = crate::linkml_resolve::resolve_effective_slots(class, schema);
+        for (slot_name, slot) in &effective {
+            if !slot.multivalued || is_class_range(slot, schema) {
+                continue;
+            }
+            let dropped = [
+                slot.pattern.is_some().then_some("pattern"),
+                (slot.minimum_value.is_some() || slot.maximum_value.is_some())
+                    .then_some("value bounds"),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+            if dropped.is_empty() {
+                continue;
+            }
+            out.push(SkippedConstraint {
+                class: class_name.clone(),
+                slot: slot_name.clone(),
+                reason: format!(
+                    "{} on a multivalued slot constrains each element, which has no Postgres \
+                     CHECK form over an array column",
+                    dropped.join(" and ")
+                ),
+            });
+        }
+    }
+    out
+}
+
 /// A `rules` entry [`render`] can't project to a `CHECK` constraint, and why.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkippedRule {
@@ -483,11 +558,18 @@ fn compute_skips(schema: &SchemaDefinition) -> BTreeMap<String, String> {
             continue;
         }
         let effective = crate::linkml_resolve::resolve_effective_slots(class, schema);
-        if let Some((slot_name, _)) = effective.iter().find(|(_, s)| s.multivalued) {
+        // A multivalued *scalar* slot is an array column. A multivalued
+        // *class* range is a linking table — real relational design, not a
+        // mechanical translation — so it still takes the class out of scope.
+        if let Some((slot_name, _)) = effective
+            .iter()
+            .find(|(_, s)| s.multivalued && is_class_range(s, schema))
+        {
             skips.insert(
                 name.clone(),
                 format!(
-                    "has multivalued slot `{slot_name}`, which this writer does not yet support"
+                    "has multivalued class-range slot `{slot_name}`, which needs a linking table \
+                     this writer does not yet emit"
                 ),
             );
             continue;
@@ -1102,7 +1184,7 @@ mod tests {
     }
 
     #[test]
-    fn class_with_multivalued_slot_is_skipped_with_a_diagnostic() {
+    fn multivalued_scalar_slot_becomes_an_array_column() {
         let mut class = ClassDefinition::new("Deployment");
         let mut tags = SlotDefinition::new("tags");
         tags.range = Some("string".to_string());
@@ -1113,15 +1195,193 @@ mod tests {
         let out = PostgresWriter::new().render(&schema);
         assert_valid_postgres_sql(&out);
         assert!(
-            !out.contains("CREATE TABLE \"deployment\""),
-            "a class with a multivalued slot must not get a table yet; got:\n{out}"
+            out.contains(r#""tags" text[]"#),
+            "a multivalued scalar slot should be an array column; got:\n{out}"
+        );
+        assert!(
+            skipped_classes(&schema).is_empty(),
+            "the class is no longer out of scope; got: {:?}",
+            skipped_classes(&schema)
+        );
+    }
+
+    /// The array element type follows the slot's range, enums included — an
+    /// enum range already renders as a declared type name, and an array of
+    /// it is the same name with `[]`.
+    #[test]
+    fn multivalued_slot_array_element_type_follows_the_range() {
+        for (range, expected) in [
+            ("integer", r#""counts" integer[]"#),
+            ("double", r#""ratios" double precision[]"#),
+            ("boolean", r#""flags" boolean[]"#),
+            ("uriorcurie", r#""xrefs" text[]"#),
+        ] {
+            let mut class = ClassDefinition::new("Sample");
+            let slot_name = expected
+                .split('"')
+                .nth(1)
+                .expect("expected column name in fixture");
+            let mut slot = SlotDefinition::new(slot_name);
+            slot.range = Some(range.to_string());
+            slot.multivalued = true;
+            class.attributes.insert(slot_name.to_string(), slot);
+            let schema = schema_with_class(class);
+
+            let out = PostgresWriter::new().render(&schema);
+            assert_valid_postgres_sql(&out);
+            assert!(
+                out.contains(expected),
+                "range `{range}` should emit `{expected}`; got:\n{out}"
+            );
+        }
+    }
+
+    /// `required` on a multivalued slot still means the column may not be
+    /// null. It does not mean non-empty — an empty array satisfies NOT NULL,
+    /// and Postgres has no CHECK form for "at least one element" that also
+    /// survives this writer's constraints.
+    #[test]
+    fn required_multivalued_slot_is_not_null() {
+        let mut class = ClassDefinition::new("Deployment");
+        let mut tags = SlotDefinition::new("tags");
+        tags.range = Some("string".to_string());
+        tags.multivalued = true;
+        tags.required = true;
+        class.attributes.insert("tags".to_string(), tags);
+        let schema = schema_with_class(class);
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            out.contains(r#""tags" text[] NOT NULL"#),
+            "a required multivalued slot should be NOT NULL; got:\n{out}"
+        );
+    }
+
+    /// A per-element constraint has no Postgres CHECK form over an array —
+    /// `arr ~ 'p'` is not an operator, and a subquery over `unnest` is not
+    /// allowed in a CHECK. Emitting one anyway would produce a script that
+    /// parses and then fails on execution, so it is dropped and reported.
+    #[test]
+    fn element_constraints_on_a_multivalued_slot_are_dropped_and_reported() {
+        let mut class = ClassDefinition::new("Sample");
+        let mut codes = SlotDefinition::new("codes");
+        codes.range = Some("string".to_string());
+        codes.multivalued = true;
+        codes.pattern = Some("^[A-Z]+$".to_string());
+        class.attributes.insert("codes".to_string(), codes);
+        let mut counts = SlotDefinition::new("counts");
+        counts.range = Some("integer".to_string());
+        counts.multivalued = true;
+        counts.minimum_value = Some(0.0);
+        class.attributes.insert("counts".to_string(), counts);
+        let schema = schema_with_class(class);
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            !out.contains("CHECK"),
+            "no element-wise CHECK is expressible over an array column; got:\n{out}"
+        );
+
+        let skipped = skipped_constraints(&schema);
+        let named: Vec<&str> = skipped.iter().map(|s| s.slot.as_str()).collect();
+        assert!(
+            named.contains(&"codes") && named.contains(&"counts"),
+            "both dropped constraints should be reported; got: {skipped:?}"
+        );
+        assert!(
+            skipped.iter().all(|s| s.class == "Sample"),
+            "each report should name its class; got: {skipped:?}"
+        );
+    }
+
+    /// A single-valued slot's `pattern` is emitted as a `CHECK`, so it must
+    /// not also be reported as dropped — that would send an author looking
+    /// for a missing constraint that is right there in the DDL.
+    #[test]
+    fn a_single_valued_constraint_is_emitted_and_not_reported_as_dropped() {
+        let mut class = ClassDefinition::new("Sample");
+        let mut code = SlotDefinition::new("code");
+        code.range = Some("string".to_string());
+        code.pattern = Some("^[A-Z]+$".to_string());
+        class.attributes.insert("code".to_string(), code);
+        let schema = schema_with_class(class);
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            out.contains("CHECK"),
+            "a single-valued pattern should still emit a CHECK; got:\n{out}"
+        );
+        assert_eq!(
+            skipped_constraints(&schema),
+            vec![],
+            "nothing was dropped, so nothing should be reported"
+        );
+    }
+
+    /// The shape a real consumer has: one class carrying both a multivalued
+    /// scalar and a multivalued class range. The class has no table at all,
+    /// so reporting a dropped column constraint on it would point at a table
+    /// that does not exist — the skip is the only useful diagnostic.
+    #[test]
+    fn constraints_on_a_class_with_no_table_are_not_separately_reported() {
+        let mut kind = ClassDefinition::new("GroceryItemKind");
+        let mut xrefs = SlotDefinition::new("food_xref");
+        xrefs.range = Some("uriorcurie".to_string());
+        xrefs.multivalued = true;
+        xrefs.pattern = Some("^http".to_string());
+        kind.attributes.insert("food_xref".to_string(), xrefs);
+        let mut images = SlotDefinition::new("images");
+        images.range = Some("Image".to_string());
+        images.multivalued = true;
+        kind.attributes.insert("images".to_string(), images);
+        let mut schema = schema_with_class(kind);
+        schema
+            .classes
+            .insert("Image".to_string(), ClassDefinition::new("Image"));
+
+        assert!(
+            !skipped_classes(&schema).is_empty(),
+            "the class should be out of scope for its class-range slot"
+        );
+        assert_eq!(
+            skipped_constraints(&schema),
+            vec![],
+            "a class with no table needs no per-constraint report"
+        );
+    }
+
+    /// Multivalued *class* ranges are a linking-table problem, not an array
+    /// one, and stay out of scope. The reason must say which kind it is, or
+    /// the diagnostic reads as though arrays are still unsupported.
+    #[test]
+    fn class_with_multivalued_class_range_slot_is_skipped_with_a_diagnostic() {
+        let mut parent = ClassDefinition::new("Recipe");
+        let mut images = SlotDefinition::new("images");
+        images.range = Some("Image".to_string());
+        images.multivalued = true;
+        parent.attributes.insert("images".to_string(), images);
+        let mut schema = schema_with_class(parent);
+        schema
+            .classes
+            .insert("Image".to_string(), ClassDefinition::new("Image"));
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            !out.contains(r#"CREATE TABLE "recipe""#),
+            "a multivalued class-range slot still has no table form; got:\n{out}"
         );
         assert_eq!(
             skipped_classes(&schema),
             vec![SkippedClass {
-                class: "Deployment".to_string(),
-                reason: "has multivalued slot `tags`, which this writer does not yet support"
-                    .to_string(),
+                class: "Recipe".to_string(),
+                reason:
+                    "has multivalued class-range slot `images`, which needs a linking table this \
+                     writer does not yet emit"
+                        .to_string(),
             }]
         );
     }
