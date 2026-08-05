@@ -186,7 +186,26 @@ without hand-writing DDL or hand-naming files.
 
 ### Slice 2: `diff` reports a semantic schema delta
 
-**Status:** Not started
+**Status:** Not started — deliberately parked, do not pick this up next
+
+> Slices 2–6 are blocked behind Postgres writer coverage, not by anything in
+> this feature. Feature 24 skips a class with a multivalued slot, which on a
+> real consumer schema means eight of seventeen classes get no table — and
+> those eight are the core of the domain. Building a delta engine and an
+> incremental migration on a projection that drops half the model produces
+> work that has to be unwound once the projection is fixed.
+>
+> Prerequisites, in order: feature 24 slice 4 (multivalued scalars as array
+> columns), then slice 5 (multivalued class ranges as linking tables). Two
+> independent consumers hit this same gap, so it is structural rather than
+> one schema's problem.
+>
+> One scope change also falls out of it. Adopt-existing-database is listed
+> under *Open Questions* as deliberately out of scope, but the consumer this
+> feature exists for already has tables, named differently from what the
+> schema projects (singular vs plural), plus tables the schema will never own.
+> For them a baseline is the only route in, so it needs to become a slice
+> rather than stay a question.
 
 **Priority:** Must Have
 
