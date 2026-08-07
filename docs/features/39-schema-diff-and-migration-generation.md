@@ -186,26 +186,25 @@ without hand-writing DDL or hand-naming files.
 
 ### Slice 2: `diff` reports a semantic schema delta
 
-**Status:** Not started — deliberately parked, do not pick this up next
+**Status:** Not started — the writer prerequisite is cleared; one consumer
+prerequisite remains
 
-> Slices 2–6 are blocked behind Postgres writer coverage, not by anything in
-> this feature. Feature 24 skips a class with a multivalued slot, which on a
-> real consumer schema means eight of seventeen classes get no table — and
-> those eight are the core of the domain. Building a delta engine and an
-> incremental migration on a projection that drops half the model produces
-> work that has to be unwound once the projection is fixed.
+> **Cleared.** These slices were parked behind Postgres writer coverage:
+> feature 24 skipped every class with a multivalued slot, which on real
+> consumer schemas meant most of the model got no table. Slices 4 and 5 of
+> that feature fixed it, and both schemas now project every class.
 >
-> Prerequisites, in order: feature 24 slice 4 (multivalued scalars as array
-> columns), then slice 5 (multivalued class ranges as linking tables). Two
-> independent consumers hit this same gap, so it is structural rather than
-> one schema's problem.
+> **Still open, and it is not a writer problem.** A delta engine designed
+> before any consumer has cut over is designed against a schema nothing
+> consumes yet. More concretely, the scope change below can only be settled
+> against a real database.
 >
-> One scope change also falls out of it. Adopt-existing-database is listed
-> under *Open Questions* as deliberately out of scope, but the consumer this
-> feature exists for already has tables, named differently from what the
-> schema projects (singular vs plural), plus tables the schema will never own.
-> For them a baseline is the only route in, so it needs to become a slice
-> rather than stay a question.
+> Adopt-existing-database is listed under *Open Questions* as deliberately
+> out of scope. The consumer this feature exists for already has tables,
+> named differently from what the schema projects (singular versus plural),
+> plus tables the schema will never own. For them a baseline is the only
+> route in, so it needs to become a slice rather than stay a question — and
+> what that slice has to do depends on what the cutover actually finds.
 
 **Priority:** Must Have
 
