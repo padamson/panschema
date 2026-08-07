@@ -38,16 +38,19 @@ pub enum InstallOutcome {
 /// is how a re-run picks up an upgraded button) and idempotently adds
 /// them to `book.toml`.
 pub fn install(book_dir: &Path, cfg: &BookLinkConfig) -> anyhow::Result<InstallOutcome> {
-    if !cfg.enabled {
+    if !cfg.enabled() {
         return Ok(InstallOutcome::Disabled);
     }
 
-    let js = SCHEMA_LINK_JS
-        .replace(
-            "__PANSCHEMA_SCHEMA_PATH__",
-            &serde_json::to_string(&cfg.schema_path)?,
-        )
-        .replace("__PANSCHEMA_LABEL__", &serde_json::to_string(&cfg.label)?);
+    // One array drives both renderings: the asset draws a plain link for a
+    // single entry and a drop-down for several, so a book that grows a
+    // second schema needs no change here.
+    let entries: Vec<serde_json::Value> = cfg
+        .entries()
+        .iter()
+        .map(|e| serde_json::json!({ "schemaPath": e.schema_path, "label": e.label }))
+        .collect();
+    let js = SCHEMA_LINK_JS.replace("__PANSCHEMA_LINKS__", &serde_json::to_string(&entries)?);
 
     std::fs::write(book_dir.join(JS_FILENAME), js)
         .with_context(|| format!("writing {JS_FILENAME} to {}", book_dir.display()))?;
@@ -158,13 +161,106 @@ fn ensure_in_array(doc: &mut DocumentMut, key: &str, val: &str) -> anyhow::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use panschema::publish::{BookLinkEntry, BookLinkTable};
 
     fn cfg(enabled: bool) -> BookLinkConfig {
-        BookLinkConfig {
+        BookLinkConfig::Single(BookLinkTable {
             enabled,
             schema_path: "schema/current/".to_string(),
             label: "Schema reference".to_string(),
-        }
+        })
+    }
+
+    /// The `[[book_link]]` form, one entry per (path, label) pair.
+    fn list_cfg(entries: &[(&str, &str)]) -> BookLinkConfig {
+        BookLinkConfig::List(
+            entries
+                .iter()
+                .map(|(p, l)| BookLinkEntry {
+                    schema_path: p.to_string(),
+                    label: l.to_string(),
+                })
+                .collect(),
+        )
+    }
+
+    /// A single entry renders the plain link a one-schema book has always
+    /// had — the property that lets a book adopt the list form without any
+    /// visible change.
+    #[test]
+    fn one_entry_installs_a_plain_link_not_a_menu() {
+        let dir = book_dir();
+        install(dir.path(), &list_cfg(&[("schema/current/", "Wine schema")])).unwrap();
+        let js = std::fs::read_to_string(dir.path().join("schema-link.js")).unwrap();
+
+        assert!(
+            js.contains(r#""schemaPath":"schema/current/""#)
+                && js.contains(r#""label":"Wine schema""#),
+            "the entry should be baked in; got:\n{js}"
+        );
+        assert!(
+            !js.contains("__PANSCHEMA_LINKS__"),
+            "the placeholder must be substituted; got:\n{js}"
+        );
+    }
+
+    /// Several entries all reach the asset, in declaration order, so the
+    /// menu lists them the way the author wrote them.
+    #[test]
+    fn several_entries_are_baked_in_in_declaration_order() {
+        let dir = book_dir();
+        install(
+            dir.path(),
+            &list_cfg(&[
+                ("schema/current/", "Wine schema"),
+                ("schema/cqa/current/", "CQ&A contract"),
+            ]),
+        )
+        .unwrap();
+        let js = std::fs::read_to_string(dir.path().join("schema-link.js")).unwrap();
+
+        let wine = js.find("Wine schema").expect("first entry present");
+        let cqa = js.find("CQ&A contract").expect("second entry present");
+        assert!(wine < cqa, "declaration order should survive; got:\n{js}");
+        assert!(
+            js.contains("schema/cqa/current/"),
+            "the dependency schema's path should be baked in; got:\n{js}"
+        );
+    }
+
+    /// An empty list is the list form's way of saying off, and must leave
+    /// the book untouched exactly as `enabled = false` does.
+    #[test]
+    fn an_empty_list_installs_nothing() {
+        let dir = book_dir();
+        let before = std::fs::read_to_string(dir.path().join("book.toml")).unwrap();
+
+        let outcome = install(dir.path(), &list_cfg(&[])).unwrap();
+        assert_eq!(outcome, InstallOutcome::Disabled);
+        assert!(!dir.path().join("schema-link.js").exists());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("book.toml")).unwrap(),
+            before,
+            "an empty list must not touch book.toml"
+        );
+    }
+
+    /// Every href is built from `path_to_root`, so the links resolve under
+    /// a GitHub Pages project prefix rather than only at a domain root.
+    #[test]
+    fn menu_links_are_relative_to_path_to_root() {
+        let dir = book_dir();
+        install(dir.path(), &list_cfg(&[("a/", "A"), ("b/", "B")])).unwrap();
+        let js = std::fs::read_to_string(dir.path().join("schema-link.js")).unwrap();
+
+        assert!(
+            js.contains("root + entry.schemaPath"),
+            "menu entries should be root-relative; got:\n{js}"
+        );
+        assert!(
+            js.contains("root + links[0].schemaPath"),
+            "the single-link form should be root-relative too; got:\n{js}"
+        );
     }
 
     /// A book dir with a minimal `book.toml` (no `[output.html]` yet, so
@@ -230,9 +326,7 @@ mod tests {
     #[test]
     fn install_bakes_schema_path_and_label_into_js() {
         let dir = book_dir();
-        let mut c = cfg(true);
-        c.schema_path = "docs/model/".to_string();
-        c.label = "Data model".to_string();
+        let c = list_cfg(&[("docs/model/", "Data model")]);
         install(dir.path(), &c).unwrap();
 
         let js = std::fs::read_to_string(dir.path().join("schema-link.js")).unwrap();

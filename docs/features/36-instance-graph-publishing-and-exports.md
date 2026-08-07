@@ -157,14 +157,71 @@ exported instance graph from a manifest-driven build (ADR-009 decision 6).
   the schema and the path, matching the manifest's existing strictness
   (`manifest_instances_path_that_does_not_exist_fails`).
 
+### Slice 6: Dataset-first versioned publishing — the `/data/` space
+
+**Status:** Not Started
+
+**Priority:** Should Have
+
+**User Value:** A repo that authors instance data against someone else's
+schema can publish that data as a versioned, addressable artifact of its
+own. The motivating case is a domain repo holding evaluation records that
+conform to a contract another repo owns: the records change on the domain
+repo's schedule and are its product, so they need a history a reader can
+navigate — beside, and separately addressable from, that repo's own schema
+docs.
+
+**What is versioned here is the instance graph, not the schema.** ADR-009
+decision 6 settles this: publishing such a repo's docs is versioned "by its
+own tags — dataset versions, not schema versions," and lands in the
+deferred `/data/` space from decision 1. The consumed schema is a **pinned
+dependency**, and the pin "is carried here by the pin the repo already
+commits" — the lockfile. Re-publishing the dependency's schema docs per
+consumer tag would duplicate what the owning repo already publishes, on an
+axis that isn't the consumer's to move.
+
+**Already done, and the reason this slice is narrow.** Slice 5 covers the
+*rendering*: a manifest naming an external schema plus an `instances` list
+emits a complete page, instance graph included — verified against a
+path-source dependency. What is missing is that it is a **single current
+build** with no `<tag>/` history and no alias.
+
+**Acceptance Criteria:**
+- [ ] A repo whose `[[instances]]` entries are the primary artifact can
+  publish them versioned by its **own** git tags, with the schema resolved
+  as a pinned dependency rather than a local file.
+- [ ] Each published version records the schema version its data was
+  rendered against, from the lockfile pin — so a reader can tell a data
+  change from a contract change without diffing.
+- [ ] The versioned data lands in its own space, addressable independently
+  of any schema-docs tree, with a `current/` alias on the same terms the
+  schema tree has — so a `[[book_link]]` entry can point at a stable path
+  (feature 21 slice 5).
+- [ ] A ref whose data file is absent is skipped with a note rather than
+  failing the run — the rule the exemplar already follows, so adding this
+  does not make old tags unpublishable.
+- [ ] It is opt-in: a repo that declares no dataset-first publishing emits
+  exactly what it does today.
+
+**Notes:**
+- **Slice 5's `github:`-source claim is not actually covered by a test.**
+  Its AC says the dependency may be a `github:` or `path:` source, but
+  `manifest_instances_render_the_local_a_boxes_with_the_imported_schema`
+  writes `path = "./wine-pkg"`. Both routes share `resolve_source`, so the
+  remote case is an inference rather than verified behaviour — and this is
+  the slice that makes the remote case the normal one, so it is worth a
+  test on the way in.
+- ADR-009 decision 1 notes this space "doubles the versioning surface
+  (`publish` would need a second tag-resolution scheme)". That cost is the
+  substance of the slice, not an aside.
+- No consumer can exercise this end to end yet — the contract in the
+  motivating case is unreleased. That is the demand-driven trigger to wait
+  for, not a reason to guess the shape now.
+
 ### Deferred (post-36, on demand)
 
 - Sibling pages for additional named instance graphs
   (`<version>/instances/<name>/`) — no consumer has more than one dataset.
-- Dataset-first *versioned publishing* (a `/data/` space versioned by the
-  dataset repo's own tags, schema as a pinned dependency) — ADR-009
-  decision 6's growth path; the manifest build above covers current-docs
-  deployment today.
 - Subgraph extraction (`InstanceSet → InstanceSet`) shared by large-graph
   visualization and retrieval — build when a large graph or a retrieval
   app demands it (ADR-009 decision 3).

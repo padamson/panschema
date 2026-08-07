@@ -137,16 +137,93 @@ pub struct FileMapping {
     pub main: PathBuf,
 }
 
-/// `[book_link]` table — mdbook→schema cross-link config. Read by
+/// `[book_link]` — mdbook→schema cross-link config. Read by
 /// `mdbook-panschema install` to bake the schema-docs location and
 /// button label into the toolbar asset it drops into an mdbook book.
 /// The reverse direction of `[publishing].site_root_url`.
+///
+/// Two spellings parse, because every book that exists today writes the
+/// first one:
+///
+/// - `[book_link]` — one target, with an `enabled` switch. Unchanged.
+/// - `[[book_link]]` — one entry per schema the book fronts. Writing an
+///   entry is itself the opt-in, so there is no `enabled` to set; an
+///   empty list means off.
+///
+/// Consumers read [`BookLinkConfig::entries`] and
+/// [`BookLinkConfig::enabled`] rather than matching on the shape, so the
+/// difference stops at the parse boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum BookLinkConfig {
+    /// `[[book_link]]` — one entry per schema.
+    List(Vec<BookLinkEntry>),
+    /// `[book_link]` — the single-target table form.
+    Single(BookLinkTable),
+}
+
+/// Dispatch on the written shape — an array is the list form, anything
+/// else the table form — rather than deriving `untagged`.
+///
+/// Two reasons, both about being wrong loudly rather than quietly. Serde
+/// can build a struct from a *sequence*, and every field of
+/// [`BookLinkTable`] has a default, so an untagged derive matches
+/// `book_link = []` against `Single` and yields one link out of an empty
+/// list. And an untagged derive reports only "data did not match any
+/// variant" — a typo'd key in an entry would tell the author nothing about
+/// which key, where the table form has always named it.
+impl<'de> Deserialize<'de> for BookLinkConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as _;
+        let value = toml::Value::deserialize(deserializer)?;
+        match value {
+            toml::Value::Array(_) => Vec::<BookLinkEntry>::deserialize(value)
+                .map(BookLinkConfig::List)
+                .map_err(D::Error::custom),
+            other => BookLinkTable::deserialize(other)
+                .map(BookLinkConfig::Single)
+                .map_err(D::Error::custom),
+        }
+    }
+}
+
+impl BookLinkConfig {
+    /// Every configured link, in declaration order — what was written,
+    /// independent of whether the feature is switched on.
+    pub fn entries(&self) -> Vec<BookLinkEntry> {
+        match self {
+            BookLinkConfig::Single(t) => vec![BookLinkEntry {
+                schema_path: t.schema_path.clone(),
+                label: t.label.clone(),
+            }],
+            BookLinkConfig::List(entries) => entries.clone(),
+        }
+    }
+
+    /// Whether `install` should do anything.
+    ///
+    /// The table form has an explicit switch, because a bare `[book_link]`
+    /// header must not turn the button on by itself. The list form has
+    /// none: writing an entry is the opt-in, so an empty list is the only
+    /// way to be off.
+    pub fn enabled(&self) -> bool {
+        match self {
+            BookLinkConfig::Single(t) => t.enabled,
+            BookLinkConfig::List(entries) => !entries.is_empty(),
+        }
+    }
+}
+
+/// The `[book_link]` table form: one target plus a master switch.
 ///
 /// Unknown keys are rejected so a typo'd setting fails loudly instead
 /// of silently reverting to its default.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct BookLinkConfig {
+pub struct BookLinkTable {
     /// Master switch — `install` is a no-op unless this is `true`.
     #[serde(default)]
     pub enabled: bool,
@@ -154,6 +231,19 @@ pub struct BookLinkConfig {
     #[serde(default = "default_book_link_schema_path")]
     pub schema_path: String,
     /// Button aria-label / tooltip / prose text.
+    #[serde(default = "default_book_link_label")]
+    pub label: String,
+}
+
+/// One `[[book_link]]` entry: a schema-docs page the book links out to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BookLinkEntry {
+    /// Book-relative path to this schema's docs.
+    #[serde(default = "default_book_link_schema_path")]
+    pub schema_path: String,
+    /// The entry's label — the button's tooltip when it is the only one,
+    /// and its name in the drop-down when it is not.
     #[serde(default = "default_book_link_label")]
     pub label: String,
 }
@@ -1288,9 +1378,136 @@ main = "schema.yaml"
 "#;
         let cfg: PublishConfig = toml.parse().expect("should parse");
         let book_link = cfg.book_link.expect("book_link should be present");
-        assert!(!book_link.enabled, "enabled must default to false");
-        assert_eq!(book_link.schema_path, "schema/current/");
-        assert_eq!(book_link.label, "Schema reference");
+        assert!(!book_link.enabled(), "enabled must default to false");
+        let entry = &book_link.entries()[0];
+        assert_eq!(entry.schema_path, "schema/current/");
+        assert_eq!(entry.label, "Schema reference");
+    }
+
+    /// A book fronting several schemas writes `[[book_link]]`. Each entry
+    /// carries its own target and label, in declaration order.
+    #[test]
+    fn parses_book_link_as_a_list_of_entries() {
+        let toml = r#"
+[schema]
+name = "x"
+version = "0.1.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+
+[[book_link]]
+schema_path = "schema/current/"
+label = "Wine schema"
+
+[[book_link]]
+schema_path = "schema/cqa/current/"
+label = "CQ&A contract"
+"#;
+        let cfg: PublishConfig = toml.parse().expect("the list form must parse");
+        let links = cfg.book_link.expect("book_link should be present");
+        let entries = links.entries();
+        assert_eq!(
+            entries.len(),
+            2,
+            "both entries should survive; got {entries:?}"
+        );
+        assert_eq!(entries[0].schema_path, "schema/current/");
+        assert_eq!(entries[0].label, "Wine schema");
+        assert_eq!(entries[1].schema_path, "schema/cqa/current/");
+        assert_eq!(entries[1].label, "CQ&A contract");
+        assert!(links.enabled(), "writing entries is itself the opt-in");
+    }
+
+    /// The table form is what every existing book writes. It must keep
+    /// producing exactly one entry, with today's defaults.
+    #[test]
+    fn the_table_form_still_yields_a_single_entry() {
+        let toml = r#"
+[schema]
+name = "x"
+version = "0.1.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+
+[book_link]
+enabled = true
+"#;
+        let cfg: PublishConfig = toml.parse().expect("should parse");
+        let links = cfg.book_link.expect("book_link should be present");
+        assert!(links.enabled());
+        let entries = links.entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].schema_path, "schema/current/");
+        assert_eq!(entries[0].label, "Schema reference");
+    }
+
+    /// `enabled = false` is the off switch in the table form, and an empty
+    /// list is the same as no section at all.
+    #[test]
+    fn book_link_is_off_when_disabled_or_empty() {
+        // `book_link` must sit at the top level. Appending a bare key after
+        // a `[table]` header would silently land inside that table.
+        let base = r#"
+[schema]
+name = "x"
+version = "0.1.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+"#;
+        let disabled: PublishConfig = format!("{base}\n[book_link]\nenabled = false\n")
+            .parse()
+            .expect("should parse");
+        assert!(!disabled.book_link.expect("present").enabled());
+
+        let empty: PublishConfig = r#"
+book_link = []
+
+[schema]
+name = "x"
+version = "0.1.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+"#
+        .parse()
+        .expect("an empty list should parse");
+        let links = empty.book_link.expect("present");
+        assert!(!links.enabled(), "an empty list means the feature is off");
+        assert!(links.entries().is_empty());
+    }
+
+    /// A typo in a list entry must fail loudly. A silently dropped button
+    /// is the failure this rejects — the author sees a missing link and no
+    /// reason for it.
+    #[test]
+    fn rejects_a_list_entry_with_an_unknown_key() {
+        let toml = r#"
+[schema]
+name = "x"
+version = "0.1.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+
+[[book_link]]
+schema_path = "schema/current/"
+labl = "typo"
+"#;
+        let err = toml
+            .parse::<PublishConfig>()
+            .expect_err("an unknown key in a list entry must be rejected");
+        assert!(
+            format!("{err}").contains("labl"),
+            "the error should name the offending key; got: {err}"
+        );
     }
 
     #[test]
@@ -1311,9 +1528,10 @@ label = "Data model"
 "#;
         let cfg: PublishConfig = toml.parse().expect("should parse");
         let book_link = cfg.book_link.expect("book_link should be present");
-        assert!(book_link.enabled);
-        assert_eq!(book_link.schema_path, "docs/schema/");
-        assert_eq!(book_link.label, "Data model");
+        assert!(book_link.enabled());
+        let entry = &book_link.entries()[0];
+        assert_eq!(entry.schema_path, "docs/schema/");
+        assert_eq!(entry.label, "Data model");
     }
 
     #[test]

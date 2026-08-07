@@ -37,7 +37,19 @@ schema_path = "schema/current/"   # book-relative path to the schema docs
 label = "Schema reference"         # button aria-label / tooltip / prose text
 ```
 
-`install` reads this section and bakes `schema_path` + `label` into the emitted asset. The consumer writes **zero** JavaScript — one config block, and the command handles the asset and the `book.toml` wiring. Improvements to the button then flow from a tool upgrade + re-`install`, not a manual edit in every book.
+A book fronting several schemas writes the same key as an array instead, one entry per schema (see Slice 5):
+
+```toml
+[[book_link]]
+schema_path = "schema/current/"
+label = "Wine schema"
+
+[[book_link]]
+schema_path = "schema/cqa/current/"
+label = "CQ&A contract"
+```
+
+`install` reads this section and bakes the entries into the emitted asset. The consumer writes **zero** JavaScript — one config block, and the command handles the asset and the `book.toml` wiring. Improvements to the button then flow from a tool upgrade + re-`install`, not a manual edit in every book.
 
 ---
 
@@ -105,6 +117,96 @@ label = "Schema reference"         # button aria-label / tooltip / prose text
 
 ---
 
+### Slice 5: One book, several schemas — link for one, selector for N
+
+**Status:** Completed
+
+**Priority:** Should Have
+
+**User Value:** A book fronting more than one schema can reach all of them
+from the toolbar. The motivating case is a domain book that publishes both
+its own schema docs and a *dependency* schema's docs rendered with local
+instance data: an author cross-checking that each eval item's expected
+anchors resolve to real catalogue nodes wants both pages open side by side,
+which means both have to be reachable and separately addressable.
+
+The wider driver is an ecosystem docs site fronting several schemas at once;
+two is the first case, three-plus is what the selector is really for.
+
+**Design:** `[book_link]` becomes a list. This is the **selector-when-N**
+pattern the in-page instance-graph selector already established (feature
+37): one renders bare, many render behind a picker. Using it again here
+makes the book-navigation version read as the same idea rather than a
+second, differently-shaped affordance.
+
+Both TOML spellings parse, because every book that exists today writes the
+table form:
+
+```toml
+# today — unchanged, still renders one plain link
+[book_link]
+enabled = true
+schema_path = "schema/current/"
+label = "Schema reference"
+
+# new — two or more entries render a drop-down in the same toolbar slot
+[[book_link]]
+schema_path = "schema/current/"
+label = "Wine schema"
+
+[[book_link]]
+schema_path = "schema/cqa/current/"
+label = "CQ&A contract"
+```
+
+**Acceptance Criteria:**
+- [x] The table form parses exactly as it does today, with the same
+  defaults, and installs the same single link. No existing book changes
+  behaviour or needs an edit.
+- [x] The array-of-tables form parses, and each entry carries its own
+  `schema_path` and `label`.
+- [x] A list of one installs a plain link, identical to what the table form
+  produces — degrading to today's behaviour is what makes the list form
+  safe to adopt early.
+- [x] A list of two or more installs a drop-down in the same toolbar slot,
+  listing every entry in declaration order.
+- [x] `enabled` still turns the whole feature off, in either form, and an
+  empty list is the same as absent.
+- [x] A malformed entry — unknown key, or a missing `schema_path` — is a
+  parse error naming the problem, not a silently dropped button.
+- [x] Every link resolves under a project-path prefix, as the single link
+  already does (`path_to_root`-relative, never absolute).
+
+**Notes:**
+- The note that filed this holds a **demand-driven rule**: build when a book
+  actually needs to link out to a second page, not ahead of it. That
+  condition is not met yet — the dependency-schema page is several steps out
+  in another repo — so the tests here stand on this repo's own fixtures
+  rather than waiting on a consumer.
+- **The `untagged` derive was wrong twice, and both showed up as tests.**
+  Serde can build a struct from a sequence, and every `[book_link]` field
+  has a default, so `book_link = []` matched the table form and produced
+  one link from an empty list. And an untagged derive reports only "data
+  did not match any variant," so a typo'd key named nothing — losing the
+  one thing the table form already did well. A hand-written `Deserialize`
+  dispatching on array-versus-table fixes both and keeps the inner error.
+- **The page a second entry points at can already be produced.** Rendering
+  local instance data against a schema the repo does not own is
+  [feature 36 slice 5](36-instance-graph-publishing-and-exports.md), which
+  is complete — a manifest naming an external schema plus an `instances`
+  list emits the full page, instance graph included. So a book can point a
+  second `[[book_link]]` entry at that page today. What is missing is only
+  a *versioned* history for it, which is feature 36 slice 6 — and note that
+  what gets versioned there is the **instance graph**, on the consuming
+  repo's own tags. The consumed schema stays a pinned dependency whose own
+  docs its owner publishes.
+- Capability B from the same note — *publishing* a dependency schema's docs
+  with local instances — is the other half and is **not** this slice. It
+  lands in the publish path, not the toolbar, and is specced separately.
+  This slice only makes such a page reachable once it exists.
+
+---
+
 ## Slice Priority and Dependencies
 
 | Slice | Priority | Depends On | Status |
@@ -114,6 +216,7 @@ label = "Schema reference"         # button aria-label / tooltip / prose text
 | Slice 2 — `mdbook-panschema` crate + `install [dir]` | Must Have | Slice 1 | Completed |
 | Slice 3 — shared authoring-template adoption | Should Have | Slice 2 | Not Started |
 | Slice 4 — reference-consumer swap + dogfood | Should Have | Slice 2 | Not Started |
+| Slice 5 — link for one, selector for N | Should Have | Slice 2 | Completed |
 
 ---
 

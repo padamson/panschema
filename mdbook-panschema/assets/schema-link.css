@@ -5,3 +5,46 @@
 .schema-docs-button svg {
   fill: none;
 }
+
+/* Multi-schema form only. The wrapper is the positioning context for the
+   menu; it must not add layout of its own, because mdbook's `.icon-button`
+   already sizes and centers the control in the toolbar. */
+.schema-docs-menu {
+  position: relative;
+  display: inline-block;
+}
+
+.schema-docs-menu-list {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 100;
+  margin: 0;
+  padding: 0.25rem 0;
+  list-style: none;
+  min-width: 12rem;
+  /* mdbook theme variables, so the menu follows the reader's theme
+     instead of pinning one palette. */
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--theme-popup-border, var(--sidebar-non-existant, #ccc));
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.schema-docs-menu-list li {
+  margin: 0;
+}
+
+.schema-docs-menu-list a {
+  display: block;
+  padding: 0.35rem 0.75rem;
+  white-space: nowrap;
+  text-decoration: none;
+  color: inherit;
+}
+
+.schema-docs-menu-list a:hover,
+.schema-docs-menu-list a:focus {
+  background: var(--theme-hover, rgba(0, 0, 0, 0.08));
+}

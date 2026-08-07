@@ -2418,8 +2418,10 @@ dependencies = [
  "anyhow",
  "clap",
  "panschema",
+ "playwright-rs",
  "serde_json",
  "tempfile",
+ "tokio",
  "toml_edit",
 ]
 

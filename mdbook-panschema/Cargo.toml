@@ -25,3 +25,11 @@ anyhow = "1.0.103"
 
 [dev-dependencies]
 tempfile = "3"
+
+# Browser test for the installed toolbar asset. The asset is JavaScript
+# that builds DOM — the unit tests here can only prove the config reached
+# the file, not that a menu opens, lists its entries, and closes. Same
+# pinned playwright-rs as the panschema crate's E2E tier; the npm-pinned
+# Playwright version in CI must match `playwright_rs::PLAYWRIGHT_VERSION`.
+playwright-rs = { git = "https://github.com/padamson/playwright-rust", branch = "main" }
+tokio = { version = "1", features = ["rt", "macros"] }
