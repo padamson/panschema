@@ -274,7 +274,7 @@ database constraint, not just a rendered sentence.
 
 ### Slice 5: Multivalued class-range slots as linking tables
 
-**Status:** Designed, not started
+**Status:** Complete
 
 **Priority:** Should Have — raised from Could Have. It is the slice that
 returns every class the Postgres projection currently skips for a
@@ -383,12 +383,12 @@ rule would make the emitted schema change silently on a slot rename, and it
 would be inventing a mechanism where the metamodel already has one.
 
 **Acceptance Criteria:**
-- [ ] A multivalued class-range slot emits a linking table named for the owning table and the slot, with both foreign keys `NOT NULL` and a composite primary key.
-- [ ] The foreign-key columns reference each side's real primary key, including a non-`id` key such as a `key: true` column.
-- [ ] Two multivalued slots whose ranges are the same class produce two distinct linking tables.
-- [ ] A class is no longer skipped for a multivalued class-range slot, and the classes that cascaded off it return too.
-- [ ] The emitted script parses as valid Postgres and its foreign keys resolve to tables the same script creates.
-- [ ] List order is documented as not preserved, in the feature doc and the coverage table.
+- [x] A multivalued class-range slot emits a linking table named for the owning table and the slot, with both foreign keys `NOT NULL` and a composite primary key.
+- [x] The foreign-key columns reference each side's real primary key, including a non-`id` key such as a `key: true` column.
+- [x] Two multivalued slots whose ranges are the same class produce two distinct linking tables.
+- [x] A class is no longer skipped for a multivalued class-range slot, and the classes that cascaded off it return too.
+- [x] The emitted script parses as valid Postgres and its foreign keys resolve to tables the same script creates.
+- [x] List order is documented as not preserved, in the feature doc and the coverage table.
 
 ---
 
@@ -452,7 +452,7 @@ computing the delta.
 | Slice 2: `unique_keys`/`pattern`/value bounds | Must Have | Slice 1 | Completed |
 | Slice 3: `rules` as `CHECK` | Should Have | Slice 1 | Completed |
 | Slice 4: multivalued scalars as arrays | Should Have | Slice 1 | Complete |
-| Slice 5: multivalued class-refs as linking tables | Could Have | Slice 1, 4 | Not Started — the one that unblocks both dogfood consumers |
+| Slice 5: multivalued class-refs as linking tables | Should Have | Slice 1, 4 | Complete |
 | Slice 6: `is_a` inheritance strategy | Could Have | Slice 1 | Not Started |
 | Slice 7: `any_of` polymorphic ranges | Won't Have | Slice 1 | 📋 Deferred |
 

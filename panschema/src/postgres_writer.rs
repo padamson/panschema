@@ -106,6 +106,7 @@ fn render_body(schema: &SchemaDefinition) -> String {
     // every `CREATE TABLE`, so declaration order (and cycles between
     // classes) never matter — the script still applies in one pass.
     let mut fk_constraints = Vec::new();
+    let mut linking_tables: Vec<LinkingTable> = Vec::new();
     let skips = compute_skips(schema);
 
     for (class_name, class) in &schema.classes {
@@ -149,6 +150,12 @@ fn render_body(schema: &SchemaDefinition) -> String {
         let slot_columns = slot_column_map(class, schema);
         for (slot_name, slot) in &effective {
             if pk_slot.as_deref() == Some(slot_name.as_str()) {
+                continue;
+            }
+            // A multivalued class range has no column here; it becomes its
+            // own table, emitted once every class table exists.
+            if let Some(link) = linking_table_for(class_name, class, slot_name, slot, schema) {
+                linking_tables.push(link);
                 continue;
             }
             let col = &slot_columns[slot_name];
@@ -247,6 +254,59 @@ fn render_body(schema: &SchemaDefinition) -> String {
         writeln!(out).ok();
     }
 
+    // Linking tables come after every class table, so a reader sees the
+    // entities first and the relationships between them second. Their
+    // foreign keys join the deferred set like any other.
+    for link in &linking_tables {
+        writeln!(out, "CREATE TABLE {} (", quote_ident(&link.name)).ok();
+        writeln!(
+            out,
+            "    {} {} NOT NULL,",
+            quote_ident(&link.owner_col),
+            link.owner_type
+        )
+        .ok();
+        writeln!(
+            out,
+            "    {} {} NOT NULL,",
+            quote_ident(&link.target_col),
+            link.target_type
+        )
+        .ok();
+        writeln!(
+            out,
+            "    PRIMARY KEY ({}, {})",
+            quote_ident(&link.owner_col),
+            quote_ident(&link.target_col)
+        )
+        .ok();
+        writeln!(out, ");").ok();
+        writeln!(out).ok();
+
+        for (from_col, to_table, to_col, side) in [
+            (
+                &link.owner_col,
+                &link.owner_table,
+                &link.owner_pk,
+                &link.owner_col,
+            ),
+            (
+                &link.target_col,
+                &link.target_table,
+                &link.target_pk,
+                &link.target_col,
+            ),
+        ] {
+            fk_constraints.push(FkConstraint {
+                from_table: link.name.clone(),
+                from_col: from_col.clone(),
+                to_table: to_table.clone(),
+                to_col: to_col.clone(),
+                constraint_name: format!("{}_{side}_fkey", link.name),
+            });
+        }
+    }
+
     for fk in &fk_constraints {
         writeln!(
             out,
@@ -329,6 +389,12 @@ fn slot_column_map(class: &ClassDefinition, schema: &SchemaDefinition) -> BTreeM
         if pk_slot.as_deref() == Some(slot_name.as_str()) {
             continue;
         }
+        // A multivalued class range lives in its own linking table, so it
+        // has no column on this table at all. Leaving it out is what keeps
+        // `unique_keys` and `rules` from naming a column that isn't there.
+        if slot.multivalued && is_class_range(slot, schema) {
+            continue;
+        }
         let col = match slot.range.as_deref().and_then(|r| schema.classes.get(r)) {
             Some(target_def) => {
                 let (target_pk_col, _) = class_primary_key(target_def, schema);
@@ -339,6 +405,57 @@ fn slot_column_map(class: &ClassDefinition, schema: &SchemaDefinition) -> BTreeM
         map.insert(slot_name.clone(), col);
     }
     map
+}
+
+/// A many-to-many table standing for one multivalued class-range slot.
+///
+/// Both sides are `NOT NULL` and together form the primary key, so a
+/// target cannot be listed twice under the same slot. See feature 24 slice
+/// 5 for why every such slot gets one, rather than a foreign key on the
+/// child when the relationship looks like ownership.
+struct LinkingTable {
+    name: String,
+    owner_col: String,
+    owner_type: String,
+    owner_table: String,
+    owner_pk: String,
+    target_col: String,
+    target_type: String,
+    target_table: String,
+    target_pk: String,
+}
+
+/// The linking table for `slot_name` on `class`, or `None` when the slot
+/// isn't a multivalued class range.
+fn linking_table_for(
+    class_name: &str,
+    class: &ClassDefinition,
+    slot_name: &str,
+    slot: &SlotDefinition,
+    schema: &SchemaDefinition,
+) -> Option<LinkingTable> {
+    if !slot.multivalued {
+        return None;
+    }
+    let target_def = slot.range.as_deref().and_then(|r| schema.classes.get(r))?;
+    let owner_table = crate::casing::snake_case(class_name);
+    let target_table = crate::casing::snake_case(slot.range.as_deref()?);
+    let (owner_pk, owner_type) = class_primary_key(class, schema);
+    let (target_pk, target_type) = class_primary_key(target_def, schema);
+    let slot_col = crate::casing::snake_case(slot_name);
+    Some(LinkingTable {
+        // Named for the slot rather than the target class, so two slots
+        // onto one class stay two distinct relationships.
+        name: format!("{owner_table}_{slot_col}"),
+        owner_col: format!("{owner_table}_{owner_pk}"),
+        owner_type,
+        owner_table,
+        owner_pk,
+        target_col: format!("{slot_col}_{target_pk}"),
+        target_type,
+        target_table,
+        target_pk,
+    })
 }
 
 /// Map a rule's `slot_conditions` to a SQL boolean expression — the `AND`
@@ -558,22 +675,6 @@ fn compute_skips(schema: &SchemaDefinition) -> BTreeMap<String, String> {
             continue;
         }
         let effective = crate::linkml_resolve::resolve_effective_slots(class, schema);
-        // A multivalued *scalar* slot is an array column. A multivalued
-        // *class* range is a linking table — real relational design, not a
-        // mechanical translation — so it still takes the class out of scope.
-        if let Some((slot_name, _)) = effective
-            .iter()
-            .find(|(_, s)| s.multivalued && is_class_range(s, schema))
-        {
-            skips.insert(
-                name.clone(),
-                format!(
-                    "has multivalued class-range slot `{slot_name}`, which needs a linking table \
-                     this writer does not yet emit"
-                ),
-            );
-            continue;
-        }
         if let Some((slot_name, _)) = effective.iter().find(|(_, s)| !s.any_of.is_empty()) {
             skips.insert(
                 name.clone(),
@@ -1327,63 +1428,235 @@ mod tests {
     /// that does not exist — the skip is the only useful diagnostic.
     #[test]
     fn constraints_on_a_class_with_no_table_are_not_separately_reported() {
-        let mut kind = ClassDefinition::new("GroceryItemKind");
-        let mut xrefs = SlotDefinition::new("food_xref");
-        xrefs.range = Some("uriorcurie".to_string());
-        xrefs.multivalued = true;
-        xrefs.pattern = Some("^http".to_string());
-        kind.attributes.insert("food_xref".to_string(), xrefs);
-        let mut images = SlotDefinition::new("images");
-        images.range = Some("Image".to_string());
-        images.multivalued = true;
-        kind.attributes.insert("images".to_string(), images);
-        let mut schema = schema_with_class(kind);
-        schema
-            .classes
-            .insert("Image".to_string(), ClassDefinition::new("Image"));
+        let mut class = ClassDefinition::new("Sample");
+        // An `any_of` slot keeps the class out of the projection entirely.
+        let mut value = SlotDefinition::new("value");
+        value.any_of = vec![SlotDefinition::new("a"), SlotDefinition::new("b")];
+        class.attributes.insert("value".to_string(), value);
+        let mut codes = SlotDefinition::new("codes");
+        codes.range = Some("string".to_string());
+        codes.multivalued = true;
+        codes.pattern = Some("^[A-Z]+$".to_string());
+        class.attributes.insert("codes".to_string(), codes);
+        let schema = schema_with_class(class);
 
         assert!(
             !skipped_classes(&schema).is_empty(),
-            "the class should be out of scope for its class-range slot"
+            "the class should be out of scope for its any_of slot"
         );
         assert_eq!(
             skipped_constraints(&schema),
             vec![],
-            "a class with no table needs no per-constraint report"
+            "a class with no table needs no per-constraint report — the skip \
+             is the only useful diagnostic"
         );
     }
 
-    /// Multivalued *class* ranges are a linking-table problem, not an array
-    /// one, and stay out of scope. The reason must say which kind it is, or
-    /// the diagnostic reads as though arrays are still unsupported.
+    /// The mirror of the case above, and the shape a real consumer has: a
+    /// class holding both a multivalued scalar with a per-element constraint
+    /// and a multivalued class range. It now gets a table and a linking
+    /// table, so the dropped constraint *is* worth reporting.
     #[test]
-    fn class_with_multivalued_class_range_slot_is_skipped_with_a_diagnostic() {
-        let mut parent = ClassDefinition::new("Recipe");
+    fn a_dropped_constraint_is_reported_once_the_class_has_a_table() {
+        let mut owner = ClassDefinition::new("Item");
+        let mut xrefs = SlotDefinition::new("xrefs");
+        xrefs.range = Some("uriorcurie".to_string());
+        xrefs.multivalued = true;
+        xrefs.pattern = Some("^http".to_string());
+        owner.attributes.insert("xrefs".to_string(), xrefs);
         let mut images = SlotDefinition::new("images");
         images.range = Some("Image".to_string());
         images.multivalued = true;
-        parent.attributes.insert("images".to_string(), images);
-        let mut schema = schema_with_class(parent);
+        owner.attributes.insert("images".to_string(), images);
+        let mut schema = schema_with_class(owner);
         schema
             .classes
             .insert("Image".to_string(), ClassDefinition::new("Image"));
 
+        assert_eq!(
+            skipped_classes(&schema),
+            vec![],
+            "the class has a table now"
+        );
+        let reported: Vec<String> = skipped_constraints(&schema)
+            .into_iter()
+            .map(|s| s.slot)
+            .collect();
+        assert_eq!(
+            reported,
+            vec!["xrefs"],
+            "the array column's dropped pattern should be reported; the \
+             class-range slot has no column and nothing to drop"
+        );
+
         let out = PostgresWriter::new().render(&schema);
         assert_valid_postgres_sql(&out);
         assert!(
-            !out.contains(r#"CREATE TABLE "recipe""#),
-            "a multivalued class-range slot still has no table form; got:\n{out}"
+            out.contains(r#""xrefs" text[]"#) && out.contains(r#"CREATE TABLE "item_images""#),
+            "both forms should emit from the one class; got:\n{out}"
         );
+    }
+
+    /// A schema whose owner class holds a multivalued class-range slot.
+    /// `owner_pk`/`target_pk` name the identifying slot each side uses, or
+    /// `None` for a synthetic surrogate key.
+    fn linking_schema(
+        owner_pk: Option<&str>,
+        target_pk: Option<&str>,
+        slots: &[(&str, &str)],
+    ) -> SchemaDefinition {
+        let mut owner = ClassDefinition::new("Recipe");
+        if let Some(pk) = owner_pk {
+            let mut id = SlotDefinition::new(pk);
+            id.identifier = true;
+            owner.attributes.insert(pk.to_string(), id);
+        }
+        let mut target = ClassDefinition::new("Image");
+        if let Some(pk) = target_pk {
+            let mut id = SlotDefinition::new(pk);
+            id.identifier = true;
+            target.attributes.insert(pk.to_string(), id);
+        }
+        for (slot_name, range) in slots {
+            let mut s = SlotDefinition::new(*slot_name);
+            s.range = Some(range.to_string());
+            s.multivalued = true;
+            owner.attributes.insert(slot_name.to_string(), s);
+        }
+        let mut schema = schema_with_class(owner);
+        schema.classes.insert("Image".to_string(), target);
+        schema
+    }
+
+    /// The linking table is named for the owning table and the slot, both
+    /// sides are `NOT NULL`, and the pair is the primary key — so a record
+    /// cannot be listed twice under the same slot.
+    #[test]
+    fn multivalued_class_range_slot_becomes_a_linking_table() {
+        let schema = linking_schema(None, None, &[("images", "Image")]);
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            out.contains(r#"CREATE TABLE "recipe_images" ("#),
+            "expected a linking table named for the owner and the slot; got:\n{out}"
+        );
+        assert!(
+            out.contains(r#""recipe_id" uuid NOT NULL"#)
+                && out.contains(r#""images_id" uuid NOT NULL"#),
+            "both sides should be NOT NULL columns; got:\n{out}"
+        );
+        assert!(
+            out.contains(r#"PRIMARY KEY ("recipe_id", "images_id")"#),
+            "the pair should be the primary key; got:\n{out}"
+        );
+        assert!(
+            !out.contains(r#""images_id" uuid,"#),
+            "the owner table must not also carry a scalar FK column; got:\n{out}"
+        );
+    }
+
+    /// The foreign keys follow each side's real primary key, so a class keyed
+    /// on a declared slot is referenced by that column rather than a
+    /// fabricated `_id`.
+    #[test]
+    fn linking_table_foreign_keys_follow_each_sides_real_primary_key() {
+        let schema = linking_schema(Some("slug"), Some("sha"), &[("images", "Image")]);
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            out.contains(r#""recipe_slug" text NOT NULL"#)
+                && out.contains(r#""images_sha" text NOT NULL"#),
+            "linking columns should carry each side's key name and type; got:\n{out}"
+        );
+        assert!(
+            out.contains(r#"REFERENCES "recipe" ("slug")"#)
+                && out.contains(r#"REFERENCES "image" ("sha")"#),
+            "foreign keys should target the declared primary keys; got:\n{out}"
+        );
+    }
+
+    /// Two slots onto the same class are two separate relationships. Naming
+    /// the table after the target class instead of the slot would collide
+    /// them into one.
+    #[test]
+    fn two_slots_onto_one_class_produce_two_linking_tables() {
+        let schema = linking_schema(None, None, &[("images", "Image"), ("thumbnails", "Image")]);
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            out.contains(r#"CREATE TABLE "recipe_images" ("#)
+                && out.contains(r#"CREATE TABLE "recipe_thumbnails" ("#),
+            "each slot needs its own linking table; got:\n{out}"
+        );
+    }
+
+    /// The owner gets a table now, and so does anything that was skipped
+    /// only because it referenced the owner.
+    #[test]
+    fn a_multivalued_class_range_no_longer_skips_the_class_or_its_referrers() {
+        let mut schema = linking_schema(None, None, &[("images", "Image")]);
+        let mut referrer = ClassDefinition::new("Review");
+        let mut of = SlotDefinition::new("of");
+        of.range = Some("Recipe".to_string());
+        referrer.attributes.insert("of".to_string(), of);
+        schema.classes.insert("Review".to_string(), referrer);
+
         assert_eq!(
             skipped_classes(&schema),
-            vec![SkippedClass {
-                class: "Recipe".to_string(),
-                reason:
-                    "has multivalued class-range slot `images`, which needs a linking table this \
-                     writer does not yet emit"
-                        .to_string(),
-            }]
+            vec![],
+            "nothing should be out of scope for a multivalued class range now"
         );
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        for table in [
+            r#""recipe""#,
+            r#""image""#,
+            r#""review""#,
+            r#""recipe_images""#,
+        ] {
+            assert!(
+                out.contains(&format!("CREATE TABLE {table} (")),
+                "expected a table for {table}; got:\n{out}"
+            );
+        }
+    }
+
+    /// Every foreign key must target a table the same script creates —
+    /// a linking table referencing a class that got no table would apply
+    /// cleanly right up until the database ran it.
+    #[test]
+    fn every_foreign_key_targets_a_table_the_script_creates() {
+        let schema = linking_schema(Some("slug"), Some("sha"), &[("images", "Image")]);
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+
+        let created: Vec<String> = out
+            .lines()
+            .filter_map(|l| l.strip_prefix("CREATE TABLE "))
+            .filter_map(|l| l.split(" (").next())
+            .map(|t| t.to_string())
+            .collect();
+        let referenced: Vec<String> = out
+            .lines()
+            .filter_map(|l| l.split("REFERENCES ").nth(1))
+            .filter_map(|l| l.split(" (").next())
+            .map(|t| t.to_string())
+            .collect();
+        assert!(
+            !referenced.is_empty(),
+            "the fixture should produce foreign keys; got:\n{out}"
+        );
+        for target in &referenced {
+            assert!(
+                created.contains(target),
+                "foreign key targets {target}, which the script never creates; \
+                 created: {created:?}\n{out}"
+            );
+        }
     }
 
     #[test]
