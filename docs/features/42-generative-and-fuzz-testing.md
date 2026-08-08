@@ -1,0 +1,212 @@
+# Feature 42: Generative and Fuzz Testing
+
+**Feature:** Tests that supply their own inputs — properties checked over
+generated schemas, and the readers hardened against arbitrary bytes.
+
+**User Story:** As a maintainer of a tool that parses files other people
+author and emits code, DDL, and RDF that other tools consume, I want the
+test suite to try inputs I did not think of, so that the failure surfaces
+here rather than in a consumer's build.
+
+**Approach:** Vertical Slicing with Outside-In TDD.
+
+---
+
+## Why now, and what this is not
+
+The suite has ~1200 example-based tests plus mutation testing per push.
+Those answer two different questions well and a third not at all:
+
+| Technique | Question it answers | Blind spot |
+|---|---|---|
+| Example tests | Does the behaviour I described hold? | Only the inputs I wrote |
+| Mutation testing | Are my assertions strong enough to notice a change? | Only ever runs my existing inputs — it perturbs the *code* |
+| **Generative / fuzz** | **Is there an input I never considered?** | No oracle beyond the properties you state |
+
+Mutation testing cannot find an unconsidered input, by construction. That
+is the gap this feature fills, and it is worth filling here specifically
+because panschema is a **parser plus a family of serializers** — the shape
+where generated inputs earn their keep.
+
+**A naming trap worth recording.** In fuzzing, "mutation-based" describes a
+fuzzer that mutates *seed inputs* (versus generation-based, which builds
+inputs from a grammar). It is what `cargo-fuzz`/libFuzzer already does by
+default. It is **not** a bridge between mutation testing and fuzzing, and
+the collision with `cargo-mutants` is coincidental — the two perturb
+different things. The real bridge is property-based testing, which is
+slice 1.
+
+**Deliberately not doing:** fuzzing the writers directly with arbitrary
+bytes. Writers take the IR, not bytes; generated `SchemaDefinition` values
+(slice 1) cover them better and shrink to a readable counterexample.
+
+---
+
+## Implementation Strategy
+
+Order is cheapest-signal-first. Slice 1 runs inside `cargo nextest` in
+milliseconds and needs no new toolchain, corpus, or CI job — so it lands
+first and stays in the push gate. Slice 2 needs all three and therefore
+lives outside the gate, on the same footing as full-codebase mutation runs.
+
+---
+
+## Vertical Slices
+
+### Slice 1: Round-trip and determinism properties over generated schemas
+
+**Status:** Complete
+
+**Priority:** Should Have
+
+**User Value:** A generated schema that panschema writes and reads back
+means the same thing, and writing it twice produces the same bytes —
+checked over hundreds of shapes per run instead of the handful anyone
+thought to write down.
+
+The two properties are chosen because each has a **real oracle**, which is
+what separates a useful property from a tautology:
+
+- **Round-trip:** `schema → TTL → OwlReader → schema` should preserve what
+  the RDF layer models. The oracle is the input itself. This is the one
+  that finds writer/reader disagreements, because unit tests on either side
+  share the author's assumptions about the format; a round-trip does not.
+- **Determinism:** the same schema rendered twice is byte-identical. Not a
+  tautology — it is a live requirement (`verify`'s regenerate-and-diff
+  gate, and migrations a runner checksums), and one format already fails
+  it (see *Known exclusion*).
+
+**Acceptance Criteria:**
+- [x] A `SchemaDefinition` generator produces varied but *valid* schemas —
+  classes, slots, enums, ranges that resolve, and the metadata the RDF
+  layer carries — so a failure means a real defect rather than an input
+  panschema never claimed to accept.
+- [x] Round-tripping a generated schema through the OWL writer and reader
+  preserves the constructs the RDF layer models, compared on a stated
+  normal form rather than on raw struct equality.
+- [x] Rendering a generated schema twice through each byte-stable writer
+  produces identical bytes.
+- [x] A failing case is reported **shrunk** to a minimal schema, so the
+  counterexample is readable.
+- [x] The properties run in the ordinary suite, in seconds, with no
+  external toolchain.
+- [x] Any construct the round-trip cannot preserve is named explicitly in
+  the property (an allow-list with a reason), not silently normalized away
+  — the exclusions are findings, and hiding them turns a real oracle into
+  a tautology.
+
+**Notes:**
+- Generated values come from the IR types, so the generator is the place
+  where "what is a valid schema?" gets written down. Expect that to
+  surface disagreements between what the IR permits and what the writers
+  assume.
+- **Known exclusion: JSON-LD is not byte-stable** (July review finding 10,
+  reconfirmed 2026-08-07). It is excluded from the determinism property
+  with that reason recorded, not quietly skipped.
+- Shrinking is the feature that makes this usable. A 40-class random
+  counterexample is not actionable; a two-class one is.
+- **First run, three findings** — the round-trip property failed before it
+  ever went green, each time shrunk to a minimal schema:
+  1. **Fixed:** the OWL reader stored every property at schema level with
+     `domain` set but never gave the owning class the slot, so every
+     resolver-driven writer projected empty classes from *any* OWL/TTL
+     input — including the reference ontology. Masked everywhere because
+     no writer test used a TTL input, and the HTML docs render slots as a
+     slot-centric section with back-links, which looks complete.
+  2. **Open, asserted in the property as a known asymmetry:** an enum
+     emits as `owl:Class` + `owl:oneOf` and the reader has no rule to
+     rebuild an `EnumDefinition`, so an enum returns as a class. The
+     property pins the wrong behaviour so a change in either direction
+     surfaces.
+  3. **Open, excluded from generation with the reason written at the
+     exclusion:** two classes declaring same-named attributes are
+     class-local in LinkML but mint one property IRI in RDF — only one
+     class keeps the slot on read-back, and two `rdfs:domain` triples mean
+     *intersection* in OWL, so the emitted semantics are wrong before the
+     reader is involved. Distinct per-class IRIs are an output-breaking
+     change, so this is tracked rather than fixed here.
+
+---
+
+### Slice 3: Reader equivalence — one IR whichever reader produced it
+
+**Status:** Not Started
+
+**Priority:** Should Have
+
+**User Value:** The same schema expressed as LinkML YAML and as OWL/Turtle
+produces the same effective IR, checked over generated schemas — the
+"IR looks the same regardless of the reader" invariant tested directly
+rather than inferred through a round-trip.
+
+**Acceptance Criteria:**
+- [ ] A generated schema serialized to YAML and to TTL, read back through
+  the respective readers, yields the same classes and effective slots on a
+  stated normal form.
+- [ ] Divergences the formats genuinely cannot share are named exclusions
+  with reasons, not silent normalizations.
+
+**Notes:**
+- Findings 2 and 3 above will bite here immediately; this slice is where
+  fixing them pays off.
+
+---
+
+### Slice 2: Fuzz the readers against arbitrary bytes
+
+**Status:** Not Started
+
+**Priority:** Could Have
+
+**User Value:** A malformed or hostile schema file makes the reader fail
+with an error, never a panic or a hang — including files fetched from a
+`github:` dependency, which is the one input panschema takes that its
+operator did not write.
+
+**Acceptance Criteria:**
+- [ ] `OwlReader` and `YamlReader` each have a fuzz target taking arbitrary
+  bytes.
+- [ ] Neither panics, aborts, nor hangs on any input the campaign reaches;
+  a malformed file is a returned error.
+- [ ] A seed corpus is committed from the existing fixtures, so a campaign
+  starts from real schema shapes rather than from noise.
+- [ ] Any crash found is committed as a regression fixture and fixed with
+  an ordinary test, so the suite keeps the finding without needing the
+  fuzzer to rediscover it.
+- [ ] Fuzzing runs on demand or on a schedule, never in the push gate.
+
+**Notes:**
+- `cargo-fuzz` needs a nightly toolchain, which is why this is its own
+  slice and its own job rather than something bolted to the existing CI.
+- The consumer-facing motivation is concrete: `panschema add
+  github:owner/repo@x.y.z` fetches and parses a file the operator did not
+  author. Tar extraction on that path is already hardened (July review's
+  "verified clean"); the *parsers* are not yet.
+- Depends on nothing in slice 1, but ordered after it because slice 1 has
+  the better cost-to-signal ratio.
+
+---
+
+## Slice Priority and Dependencies
+
+| Slice | Priority | Depends On | Status |
+|-------|----------|------------|--------|
+| Slice 1: round-trip + determinism properties | Should Have | None | Complete |
+| Slice 2: reader fuzz targets | Could Have | None | Not Started |
+| Slice 3: reader equivalence | Should Have | Slice 1 | Not Started |
+
+---
+
+## Things to watch
+
+- **A property with no oracle is a tautology.** "It doesn't panic" is worth
+  little for a pure transform. Round-trip and determinism are in scope
+  because each has something real to compare against.
+- **Generator bias is invisible.** If the generator never emits a class
+  with a mixin, the properties silently do not cover mixins. Coverage of
+  the generator's own output is worth checking before trusting a green run.
+- **Do not let the properties duplicate the example suite.** They exist to
+  cover the input space between the examples, not to restate them.
+- Per the repo's standing policy, heavy runs stay out of the per-push gate:
+  full-codebase mutation testing is manual, and fuzzing takes the same
+  footing.
