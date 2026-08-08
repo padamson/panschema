@@ -20,13 +20,30 @@ updates:
       semver-major-days: 14
       semver-minor-days: 7
       semver-patch-days: 3
+    # Grouping exists to keep the weekly run to as few PRs as possible.
+    # Every cargo PR edits Cargo.lock, so two open cargo PRs conflict the
+    # moment one merges — the second must rebase and re-run CI, and with N
+    # PRs the auto-merge cascade costs O(N²) runs. No merge machinery
+    # avoids a lockfile conflict; fewer PRs is the fix.
     groups:
+      # Listed first: a dependency joins the first group it matches, and a
+      # git-pinned bump carries no semver update-type, so the filtered
+      # groups below can never claim these.
+      git-dependencies:
+        patterns:
+          - "playwright-rs"
+          - "playwright-rs-macros"
       start-dependencies:
         patterns:
           - "*"
         update-types:
           - "minor"
           - "patch"
+      major-dependencies:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -40,3 +57,8 @@ updates:
     # keys for github-actions, and one bad entry invalidates this whole file.
     cooldown:
       default-days: 7
+    # One PR for the week's action bumps, same cascade rationale as cargo.
+    groups:
+      actions:
+        patterns:
+          - "*"
