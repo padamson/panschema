@@ -219,6 +219,12 @@ impl OwlReader {
         let owl_named_individual_term: SimpleTerm = owl_named_individual.into_term();
         let individuals = Self::extract_individuals(&graph, &owl_named_individual_term)?;
 
+        // A class closed by `owl:oneOf` is an enum, not a class: pull it
+        // out of the class list, claim its value individuals, and carry it
+        // separately. Done after both extractions so the enum can take
+        // labels/comments straight off what was already read.
+        let (classes, individuals, enums) = Self::extract_enums(&graph, classes, individuals, &owl);
+
         Ok(OntologyMetadata {
             iri,
             label,
@@ -227,7 +233,110 @@ impl OwlReader {
             classes,
             properties,
             individuals,
+            enums,
         })
+    }
+
+    /// Split `owl:oneOf`-closed classes out of `classes` as enums, claiming
+    /// their value individuals out of `individuals`. Classes without a
+    /// `oneOf` pass through untouched, as do individuals of real classes.
+    fn extract_enums(
+        graph: &FastGraph,
+        classes: Vec<OntologyClass>,
+        individuals: Vec<OntologyIndividual>,
+        owl: &Namespace<&str>,
+    ) -> (
+        Vec<OntologyClass>,
+        Vec<OntologyIndividual>,
+        Vec<crate::owl_model::OntologyEnum>,
+    ) {
+        use sophia::api::ns::rdf;
+        let one_of = owl.get("oneOf").expect("owl:oneOf is a valid IRI");
+
+        // Walk an RDF collection from its head cell to rdf:nil, returning
+        // member IRIs in list order. A well-formed list ends at nil; a
+        // malformed graph can also form a `rdf:rest` cycle, so every cell
+        // is remembered and a revisit ends the walk — a hostile input must
+        // hang the reader no more than it extends an enum.
+        let list_members = |head: SimpleTerm<'_>| -> Vec<String> {
+            let mut members = Vec::new();
+            let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+            let mut cell = head;
+            loop {
+                if !seen.insert(format!("{cell:?}")) {
+                    break;
+                }
+                let Some(first) = graph
+                    .triples_matching([&cell], [rdf::first], Any)
+                    .filter_map(Result::ok)
+                    .filter_map(|t| t.o().iri().map(|i| i.to_string()))
+                    .next()
+                else {
+                    break;
+                };
+                members.push(first);
+                let next = graph
+                    .triples_matching([&cell], [rdf::rest], Any)
+                    .filter_map(Result::ok)
+                    .map(|t| t.o().into_term::<SimpleTerm>())
+                    .next();
+                match next {
+                    Some(n) if !Term::eq(&rdf::nil, n.borrow_term()) => cell = n,
+                    _ => break,
+                }
+            }
+            members
+        };
+
+        let mut enums = Vec::new();
+        let mut enum_value_iris: std::collections::BTreeSet<String> =
+            std::collections::BTreeSet::new();
+        let mut kept_classes = Vec::new();
+
+        for class in classes {
+            let class_term: SimpleTerm = sophia::api::term::IriRef::new_unchecked(
+                sophia::api::MownStr::from(class.iri.as_str()),
+            )
+            .into_term();
+            let head = graph
+                .triples_matching([&class_term], [&one_of], Any)
+                .filter_map(Result::ok)
+                .map(|t| t.o().into_term::<SimpleTerm>())
+                .next();
+            let Some(head) = head else {
+                kept_classes.push(class);
+                continue;
+            };
+            let value_iris = list_members(head);
+            let values = value_iris
+                .iter()
+                .map(|iri| {
+                    // Labels/comments come from the already-extracted
+                    // individuals when the value is one; an external
+                    // `meaning:` IRI may not be, and stays bare.
+                    let ind = individuals.iter().find(|i| &i.iri == iri);
+                    crate::owl_model::OntologyEnumValue {
+                        iri: iri.clone(),
+                        label: ind.and_then(|i| i.label.clone()),
+                        comment: ind.and_then(|i| i.comment.clone()),
+                    }
+                })
+                .collect();
+            enum_value_iris.extend(value_iris);
+            enums.push(crate::owl_model::OntologyEnum {
+                iri: class.iri,
+                id: class.id,
+                label: class.label,
+                comment: class.comment,
+                values,
+            });
+        }
+
+        let kept_individuals = individuals
+            .into_iter()
+            .filter(|i| !enum_value_iris.contains(&i.iri))
+            .collect();
+        (kept_classes, kept_individuals, enums)
     }
 
     /// Extract all owl:Class entities from the graph
@@ -549,6 +658,41 @@ impl OwlReader {
         // Build class lookup for hierarchy resolution
         let class_iris: std::collections::HashSet<_> =
             metadata.classes.iter().map(|c| c.iri.as_str()).collect();
+        // Enum IRIs resolve as slot ranges by name, exactly like classes.
+        let enum_iris: std::collections::HashSet<_> =
+            metadata.enums.iter().map(|e| e.iri.as_str()).collect();
+
+        // Map enums: each `owl:oneOf` member becomes a permissible value.
+        // The key is the tail of the value IRI under the enum's own
+        // namespace (`{enum}/{key}`, the derived form the writer mints); a
+        // member outside that namespace is a `meaning:` IRI, keyed by its
+        // label, with the IRI preserved as the value's meaning.
+        for owl_enum in &metadata.enums {
+            let mut enum_def = crate::linkml::EnumDefinition::new(&owl_enum.id);
+            enum_def.description = owl_enum.comment.clone();
+            let derived_prefix = format!("{}/", owl_enum.iri);
+            for value in &owl_enum.values {
+                let (key, meaning) = match value.iri.strip_prefix(&derived_prefix) {
+                    Some(tail) => (tail.to_string(), None),
+                    None => (
+                        value
+                            .label
+                            .clone()
+                            .unwrap_or_else(|| extract_id_from_iri(&value.iri)),
+                        Some(value.iri.clone()),
+                    ),
+                };
+                enum_def.permissible_values.insert(
+                    key.clone(),
+                    crate::linkml::PermissibleValue {
+                        text: value.label.clone().unwrap_or(key),
+                        description: value.comment.clone(),
+                        meaning,
+                    },
+                );
+            }
+            schema.enums.insert(owl_enum.id.clone(), enum_def);
+        }
 
         // Map classes
         for owl_class in &metadata.classes {
@@ -603,9 +747,10 @@ impl OwlReader {
             if let Some(ref range_iri) = owl_prop.range_iri {
                 let range_id = extract_id_from_iri(range_iri);
 
-                // If range is a known class, use the class name
+                // If range is a known class or enum, use its name
                 // Otherwise, it's probably an XSD datatype
-                if class_iris.contains(range_iri.as_str()) {
+                if class_iris.contains(range_iri.as_str()) || enum_iris.contains(range_iri.as_str())
+                {
                     slot_def.range = Some(range_id);
                 } else {
                     // Map XSD types to LinkML built-in types
@@ -780,6 +925,223 @@ mod tests {
             .join("tests")
             .join("fixtures")
             .join("reference.ttl")
+    }
+
+    /// Write a TTL string to a temp file and read it back through the
+    /// full reader path.
+    fn read_ttl(ttl: &str) -> SchemaDefinition {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schema.ttl");
+        std::fs::write(&path, ttl).expect("write ttl");
+        OwlReader::new().read(&path).expect("read ttl")
+    }
+
+    /// An `owl:Class` closed by `owl:oneOf` over named individuals is
+    /// LinkML's enum, and reads back as one: an `EnumDefinition` carrying
+    /// each value's key, label, and description — not a class. This is the
+    /// shape panschema's own Turtle writer emits, so it is also what makes
+    /// the enum half of a round-trip hold.
+    #[test]
+    fn a_one_of_closed_class_reads_back_as_an_enum() {
+        let schema = read_ttl(
+            r#"@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix ex: <https://example.org/s#> .
+
+<https://example.org/s> a owl:Ontology .
+
+ex:Status a owl:Class ;
+  rdfs:label "Status" ;
+  rdfs:comment "The lifecycle status." ;
+  owl:oneOf ( <https://example.org/s#Status/open> <https://example.org/s#Status/closed> ) .
+
+<https://example.org/s#Status/open> a owl:NamedIndividual, ex:Status ;
+  rdfs:label "open" ;
+  rdfs:comment "Still going." .
+
+<https://example.org/s#Status/closed> a owl:NamedIndividual, ex:Status ;
+  rdfs:label "closed" .
+
+ex:Ticket a owl:Class ;
+  rdfs:label "Ticket" .
+
+ex:status a owl:ObjectProperty ;
+  rdfs:domain ex:Ticket ;
+  rdfs:range ex:Status .
+"#,
+        );
+
+        let status = schema
+            .enums
+            .get("Status")
+            .expect("Status should read back as an enum");
+        assert_eq!(status.description.as_deref(), Some("The lifecycle status."));
+        let open = status
+            .permissible_values
+            .get("open")
+            .expect("value `open` present");
+        assert_eq!(open.text, "open");
+        assert_eq!(open.description.as_deref(), Some("Still going."));
+        assert!(status.permissible_values.contains_key("closed"));
+
+        assert!(
+            !schema.classes.contains_key("Status"),
+            "a oneOf-closed class is an enum, not a class; classes: {:?}",
+            schema.classes.keys().collect::<Vec<_>>()
+        );
+        let ticket = schema.classes.get("Ticket").expect("Ticket stays a class");
+        let effective = crate::linkml_resolve::resolve_effective_slots(ticket, &schema);
+        assert_eq!(
+            effective.get("status").and_then(|s| s.range.clone()),
+            Some("Status".to_string()),
+            "the enum-ranged slot's range should resolve to the enum by name"
+        );
+    }
+
+    /// The `owl:oneOf` walk stops at `rdf:nil` because nil *is* the list
+    /// terminator — not merely because nil happens to carry no
+    /// `rdf:first`. A malformed graph that asserts triples about `rdf:nil`
+    /// must not smuggle an extra value into every enum in the file.
+    #[test]
+    fn a_graph_asserting_triples_about_nil_cannot_extend_an_enum() {
+        let schema = read_ttl(
+            r#"@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix ex: <https://example.org/s#> .
+
+<https://example.org/s> a owl:Ontology .
+
+ex:Color a owl:Class ;
+  rdfs:label "Color" ;
+  owl:oneOf ( <https://example.org/s#Color/red> ) .
+
+<https://example.org/s#Color/red> a owl:NamedIndividual, ex:Color ;
+  rdfs:label "red" .
+
+# Hostile / malformed: rdf:nil is not a list cell, whatever this claims.
+rdf:nil rdf:first <https://example.org/s#Color/smuggled> ;
+  rdf:rest rdf:nil .
+"#,
+        );
+        let color = schema.enums.get("Color").expect("Color enum");
+        assert_eq!(
+            color.permissible_values.keys().collect::<Vec<_>>(),
+            vec!["red"],
+            "the walk must stop at rdf:nil, not read values off it"
+        );
+    }
+
+    /// An enum whose local name collides with an XSD alias is still an
+    /// enum reference, not a datatype. `int` maps to `integer` under the
+    /// XSD fallback, so if the known-enum check is skipped the range
+    /// dangles.
+    #[test]
+    fn an_enum_named_like_an_xsd_alias_still_resolves_as_the_enum() {
+        let schema = read_ttl(
+            r#"@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ex: <https://example.org/s#> .
+
+<https://example.org/s> a owl:Ontology .
+
+ex:int a owl:Class ;
+  rdfs:label "int" ;
+  owl:oneOf ( <https://example.org/s#int/one> ) .
+
+<https://example.org/s#int/one> a owl:NamedIndividual, ex:int ;
+  rdfs:label "one" .
+
+ex:Ticket a owl:Class ; rdfs:label "Ticket" .
+
+ex:kind a owl:ObjectProperty ;
+  rdfs:domain ex:Ticket ;
+  rdfs:range ex:int .
+"#,
+        );
+        assert!(schema.enums.contains_key("int"), "the enum reads back");
+        let ticket = schema.classes.get("Ticket").expect("Ticket class");
+        let effective = crate::linkml_resolve::resolve_effective_slots(ticket, &schema);
+        assert_eq!(
+            effective.get("kind").and_then(|s| s.range.clone()),
+            Some("int".to_string()),
+            "the range must name the enum, not be rewritten to `integer` by \
+             the XSD fallback"
+        );
+    }
+
+    /// A malformed graph can close an `rdf:rest` cycle that never reaches
+    /// nil. The walk must terminate anyway — a hostile input gets to be
+    /// wrong, not to hang the reader.
+    #[test]
+    fn a_cyclic_one_of_list_terminates_instead_of_hanging() {
+        let schema = read_ttl(
+            r#"@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix ex: <https://example.org/s#> .
+
+<https://example.org/s> a owl:Ontology .
+
+ex:Color a owl:Class ;
+  rdfs:label "Color" ;
+  owl:oneOf ex:cell1 .
+
+ex:cell1 rdf:first <https://example.org/s#Color/red> ; rdf:rest ex:cell2 .
+ex:cell2 rdf:first <https://example.org/s#Color/blue> ; rdf:rest ex:cell1 .
+
+<https://example.org/s#Color/red> a owl:NamedIndividual, ex:Color ;
+  rdfs:label "red" .
+<https://example.org/s#Color/blue> a owl:NamedIndividual, ex:Color ;
+  rdfs:label "blue" .
+"#,
+        );
+        let color = schema.enums.get("Color").expect("Color enum");
+        assert_eq!(
+            color.permissible_values.keys().collect::<Vec<_>>(),
+            vec!["blue", "red"],
+            "each member is read once and the cycle ends the walk"
+        );
+    }
+
+    /// The enum's value individuals belong to the enum; they must not also
+    /// surface as instance individuals, or every enum ships ghost records.
+    #[test]
+    fn enum_value_individuals_are_not_instance_individuals() {
+        let schema = read_ttl(
+            r#"@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ex: <https://example.org/s#> .
+
+<https://example.org/s> a owl:Ontology .
+
+ex:Color a owl:Class ;
+  rdfs:label "Color" ;
+  owl:oneOf ( <https://example.org/s#Color/red> ) .
+
+<https://example.org/s#Color/red> a owl:NamedIndividual, ex:Color ;
+  rdfs:label "red" .
+
+ex:Wine a owl:Class ; rdfs:label "Wine" .
+ex:morgon a owl:NamedIndividual, ex:Wine ; rdfs:label "Morgon" .
+"#,
+        );
+
+        assert!(schema.enums.contains_key("Color"));
+        let individuals = schema
+            .annotations
+            .get("panschema:individuals")
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            individuals.contains("morgon"),
+            "a real instance individual survives; got: {individuals}"
+        );
+        assert!(
+            !individuals.contains("red"),
+            "an enum value must not double as an instance individual; got: {individuals}"
+        );
     }
 
     /// A property's `rdfs:domain` states which class carries it, so the

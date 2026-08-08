@@ -20,6 +20,8 @@ pub struct OntologyMetadata {
     pub properties: Vec<OntologyProperty>,
     /// Named individuals defined in the ontology
     pub individuals: Vec<OntologyIndividual>,
+    /// Enumerations (`owl:oneOf`-closed classes) defined in the ontology
+    pub enums: Vec<OntologyEnum>,
 }
 
 /// SKOS / editorial cross-references attached to a class or property.
@@ -139,6 +141,34 @@ pub struct PropertyValue {
     pub value: String,
 }
 
+/// An enumeration extracted from an ontology: an `owl:Class` closed by
+/// `owl:oneOf` over named individuals — the RDF shape LinkML's enums emit
+/// to and read back from.
+#[derive(Debug, Clone)]
+pub struct OntologyEnum {
+    /// The enum class IRI
+    pub iri: String,
+    /// A short identifier derived from the IRI
+    pub id: String,
+    /// The enum label (rdfs:label)
+    pub label: Option<String>,
+    /// The enum description (rdfs:comment)
+    pub comment: Option<String>,
+    /// The `owl:oneOf` members, in list order
+    pub values: Vec<OntologyEnumValue>,
+}
+
+/// One permissible value: a member of an enum's `owl:oneOf` list.
+#[derive(Debug, Clone)]
+pub struct OntologyEnumValue {
+    /// The value individual's IRI
+    pub iri: String,
+    /// The value label (rdfs:label)
+    pub label: Option<String>,
+    /// The value description (rdfs:comment)
+    pub comment: Option<String>,
+}
+
 /// A named individual (owl:NamedIndividual) extracted from an ontology
 #[derive(Debug, Clone)]
 pub struct OntologyIndividual {
@@ -184,6 +214,7 @@ mod tests {
             classes: vec![],
             properties: vec![],
             individuals: vec![],
+            enums: vec![],
         };
         assert_eq!(meta.title(), "My Ontology");
     }
@@ -198,6 +229,7 @@ mod tests {
             classes: vec![],
             properties: vec![],
             individuals: vec![],
+            enums: vec![],
         };
         assert_eq!(meta.title(), "http://example.org/onto");
     }

@@ -237,11 +237,9 @@ proptest! {
     /// whichever reader produced it", tested directly rather than inferred
     /// through one format's round-trip.
     ///
-    /// Named exclusion, same as the round-trip property: enums come back
-    /// from Turtle as classes (the reader has no `owl:oneOf` rule yet), so
-    /// enum-named entries are filtered from the Turtle side and their
-    /// presence as classes is asserted — the exclusion stays a visible
-    /// finding, not a silent normalization.
+    /// Enums are compared like everything else: the Turtle reader rebuilds
+    /// them from `owl:oneOf`, so both readers must agree on the enum set
+    /// too.
     #[test]
     fn yaml_and_turtle_readers_agree_on_classes_and_slots(schema in arb_schema()) {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -271,15 +269,15 @@ proptest! {
             .read(&ttl_path)
             .expect("read ttl");
 
-        let ttl_view: Vec<_> = rdf_normal_form(&from_ttl)
-            .into_iter()
-            .filter(|(name, _)| !schema.enums.contains_key(name))
-            .collect();
-
         prop_assert_eq!(
-            ttl_view,
+            rdf_normal_form(&from_ttl),
             rdf_normal_form(&from_yaml),
             "the two readers should agree on classes and their effective slots"
+        );
+        prop_assert_eq!(
+            from_ttl.enums.keys().collect::<Vec<_>>(),
+            from_yaml.enums.keys().collect::<Vec<_>>(),
+            "the two readers should agree on the enum set"
         );
     }
 
@@ -303,28 +301,30 @@ proptest! {
             .read(&out)
             .expect("read ttl");
 
-        // Known asymmetry, excluded deliberately and asserted so it stays
-        // visible: an enum emits as `owl:Class` closed by `owl:oneOf`, and
-        // the reader has no rule to rebuild an `EnumDefinition` from that
-        // shape — so an enum returns as a class. Tracked as its own
-        // finding; this assertion fails if the behaviour changes in either
-        // direction, which is what keeps the exclusion from rotting into a
-        // silent normalization.
-        for enum_name in schema.enums.keys() {
+        // Enums round-trip as enums: the reader rebuilds an
+        // `EnumDefinition` from the `owl:oneOf` shape the writer emits, so
+        // they must come back with their values — and must not come back
+        // as classes, which is what happened before the reader learned the
+        // shape.
+        for (enum_name, enum_def) in &schema.enums {
+            let back = read_back.enums.get(enum_name);
             prop_assert!(
-                read_back.classes.contains_key(enum_name),
-                "known asymmetry: enum `{}` should come back as a class until \
-                 the reader learns owl:oneOf",
+                back.is_some(),
+                "enum `{}` should come back as an enum; enums: {:?}, classes: {:?}",
+                enum_name,
+                read_back.enums.keys().collect::<Vec<_>>(),
+                read_back.classes.keys().collect::<Vec<_>>()
+            );
+            prop_assert_eq!(
+                back.unwrap().permissible_values.keys().collect::<Vec<_>>(),
+                enum_def.permissible_values.keys().collect::<Vec<_>>(),
+                "enum `{}` should keep its permissible values",
                 enum_name
             );
         }
-        let round_tripped: Vec<_> = rdf_normal_form(&read_back)
-            .into_iter()
-            .filter(|(name, _)| !schema.enums.contains_key(name))
-            .collect();
 
         prop_assert_eq!(
-            round_tripped,
+            rdf_normal_form(&read_back),
             rdf_normal_form(&schema),
             "classes and slots should survive a Turtle round-trip"
         );
