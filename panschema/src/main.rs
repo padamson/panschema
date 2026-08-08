@@ -406,55 +406,14 @@ fn generate(
         );
     }
 
-    // `rules` and `unique_keys` are IR-modeled (so `unmodeled_class_constructs`
-    // above stays silent about them) but not every writer projects them — warn
-    // for a format that doesn't, naming that format rather than assuming RDF.
-    // (Empty for the formats that do project the construct, so this is safe to
-    // call unconditionally.)
-    for u in panschema::diagnostics::classes_with_unprojected_constructs(&schema, format) {
-        eprintln!("warning: {}", u.message(format));
-    }
-
-    // The Postgres writer covers concrete classes with scalar/enum/
-    // single-valued-class-reference slots only; a class using `is_a`, a
-    // multivalued slot, or `any_of` — or referencing one of those — is
-    // skipped rather than emitted as broken DDL. Warn so the omission is
-    // visible instead of a schema silently producing a thinner script.
-    if format.eq_ignore_ascii_case("postgres") {
-        for skipped in panschema::postgres_writer::skipped_classes(&schema) {
-            eprintln!(
-                "warning: class `{}` has no postgres table: {}",
-                skipped.class, skipped.reason
-            );
-        }
-        // A rule on a table-bearing class that can't become a CHECK is
-        // dropped from the DDL; warn so it isn't a silent gap (a class
-        // with no table at all is already covered above).
-        for skipped in panschema::postgres_writer::skipped_rules(&schema) {
-            eprintln!(
-                "warning: rule `{}` on class `{}` is not emitted as a postgres CHECK: {}",
-                skipped.rule, skipped.class, skipped.reason
-            );
-        }
-        for skipped in panschema::postgres_writer::skipped_constraints(&schema) {
-            eprintln!(
-                "warning: constraint on slot `{}` of class `{}` is not emitted: {}",
-                skipped.slot, skipped.class, skipped.reason
-            );
-        }
-    }
-
-    // The SHACL writer projects most `rules` as conditional shapes, but a
-    // one-sided rule, an empty condition side, or a condition naming a slot
-    // the class doesn't have has no shape form — dropped rather than
-    // emitting a shape over a fabricated property IRI. Warn so it isn't a
-    // silent gap.
-    if format.eq_ignore_ascii_case("shacl") {
-        for skipped in panschema::rdf_serializers::shacl_skipped_rules(&schema) {
-            eprintln!(
-                "warning: rule `{}` on class `{}` is not emitted as a SHACL shape: {}",
-                skipped.rule, skipped.class, skipped.reason
-            );
+    // Each writer owns its own gap story — what it drops or degrades when
+    // projecting this schema — and reports it through one surface, so a
+    // new writer or a new gap class never needs another format-gated block
+    // here. The cross-format unprojected-construct diagnostic is the
+    // default; Postgres and SHACL extend it with their own classes.
+    if let Some(writer) = registry.writer_for_format(format) {
+        for gap in writer.projection_gaps(&schema) {
+            eprintln!("warning: {gap}");
         }
     }
 
@@ -663,27 +622,14 @@ fn emit_initial_migration(
     let schema = panschema::import_resolve::load_schema_with_deps(schema_path, &registry, deps)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-    // The DDL covers the classes the Postgres writer can project; the rest
-    // are already reported by the shared warning path that `generate` uses,
-    // so surface them here too rather than emitting a thinner script in
-    // silence.
-    for skipped in panschema::postgres_writer::skipped_classes(&schema) {
-        eprintln!(
-            "warning: class `{}` has no postgres table: {}",
-            skipped.class, skipped.reason
-        );
-    }
-    for skipped in panschema::postgres_writer::skipped_rules(&schema) {
-        eprintln!(
-            "warning: rule `{}` on class `{}` is not emitted as a postgres CHECK: {}",
-            skipped.rule, skipped.class, skipped.reason
-        );
-    }
-    for skipped in panschema::postgres_writer::skipped_constraints(&schema) {
-        eprintln!(
-            "warning: constraint on slot `{}` of class `{}` is not emitted: {}",
-            skipped.slot, skipped.class, skipped.reason
-        );
+    // The DDL covers the classes the Postgres writer can project; surface
+    // what it drops through the writer's own gap surface — the same one
+    // `generate` renders — rather than emitting a thinner script in silence.
+    for gap in panschema::io::Writer::projection_gaps(
+        &panschema::postgres_writer::PostgresWriter::new(),
+        &schema,
+    ) {
+        eprintln!("warning: {gap}");
     }
 
     let filename = migration_filename(&schema.name, FIRST_MIGRATION_VERSION);

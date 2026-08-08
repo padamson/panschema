@@ -141,7 +141,7 @@ can't silently misrender in another.
 
 ### Slice 6: Writer-level diagnostics surface — as demand confirms
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Could Have
 
@@ -151,7 +151,19 @@ surface, so new writers and new gap classes don't require coordinated edits
 across three files.
 
 **Acceptance Criteria:**
-- [ ] Writers report projection gaps through a common interface the CLI renders generically; the format-gated blocks in the CLI dispatch collapse.
+- [x] Writers report projection gaps through a common interface the CLI renders generically; the format-gated blocks in the CLI dispatch collapse.
+
+**Notes:**
+- The demand that confirmed it: the `migrate` command needed the same
+  Postgres warnings `generate` emits and got them as a hand-copied block —
+  then a new gap class (per-element constraints over array columns) had to
+  be wired into both copies by hand. A third command was already on the
+  roadmap.
+- Shape: `Writer::projection_gaps(&schema) -> Vec<String>`, default = the
+  cross-format unprojected-construct diagnostic for the writer's format id.
+  Postgres and SHACL override, appending their own gap classes with message
+  text identical to before — the typed diagnostic functions stay public for
+  callers that want data rather than prose.
 
 ---
 
@@ -176,7 +188,7 @@ across three files.
 | Slice 3: RDF family effective slots | Must Have | None | Complete |
 | Slice 4: uniform output paths | Should Have | None | Complete |
 | Slice 5: consolidate helpers | Should Have | None | Complete |
-| Slice 6: writer diagnostics surface | Could Have | Slice 2 | Not Started |
+| Slice 6: writer diagnostics surface | Could Have | Slice 2 | Complete |
 
 Cross-schema imports ([feature 15](15-multi-file-schema-modularity.md)
 slices 3–4) depend on slices 1–3.

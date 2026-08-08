@@ -61,6 +61,30 @@ impl Writer for ShaclWriter {
     fn format_id(&self) -> &str {
         "shacl"
     }
+
+    /// The cross-format default (`unique_keys` has no SHACL Core form)
+    /// plus this writer's own gap: a rule with no conditional-shape form —
+    /// one-sided, an empty condition side, or a condition naming a slot
+    /// the class doesn't have — dropped rather than emitted over a
+    /// fabricated property IRI. Prose over the same data
+    /// [`crate::rdf_serializers::shacl_skipped_rules`] exposes.
+    fn projection_gaps(&self, schema: &SchemaDefinition) -> Vec<String> {
+        let mut gaps = crate::diagnostics::classes_with_unprojected_constructs(schema, "shacl")
+            .into_iter()
+            .map(|u| u.message("shacl"))
+            .collect::<Vec<_>>();
+        gaps.extend(
+            crate::rdf_serializers::shacl_skipped_rules(schema)
+                .into_iter()
+                .map(|s| {
+                    format!(
+                        "rule `{}` on class `{}` is not emitted as a SHACL shape: {}",
+                        s.rule, s.class, s.reason
+                    )
+                }),
+        );
+        gaps
+    }
 }
 
 #[cfg(test)]
@@ -102,6 +126,51 @@ mod tests {
 
     const SH: &str = "http://www.w3.org/ns/shacl#";
     const EX: &str = "http://example.org/test";
+
+    /// The writer owns its full gap story: the cross-format unprojected
+    /// diagnostic (`unique_keys` has no SHACL Core form) plus its own
+    /// dropped-rule diagnostic, one warning each, through one surface.
+    #[test]
+    fn projection_gaps_reports_unique_keys_and_dropped_rules() {
+        let mut schema = SchemaDefinition::new("s");
+        let mut keyed = ClassDefinition::new("Keyed");
+        let mut slot = SlotDefinition::new("code");
+        slot.range = Some("string".to_string());
+        keyed.attributes.insert("code".to_string(), slot);
+        keyed.unique_keys.insert(
+            "k".to_string(),
+            crate::linkml::UniqueKey {
+                unique_key_slots: vec!["code".to_string()],
+                description: None,
+            },
+        );
+        // A one-sided rule has no SHACL shape form and is dropped.
+        keyed.rules.push(crate::linkml::ClassRule {
+            title: None,
+            description: None,
+            preconditions: None,
+            postconditions: None,
+        });
+        schema.classes.insert("Keyed".to_string(), keyed);
+
+        let gaps = ShaclWriter::new().projection_gaps(&schema);
+        assert!(
+            gaps.iter()
+                .any(|g| g.contains("unique_keys") && g.contains("Keyed")),
+            "the unprojected-construct warning should come through; got: {gaps:#?}"
+        );
+        let expected_rule = {
+            let s = &crate::rdf_serializers::shacl_skipped_rules(&schema)[0];
+            format!(
+                "rule `{}` on class `{}` is not emitted as a SHACL shape: {}",
+                s.rule, s.class, s.reason
+            )
+        };
+        assert!(
+            gaps.contains(&expected_rule),
+            "the dropped-rule warning should come through verbatim; got: {gaps:#?}"
+        );
+    }
 
     fn schema_with_constrained_class() -> SchemaDefinition {
         let mut schema = SchemaDefinition::new("test");

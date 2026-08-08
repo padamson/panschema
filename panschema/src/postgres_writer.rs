@@ -54,6 +54,37 @@ impl Writer for PostgresWriter {
     fn format_id(&self) -> &str {
         "postgres"
     }
+
+    /// This writer's three gap classes, as prose over the same data the
+    /// typed diagnostics ([`skipped_classes`], [`skipped_rules`],
+    /// [`skipped_constraints`]) expose: a class with no table, a rule with
+    /// no `CHECK` form, and a per-element constraint with no form over an
+    /// array column. The cross-format default contributes nothing here —
+    /// this format projects `rules` and `unique_keys`.
+    fn projection_gaps(&self, schema: &SchemaDefinition) -> Vec<String> {
+        let mut gaps = crate::diagnostics::classes_with_unprojected_constructs(schema, "postgres")
+            .into_iter()
+            .map(|u| u.message("postgres"))
+            .collect::<Vec<_>>();
+        gaps.extend(
+            skipped_classes(schema)
+                .into_iter()
+                .map(|s| format!("class `{}` has no postgres table: {}", s.class, s.reason)),
+        );
+        gaps.extend(skipped_rules(schema).into_iter().map(|s| {
+            format!(
+                "rule `{}` on class `{}` is not emitted as a postgres CHECK: {}",
+                s.rule, s.class, s.reason
+            )
+        }));
+        gaps.extend(skipped_constraints(schema).into_iter().map(|s| {
+            format!(
+                "constraint on slot `{}` of class `{}` is not emitted: {}",
+                s.slot, s.class, s.reason
+            )
+        }));
+        gaps
+    }
 }
 
 /// Double-quote a Postgres identifier, doubling any embedded `"`. Applied
@@ -816,6 +847,77 @@ mod tests {
     #[test]
     fn postgres_writer_format_id_is_postgres() {
         assert_eq!(PostgresWriter::new().format_id(), "postgres");
+    }
+
+    /// The writer owns its full gap story through one surface, so every
+    /// command that renders this format gets identical warnings from one
+    /// call instead of hand-copying three loops. Message text matches the
+    /// typed diagnostics exactly — this is prose over the same data.
+    #[test]
+    fn projection_gaps_reports_every_postgres_gap_class() {
+        let mut schema = SchemaDefinition::new("s");
+        // A class taken out of scope entirely (any_of slot).
+        let mut poly = ClassDefinition::new("Poly");
+        let mut value = SlotDefinition::new("value");
+        value.any_of = vec![SlotDefinition::new("a"), SlotDefinition::new("b")];
+        poly.attributes.insert("value".to_string(), value);
+        schema.classes.insert("Poly".to_string(), poly);
+        // A table-bearing class with a rule that can't become a CHECK and
+        // a per-element constraint that can't survive an array column.
+        let mut item = ClassDefinition::new("Item");
+        let mut xrefs = SlotDefinition::new("xrefs");
+        xrefs.range = Some("string".to_string());
+        xrefs.multivalued = true;
+        xrefs.pattern = Some("^x".to_string());
+        item.attributes.insert("xrefs".to_string(), xrefs);
+        item.rules.push(crate::linkml::ClassRule {
+            title: None,
+            description: None,
+            preconditions: None,
+            postconditions: None,
+        });
+        schema.classes.insert("Item".to_string(), item);
+
+        let gaps = PostgresWriter::new().projection_gaps(&schema);
+        let expected_class = format!(
+            "class `Poly` has no postgres table: {}",
+            skipped_classes(&schema)[0].reason
+        );
+        let expected_rule = {
+            let s = &skipped_rules(&schema)[0];
+            format!(
+                "rule `{}` on class `{}` is not emitted as a postgres CHECK: {}",
+                s.rule, s.class, s.reason
+            )
+        };
+        let expected_constraint = {
+            let s = &skipped_constraints(&schema)[0];
+            format!(
+                "constraint on slot `{}` of class `{}` is not emitted: {}",
+                s.slot, s.class, s.reason
+            )
+        };
+        for expected in [&expected_class, &expected_rule, &expected_constraint] {
+            assert!(
+                gaps.contains(expected),
+                "projection_gaps should carry {expected:?}; got: {gaps:#?}"
+            );
+        }
+    }
+
+    /// A schema this writer projects completely has nothing to warn about.
+    #[test]
+    fn projection_gaps_is_empty_when_everything_projects() {
+        let mut class = ClassDefinition::new("Plain");
+        let mut name = SlotDefinition::new("name");
+        name.range = Some("string".to_string());
+        class.attributes.insert("name".to_string(), name);
+        let schema = schema_with_class(class);
+
+        assert_eq!(
+            PostgresWriter::new().projection_gaps(&schema),
+            Vec::<String>::new()
+        );
     }
 
     /// A migration runner hashes raw SQL with no normalization, so the

@@ -100,6 +100,25 @@ pub trait Writer {
 
     /// Identifier for this output format (e.g., "html", "ttl", "yaml")
     fn format_id(&self) -> &str;
+
+    /// One human-readable warning per construct this writer drops or
+    /// degrades when projecting `schema` — the writer-owned gap surface,
+    /// rendered generically by the CLI. Without this, every command that
+    /// renders a format has to hand-copy that format's warning loops, and
+    /// the copies drift.
+    ///
+    /// The default is the cross-format unprojected-construct diagnostic
+    /// for this writer's format id (empty for formats that project
+    /// everything they model). A writer with its own gap classes overrides
+    /// this and appends them — keeping each message identical to what its
+    /// typed diagnostic functions describe, since those stay public for
+    /// callers that want the data rather than the prose.
+    fn projection_gaps(&self, schema: &SchemaDefinition) -> Vec<String> {
+        crate::diagnostics::classes_with_unprojected_constructs(schema, self.format_id())
+            .into_iter()
+            .map(|u| u.message(self.format_id()))
+            .collect()
+    }
 }
 
 /// Registry of available readers and writers
@@ -203,6 +222,47 @@ impl FormatRegistry {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    /// A writer that does not override `projection_gaps` must still surface
+    /// the cross-format unprojected-construct diagnostic for its own format
+    /// id — that default is the whole reason a new writer needs no CLI
+    /// block. `rust` projects neither `rules` nor `unique_keys`, so both
+    /// warnings must come through, format-named, and nothing else.
+    #[test]
+    fn default_projection_gaps_carry_the_unprojected_constructs() {
+        use crate::linkml::{ClassDefinition, ClassRule, UniqueKey};
+        let mut schema = SchemaDefinition::new("s");
+        let mut class = ClassDefinition::new("Deployment");
+        class.rules.push(ClassRule {
+            title: None,
+            description: None,
+            preconditions: None,
+            postconditions: None,
+        });
+        class.unique_keys.insert(
+            "k".to_string(),
+            UniqueKey {
+                unique_key_slots: vec!["x".to_string()],
+                description: None,
+            },
+        );
+        schema.classes.insert("Deployment".to_string(), class);
+
+        let gaps = RustWriter::new().projection_gaps(&schema);
+        let expected: Vec<String> =
+            crate::diagnostics::classes_with_unprojected_constructs(&schema, "rust")
+                .into_iter()
+                .map(|u| u.message("rust"))
+                .collect();
+        assert!(
+            !expected.is_empty(),
+            "the fixture must produce unprojected constructs for rust"
+        );
+        assert_eq!(
+            gaps, expected,
+            "the default must be exactly the unprojected-construct messages"
+        );
+    }
 
     // Mock reader for testing
     struct MockReader {
