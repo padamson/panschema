@@ -127,6 +127,180 @@ mod tests {
     const SH: &str = "http://www.w3.org/ns/shacl#";
     const EX: &str = "http://example.org/test";
 
+    /// An enum-ranged slot's shape closes the value set with `sh:in`,
+    /// listing the value IRIs exactly as the A-box asserts them — the
+    /// derived `{enumIRI}/{key}` form, or the `meaning:` IRI when one is
+    /// declared. Without this, data carrying an invalid enum value
+    /// validates clean, because the shape carries no constraint at all.
+    #[test]
+    fn enum_ranged_slot_closes_its_value_set_with_sh_in() {
+        let mut schema = SchemaDefinition::new("test");
+        schema.id = Some(EX.to_string());
+        schema
+            .prefixes
+            .insert("vocab".to_string(), "http://purl.org/vocab/".to_string());
+
+        let mut color = crate::linkml::EnumDefinition::new("Color");
+        color.permissible_values.insert(
+            "red".to_string(),
+            crate::linkml::PermissibleValue {
+                text: "red".to_string(),
+                description: None,
+                meaning: None,
+            },
+        );
+        color.permissible_values.insert(
+            "white".to_string(),
+            crate::linkml::PermissibleValue {
+                text: "white".to_string(),
+                description: None,
+                meaning: Some("vocab:White".to_string()),
+            },
+        );
+        schema.enums.insert("Color".to_string(), color);
+
+        let mut wine = ClassDefinition::new("Wine");
+        wine.class_uri = Some(format!("{EX}#Wine"));
+        let mut slot = SlotDefinition::new("color");
+        slot.range = Some("Color".to_string());
+        wine.attributes.insert("color".to_string(), slot);
+        schema.classes.insert("Wine".to_string(), wine);
+
+        let store = render_to_store(&schema);
+
+        // The list members are reachable from the property shape via
+        // `sh:in` then list traversal; each expected IRI must be present.
+        for value_iri in [
+            format!("{EX}#Color/red"),
+            "http://purl.org/vocab/White".to_string(),
+        ] {
+            assert!(
+                ask(
+                    &store,
+                    &format!(
+                        "PREFIX sh: <{SH}> \
+                         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+                         ASK {{ ?ps sh:path <{EX}#color> ; \
+                                sh:in/rdf:rest*/rdf:first <{value_iri}> }}"
+                    )
+                ),
+                "sh:in should list <{value_iri}>"
+            );
+        }
+        // The list is closed: exactly two members.
+        assert!(
+            !ask(
+                &store,
+                &format!(
+                    "PREFIX sh: <{SH}> \
+                     PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+                     ASK {{ ?ps sh:path <{EX}#color> ; \
+                            sh:in/rdf:rest/rdf:rest/rdf:first ?third }}"
+                )
+            ),
+            "the sh:in list should have exactly two members"
+        );
+        // No fabricated datatype rides along with the closed set.
+        assert!(
+            !ask(
+                &store,
+                &format!(
+                    "PREFIX sh: <{SH}> \
+                     ASK {{ ?ps sh:path <{EX}#color> ; sh:datatype ?dt }}"
+                )
+            ),
+            "an enum range must not also emit sh:datatype"
+        );
+    }
+
+    /// A rule condition on an enum-ranged slot must **not** also close the
+    /// value set. The condition carries the slot's range only to type its
+    /// literals; adding `sh:in` there would sit beside the condition's own
+    /// `sh:hasValue` and leave a precondition nothing can satisfy — which
+    /// turns `sh:or ( [sh:not pre] post )` vacuously true and silently
+    /// stops enforcing the rule. Only the slot's own property shape closes
+    /// the set.
+    #[test]
+    fn a_rule_condition_on_an_enum_slot_does_not_close_the_value_set() {
+        use crate::linkml::{ClassRule, RuleConditions, SlotCondition};
+
+        let mut schema = SchemaDefinition::new("test");
+        schema.id = Some(EX.to_string());
+        let mut verdict_enum = crate::linkml::EnumDefinition::new("Verdict");
+        for v in ["good", "poor"] {
+            verdict_enum.permissible_values.insert(
+                v.to_string(),
+                crate::linkml::PermissibleValue {
+                    text: v.to_string(),
+                    description: None,
+                    meaning: None,
+                },
+            );
+        }
+        schema.enums.insert("Verdict".to_string(), verdict_enum);
+
+        let mut class = ClassDefinition::new("Assessment");
+        class.class_uri = Some(format!("{EX}#Assessment"));
+        let mut verdict = SlotDefinition::new("verdict");
+        verdict.range = Some("Verdict".to_string());
+        class.attributes.insert("verdict".to_string(), verdict);
+        let mut note = SlotDefinition::new("note");
+        note.range = Some("string".to_string());
+        class.attributes.insert("note".to_string(), note);
+
+        let condition = |init: fn(&mut SlotCondition)| {
+            let mut c = SlotCondition::default();
+            init(&mut c);
+            c
+        };
+        let pre = RuleConditions {
+            slot_conditions: [(
+                "verdict".to_string(),
+                condition(|c| c.equals_string = Some("poor".to_string())),
+            )]
+            .into_iter()
+            .collect(),
+            any_of: Vec::new(),
+        };
+        let post = RuleConditions {
+            slot_conditions: [("note".to_string(), condition(|c| c.required = true))]
+                .into_iter()
+                .collect(),
+            any_of: Vec::new(),
+        };
+        class.rules.push(ClassRule {
+            title: Some("poor needs a note".to_string()),
+            description: None,
+            preconditions: Some(pre),
+            postconditions: Some(post),
+        });
+        schema.classes.insert("Assessment".to_string(), class);
+
+        let store = render_to_store(&schema);
+
+        // The slot's own property shape closes the set.
+        assert!(
+            ask(
+                &store,
+                &format!(
+                    "PREFIX sh: <{SH}> ASK {{ \
+                       <{EX}#AssessmentShape> sh:property ?ps . \
+                       ?ps sh:path <{EX}#verdict> ; sh:in ?list }}"
+                )
+            ),
+            "the class-level property shape should carry sh:in"
+        );
+        // No shape carries both a hasValue and a closed set — the
+        // unsatisfiable combination.
+        assert!(
+            !ask(
+                &store,
+                &format!("PREFIX sh: <{SH}> ASK {{ ?s sh:hasValue ?v ; sh:in ?list }}")
+            ),
+            "no shape may carry sh:hasValue and sh:in together"
+        );
+    }
+
     /// The writer owns its full gap story: the cross-format unprojected
     /// diagnostic (`unique_keys` has no SHACL Core form) plus its own
     /// dropped-rule diagnostic, one warning each, through one surface.

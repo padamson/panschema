@@ -976,9 +976,13 @@ fn emit_instances(
 /// consumes — but built from the same IRI derivation, so every shape targets
 /// the class/property IRIs the OWL output declares.
 ///
-/// SHACL Core only. Slot `range` → `sh:datatype` (scalar) or `sh:class`
-/// (class-valued); an enum range carries no datatype/class constraint yet
-/// (`sh:in` projection is a later refinement). `required` and
+/// SHACL Core only. Slot `range` → `sh:datatype` (scalar), `sh:class`
+/// (class-valued), or `sh:in` over the value IRIs (enum-valued — the same
+/// IRIs the A-box asserts, so an unpermitted value fails validation). A
+/// rule condition's range is *not* closed this way: there it only types
+/// the condition's literals, and a second constraint beside the
+/// condition's own `sh:hasValue` would leave a precondition nothing can
+/// satisfy. `required` and
 /// `minimum_cardinality` reconcile to a single `sh:minCount` (explicit
 /// cardinality wins); `maximum_cardinality` → `sh:maxCount`; `pattern` →
 /// `sh:pattern`; `minimum_value`/`maximum_value` →
@@ -1102,6 +1106,7 @@ struct ShaclTerms {
     has_value: Iri<String>,
     or_: Iri<String>,
     not_: Iri<String>,
+    in_: Iri<String>,
 }
 
 impl ShaclTerms {
@@ -1122,6 +1127,7 @@ impl ShaclTerms {
             has_value: sh("hasValue")?,
             or_: sh("or")?,
             not_: sh("not")?,
+            in_: sh("in")?,
         })
     }
 }
@@ -1151,6 +1157,17 @@ struct PropertyConstraints<'a> {
     /// Slot-level `any_of`: the value satisfies at least one alternative —
     /// emitted as `sh:or` over per-alternative constraint shapes.
     any_of: Vec<PropertyConstraints<'a>>,
+    /// Whether an enum `range` should close the value set with `sh:in`.
+    ///
+    /// True for a slot's own property shape, which is where the range is a
+    /// constraint. False inside a rule-condition shape: there the range is
+    /// carried only to *type* `equals_number` (see [`with_range`]), and
+    /// adding `sh:in` would contradict the condition's own
+    /// `sh:hasValue` — leaving a precondition nothing can satisfy, which
+    /// makes the whole rule vacuously true instead of enforced.
+    ///
+    /// [`with_range`]: PropertyConstraints::with_range
+    close_enum_range: bool,
 }
 
 impl<'a> PropertyConstraints<'a> {
@@ -1163,6 +1180,7 @@ impl<'a> PropertyConstraints<'a> {
             max_value: slot.maximum_value,
             min_cardinality: slot.minimum_cardinality,
             max_cardinality: slot.maximum_cardinality,
+            close_enum_range: true,
             ..Default::default()
         }
     }
@@ -1180,6 +1198,11 @@ impl<'a> PropertyConstraints<'a> {
             equals_number: cond.equals_number,
             value_presence: cond.value_presence,
             any_of: cond.any_of.iter().map(Self::from_condition).collect(),
+            // A condition's range types its literals; it does not re-assert
+            // the slot's value set. The class-level property shape already
+            // carries that, and duplicating it here would contradict the
+            // condition's own `sh:hasValue`.
+            close_enum_range: false,
         }
     }
 
@@ -1339,6 +1362,47 @@ fn shacl_rule_skip_reason(
 /// `required`/cardinality → `sh:minCount`/`sh:maxCount`; `pattern` →
 /// `sh:pattern`; value bounds → `sh:minInclusive`/`sh:maxInclusive`;
 /// `equals_*` → `sh:hasValue`.
+/// Insert `items` as an RDF collection, linked from `subject` by
+/// `predicate`. A no-op for an empty list, since there is no useful
+/// `sh:in ()`.
+///
+/// Cells are named by `cell` rather than being blank nodes — the same
+/// choice the conditional rule shapes make, and for the same reason:
+/// deterministic IRIs keep the output byte-stable across runs and let a
+/// consumer query into the list.
+fn insert_rdf_list(
+    graph: &mut FastGraph,
+    subject: &Iri<String>,
+    predicate: &Iri<String>,
+    items: &[String],
+    cell: impl Fn(usize) -> String,
+) -> IoResult<()> {
+    let Some(last) = items.len().checked_sub(1) else {
+        return Ok(());
+    };
+    let write = |e: <FastGraph as sophia::api::graph::MutableGraph>::MutationError| {
+        IoError::Write(e.to_string())
+    };
+
+    graph
+        .insert(subject, predicate, &make_iri(&cell(0))?)
+        .map_err(write)?;
+    for (i, item) in items.iter().enumerate() {
+        let here = make_iri(&cell(i))?;
+        graph
+            .insert(&here, rdf::first, &make_iri(item)?)
+            .map_err(write)?;
+        if i == last {
+            graph.insert(&here, rdf::rest, rdf::nil).map_err(write)?;
+        } else {
+            graph
+                .insert(&here, rdf::rest, &make_iri(&cell(i + 1))?)
+                .map_err(write)?;
+        }
+    }
+    Ok(())
+}
+
 fn emit_property_shape(
     graph: &mut FastGraph,
     t: &ShaclTerms,
@@ -1375,9 +1439,25 @@ fn emit_constraint_fields(
             graph
                 .insert(prop_shape, &t.class, &target_iri)
                 .map_err(|e| IoError::Write(e.to_string()))?;
+        } else if c.close_enum_range
+            && let Some(enum_def) = schema.enums.get(range)
+        {
+            // An enum range closes the value set over the IRIs the A-box
+            // actually asserts, so an unlisted value fails validation
+            // instead of passing unconstrained. No `sh:datatype` rides
+            // along: the values are IRIs, and there is no XSD datatype for
+            // an enum to fabricate.
+            let values: Vec<String> = enum_def
+                .permissible_values
+                .keys()
+                .filter_map(|key| enum_value_iri(range, enum_def, key, schema))
+                .collect();
+            insert_rdf_list(graph, prop_shape, &t.in_, &values, |i| {
+                format!("{prop_shape}/in{i}")
+            })?;
         } else if let Some(xsd) = crate::primitives::xsd_datatype_iri(range) {
-            // Only a built-in primitive gets an `sh:datatype`; an enum or a
-            // typo has no XSD datatype, so emit none rather than a fabricated
+            // Only a built-in primitive gets an `sh:datatype`; a typo has no
+            // XSD datatype, so emit none rather than a fabricated
             // `xsd:{name}`.
             let xsd_iri = make_iri(&xsd)?;
             graph
