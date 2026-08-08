@@ -91,6 +91,13 @@ test-fixtures = []
 # Snapshot testing
 insta = "1"
 
+# Property-based testing: supplies its own schemas rather than only the
+# ones someone thought to write down, and shrinks a failure to a minimal
+# counterexample. Covers the input space between the example tests —
+# mutation testing cannot, since it perturbs the code and reuses the
+# existing inputs. See docs/features/42-generative-and-fuzz-testing.md.
+proptest = "1"
+
 # Syntactic validation of RustWriter output without paying the cost of a
 # full `cargo build`. Parses generated source as a Rust file — catches
 # syntax errors in the writer but ignores semantic issues (undefined

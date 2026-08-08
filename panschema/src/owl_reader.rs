@@ -659,6 +659,22 @@ impl OwlReader {
                     .insert("panschema:label".to_string(), label.clone());
             }
 
+            // `rdfs:domain` states which class carries the property, so the
+            // class must list it. Without this the slot exists only at
+            // schema level and the shared resolver — which every writer
+            // asks for a class's effective slots — reports the class as
+            // having none, so an ontology that plainly declares fields
+            // projects to empty structs, empty tables, and no shapes.
+            //
+            // A property with no domain belongs to no class in particular
+            // and stays schema-level, exactly as before.
+            if let Some(domain) = &slot_def.domain
+                && let Some(class) = schema.classes.get_mut(domain)
+                && !class.slots.contains(&owl_prop.id)
+            {
+                class.slots.push(owl_prop.id.clone());
+            }
+
             schema.slots.insert(owl_prop.id.clone(), slot_def);
         }
 
@@ -764,6 +780,70 @@ mod tests {
             .join("tests")
             .join("fixtures")
             .join("reference.ttl")
+    }
+
+    /// A property's `rdfs:domain` states which class carries it, so the
+    /// class must come back owning that slot. Every writer that asks the
+    /// shared resolver "what slots does this class have?" — Rust, Postgres,
+    /// SHACL, JSON Schema — sees nothing otherwise, and emits a class with
+    /// no fields from an ontology that plainly declares them.
+    #[test]
+    fn a_property_domain_makes_the_class_own_the_slot() {
+        let schema = OwlReader::new()
+            .read(&reference_ontology_path())
+            .expect("read reference ontology");
+
+        // `Animal` is the declared domain of hasOwner, hasAge, and relatedTo.
+        let animal = schema.classes.get("Animal").expect("Animal class");
+        let effective = crate::linkml_resolve::resolve_effective_slots(animal, &schema);
+        for slot in ["hasOwner", "hasAge", "relatedTo"] {
+            assert!(
+                effective.contains_key(slot),
+                "`{slot}` names Animal as its rdfs:domain, so the resolver must \
+                 see it on Animal; got: {:?}",
+                effective.keys().collect::<Vec<_>>()
+            );
+        }
+
+        // Subclasses inherit it through `is_a`, so the whole hierarchy gains
+        // the slots rather than only the declared domain.
+        let dog = schema.classes.get("Dog").expect("Dog class");
+        let inherited = crate::linkml_resolve::resolve_effective_slots(dog, &schema);
+        assert!(
+            inherited.contains_key("hasAge"),
+            "Dog is a subclass of Animal, so it inherits Animal's slots; got: {:?}",
+            inherited.keys().collect::<Vec<_>>()
+        );
+    }
+
+    /// A property with no `rdfs:domain` belongs to no class in particular.
+    /// It stays a schema-level slot rather than being attached to an
+    /// arbitrary one — the fix for the domain case must not over-reach.
+    #[test]
+    fn a_property_without_a_domain_is_attached_to_no_class() {
+        let schema = OwlReader::new()
+            .read(&reference_ontology_path())
+            .expect("read reference ontology");
+
+        let undomained: Vec<&String> = schema
+            .slots
+            .iter()
+            .filter(|(_, s)| s.domain.is_none())
+            .map(|(name, _)| name)
+            .collect();
+        assert!(
+            !undomained.is_empty(),
+            "the fixture should carry at least one domain-less property"
+        );
+        for (class_name, class) in &schema.classes {
+            for slot in &undomained {
+                assert!(
+                    !class.slots.contains(slot),
+                    "`{slot}` has no rdfs:domain, so class `{class_name}` must \
+                     not claim it"
+                );
+            }
+        }
     }
 
     // Parser tests (moved from parser.rs)
