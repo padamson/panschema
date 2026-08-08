@@ -70,9 +70,75 @@ pub fn unmodeled_class_constructs(schema: &SchemaDefinition) -> Vec<UnmodeledCon
 pub fn should_fail_strict(
     unmodeled: &[UnmodeledConstruct],
     dangling: &[DanglingRef],
+    colliding: &[CollidingSlot],
     strict: bool,
 ) -> bool {
-    strict && (!unmodeled.is_empty() || !dangling.is_empty())
+    strict && (!unmodeled.is_empty() || !dangling.is_empty() || !colliding.is_empty())
+}
+
+/// A slot name defined at more than one site whose definitions would mint
+/// one RDF property IRI — distinct slots in LinkML, one property in OWL.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CollidingSlot {
+    pub name: String,
+    /// Where each colliding definition lives, sorted: `` class `X` `` or
+    /// `` top-level `slots:` ``.
+    pub sites: Vec<String>,
+}
+
+impl CollidingSlot {
+    pub fn message(&self) -> String {
+        format!(
+            "slot `{}` is defined at {} sites ({}); RDF output mints one property \
+             IRI for all of them, so only one definition survives a read-back and \
+             the emitted OWL asserts a single property about every declaring class \
+             — rename them, share one top-level slot, or give each an explicit \
+             `slot_uri`",
+            self.name,
+            self.sites.len(),
+            self.sites.join(", ")
+        )
+    }
+}
+
+/// Slot names whose definitions collide at one RDF property IRI.
+///
+/// A *definition site* is a top-level `slots:` entry or a class's
+/// `attributes:` entry. A class listing a top-level slot via `slots:` is a
+/// *use*, not a definition — sharing one slot is the supported way to say
+/// two classes carry the same property. Identity follows IRI minting: an
+/// explicit `slot_uri` is its own identity, everything else falls back to
+/// the name, mirroring how the RDF writers derive property IRIs.
+pub fn colliding_slot_definitions(schema: &SchemaDefinition) -> Vec<CollidingSlot> {
+    use std::collections::BTreeMap;
+    // identity key -> (display name, sorted definition sites)
+    let mut sites: BTreeMap<String, (String, Vec<String>)> = BTreeMap::new();
+    let mut record = |slot: &crate::linkml::SlotDefinition, name: &str, site: String| {
+        let key = match &slot.slot_uri {
+            Some(uri) => format!("uri:{uri}"),
+            None => format!("name:{name}"),
+        };
+        let entry = sites
+            .entry(key)
+            .or_insert_with(|| (name.to_string(), Vec::new()));
+        entry.1.push(site);
+    };
+    for (name, slot) in &schema.slots {
+        record(slot, name, "top-level `slots:`".to_string());
+    }
+    for (class_name, class) in &schema.classes {
+        for (name, slot) in &class.attributes {
+            record(slot, name, format!("class `{class_name}`"));
+        }
+    }
+    sites
+        .into_values()
+        .filter(|(_, s)| s.len() > 1)
+        .map(|(name, mut sites)| {
+            sites.sort();
+            CollidingSlot { name, sites }
+        })
+        .collect()
 }
 
 /// The format-independent schema diagnostics the shared load path
@@ -94,6 +160,11 @@ pub fn schema_load_diagnostics(schema: &SchemaDefinition) -> Vec<String> {
             .map(|u| u.message()),
     );
     out.extend(dangling_references(schema).iter().map(|d| d.message()));
+    out.extend(
+        colliding_slot_definitions(schema)
+            .iter()
+            .map(|c| c.message()),
+    );
     // The metamodel recommends at most one `tree_root` per schema. Several
     // are supported here — each dataset is read against the root it conforms
     // to — but the deviation from that "should" is stated, because upstream
@@ -612,6 +683,67 @@ pub fn unresolved_unique_key_slots(schema: &SchemaDefinition) -> Vec<UnresolvedK
 
 #[cfg(test)]
 mod tests {
+    /// Two classes declaring same-named `attributes:` are distinct slots in
+    /// LinkML but mint one property IRI in RDF — only one survives a
+    /// read-back, and the emitted OWL asserts one property about both
+    /// classes. The diagnostic names every definition site so an author can
+    /// pick a rename, a shared top-level slot, or distinct `slot_uri`s.
+    #[test]
+    fn same_named_attributes_on_two_classes_are_reported() {
+        let schema = parse(
+            "name: s\nclasses:\n  Recipe:\n    attributes:\n      id:\n        range: string\n  Image:\n    attributes:\n      id:\n        range: string\n",
+        );
+        let collisions = super::colliding_slot_definitions(&schema);
+        assert_eq!(
+            collisions.len(),
+            1,
+            "one colliding name; got {collisions:?}"
+        );
+        let c = &collisions[0];
+        assert_eq!(c.name, "id");
+        assert_eq!(c.sites, vec!["class `Image`", "class `Recipe`"]);
+        assert!(
+            c.message().contains("one property IRI"),
+            "the message should state the RDF consequence; got: {}",
+            c.message()
+        );
+    }
+
+    /// A top-level slot listed by several classes via `slots:` is one slot —
+    /// the sharing is the point, and it must not be reported.
+    #[test]
+    fn a_shared_top_level_slot_is_not_a_collision() {
+        let schema = parse(
+            "name: s\nslots:\n  id:\n    range: string\nclasses:\n  Recipe:\n    slots: [id]\n  Image:\n    slots: [id]\n",
+        );
+        assert_eq!(super::colliding_slot_definitions(&schema), vec![]);
+    }
+
+    /// A class-local attribute shadowing a same-named top-level slot is two
+    /// definitions at one IRI, and is reported.
+    #[test]
+    fn an_attribute_shadowing_a_top_level_slot_is_a_collision() {
+        let schema = parse(
+            "name: s\nslots:\n  id:\n    range: string\nclasses:\n  Recipe:\n    slots: [id]\n  Image:\n    attributes:\n      id:\n        range: string\n",
+        );
+        let collisions = super::colliding_slot_definitions(&schema);
+        assert_eq!(collisions.len(), 1);
+        assert_eq!(
+            collisions[0].sites,
+            vec!["class `Image`", "top-level `slots:`"]
+        );
+    }
+
+    /// Distinct explicit `slot_uri`s mint distinct IRIs, so same-named
+    /// definitions with their own URIs do not collide.
+    #[test]
+    fn distinct_slot_uris_do_not_collide() {
+        let schema = parse(
+            "name: s\nprefixes:\n  ex: https://example.org/\nclasses:\n  Recipe:\n    attributes:\n      id:\n        slot_uri: ex:recipeId\n        range: string\n  Image:\n    attributes:\n      id:\n        range: string\n",
+        );
+        assert_eq!(super::colliding_slot_definitions(&schema), vec![]);
+    }
+
     use super::*;
 
     fn parse(yaml: &str) -> SchemaDefinition {
@@ -783,16 +915,16 @@ mod tests {
         let no_dangling: Vec<DanglingRef> = Vec::new();
 
         // Not strict ⇒ never fail, whatever is present.
-        assert!(!should_fail_strict(&unmodeled, &dangling, false));
+        assert!(!should_fail_strict(&unmodeled, &dangling, &[], false));
         // Strict + nothing ⇒ ok.
-        assert!(!should_fail_strict(&no_unmodeled, &no_dangling, true));
+        assert!(!should_fail_strict(&no_unmodeled, &no_dangling, &[], true));
         // Strict + either kind of finding ⇒ fail.
         assert!(
-            should_fail_strict(&unmodeled, &no_dangling, true),
+            should_fail_strict(&unmodeled, &no_dangling, &[], true),
             "strict + unmodeled ⇒ fail"
         );
         assert!(
-            should_fail_strict(&no_unmodeled, &dangling, true),
+            should_fail_strict(&no_unmodeled, &dangling, &[], true),
             "strict + dangling ⇒ fail"
         );
     }

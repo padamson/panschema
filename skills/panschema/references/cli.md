@@ -27,9 +27,10 @@ bare no-subcommand form.
   files. That overlap is **reported, not an error** — a preview that is a
   subset of a worked example shares records on purpose.
 - `--strict` — **narrower than it sounds.** It fails on unmodeled
-  constructs, dangling references, and instance-data violations. It does
-  *not* promote unprojected-construct, Postgres-skip, or SHACL-skip
-  warnings to errors.
+  constructs, dangling references, colliding slot definitions (the same
+  slot name defined at several sites, which would mint one RDF property
+  IRI), and instance-data violations. It does *not* promote
+  unprojected-construct, Postgres-skip, or SHACL-skip warnings to errors.
 - **Pointing at a record in another graph.** In instance data, a
   class-ranged value that is an absolute IRI or a CURIE against a prefix the
   schema declares (`catalog:aws`) is an *external reference*: it emits as an

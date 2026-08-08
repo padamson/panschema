@@ -101,9 +101,10 @@ enum Commands {
         refresh_labels: bool,
 
         /// Fail (non-zero exit) instead of only warning when the schema uses
-        /// a LinkML construct panschema parses but does not model, or contains
+        /// a LinkML construct panschema parses but does not model, contains
         /// a dangling reference (a `range`, `is_a`, `mixin`, or `inverse`
-        /// naming nothing the schema defines).
+        /// naming nothing the schema defines), or defines the same slot name
+        /// at several sites that would collide at one RDF property IRI.
         #[arg(long)]
         strict: bool,
     },
@@ -393,16 +394,19 @@ fn generate(
 
     // The unmodeled-construct, unresolved-unique-key, and dangling-reference
     // warnings are emitted by the shared load path above (so `serve`/`publish`
-    // surface them too). Under `--strict`, an unmodeled construct or a dangling
-    // reference is additionally a hard error here.
+    // surface them too). Under `--strict`, an unmodeled construct, a dangling
+    // reference, or a colliding slot definition is additionally a hard error
+    // here.
     let unmodeled = panschema::diagnostics::unmodeled_class_constructs(&schema);
     let dangling = panschema::diagnostics::dangling_references(&schema);
-    if panschema::diagnostics::should_fail_strict(&unmodeled, &dangling, strict) {
+    let colliding = panschema::diagnostics::colliding_slot_definitions(&schema);
+    if panschema::diagnostics::should_fail_strict(&unmodeled, &dangling, &colliding, strict) {
         anyhow::bail!(
-            "{} unmodeled LinkML construct(s) and {} dangling reference(s) present; \
-             failing because --strict is set",
+            "{} unmodeled LinkML construct(s), {} dangling reference(s), and \
+             {} colliding slot definition(s) present; failing because --strict is set",
             unmodeled.len(),
-            dangling.len()
+            dangling.len(),
+            colliding.len()
         );
     }
 

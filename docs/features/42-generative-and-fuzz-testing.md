@@ -130,7 +130,7 @@ what separates a useful property from a tautology:
 
 ### Slice 3: Reader equivalence — one IR whichever reader produced it
 
-**Status:** Not Started
+**Status:** Complete
 
 **Priority:** Should Have
 
@@ -140,15 +140,24 @@ produces the same effective IR, checked over generated schemas — the
 rather than inferred through a round-trip.
 
 **Acceptance Criteria:**
-- [ ] A generated schema serialized to YAML and to TTL, read back through
+- [x] A generated schema serialized to YAML and to TTL, read back through
   the respective readers, yields the same classes and effective slots on a
   stated normal form.
-- [ ] Divergences the formats genuinely cannot share are named exclusions
+- [x] Divergences the formats genuinely cannot share are named exclusions
   with reasons, not silent normalizations.
 
 **Notes:**
-- Findings 2 and 3 above will bite here immediately; this slice is where
-  fixing them pays off.
+- The property went green on first run *because* it inherits slice 1's two
+  exclusions (enums filtered on the TTL side; the generator avoids
+  same-named attributes). Equivalence holds everywhere else.
+- **Finding 3 gained an authoring-boundary guard** rather than waiting for
+  the IRI fix: the shared load path now reports colliding slot definitions
+  (same name defined at several sites → one RDF property IRI), and
+  `--strict` fails on them. Verified against the three consumer schemas
+  currently in authoring — all pass — and it caught a genuine collision in
+  panschema's own `wine_catalog` fixture, which was converted to shared
+  top-level slots. The per-declaring-class IRI scheme remains the real
+  fix, tracked as an output-breaking change.
 
 ---
 
@@ -193,7 +202,7 @@ operator did not write.
 |-------|----------|------------|--------|
 | Slice 1: round-trip + determinism properties | Should Have | None | Complete |
 | Slice 2: reader fuzz targets | Could Have | None | Not Started |
-| Slice 3: reader equivalence | Should Have | Slice 1 | Not Started |
+| Slice 3: reader equivalence | Should Have | Slice 1 | Complete |
 
 ---
 

@@ -3341,21 +3341,66 @@ fn e2e_legends_adapt_to_what_each_graph_contains() {
             )
             .await
             .unwrap_or_default();
-        // This fixture's slots are inline attributes, drawn as direct
-        // edges rather than slot pills — so the key lists classes and the
-        // range edges, and nothing else.
+        // This fixture mixes shared top-level slots (drawn as slot pills)
+        // with inline attributes (drawn as direct edges), so the key lists
+        // classes, slots, and the range edges.
         assert!(
             schema_summary.contains("\"Class\"") && schema_summary.contains("\"range\""),
             "the schema key lists the kinds present; got: {schema_summary}"
         );
         assert!(
-            !schema_summary.contains("\"Slot\""),
-            "no slot pills are drawn for inline attributes, so no Slot row; got: {schema_summary}"
+            schema_summary.contains("\"Slot\""),
+            "shared top-level slots draw slot pills, so the key has a Slot row; \
+             got: {schema_summary}"
         );
         assert!(
             !schema_summary.contains("Enum"),
             "a schema with no enums must not advertise the diamond; got: {schema_summary}"
         );
+
+        // An attributes-only schema draws no slot pills, so its key has no
+        // Slot row — the half of the adaptation the mixed fixture above can
+        // no longer show.
+        let attr_only_dir = generate_docs_for("tests/fixtures/scoped_estate.yaml");
+        let (attr_listener, attr_port) = bind_ephemeral();
+        let (attr_shutdown_tx, attr_shutdown_rx) = oneshot::channel();
+        let attr_server = tokio::spawn(start_server(
+            attr_only_dir.clone(),
+            attr_listener,
+            attr_shutdown_rx,
+        ));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let attr_page = browser.new_page().await.expect("attributes-only page");
+        attr_page
+            .goto(&format!("http://127.0.0.1:{attr_port}/index.html"), None)
+            .await
+            .expect("goto attributes-only docs");
+        assert!(
+            wait_for_graph_viz_ready(&attr_page).await,
+            "attributes-only schema graph should become ready"
+        );
+        let attr_summary = attr_page
+            .evaluate_value(
+                r#"(function(){
+                    var viz = window.__panschema_viz;
+                    if (!viz || typeof viz.legend_summary_json !== 'function') return 'no-api';
+                    return viz.legend_summary_json();
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert!(
+            attr_summary.contains("\"Class\""),
+            "the attributes-only key still lists classes; got: {attr_summary}"
+        );
+        assert!(
+            !attr_summary.contains("\"Slot\""),
+            "no slot pills are drawn for inline attributes, so no Slot row; \
+             got: {attr_summary}"
+        );
+        let _ = attr_shutdown_tx.send(());
+        let _ = attr_server.await;
+        let _ = fs::remove_dir_all(attr_only_dir);
 
         // The instance graph's key is reachable: toggling shows the panel.
         page.locator("#instance-graph-legend-toggle")

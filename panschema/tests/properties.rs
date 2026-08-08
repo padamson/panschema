@@ -232,6 +232,57 @@ proptest! {
         }
     }
 
+    /// The same schema expressed as LinkML YAML and as OWL/Turtle yields
+    /// the same classes and effective slots — "the IR looks the same
+    /// whichever reader produced it", tested directly rather than inferred
+    /// through one format's round-trip.
+    ///
+    /// Named exclusion, same as the round-trip property: enums come back
+    /// from Turtle as classes (the reader has no `owl:oneOf` rule yet), so
+    /// enum-named entries are filtered from the Turtle side and their
+    /// presence as classes is asserted — the exclusion stays a visible
+    /// finding, not a silent normalization.
+    #[test]
+    fn yaml_and_turtle_readers_agree_on_classes_and_slots(schema in arb_schema()) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let registry = FormatRegistry::with_defaults();
+
+        let yaml_path = dir.path().join("schema.yaml");
+        std::fs::write(
+            &yaml_path,
+            serde_norway::to_string(&schema).expect("serialize IR as LinkML YAML"),
+        )
+        .expect("write yaml");
+        let from_yaml = registry
+            .reader_for_path(&yaml_path)
+            .expect("yaml reader")
+            .read(&yaml_path)
+            .expect("read yaml");
+
+        let ttl_path = dir.path().join("schema.ttl");
+        registry
+            .writer_for_format("ttl")
+            .expect("ttl writer")
+            .write(&schema, &ttl_path)
+            .expect("write ttl");
+        let from_ttl = registry
+            .reader_for_path(&ttl_path)
+            .expect("ttl reader")
+            .read(&ttl_path)
+            .expect("read ttl");
+
+        let ttl_view: Vec<_> = rdf_normal_form(&from_ttl)
+            .into_iter()
+            .filter(|(name, _)| !schema.enums.contains_key(name))
+            .collect();
+
+        prop_assert_eq!(
+            ttl_view,
+            rdf_normal_form(&from_yaml),
+            "the two readers should agree on classes and their effective slots"
+        );
+    }
+
     /// A schema written to Turtle and read back keeps its classes and their
     /// slots. The oracle is the input schema, which is what makes this
     /// catch a writer/reader disagreement rather than restating either
