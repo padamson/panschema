@@ -196,9 +196,7 @@ fn emit_mappings(
             .map_err(|e| IoError::Parse(e.to_string()))?;
         for value in values {
             let object_iri = make_iri(&expand_curie(value, schema))?;
-            graph
-                .insert(subject_iri, predicate, &object_iri)
-                .map_err(|e| IoError::Write(e.to_string()))?;
+            triple(graph, subject_iri, predicate, &object_iri)?;
         }
     }
     Ok(())
@@ -219,15 +217,11 @@ fn emit_aliases_and_see_also(
         .get("altLabel")
         .map_err(|e| IoError::Parse(e.to_string()))?;
     for alias in aliases {
-        graph
-            .insert(subject_iri, skos_alt_label, alias.as_str())
-            .map_err(|e| IoError::Write(e.to_string()))?;
+        triple(graph, subject_iri, skos_alt_label, alias.as_str())?;
     }
     for reference in see_also {
         let object_iri = make_iri(&expand_curie(reference, schema))?;
-        graph
-            .insert(subject_iri, rdfs::seeAlso, &object_iri)
-            .map_err(|e| IoError::Write(e.to_string()))?;
+        triple(graph, subject_iri, rdfs::seeAlso, &object_iri)?;
     }
     Ok(())
 }
@@ -247,22 +241,21 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
     let owl_ontology = owl
         .get("Ontology")
         .map_err(|e| IoError::Parse(e.to_string()))?;
-    graph
-        .insert(&ontology_iri, rdf::type_, owl_ontology)
-        .map_err(|e| IoError::Write(e.to_string()))?;
+    triple(&mut graph, &ontology_iri, rdf::type_, owl_ontology)?;
 
     // rdfs:label from title
     if let Some(ref title) = schema.title {
-        graph
-            .insert(&ontology_iri, rdfs::label, title.as_str())
-            .map_err(|e| IoError::Write(e.to_string()))?;
+        triple(&mut graph, &ontology_iri, rdfs::label, title.as_str())?;
     }
 
     // rdfs:comment from description
     if let Some(ref description) = schema.description {
-        graph
-            .insert(&ontology_iri, rdfs::comment, description.as_str())
-            .map_err(|e| IoError::Write(e.to_string()))?;
+        triple(
+            &mut graph,
+            &ontology_iri,
+            rdfs::comment,
+            description.as_str(),
+        )?;
     }
 
     // owl:versionInfo
@@ -270,9 +263,12 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
         .get("versionInfo")
         .map_err(|e| IoError::Parse(e.to_string()))?;
     if let Some(ref version) = schema.version {
-        graph
-            .insert(&ontology_iri, owl_version_info, version.as_str())
-            .map_err(|e| IoError::Write(e.to_string()))?;
+        triple(
+            &mut graph,
+            &ontology_iri,
+            owl_version_info,
+            version.as_str(),
+        )?;
 
         // owl:versionIRI
         if let Some(ref id) = schema.id {
@@ -280,9 +276,7 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
             let owl_version_iri = owl
                 .get("versionIRI")
                 .map_err(|e| IoError::Parse(e.to_string()))?;
-            graph
-                .insert(&ontology_iri, owl_version_iri, &version_iri)
-                .map_err(|e| IoError::Write(e.to_string()))?;
+            triple(&mut graph, &ontology_iri, owl_version_iri, &version_iri)?;
         }
     }
 
@@ -292,9 +286,7 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
         .map_err(|e| IoError::Parse(e.to_string()))?;
     if let Some(ref license) = schema.license {
         let license_iri = make_iri(license)?;
-        graph
-            .insert(&ontology_iri, dcterms_license, &license_iri)
-            .map_err(|e| IoError::Write(e.to_string()))?;
+        triple(&mut graph, &ontology_iri, dcterms_license, &license_iri)?;
     }
 
     // dcterms:creator from contributors
@@ -302,9 +294,12 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
         .get("creator")
         .map_err(|e| IoError::Parse(e.to_string()))?;
     for contributor in &schema.contributors {
-        graph
-            .insert(&ontology_iri, dcterms_creator, contributor.name.as_str())
-            .map_err(|e| IoError::Write(e.to_string()))?;
+        triple(
+            &mut graph,
+            &ontology_iri,
+            dcterms_creator,
+            contributor.name.as_str(),
+        )?;
     }
 
     // dcterms:created
@@ -312,9 +307,7 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
         .get("created")
         .map_err(|e| IoError::Parse(e.to_string()))?;
     if let Some(ref created) = schema.created {
-        graph
-            .insert(&ontology_iri, dcterms_created, created.as_str())
-            .map_err(|e| IoError::Write(e.to_string()))?;
+        triple(&mut graph, &ontology_iri, dcterms_created, created.as_str())?;
     }
 
     // dcterms:modified
@@ -322,9 +315,12 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
         .get("modified")
         .map_err(|e| IoError::Parse(e.to_string()))?;
     if let Some(ref modified) = schema.modified {
-        graph
-            .insert(&ontology_iri, dcterms_modified, modified.as_str())
-            .map_err(|e| IoError::Write(e.to_string()))?;
+        triple(
+            &mut graph,
+            &ontology_iri,
+            dcterms_modified,
+            modified.as_str(),
+        )?;
     }
 
     // Classes
@@ -344,16 +340,12 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
         let class_iri = make_iri(&class_iri_str)?;
 
         // rdf:type owl:Class
-        graph
-            .insert(&class_iri, rdf::type_, owl_class)
-            .map_err(|e| IoError::Write(e.to_string()))?;
+        triple(&mut graph, &class_iri, rdf::type_, owl_class)?;
 
         // owl:deprecated true — a Rust bool serializes as an
         // `xsd:boolean`-typed literal.
         if class_def.deprecated.is_some() {
-            graph
-                .insert(&class_iri, owl_deprecated, true)
-                .map_err(|e| IoError::Write(e.to_string()))?;
+            triple(&mut graph, &class_iri, owl_deprecated, true)?;
         }
 
         // rdfs:label
@@ -362,15 +354,11 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
             .get("panschema:label")
             .cloned()
             .unwrap_or_else(|| name.to_string());
-        graph
-            .insert(&class_iri, rdfs::label, label.as_str())
-            .map_err(|e| IoError::Write(e.to_string()))?;
+        triple(&mut graph, &class_iri, rdfs::label, label.as_str())?;
 
         // rdfs:comment from description
         if let Some(ref description) = class_def.description {
-            graph
-                .insert(&class_iri, rdfs::comment, description.as_str())
-                .map_err(|e| IoError::Write(e.to_string()))?;
+            triple(&mut graph, &class_iri, rdfs::comment, description.as_str())?;
         }
 
         // rdfs:subClassOf from is_a and each mixin. LinkML treats mixins
@@ -379,9 +367,7 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
         for parent in class_def.is_a.iter().chain(class_def.mixins.iter()) {
             let parent_iri_str = class_iri_by_name(parent, schema);
             let parent_iri = make_iri(&parent_iri_str)?;
-            graph
-                .insert(&class_iri, rdfs_subclass_of, &parent_iri)
-                .map_err(|e| IoError::Write(e.to_string()))?;
+            triple(&mut graph, &class_iri, rdfs_subclass_of, &parent_iri)?;
         }
 
         // External rdfs:subClassOf grounding (`subclass_of:` in
@@ -391,9 +377,7 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
         // map. Single-valued per the LinkML metamodel.
         if let Some(external) = class_def.subclass_of.as_deref() {
             let target_iri = make_iri(&expand_curie(external, schema))?;
-            graph
-                .insert(&class_iri, rdfs_subclass_of, &target_iri)
-                .map_err(|e| IoError::Write(e.to_string()))?;
+            triple(&mut graph, &class_iri, rdfs_subclass_of, &target_iri)?;
         }
 
         emit_mappings(
@@ -429,21 +413,13 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
     for (enum_name, enum_def) in &schema.enums {
         let enum_iri_str = enum_iri_string(enum_name, schema);
         let enum_iri = make_iri(&enum_iri_str)?;
-        graph
-            .insert(&enum_iri, rdf::type_, owl_class)
-            .map_err(|e| IoError::Write(e.to_string()))?;
-        graph
-            .insert(&enum_iri, rdfs::label, enum_name.as_str())
-            .map_err(|e| IoError::Write(e.to_string()))?;
+        triple(&mut graph, &enum_iri, rdf::type_, owl_class)?;
+        triple(&mut graph, &enum_iri, rdfs::label, enum_name.as_str())?;
         if let Some(description) = &enum_def.description {
-            graph
-                .insert(&enum_iri, rdfs::comment, description.as_str())
-                .map_err(|e| IoError::Write(e.to_string()))?;
+            triple(&mut graph, &enum_iri, rdfs::comment, description.as_str())?;
         }
         if enum_def.deprecated.is_some() {
-            graph
-                .insert(&enum_iri, owl_deprecated, true)
-                .map_err(|e| IoError::Write(e.to_string()))?;
+            triple(&mut graph, &enum_iri, owl_deprecated, true)?;
         }
 
         let mut value_iris = Vec::new();
@@ -454,24 +430,16 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
                 .map(|m| expand_curie(m, schema))
                 .unwrap_or_else(|| format!("{enum_iri_str}/{key}"));
             let value_iri = make_iri(&value_iri_str)?;
-            graph
-                .insert(&value_iri, rdf::type_, owl_named_individual_t)
-                .map_err(|e| IoError::Write(e.to_string()))?;
-            graph
-                .insert(&value_iri, rdf::type_, &enum_iri)
-                .map_err(|e| IoError::Write(e.to_string()))?;
+            triple(&mut graph, &value_iri, rdf::type_, owl_named_individual_t)?;
+            triple(&mut graph, &value_iri, rdf::type_, &enum_iri)?;
             let label = if pv.text.is_empty() {
                 key.as_str()
             } else {
                 pv.text.as_str()
             };
-            graph
-                .insert(&value_iri, rdfs::label, label)
-                .map_err(|e| IoError::Write(e.to_string()))?;
+            triple(&mut graph, &value_iri, rdfs::label, label)?;
             if let Some(description) = &pv.description {
-                graph
-                    .insert(&value_iri, rdfs::comment, description.as_str())
-                    .map_err(|e| IoError::Write(e.to_string()))?;
+                triple(&mut graph, &value_iri, rdfs::comment, description.as_str())?;
             }
             value_iris.push(value_iri);
         }
@@ -584,20 +552,14 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
 
         // rdf:type
         if is_object_property {
-            graph
-                .insert(&prop_iri, rdf::type_, owl_object_property)
-                .map_err(|e| IoError::Write(e.to_string()))?;
+            triple(&mut graph, &prop_iri, rdf::type_, owl_object_property)?;
         } else {
-            graph
-                .insert(&prop_iri, rdf::type_, owl_datatype_property)
-                .map_err(|e| IoError::Write(e.to_string()))?;
+            triple(&mut graph, &prop_iri, rdf::type_, owl_datatype_property)?;
         }
 
         // owl:deprecated true — see the class emission above.
         if slot_def.deprecated.is_some() {
-            graph
-                .insert(&prop_iri, owl_deprecated, true)
-                .map_err(|e| IoError::Write(e.to_string()))?;
+            triple(&mut graph, &prop_iri, owl_deprecated, true)?;
         }
 
         // OWL relationship characteristics → `rdf:type owl:<Name>Property`.
@@ -612,9 +574,7 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
         .zip(&owl_characteristic_types)
         {
             if set {
-                graph
-                    .insert(&prop_iri, rdf::type_, characteristic_type)
-                    .map_err(|e| IoError::Write(e.to_string()))?;
+                triple(&mut graph, &prop_iri, rdf::type_, characteristic_type)?;
             }
         }
 
@@ -624,15 +584,11 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
             .get("panschema:label")
             .cloned()
             .unwrap_or_else(|| name.to_string());
-        graph
-            .insert(&prop_iri, rdfs::label, label.as_str())
-            .map_err(|e| IoError::Write(e.to_string()))?;
+        triple(&mut graph, &prop_iri, rdfs::label, label.as_str())?;
 
         // rdfs:comment from description
         if let Some(ref description) = slot_def.description {
-            graph
-                .insert(&prop_iri, rdfs::comment, description.as_str())
-                .map_err(|e| IoError::Write(e.to_string()))?;
+            triple(&mut graph, &prop_iri, rdfs::comment, description.as_str())?;
         }
 
         // rdfs:domain — an explicit `domain:` wins; otherwise an
@@ -643,9 +599,7 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
         if let Some(domain) = domain_name {
             let domain_iri_str = class_iri_by_name(domain, schema);
             let domain_iri = make_iri(&domain_iri_str)?;
-            graph
-                .insert(&prop_iri, rdfs::domain, &domain_iri)
-                .map_err(|e| IoError::Write(e.to_string()))?;
+            triple(&mut graph, &prop_iri, rdfs::domain, &domain_iri)?;
         }
 
         // rdfs:range. For a datatype property the range must be a built-in
@@ -665,9 +619,7 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
             };
             if let Some(range_iri_str) = range_iri_str {
                 let range_iri = make_iri(&range_iri_str)?;
-                graph
-                    .insert(&prop_iri, rdfs::range, &range_iri)
-                    .map_err(|e| IoError::Write(e.to_string()))?;
+                triple(&mut graph, &prop_iri, rdfs::range, &range_iri)?;
             }
         } else if all_union_classes {
             // No single range to name: the slot accepts any member of the
@@ -677,12 +629,8 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
                 .map(|member| make_iri(&class_iri_by_name(member, schema)))
                 .collect::<Result<Vec<_>, _>>()?;
             let union_node = make_iri(&format!("{prop_iri_str}/range"))?;
-            graph
-                .insert(&prop_iri, rdfs::range, &union_node)
-                .map_err(|e| IoError::Write(e.to_string()))?;
-            graph
-                .insert(&union_node, rdf::type_, owl_class)
-                .map_err(|e| IoError::Write(e.to_string()))?;
+            triple(&mut graph, &prop_iri, rdfs::range, &union_node)?;
+            triple(&mut graph, &union_node, rdf::type_, owl_class)?;
             emit_rdf_list(
                 &mut graph,
                 &union_node,
@@ -701,9 +649,7 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
                 None => fallback_element_iri(inverse, schema),
             };
             let inverse_iri = make_iri(&inverse_iri_str)?;
-            graph
-                .insert(&prop_iri, owl_inverse_of, &inverse_iri)
-                .map_err(|e| IoError::Write(e.to_string()))?;
+            triple(&mut graph, &prop_iri, owl_inverse_of, &inverse_iri)?;
         }
 
         emit_mappings(
@@ -754,9 +700,7 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
             let ind_iri = make_iri(&ind_iri_str)?;
 
             // rdf:type owl:NamedIndividual
-            graph
-                .insert(&ind_iri, rdf::type_, owl_named_individual)
-                .map_err(|e| IoError::Write(e.to_string()))?;
+            triple(&mut graph, &ind_iri, rdf::type_, owl_named_individual)?;
 
             // Additional types
             let types_key = format!("panschema:individual:{}", ind_id);
@@ -765,9 +709,7 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
                     let type_iri_str = type_iri_str.trim();
                     if !type_iri_str.is_empty() {
                         let type_iri = make_iri(type_iri_str)?;
-                        graph
-                            .insert(&ind_iri, rdf::type_, &type_iri)
-                            .map_err(|e| IoError::Write(e.to_string()))?;
+                        triple(&mut graph, &ind_iri, rdf::type_, &type_iri)?;
                     }
                 }
             }
@@ -775,9 +717,7 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
             // rdfs:label
             let label_key = format!("panschema:individual:{}:_label", ind_id);
             if let Some(label) = schema.annotations.get(&label_key) {
-                graph
-                    .insert(&ind_iri, rdfs::label, label.as_str())
-                    .map_err(|e| IoError::Write(e.to_string()))?;
+                triple(&mut graph, &ind_iri, rdfs::label, label.as_str())?;
             }
         }
     }
@@ -882,21 +822,15 @@ fn emit_instances(
     for inst in &set.instances {
         let subject = make_iri(&instance_iri_string(schema, inst))?;
 
-        graph
-            .insert(&subject, rdf::type_, owl_named_individual)
-            .map_err(|e| IoError::Write(e.to_string()))?;
+        triple(graph, &subject, rdf::type_, owl_named_individual)?;
         for class_name in &inst.types {
             if let Some(class_def) = schema.classes.get(class_name) {
                 let class_iri = make_iri(&class_iri_string(class_name, class_def, schema))?;
-                graph
-                    .insert(&subject, rdf::type_, &class_iri)
-                    .map_err(|e| IoError::Write(e.to_string()))?;
+                triple(graph, &subject, rdf::type_, &class_iri)?;
             }
         }
         if !inst.label.is_empty() {
-            graph
-                .insert(&subject, rdfs::label, inst.label.as_str())
-                .map_err(|e| IoError::Write(e.to_string()))?;
+            triple(graph, &subject, rdfs::label, inst.label.as_str())?;
         }
 
         for sv in &inst.slot_values {
@@ -922,9 +856,7 @@ fn emit_instances(
                         enum_value_iri(enum_name, enum_def, &authored, schema)
                     {
                         let object = make_iri(&value_iri_str)?;
-                        graph
-                            .insert(&subject, &predicate, &object)
-                            .map_err(|e| IoError::Write(e.to_string()))?;
+                        triple(graph, &subject, &predicate, &object)?;
                         continue;
                     }
                     // A value the enum doesn't permit: keep it as authored so
@@ -961,9 +893,7 @@ fn emit_instances(
                     )
                 });
             let target = make_iri(&target_iri_str)?;
-            graph
-                .insert(&subject, &predicate, &target)
-                .map_err(|e| IoError::Write(e.to_string()))?;
+            triple(graph, &subject, &predicate, &target)?;
         }
     }
     Ok(())
@@ -997,12 +927,8 @@ pub fn build_shacl_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
         let shape_iri_str = format!("{class_iri_str}Shape");
         let shape_iri = make_iri(&shape_iri_str)?;
 
-        graph
-            .insert(&shape_iri, rdf::type_, &t.node_shape)
-            .map_err(|e| IoError::Write(e.to_string()))?;
-        graph
-            .insert(&shape_iri, &t.target_class, &class_iri)
-            .map_err(|e| IoError::Write(e.to_string()))?;
+        triple(&mut graph, &shape_iri, rdf::type_, &t.node_shape)?;
+        triple(&mut graph, &shape_iri, &t.target_class, &class_iri)?;
 
         let effective = crate::linkml_resolve::resolve_effective_slots(class_def, schema);
         for (slot_name, slot) in &effective {
@@ -1071,18 +997,12 @@ pub fn build_shacl_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
                     .map_err(|e| IoError::Write(e.to_string()))?;
                 Ok(())
             };
-            graph
-                .insert(&notpre, &t.not_, &pre_iri)
-                .map_err(|e| IoError::Write(e.to_string()))?;
-            graph
-                .insert(&shape_iri, &t.or_, &or0)
-                .map_err(|e| IoError::Write(e.to_string()))?;
+            triple(&mut graph, &notpre, &t.not_, &pre_iri)?;
+            triple(&mut graph, &shape_iri, &t.or_, &or0)?;
             w(&mut graph, &or0, rdf::first, &notpre)?;
             w(&mut graph, &or0, rdf::rest, &or1)?;
             w(&mut graph, &or1, rdf::first, &post_iri)?;
-            graph
-                .insert(&or1, rdf::rest, rdf::nil)
-                .map_err(|e| IoError::Write(e.to_string()))?;
+            triple(&mut graph, &or1, rdf::rest, rdf::nil)?;
         }
     }
 
@@ -1362,6 +1282,24 @@ fn shacl_rule_skip_reason(
 /// `required`/cardinality → `sh:minCount`/`sh:maxCount`; `pattern` →
 /// `sh:pattern`; value bounds → `sh:minInclusive`/`sh:maxInclusive`;
 /// `equals_*` → `sh:hasValue`.
+/// Insert one triple, mapping the graph's mutation error into [`IoError`].
+///
+/// The builders below assert around seventy triples. Spelling the error
+/// mapping at each site buried the triple being asserted under plumbing —
+/// three lines to say one fact — and the file had already grown two ad-hoc
+/// local closures to escape it.
+fn triple<S, P, O>(graph: &mut FastGraph, s: S, p: P, o: O) -> IoResult<()>
+where
+    S: sophia::api::term::Term,
+    P: sophia::api::term::Term,
+    O: sophia::api::term::Term,
+{
+    graph
+        .insert(s, p, o)
+        .map_err(|e| IoError::Write(e.to_string()))?;
+    Ok(())
+}
+
 /// Insert `items` as an RDF collection, linked from `subject` by
 /// `predicate`. A no-op for an empty list, since there is no useful
 /// `sh:in ()`.
@@ -1412,12 +1350,8 @@ fn emit_property_shape(
     schema: &SchemaDefinition,
     c: PropertyConstraints<'_>,
 ) -> IoResult<()> {
-    graph
-        .insert(shape, &t.property, prop_shape)
-        .map_err(|e| IoError::Write(e.to_string()))?;
-    graph
-        .insert(prop_shape, &t.path, path)
-        .map_err(|e| IoError::Write(e.to_string()))?;
+    triple(graph, shape, &t.property, prop_shape)?;
+    triple(graph, prop_shape, &t.path, path)?;
     emit_constraint_fields(graph, t, prop_shape, schema, c)
 }
 
@@ -1436,9 +1370,7 @@ fn emit_constraint_fields(
     if let Some(range) = c.range {
         if let Some(target) = schema.classes.get(range) {
             let target_iri = make_iri(&class_iri_string(range, target, schema))?;
-            graph
-                .insert(prop_shape, &t.class, &target_iri)
-                .map_err(|e| IoError::Write(e.to_string()))?;
+            triple(graph, prop_shape, &t.class, &target_iri)?;
         } else if c.close_enum_range
             && let Some(enum_def) = schema.enums.get(range)
         {
@@ -1460,9 +1392,7 @@ fn emit_constraint_fields(
             // XSD datatype, so emit none rather than a fabricated
             // `xsd:{name}`.
             let xsd_iri = make_iri(&xsd)?;
-            graph
-                .insert(prop_shape, &t.datatype, &xsd_iri)
-                .map_err(|e| IoError::Write(e.to_string()))?;
+            triple(graph, prop_shape, &t.datatype, &xsd_iri)?;
         }
     }
     // `required` and `minimum_cardinality` are two spellings of the same
@@ -1480,9 +1410,7 @@ fn emit_constraint_fields(
         .unwrap_or(u32::from(c.required))
         .max(presence_min);
     if effective_min > 0 {
-        graph
-            .insert(prop_shape, &t.min_count, effective_min as i32)
-            .map_err(|e| IoError::Write(e.to_string()))?;
+        triple(graph, prop_shape, &t.min_count, effective_min as i32)?;
     }
     let effective_max = if matches!(c.value_presence, Some(crate::linkml::ValuePresence::Absent)) {
         Some(0)
@@ -1490,29 +1418,19 @@ fn emit_constraint_fields(
         c.max_cardinality
     };
     if let Some(max) = effective_max {
-        graph
-            .insert(prop_shape, &t.max_count, max as i32)
-            .map_err(|e| IoError::Write(e.to_string()))?;
+        triple(graph, prop_shape, &t.max_count, max as i32)?;
     }
     if let Some(pattern) = c.pattern {
-        graph
-            .insert(prop_shape, &t.pattern, pattern)
-            .map_err(|e| IoError::Write(e.to_string()))?;
+        triple(graph, prop_shape, &t.pattern, pattern)?;
     }
     if let Some(min) = c.min_value {
-        graph
-            .insert(prop_shape, &t.min_inclusive, min)
-            .map_err(|e| IoError::Write(e.to_string()))?;
+        triple(graph, prop_shape, &t.min_inclusive, min)?;
     }
     if let Some(max) = c.max_value {
-        graph
-            .insert(prop_shape, &t.max_inclusive, max)
-            .map_err(|e| IoError::Write(e.to_string()))?;
+        triple(graph, prop_shape, &t.max_inclusive, max)?;
     }
     if let Some(v) = c.equals_string {
-        graph
-            .insert(prop_shape, &t.has_value, v)
-            .map_err(|e| IoError::Write(e.to_string()))?;
+        triple(graph, prop_shape, &t.has_value, v)?;
     }
     if let Some(n) = c.equals_number {
         // `sh:hasValue` is term equality (datatype-sensitive), so the
@@ -1524,13 +1442,9 @@ fn emit_constraint_fields(
         // float/double/decimal or rangeless conditions.
         let is_integer = matches!(c.range, Some("integer") | Some("int"));
         if is_integer {
-            graph
-                .insert(prop_shape, &t.has_value, n as isize)
-                .map_err(|e| IoError::Write(e.to_string()))?;
+            triple(graph, prop_shape, &t.has_value, n as isize)?;
         } else {
-            graph
-                .insert(prop_shape, &t.has_value, n)
-                .map_err(|e| IoError::Write(e.to_string()))?;
+            triple(graph, prop_shape, &t.has_value, n)?;
         }
     }
     if !c.any_of.is_empty() {
@@ -1567,14 +1481,10 @@ where
         cells.push(make_iri(&format!("{base}/{cell_name}{j}"))?);
     }
     if let Some(first) = cells.first() {
-        graph
-            .insert(subject, predicate, first)
-            .map_err(|e| IoError::Write(e.to_string()))?;
+        triple(graph, subject, predicate, first)?;
     }
     for (j, (cell, member)) in cells.iter().zip(&members).enumerate() {
-        graph
-            .insert(cell, rdf::first, member)
-            .map_err(|e| IoError::Write(e.to_string()))?;
+        triple(graph, cell, rdf::first, member)?;
         match cells.get(j + 1) {
             Some(next) => graph
                 .insert(cell, rdf::rest, next)
@@ -1599,14 +1509,10 @@ fn emit_or_list(
         cells.push(make_iri(&format!("{base}/orcell{j}"))?);
     }
     if let Some(first) = cells.first() {
-        graph
-            .insert(subject, &t.or_, first)
-            .map_err(|e| IoError::Write(e.to_string()))?;
+        triple(graph, subject, &t.or_, first)?;
     }
     for (j, (cell, member)) in cells.iter().zip(&members).enumerate() {
-        graph
-            .insert(cell, rdf::first, member)
-            .map_err(|e| IoError::Write(e.to_string()))?;
+        triple(graph, cell, rdf::first, member)?;
         match cells.get(j + 1) {
             Some(next) => graph
                 .insert(cell, rdf::rest, next)
