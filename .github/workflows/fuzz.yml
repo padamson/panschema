@@ -1,0 +1,102 @@
+name: Fuzz
+
+# Fuzz the readers against arbitrary bytes — the one surface that parses
+# files the operator did not author (`panschema add github:` fetches a
+# dependency's schema). On demand only, never in the push gate: fuzzing's
+# value scales with wall-clock, the same footing as full-codebase mutation
+# runs. See docs/features/42-generative-and-fuzz-testing.md.
+#
+# A crash artifact is not a CI failure to shrug at: minimize it, commit it
+# as a regression fixture with an ordinary test, and fix — the suite keeps
+# the finding without needing the fuzzer to rediscover it.
+#
+# Known crash class: sophia_turtle 0.10 (current latest) panics on some
+# malformed input (`assertion failed: !txt.is_empty()`). Consumers are
+# shielded by a catch_unwind boundary in the reader, but fuzz builds use
+# panic=abort where that is a no-op — so owl_reader campaigns re-find it
+# and end early until the assertion is fixed upstream. An artifact
+# reproducing at that assertion is this known bug, not a new finding.
+
+on:
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: "Seconds to fuzz each target"
+        required: false
+        type: number
+        default: 600
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    # Build (~10 min cold) plus the campaign; a hanging input is killed by
+    # libFuzzer's own -timeout below, so this ceiling is for everything else.
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [owl_reader, yaml_reader]
+    steps:
+      - uses: actions/checkout@v5
+
+      # panschema's build.rs exits when the wasm artifacts are absent and
+      # wasm-pack is not installed; empty placeholders satisfy the
+      # include_bytes! without a wasm-pack run, same as every other job
+      # that builds panschema without the viz.
+      - name: Stub WASM artifacts
+        run: |
+          mkdir -p panschema-viz/pkg
+          touch panschema-viz/pkg/panschema_viz.js panschema-viz/pkg/panschema_viz_bg.wasm
+
+      - name: Install nightly Rust
+        run: |
+          rustup toolchain install nightly --profile minimal
+          rustup component add llvm-tools-preview --toolchain nightly
+
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+
+      # The working corpus compounds across dispatches — without this,
+      # every campaign restarts from the seeds and re-derives the same
+      # coverage frontier instead of pushing past it.
+      - name: Cache working corpus
+        uses: actions/cache@v6
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ matrix.target }}-
+
+      # The corpus dir is gitignored (machine state, not repo contract), so
+      # a fresh checkout with no cache hit has no such directory — and
+      # libFuzzer exits rather than creating an explicitly-passed one.
+      - name: Ensure corpus dir exists
+        run: mkdir -p fuzz/corpus/${{ matrix.target }}
+
+      # `-timeout` is what actually enforces the harness's "never a hang"
+      # contract per input; without it libFuzzer's 1200s default means any
+      # hang under 20 minutes goes unreported. The duration input reaches
+      # the script through the environment, never by interpolation into
+      # the script text.
+      - name: Fuzz ${{ matrix.target }}
+        env:
+          FUZZ_SECONDS: ${{ inputs.seconds }}
+        run: |
+          cargo +nightly fuzz run ${{ matrix.target }} \
+            fuzz/corpus/${{ matrix.target }} fuzz/seeds/${{ matrix.target }} -- \
+            -max_total_time="${FUZZ_SECONDS:-600}" \
+            -timeout=30
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore

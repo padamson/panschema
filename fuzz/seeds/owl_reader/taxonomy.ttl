@@ -1,0 +1,31 @@
+@prefix : <http://example.org/tax#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+# An is_a-heavy taxonomy: every edge is rdfs:subClassOf, no
+# properties. Used by the e2e to prove the layout auto-default
+# recommends Hierarchical when inheritance dominates (feature 09
+# slice 9). Contrast reference.ttl, which is mixed-edge → SGD.
+<http://example.org/tax> a owl:Ontology ;
+    rdfs:label "Taxonomy" .
+
+:Animal a owl:Class ;
+    rdfs:label "Animal" .
+:Mammal a owl:Class ;
+    rdfs:label "Mammal" ;
+    rdfs:subClassOf :Animal .
+:Dog a owl:Class ;
+    rdfs:label "Dog" ;
+    rdfs:subClassOf :Mammal .
+:Cat a owl:Class ;
+    rdfs:label "Cat" ;
+    rdfs:subClassOf :Mammal .
+:Bird a owl:Class ;
+    rdfs:label "Bird" ;
+    rdfs:subClassOf :Animal .
+:Fish a owl:Class ;
+    rdfs:label "Fish" ;
+    rdfs:subClassOf :Animal .
+:Reptile a owl:Class ;
+    rdfs:label "Reptile" ;
+    rdfs:subClassOf :Animal .

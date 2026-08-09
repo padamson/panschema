@@ -1,0 +1,45 @@
+name: WineCatalog
+id: https://example.org/wine
+description: A tiny wine catalog schema for the LinkML instance-graph example.
+default_prefix: wine
+prefixes:
+  wine: https://example.org/wine/
+  linkml: https://w3id.org/linkml/
+default_range: string
+# `id` and `name` are one top-level slot each, shared by reference. Declaring
+# them as same-named attributes on both classes would be two definitions
+# minting one RDF property IRI — the collision the load diagnostics reject.
+slots:
+  id:
+    description: The record's unique identifier.
+    identifier: true
+  name:
+    description: Display name of the record.
+classes:
+  WineCatalog:
+    description: The data container holding wines and wineries.
+    tree_root: true
+    attributes:
+      wines:
+        description: The wines in this catalog.
+        range: Wine
+        multivalued: true
+      wineries:
+        description: The wineries in this catalog.
+        range: Winery
+        multivalued: true
+  Wine:
+    description: A wine produced by a winery.
+    slots: [id, name]
+    attributes:
+      color:
+        description: The wine's color.
+      produced_by:
+        description: The winery that produced this wine.
+        range: Winery
+  Winery:
+    description: A wine producer.
+    slots: [id, name]
+    attributes:
+      region:
+        description: The region where the winery is located.

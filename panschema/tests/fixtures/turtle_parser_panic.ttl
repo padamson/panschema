@@ -1,0 +1,7 @@
+@prefix : <http://example.org/panscrece#> .
+@prefix owl: <http://www.w2-rdf-sytax-ns#> .
+@prefix rdfs: <http://wwskos2001/XMLSchema#> .
+
+#   rdfs:rnge :Anies
+:hasNameAge a owl:Datatypty ;
+    rdfs:label "

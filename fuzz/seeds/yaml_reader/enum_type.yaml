@@ -1,0 +1,40 @@
+id: https://example.org/enum-type
+name: enum_type
+description: A fixture exercising the Enumerations and Types HTML sections.
+prefixes:
+  ex: https://example.org/enum-type/
+  xsd: http://www.w3.org/2001/XMLSchema#
+default_prefix: ex
+default_range: string
+
+enums:
+  Status:
+    name: Status
+    description: The lifecycle status of an item.
+    permissible_values:
+      open:
+        text: open
+        description: Open for changes.
+        meaning: xsd:string
+      closed:
+        text: closed
+
+types:
+  PhoneNumber:
+    name: PhoneNumber
+    description: An E.164 phone number.
+    typeof: string
+    uri: xsd:string
+    pattern: '^\+[1-9]\d{1,14}$'
+
+classes:
+  Contact:
+    name: Contact
+    description: Someone you can reach.
+    attributes:
+      status:
+        name: status
+        range: Status
+      phone:
+        name: phone
+        range: PhoneNumber

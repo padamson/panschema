@@ -1,0 +1,31 @@
+# Fuzz targets for panschema's readers — the one surface that parses
+# files the operator did not author (`panschema add github:` fetches a
+# dependency's schema over the network). Not a workspace member: built
+# only by `cargo +nightly fuzz`, see docs/features/42-generative-and-fuzz-testing.md.
+[package]
+name = "panschema-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tempfile = "3"
+panschema = { path = "../panschema" }
+
+[[bin]]
+name = "owl_reader"
+path = "fuzz_targets/owl_reader.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "yaml_reader"
+path = "fuzz_targets/yaml_reader.rs"
+test = false
+doc = false
+bench = false

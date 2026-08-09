@@ -1,0 +1,8 @@
+target
+artifacts/
+coverage/
+corpus/
+# Resolved fresh per campaign: a committed lockfile here would sit outside
+# every supply-chain gate (dependabot, audit, deny, vet all resolve the
+# workspace only) and age indefinitely. Nothing in this crate ships.
+Cargo.lock

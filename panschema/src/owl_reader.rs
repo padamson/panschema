@@ -156,7 +156,16 @@ impl OwlReader {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
 
-        let graph: FastGraph = turtle::parse_bufread(reader).collect_triples()?;
+        // The dependency parser can panic on malformed input (fuzzing found
+        // a debug assertion in sophia_turtle 0.10 doing exactly that), and
+        // this reader's contract is that a malformed file is a returned
+        // error whoever's code chokes on it. The catch is confined to the
+        // parse of one just-opened file, so no shared state can be observed
+        // mid-panic.
+        let graph: FastGraph = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            turtle::parse_bufread(reader).collect_triples()
+        }))
+        .map_err(|_| anyhow::anyhow!("Turtle parser crashed on malformed input"))??;
 
         let owl = Namespace::new_unchecked(OWL_NS);
         let owl_ontology = owl.get("Ontology")?;
@@ -925,6 +934,23 @@ mod tests {
             .join("tests")
             .join("fixtures")
             .join("reference.ttl")
+    }
+
+    /// A malformed Turtle file the dependency parser panics on (a debug
+    /// assertion in sophia_turtle 0.10, found by fuzzing) must come back
+    /// as an error like any other malformed file — the reader's contract
+    /// does not care whose code the panic is in.
+    #[test]
+    fn a_parser_panicking_input_returns_an_error_not_a_crash() {
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("turtle_parser_panic.ttl");
+        let result = OwlReader::new().read(&fixture);
+        assert!(
+            result.is_err(),
+            "a malformed file is a returned error, never a panic"
+        );
     }
 
     /// Write a TTL string to a temp file and read it back through the

@@ -70,6 +70,14 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      # The fuzz crate is workspace-excluded (nightly-only to *run*), so
+      # nothing else ever compiles it — without this canary its targets
+      # bit-rot silently against panschema's API and the breakage surfaces
+      # only when someone finally dispatches the on-demand fuzz workflow.
+      # A plain stable type-check is enough to catch that class.
+      - name: Fuzz-crate compile canary
+        run: cargo check --manifest-path fuzz/Cargo.toml
+
       - name: Clippy (release)
         run: cargo clippy -p panschema --all-targets -- -D warnings
 

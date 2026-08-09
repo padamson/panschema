@@ -163,7 +163,8 @@ rather than inferred through a round-trip.
 
 ### Slice 2: Fuzz the readers against arbitrary bytes
 
-**Status:** Not Started
+**Status:** Complete (scaffolding + smoke campaign; long campaigns are the
+on-demand job's business)
 
 **Priority:** Could Have
 
@@ -173,16 +174,47 @@ with an error, never a panic or a hang — including files fetched from a
 operator did not write.
 
 **Acceptance Criteria:**
-- [ ] `OwlReader` and `YamlReader` each have a fuzz target taking arbitrary
-  bytes.
-- [ ] Neither panics, aborts, nor hangs on any input the campaign reaches;
-  a malformed file is a returned error.
-- [ ] A seed corpus is committed from the existing fixtures, so a campaign
-  starts from real schema shapes rather than from noise.
-- [ ] Any crash found is committed as a regression fixture and fixed with
+- [x] `OwlReader` and `YamlReader` each have a fuzz target taking arbitrary
+  bytes (`fuzz/fuzz_targets/`), exercising the readers' path-based entry
+  points rather than an internal parse function. **Scope is reader-level
+  hardening only:** the `github:`-dependency threat actually enters through
+  `import_resolve::load_schema_with_deps`, whose untrusted-input logic —
+  the path-escape guard, import cycle detection, extension probing, and
+  transitive re-reads — a single-`&[u8]` harness structurally cannot
+  reach, since it needs a multi-file import graph. Fuzzing that layer
+  needs a structured harness (generate an import *graph*, not a byte
+  string) and is the follow-up slice to file if that surface grows.
+- [x] Neither panics, aborts, nor hangs on any input the campaign reaches;
+  a malformed file is a returned error. Held through the initial smoke
+  campaign; every future campaign re-earns it.
+- [x] A seed corpus is committed from the existing fixtures
+  (`fuzz/seeds/<target>/`), so a campaign starts from real schema shapes
+  rather than from noise. The *working* corpus a campaign grows
+  (`fuzz/corpus/`, thousands of hash-named files) stays gitignored — the
+  seeds are the repo's contract, the growth is machine state.
+- [x] Any crash found is committed as a regression fixture and fixed with
   an ordinary test, so the suite keeps the finding without needing the
-  fuzzer to rediscover it.
-- [ ] Fuzzing runs on demand or on a schedule, never in the push gate.
+  fuzzer to rediscover it — exercised for real on this slice's first
+  extended campaign (see below), and the reader-hardening tests that
+  preceded it (smuggled nil, cyclic `rdf:rest`, XSD-alias collision) are
+  the pattern.
+
+**First real find (2026-08-08): the dependency Turtle parser panics on
+malformed input.** A mutated seed hits `assertion failed: !txt.is_empty()`
+inside sophia_turtle 0.10 — current latest; no upstream fix exists. The
+consumer-facing fix is a `catch_unwind` boundary in `parse_ontology`
+(a malformed file is a returned error whoever's code chokes), pinned by
+the `turtle_parser_panic.ttl` regression fixture. **The fuzz target cannot
+be shielded the same way:** cargo-fuzz builds with `panic=abort`, where
+`catch_unwind` is a no-op — so owl_reader campaigns will keep re-finding
+this class and ending early until the assertion is fixed upstream. A crash
+artifact whose reproduction panics at sophia's `_generic_source.rs`
+`!txt.is_empty()` assertion is this known bug, not a new finding. Filing
+the upstream issue is the real fix's trigger.
+- [x] Fuzzing runs on demand (`fuzz.yml`, `workflow_dispatch` with a
+  configurable duration), never in the push gate — the same footing as
+  full-codebase mutation runs. A schedule can be added if on-demand runs
+  prove too easy to forget.
 
 **Notes:**
 - `cargo-fuzz` needs a nightly toolchain, which is why this is its own
@@ -201,7 +233,7 @@ operator did not write.
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | Slice 1: round-trip + determinism properties | Should Have | None | Complete |
-| Slice 2: reader fuzz targets | Could Have | None | Not Started |
+| Slice 2: reader fuzz targets | Could Have | None | Complete |
 | Slice 3: reader equivalence | Should Have | Slice 1 | Complete |
 
 ---
