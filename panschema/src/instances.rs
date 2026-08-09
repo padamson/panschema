@@ -319,15 +319,10 @@ impl InstanceSet {
             let Some(slot) = root_slots.get(slot_name) else {
                 continue;
             };
-            // Resolve the range the way record ingestion does — a slot that
-            // leans on `default_range` (an `identifier` usually does) has no
-            // explicit range of its own, and skipping those would drop both
-            // the root's id and any such scalar from the metadata.
-            let range = slot
-                .range
-                .clone()
-                .or_else(|| schema.default_range.clone())
-                .unwrap_or_default();
+            // A slot with no range (none declared, none defaulted at load)
+            // is still a scalar for metadata purposes — skipping it would
+            // drop both the root's id and any such scalar from the metadata.
+            let range = slot.range.clone().unwrap_or_default();
             // Class-ranged container slots hold instance records; the
             // container's scalar attributes (a catalog title, a
             // description) describe the dataset itself and surface as its
@@ -616,8 +611,8 @@ impl LinkmlLoader<'_> {
         let map = record.as_mapping()?;
         // Resolved *with provenance* so each slot's induced range is available:
         // an `any_of` union has several range targets and no scalar `range:`,
-        // so reading `range` alone would see nothing and fall back to the
-        // schema's default_range — silently turning references into literals.
+        // so reading `range` alone would see nothing — silently turning
+        // references into literals.
         let resolved =
             crate::linkml_resolve::resolve_effective_slots_with_provenance(class, self.schema);
         let slots: BTreeMap<String, SlotDefinition> = resolved
@@ -668,16 +663,13 @@ impl LinkmlLoader<'_> {
             }
             // The slot's range targets: the induced set when the schema
             // supplies one (a union contributes every member), else the
-            // declared scalar range, else the schema default.
+            // declared scalar range.
             let induced = resolved
                 .get(field)
                 .map(|rs| rs.induced.ranges.clone())
                 .unwrap_or_default();
             let ranges: Vec<String> = if induced.is_empty() {
-                slot.and_then(|s| s.range.clone())
-                    .or_else(|| self.schema.default_range.clone())
-                    .into_iter()
-                    .collect()
+                slot.and_then(|s| s.range.clone()).into_iter().collect()
             } else {
                 induced
             };

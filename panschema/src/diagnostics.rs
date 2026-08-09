@@ -228,7 +228,8 @@ pub struct DanglingRef {
     /// The slot or class carrying the reference, pre-formatted (e.g.
     /// ``slot `ships_to` ``).
     pub referrer: String,
-    /// Which reference it is: `range`, `is_a`, `mixin`, or `inverse`.
+    /// Which reference it is: `default_range`, `range`, `is_a`, `mixin`,
+    /// or `inverse`.
     pub kind: &'static str,
     /// The unresolved name.
     pub name: String,
@@ -240,6 +241,7 @@ impl DanglingRef {
     pub fn message(&self) -> String {
         let (verb, expected) = match self.kind {
             "range" => ("has range", "class, enum, type, or built-in type"),
+            "default_range" => ("has default_range", "class, enum, type, or built-in type"),
             "is_a" => ("has parent", "class"),
             "mixin" => ("mixes in", "class"),
             "inverse" => ("has inverse", "slot"),
@@ -252,11 +254,12 @@ impl DanglingRef {
     }
 }
 
-/// Report every reference that doesn't resolve against the loaded schema — a
-/// slot `range` (must be a class, enum, `types:` entry, or built-in), a class
-/// `is_a`/`mixin` (must be a class), or a slot `inverse` (must be a known
-/// slot). Deterministic order: class references by class name, then slot
-/// references (top-level slots, then inline attributes).
+/// Report every reference that doesn't resolve against the loaded schema —
+/// the schema's `default_range`, a slot `range` (each must be a class, enum,
+/// `types:` entry, or built-in), a class `is_a`/`mixin` (must be a class), or
+/// a slot `inverse` (must be a known slot). Deterministic order: the schema
+/// reference, then class references by class name, then slot references
+/// (top-level slots, then inline attributes).
 pub fn dangling_references(schema: &SchemaDefinition) -> Vec<DanglingRef> {
     let mut out = Vec::new();
 
@@ -266,6 +269,18 @@ pub fn dangling_references(schema: &SchemaDefinition) -> Vec<DanglingRef> {
             || schema.types.contains_key(name)
             || LINKML_BUILTIN_TYPES.contains(&name)
     };
+
+    // A typo'd `default_range` otherwise fails silently: it types nothing,
+    // and a schema whose slots all declare ranges shows no symptom at all.
+    if let Some(default) = schema.default_range.as_deref()
+        && !resolves_as_type(default)
+    {
+        out.push(DanglingRef {
+            referrer: "schema".to_string(),
+            kind: "default_range",
+            name: default.to_string(),
+        });
+    }
 
     // Every slot name the schema defines — top-level plus inline attributes —
     // so an `inverse` can resolve against either.
@@ -803,6 +818,23 @@ mod tests {
         assert!(
             msgs.iter().any(|m| m.contains("missing")),
             "expected an unresolved unique-key-slot message; got: {msgs:?}"
+        );
+    }
+
+    #[test]
+    fn an_unresolvable_default_range_is_flagged_at_its_source() {
+        // A typo'd `default_range` would otherwise fail silently — it types
+        // nothing, and a schema with no rangeless slot shows no symptom at
+        // all. One warning names the schema-level root cause.
+        let schema = parse("name: s\ndefault_range: strng\nclasses:\n  Order: {}\n");
+        let msgs: Vec<String> = dangling_references(&schema)
+            .iter()
+            .map(|d| d.message())
+            .collect();
+        assert!(
+            msgs.iter()
+                .any(|m| m.contains("default_range") && m.contains("strng")),
+            "the unresolvable default must be flagged; got: {msgs:?}"
         );
     }
 

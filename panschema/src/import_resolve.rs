@@ -80,6 +80,10 @@ pub fn load_schema_with_deps(
 ) -> IoResult<SchemaDefinition> {
     let reader = registry.reader_for_path(input)?;
     let mut schema = reader.read(input)?;
+    // Each file's `default_range` fills its own rangeless slots before any
+    // merging, here for the root and in `resolve_into` for every import —
+    // per-file scope, per LinkML semantics.
+    crate::linkml_resolve::materialize_default_range(&mut schema);
 
     if !schema.imports.is_empty() {
         let report = resolve_imports(&mut schema, input, registry, deps)
@@ -360,6 +364,11 @@ fn resolve_into(
             path: resolved.clone(),
             source,
         })?;
+        // This file's own `default_range` types this file's own slots —
+        // applied before recursing so a transitive import (materialized at
+        // its own read, then merged in below) is never re-typed by an
+        // importer's default.
+        crate::linkml_resolve::materialize_default_range(&mut imported);
 
         // Recurse into the imported file's own imports first, resolving
         // them relative to *its* directory, before folding the imported
@@ -1086,6 +1095,71 @@ mod tests {
         assert!(
             msg.contains("conflict_one.yaml") && msg.contains("conflict_two.yaml"),
             "error must name both conflicting sources; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn each_files_default_range_types_its_own_slots() {
+        // LinkML scopes `default_range` to the declaring schema: an imported
+        // file's rangeless slots take *its* default, never the root's. After
+        // the load, both slots carry the range their own file's default
+        // dictates, so no consumer of the merged schema needs to know which
+        // file a slot came from.
+        let registry = FormatRegistry::with_defaults();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::write(
+            dir.join("measurements.yaml"),
+            "name: measurements\nid: https://example.org/measurements\n\
+             default_range: float\nslots:\n  score: {}\n",
+        )
+        .unwrap();
+        let root_path = dir.join("root.yaml");
+        std::fs::write(
+            &root_path,
+            "name: root\nid: https://example.org/root\ndefault_range: string\n\
+             imports:\n  - measurements\nslots:\n  title: {}\n",
+        )
+        .unwrap();
+
+        let schema = load_schema(&root_path, &registry).expect("load");
+        assert_eq!(
+            schema.slots["title"].range.as_deref(),
+            Some("string"),
+            "the root's rangeless slot takes the root's default"
+        );
+        assert_eq!(
+            schema.slots["score"].range.as_deref(),
+            Some("float"),
+            "the import's rangeless slot takes the import's own default, not the root's"
+        );
+    }
+
+    #[test]
+    fn an_import_without_a_default_range_keeps_its_slots_rangeless() {
+        // A file that declares no `default_range` gets none — the root's
+        // default must not leak across the merge into slots the import
+        // deliberately left untyped.
+        let registry = FormatRegistry::with_defaults();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::write(
+            dir.join("untyped.yaml"),
+            "name: untyped\nid: https://example.org/untyped\nslots:\n  note: {}\n",
+        )
+        .unwrap();
+        let root_path = dir.join("root.yaml");
+        std::fs::write(
+            &root_path,
+            "name: root\nid: https://example.org/root\ndefault_range: string\n\
+             imports:\n  - untyped\nslots:\n  title: {}\n",
+        )
+        .unwrap();
+
+        let schema = load_schema(&root_path, &registry).expect("load");
+        assert_eq!(
+            schema.slots["note"].range, None,
+            "no default in the declaring file means no range, whatever the root declares"
         );
     }
 

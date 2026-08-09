@@ -1923,6 +1923,37 @@ mod tests {
         })
     }
 
+    /// A top-level slot typed only by `default_range` still emits its
+    /// `rdfs:range`: loading materializes the default into the slot
+    /// definition, and the writer emits what the definition carries —
+    /// whichever path (top-level `slots:` or class attributes) a property
+    /// arrives by.
+    #[test]
+    fn a_default_ranged_top_level_slot_emits_its_range() {
+        let mut schema = SchemaDefinition::new("s");
+        schema.id = Some("https://example.org/s".to_string());
+        schema.default_range = Some("string".to_string());
+        schema
+            .slots
+            .insert("question".to_string(), SlotDefinition::new("question"));
+        let mut item = ClassDefinition::new("Item");
+        item.slots.push("question".to_string());
+        schema.classes.insert("Item".to_string(), item);
+        crate::linkml_resolve::materialize_default_range(&mut schema);
+
+        let graph = build_rdf_graph(&schema).expect("build graph");
+        let ranges = objects_of(
+            &graph,
+            "https://example.org/s#question",
+            "http://www.w3.org/2000/01/rdf-schema#range",
+        );
+        assert_eq!(
+            ranges,
+            vec!["http://www.w3.org/2001/XMLSchema#string".to_string()],
+            "the defaulted slot should carry xsd:string"
+        );
+    }
+
     /// The object IRIs of every `subject predicate ?o` triple.
     fn objects_of(graph: &FastGraph, subject: &str, predicate: &str) -> Vec<String> {
         use sophia::api::graph::Graph;

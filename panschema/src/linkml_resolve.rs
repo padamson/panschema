@@ -141,6 +141,36 @@ pub fn resolve_effective_slots_with_provenance(
     resolve_slots_walk(class, schema, &mut visited)
 }
 
+/// Fill the schema's `default_range` into its own rangeless slot
+/// definitions — top-level `slots:` entries and every class's inline
+/// `attributes`. Runs once per schema file at load time, *before* imports
+/// merge: LinkML scopes `default_range` to the declaring schema, so each
+/// file's default lands on exactly the slots that file declares, and no
+/// later consumer — resolver, writer, or validator — needs to know
+/// defaults exist.
+///
+/// A slot that states anything more specific is left alone: an explicit
+/// `range`, an `any_of` union, or `maximum_cardinality: 0` (the author
+/// saying "no value", where a range would contradict the induced view).
+pub fn materialize_default_range(schema: &mut SchemaDefinition) {
+    let Some(default) = schema.default_range.clone() else {
+        return;
+    };
+    let fill = |slot: &mut SlotDefinition| {
+        if slot.range.is_none() && slot.any_of.is_empty() && slot.maximum_cardinality != Some(0) {
+            slot.range = Some(default.clone());
+        }
+    };
+    for slot in schema.slots.values_mut() {
+        fill(slot);
+    }
+    for class in schema.classes.values_mut() {
+        for attribute in class.attributes.values_mut() {
+            fill(attribute);
+        }
+    }
+}
+
 /// Recursive worker for [`resolve_effective_slots`]. `visited` holds the
 /// classes currently on the recursion stack so a circular `is_a` or `mixin`
 /// chain terminates (silently dropping the would-be-cyclic contribution)
@@ -771,6 +801,121 @@ mod tests {
                 .as_deref(),
             Some("Parent"),
             "a refined inherited slot still points at its origin"
+        );
+    }
+
+    /// Materializing `default_range` fills exactly the slots that state
+    /// nothing more specific: rangeless top-level `slots:` and class
+    /// `attributes` gain the default, while an explicit `range`, an
+    /// `any_of` union, and a `maximum_cardinality: 0` "no value" slot are
+    /// all left alone. Once materialized, the resolver's induced view
+    /// carries the default like any declared range.
+    #[test]
+    fn materializing_the_default_range_fills_only_slots_that_state_nothing() {
+        let mut schema = SchemaDefinition::new("s");
+        schema.default_range = Some("string".to_string());
+        schema
+            .slots
+            .insert("title".into(), SlotDefinition::new("title"));
+        let mut class = ClassDefinition::new("Item");
+        class
+            .attributes
+            .insert("question".into(), SlotDefinition::new("question"));
+        let mut explicit = SlotDefinition::new("count");
+        explicit.range = Some("integer".to_string());
+        class.attributes.insert("count".into(), explicit);
+        let mut union = SlotDefinition::new("either");
+        union.any_of = vec![SlotDefinition::new("a"), SlotDefinition::new("b")];
+        class.attributes.insert("either".into(), union);
+        let mut no_value = SlotDefinition::new("legacy");
+        no_value.maximum_cardinality = Some(0);
+        class.attributes.insert("legacy".into(), no_value);
+        schema.classes.insert("Item".into(), class);
+
+        materialize_default_range(&mut schema);
+
+        assert_eq!(
+            schema.slots["title"].range.as_deref(),
+            Some("string"),
+            "a rangeless top-level slot takes the default"
+        );
+        let item = &schema.classes["Item"];
+        assert_eq!(
+            item.attributes["question"].range.as_deref(),
+            Some("string"),
+            "a rangeless attribute takes the default"
+        );
+        assert_eq!(
+            item.attributes["count"].range.as_deref(),
+            Some("integer"),
+            "an explicit range is untouched"
+        );
+        assert!(
+            item.attributes["either"].range.is_none(),
+            "an any_of union does not gain a scalar range"
+        );
+        assert!(
+            item.attributes["legacy"].range.is_none(),
+            "a no-value slot does not gain a range its induced view denies"
+        );
+
+        let resolved = resolve_effective_slots_with_provenance(&schema.classes["Item"], &schema);
+        assert_eq!(
+            resolved["question"].induced.ranges,
+            vec!["string".to_string()],
+            "the induced view carries the materialized default like any declared range"
+        );
+    }
+
+    /// Without a `default_range`, materialization is a no-op — the default
+    /// is opt-in, not an implicit string.
+    #[test]
+    fn no_default_range_leaves_a_rangeless_slot_alone() {
+        let mut schema = SchemaDefinition::new("s");
+        let mut class = ClassDefinition::new("Item");
+        class
+            .attributes
+            .insert("question".into(), SlotDefinition::new("question"));
+        schema.classes.insert("Item".into(), class);
+
+        materialize_default_range(&mut schema);
+
+        assert!(
+            schema.classes["Item"].attributes["question"]
+                .range
+                .is_none()
+        );
+    }
+
+    /// A slot whose `any_of` branches carry only facets (no `range:`)
+    /// resolves the same whether or not the schema declares a
+    /// `default_range` — an unrelated schema-level setting must not change
+    /// how an untouched slot renders or validates.
+    #[test]
+    fn a_facet_only_union_resolves_identically_with_and_without_a_default() {
+        let build = |default: Option<&str>| {
+            let mut schema = SchemaDefinition::new("s");
+            schema.default_range = default.map(str::to_string);
+            let mut class = ClassDefinition::new("Item");
+            let mut score = SlotDefinition::new("score");
+            score.range = Some("integer".to_string());
+            let mut low = SlotDefinition::new("low");
+            low.maximum_value = Some(5.0);
+            let mut sentinel = SlotDefinition::new("sentinel");
+            sentinel.minimum_value = Some(-1.0);
+            score.any_of = vec![low, sentinel];
+            class.attributes.insert("score".into(), score);
+            schema.classes.insert("Item".into(), class);
+            materialize_default_range(&mut schema);
+            resolve_effective_slots_with_provenance(&schema.classes["Item"], &schema)["score"]
+                .induced
+                .clone()
+        };
+
+        assert_eq!(
+            build(None),
+            build(Some("string")),
+            "declaring a default the slot never uses must not alter its induced view"
         );
     }
 

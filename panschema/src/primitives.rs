@@ -58,6 +58,57 @@ pub fn xsd_datatype_iri(name: &str) -> Option<String> {
     Some(format!("{xsd}{local}"))
 }
 
+/// The built-in primitive a range name ultimately denotes: the name itself
+/// when it is a built-in scalar (aliases canonicalized), the base of a
+/// custom `types:` entry's `typeof` chain, or — for a root type with no
+/// `typeof:` — the primitive whose lexical space its `uri:` names. `None`
+/// for classes, enums, unknown names, chains that never reach a primitive,
+/// and cycles — a caller that enforces typing must skip rather than guess.
+pub fn effective_primitive(
+    schema: &crate::linkml::SchemaDefinition,
+    range: &str,
+) -> Option<&'static str> {
+    let mut seen: Vec<&str> = Vec::new();
+    let mut current = range;
+    loop {
+        if let Some(p) = canonical_primitive(current) {
+            return Some(p);
+        }
+        if seen.contains(&current) {
+            return None;
+        }
+        seen.push(current);
+        let type_def = schema.types.get(current)?;
+        match type_def.typeof_.as_deref() {
+            Some(parent) => current = parent,
+            None => return type_def.uri.as_deref().and_then(primitive_for_datatype_uri),
+        }
+    }
+}
+
+/// The LinkML primitive whose lexical space an XSD datatype reference
+/// denotes — accepts a CURIE (`xsd:integer`) or an absolute IRI. `None`
+/// for datatypes with no primitive counterpart.
+fn primitive_for_datatype_uri(uri: &str) -> Option<&'static str> {
+    let local = uri.rsplit(['#', ':', '/']).next()?;
+    Some(match local {
+        "string" | "normalizedString" | "token" => "string",
+        "integer" | "int" | "long" | "short" | "byte" | "nonNegativeInteger"
+        | "positiveInteger" | "nonPositiveInteger" | "negativeInteger" | "unsignedLong"
+        | "unsignedInt" | "unsignedShort" | "unsignedByte" => "integer",
+        "float" => "float",
+        "double" => "double",
+        "decimal" => "decimal",
+        "boolean" => "boolean",
+        "date" => "date",
+        "dateTime" => "datetime",
+        "time" => "time",
+        "anyURI" => "uri",
+        "NCName" => "ncname",
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,6 +143,60 @@ mod tests {
     #[test]
     fn non_primitive_has_no_xsd_datatype() {
         assert_eq!(xsd_datatype_iri("Warehouse"), None);
+    }
+
+    #[test]
+    fn a_uri_only_type_resolves_to_the_primitive_its_datatype_names() {
+        // Pin every datatype→primitive mapping (as a CURIE, plus one absolute
+        // IRI) so dropping or misrouting an arm is caught, and pin that an
+        // unmapped datatype resolves to nothing rather than a guess.
+        use crate::linkml::{SchemaDefinition, TypeDefinition};
+        let type_with_uri = |uri: &str| {
+            let mut schema = SchemaDefinition::new("s");
+            let mut type_def = TypeDefinition::new("T");
+            type_def.uri = Some(uri.to_string());
+            schema.types.insert("T".to_string(), type_def);
+            schema
+        };
+        for (uri, primitive) in [
+            ("xsd:string", "string"),
+            ("xsd:normalizedString", "string"),
+            ("xsd:token", "string"),
+            ("xsd:integer", "integer"),
+            ("xsd:int", "integer"),
+            ("xsd:long", "integer"),
+            ("xsd:short", "integer"),
+            ("xsd:byte", "integer"),
+            ("xsd:nonNegativeInteger", "integer"),
+            ("xsd:positiveInteger", "integer"),
+            ("xsd:nonPositiveInteger", "integer"),
+            ("xsd:negativeInteger", "integer"),
+            ("xsd:unsignedLong", "integer"),
+            ("xsd:unsignedInt", "integer"),
+            ("xsd:unsignedShort", "integer"),
+            ("xsd:unsignedByte", "integer"),
+            ("xsd:float", "float"),
+            ("xsd:double", "double"),
+            ("xsd:decimal", "decimal"),
+            ("xsd:boolean", "boolean"),
+            ("xsd:date", "date"),
+            ("xsd:dateTime", "datetime"),
+            ("xsd:time", "time"),
+            ("xsd:anyURI", "uri"),
+            ("xsd:NCName", "ncname"),
+            ("http://www.w3.org/2001/XMLSchema#integer", "integer"),
+        ] {
+            assert_eq!(
+                effective_primitive(&type_with_uri(uri), "T"),
+                Some(primitive),
+                "wrong primitive for `{uri}`"
+            );
+        }
+        assert_eq!(
+            effective_primitive(&type_with_uri("xsd:hexBinary"), "T"),
+            None,
+            "a datatype with no primitive counterpart is never guessed at"
+        );
     }
 
     #[test]

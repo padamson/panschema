@@ -127,6 +127,34 @@ mod tests {
     const SH: &str = "http://www.w3.org/ns/shacl#";
     const EX: &str = "http://example.org/test";
 
+    /// A slot typed only by the schema's `default_range` still gets its
+    /// `sh:datatype` — loading materializes the default into the slot
+    /// definition, so the shapes check what the schema actually declares.
+    #[test]
+    fn a_default_ranged_slot_carries_its_datatype() {
+        let mut schema = SchemaDefinition::new("test");
+        schema.id = Some(EX.to_string());
+        schema.default_range = Some("string".to_string());
+        let mut item = ClassDefinition::new("Item");
+        item.class_uri = Some(format!("{EX}#Item"));
+        item.attributes
+            .insert("question".to_string(), SlotDefinition::new("question"));
+        schema.classes.insert("Item".to_string(), item);
+        crate::linkml_resolve::materialize_default_range(&mut schema);
+
+        let store = render_to_store(&schema);
+        assert!(
+            ask(
+                &store,
+                &format!(
+                    "PREFIX sh: <{SH}> ASK {{ ?ps sh:path <{EX}#question> ; \
+                     sh:datatype <http://www.w3.org/2001/XMLSchema#string> }}"
+                )
+            ),
+            "the defaulted slot's shape should carry xsd:string"
+        );
+    }
+
     /// An enum-ranged slot's shape closes the value set with `sh:in`,
     /// listing the value IRIs exactly as the A-box asserts them — the
     /// derived `{enumIRI}/{key}` form, or the `meaning:` IRI when one is

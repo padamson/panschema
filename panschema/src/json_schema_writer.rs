@@ -150,11 +150,7 @@ fn slot_value_schema(slot: &SlotDefinition, schema: &SchemaDefinition) -> Value 
         return json!({ "anyOf": branches });
     }
 
-    let range = slot
-        .range
-        .as_deref()
-        .or(schema.default_range.as_deref())
-        .unwrap_or("string");
+    let range = slot.range.as_deref().unwrap_or("string");
 
     // Enum range → the permissible values as a JSON `enum` (BTreeMap key order,
     // so the list is deterministic).

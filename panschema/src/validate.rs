@@ -53,6 +53,20 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
         .filter_map(|i| i.types.first().map(|t| (i.id.as_str(), t.as_str())))
         .collect();
 
+    // Slot resolution depends on the class, not the record — resolve each
+    // class that appears in the set once, however many records instantiate it.
+    let mut resolved_by_class: std::collections::BTreeMap<&str, _> =
+        std::collections::BTreeMap::new();
+    for inst in &set.instances {
+        if let Some(class_name) = inst.types.first()
+            && let Some(class) = schema.classes.get(class_name)
+        {
+            resolved_by_class
+                .entry(class_name.as_str())
+                .or_insert_with(|| resolve_effective_slots_with_provenance(class, schema));
+        }
+    }
+
     for inst in &set.instances {
         // A record's class is the collection slot's range that produced it.
         let Some(class_name) = inst.types.first() else {
@@ -61,7 +75,7 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
         let Some(class) = schema.classes.get(class_name) else {
             continue;
         };
-        for (slot_name, rs) in &resolve_effective_slots_with_provenance(class, schema) {
+        for (slot_name, rs) in &resolved_by_class[class_name.as_str()] {
             let slot = &rs.definition;
             // A union slot has several range targets and no scalar `range:`.
             let ranges = &rs.induced.ranges;
@@ -127,6 +141,20 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
                 },
                 None => None,
             };
+            // The primitive kind each range target demands, resolved once per
+            // slot. Kind-checking applies only when *every* target resolves
+            // to a known primitive: enums have their own check, class ranges
+            // are the reference machinery's, and an unresolvable name is the
+            // dangling diagnostic's — never a typing guess here.
+            let expected_primitives: Vec<&'static str> = if range_enum.is_none() {
+                ranges
+                    .iter()
+                    .map(|r| crate::primitives::effective_primitive(schema, r))
+                    .collect::<Option<Vec<_>>>()
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
             for value in inst
                 .slot_values
                 .iter()
@@ -168,6 +196,38 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
                         continue;
                     }
                 };
+                // Scalar kind vs the range's primitive(s), matching the JSON
+                // Schema this same schema projects: `type: string` there
+                // rejects `42`, so the native validator must too. A union
+                // conforms when any branch's kind matches, mirroring `anyOf`.
+                if !expected_primitives.is_empty()
+                    && !expected_primitives.iter().any(|p| kind_matches(p, scalar))
+                {
+                    let shown = scalar_to_display(scalar);
+                    let kind = match scalar {
+                        ScalarValue::String(_) => "a string",
+                        ScalarValue::Integer(_) => "an integer",
+                        ScalarValue::Float(_) => "a float",
+                        ScalarValue::Boolean(_) => "a boolean",
+                    };
+                    let expected = match (ranges.as_slice(), expected_primitives.as_slice()) {
+                        ([range], [primitive]) => format!(
+                            "the slot's range `{range}` expects {}",
+                            with_article(primitive)
+                        ),
+                        _ => format!(
+                            "none of the slot's ranges `{}` permit it",
+                            ranges.join("`, `")
+                        ),
+                    };
+                    push(format!(
+                        "slot `{slot_name}` (class `{class_name}`) value `{shown}` is {kind}, \
+                         but {expected}"
+                    ));
+                    // A wrong-kinded value can't be meaningfully pattern- or
+                    // bounds-checked; one problem yields one report.
+                    continue;
+                }
                 if let Some((enum_name, enum_def)) = range_enum
                     && !enum_permits(enum_def, scalar)
                 {
@@ -478,6 +538,33 @@ fn enum_permits(enum_def: &EnumDefinition, scalar: &ScalarValue) -> bool {
             .any(|pv| pv.text == value)
 }
 
+/// Whether a scalar's kind satisfies a primitive range, with JSON Schema
+/// number semantics: an integer is a valid float/double/decimal, and an
+/// integral float (`5.0`) is a valid integer. Everything outside the numeric
+/// and boolean families — strings, dates, URIs — is string-kinded.
+fn kind_matches(primitive: &str, scalar: &ScalarValue) -> bool {
+    match primitive {
+        "integer" => match scalar {
+            ScalarValue::Integer(_) => true,
+            ScalarValue::Float(f) => f.fract() == 0.0,
+            _ => false,
+        },
+        "float" | "double" | "decimal" => {
+            matches!(scalar, ScalarValue::Integer(_) | ScalarValue::Float(_))
+        }
+        "boolean" => matches!(scalar, ScalarValue::Boolean(_)),
+        _ => matches!(scalar, ScalarValue::String(_)),
+    }
+}
+
+/// The primitive name with its indefinite article — "an integer", "a float".
+fn with_article(noun: &str) -> String {
+    match noun.chars().next() {
+        Some('a' | 'e' | 'i' | 'o' | 'u') => format!("an {noun}"),
+        _ => format!("a {noun}"),
+    }
+}
+
 /// The numeric value of a scalar for bound-checking, or `None` for a
 /// non-numeric scalar (a string/bool where a bound was declared).
 fn numeric(scalar: &ScalarValue) -> Option<f64> {
@@ -523,11 +610,232 @@ classes:
 ";
 
     fn schema() -> SchemaDefinition {
-        serde_norway::from_str(SCHEMA).expect("parse schema")
+        let mut schema: SchemaDefinition = serde_norway::from_str(SCHEMA).expect("parse schema");
+        // Mirror the load path: `default_range` is materialized before any
+        // consumer sees the schema.
+        crate::linkml_resolve::materialize_default_range(&mut schema);
+        schema
     }
 
     fn data(yaml: &str) -> Value {
         serde_norway::from_str(yaml).expect("parse data")
+    }
+
+    /// The float family follows number semantics: an integer is a valid
+    /// float/double/decimal, exactly as the projected JSON Schema accepts
+    /// it — the native validator and the emitted contract must agree.
+    #[test]
+    fn an_integer_at_a_float_slot_conforms() {
+        let schema: crate::linkml::SchemaDefinition = serde_norway::from_str(
+            "name: s\nclasses:\n  Item:\n    tree_root: true\n    attributes:\n      id:\n        identifier: true\n      ratio:\n        range: float\n",
+        )
+        .expect("parse schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: x1\nratio: 3\n").expect("parse data");
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        let violations = validate_instances(&schema, &set);
+        assert!(
+            violations.is_empty(),
+            "an integer is a valid number; got: {:?}",
+            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+        );
+    }
+
+    /// An explicit scalar range is enforced the same way the default is —
+    /// a string slot rejects an integer whichever way it was typed.
+    #[test]
+    fn an_integer_at_an_explicitly_string_slot_is_a_violation() {
+        let schema: crate::linkml::SchemaDefinition = serde_norway::from_str(
+            "name: s\nclasses:\n  Item:\n    tree_root: true\n    attributes:\n      id:\n        identifier: true\n        range: string\n      question:\n        range: string\n",
+        )
+        .expect("parse schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: x1\nquestion: 42\n").expect("parse data");
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        let violations = validate_instances(&schema, &set);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.to_string().contains("question")),
+            "explicit ranges are typed too; got: {:?}",
+            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+        );
+    }
+
+    /// An integral float satisfies an `integer` range — `5.0` denotes the
+    /// integer five, exactly as the projected JSON Schema's `type: integer`
+    /// accepts it; only a fractional value is wrong-kinded.
+    #[test]
+    fn an_integral_float_at_an_integer_slot_conforms() {
+        let schema: crate::linkml::SchemaDefinition = serde_norway::from_str(
+            "name: s\nclasses:\n  Item:\n    tree_root: true\n    attributes:\n      id:\n        identifier: true\n      count:\n        range: integer\n",
+        )
+        .expect("parse schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: x1\ncount: 5.0\n").expect("parse data");
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        let violations = validate_instances(&schema, &set);
+        assert!(
+            violations.is_empty(),
+            "5.0 denotes an integer; got: {:?}",
+            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+        );
+
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: x1\ncount: 5.5\n").expect("parse data");
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        let violations = validate_instances(&schema, &set);
+        assert!(
+            violations.iter().any(|v| v.to_string().contains("count")),
+            "a fractional value at an integer slot is a violation; got: {:?}",
+            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+        );
+    }
+
+    /// A union of scalar ranges is kind-checked against every branch: a
+    /// value no branch permits is a violation, matching the `anyOf` the
+    /// projected JSON Schema emits for the same slot.
+    #[test]
+    fn a_wrong_kinded_value_at_a_scalar_union_is_a_violation() {
+        let schema: crate::linkml::SchemaDefinition = serde_norway::from_str(
+            "name: s\nclasses:\n  Item:\n    tree_root: true\n    attributes:\n      id:\n        identifier: true\n      flag:\n        any_of:\n          - range: integer\n          - range: boolean\n",
+        )
+        .expect("parse schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: x1\nflag: hello\n").expect("parse data");
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        let violations = validate_instances(&schema, &set);
+        assert!(
+            violations.iter().any(|v| {
+                let s = v.to_string();
+                s.contains("flag") && s.contains("integer") && s.contains("boolean")
+            }),
+            "no branch permits a string, and the report names the branches; got: {:?}",
+            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+        );
+
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: x1\nflag: true\n").expect("parse data");
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        let violations = validate_instances(&schema, &set);
+        assert!(
+            violations.is_empty(),
+            "a value one branch permits conforms; got: {:?}",
+            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+        );
+    }
+
+    /// The kind-mismatch report is grammatical for every primitive: the
+    /// expected range takes its own indefinite article.
+    #[test]
+    fn the_kind_report_gives_the_expected_primitive_its_article() {
+        let schema: crate::linkml::SchemaDefinition = serde_norway::from_str(
+            "name: s\nclasses:\n  Item:\n    tree_root: true\n    attributes:\n      id:\n        identifier: true\n      count:\n        range: integer\n",
+        )
+        .expect("parse schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: x1\ncount: hello\n").expect("parse data");
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        let violations = validate_instances(&schema, &set);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.to_string().contains("expects an integer")),
+            "\"an integer\", not \"a integer\"; got: {:?}",
+            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+        );
+    }
+
+    /// A root `types:` entry that declares its lexical space via `uri:`
+    /// alone (no `typeof:`) enforces that space — the idiomatic spelling
+    /// of a custom root type must not silently escape the kind check.
+    #[test]
+    fn a_uri_only_root_type_enforces_its_lexical_space() {
+        let schema: crate::linkml::SchemaDefinition = serde_norway::from_str(
+            "name: s\ntypes:\n  Question:\n    uri: xsd:string\nclasses:\n  Item:\n    tree_root: true\n    attributes:\n      id:\n        identifier: true\n      question:\n        range: Question\n",
+        )
+        .expect("parse schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: x1\nquestion: 42\n").expect("parse data");
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        let violations = validate_instances(&schema, &set);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.to_string().contains("question")),
+            "xsd:string via `uri:` types the slot; got: {:?}",
+            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+        );
+    }
+
+    /// A string value at a bounded string-kinded slot (a `date` with a
+    /// numeric bound) reports the impossible bound rather than panicking
+    /// or conforming — the bound is the schema's mistake to surface.
+    #[test]
+    fn a_bounded_non_numeric_slot_reports_the_impossible_bound() {
+        let schema: crate::linkml::SchemaDefinition = serde_norway::from_str(
+            "name: s\nclasses:\n  Item:\n    tree_root: true\n    attributes:\n      id:\n        identifier: true\n      when:\n        range: date\n        minimum_value: 5\n",
+        )
+        .expect("parse schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: x1\nwhen: 2024-01-01\n").expect("parse data");
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        let violations = validate_instances(&schema, &set);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.to_string().contains("is not numeric")),
+            "the bogus bound is reported; got: {:?}",
+            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+        );
+    }
+
+    /// A custom `types:` entry types through its `typeof` chain, and a
+    /// range that resolves to no known primitive is never guessed at.
+    #[test]
+    fn a_custom_type_enforces_its_base_and_an_unknown_range_is_skipped() {
+        let schema: crate::linkml::SchemaDefinition = serde_norway::from_str(
+            "name: s\ntypes:\n  Score:\n    typeof: integer\nclasses:\n  Item:\n    tree_root: true\n    attributes:\n      id:\n        identifier: true\n      score:\n        range: Score\n      free:\n        range: Mystery\n",
+        )
+        .expect("parse schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: x1\nscore: not a number\nfree: 12\n").expect("parse data");
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        let violations = validate_instances(&schema, &set);
+        assert!(
+            violations.iter().any(|v| v.to_string().contains("score")),
+            "the typeof chain resolves Score to integer; got: {:?}",
+            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+        );
+        assert!(
+            !violations.iter().any(|v| v.to_string().contains("free")),
+            "an unresolvable range is the dangling diagnostic's problem, \
+             not a typing guess; got: {:?}",
+            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+        );
+    }
+
+    /// The schema's `default_range` types every slot that states no range
+    /// of its own (materialized at load), so data violating the default is
+    /// a violation — not a silent pass.
+    #[test]
+    fn a_value_violating_the_default_range_is_a_violation() {
+        let mut schema: crate::linkml::SchemaDefinition = serde_norway::from_str(
+            "name: s\ndefault_range: string\nclasses:\n  Item:\n    tree_root: true\n    attributes:\n      id:\n        identifier: true\n        range: string\n      question:\n        required: true\n",
+        )
+        .expect("parse schema");
+        crate::linkml_resolve::materialize_default_range(&mut schema);
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: x1\nquestion: 42\n").expect("parse data");
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        let violations = validate_instances(&schema, &set);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.to_string().contains("question")),
+            "an integer at a string-defaulted slot must be reported; got: {:?}",
+            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -950,10 +1258,17 @@ enums:
     }
 
     #[test]
-    fn non_numeric_value_at_a_bounded_slot_is_reported_not_panicked() {
+    fn a_wrong_kinded_value_at_a_bounded_slot_yields_one_report() {
+        // The kind check fires and suppresses the bounds check — a string at
+        // a bounded float slot is one problem, reported once, not a panic
+        // and not a double report.
         let v = value_violations("items:\n  - id: a\n    strength: high\n");
-        assert_eq!(v.len(), 1);
-        assert!(v[0].detail.contains("not numeric"), "got: {}", v[0].detail);
+        assert_eq!(v.len(), 1, "one problem, one report; got: {v:?}");
+        assert!(
+            v[0].detail.contains("expects a float"),
+            "the kind mismatch names the declared range; got: {}",
+            v[0].detail
+        );
     }
 
     /// Conditional-requirement rules, in the shape a consumer schema actually
