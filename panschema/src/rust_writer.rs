@@ -953,9 +953,12 @@ fn type_for_range(
     schema: &SchemaDefinition,
     roles: &BTreeMap<String, ClassRole>,
 ) -> String {
-    // Resolve aliases (`int`/`bool`/`str`) through the shared primitive table;
-    // a non-primitive keeps its original name for the class/enum/trait lookup.
-    let canonical = match crate::primitives::canonical_primitive(range) {
+    // Resolve through the shared primitive table — aliases, a custom
+    // `types:` entry's `typeof` chain, a root type's `uri:` — so the field
+    // type agrees with the primitive every other projection resolves the
+    // same range to; a non-primitive keeps its original name for the
+    // class/enum/trait lookup.
+    let canonical = match crate::primitives::effective_primitive(schema, range) {
         Some(p) => p,
         None => range,
     };
@@ -981,11 +984,14 @@ fn type_for_range(
                 } else {
                     "String".to_string()
                 }
-            } else if schema.classes.contains_key(other)
-                || schema.enums.contains_key(other)
-                || schema.types.contains_key(other)
-            {
+            } else if schema.classes.contains_key(other) || schema.enums.contains_key(other) {
                 type_ident(other).into_owned()
+            } else if schema.types.contains_key(other) {
+                // A custom type that resolves to no primitive: the generated
+                // code declares no alias for it, so its name would not
+                // compile as a field type — `String` is the widest lexical
+                // carrier, matching the Postgres writer's `text` fallback.
+                "String".to_string()
             } else {
                 // Unresolved ref. Preserve verbatim — could be defined in
                 // an imported schema (a future writer pass would surface
@@ -1704,6 +1710,59 @@ mod tests {
             type_for_range("datetime", &schema, &roles),
             "chrono::DateTime<chrono::Utc>"
         );
+    }
+
+    /// A range name defined as both a class (or enum) and a `types:` entry
+    /// maps to the class/enum ident — the generated struct or enum is the
+    /// declaration the field can actually reference, so it outranks the
+    /// custom-type `String` fallback.
+    #[test]
+    fn a_name_that_is_both_class_and_type_maps_to_the_class() {
+        use crate::linkml::TypeDefinition;
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .classes
+            .insert("Foo".to_string(), ClassDefinition::new("Foo"));
+        schema
+            .types
+            .insert("Foo".to_string(), TypeDefinition::new("Foo"));
+        let mut bar = crate::linkml::EnumDefinition::new("Bar");
+        bar.permissible_values
+            .insert("a".to_string(), crate::linkml::PermissibleValue::new("a"));
+        schema.enums.insert("Bar".to_string(), bar);
+        schema
+            .types
+            .insert("Bar".to_string(), TypeDefinition::new("Bar"));
+
+        let roles = compute_class_roles(&schema);
+        assert_eq!(type_for_range("Foo", &schema, &roles), "Foo");
+        assert_eq!(type_for_range("Bar", &schema, &roles), "Bar");
+    }
+
+    /// A custom `types:` entry maps to the Rust type of its base primitive
+    /// — through a `typeof` chain or a root type's `uri:` — because the
+    /// generated code declares no alias for the custom name, so emitting it
+    /// verbatim would reference a type that does not exist. A `types:`
+    /// entry that resolves to no primitive falls back to `String`, keeping
+    /// the output compilable.
+    #[test]
+    fn type_for_range_resolves_a_custom_type_to_its_base() {
+        use crate::linkml::TypeDefinition;
+        let mut schema = SchemaDefinition::new("s");
+        let mut score = TypeDefinition::new("Score");
+        score.typeof_ = Some("integer".to_string());
+        schema.types.insert("Score".to_string(), score);
+        let mut question = TypeDefinition::new("Question");
+        question.uri = Some("xsd:string".to_string());
+        schema.types.insert("Question".to_string(), question);
+        schema
+            .types
+            .insert("Opaque".to_string(), TypeDefinition::new("Opaque"));
+
+        let roles = BTreeMap::new();
+        assert_eq!(type_for_range("Score", &schema, &roles), "i64");
+        assert_eq!(type_for_range("Question", &schema, &roles), "String");
+        assert_eq!(type_for_range("Opaque", &schema, &roles), "String");
     }
 
     // ----- supports_default -------------------------------------------

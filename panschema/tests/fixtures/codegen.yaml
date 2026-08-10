@@ -43,6 +43,19 @@ enums:
         text: strategic
         description: A strategic move.
 
+types:
+  # Custom scalar types carry no generated alias, so a field ranging over
+  # one compiles as its base primitive: a `typeof` chain resolves to `i64`
+  # here, and a root type declaring only its `uri:` resolves to `String`.
+  Score:
+    name: Score
+    description: A bounded integer score.
+    typeof: integer
+  FreeText:
+    name: FreeText
+    description: A root type declared by its XSD datatype alone.
+    uri: xsd:string
+
 classes:
   # ---------------------------------------------------------------
   # Inheritance: `Activity` is named as an is_a parent, so it renders
@@ -207,6 +220,16 @@ classes:
         description: Boolean flag, defaulting to false.
         range: boolean
         ifabsent: "False"
+      # Custom-type ranges: the field types are the base primitives the
+      # `types:` entries resolve to (`Option<i64>`, `Option<String>`).
+      score:
+        name: score
+        description: A custom type resolved through its typeof chain.
+        range: Score
+      note:
+        name: note
+        description: A custom type resolved through its declared uri.
+        range: FreeText
 
   # ---------------------------------------------------------------
   # Keyword-escaping coverage at the field level: slots named with Rust

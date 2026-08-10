@@ -377,6 +377,10 @@ fn main() {
         prefix: "db".to_string(),
         enabled: false,
         verbose: true,
+        // Custom-type ranges compile as their base primitives: a `typeof`
+        // chain as `i64`, a `uri:`-declared root type as `String`.
+        score: Some(7),
+        note: Some("free text".to_string()),
     };
     let cfg_json = serde_json::to_string(&cfg).expect("serialize ServiceConfig");
     let _cfg_back: codegen::ServiceConfig =

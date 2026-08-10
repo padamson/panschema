@@ -792,7 +792,7 @@ fn sql_type_for_slot_range(range: Option<&str>, schema: &SchemaDefinition) -> St
     if schema.enums.contains_key(range) {
         quote_ident(&crate::casing::snake_case(range))
     } else {
-        sql_type_for_range(range).to_string()
+        sql_type_for_range(range, schema).to_string()
     }
 }
 
@@ -803,11 +803,12 @@ fn sql_type_for_slot_range(range: Option<&str>, schema: &SchemaDefinition) -> St
 /// `nodeidentifier` all resolve to `"text"` — the same value the `_`
 /// fallback below produces for any other unrecognized name — so they're
 /// covered by the fallback rather than listed as their own match arm.
-fn sql_type_for_range(range: &str) -> &'static str {
-    // Resolve aliases (`int`/`bool`/`str`) through the shared primitive table
-    // so every writer agrees on what a primitive is; non-primitives fall
-    // through to `text`.
-    let canonical = match crate::primitives::canonical_primitive(range) {
+fn sql_type_for_range(range: &str, schema: &SchemaDefinition) -> &'static str {
+    // Resolve through the shared primitive table — aliases, a custom
+    // `types:` entry's `typeof` chain, a root type's `uri:` — so this
+    // column agrees with the primitive every other projection resolves the
+    // same range to; non-primitives fall through to `text`.
+    let canonical = match crate::primitives::effective_primitive(schema, range) {
         Some(p) => p,
         None => range,
     };
@@ -847,6 +848,30 @@ mod tests {
     #[test]
     fn postgres_writer_format_id_is_postgres() {
         assert_eq!(PostgresWriter::new().format_id(), "postgres");
+    }
+
+    /// A custom `types:` entry maps to the column type of its base
+    /// primitive — through a `typeof` chain or a root type's `uri:` — so
+    /// the column agrees with what RDF, SHACL, JSON Schema, and the
+    /// validator all resolve the same range to. A `types:` entry that
+    /// resolves to no primitive keeps the `text` fallback.
+    #[test]
+    fn a_custom_type_column_takes_its_base_primitive_type() {
+        use crate::linkml::TypeDefinition;
+        let mut schema = SchemaDefinition::new("s");
+        let mut score = TypeDefinition::new("Score");
+        score.typeof_ = Some("integer".to_string());
+        schema.types.insert("Score".to_string(), score);
+        let mut question = TypeDefinition::new("Question");
+        question.uri = Some("xsd:string".to_string());
+        schema.types.insert("Question".to_string(), question);
+        schema
+            .types
+            .insert("Opaque".to_string(), TypeDefinition::new("Opaque"));
+
+        assert_eq!(sql_type_for_slot_range(Some("Score"), &schema), "integer");
+        assert_eq!(sql_type_for_slot_range(Some("Question"), &schema), "text");
+        assert_eq!(sql_type_for_slot_range(Some("Opaque"), &schema), "text");
     }
 
     /// The writer owns its full gap story through one surface, so every
