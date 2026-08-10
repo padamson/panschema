@@ -270,9 +270,11 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
             version.as_str(),
         )?;
 
-        // owl:versionIRI
+        // owl:versionIRI — one separator whichever way the `id` is spelled
+        // (a slash-ended and a bare `id:` are both legal LinkML, and an
+        // empty path segment would make it a different resource).
         if let Some(ref id) = schema.id {
-            let version_iri = make_iri(&format!("{}/{}", id, version))?;
+            let version_iri = make_iri(&format!("{}/{}", id.trim_end_matches('/'), version))?;
             let owl_version_iri = owl
                 .get("versionIRI")
                 .map_err(|e| IoError::Parse(e.to_string()))?;
@@ -1921,6 +1923,32 @@ mod tests {
                 && t.p().iri().is_some_and(|i| i.as_str() == predicate)
                 && t.o().iri().is_some_and(|i| i.as_str() == object)
         })
+    }
+
+    /// The `owl:versionIRI` joins the schema `id` and version with exactly
+    /// one slash, whichever way the `id` is spelled — an empty path segment
+    /// is significant in a URI, so `…/wine//0.2.0` and `…/wine/0.2.0` are
+    /// different resources and anything resolving or joining on the version
+    /// IRI would miss.
+    #[test]
+    fn version_iri_joins_with_a_single_slash_whatever_the_id_spelling() {
+        let version_iri_for = |id: &str| {
+            let mut schema = SchemaDefinition::new("wine");
+            schema.id = Some(id.to_string());
+            schema.version = Some("0.2.0".to_string());
+            let graph = build_rdf_graph(&schema).expect("build graph");
+            objects_of(&graph, id, "http://www.w3.org/2002/07/owl#versionIRI")
+        };
+        assert_eq!(
+            version_iri_for("https://example.org/wine/"),
+            vec!["https://example.org/wine/0.2.0".to_string()],
+            "a slash-ended id must not yield a doubled slash"
+        );
+        assert_eq!(
+            version_iri_for("https://example.org/wine"),
+            vec!["https://example.org/wine/0.2.0".to_string()],
+            "a bare id gains the one separator"
+        );
     }
 
     /// A top-level slot typed only by `default_range` still emits its
