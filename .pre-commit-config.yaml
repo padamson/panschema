@@ -64,15 +64,9 @@ repos:
         types: [rust]
         pass_filenames: false
 
-      # Same feature set as the two hooks above so it reuses their build.
-      - id: cargo-doctest
-        name: cargo test --doc
-        description: Run documentation tests
-        entry: cargo test --doc --workspace --features panschema/dev
-        language: system
-        types: [rust]
-        pass_filenames: false
-
+      # Doctests deliberately run in CI only (test.yml): they are a third
+      # full compilation mode for a test class that changes rarely, and
+      # the commit gate already runs clippy + the full nextest suite.
       - id: cargo-audit
         name: cargo audit
         description: Check dependencies for known vulnerabilities

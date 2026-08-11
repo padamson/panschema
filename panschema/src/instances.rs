@@ -326,13 +326,30 @@ impl InstanceSet {
             // Class-ranged container slots hold instance records; the
             // container's scalar attributes (a catalog title, a
             // description) describe the dataset itself and surface as its
-            // metadata rather than vanishing.
+            // metadata rather than vanishing. A *list* of scalars (a
+            // multivalued scalar slot on the root) is neither a collection
+            // of records nor a single metadata scalar — it replays through
+            // the record builder like any record's values, and shows in
+            // the metadata as the joined list.
             if schema.classes.contains_key(&range) {
                 let ids = loader.collect_collection(&range, value);
                 contained.push((slot_name.to_string(), ids));
             } else if let Some(scalar) = scalar_value(value) {
                 metadata.push((slot_name.to_string(), scalar_to_display(&scalar)));
                 root_fields.insert(key.clone(), value.clone());
+            } else if let Some(items) = value.as_sequence() {
+                let scalars: Vec<ScalarValue> = items.iter().filter_map(scalar_value).collect();
+                if scalars.len() == items.len() && !scalars.is_empty() {
+                    metadata.push((
+                        slot_name.to_string(),
+                        scalars
+                            .iter()
+                            .map(scalar_to_display)
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ));
+                    root_fields.insert(key.clone(), value.clone());
+                }
             }
         }
 
@@ -1392,6 +1409,86 @@ classes:
             "https://example.org/catalog/".to_string(),
         );
         schema
+    }
+
+    /// A tree-root container's multivalued scalar slot keeps its values:
+    /// they land on the root record like any record's, so they render and
+    /// the validator sees them — a list is neither a collection of records
+    /// nor a single metadata scalar, and must not fall between the two.
+    #[test]
+    fn a_container_multivalued_scalar_slot_keeps_its_values() {
+        let mut schema = SchemaDefinition::new("s");
+        let mut root = ClassDefinition::new("Root");
+        root.tree_root = true;
+        let mut id = SlotDefinition::new("id");
+        id.identifier = true;
+        root.attributes.insert("id".to_string(), id);
+        let mut keywords = SlotDefinition::new("keywords");
+        keywords.multivalued = true;
+        keywords.range = Some("string".to_string());
+        root.attributes.insert("keywords".to_string(), keywords);
+        schema.classes.insert("Root".to_string(), root);
+
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: r1\nkeywords: [alpha, beta]\n").unwrap();
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        let root_inst = set
+            .instances
+            .iter()
+            .find(|i| i.id == "r1")
+            .expect("the identified root emits as a record");
+        let keyword_values: Vec<String> = root_inst
+            .slot_values
+            .iter()
+            .find(|sv| sv.slot == "keywords")
+            .map(|sv| {
+                sv.values
+                    .iter()
+                    .filter_map(|v| match v {
+                        InstanceValue::Scalar(ScalarValue::String(s)) => Some(s.clone()),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert_eq!(
+            keyword_values,
+            vec!["alpha".to_string(), "beta".to_string()],
+            "both list values must survive ingestion"
+        );
+    }
+
+    /// A list holding a non-scalar at a scalar-ranged root slot is not the
+    /// multivalued-scalar shape: no values are invented from the scalar
+    /// subset — the field is left out of the root record entirely rather
+    /// than partially ingested.
+    #[test]
+    fn a_mixed_list_at_a_scalar_container_slot_is_not_partially_ingested() {
+        let mut schema = SchemaDefinition::new("s");
+        let mut root = ClassDefinition::new("Root");
+        root.tree_root = true;
+        let mut id = SlotDefinition::new("id");
+        id.identifier = true;
+        root.attributes.insert("id".to_string(), id);
+        let mut keywords = SlotDefinition::new("keywords");
+        keywords.multivalued = true;
+        keywords.range = Some("string".to_string());
+        root.attributes.insert("keywords".to_string(), keywords);
+        schema.classes.insert("Root".to_string(), root);
+
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: r1\nkeywords: [alpha, {stray: 1}]\n").unwrap();
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        let root_inst = set
+            .instances
+            .iter()
+            .find(|i| i.id == "r1")
+            .expect("the identified root emits as a record");
+        assert!(
+            !root_inst.slot_values.iter().any(|sv| sv.slot == "keywords"),
+            "a mixed list must not be partially ingested; got: {:?}",
+            root_inst.slot_values
+        );
     }
 
     #[test]

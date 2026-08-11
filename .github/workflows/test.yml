@@ -88,8 +88,11 @@ jobs:
       - name: Check panschema-viz on wasm32-unknown-unknown
         run: cargo check --target wasm32-unknown-unknown -p panschema-viz
 
+      # CI owns doctests entirely — the commit gate deliberately skips
+      # them. Workspace-wide with the dev feature, matching the coverage
+      # the gate's doctest hook had before it moved here.
       - name: Run doc-tests
-        run: cargo test --doc -p panschema
+        run: cargo test --doc --workspace --features panschema/dev
 
       - name: Generate documentation
         run: cargo doc --no-deps -p panschema
