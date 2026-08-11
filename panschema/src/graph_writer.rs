@@ -1214,6 +1214,22 @@ impl Writer for GraphWriter {
     fn format_id(&self) -> &str {
         "graph-json"
     }
+
+    /// The cross-format default plus this format's own drop: the graph
+    /// draws no edge for a slot-level `is_a`, so the relation is not
+    /// carried.
+    fn projection_gaps(&self, schema: &SchemaDefinition) -> Vec<String> {
+        let mut gaps =
+            crate::diagnostics::classes_with_unprojected_constructs(schema, "graph-json")
+                .into_iter()
+                .map(|u| u.message("graph-json"))
+                .collect::<Vec<_>>();
+        gaps.extend(crate::diagnostics::slot_specialization_gaps(
+            schema,
+            "graph-json",
+        ));
+        gaps
+    }
 }
 
 /// Writer for the instance (A-box) graph as its own JSON document — a
@@ -1267,6 +1283,26 @@ mod tests {
     use crate::linkml::{
         ClassDefinition, EnumDefinition, PermissibleValue, SlotDefinition, TypeDefinition,
     };
+
+    /// A slot-level `is_a` draws no graph edge, so the writer reports the
+    /// drop as a projection gap instead of making it silently.
+    #[test]
+    fn a_slot_specialization_is_reported_as_a_projection_gap() {
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .slots
+            .insert("anchors".to_string(), SlotDefinition::new("anchors"));
+        let mut citations = SlotDefinition::new("citations");
+        citations.is_a = Some("anchors".to_string());
+        schema.slots.insert("citations".to_string(), citations);
+
+        let gaps = crate::io::Writer::projection_gaps(&GraphWriter::new(), &schema);
+        assert!(
+            gaps.iter()
+                .any(|g| g.contains("citations") && g.contains("anchors")),
+            "the dropped subset must be a stated gap; got: {gaps:?}"
+        );
+    }
 
     // ========== Instance (A-box) graph ==========
 

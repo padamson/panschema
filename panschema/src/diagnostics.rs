@@ -756,6 +756,22 @@ pub fn slot_specializations(schema: &SchemaDefinition) -> Vec<(String, String)> 
     pairs.into_iter().collect()
 }
 
+/// Gap messages for slot specializations a format cannot express — one
+/// line per [`slot_specializations`] pair, phrased for the named format.
+/// The SHACL writer words its own version (naming the missing SHACL Core
+/// constraint); every other writer without a sub-property form uses this.
+pub fn slot_specialization_gaps(schema: &SchemaDefinition, format: &str) -> Vec<String> {
+    slot_specializations(schema)
+        .into_iter()
+        .map(|(child, parent)| {
+            format!(
+                "slot `{child}` specializes `{parent}`, which the {format} output cannot \
+                 express — the subset relation is not carried"
+            )
+        })
+        .collect()
+}
+
 /// A `unique_keys` slot that doesn't resolve to any slot on its class.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnresolvedKeySlot {

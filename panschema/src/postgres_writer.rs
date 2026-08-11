@@ -83,6 +83,9 @@ impl Writer for PostgresWriter {
                 s.slot, s.class, s.reason
             )
         }));
+        gaps.extend(crate::diagnostics::slot_specialization_gaps(
+            schema, "postgres",
+        ));
         gaps
     }
 }
@@ -848,6 +851,26 @@ mod tests {
     #[test]
     fn postgres_writer_format_id_is_postgres() {
         assert_eq!(PostgresWriter::new().format_id(), "postgres");
+    }
+
+    /// A slot-level `is_a` has no DDL form, so the writer reports the drop
+    /// as a projection gap instead of making it silently.
+    #[test]
+    fn a_slot_specialization_is_reported_as_a_projection_gap() {
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .slots
+            .insert("anchors".to_string(), SlotDefinition::new("anchors"));
+        let mut citations = SlotDefinition::new("citations");
+        citations.is_a = Some("anchors".to_string());
+        schema.slots.insert("citations".to_string(), citations);
+
+        let gaps = crate::io::Writer::projection_gaps(&PostgresWriter::new(), &schema);
+        assert!(
+            gaps.iter()
+                .any(|g| g.contains("citations") && g.contains("anchors")),
+            "the dropped subset must be a stated gap; got: {gaps:?}"
+        );
     }
 
     /// A custom `types:` entry maps to the column type of its base

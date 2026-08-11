@@ -57,6 +57,22 @@ impl Writer for JsonSchemaWriter {
     fn format_id(&self) -> &str {
         "json-schema"
     }
+
+    /// The cross-format default plus this format's own drop: JSON Schema
+    /// has no sub-property form, so a slot-level `is_a` is not carried and
+    /// the document accepts data the native validator rejects.
+    fn projection_gaps(&self, schema: &SchemaDefinition) -> Vec<String> {
+        let mut gaps =
+            crate::diagnostics::classes_with_unprojected_constructs(schema, "json-schema")
+                .into_iter()
+                .map(|u| u.message("json-schema"))
+                .collect::<Vec<_>>();
+        gaps.extend(crate::diagnostics::slot_specialization_gaps(
+            schema,
+            "json-schema",
+        ));
+        gaps
+    }
 }
 
 /// Build the JSON Schema document: `$schema` + `$defs` with one `object`
@@ -270,6 +286,26 @@ fn scalar_json_type(range: &str) -> Value {
 mod tests {
     use super::*;
     use crate::linkml::{ClassDefinition, SlotDefinition};
+
+    /// A slot-level `is_a` has no JSON Schema form, so the writer reports
+    /// the drop as a projection gap instead of making it silently.
+    #[test]
+    fn a_slot_specialization_is_reported_as_a_projection_gap() {
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .slots
+            .insert("anchors".to_string(), SlotDefinition::new("anchors"));
+        let mut citations = SlotDefinition::new("citations");
+        citations.is_a = Some("anchors".to_string());
+        schema.slots.insert("citations".to_string(), citations);
+
+        let gaps = crate::io::Writer::projection_gaps(&JsonSchemaWriter::new(), &schema);
+        assert!(
+            gaps.iter()
+                .any(|g| g.contains("citations") && g.contains("anchors")),
+            "the dropped subset must be a stated gap; got: {gaps:?}"
+        );
+    }
 
     /// A `Wine` class with a required string, an optional integer, and a
     /// multivalued string — enough to exercise scalar typing, `required`,

@@ -110,6 +110,17 @@ impl Writer for RustWriter {
     fn format_id(&self) -> &str {
         "rust"
     }
+
+    /// The cross-format default plus this format's own drop: generated Rust
+    /// has no sub-property form, so a slot-level `is_a` is not carried.
+    fn projection_gaps(&self, schema: &SchemaDefinition) -> Vec<String> {
+        let mut gaps = crate::diagnostics::classes_with_unprojected_constructs(schema, "rust")
+            .into_iter()
+            .map(|u| u.message("rust"))
+            .collect::<Vec<_>>();
+        gaps.extend(crate::diagnostics::slot_specialization_gaps(schema, "rust"));
+        gaps
+    }
 }
 
 /// Reject any schema name that can't become a Rust identifier before a
@@ -1346,6 +1357,26 @@ fn variant_ident_for(text: &str) -> String {
 mod tests {
     use super::*;
     use crate::linkml::{ClassDefinition, EnumDefinition, PermissibleValue, SlotDefinition};
+
+    /// A slot-level `is_a` has no generated-Rust form, so the writer
+    /// reports the drop as a projection gap instead of making it silently.
+    #[test]
+    fn a_slot_specialization_is_reported_as_a_projection_gap() {
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .slots
+            .insert("anchors".to_string(), SlotDefinition::new("anchors"));
+        let mut citations = SlotDefinition::new("citations");
+        citations.is_a = Some("anchors".to_string());
+        schema.slots.insert("citations".to_string(), citations);
+
+        let gaps = crate::io::Writer::projection_gaps(&RustWriter::new(), &schema);
+        assert!(
+            gaps.iter()
+                .any(|g| g.contains("citations") && g.contains("anchors")),
+            "the dropped subset must be a stated gap; got: {gaps:?}"
+        );
+    }
 
     // ----- identifier validation ---------------------------------------
 
