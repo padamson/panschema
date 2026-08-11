@@ -161,6 +161,11 @@ pub fn schema_load_diagnostics(schema: &SchemaDefinition) -> Vec<String> {
     );
     out.extend(dangling_references(schema).iter().map(|d| d.message()));
     out.extend(
+        unchecked_specializations(schema)
+            .iter()
+            .map(|u| u.message()),
+    );
+    out.extend(
         colliding_slot_definitions(schema)
             .iter()
             .map(|c| c.message()),
@@ -229,7 +234,7 @@ pub struct DanglingRef {
     /// ``slot `ships_to` ``).
     pub referrer: String,
     /// Which reference it is: `default_range`, `range`, `is_a`, `mixin`,
-    /// or `inverse`.
+    /// `inverse`, or `specializes` (a slot-level `is_a`).
     pub kind: &'static str,
     /// The unresolved name.
     pub name: String,
@@ -245,6 +250,7 @@ impl DanglingRef {
             "is_a" => ("has parent", "class"),
             "mixin" => ("mixes in", "class"),
             "inverse" => ("has inverse", "slot"),
+            "specializes" => ("specializes", "slot"),
             _ => ("references", "definition"),
         };
         format!(
@@ -327,6 +333,15 @@ pub fn dangling_references(schema: &SchemaDefinition) -> Vec<DanglingRef> {
                 name: range.clone(),
             });
         }
+        if let Some(parent) = &slot.is_a
+            && !all_slot_names.contains(parent.as_str())
+        {
+            out.push(DanglingRef {
+                referrer: format!("slot `{slot_name}`"),
+                kind: "specializes",
+                name: parent.clone(),
+            });
+        }
         if let Some(inverse) = &slot.inverse
             && !all_slot_names.contains(inverse.as_str())
         {
@@ -335,6 +350,23 @@ pub fn dangling_references(schema: &SchemaDefinition) -> Vec<DanglingRef> {
                 kind: "inverse",
                 name: inverse.clone(),
             });
+        }
+    }
+
+    // `slot_usage` overrides can introduce references of their own — an
+    // `is_a` declared there resolves against the same slot namespace, and a
+    // typo'd parent would otherwise evaporate with the whole subset claim.
+    for (class_name, class) in &schema.classes {
+        for (slot_name, override_def) in &class.slot_usage {
+            if let Some(parent) = &override_def.is_a
+                && !all_slot_names.contains(parent.as_str())
+            {
+                out.push(DanglingRef {
+                    referrer: format!("slot `{slot_name}` (class `{class_name}`)"),
+                    kind: "specializes",
+                    name: parent.clone(),
+                });
+            }
         }
     }
 
@@ -646,6 +678,84 @@ pub fn classes_with_unprojected_constructs(
     found
 }
 
+/// A class using a specializing slot without its parent: the subset the
+/// schema states (`child is_a parent`) cannot be checked on that class's
+/// records, because there is no parent slot there to contain the values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UncheckedSpecialization {
+    /// The class whose records escape the check.
+    pub class: String,
+    /// The specializing slot the class uses.
+    pub child: String,
+    /// The parent slot the class does not use.
+    pub parent: String,
+}
+
+impl UncheckedSpecialization {
+    /// A user-facing warning line.
+    pub fn message(&self) -> String {
+        format!(
+            "class `{}` uses slot `{}`, which specializes `{}`, without the parent slot — \
+             the subset is not validated for its records",
+            self.class, self.child, self.parent
+        )
+    }
+}
+
+/// Report every class whose effective slots include a specializing slot
+/// but not its parent — there, `validate` has nothing to check the subset
+/// against, while the RDF output still asserts `rdfs:subPropertyOf`, so
+/// the skip must be visible rather than silent. A parent that resolves
+/// nowhere at all is the dangling-reference diagnostic's report, not a
+/// second one here.
+pub fn unchecked_specializations(schema: &SchemaDefinition) -> Vec<UncheckedSpecialization> {
+    let mut all_slot_names: std::collections::BTreeSet<&str> =
+        schema.slots.keys().map(String::as_str).collect();
+    for class in schema.classes.values() {
+        all_slot_names.extend(class.attributes.keys().map(String::as_str));
+    }
+
+    let mut found = Vec::new();
+    for (class_name, class) in &schema.classes {
+        let effective = crate::linkml_resolve::resolve_effective_slots(class, schema);
+        for (child_name, def) in &effective {
+            if let Some(parent) = &def.is_a
+                && !effective.contains_key(parent)
+                && all_slot_names.contains(parent.as_str())
+            {
+                found.push(UncheckedSpecialization {
+                    class: class_name.clone(),
+                    child: child_name.clone(),
+                    parent: parent.clone(),
+                });
+            }
+        }
+    }
+    found
+}
+
+/// Every specializing slot in the schema — top-level `slots:` and class
+/// attributes — as `(child, parent)` pairs, deduplicated and sorted. A
+/// writer whose output format has no sub-property form reports the drop
+/// through this instead of making it silently; the SHACL writer does so
+/// today.
+pub fn slot_specializations(schema: &SchemaDefinition) -> Vec<(String, String)> {
+    let mut pairs: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new();
+    for (name, slot) in &schema.slots {
+        if let Some(parent) = &slot.is_a {
+            pairs.insert((name.clone(), parent.clone()));
+        }
+    }
+    for class in schema.classes.values() {
+        for (name, slot) in &class.attributes {
+            if let Some(parent) = &slot.is_a {
+                pairs.insert((name.clone(), parent.clone()));
+            }
+        }
+    }
+    pairs.into_iter().collect()
+}
+
 /// A `unique_keys` slot that doesn't resolve to any slot on its class.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnresolvedKeySlot {
@@ -818,6 +928,80 @@ mod tests {
         assert!(
             msgs.iter().any(|m| m.contains("missing")),
             "expected an unresolved unique-key-slot message; got: {msgs:?}"
+        );
+    }
+
+    #[test]
+    fn a_slot_usage_is_a_naming_no_slot_is_dangling() {
+        // The subset claim a `slot_usage` override states dies silently if
+        // its parent is a typo — the override merge just carries the bad
+        // name, the validator's gate never matches it, and nothing else
+        // looks. The dangling pass is where it must surface.
+        let schema = parse(
+            "name: s\nslots:\n  citations: {}\nclasses:\n  C:\n    slots: [citations]\n    \
+             slot_usage:\n      citations:\n        is_a: anchros\n",
+        );
+        let msgs: Vec<String> = dangling_references(&schema)
+            .iter()
+            .map(|d| d.message())
+            .collect();
+        assert!(
+            msgs.iter()
+                .any(|m| m.contains("citations") && m.contains("anchros") && m.contains("`C`")),
+            "the typo'd slot_usage parent must be flagged with its class; got: {msgs:?}"
+        );
+    }
+
+    #[test]
+    fn a_class_using_the_child_without_the_parent_is_flagged() {
+        // The subset can only be checked where both slots are usable; a
+        // class carrying just the child gets a warning naming all three,
+        // and a class carrying both stays silent.
+        let schema = parse(
+            "name: s\nslots:\n  anchors: {}\n  citations:\n    is_a: anchors\n\
+             classes:\n  Partial:\n    slots: [citations]\n  Full:\n    slots: [anchors, citations]\n",
+        );
+        let found = unchecked_specializations(&schema);
+        assert_eq!(
+            found.len(),
+            1,
+            "only the class missing the parent is flagged; got: {found:?}"
+        );
+        assert_eq!(found[0].class, "Partial");
+        assert_eq!(found[0].child, "citations");
+        assert_eq!(found[0].parent, "anchors");
+        assert_eq!(
+            found[0].message(),
+            "class `Partial` uses slot `citations`, which specializes `anchors`, without \
+             the parent slot — the subset is not validated for its records"
+        );
+    }
+
+    #[test]
+    fn a_dangling_parent_is_not_double_reported_as_unchecked() {
+        // A typo'd parent resolves nowhere: that is the dangling-reference
+        // report's finding, and the unchecked-specialization pass stays
+        // quiet rather than stacking a second warning on the same typo.
+        let schema = parse(
+            "name: s\nslots:\n  citations:\n    is_a: no_such\nclasses:\n  C:\n    slots: [citations]\n",
+        );
+        assert!(unchecked_specializations(&schema).is_empty());
+    }
+
+    #[test]
+    fn a_slot_is_a_naming_no_slot_is_dangling() {
+        // A slot-level `is_a` that names no slot states a subset relation
+        // against nothing — no subPropertyOf is emitted and no containment
+        // is checked, so the typo must be reported, not swallowed.
+        let schema = parse("name: s\nslots:\n  child:\n    is_a: no_such_slot\n");
+        let msgs: Vec<String> = dangling_references(&schema)
+            .iter()
+            .map(|d| d.message())
+            .collect();
+        assert!(
+            msgs.iter().any(|m| m
+                == "slot `child` specializes `no_such_slot`, which names no slot the schema defines"),
+            "the unresolvable slot is_a must be flagged with its own phrasing; got: {msgs:?}"
         );
     }
 

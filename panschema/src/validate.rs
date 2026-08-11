@@ -75,7 +75,8 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
         let Some(class) = schema.classes.get(class_name) else {
             continue;
         };
-        for (slot_name, rs) in &resolved_by_class[class_name.as_str()] {
+        let resolved = &resolved_by_class[class_name.as_str()];
+        for (slot_name, rs) in resolved {
             let slot = &rs.definition;
             // A union slot has several range targets and no scalar `range:`.
             let ranges = &rs.induced.ranges;
@@ -271,6 +272,35 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
                             scalar_to_display(scalar)
                         )),
                     }
+                }
+            }
+
+            // Slot-level `is_a` states a subset: every value here must also
+            // be a value of the parent slot on this record. No reasoner runs
+            // on this path — without the check, citing a value outside the
+            // parent set silently widens the parent instead of erroring.
+            // Values compare as typed values, not display strings, so a
+            // reference and a same-spelled literal stay distinct. An
+            // `Unexpected` child value is the range-kind report's problem;
+            // a repeated outside value is reported once.
+            if let Some(parent_name) = rs.definition.is_a.as_deref()
+                && resolved.contains_key(parent_name)
+            {
+                let parent_values = slot_values(inst, parent_name);
+                let mut reported: Vec<&InstanceValue> = Vec::new();
+                for value in slot_values(inst, slot_name) {
+                    if matches!(value, InstanceValue::Unexpected(_))
+                        || parent_values.iter().any(|p| values_match(p, value))
+                        || reported.iter().any(|r| values_match(r, value))
+                    {
+                        continue;
+                    }
+                    reported.push(value);
+                    push(format!(
+                        "slot `{slot_name}` (class `{class_name}`) value `{}` is not \
+                         among the values of `{parent_name}`, which `{slot_name}` specializes",
+                        value_display(value)
+                    ));
                 }
             }
         }
@@ -565,6 +595,40 @@ fn with_article(noun: &str) -> String {
     }
 }
 
+/// Whether two values denote the same thing, with the same number
+/// semantics the kind check applies: `5` and `5.0` are one value, and a
+/// NaN matches a NaN (containment is about which values are present, not
+/// IEEE comparison). Everything else compares as its typed self, so a
+/// reference and a same-spelled literal stay distinct.
+fn values_match(a: &InstanceValue, b: &InstanceValue) -> bool {
+    if a == b {
+        return true;
+    }
+    match (numeric_value(a), numeric_value(b)) {
+        (Some(x), Some(y)) => x == y || (x.is_nan() && y.is_nan()),
+        _ => false,
+    }
+}
+
+/// The numeric reading of a value, when it has one.
+fn numeric_value(value: &InstanceValue) -> Option<f64> {
+    match value {
+        InstanceValue::Scalar(s) => numeric(s),
+        InstanceValue::Reference(_) | InstanceValue::Unexpected(_) => None,
+    }
+}
+
+/// A value's display form for violation messages — the scalar's display
+/// or a reference's target id. Display only: values compare through
+/// [`values_match`] so kinds stay distinct even when displays collide.
+fn value_display(value: &InstanceValue) -> String {
+    match value {
+        InstanceValue::Scalar(s) => scalar_to_display(s),
+        InstanceValue::Reference(target) => target.clone(),
+        InstanceValue::Unexpected(kind) => kind.to_string(),
+    }
+}
+
 /// The numeric value of a scalar for bound-checking, or `None` for a
 /// non-numeric scalar (a string/bool where a bound was declared).
 fn numeric(scalar: &ScalarValue) -> Option<f64> {
@@ -786,6 +850,236 @@ classes:
                 .iter()
                 .any(|v| v.to_string().contains("is not numeric")),
             "the bogus bound is reported; got: {:?}",
+            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+        );
+    }
+
+    /// A slot specializing another (slot-level `is_a`) is a subset claim:
+    /// every value of the child is also a value of the parent. On the YAML
+    /// path no reasoner runs, so a child value missing from the parent
+    /// slot's values on the same record is a violation — not a silently
+    /// widened parent set.
+    #[test]
+    fn a_child_slot_value_missing_from_its_parent_slot_is_a_violation() {
+        const SPECIALIZING: &str = "\
+name: s
+classes:
+  Benchmark:
+    tree_root: true
+    attributes:
+      id:
+        identifier: true
+      answers:
+        range: Answer
+        multivalued: true
+  Answer:
+    attributes:
+      id:
+        identifier: true
+    slots: [expected_anchors, expected_citations]
+slots:
+  expected_anchors:
+    range: string
+    multivalued: true
+  expected_citations:
+    is_a: expected_anchors
+    range: string
+    multivalued: true
+";
+        let schema: crate::linkml::SchemaDefinition =
+            serde_norway::from_str(SPECIALIZING).expect("parse schema");
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: b1\nanswers:\n  - id: a1\n    expected_anchors: [rec-a, rec-b]\n    expected_citations: [rec-b, rec-x]\n",
+        )
+        .expect("parse data");
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        let violations = validate_instances(&schema, &set);
+        assert!(
+            violations.iter().any(|v| {
+                let s = v.to_string();
+                s.contains("rec-x") && s.contains("expected_anchors")
+            }),
+            "the value outside the parent set must be reported, naming both; got: {:?}",
+            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+        );
+        assert!(
+            !violations.iter().any(|v| v.to_string().contains("rec-b")),
+            "a value the parent also holds conforms; got: {:?}",
+            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+        );
+
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: b1\nanswers:\n  - id: a1\n    expected_anchors: [rec-a, rec-b]\n    expected_citations: [rec-a]\n",
+        )
+        .expect("parse data");
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        let violations = validate_instances(&schema, &set);
+        assert!(
+            violations.is_empty(),
+            "a subset conforms; got: {:?}",
+            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+        );
+    }
+
+    /// The subset check follows the kind check's number semantics: `5`
+    /// and `5.0` denote one value, so YAML spelling differences between
+    /// the parent's and child's numerals do not fabricate violations.
+    #[test]
+    fn an_integral_spelling_difference_is_not_a_containment_violation() {
+        const SPECIALIZING: &str = "\
+name: s
+classes:
+  Root:
+    tree_root: true
+    attributes:
+      id:
+        identifier: true
+      items:
+        range: Item
+        multivalued: true
+  Item:
+    attributes:
+      id:
+        identifier: true
+    slots: [readings, flagged]
+slots:
+  readings:
+    range: float
+    multivalued: true
+  flagged:
+    is_a: readings
+    range: float
+    multivalued: true
+";
+        let schema: crate::linkml::SchemaDefinition =
+            serde_norway::from_str(SPECIALIZING).expect("parse schema");
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: r1\nitems:\n  - id: i1\n    readings: [5.0, 2.5]\n    flagged: [5]\n",
+        )
+        .expect("parse data");
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        let violations = validate_instances(&schema, &set);
+        assert!(
+            violations.is_empty(),
+            "5 is among [5.0, 2.5]; got: {:?}",
+            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+        );
+    }
+
+    /// Numeric containment is by value, both ways: a child numeral equal
+    /// to no parent numeral is a violation, and a NaN is contained only
+    /// when the parent also holds a NaN.
+    #[test]
+    fn numeric_containment_is_by_value_and_nan_only_matches_nan() {
+        const SPECIALIZING: &str = "\
+name: s
+classes:
+  Root:
+    tree_root: true
+    attributes:
+      id:
+        identifier: true
+      items:
+        range: Item
+        multivalued: true
+  Item:
+    attributes:
+      id:
+        identifier: true
+    slots: [readings, flagged]
+slots:
+  readings:
+    range: float
+    multivalued: true
+  flagged:
+    is_a: readings
+    range: float
+    multivalued: true
+";
+        let schema: crate::linkml::SchemaDefinition =
+            serde_norway::from_str(SPECIALIZING).expect("parse schema");
+        let validate = |data: &str| {
+            let data: serde_norway::Value = serde_norway::from_str(data).expect("parse data");
+            let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+            validate_instances(&schema, &set)
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+        };
+
+        let violations =
+            validate("id: r1\nitems:\n  - id: i1\n    readings: [2.5]\n    flagged: [5]\n");
+        assert!(
+            violations.iter().any(|v| v.contains("flagged")),
+            "5 is not among [2.5]; got: {violations:?}"
+        );
+
+        let violations =
+            validate("id: r1\nitems:\n  - id: i1\n    readings: [1.0]\n    flagged: [.nan]\n");
+        assert!(
+            violations.iter().any(|v| v.contains("flagged")),
+            "a NaN is not among [1.0]; got: {violations:?}"
+        );
+
+        let violations =
+            validate("id: r1\nitems:\n  - id: i1\n    readings: [.nan]\n    flagged: [.nan]\n");
+        assert!(
+            violations.is_empty(),
+            "a NaN parent contains a NaN child; got: {violations:?}"
+        );
+    }
+
+    /// The subset check compares typed values, not display strings: a
+    /// literal spelled like a reference's target is not that reference,
+    /// so it does not count as contained.
+    #[test]
+    fn a_literal_spelled_like_a_reference_target_is_not_contained() {
+        const SPECIALIZING: &str = "\
+name: s
+classes:
+  Benchmark:
+    tree_root: true
+    attributes:
+      id:
+        identifier: true
+      recs:
+        range: Rec
+        multivalued: true
+      answers:
+        range: Answer
+        multivalued: true
+  Rec:
+    attributes:
+      id:
+        identifier: true
+  Answer:
+    attributes:
+      id:
+        identifier: true
+    slots: [expected_anchors, expected_citations]
+slots:
+  expected_anchors:
+    range: Rec
+    multivalued: true
+  expected_citations:
+    is_a: expected_anchors
+    range: string
+    multivalued: true
+";
+        let schema: crate::linkml::SchemaDefinition =
+            serde_norway::from_str(SPECIALIZING).expect("parse schema");
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: b1\nrecs:\n  - id: rec-a\nanswers:\n  - id: a1\n    expected_anchors: [rec-a]\n    expected_citations: [rec-a]\n",
+        )
+        .expect("parse data");
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        let violations = validate_instances(&schema, &set);
+        assert!(
+            violations.iter().any(|v| {
+                let s = v.to_string();
+                s.contains("expected_citations") && s.contains("rec-a")
+            }),
+            "a string literal is not the reference it happens to spell; got: {:?}",
             violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
         );
     }

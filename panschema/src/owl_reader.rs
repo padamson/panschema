@@ -456,6 +456,22 @@ impl OwlReader {
                 .next()
         }
 
+        // All IRI objects for a predicate, sorted — so a multi-axiom read
+        // is deterministic whatever the graph's iteration order.
+        fn get_iri_values<T: Term>(
+            graph: &FastGraph,
+            subject: &SimpleTerm,
+            predicate: T,
+        ) -> Vec<String> {
+            let mut values: Vec<String> = graph
+                .triples_matching([subject], [predicate], Any)
+                .filter_map(Result::ok)
+                .filter_map(|t| t.o().iri().map(|i| i.to_string()))
+                .collect();
+            values.sort();
+            values
+        }
+
         let mut properties = Vec::new();
 
         // Extract object properties
@@ -479,6 +495,7 @@ impl OwlReader {
             let domain_iri = get_iri_value(graph, &prop_iri, rdfs::domain);
             let range_iri = get_iri_value(graph, &prop_iri, rdfs::range);
             let inverse_of_iri = get_iri_value(graph, &prop_iri, owl_inverse_of);
+            let sub_property_of_iris = get_iri_values(graph, &prop_iri, rdfs::subPropertyOf);
             let characteristics = read_characteristics(graph, &prop_iri, owl);
             let annotations = read_annotations(graph, &prop_iri, owl);
 
@@ -491,6 +508,7 @@ impl OwlReader {
                 domain_iri,
                 range_iri,
                 inverse_of_iri,
+                sub_property_of_iris,
                 characteristics,
                 annotations,
             });
@@ -516,6 +534,7 @@ impl OwlReader {
             let comment = get_literal_value(graph, &prop_iri, rdfs::comment);
             let domain_iri = get_iri_value(graph, &prop_iri, rdfs::domain);
             let range_iri = get_iri_value(graph, &prop_iri, rdfs::range);
+            let sub_property_of_iris = get_iri_values(graph, &prop_iri, rdfs::subPropertyOf);
             let characteristics = read_characteristics(graph, &prop_iri, owl);
             let annotations = read_annotations(graph, &prop_iri, owl);
 
@@ -528,6 +547,7 @@ impl OwlReader {
                 domain_iri,
                 range_iri,
                 inverse_of_iri: None,
+                sub_property_of_iris,
                 characteristics,
                 annotations,
             });
@@ -741,6 +761,8 @@ impl OwlReader {
         }
 
         // Map properties to slots
+        let property_iris: std::collections::BTreeSet<&str> =
+            metadata.properties.iter().map(|p| p.iri.as_str()).collect();
         for owl_prop in &metadata.properties {
             let mut slot_def = SlotDefinition::new(&owl_prop.id);
             slot_def.description = owl_prop.comment.clone();
@@ -771,6 +793,23 @@ impl OwlReader {
             if let Some(ref inverse_iri) = owl_prop.inverse_of_iri {
                 let inverse_id = extract_id_from_iri(inverse_iri);
                 slot_def.inverse = Some(inverse_id);
+            }
+
+            // rdfs:subPropertyOf → slot-level is_a, only when the parent is
+            // a property this ontology defines: an external parent (a
+            // dcterms: term, an OWL builtin) names no slot here, and
+            // localizing it would re-emit the relation against a freshly
+            // minted local IRI. A reflexive axiom (`p subPropertyOf p`,
+            // asserted by entailment-materialized ontologies) says nothing
+            // and is skipped. Several axioms project onto LinkML's
+            // single-valued `is_a` deterministically — the lexicographically
+            // first qualifying parent wins, whatever the graph's order.
+            if let Some(parent_iri) = owl_prop
+                .sub_property_of_iris
+                .iter()
+                .find(|iri| property_iris.contains(iri.as_str()) && **iri != owl_prop.iri)
+            {
+                slot_def.is_a = Some(extract_id_from_iri(parent_iri));
             }
 
             // OWL relationship characteristics.
@@ -960,6 +999,112 @@ mod tests {
         let path = dir.path().join("schema.ttl");
         std::fs::write(&path, ttl).expect("write ttl");
         OwlReader::new().read(&path).expect("read ttl")
+    }
+
+    /// An `rdfs:subPropertyOf` between two named properties reads back as
+    /// slot-level `is_a`, so the subset relation survives an OWL round-trip
+    /// the same way `owl:inverseOf` does.
+    #[test]
+    fn a_sub_property_axiom_reads_back_as_slot_is_a() {
+        let schema = read_ttl(
+            r#"@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix : <https://example.org/s#> .
+<https://example.org/s> a owl:Ontology .
+:hasName a owl:DatatypeProperty ; rdfs:range xsd:string .
+:hasNickname a owl:DatatypeProperty ; rdfs:subPropertyOf :hasName ; rdfs:range xsd:string .
+"#,
+        );
+        assert_eq!(
+            schema.slots["hasNickname"].is_a.as_deref(),
+            Some("hasName"),
+            "the sub-property axiom must land on the specializing slot"
+        );
+        assert_eq!(schema.slots["hasName"].is_a, None);
+    }
+
+    /// An external super-property — a dcterms: term, an OWL builtin —
+    /// names no slot in this schema, so it does not localize into `is_a`:
+    /// the axiom is a reference into a vocabulary the IR cannot express,
+    /// and localizing it would re-emit the relation against a freshly
+    /// minted local IRI.
+    #[test]
+    fn an_external_super_property_does_not_localize() {
+        let schema = read_ttl(
+            r#"@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix : <https://example.org/s#> .
+<https://example.org/s> a owl:Ontology .
+:hasAuthor a owl:ObjectProperty ; rdfs:subPropertyOf <http://purl.org/dc/terms/creator> .
+"#,
+        );
+        assert_eq!(
+            schema.slots["hasAuthor"].is_a, None,
+            "an external parent must not become a local slot reference"
+        );
+    }
+
+    #[test]
+    fn tmp_verifier_reflexive_sub_property_axiom() {
+        let schema = read_ttl(
+            r#"@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix : <https://example.org/s#> .
+<https://example.org/s> a owl:Ontology .
+:zParent a owl:ObjectProperty .
+:child a owl:ObjectProperty ; rdfs:subPropertyOf :child , :zParent .
+"#,
+        );
+        assert_eq!(
+            schema.slots["child"].is_a.as_deref(),
+            Some("zParent"),
+            "reflexive axiom must not shadow the real parent; got {:?}",
+            schema.slots["child"].is_a
+        );
+    }
+
+    /// A reflexive axiom (`p subPropertyOf p`, asserted by every
+    /// entailment-materialized ontology) says nothing — the real parent
+    /// wins even when the self-reference sorts first.
+    #[test]
+    fn a_reflexive_sub_property_axiom_is_ignored() {
+        let schema = read_ttl(
+            r#"@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix : <https://example.org/s#> .
+<https://example.org/s> a owl:Ontology .
+:aChild a owl:ObjectProperty ; rdfs:subPropertyOf :aChild , :bParent .
+:bParent a owl:ObjectProperty .
+"#,
+        );
+        assert_eq!(
+            schema.slots["aChild"].is_a.as_deref(),
+            Some("bParent"),
+            "the self-axiom must not shadow the genuine parent"
+        );
+    }
+
+    /// Several super-property axioms project onto LinkML's single-valued
+    /// `is_a` deterministically — the lexicographically first parent this
+    /// ontology defines — whatever order the graph yields them in.
+    #[test]
+    fn several_super_properties_project_deterministically() {
+        let schema = read_ttl(
+            r#"@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix : <https://example.org/s#> .
+<https://example.org/s> a owl:Ontology .
+:aParent a owl:ObjectProperty .
+:bParent a owl:ObjectProperty .
+:child a owl:ObjectProperty ; rdfs:subPropertyOf :bParent , :aParent .
+"#,
+        );
+        assert_eq!(
+            schema.slots["child"].is_a.as_deref(),
+            Some("aParent"),
+            "the projection must not depend on graph iteration order"
+        );
     }
 
     /// An `owl:Class` closed by `owl:oneOf` over named individuals is

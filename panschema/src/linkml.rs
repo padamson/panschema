@@ -153,6 +153,19 @@ pub struct SchemaDefinition {
 }
 
 impl SchemaDefinition {
+    /// The definition of a slot referenced by *name*: the top-level
+    /// `slots:` entry, or the first class attribute (classes in map order)
+    /// declaring it. The one by-name lookup for every site that holds a
+    /// slot name rather than its definition — IRI derivation and display
+    /// labels resolve the same declaration, so they cannot drift.
+    pub fn find_slot(&self, name: &str) -> Option<&SlotDefinition> {
+        self.slots.get(name).or_else(|| {
+            self.classes
+                .values()
+                .find_map(|class| class.attributes.get(name))
+        })
+    }
+
     /// Create a new schema with the given name
     pub fn new(name: impl Into<String>) -> Self {
         Self {
@@ -499,6 +512,12 @@ pub struct SlotDefinition {
     /// Inverse slot (for bidirectional relationships)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inverse: Option<String>,
+    /// Parent slot this one specializes (LinkML slot-level `is_a`): every
+    /// value of this slot is also a value of the parent. Projects as
+    /// `rdfs:subPropertyOf` in RDF output; the parent's field values are
+    /// not inherited onto this definition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_a: Option<String>,
     /// OWL object-property characteristics. Each, when set, maps to an
     /// `owl:<Name>Property` `rdf:type` axiom in the RDF output and a
     /// characteristic badge on the slot card. These are LinkML's
@@ -569,6 +588,7 @@ impl SlotDefinition {
             inlined_as_list: None,
             slot_uri: None,
             inverse: None,
+            is_a: None,
             symmetric: false,
             asymmetric: false,
             reflexive: false,

@@ -1198,13 +1198,16 @@ impl HtmlWriter {
                 characteristics.push(format!("{lo}..{hi}"));
             }
             if let Some(inverse_id) = &slot_def.inverse {
-                let inverse_label = schema
-                    .slots
-                    .get(inverse_id)
-                    .and_then(|inv| inv.annotations.get("panschema:label"))
-                    .cloned()
-                    .unwrap_or_else(|| inverse_id.clone());
-                characteristics.push(format!("Inverse of: {}", inverse_label));
+                characteristics.push(format!(
+                    "Inverse of: {}",
+                    slot_display_label(schema, inverse_id)
+                ));
+            }
+            if let Some(parent_id) = &slot_def.is_a {
+                characteristics.push(format!(
+                    "Specializes: {}",
+                    slot_display_label(schema, parent_id)
+                ));
             }
 
             let mappings = build_mappings(
@@ -1565,6 +1568,19 @@ impl Writer for HtmlWriter {
     fn format_id(&self) -> &str {
         "html"
     }
+}
+
+/// Display label for a slot referenced by *name* — its `panschema:label`
+/// annotation when declared, else the raw name. Resolved through the
+/// shared by-name lookup, so a reference to an attribute-declared slot
+/// (an `inverse` or a slot-level `is_a` parent) shows the same label
+/// that slot's own card does.
+fn slot_display_label(schema: &SchemaDefinition, name: &str) -> String {
+    schema
+        .find_slot(name)
+        .and_then(|def| def.annotations.get("panschema:label"))
+        .cloned()
+        .unwrap_or_else(|| name.to_string())
 }
 
 /// Render a LinkML `description:` value to HTML. Runs CommonMark
@@ -3342,6 +3358,43 @@ mod tests {
         assert!(
             plain_card.examples.is_empty(),
             "a slot with no examples renders no Examples section"
+        );
+    }
+
+    /// A slot specializing another (slot-level `is_a`) shows the relation
+    /// on its card, labeled by the parent's display label — the same
+    /// surfacing `inverse` gets.
+    #[test]
+    fn slot_card_shows_the_slot_it_specializes() {
+        use crate::linkml::{SchemaDefinition, SlotDefinition};
+        let mut schema = SchemaDefinition::new("s");
+        schema.slots.insert("expected_anchors".to_string(), {
+            let mut s = SlotDefinition::new("expected_anchors");
+            s.annotations.insert(
+                "panschema:label".to_string(),
+                "expected anchors".to_string(),
+            );
+            s
+        });
+        let mut citations = SlotDefinition::new("expected_citations");
+        citations.is_a = Some("expected_anchors".to_string());
+        schema
+            .slots
+            .insert("expected_citations".to_string(), citations);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let child = data
+            .slot_data
+            .iter()
+            .find(|p| p.id == "expected_citations")
+            .unwrap();
+        assert!(
+            child
+                .characteristics
+                .iter()
+                .any(|c| c == "Specializes: expected anchors"),
+            "the child card names its parent; got {:?}",
+            child.characteristics
         );
     }
 

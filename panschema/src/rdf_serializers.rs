@@ -93,6 +93,18 @@ fn class_iri_by_name(name: &str, schema: &SchemaDefinition) -> String {
     }
 }
 
+/// Absolute IRI for a slot referenced by *name* — its declaration's
+/// `slot_uri` when it has one, else the shared fallback. Resolved through
+/// the shared by-name lookup, so a reference to an attribute-declared
+/// slot (`inverse`, slot-level `is_a`) gets the IRI that attribute's own
+/// emission uses.
+fn slot_iri_by_name(name: &str, schema: &SchemaDefinition) -> String {
+    schema
+        .find_slot(name)
+        .map(|def| slot_iri_string(name, def, schema))
+        .unwrap_or_else(|| fallback_element_iri(name, schema))
+}
+
 /// LinkML's default URI for an element that declares none:
 /// `{default_prefix}:{name}`, expanded — the same rule linkml-runtime
 /// applies, so the two tools mint identical IRIs for the same schema. A
@@ -646,12 +658,15 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
         // owl:inverseOf — the inverse names another slot, so it derives the
         // way that slot's own declaration would.
         if let Some(ref inverse) = slot_def.inverse {
-            let inverse_iri_str = match schema.slots.get(inverse) {
-                Some(inv_def) => slot_iri_string(inverse, inv_def, schema),
-                None => fallback_element_iri(inverse, schema),
-            };
-            let inverse_iri = make_iri(&inverse_iri_str)?;
+            let inverse_iri = make_iri(&slot_iri_by_name(inverse, schema))?;
             triple(&mut graph, &prop_iri, owl_inverse_of, &inverse_iri)?;
+        }
+
+        // rdfs:subPropertyOf — slot-level `is_a` names another slot; its
+        // IRI derives the way that slot's own declaration would.
+        if let Some(ref parent) = slot_def.is_a {
+            let parent_iri = make_iri(&slot_iri_by_name(parent, schema))?;
+            triple(&mut graph, &prop_iri, rdfs::subPropertyOf, &parent_iri)?;
         }
 
         emit_mappings(
@@ -1923,6 +1938,65 @@ mod tests {
                 && t.p().iri().is_some_and(|i| i.as_str() == predicate)
                 && t.o().iri().is_some_and(|i| i.as_str() == object)
         })
+    }
+
+    /// A slot specializing another (slot-level `is_a`) emits
+    /// `rdfs:subPropertyOf`, so RDF consumers see the subset relation the
+    /// schema states — every value of the child is also a value of the
+    /// parent.
+    #[test]
+    fn a_slot_specializing_another_emits_sub_property_of() {
+        let mut schema = SchemaDefinition::new("s");
+        schema.id = Some("https://example.org/s".to_string());
+        let mut anchors = SlotDefinition::new("expected_anchors");
+        anchors.range = Some("string".to_string());
+        schema.slots.insert("expected_anchors".to_string(), anchors);
+        let mut citations = SlotDefinition::new("expected_citations");
+        citations.range = Some("string".to_string());
+        citations.is_a = Some("expected_anchors".to_string());
+        schema
+            .slots
+            .insert("expected_citations".to_string(), citations);
+
+        let graph = build_rdf_graph(&schema).expect("build graph");
+        assert!(
+            has_iri_triple(
+                &graph,
+                "https://example.org/s#expected_citations",
+                "http://www.w3.org/2000/01/rdf-schema#subPropertyOf",
+                "https://example.org/s#expected_anchors",
+            ),
+            "the specializing slot must state rdfs:subPropertyOf its parent"
+        );
+    }
+
+    /// A parent declared as a class attribute resolves to the IRI that
+    /// attribute's own emission uses — its `slot_uri` — never a minted
+    /// fallback, so the `rdfs:subPropertyOf` edge lands on a property the
+    /// graph actually declares.
+    #[test]
+    fn a_specialization_of_an_attribute_parent_targets_its_declared_iri() {
+        let mut schema = SchemaDefinition::new("s");
+        schema.id = Some("https://example.org/s".to_string());
+        let mut item = ClassDefinition::new("Item");
+        let mut parent = SlotDefinition::new("relation");
+        parent.slot_uri = Some("http://purl.org/dc/terms/relation".to_string());
+        item.attributes.insert("relation".to_string(), parent);
+        schema.classes.insert("Item".to_string(), item);
+        let mut child = SlotDefinition::new("cites");
+        child.is_a = Some("relation".to_string());
+        schema.slots.insert("cites".to_string(), child);
+
+        let graph = build_rdf_graph(&schema).expect("build graph");
+        assert!(
+            has_iri_triple(
+                &graph,
+                "https://example.org/s#cites",
+                "http://www.w3.org/2000/01/rdf-schema#subPropertyOf",
+                "http://purl.org/dc/terms/relation",
+            ),
+            "the parent IRI must be the attribute's declared slot_uri"
+        );
     }
 
     /// The `owl:versionIRI` joins the schema `id` and version with exactly

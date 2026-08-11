@@ -117,6 +117,9 @@ pub struct OntologyProperty {
     pub range_iri: Option<String>,
     /// IRI of the inverse property (owl:inverseOf)
     pub inverse_of_iri: Option<String>,
+    /// IRIs of the properties this one specializes (rdfs:subPropertyOf),
+    /// sorted — a property may carry several axioms.
+    pub sub_property_of_iris: Vec<String>,
     /// OWL relationship characteristics (transitive, symmetric, …).
     pub characteristics: PropertyCharacteristics,
     /// SKOS / editorial cross-references (deprecated, aliases, see_also, mappings).
@@ -245,6 +248,7 @@ mod tests {
             domain_iri: None,
             range_iri: None,
             inverse_of_iri: None,
+            sub_property_of_iris: Vec::new(),
             characteristics: PropertyCharacteristics::default(),
             annotations: Annotations::default(),
         };
@@ -262,6 +266,7 @@ mod tests {
             domain_iri: None,
             range_iri: None,
             inverse_of_iri: None,
+            sub_property_of_iris: Vec::new(),
             characteristics: PropertyCharacteristics::default(),
             annotations: Annotations::default(),
         };

@@ -374,6 +374,7 @@ fn merge_slot_override(target: &mut SlotDefinition, source: &SlotDefinition) {
     merge_opt!(range);
     merge_opt!(description);
     merge_opt!(pattern);
+    merge_opt!(is_a);
     merge_opt_copy!(minimum_cardinality);
     merge_opt_copy!(maximum_cardinality);
 
@@ -865,6 +866,31 @@ mod tests {
             vec!["string".to_string()],
             "the induced view carries the materialized default like any declared range"
         );
+    }
+
+    /// A `slot_usage` override can introduce a specialization: `is_a` set
+    /// there lands on the effective definition, where the validator
+    /// enforces it for that class's records. The scope is the class —
+    /// RDF's `rdfs:subPropertyOf` is a global axiom, so a class-scoped
+    /// override deliberately does not emit one.
+    #[test]
+    fn slot_usage_can_declare_a_slot_specialization() {
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .slots
+            .insert("anchors".into(), SlotDefinition::new("anchors"));
+        schema
+            .slots
+            .insert("citations".into(), SlotDefinition::new("citations"));
+        let mut class = ClassDefinition::new("Answer");
+        class.slots = vec!["anchors".into(), "citations".into()];
+        let mut usage = SlotDefinition::new("citations");
+        usage.is_a = Some("anchors".to_string());
+        class.slot_usage.insert("citations".into(), usage);
+        schema.classes.insert("Answer".into(), class);
+
+        let resolved = resolve_effective_slots(&schema.classes["Answer"], &schema);
+        assert_eq!(resolved["citations"].is_a.as_deref(), Some("anchors"));
     }
 
     /// Without a `default_range`, materialization is a no-op — the default

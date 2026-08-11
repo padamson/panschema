@@ -83,6 +83,20 @@ impl Writer for ShaclWriter {
                     )
                 }),
         );
+        // SHACL Core's property-pair constraints (sh:equals, sh:disjoint,
+        // sh:lessThan[OrEquals]) include no subset form, so a slot-level
+        // `is_a` has no shape to land in — the shapes accept data the
+        // native validator rejects, and that gap must be stated.
+        gaps.extend(
+            crate::diagnostics::slot_specializations(schema)
+                .into_iter()
+                .map(|(child, parent)| {
+                    format!(
+                        "slot `{child}` specializes `{parent}`, which SHACL Core cannot express — \
+                     the emitted shapes do not enforce the subset"
+                    )
+                }),
+        );
         gaps
     }
 }
@@ -126,6 +140,27 @@ mod tests {
 
     const SH: &str = "http://www.w3.org/ns/shacl#";
     const EX: &str = "http://example.org/test";
+
+    /// A slot-level `is_a` has no SHACL Core form, so the writer reports
+    /// the drop as a projection gap instead of leaving the shapes silently
+    /// weaker than the native validator.
+    #[test]
+    fn a_slot_specialization_is_reported_as_a_projection_gap() {
+        let mut schema = SchemaDefinition::new("test");
+        schema
+            .slots
+            .insert("anchors".to_string(), SlotDefinition::new("anchors"));
+        let mut citations = SlotDefinition::new("citations");
+        citations.is_a = Some("anchors".to_string());
+        schema.slots.insert("citations".to_string(), citations);
+
+        let gaps = crate::io::Writer::projection_gaps(&ShaclWriter::new(), &schema);
+        assert!(
+            gaps.iter()
+                .any(|g| g.contains("citations") && g.contains("anchors")),
+            "the inexpressible subset must be a stated gap; got: {gaps:?}"
+        );
+    }
 
     /// A slot typed only by the schema's `default_range` still gets its
     /// `sh:datatype` — loading materializes the default into the slot

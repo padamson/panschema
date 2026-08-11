@@ -84,7 +84,7 @@ slot, enum, type, and permissible-value alike. panschema models only a few:
 | `created` `modified` | ● | ○ | — | ● | ✗ | ✗ | **RDF-only** (`dcterms:created`/`modified`); HTML drops them |
 | `prefixes` | ● | ● | ◐ | ● | ✗ | ✗ | namespace table; CURIE expansion; `@prefix` |
 | `default_prefix` | ● | ● | ◐ | ◐ | ✗ | ✗ | bare-name CURIE resolution |
-| `default_range` | ● | ○ | ○ | ○ | ○ | ✗ | modeled, but no writer applies it |
+| `default_range` | ● | ● | ● | ● | ● | ●◨ | materialized into rangeless slot definitions at load, per declaring file (an import's slots take its own file's default, never the root's), so every writer and the validator see a populated range; an unresolvable default is a dangling-reference warning |
 | `imports` | ● | ◐ | ◐ | ◐ | ◐ | ✗ | local file imports resolved + merged at load time (every writer sees one schema); CURIE/remote/builtin imports + provenance rendering still pending |
 | `classes` `slots` `enums` `types` | ● | ● | ● | ● | ● | ●◨ | the indexes the writers walk; Postgres walks `classes`/`enums` ([feature 24 slice 1](features/24-postgres-ddl-writer.md) ✅, syntax-verified via `pg_query` — [feature 28 slice 1](features/28-postgres-ddl-writer-output-verification.md) ✅); `slots`/`types` not applicable (no top-level slot or type table) |
 | `subsets` `settings` `bindings` `emit_prefixes` `source_file` `metamodel_version` `generation_date` … | ✗ | — | — | — | — | — | not modeled |
@@ -136,7 +136,8 @@ focused subset of the structural ones.
 | `symmetric` `asymmetric` `reflexive` `irreflexive` `transitive` | ● | ● | — | ● | — | — | OWL relationship characteristics: card badge + `owl:<Name>Property` axiom; round-trips (OWL reader reads the axioms back into the flags); not applicable to relational modeling |
 | `ifabsent` | ● | ● | — | — | ● | ✗ | schema-encoded default. Rust: enum and scalar (`int`/`float`/`double`/`string`/boolean) forms generate a non-`Option` field with `#[serde(default)]` + default fn; HTML "Default" row shows the value; Postgres doesn't yet emit a column `DEFAULT` from it |
 | `key` | ● | ○ | ○ | ○ | ○ | ●◨ | identifies records within their container: the record-id slot for instance data (scoping per dataset — see feature 41), and the Postgres primary key when no `identifier` exists. Not yet surfaced as a card badge |
-| `designates_type` `subproperty_of` `singular_name` `recommended` `slot_group` `unit` `implicit_prefix` `readonly` `shared` `list_elements_unique`/`_ordered` | ✗ | — | — | — | — | — | not modeled. `subproperty_of` (`rdfs:subPropertyOf`) would further enrich RDF/OWL |
+| `is_a` (slot) | ● | ● | — | ● | — | — | slot specialization: "Specializes" card line; `rdfs:subPropertyOf` (read back by the OWL reader for parents the ontology itself defines; several axioms project deterministically onto the single-valued field); `validate` enforces per-record value containment; a class using the child without the parent is warned. **Divergence:** the parent's field values are not inherited onto the child (linkml-runtime induces them); a `slot_usage`-declared `is_a` is class-scoped — enforced by `validate`, deliberately not emitted as a global RDF axiom |
+| `designates_type` `subproperty_of` `singular_name` `recommended` `slot_group` `unit` `implicit_prefix` `readonly` `shared` `list_elements_unique`/`_ordered` | ✗ | — | — | — | — | — | not modeled. `subproperty_of` (an *external* `rdfs:subPropertyOf` target URI) would complement slot-level `is_a`, which covers the in-schema case |
 | `minimum_value` `maximum_value` | ● | ● | — | ○ | — | ●◨ | numeric value bounds: `≥`/`≤` card badge (feature 14 slice 2); RDF `owl:withRestrictions` facet deferred (slice 2b); Postgres emits one inline `CHECK (col >= min AND col <= max)`, or just the set side ([feature 24 slice 2](features/24-postgres-ddl-writer.md) ✅, syntax-verified via `pg_query`) |
 | `equals_string` `equals_string_in` `equals_number` `equals_expression` `exact_cardinality` `has_member` `all_members` `structured_pattern` `range_expression` `all_of` `exactly_one_of` `none_of` `array` | ✗ | — | — | — | — | — | not modeled. Value/boolean-expression constraints (a validation-feature family) |
 
@@ -225,7 +226,8 @@ Ordered by impact, with the slices already filed against each:
    relationship characteristics — `symmetric`, `asymmetric`, `reflexive`,
    `irreflexive`, `transitive` — are modeled and emit `owl:<Name>Property`
    axioms + card badges ([feature 14 slice 1](features/14-slot-constraints.md) ✅).
-   Remaining tail: `subproperty_of` (`rdfs:subPropertyOf`).
+   Remaining tail: `subproperty_of` (an external `rdfs:subPropertyOf`
+   target URI; slot-level `is_a` covers the in-schema case).
 7. **Dynamic enums / imports resolution**: `reachable_from`, `code_set`;
    `imports` of local files now resolve + merge at load time, so a schema
    split across files renders as one. CURIE/remote/builtin (`linkml:*`)
