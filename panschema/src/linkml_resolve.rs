@@ -141,6 +141,85 @@ pub fn resolve_effective_slots_with_provenance(
     resolve_slots_walk(class, schema, &mut visited)
 }
 
+/// Fill each specializing slot's unset fields from its `is_a` parent
+/// chain — LinkML's slot inheritance. Nearer ancestors win; a field the
+/// child states is never touched. Runs at load time before
+/// [`materialize_default_range`] (an inherited explicit range beats the
+/// file's default) and once more after imports merge, so a parent
+/// declared in another file contributes to fields still unset. One
+/// residual ordering corner: a cross-file parent's field loses to the
+/// child file's own `default_range`, because the default materializes
+/// per file before the merge makes the parent visible.
+///
+/// Only `Option`- and list-valued metaslots inherit. The boolean
+/// metaslots (`required`, `multivalued`, …) do not: the IR cannot
+/// distinguish a stated `false` from silence, and stomping an explicit
+/// `false` would be worse than not inheriting — recorded as a divergence
+/// in `docs/linkml-coverage.md`.
+pub fn resolve_slot_inheritance(schema: &mut SchemaDefinition) {
+    // Snapshot of every slot definition by name, so fills read stable
+    // pre-inheritance ancestors while the live definitions mutate.
+    // Top-level slots shadow same-named attributes, matching `find_slot`.
+    let mut defs: BTreeMap<String, SlotDefinition> = BTreeMap::new();
+    for class in schema.classes.values() {
+        for (name, def) in &class.attributes {
+            defs.entry(name.clone()).or_insert_with(|| def.clone());
+        }
+    }
+    for (name, def) in &schema.slots {
+        defs.insert(name.clone(), def.clone());
+    }
+
+    let fill = |own_name: &str, slot: &mut SlotDefinition| {
+        let mut seen: Vec<String> = vec![own_name.to_string()];
+        let mut next = slot.is_a.clone();
+        while let Some(parent_name) = next {
+            if seen.contains(&parent_name) {
+                break;
+            }
+            let Some(parent) = defs.get(&parent_name) else {
+                break;
+            };
+            inherit_unset(slot, parent);
+            next = parent.is_a.clone();
+            seen.push(parent_name);
+        }
+    };
+    for (name, slot) in schema.slots.iter_mut() {
+        fill(name, slot);
+    }
+    for class in schema.classes.values_mut() {
+        for (name, attribute) in class.attributes.iter_mut() {
+            fill(name, attribute);
+        }
+    }
+}
+
+/// Copy `parent`'s value into `child` for every inheritable metaslot the
+/// child leaves unset.
+fn inherit_unset(child: &mut SlotDefinition, parent: &SlotDefinition) {
+    macro_rules! inherit_opt {
+        ($field:ident) => {
+            if child.$field.is_none() {
+                child.$field = parent.$field.clone();
+            }
+        };
+    }
+    inherit_opt!(range);
+    inherit_opt!(description);
+    inherit_opt!(pattern);
+    inherit_opt!(ifabsent);
+    inherit_opt!(minimum_cardinality);
+    inherit_opt!(maximum_cardinality);
+    inherit_opt!(minimum_value);
+    inherit_opt!(maximum_value);
+    inherit_opt!(inlined);
+    inherit_opt!(inlined_as_list);
+    if child.any_of.is_empty() && !parent.any_of.is_empty() {
+        child.any_of = parent.any_of.clone();
+    }
+}
+
 /// Fill the schema's `default_range` into its own rangeless slot
 /// definitions — top-level `slots:` entries and every class's inline
 /// `attributes`. Runs once per schema file at load time, *before* imports
@@ -353,6 +432,48 @@ fn rebase_through_mixin(mixin: &str, provenance: Provenance) -> Provenance {
 /// from "override omits the field." This compromise covers the common
 /// case faithfully.
 fn merge_slot_override(target: &mut SlotDefinition, source: &SlotDefinition) {
+    // Enrollment check: every field is named (no `..`), so adding a field
+    // to `SlotDefinition` fails to compile here until this merge decides
+    // whether `slot_usage` carries it — instead of silently dropping it,
+    // which is how `inverse` and `slot_uri` went unenrolled.
+    let SlotDefinition {
+        name: _,
+        description: _,
+        deprecated: _,
+        aliases: _,
+        see_also: _,
+        examples: _,
+        range: _,
+        domain: _,
+        ifabsent: _,
+        required: _,
+        multivalued: _,
+        minimum_cardinality: _,
+        maximum_cardinality: _,
+        pattern: _,
+        identifier: _,
+        key: _,
+        inlined: _,
+        inlined_as_list: _,
+        slot_uri: _,
+        inverse: _,
+        is_a: _,
+        symmetric: _,
+        asymmetric: _,
+        reflexive: _,
+        irreflexive: _,
+        transitive: _,
+        minimum_value: _,
+        maximum_value: _,
+        any_of: _,
+        exact_mappings: _,
+        close_mappings: _,
+        related_mappings: _,
+        narrow_mappings: _,
+        broad_mappings: _,
+        annotations: _,
+    } = *source;
+
     /// Clone the source field into the target when the source field is
     /// `Some`. Skips when source is `None` so the inherited value wins.
     macro_rules! merge_opt {
@@ -891,6 +1012,149 @@ mod tests {
 
         let resolved = resolve_effective_slots(&schema.classes["Answer"], &schema);
         assert_eq!(resolved["citations"].is_a.as_deref(), Some("anchors"));
+    }
+
+    /// A specializing slot inherits its parent chain's unset metaslots —
+    /// nearest ancestor first — while everything the child states stays
+    /// its own. A cyclic chain terminates rather than spinning.
+    #[test]
+    fn a_slot_inherits_unset_fields_from_its_parent_chain() {
+        let mut schema = SchemaDefinition::new("s");
+        let mut grandparent = SlotDefinition::new("references");
+        grandparent.range = Some("integer".to_string());
+        grandparent.pattern = Some("^r".to_string());
+        schema.slots.insert("references".into(), grandparent);
+        let mut parent = SlotDefinition::new("anchors");
+        parent.is_a = Some("references".to_string());
+        parent.range = Some("string".to_string());
+        parent.description = Some("anchor set".to_string());
+        schema.slots.insert("anchors".into(), parent);
+        let mut child = SlotDefinition::new("citations");
+        child.is_a = Some("anchors".to_string());
+        child.description = Some("cited subset".to_string());
+        schema.slots.insert("citations".into(), child);
+
+        resolve_slot_inheritance(&mut schema);
+
+        let citations = &schema.slots["citations"];
+        assert_eq!(
+            citations.range.as_deref(),
+            Some("string"),
+            "the nearest ancestor's range wins"
+        );
+        assert_eq!(
+            citations.description.as_deref(),
+            Some("cited subset"),
+            "a field the child states is never touched"
+        );
+        assert_eq!(
+            citations.pattern.as_deref(),
+            Some("^r"),
+            "a field no nearer ancestor states comes from the grandparent"
+        );
+
+        let mut cyclic = SchemaDefinition::new("c");
+        let mut a = SlotDefinition::new("a");
+        a.is_a = Some("b".to_string());
+        let mut b = SlotDefinition::new("b");
+        b.is_a = Some("a".to_string());
+        b.range = Some("string".to_string());
+        cyclic.slots.insert("a".into(), a);
+        cyclic.slots.insert("b".into(), b);
+        resolve_slot_inheritance(&mut cyclic);
+        assert_eq!(
+            cyclic.slots["a"].range.as_deref(),
+            Some("string"),
+            "a cycle terminates after one lap, keeping what it gathered"
+        );
+    }
+
+    /// A parent's `any_of` union inherits onto a child that states none,
+    /// and never onto a child that states its own.
+    #[test]
+    fn a_parent_union_inherits_only_where_the_child_states_none() {
+        let mut schema = SchemaDefinition::new("s");
+        let mut parent = SlotDefinition::new("value");
+        let mut int_branch = SlotDefinition::new("i");
+        int_branch.range = Some("integer".to_string());
+        let mut bool_branch = SlotDefinition::new("b");
+        bool_branch.range = Some("boolean".to_string());
+        parent.any_of = vec![int_branch, bool_branch];
+        schema.slots.insert("value".into(), parent);
+        let mut bare = SlotDefinition::new("bare");
+        bare.is_a = Some("value".to_string());
+        schema.slots.insert("bare".into(), bare);
+        let mut own = SlotDefinition::new("own");
+        own.is_a = Some("value".to_string());
+        let mut string_branch = SlotDefinition::new("s");
+        string_branch.range = Some("string".to_string());
+        own.any_of = vec![string_branch];
+        schema.slots.insert("own".into(), own);
+
+        resolve_slot_inheritance(&mut schema);
+
+        assert_eq!(
+            schema.slots["bare"].any_of.len(),
+            2,
+            "a union-less child takes the parent's union"
+        );
+        assert_eq!(
+            schema.slots["own"].any_of.len(),
+            1,
+            "a child's own union is never overwritten"
+        );
+        assert_eq!(
+            schema.slots["own"].any_of[0].range.as_deref(),
+            Some("string")
+        );
+    }
+
+    /// An inherited explicit range beats the file's `default_range`:
+    /// inheritance resolves first, so the default fills only slots that
+    /// neither state nor inherit a range.
+    #[test]
+    fn an_inherited_range_beats_the_default_range() {
+        let mut schema = SchemaDefinition::new("s");
+        schema.default_range = Some("string".to_string());
+        let mut parent = SlotDefinition::new("anchors");
+        parent.range = Some("integer".to_string());
+        schema.slots.insert("anchors".into(), parent);
+        let mut child = SlotDefinition::new("citations");
+        child.is_a = Some("anchors".to_string());
+        schema.slots.insert("citations".into(), child);
+
+        resolve_slot_inheritance(&mut schema);
+        materialize_default_range(&mut schema);
+
+        assert_eq!(
+            schema.slots["citations"].range.as_deref(),
+            Some("integer"),
+            "inheritance runs before the default fill"
+        );
+    }
+
+    /// An attribute-declared child inherits from a top-level parent — the
+    /// chain resolves across both declaration sites, matching `find_slot`.
+    #[test]
+    fn an_attribute_child_inherits_from_a_top_level_parent() {
+        let mut schema = SchemaDefinition::new("s");
+        let mut parent = SlotDefinition::new("anchors");
+        parent.range = Some("integer".to_string());
+        schema.slots.insert("anchors".into(), parent);
+        let mut class = ClassDefinition::new("Answer");
+        let mut child = SlotDefinition::new("citations");
+        child.is_a = Some("anchors".to_string());
+        class.attributes.insert("citations".into(), child);
+        schema.classes.insert("Answer".into(), class);
+
+        resolve_slot_inheritance(&mut schema);
+
+        assert_eq!(
+            schema.classes["Answer"].attributes["citations"]
+                .range
+                .as_deref(),
+            Some("integer")
+        );
     }
 
     /// Without a `default_range`, materialization is a no-op — the default

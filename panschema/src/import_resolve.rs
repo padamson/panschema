@@ -80,9 +80,12 @@ pub fn load_schema_with_deps(
 ) -> IoResult<SchemaDefinition> {
     let reader = registry.reader_for_path(input)?;
     let mut schema = reader.read(input)?;
-    // Each file's `default_range` fills its own rangeless slots before any
-    // merging, here for the root and in `resolve_into` for every import —
-    // per-file scope, per LinkML semantics.
+    // Slot inheritance first — an inherited explicit range beats the
+    // file's default — then each file's `default_range` fills its own
+    // still-rangeless slots, before any merging. Same pair runs in
+    // `resolve_into` for every import: per-file scope, per LinkML
+    // semantics.
+    crate::linkml_resolve::resolve_slot_inheritance(&mut schema);
     crate::linkml_resolve::materialize_default_range(&mut schema);
 
     if !schema.imports.is_empty() {
@@ -119,6 +122,11 @@ pub fn load_schema_with_deps(
             return Err(IoError::Parse(conflicts.join("\n")));
         }
     }
+
+    // Second inheritance pass, now that the merge has made cross-file
+    // parents visible — fills only fields still unset, so per-file
+    // defaults and same-file inheritance keep their precedence.
+    crate::linkml_resolve::resolve_slot_inheritance(&mut schema);
 
     // Schema-level diagnostics that don't depend on the output format, so every
     // command surfaces them — previously only `generate` did. `--strict`
@@ -364,10 +372,11 @@ fn resolve_into(
             path: resolved.clone(),
             source,
         })?;
-        // This file's own `default_range` types this file's own slots —
-        // applied before recursing so a transitive import (materialized at
-        // its own read, then merged in below) is never re-typed by an
-        // importer's default.
+        // This file's own inheritance and `default_range` type this file's
+        // own slots — applied before recursing so a transitive import
+        // (normalized at its own read, then merged in below) is never
+        // re-typed by an importer's default.
+        crate::linkml_resolve::resolve_slot_inheritance(&mut imported);
         crate::linkml_resolve::materialize_default_range(&mut imported);
 
         // Recurse into the imported file's own imports first, resolving
@@ -1095,6 +1104,34 @@ mod tests {
         assert!(
             msg.contains("conflict_one.yaml") && msg.contains("conflict_two.yaml"),
             "error must name both conflicting sources; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_slot_inherits_from_a_parent_declared_in_an_imported_file() {
+        // Slot-level `is_a` inheritance resolves against the merged
+        // namespace: a child whose parent lives in an imported file takes
+        // the parent's range once the merge lands it.
+        let registry = FormatRegistry::with_defaults();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::write(
+            dir.join("base.yaml"),
+            "name: base\nid: https://example.org/base\nslots:\n  anchors:\n    range: integer\n    description: base anchors\n",
+        )
+        .unwrap();
+        let root_path = dir.join("root.yaml");
+        std::fs::write(
+            &root_path,
+            "name: root\nid: https://example.org/root\nimports:\n  - base\nslots:\n  citations:\n    is_a: anchors\n",
+        )
+        .unwrap();
+
+        let schema = load_schema(&root_path, &registry).expect("load");
+        assert_eq!(
+            schema.slots["citations"].range.as_deref(),
+            Some("integer"),
+            "the cross-file parent's range must reach the child after the merge"
         );
     }
 

@@ -514,8 +514,11 @@ pub struct SlotDefinition {
     pub inverse: Option<String>,
     /// Parent slot this one specializes (LinkML slot-level `is_a`): every
     /// value of this slot is also a value of the parent. Projects as
-    /// `rdfs:subPropertyOf` in RDF output; the parent's field values are
-    /// not inherited onto this definition.
+    /// `rdfs:subPropertyOf` in RDF output. The parent's unset option- and
+    /// list-valued metaslots are inherited at load time
+    /// ([`crate::linkml_resolve::resolve_slot_inheritance`]); boolean
+    /// metaslots are not, since the IR cannot distinguish a stated
+    /// `false` from silence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_a: Option<String>,
     /// OWL object-property characteristics. Each, when set, maps to an
