@@ -1287,7 +1287,9 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
 
     // Scroll to graph section to ensure buttons are visible
     page.evaluate::<(), ()>(
-        "document.getElementById('graph-visualization').scrollIntoView()",
+        // Driver 1.62.1+: scrollIntoView() evaluates to a result object
+        // ({interrupted: bool}); void keeps the expression unit-shaped.
+        "void document.getElementById('graph-visualization').scrollIntoView()",
         None,
     )
     .await
@@ -1570,7 +1572,9 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
     // 26. Test click-to-select: clicking on canvas should update selection state
     // First, scroll to graph and ensure viz is initialized
     page.evaluate::<(), ()>(
-        "document.getElementById('graph-visualization').scrollIntoView()",
+        // Driver 1.62.1+: scrollIntoView() evaluates to a result object
+        // ({interrupted: bool}); void keeps the expression unit-shaped.
+        "void document.getElementById('graph-visualization').scrollIntoView()",
         None,
     )
     .await
