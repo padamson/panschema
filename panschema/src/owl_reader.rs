@@ -670,7 +670,7 @@ impl OwlReader {
     }
 
     /// Map OntologyMetadata to LinkML SchemaDefinition
-    fn map_to_linkml(metadata: &OntologyMetadata) -> SchemaDefinition {
+    fn map_to_linkml(metadata: &OntologyMetadata, warnings: &mut Vec<String>) -> SchemaDefinition {
         let mut schema = SchemaDefinition::new(extract_id_from_iri(&metadata.iri));
 
         // Map ontology metadata
@@ -801,15 +801,36 @@ impl OwlReader {
             // localizing it would re-emit the relation against a freshly
             // minted local IRI. A reflexive axiom (`p subPropertyOf p`,
             // asserted by entailment-materialized ontologies) says nothing
-            // and is skipped. Several axioms project onto LinkML's
+            // and is skipped silently. Several axioms project onto LinkML's
             // single-valued `is_a` deterministically — the lexicographically
             // first qualifying parent wins, whatever the graph's order.
-            if let Some(parent_iri) = owl_prop
+            // Every dropped axiom is warned: the projection is lossy and
+            // the loss must be visible, not silent.
+            let chosen = owl_prop
                 .sub_property_of_iris
                 .iter()
-                .find(|iri| property_iris.contains(iri.as_str()) && **iri != owl_prop.iri)
-            {
+                .find(|iri| property_iris.contains(iri.as_str()) && **iri != owl_prop.iri);
+            if let Some(parent_iri) = chosen {
                 slot_def.is_a = Some(extract_id_from_iri(parent_iri));
+            }
+            for dropped in &owl_prop.sub_property_of_iris {
+                if Some(dropped) == chosen || *dropped == owl_prop.iri {
+                    continue;
+                }
+                warnings.push(match chosen {
+                    Some(kept) if property_iris.contains(dropped.as_str()) => format!(
+                        "property `{}` has several rdfs:subPropertyOf axioms; kept `{}`, \
+                         dropped `{}` (LinkML slot `is_a` holds one parent)",
+                        owl_prop.id,
+                        extract_id_from_iri(kept),
+                        extract_id_from_iri(dropped),
+                    ),
+                    _ => format!(
+                        "property `{}` is rdfs:subPropertyOf <{dropped}>, which this ontology \
+                         does not define — the axiom cannot be represented and was dropped",
+                        owl_prop.id,
+                    ),
+                });
             }
 
             // OWL relationship characteristics.
@@ -953,9 +974,14 @@ impl Default for OwlReader {
 
 impl Reader for OwlReader {
     fn read(&self, input: &Path) -> IoResult<SchemaDefinition> {
-        let metadata = Self::parse_ontology(input).map_err(|e| IoError::Parse(e.to_string()))?;
+        self.read_with_warnings(input).map(|(schema, _)| schema)
+    }
 
-        Ok(Self::map_to_linkml(&metadata))
+    fn read_with_warnings(&self, input: &Path) -> IoResult<(SchemaDefinition, Vec<String>)> {
+        let metadata = Self::parse_ontology(input).map_err(|e| IoError::Parse(e.to_string()))?;
+        let mut warnings = Vec::new();
+        let schema = Self::map_to_linkml(&metadata, &mut warnings);
+        Ok((schema, warnings))
     }
 
     fn supported_extensions(&self) -> &[&str] {
@@ -1024,6 +1050,57 @@ mod tests {
         assert_eq!(schema.slots["hasName"].is_a, None);
     }
 
+    /// A projection the IR cannot hold is warned, not silent: surplus
+    /// `rdfs:subPropertyOf` axioms (LinkML `is_a` is single-valued) name
+    /// what was kept and what was dropped, and an external parent names
+    /// the IRI that could not be represented.
+    #[test]
+    fn dropped_sub_property_axioms_are_warned() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schema.ttl");
+        std::fs::write(
+            &path,
+            r#"@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix : <https://example.org/s#> .
+<https://example.org/s> a owl:Ontology .
+:aParent a owl:ObjectProperty .
+:bParent a owl:ObjectProperty .
+:child a owl:ObjectProperty ; rdfs:subPropertyOf :child , :aParent , :bParent .
+:hasAuthor a owl:ObjectProperty ; rdfs:subPropertyOf <http://purl.org/dc/terms/creator> .
+:mixed a owl:ObjectProperty ; rdfs:subPropertyOf :aParent , <http://purl.org/dc/terms/relation> .
+"#,
+        )
+        .expect("write ttl");
+        let (schema, warnings) =
+            crate::io::Reader::read_with_warnings(&OwlReader::new(), &path).expect("read ttl");
+
+        assert_eq!(schema.slots["child"].is_a.as_deref(), Some("aParent"));
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("child") && w.contains("aParent") && w.contains("bParent")),
+            "the surplus axiom must be warned, naming kept and dropped; got: {warnings:?}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("hasAuthor") && w.contains("http://purl.org/dc/terms/creator")),
+            "the unrepresentable external parent must be warned; got: {warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("mixed")
+                && w.contains("http://purl.org/dc/terms/relation")
+                && w.contains("does not define")),
+            "an external parent beside a kept one still gets the external message; got: {warnings:?}"
+        );
+        assert_eq!(
+            warnings.len(),
+            3,
+            "kept parents and reflexive axioms produce no warning; got: {warnings:?}"
+        );
+    }
+
     /// An external super-property — a dcterms: term, an OWL builtin —
     /// names no slot in this schema, so it does not localize into `is_a`:
     /// the axiom is a reference into a vocabulary the IR cannot express,
@@ -1042,25 +1119,6 @@ mod tests {
         assert_eq!(
             schema.slots["hasAuthor"].is_a, None,
             "an external parent must not become a local slot reference"
-        );
-    }
-
-    #[test]
-    fn tmp_verifier_reflexive_sub_property_axiom() {
-        let schema = read_ttl(
-            r#"@prefix owl: <http://www.w3.org/2002/07/owl#> .
-@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
-@prefix : <https://example.org/s#> .
-<https://example.org/s> a owl:Ontology .
-:zParent a owl:ObjectProperty .
-:child a owl:ObjectProperty ; rdfs:subPropertyOf :child , :zParent .
-"#,
-        );
-        assert_eq!(
-            schema.slots["child"].is_a.as_deref(),
-            Some("zParent"),
-            "reflexive axiom must not shadow the real parent; got {:?}",
-            schema.slots["child"].is_a
         );
     }
 

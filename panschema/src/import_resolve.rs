@@ -79,7 +79,12 @@ pub fn load_schema_with_deps(
     deps: &BTreeMap<String, PathBuf>,
 ) -> IoResult<SchemaDefinition> {
     let reader = registry.reader_for_path(input)?;
-    let mut schema = reader.read(input)?;
+    let (mut schema, reader_warnings) = reader.read_with_warnings(input)?;
+    // Read-time drops — constructs the IR cannot hold — surface with the
+    // other load warnings rather than vanishing.
+    for warning in &reader_warnings {
+        eprintln!("warning: {warning}");
+    }
     // Slot inheritance first — an inherited explicit range beats the
     // file's default — then each file's `default_range` fills its own
     // still-rangeless slots, before any merging. Same pair runs in
@@ -368,10 +373,16 @@ fn resolve_into(
                 path: resolved.clone(),
                 source,
             })?;
-        let mut imported = reader.read(&resolved).map_err(|source| ImportError::Load {
-            path: resolved.clone(),
-            source,
-        })?;
+        let (mut imported, reader_warnings) =
+            reader
+                .read_with_warnings(&resolved)
+                .map_err(|source| ImportError::Load {
+                    path: resolved.clone(),
+                    source,
+                })?;
+        for warning in &reader_warnings {
+            eprintln!("warning: {}: {warning}", resolved.display());
+        }
         // This file's own inheritance and `default_range` type this file's
         // own slots — applied before recursing so a transitive import
         // (normalized at its own read, then merged in below) is never

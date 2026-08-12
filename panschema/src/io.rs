@@ -78,6 +78,18 @@ pub trait Reader {
     /// Parse the input file into a SchemaDefinition
     fn read(&self, input: &Path) -> IoResult<SchemaDefinition>;
 
+    /// Like [`Reader::read`], additionally returning human-readable
+    /// warnings about constructs the reader dropped — projections the IR
+    /// cannot hold, such as an external `rdfs:subPropertyOf` parent or
+    /// surplus axioms on a single-valued field. The schema is identical to
+    /// what `read` returns; the warnings only add visibility, and the load
+    /// path prints them alongside the schema-load diagnostics. The default
+    /// wraps `read` with no warnings; a reader that projects lossily
+    /// overrides this and implements `read` in terms of it.
+    fn read_with_warnings(&self, input: &Path) -> IoResult<(SchemaDefinition, Vec<String>)> {
+        self.read(input).map(|schema| (schema, Vec::new()))
+    }
+
     /// File extensions this reader can handle (e.g., ["ttl", "turtle"])
     fn supported_extensions(&self) -> &[&str];
 
