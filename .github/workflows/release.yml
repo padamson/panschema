@@ -46,8 +46,7 @@ jobs:
       uses: dtolnay/rust-toolchain@master
       with:
         toolchain: stable
-        target: ${{ matrix.target }}
-        targets: wasm32-unknown-unknown
+        targets: ${{ matrix.target }}, wasm32-unknown-unknown
 
     # Release binaries embed the real WebGPU viz bundle (build.rs refuses
     # to build without wasm-pack when the bundle is absent — no stubs in a
