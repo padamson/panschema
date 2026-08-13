@@ -1,6 +1,6 @@
 {
   "name": "panschema",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Convert, document, and validate data models with panschema: LinkML and OWL schemas to HTML docs, RDF/OWL, JSON Schema, OpenAPI, SHACL, Rust, and Postgres DDL; validate instance data; wire a panschema.toml manifest.",
   "author": {
     "name": "Paul Adamson",
@@ -8,7 +8,7 @@
   },
   "homepage": "https://github.com/padamson/panschema",
   "repository": "https://github.com/padamson/panschema",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": [
     "linkml",
     "owl",

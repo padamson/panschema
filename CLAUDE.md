@@ -6,7 +6,7 @@ This file provides guidance for Claude Code when working on the panschema projec
 
 **panschema** is a universal CLI for schema conversion, documentation, validation, and comparison. Think of it as pandoc for data modeling — supporting OWL, LinkML, JSON Schema, and more.
 
-**Current Status:** v0.2.0 — Reader/Writer architecture with OWL/Turtle and LinkML-YAML input and multiple output writers: HTML docs, the RDF/OWL family (Turtle, JSON-LD, RDF/XML, N-Triples), graph JSON, Rust, Postgres DDL, and SHACL shapes.
+**Current Status:** v0.3.0 — schema package manager (`fetch`/`verify`/`publish`, `path:` and `github:` sources), Rust codegen with selectable time crate, `generate --check` drift gate, native instance-data validation (scalar kinds, slot-level `is_a` containment, rules), slot-level `is_a` across every projection, and `default_range` materialization — on the v0.2.0 Reader/Writer architecture (OWL/Turtle + LinkML-YAML in; HTML, RDF/OWL family, graph JSON, Rust, Postgres DDL, SHACL, JSON Schema, OpenAPI out).
 
 ## Build Commands
 

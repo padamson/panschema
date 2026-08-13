@@ -51,7 +51,7 @@ Input → Reader → LinkML IR → [Filters] → Writer → Output
 - Interactive WebGPU schema graph visualization (`panschema-viz` wasm crate)
 - E2E browser tests via playwright-rs
 
-### v0.3.0 — Schema Package Manager + Rust Codegen + Dogfood Fixes (current)
+### v0.3.0 — Schema Package Manager + Rust Codegen + Dogfood Fixes ✅ (released 2026-08-13)
 
 **Goal:** Make panschema usable as a versioned schema dependency in downstream Rust applications.
 
