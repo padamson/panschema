@@ -86,6 +86,13 @@ enum Commands {
         #[arg(long = "no-graph")]
         no_graph: bool,
 
+        /// Check mode: regenerate to a temporary location and compare
+        /// against each declared output byte-for-byte. Exits non-zero
+        /// naming every drifted or missing output; writes nothing. The
+        /// committed-codegen CI gate, without wrapping git.
+        #[arg(long)]
+        check: bool,
+
         /// Time crate for generated Rust temporal fields: chrono (default)
         /// or jiff. The wire format is identical either way. Only
         /// meaningful with --format rust; keep it in step with the
@@ -389,6 +396,9 @@ struct GenerateOptions<'a> {
     rust_time: Option<&'a str>,
     /// Promote load-time diagnostics to hard errors.
     strict: bool,
+    /// Compare a fresh generation against the declared output instead of
+    /// writing it; the drifted path is returned rather than printed.
+    check: bool,
 }
 
 fn generate(
@@ -399,14 +409,41 @@ fn generate(
     opts: &GenerateOptions<'_>,
     labels: &LabelOptions,
     deps: &std::collections::BTreeMap<String, PathBuf>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<PathBuf>> {
     let GenerateOptions {
         include_graph,
         html_graph_aspect,
         html_default_layout,
         rust_time,
         strict,
+        check,
     } = *opts;
+    // Check mode renders to a scratch path and byte-compares against the
+    // declared output. HTML is a directory artifact and is not compared;
+    // that skip is stated, never silent.
+    if check && format.eq_ignore_ascii_case("html") {
+        eprintln!(
+            "warning: html output `{}` is not compared by --check (directory output); \
+             rerun without --check to refresh it",
+            output.display()
+        );
+        return Ok(Vec::new());
+    }
+    let scratch = if check {
+        Some(tempfile::tempdir().map_err(|e| anyhow::anyhow!("scratch dir: {e}"))?)
+    } else {
+        None
+    };
+    let declared = output.to_path_buf();
+    let render_target = match &scratch {
+        Some(dir) => dir.path().join(
+            declared
+                .file_name()
+                .unwrap_or_else(|| std::ffi::OsStr::new("output")),
+        ),
+        None => declared.clone(),
+    };
+    let output: &Path = &render_target;
     let registry = FormatRegistry::with_defaults();
 
     // Read the input and fold in any `imports:` through the shared load path,
@@ -556,6 +593,17 @@ fn generate(
             .map_err(|e| anyhow::anyhow!("{}", e))?;
     }
 
+    if check {
+        let fresh = std::fs::read(&render_target)
+            .map_err(|e| anyhow::anyhow!("read fresh generation: {e}"))?;
+        let current = std::fs::read(&declared).ok();
+        return Ok(if current.as_deref() == Some(fresh.as_slice()) {
+            Vec::new()
+        } else {
+            vec![declared]
+        });
+    }
+
     let title = schema.title.as_deref().unwrap_or(&schema.name);
     let format_desc = match format.to_lowercase().as_str() {
         "html" => "documentation",
@@ -571,7 +619,7 @@ fn generate(
         title,
         output.display()
     );
-    Ok(())
+    Ok(Vec::new())
 }
 
 /// Discover the manifest and load it. Returns the parsed manifest plus the
@@ -763,7 +811,13 @@ fn migrate_from_manifest() -> anyhow::Result<()> {
 }
 
 /// `panschema generate` (no --schema): walk the manifest and run configured writers.
-fn generate_from_manifest(offline: bool, refresh_labels: bool, strict: bool) -> anyhow::Result<()> {
+fn generate_from_manifest(
+    offline: bool,
+    refresh_labels: bool,
+    strict: bool,
+    check: bool,
+) -> anyhow::Result<()> {
+    let mut drifted: Vec<PathBuf> = Vec::new();
     use anyhow::Context as _;
     let (manifest, manifest_dir) = load_manifest()?;
     let labels = LabelOptions {
@@ -814,6 +868,7 @@ fn generate_from_manifest(offline: bool, refresh_labels: bool, strict: bool) -> 
                     html_default_layout: gen_cfg.html_default_layout.as_deref(),
                     rust_time: None,
                     strict,
+                    check,
                 },
                 &labels,
                 &deps,
@@ -841,20 +896,23 @@ fn generate_from_manifest(offline: bool, refresh_labels: bool, strict: bool) -> 
             let out = manifest_dir.join(out);
             // `rust_time` rides along unconditionally; only the rust
             // branch of `generate` reads it.
-            generate(
-                schema_path,
-                &instances,
-                &out,
-                format,
-                &GenerateOptions {
-                    rust_time: gen_cfg.rust_time.as_deref(),
-                    strict,
-                    ..Default::default()
-                },
-                &labels,
-                &deps,
-            )
-            .with_context(|| format!("schema `{name}`, format `{format}`"))?;
+            drifted.extend(
+                generate(
+                    schema_path,
+                    &instances,
+                    &out,
+                    format,
+                    &GenerateOptions {
+                        rust_time: gen_cfg.rust_time.as_deref(),
+                        strict,
+                        check,
+                        ..Default::default()
+                    },
+                    &labels,
+                    &deps,
+                )
+                .with_context(|| format!("schema `{name}`, format `{format}`"))?,
+            );
             produced_anything = true;
         }
     }
@@ -862,6 +920,17 @@ fn generate_from_manifest(offline: bool, refresh_labels: bool, strict: bool) -> 
     if !produced_anything {
         eprintln!(
             "No outputs generated. Add an `[generate.<schema>]` block with at least one writer key (e.g. `html = \"docs/\"` or `rust = \"src/generated.rs\"`)."
+        );
+    }
+    if !drifted.is_empty() {
+        anyhow::bail!(
+            "{} output(s) out of date with a fresh generation:\n{}\nrun `panschema generate` to refresh",
+            drifted.len(),
+            drifted
+                .iter()
+                .map(|p| format!("  {}", p.display()))
+                .collect::<Vec<_>>()
+                .join("\n")
         );
     }
     Ok(())
@@ -1705,6 +1774,7 @@ async fn main() -> anyhow::Result<()> {
             output,
             format,
             no_graph,
+            check,
             rust_time,
             viz_mode,
             offline,
@@ -1758,7 +1828,7 @@ async fn main() -> anyhow::Result<()> {
                     overrides: &no_overrides,
                 };
                 let no_deps = std::collections::BTreeMap::new();
-                generate(
+                let drifted = generate(
                     &schema_path,
                     &instances,
                     &output,
@@ -1767,13 +1837,25 @@ async fn main() -> anyhow::Result<()> {
                         include_graph: !no_graph,
                         rust_time: rust_time.as_deref(),
                         strict,
+                        check,
                         ..Default::default()
                     },
                     &labels,
                     &no_deps,
                 )?;
+                if !drifted.is_empty() {
+                    anyhow::bail!(
+                        "{} output(s) out of date with a fresh generation:\n{}\nrun `panschema generate` to refresh",
+                        drifted.len(),
+                        drifted
+                            .iter()
+                            .map(|p| format!("  {}", p.display()))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    );
+                }
             }
-            None => generate_from_manifest(offline, refresh_labels, strict)?,
+            None => generate_from_manifest(offline, refresh_labels, strict, check)?,
         },
         Commands::Init {
             name,
@@ -1907,6 +1989,7 @@ mod tests {
                 output,
                 format,
                 no_graph,
+                check,
                 rust_time,
                 viz_mode,
                 offline,
@@ -1915,6 +1998,7 @@ mod tests {
             } => {
                 assert_eq!(schema, Some(PathBuf::from("test.ttl")));
                 assert_eq!(rust_time, None, "rust_time defaults to unset");
+                assert!(!check, "check defaults to off");
                 assert!(instances.is_empty(), "no instance-data file by default");
                 assert_eq!(output, PathBuf::from("docs"));
                 assert_eq!(format, "html");

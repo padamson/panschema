@@ -2688,6 +2688,74 @@ rust_time = "chrono2"
     );
 }
 
+/// `generate --check` is the committed-codegen drift gate: it compares a
+/// fresh generation against every declared output byte-for-byte, exits
+/// non-zero naming what drifted, and writes nothing — a tampered output
+/// stays tampered, and a missing one stays missing.
+#[test]
+fn generate_check_reports_drift_without_writing() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    write_sample_pkg(consumer, "sample-pkg");
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+sample_schema = { path = "./sample-pkg" }
+
+[generate.sample_schema]
+rust = "sample.rs"
+"#,
+    )
+    .expect("write manifest");
+
+    let check = |dir: &Path| {
+        Command::new(env!("CARGO_BIN_EXE_panschema"))
+            .args(["generate", "--check"])
+            .current_dir(dir)
+            .output()
+            .expect("run panschema generate --check")
+    };
+
+    // Missing output: drift.
+    let out = check(consumer);
+    assert!(!out.status.success(), "a missing declared output is drift");
+
+    // Freshly generated: clean.
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("generate")
+        .current_dir(consumer)
+        .status()
+        .expect("run panschema generate");
+    assert!(status.success());
+    let out = check(consumer);
+    assert!(
+        out.status.success(),
+        "an up-to-date output passes --check; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Tampered output: drift, named, and not rewritten.
+    let rust_out = consumer.join("sample.rs");
+    let tampered = format!(
+        "{}\n// local edit\n",
+        fs::read_to_string(&rust_out).unwrap()
+    );
+    fs::write(&rust_out, &tampered).expect("tamper output");
+    let out = check(consumer);
+    assert!(!out.status.success(), "a tampered output is drift");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("sample.rs"),
+        "the drifted file is named; got: {stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(&rust_out).expect("read back"),
+        tampered,
+        "--check must not rewrite the output"
+    );
+}
+
 /// `panschema fetch` writes a lockfile with one entry per manifested schema;
 /// `panschema verify` then succeeds against the unchanged on-disk content.
 #[test]

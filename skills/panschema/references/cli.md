@@ -41,6 +41,14 @@ bare no-subcommand form.
 - `--offline` / `--refresh-labels` — control upstream label fetching for
   external groundings. Fail-open: unreachable sources fall back to CURIEs.
 - `--no-graph`, `--viz-mode` — HTML only; warn if used with another format.
+- `--check` (`generate`) — the committed-codegen drift gate: regenerates to
+  a temporary location, byte-compares against every declared output, exits
+  non-zero naming what drifted or is missing, writes nothing. HTML outputs
+  are directories and are skipped with a warning. Replaces consumer-side
+  regenerate-and-git-diff wrapper scripts.
+- `--rust-time <chrono|jiff>` (`generate`) — time crate for `--format rust`
+  temporal fields; keep it in step with the manifest's `rust_time` so a
+  by-hand regenerate can't silently flip a jiff module back to chrono.
 
 ## Common recipes
 
