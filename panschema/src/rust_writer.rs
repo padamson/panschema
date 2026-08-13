@@ -22,11 +22,53 @@ use crate::linkml::{ClassDefinition, EnumDefinition, SchemaDefinition, SlotDefin
 /// Writes a Rust module representing the schema's classes, enums, and
 /// inheritance structure.
 #[derive(Debug, Default)]
-pub struct RustWriter;
+pub struct RustWriter {
+    time_crate: TimeCrate,
+}
+
+/// Which crate the generated module's temporal fields use. The wire format
+/// is identical either way — RFC 3339 / ISO 8601 strings through serde —
+/// so consumers pick whichever crate their workspace already carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TimeCrate {
+    /// `chrono::DateTime<Utc>` / `NaiveDate` / `NaiveTime` — the default.
+    #[default]
+    Chrono,
+    /// `jiff::Timestamp` / `jiff::civil::Date` / `jiff::civil::Time`.
+    Jiff,
+}
+
+impl TimeCrate {
+    /// Parse a manifest `rust_time` value. `None` for anything but the
+    /// two supported crate names, so a typo is an error rather than a
+    /// silent chrono fallback.
+    pub fn from_manifest(value: &str) -> Option<Self> {
+        match value {
+            "chrono" => Some(Self::Chrono),
+            "jiff" => Some(Self::Jiff),
+            _ => None,
+        }
+    }
+}
+
+/// Everything the per-class render functions read but never mutate —
+/// bundled so a writer-wide knob extends this struct instead of growing
+/// four signatures and their call sites.
+struct RenderCtx<'a> {
+    schema: &'a SchemaDefinition,
+    roles: &'a BTreeMap<String, ClassRole>,
+    eq_hash_support: &'a BTreeMap<String, bool>,
+    time: TimeCrate,
+}
 
 impl RustWriter {
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    /// A writer whose temporal fields use `time_crate`.
+    pub fn with_time_crate(time_crate: TimeCrate) -> Self {
+        Self { time_crate }
     }
 
     /// Produce the generated Rust source text for `schema`.
@@ -53,6 +95,12 @@ impl RustWriter {
     pub fn render_into<W: Write>(&self, out: &mut W, schema: &SchemaDefinition) -> fmt::Result {
         let roles = compute_class_roles(schema);
         let eq_hash_support = compute_eq_hash_support(schema, &roles);
+        let ctx = RenderCtx {
+            schema,
+            roles: &roles,
+            eq_hash_support: &eq_hash_support,
+            time: self.time_crate,
+        };
         let mut any_of_enums: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
         render_header(out, schema)?;
@@ -72,15 +120,7 @@ impl RustWriter {
         }
         for (name, def) in &schema.classes {
             if roles.get(name) == Some(&ClassRole::Struct) {
-                render_class(
-                    out,
-                    name,
-                    def,
-                    schema,
-                    &roles,
-                    &eq_hash_support,
-                    &mut any_of_enums,
-                )?;
+                render_class(out, name, def, &ctx, &mut any_of_enums)?;
             }
         }
         for name in schema.classes.keys() {
@@ -499,11 +539,15 @@ fn render_class<W: Write>(
     out: &mut W,
     name: &str,
     def: &ClassDefinition,
-    schema: &SchemaDefinition,
-    roles: &BTreeMap<String, ClassRole>,
-    eq_hash_support: &BTreeMap<String, bool>,
+    ctx: &RenderCtx<'_>,
     any_of_enums: &mut BTreeMap<String, Vec<String>>,
 ) -> fmt::Result {
+    let RenderCtx {
+        schema,
+        roles,
+        eq_hash_support,
+        ..
+    } = *ctx;
     render_doc_comment(out, "", def.description.as_deref())?;
     if def.r#abstract {
         out.write_str("///\n/// LinkML abstract class.\n")?;
@@ -564,7 +608,7 @@ fn render_class<W: Write>(
             // A resolved default is always present, so the faithful shape
             // is the bare type, not `Option<T>`.
             Some(d) => d.rust_type(),
-            None => field_type_for(name, slot_name, slot, schema, roles, any_of_enums),
+            None => field_type_for(name, slot_name, slot, ctx, any_of_enums),
         };
         render_doc_comment(out, "    ", slot.description.as_deref())?;
         if let Some(origin) = resolved_p[slot_name].provenance.origin_label(name) {
@@ -600,7 +644,7 @@ fn render_class<W: Write>(
         writeln!(out, "fn {fn_name}() -> {rust_type} {{ {body_expr} }}\n")?;
     }
 
-    render_constructor(out, name, &resolved, schema, roles, any_of_enums)?;
+    render_constructor(out, name, &resolved, ctx, any_of_enums)?;
 
     let mut impl_targets: Vec<String> = Vec::new();
     for ancestor in is_a_ancestors(def, schema) {
@@ -648,14 +692,15 @@ fn render_class<W: Write>(
 /// fields without breaking calling code. Skipped when the struct has
 /// no required fields, since `Default::default()` already covers that
 /// shape and an empty-arg `new()` would be redundant.
+#[allow(clippy::too_many_arguments)]
 fn render_constructor<W: Write>(
     out: &mut W,
     name: &str,
     resolved: &BTreeMap<String, SlotDefinition>,
-    schema: &SchemaDefinition,
-    roles: &BTreeMap<String, ClassRole>,
+    ctx: &RenderCtx<'_>,
     any_of_enums: &mut BTreeMap<String, Vec<String>>,
 ) -> fmt::Result {
+    let schema = ctx.schema;
     // A slot with a resolvable `ifabsent` default always has a value (the
     // default), so it's neither a required constructor param nor an
     // `Option` set to `None` — the ctor initializes it from the generated
@@ -675,7 +720,7 @@ fn render_constructor<W: Write>(
         .map(|(slot_name, slot)| {
             (
                 raw_if_keyword(&snake_case(slot_name)).into_owned(),
-                field_type_for(name, slot_name, slot, schema, roles, any_of_enums),
+                field_type_for(name, slot_name, slot, ctx, any_of_enums),
             )
         })
         .collect();
@@ -854,9 +899,12 @@ fn supports_default(slot: &SlotDefinition) -> bool {
         "string" | "str" | "uri" | "uriorcurie" | "curie" | "ncname"
         | "objectidentifier" | "nodeidentifier"
         // Numeric and boolean primitives — all `Default`.
-        | "integer" | "int" | "boolean" | "bool" | "float" | "double" | "decimal" // `chrono::DateTime<Utc>`, `NaiveDate`, `NaiveTime` are not `Default`.
-                                                                                  // Class refs and enum refs are also not `Default` under the
-                                                                                  // conservative rule (would need recursive analysis).
+        | "integer" | "int" | "boolean" | "bool" | "float" | "double" | "decimal" // Temporal ranges are excluded whichever time crate is selected:
+                                                                                  // chrono's types are not `Default`, and jiff's epoch `Default`
+                                                                                  // would be a data-inventing default — so the generated API stays
+                                                                                  // identical across crates. Class refs and enum refs are also not
+                                                                                  // `Default` under the conservative rule (would need recursive
+                                                                                  // analysis).
     )
 }
 
@@ -879,10 +927,10 @@ fn field_type_for(
     class_name: &str,
     slot_name: &str,
     slot: &SlotDefinition,
-    schema: &SchemaDefinition,
-    roles: &BTreeMap<String, ClassRole>,
+    ctx: &RenderCtx<'_>,
     any_of_enums: &mut BTreeMap<String, Vec<String>>,
 ) -> String {
+    let roles = ctx.roles;
     if !slot.any_of.is_empty() {
         let enum_name = format!("{class_name}{}", pascal_case(slot_name));
         // LinkML spec: an `any_of` branch can omit its `range`, in
@@ -908,7 +956,7 @@ fn field_type_for(
     };
 
     let needs_box = matches!(roles.get(range.as_str()), Some(ClassRole::Struct));
-    let base = type_for_range(range, schema, roles);
+    let base = type_for_range(range, ctx);
 
     if needs_box {
         framed_boxed(&base, slot)
@@ -959,11 +1007,13 @@ fn has_concrete_descendants(
 /// type. Range names that resolve to a trait class are rewritten to
 /// `<Name>Kind` so the field type is a sized closed enum of concrete
 /// descendants.
-fn type_for_range(
-    range: &str,
-    schema: &SchemaDefinition,
-    roles: &BTreeMap<String, ClassRole>,
-) -> String {
+fn type_for_range(range: &str, ctx: &RenderCtx<'_>) -> String {
+    let RenderCtx {
+        schema,
+        roles,
+        time,
+        ..
+    } = *ctx;
     // Resolve through the shared primitive table — aliases, a custom
     // `types:` entry's `typeof` chain, a root type's `uri:` — so the field
     // type agrees with the primitive every other projection resolves the
@@ -979,9 +1029,18 @@ fn type_for_range(
         "integer" => "i64".to_string(),
         "boolean" => "bool".to_string(),
         "float" | "double" | "decimal" => "f64".to_string(),
-        "datetime" => "chrono::DateTime<chrono::Utc>".to_string(),
-        "date" => "chrono::NaiveDate".to_string(),
-        "time" => "chrono::NaiveTime".to_string(),
+        "datetime" => match time {
+            TimeCrate::Chrono => "chrono::DateTime<chrono::Utc>".to_string(),
+            TimeCrate::Jiff => "jiff::Timestamp".to_string(),
+        },
+        "date" => match time {
+            TimeCrate::Chrono => "chrono::NaiveDate".to_string(),
+            TimeCrate::Jiff => "jiff::civil::Date".to_string(),
+        },
+        "time" => match time {
+            TimeCrate::Chrono => "chrono::NaiveTime".to_string(),
+            TimeCrate::Jiff => "jiff::civil::Time".to_string(),
+        },
         other => {
             if roles.get(other) == Some(&ClassRole::Trait) {
                 // Has subclasses or used as a mixin; field type uses the
@@ -1358,6 +1417,62 @@ mod tests {
     use super::*;
     use crate::linkml::{ClassDefinition, EnumDefinition, PermissibleValue, SlotDefinition};
 
+    /// A chrono-default [`RenderCtx`] over borrowed schema and roles —
+    /// the shape every direct render-fn test needs.
+    fn chrono_ctx<'a>(
+        schema: &'a SchemaDefinition,
+        roles: &'a BTreeMap<String, ClassRole>,
+    ) -> RenderCtx<'a> {
+        static EMPTY: BTreeMap<String, bool> = BTreeMap::new();
+        RenderCtx {
+            schema,
+            roles,
+            eq_hash_support: &EMPTY,
+            time: TimeCrate::Chrono,
+        }
+    }
+
+    /// The manifest value maps to exactly the two supported crates; any
+    /// other spelling is `None`, so a typo errors instead of silently
+    /// falling back to chrono.
+    #[test]
+    fn time_crate_parses_the_two_supported_names_and_nothing_else() {
+        assert_eq!(TimeCrate::from_manifest("chrono"), Some(TimeCrate::Chrono));
+        assert_eq!(TimeCrate::from_manifest("jiff"), Some(TimeCrate::Jiff));
+        assert_eq!(TimeCrate::from_manifest("Jiff"), None, "case-sensitive");
+        assert_eq!(TimeCrate::from_manifest("time"), None);
+    }
+
+    /// With `rust_time = "jiff"` selected, temporal ranges map to jiff
+    /// types and no chrono path appears in the output; the default writer
+    /// keeps the chrono mapping.
+    #[test]
+    fn the_jiff_time_crate_maps_temporal_ranges() {
+        let mut schema = SchemaDefinition::new("s");
+        let mut event = ClassDefinition::new("Event");
+        for (slot_name, range) in [("at", "datetime"), ("day", "date"), ("tick", "time")] {
+            let mut slot = SlotDefinition::new(slot_name);
+            slot.range = Some(range.to_string());
+            event.attributes.insert(slot_name.to_string(), slot);
+        }
+        schema.classes.insert("Event".to_string(), event);
+
+        let jiff_out = RustWriter::with_time_crate(TimeCrate::Jiff).render(&schema);
+        assert!(jiff_out.contains("jiff::Timestamp"), "datetime → Timestamp");
+        assert!(jiff_out.contains("jiff::civil::Date"), "date → civil::Date");
+        assert!(jiff_out.contains("jiff::civil::Time"), "time → civil::Time");
+        assert!(
+            !jiff_out.contains("chrono::"),
+            "no chrono type leaks into a jiff module"
+        );
+
+        let default_out = RustWriter::new().render(&schema);
+        assert!(
+            default_out.contains("chrono::DateTime<chrono::Utc>"),
+            "chrono stays the default mapping"
+        );
+    }
+
     /// A slot-level `is_a` has no generated-Rust form, so the writer
     /// reports the drop as a projection gap instead of making it silently.
     #[test]
@@ -1727,18 +1842,27 @@ mod tests {
         schema.classes.insert("QF".to_string(), sub);
 
         let roles = compute_class_roles(&schema);
-        assert_eq!(type_for_range("Activity", &schema, &roles), "ActivityKind");
-        assert_eq!(type_for_range("QF", &schema, &roles), "QF");
+        assert_eq!(
+            type_for_range("Activity", &chrono_ctx(&schema, &roles)),
+            "ActivityKind"
+        );
+        assert_eq!(type_for_range("QF", &chrono_ctx(&schema, &roles)), "QF");
     }
 
     #[test]
     fn type_for_range_primitives() {
         let schema = SchemaDefinition::new("s");
         let roles = BTreeMap::new();
-        assert_eq!(type_for_range("string", &schema, &roles), "String");
-        assert_eq!(type_for_range("integer", &schema, &roles), "i64");
         assert_eq!(
-            type_for_range("datetime", &schema, &roles),
+            type_for_range("string", &chrono_ctx(&schema, &roles)),
+            "String"
+        );
+        assert_eq!(
+            type_for_range("integer", &chrono_ctx(&schema, &roles)),
+            "i64"
+        );
+        assert_eq!(
+            type_for_range("datetime", &chrono_ctx(&schema, &roles)),
             "chrono::DateTime<chrono::Utc>"
         );
     }
@@ -1766,8 +1890,8 @@ mod tests {
             .insert("Bar".to_string(), TypeDefinition::new("Bar"));
 
         let roles = compute_class_roles(&schema);
-        assert_eq!(type_for_range("Foo", &schema, &roles), "Foo");
-        assert_eq!(type_for_range("Bar", &schema, &roles), "Bar");
+        assert_eq!(type_for_range("Foo", &chrono_ctx(&schema, &roles)), "Foo");
+        assert_eq!(type_for_range("Bar", &chrono_ctx(&schema, &roles)), "Bar");
     }
 
     /// A custom `types:` entry maps to the Rust type of its base primitive
@@ -1791,9 +1915,15 @@ mod tests {
             .insert("Opaque".to_string(), TypeDefinition::new("Opaque"));
 
         let roles = BTreeMap::new();
-        assert_eq!(type_for_range("Score", &schema, &roles), "i64");
-        assert_eq!(type_for_range("Question", &schema, &roles), "String");
-        assert_eq!(type_for_range("Opaque", &schema, &roles), "String");
+        assert_eq!(type_for_range("Score", &chrono_ctx(&schema, &roles)), "i64");
+        assert_eq!(
+            type_for_range("Question", &chrono_ctx(&schema, &roles)),
+            "String"
+        );
+        assert_eq!(
+            type_for_range("Opaque", &chrono_ctx(&schema, &roles)),
+            "String"
+        );
     }
 
     // ----- supports_default -------------------------------------------
@@ -2270,9 +2400,7 @@ mod tests {
             &mut out,
             "Child",
             &leaf,
-            &schema,
-            &roles,
-            &BTreeMap::new(),
+            &chrono_ctx(&schema, &roles),
             &mut any_of_enums,
         )
         .unwrap();
@@ -2300,9 +2428,7 @@ mod tests {
             &mut out,
             "Loner",
             &def,
-            &schema,
-            &roles,
-            &BTreeMap::new(),
+            &chrono_ctx(&schema, &roles),
             &mut any_of_enums,
         )
         .unwrap();
@@ -2348,9 +2474,7 @@ mod tests {
             &mut out,
             "Leaf",
             &leaf,
-            &schema,
-            &roles,
-            &BTreeMap::new(),
+            &chrono_ctx(&schema, &roles),
             &mut any_of_enums,
         )
         .unwrap();
@@ -2387,9 +2511,7 @@ mod tests {
             &mut out,
             "Thing",
             &def,
-            &schema,
-            &roles,
-            &BTreeMap::new(),
+            &chrono_ctx(&schema, &roles),
             &mut any_of_enums,
         )
         .unwrap();
@@ -2436,9 +2558,7 @@ mod tests {
             &mut out,
             "Item",
             &def,
-            &schema,
-            &roles,
-            &BTreeMap::new(),
+            &chrono_ctx(&schema, &roles),
             &mut any_of_enums,
         )
         .unwrap();
@@ -2513,8 +2633,7 @@ mod tests {
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
-            &schema,
-            &roles,
+            &chrono_ctx(&schema, &roles),
             &mut any_of_enums,
         )
         .unwrap();
@@ -2551,9 +2670,7 @@ mod tests {
             &mut out,
             "Node",
             &def,
-            &schema,
-            &roles,
-            &BTreeMap::new(),
+            &chrono_ctx(&schema, &roles),
             &mut any_of_enums,
         )
         .unwrap();
@@ -2591,9 +2708,7 @@ mod tests {
             &mut out,
             "Vagueness",
             &leaf,
-            &schema,
-            &roles,
-            &BTreeMap::new(),
+            &chrono_ctx(&schema, &roles),
             &mut any_of_enums,
         )
         .unwrap();
@@ -2656,9 +2771,7 @@ mod tests {
             &mut out,
             "Holder",
             &def,
-            &schema,
-            &roles,
-            &BTreeMap::new(),
+            &chrono_ctx(&schema, &roles),
             &mut any_of_enums,
         )
         .unwrap();
@@ -2709,7 +2822,10 @@ mod tests {
         );
 
         // type_for_range: returns "String", not "PhantomKind".
-        assert_eq!(type_for_range("Phantom", &schema, &roles), "String");
+        assert_eq!(
+            type_for_range("Phantom", &chrono_ctx(&schema, &roles)),
+            "String"
+        );
     }
 
     #[test]
@@ -2729,9 +2845,7 @@ mod tests {
             &mut out,
             "Lonely",
             &def,
-            &schema,
-            &roles,
-            &BTreeMap::new(),
+            &chrono_ctx(&schema, &roles),
             &mut any_of_enums,
         )
         .unwrap();
@@ -2763,9 +2877,7 @@ mod tests {
             &mut out,
             "HasInline",
             &def,
-            &schema,
-            &roles,
-            &BTreeMap::new(),
+            &chrono_ctx(&schema, &roles),
             &mut any_of_enums,
         )
         .unwrap();
@@ -2786,9 +2898,7 @@ mod tests {
             &mut out,
             "HasUsage",
             &def,
-            &schema,
-            &roles,
-            &BTreeMap::new(),
+            &chrono_ctx(&schema, &roles),
             &mut any_of_enums,
         )
         .unwrap();
@@ -2835,9 +2945,7 @@ mod tests {
             &mut out,
             "PlacedItem",
             def,
-            schema,
-            &roles,
-            &BTreeMap::new(),
+            &chrono_ctx(schema, &roles),
             &mut any_of_enums,
         )
         .unwrap();
@@ -2975,9 +3083,7 @@ mod tests {
             &mut out,
             "Config",
             &config,
-            &schema,
-            &roles,
-            &BTreeMap::new(),
+            &chrono_ctx(&schema, &roles),
             &mut any_of_enums,
         )
         .unwrap();
@@ -3077,7 +3183,10 @@ mod tests {
         );
 
         // And the corresponding `type_for_range` fallback still applies.
-        assert_eq!(type_for_range("Phantom", &schema, &roles), "String");
+        assert_eq!(
+            type_for_range("Phantom", &chrono_ctx(&schema, &roles)),
+            "String"
+        );
     }
 
     #[test]
@@ -3123,9 +3232,7 @@ mod tests {
             &mut out,
             "Question",
             &def,
-            &schema,
-            &roles,
-            &BTreeMap::new(),
+            &chrono_ctx(&schema, &roles),
             &mut any_of_enums,
         )
         .unwrap();
@@ -3315,9 +3422,12 @@ mod tests {
             &mut out,
             "Item",
             &def,
-            &schema,
-            &roles,
-            &support,
+            &RenderCtx {
+                schema: &schema,
+                roles: &roles,
+                eq_hash_support: &support,
+                time: TimeCrate::Chrono,
+            },
             &mut any_of_enums,
         )
         .unwrap();
@@ -3348,9 +3458,12 @@ mod tests {
             &mut out,
             "Measure",
             &def,
-            &schema,
-            &roles,
-            &support,
+            &RenderCtx {
+                schema: &schema,
+                roles: &roles,
+                eq_hash_support: &support,
+                time: TimeCrate::Chrono,
+            },
             &mut any_of_enums,
         )
         .unwrap();
@@ -3392,9 +3505,12 @@ mod tests {
             &mut out,
             "Question",
             &def,
-            &schema,
-            &roles,
-            &support,
+            &RenderCtx {
+                schema: &schema,
+                roles: &roles,
+                eq_hash_support: &support,
+                time: TimeCrate::Chrono,
+            },
             &mut any_of_enums,
         )
         .unwrap();
@@ -3439,9 +3555,12 @@ mod tests {
             &mut out,
             "Loose",
             &def,
-            &schema,
-            &roles,
-            &support,
+            &RenderCtx {
+                schema: &schema,
+                roles: &roles,
+                eq_hash_support: &support,
+                time: TimeCrate::Chrono,
+            },
             &mut any_of_enums,
         )
         .unwrap();
@@ -3477,9 +3596,12 @@ mod tests {
             &mut out,
             "Holder",
             &def,
-            &schema,
-            &roles,
-            &support,
+            &RenderCtx {
+                schema: &schema,
+                roles: &roles,
+                eq_hash_support: &support,
+                time: TimeCrate::Chrono,
+            },
             &mut any_of_enums,
         )
         .unwrap();

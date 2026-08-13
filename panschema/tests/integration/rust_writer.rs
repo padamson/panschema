@@ -90,9 +90,36 @@ fn codegen_fixture_compiles_and_round_trips_in_downstream_crate() {
         panic!("generated Rust failed to parse: {e}\n--- preview (first 2k chars) ---\n{preview}")
     });
 
+    // The jiff module rides in the same scratch crate — one dependency
+    // resolve and one build proves both time-crate mappings, including
+    // the wire contract: temporal fields serialize as RFC 3339 /
+    // ISO 8601 strings (trailing-Z timestamps) under either crate, so
+    // switching crates never moves the wire format.
+    let jiff_body = RustWriter::with_time_crate(panschema::rust_writer::TimeCrate::Jiff)
+        .render(&temporal_schema());
+
     let tmp = tempfile::tempdir().expect("tempdir for codegen scratch crate");
-    write_codegen_scratch_crate(tmp.path(), &body);
+    write_codegen_scratch_crate(tmp.path(), &body, &jiff_body);
     cargo_run_scratch(tmp.path());
+}
+
+/// A minimal schema covering all three temporal ranges, for the jiff
+/// module compiled alongside the chrono fixture module.
+fn temporal_schema() -> SchemaDefinition {
+    use panschema::linkml::{ClassDefinition, SlotDefinition};
+    let mut schema = SchemaDefinition::new("temporal");
+    let mut event = ClassDefinition::new("Event");
+    for (slot_name, range) in [("id", "string"), ("at", "datetime"), ("day", "date")] {
+        let mut slot = SlotDefinition::new(slot_name);
+        slot.range = Some(range.to_string());
+        slot.required = true;
+        if slot_name == "id" {
+            slot.identifier = true;
+        }
+        event.attributes.insert(slot_name.to_string(), slot);
+    }
+    schema.classes.insert("Event".to_string(), event);
+    schema
 }
 
 /// The codegen fixture renders deliberately non-canonical layout, so
@@ -303,7 +330,7 @@ fn cargo_run_scratch(root: &Path) {
 /// runtime (see [`CODEGEN_CONSUMER`]). The crate is a binary so
 /// [`cargo_run_scratch`] can execute the assertions rather than merely
 /// compile them.
-fn write_codegen_scratch_crate(root: &Path, generated_module_body: &str) {
+fn write_codegen_scratch_crate(root: &Path, generated_module_body: &str, jiff_module_body: &str) {
     std::fs::write(
         root.join("Cargo.toml"),
         r#"[package]
@@ -316,11 +343,14 @@ publish = false
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
+jiff = { version = "0.2", features = ["serde"] }
 "#,
     )
     .expect("write Cargo.toml");
     std::fs::create_dir_all(root.join("src")).expect("mkdir src/");
     std::fs::write(root.join("src/codegen.rs"), generated_module_body).expect("write codegen.rs");
+    std::fs::write(root.join("src/codegen_jiff.rs"), jiff_module_body)
+        .expect("write codegen_jiff.rs");
     std::fs::write(root.join("src/main.rs"), CODEGEN_CONSUMER).expect("write main.rs");
 }
 
@@ -334,8 +364,22 @@ const CODEGEN_CONSUMER: &str = r##"
 #![allow(dead_code, unused_variables)]
 
 mod codegen;
+mod codegen_jiff;
 
 fn main() {
+    // jiff wire contract: RFC 3339 timestamps with a trailing Z, ISO
+    // 8601 dates — byte-compatible with what the chrono mapping emits.
+    let event = codegen_jiff::Event {
+        id: "e1".to_string(),
+        at: "2026-01-02T03:04:05Z".parse().expect("parse timestamp"),
+        day: "2026-01-02".parse().expect("parse date"),
+    };
+    let event_json = serde_json::to_value(&event).expect("serialize jiff event");
+    assert_eq!(event_json["at"], "2026-01-02T03:04:05Z", "timestamps stay RFC 3339 with Z");
+    assert_eq!(event_json["day"], "2026-01-02", "dates stay ISO 8601");
+    let back: codegen_jiff::Event = serde_json::from_value(event_json).expect("deserialize");
+    assert_eq!(back, event, "jiff round-trip is lossless");
+
     // Constructor: required `label` only; optional/multivalued fields
     // default, and the `ifabsent` field initializes to its enum default.
     let q = codegen::Question::new("Why is the sky blue?".to_string());

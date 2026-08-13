@@ -61,6 +61,7 @@ are manifest-relative.
 | `html_graph_aspect` | `"W:H"`, default `16:8`. Only meaningful with `html` |
 | `html_default_layout` | Layout name; see the formats reference |
 | `rust` | Rust structs/enums |
+| `rust_time` | Time crate for generated temporal fields: `"chrono"` (default) or `"jiff"`. Wire format (RFC 3339 / ISO 8601 strings) is identical either way; pick the crate the consuming workspace already carries. Only meaningful beside `rust` |
 | `postgres` | Postgres DDL — **the key is `postgres`, there is no `sql`** |
 | `shacl` | SHACL shapes graph |
 | `json_schema` | JSON Schema — **underscore**, though the CLI flag is `--format json-schema` |

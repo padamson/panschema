@@ -14,7 +14,7 @@ reference.
 | `ntriples` | file | Accepts one `--instances` |
 | `graph-json` | file | Schema (T-box) graph wire format |
 | `instance-graph-json` | file | A-box graph. Without `--instances`, falls back to the schema's embedded OWL individuals |
-| `rust` | file | Structs/enums. Generated code needs `serde` (and `chrono` for `datetime` ranges) |
+| `rust` | file | Structs/enums. Generated code needs `serde`, plus a time crate for temporal ranges: `chrono` by default, or `jiff` with `features = ["serde"]` when the manifest sets `rust_time = "jiff"` |
 | `postgres` | file | DDL. Skips classes using `is_a`, multivalued slots, or polymorphic `any_of`, with a diagnostic per skip |
 | `shacl` | file | Shapes graph, separate artifact from the OWL output |
 | `json-schema` | file | Draft 2020-12. Manifest key is `json_schema` |

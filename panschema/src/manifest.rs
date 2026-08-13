@@ -109,6 +109,13 @@ pub struct GenerateConfig {
     /// Rust module output file path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rust: Option<PathBuf>,
+    /// Time crate for the generated Rust module's temporal fields:
+    /// `"chrono"` (the default) or `"jiff"`. The wire format is RFC 3339 /
+    /// ISO 8601 strings through serde either way — the key only selects
+    /// which crate the field types name, so a consumer picks the crate its
+    /// workspace already carries. Only meaningful when `rust` is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rust_time: Option<String>,
     /// Postgres DDL output file path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub postgres: Option<PathBuf>,
@@ -170,6 +177,7 @@ impl GenerateConfig {
             html_graph_aspect: Some("16:9".to_string()),
             html_default_layout: Some("sgd".to_string()),
             rust: Some(PathBuf::from("x")),
+            rust_time: Some("jiff".to_string()),
             postgres: Some(PathBuf::from("x")),
             shacl: Some(PathBuf::from("x")),
             json_schema: Some(PathBuf::from("x")),
@@ -234,6 +242,19 @@ impl FromStr for Manifest {
                     schema: name.clone(),
                     message,
                 })?;
+            }
+            // Eager, like the layout check above: a typo'd `rust_time`
+            // errors at parse — before any output is written — even when
+            // no `rust` output is configured beside it.
+            if let Some(value) = cfg.rust_time.as_deref()
+                && crate::rust_writer::TimeCrate::from_manifest(value).is_none()
+            {
+                return Err(ManifestError::InvalidField {
+                    schema: name.clone(),
+                    message: format!(
+                        "unsupported rust_time `{value}`: expected `chrono` or `jiff`"
+                    ),
+                });
             }
         }
         Ok(manifest)
@@ -768,6 +789,33 @@ html_default_layout = "wat"
         }
     }
 
+    /// A typo'd `rust_time` fails at parse — before any output is
+    /// written — even when no `rust` output is configured beside it.
+    #[test]
+    fn a_typoed_rust_time_is_rejected_at_parse() {
+        let toml = r#"
+[schemas]
+foo = { path = "./foo-pkg" }
+
+[generate.foo]
+html = "docs/"
+rust_time = "chrono2"
+"#;
+        let err = toml
+            .parse::<Manifest>()
+            .expect_err("should reject `chrono2`");
+        match err {
+            ManifestError::InvalidField { schema, message } => {
+                assert_eq!(schema, "foo");
+                assert!(
+                    message.contains("chrono2") && message.contains("jiff"),
+                    "error should name the bad value and the valid options; got: {message}"
+                );
+            }
+            other => panic!("expected InvalidField, got {other:?}"),
+        }
+    }
+
     #[test]
     fn parses_multiple_schemas() {
         let toml = r#"
@@ -1195,6 +1243,7 @@ x = { path = "./x-pkg" }
             "html_graph_aspect",
             "html_default_layout",
             "rust",
+            "rust_time",
             "postgres",
             "shacl",
             "json_schema",

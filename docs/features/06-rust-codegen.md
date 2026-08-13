@@ -50,7 +50,7 @@ LinkML schema (parsed → SchemaDefinition)
 
 Fan-out lives in `generate_from_manifest` ([panschema/src/main.rs](../../panschema/src/main.rs)): for each `[generate.<name>]` entry, every populated writer field on `GenerateConfig` runs against the same resolved schema. No new abstraction — adding a writer is (1) implement the `Writer` trait, (2) add an `Option<PathBuf>` field to `GenerateConfig`, (3) add the matching branch to the dispatch loop.
 
-`RustWriter` produces a single flat Rust module per schema. The output takes two deps in the consumer's `Cargo.toml`: `serde` (Serialize/Deserialize) and `chrono` (DateTime<Utc>). Both are commonplace in Axum/Tokio apps.
+`RustWriter` produces a single flat Rust module per schema. The output takes two deps in the consumer's `Cargo.toml`: `serde` (Serialize/Deserialize) and a time crate for temporal ranges — `chrono` (`DateTime<Utc>`) by default, or `jiff` (`Timestamp` / `civil::Date` / `civil::Time`, with its `serde` feature) when the manifest sets `rust_time = "jiff"`. The serde wire format is RFC 3339 / ISO 8601 strings under either crate.
 
 ---
 
@@ -81,7 +81,7 @@ Fan-out lives in `generate_from_manifest` ([panschema/src/main.rs](../../pansche
 | `range: integer` | `i64` |
 | `range: boolean` | `bool` |
 | `range: float` / `double` | `f64` |
-| `range: datetime` | `chrono::DateTime<Utc>` |
+| `range: datetime` | `chrono::DateTime<Utc>` (`jiff::Timestamp` under `rust_time = "jiff"`) |
 | `range: <classname>` / `<enumname>` | `T = ClassName` / `EnumName` |
 | `description:` | `///` doc-comment, wrapped at ~80 chars |
 | `identifier: true` slot | No special treatment in v0.1 — a regular field |

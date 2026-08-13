@@ -2610,6 +2610,84 @@ rust = "sample.rs"
     assert!(body.contains("Schema: sample_schema"));
 }
 
+/// `rust_time = "jiff"` in the manifest maps the generated module's
+/// temporal fields to jiff types; an unsupported value fails the run
+/// with a message naming the key, never a silent chrono fallback.
+#[test]
+fn manifest_rust_time_selects_the_jiff_mapping_and_rejects_typos() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+
+    let pkg = consumer.join("temporal-pkg");
+    fs::create_dir_all(&pkg).expect("mkdir pkg");
+    fs::write(
+        pkg.join("temporal.yaml"),
+        "name: temporal\nid: https://example.org/temporal\nclasses:\n  Event:\n    attributes:\n      id:\n        identifier: true\n        range: string\n      at:\n        range: datetime\n",
+    )
+    .expect("write schema");
+    fs::write(
+        pkg.join("panschema-publish.toml"),
+        "[schema]\nname = \"temporal\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"temporal.yaml\"\n",
+    )
+    .expect("write publish toml");
+
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+temporal = { path = "./temporal-pkg" }
+
+[generate.temporal]
+rust = "temporal.rs"
+rust_time = "jiff"
+"#,
+    )
+    .expect("write manifest");
+
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("generate")
+        .current_dir(consumer)
+        .status()
+        .expect("Failed to execute panschema");
+    assert!(status.success());
+    let body = fs::read_to_string(consumer.join("temporal.rs")).expect("read temporal.rs");
+    assert!(
+        body.contains("jiff::Timestamp"),
+        "datetime must map to jiff::Timestamp; got:\n{body}"
+    );
+    assert!(
+        !body.contains("chrono::"),
+        "no chrono type in a jiff module"
+    );
+
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+temporal = { path = "./temporal-pkg" }
+
+[generate.temporal]
+rust = "temporal.rs"
+rust_time = "chrono2"
+"#,
+    )
+    .expect("rewrite manifest");
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("generate")
+        .current_dir(consumer)
+        .output()
+        .expect("Failed to execute panschema");
+    assert!(
+        !output.status.success(),
+        "a typo'd rust_time must fail the run"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("rust_time") && stderr.contains("chrono2"),
+        "the error names the key and the bad value; got: {stderr}"
+    );
+}
+
 /// `panschema fetch` writes a lockfile with one entry per manifested schema;
 /// `panschema verify` then succeeds against the unchanged on-disk content.
 #[test]

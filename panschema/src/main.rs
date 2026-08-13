@@ -86,6 +86,14 @@ enum Commands {
         #[arg(long = "no-graph")]
         no_graph: bool,
 
+        /// Time crate for generated Rust temporal fields: chrono (default)
+        /// or jiff. The wire format is identical either way. Only
+        /// meaningful with --format rust; keep it in step with the
+        /// manifest's `rust_time` so a by-hand regenerate can't silently
+        /// flip a jiff module back to chrono.
+        #[arg(long = "rust-time")]
+        rust_time: Option<String>,
+
         /// Visualization mode: auto, 2d, 3d (requires --graph)
         #[arg(long, value_enum, default_value = "auto")]
         viz_mode: VizMode,
@@ -370,19 +378,35 @@ fn load_instance_set(
     Ok(set)
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Per-format options a `generate` run carries — HTML's viz knobs and the
+/// Rust writer's time crate. One struct, so a new writer option extends
+/// this instead of growing `generate`'s signature and every call site.
+#[derive(Default)]
+struct GenerateOptions<'a> {
+    include_graph: bool,
+    html_graph_aspect: Option<&'a str>,
+    html_default_layout: Option<&'a str>,
+    rust_time: Option<&'a str>,
+    /// Promote load-time diagnostics to hard errors.
+    strict: bool,
+}
+
 fn generate(
     input: &Path,
     instances: &[PathBuf],
     output: &Path,
     format: &str,
-    include_graph: bool,
-    html_graph_aspect: Option<&str>,
-    html_default_layout: Option<&str>,
+    opts: &GenerateOptions<'_>,
     labels: &LabelOptions,
-    strict: bool,
     deps: &std::collections::BTreeMap<String, PathBuf>,
 ) -> anyhow::Result<()> {
+    let GenerateOptions {
+        include_graph,
+        html_graph_aspect,
+        html_default_layout,
+        rust_time,
+        strict,
+    } = *opts;
     let registry = FormatRegistry::with_defaults();
 
     // Read the input and fold in any `imports:` through the shared load path,
@@ -506,6 +530,21 @@ fn generate(
             _ => Box::new(panschema::rdf_serializers::NTriplesWriter::new().with_instances(set)),
         };
         writer
+            .write(&schema, output)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+    } else if format.eq_ignore_ascii_case("rust") {
+        use panschema::io::Writer;
+        use panschema::rust_writer::{RustWriter, TimeCrate};
+        // `rust_time` selects which crate the module's temporal fields
+        // name; the wire format (RFC 3339 / ISO 8601 strings) is the
+        // same either way. A typo is an error, never a chrono fallback.
+        let time = match rust_time {
+            Some(value) => TimeCrate::from_manifest(value).ok_or_else(|| {
+                anyhow::anyhow!("unsupported rust_time `{value}`: expected `chrono` or `jiff`")
+            })?,
+            None => TimeCrate::default(),
+        };
+        RustWriter::with_time_crate(time)
             .write(&schema, output)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
     } else {
@@ -769,11 +808,14 @@ fn generate_from_manifest(offline: bool, refresh_labels: bool, strict: bool) -> 
                 &instances,
                 &html_out,
                 "html",
-                true,
-                gen_cfg.html_graph_aspect.as_deref(),
-                gen_cfg.html_default_layout.as_deref(),
+                &GenerateOptions {
+                    include_graph: true,
+                    html_graph_aspect: gen_cfg.html_graph_aspect.as_deref(),
+                    html_default_layout: gen_cfg.html_default_layout.as_deref(),
+                    rust_time: None,
+                    strict,
+                },
                 &labels,
-                strict,
                 &deps,
             )
             .with_context(|| format!("schema `{name}`, format `html`"))?;
@@ -797,16 +839,19 @@ fn generate_from_manifest(offline: bool, refresh_labels: bool, strict: bool) -> 
         ] {
             let Some(out) = out_opt else { continue };
             let out = manifest_dir.join(out);
+            // `rust_time` rides along unconditionally; only the rust
+            // branch of `generate` reads it.
             generate(
                 schema_path,
                 &instances,
                 &out,
                 format,
-                false,
-                None,
-                None,
+                &GenerateOptions {
+                    rust_time: gen_cfg.rust_time.as_deref(),
+                    strict,
+                    ..Default::default()
+                },
                 &labels,
-                strict,
                 &deps,
             )
             .with_context(|| format!("schema `{name}`, format `{format}`"))?;
@@ -1660,6 +1705,7 @@ async fn main() -> anyhow::Result<()> {
             output,
             format,
             no_graph,
+            rust_time,
             viz_mode,
             offline,
             refresh_labels,
@@ -1717,11 +1763,13 @@ async fn main() -> anyhow::Result<()> {
                     &instances,
                     &output,
                     &format,
-                    !no_graph,
-                    None,
-                    None,
+                    &GenerateOptions {
+                        include_graph: !no_graph,
+                        rust_time: rust_time.as_deref(),
+                        strict,
+                        ..Default::default()
+                    },
                     &labels,
-                    strict,
                     &no_deps,
                 )?;
             }
@@ -1859,12 +1907,14 @@ mod tests {
                 output,
                 format,
                 no_graph,
+                rust_time,
                 viz_mode,
                 offline,
                 refresh_labels,
                 strict,
             } => {
                 assert_eq!(schema, Some(PathBuf::from("test.ttl")));
+                assert_eq!(rust_time, None, "rust_time defaults to unset");
                 assert!(instances.is_empty(), "no instance-data file by default");
                 assert_eq!(output, PathBuf::from("docs"));
                 assert_eq!(format, "html");
