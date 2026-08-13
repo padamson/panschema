@@ -550,6 +550,16 @@ impl LinkmlLoader<'_> {
         match value {
             serde_norway::Value::Sequence(items) => {
                 for item in items {
+                    // A bare scalar in a class-ranged collection is LinkML's
+                    // non-inlined form: a reference to a record by its
+                    // identifier. The id joins the collection as a reference
+                    // — whether it resolves is the reference-integrity
+                    // pass's question — rather than being dropped for not
+                    // being an inline record.
+                    if let Some(scalar) = scalar_value(item) {
+                        ids.push(scalar_to_display(&scalar));
+                        continue;
+                    }
                     if let Some(id) = self.build_record(class_name, None, item) {
                         ids.push(id.clone());
                         self.note_top_level_id(id);

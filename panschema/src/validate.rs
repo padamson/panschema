@@ -1029,6 +1029,59 @@ slots:
         );
     }
 
+    /// The subset check fires for class-ranged slots exactly as it does
+    /// for scalar ones: a citation referencing a record the anchors don't
+    /// is a violation, whether or not the target record resolves.
+    #[test]
+    fn a_class_ranged_child_value_outside_its_parent_is_a_violation() {
+        const CLASSY: &str = "\
+name: s
+classes:
+  Rec:
+    slots: [id]
+  Thing:
+    tree_root: true
+    slots: [id, anchors, citations]
+slots:
+  id:
+    identifier: true
+  anchors:
+    range: Rec
+    multivalued: true
+  citations:
+    is_a: anchors
+    range: Rec
+    multivalued: true
+";
+        let schema: crate::linkml::SchemaDefinition =
+            serde_norway::from_str(CLASSY).expect("parse schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: t1\ncitations: [a]\n").expect("parse data");
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        let violations = validate_instances(&schema, &set);
+        assert!(
+            violations.iter().any(|v| {
+                let s = v.to_string();
+                s.contains("citations") && s.contains("anchors")
+            }),
+            "a citation with no anchor must violate at a class range too; got: {:?}",
+            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+        );
+
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: t1\nanchors: [a, b]\ncitations: [a]\n")
+                .expect("parse data");
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        let violations = validate_instances(&schema, &set);
+        assert!(
+            !violations
+                .iter()
+                .any(|v| v.to_string().contains("specializes")),
+            "a citation among the anchors conforms; got: {:?}",
+            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+        );
+    }
+
     /// The subset check compares typed values, not display strings: a
     /// literal spelled like a reference's target is not that reference,
     /// so it does not count as contained.
