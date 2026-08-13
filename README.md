@@ -35,11 +35,15 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
 ## Installation
 
-```bash
-cargo install panschema
-```
+Download a pre-built binary from
+[GitHub Releases](https://github.com/padamson/panschema/releases), or build
+from source (requires [wasm-pack](https://rustwasm.github.io/wasm-pack/),
+which builds the embedded visualization bundle):
 
-Or download pre-built binaries from [GitHub Releases](https://github.com/padamson/panschema/releases).
+```bash
+cargo install wasm-pack
+cargo install --git https://github.com/padamson/panschema --tag v0.3.0 panschema
+```
 
 ### Working with an AI coding agent
 

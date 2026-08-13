@@ -47,6 +47,16 @@ jobs:
       with:
         toolchain: stable
         target: ${{ matrix.target }}
+        targets: wasm32-unknown-unknown
+
+    # Release binaries embed the real WebGPU viz bundle (build.rs refuses
+    # to build without wasm-pack when the bundle is absent — no stubs in a
+    # shipped binary), so the bundle is built before the release build.
+    - name: Install wasm-pack
+      uses: taiki-e/install-action@wasm-pack
+
+    - name: Build WASM package
+      run: wasm-pack build panschema-viz --target web --features webgpu
 
     - name: Cache Cargo
       uses: actions/cache@v6
@@ -130,19 +140,8 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  publish-crate:
-    name: Publish to crates.io
-    needs: release
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v7
-
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@master
-      with:
-        toolchain: stable
-
-    - name: Publish to crates.io
-      run: cargo publish -p panschema
-      env:
-        CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+  # crates.io publishing is deliberately absent: the packaged crate cannot
+  # contain ../panschema-viz, so `cargo publish`'s verification build can
+  # never succeed until the wasm bundle ships inside the crate directory.
+  # Tracked as a follow-up; consumers install from the GitHub release
+  # binaries or `cargo install --git`.
