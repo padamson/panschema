@@ -8,17 +8,12 @@
 //!
 //! No mdbook and no server: the page is a minimal stand-in for mdbook's
 //! toolbar loaded over `file://`, which is enough because the asset does no
-//! fetching and imports nothing.
-//!
-//! ## Setup
-//! Install Playwright browsers matching the bundled version:
-//! ```bash
-//! npx playwright@1.60.0 install
-//! ```
+//! fetching and imports nothing. Setup is the parent target's: install
+//! Playwright browsers matching [`playwright_rs::PLAYWRIGHT_VERSION`].
 
 use std::path::Path;
 
-use mdbook_panschema::install;
+use panschema::mdbook::install;
 use panschema::publish::{BookLinkConfig, BookLinkEntry};
 use playwright_rs::Playwright;
 
@@ -57,18 +52,7 @@ fn installed_page(entries: &[(&str, &str)]) -> tempfile::TempDir {
 }
 
 fn page_url(dir: &Path) -> String {
-    format!("file://{}/index.html", dir.path_display())
-}
-
-/// `Path::display()` returns a `Display`, not a `String`; this keeps the
-/// call sites readable.
-trait PathDisplay {
-    fn path_display(&self) -> String;
-}
-impl PathDisplay for Path {
-    fn path_display(&self) -> String {
-        self.display().to_string()
-    }
+    format!("file://{}/index.html", dir.display())
 }
 
 /// One schema: the plain anchor a single-schema book has always had, with
@@ -168,10 +152,12 @@ fn e2e_several_entries_render_a_menu_that_opens() {
     });
 }
 
-/// The menu is dismissible both ways a reader will try. A control that
-/// opens but will not close is worse than no control.
+/// The menu is dismissible both ways a reader will try — Escape and a
+/// click outside — and the toggle is a real button carrying its expanded
+/// state, so the control is reachable and legible to a screen reader
+/// rather than being a mouse-only affordance.
 #[test]
-fn e2e_menu_closes_on_escape_and_on_outside_click() {
+fn e2e_menu_dismisses_both_ways_and_toggle_reports_expanded_state() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
         let dir = installed_page(&[("a/", "A"), ("b/", "B")]);
@@ -183,7 +169,17 @@ fn e2e_menu_closes_on_escape_and_on_outside_click() {
         let toggle = page.locator(".schema-docs-menu .icon-button");
         let list = page.locator(".schema-docs-menu-list");
 
+        assert_eq!(
+            toggle.get_attribute("aria-expanded").await.expect("attr"),
+            Some("false".to_string()),
+            "closed menu should report aria-expanded=false"
+        );
         toggle.click(None).await.expect("open");
+        assert_eq!(
+            toggle.get_attribute("aria-expanded").await.expect("attr"),
+            Some("true".to_string()),
+            "opening should update aria-expanded"
+        );
         assert!(list.is_visible().await.expect("visible"), "opened");
         let escaped = page
             .evaluate_value(
@@ -207,34 +203,6 @@ fn e2e_menu_closes_on_escape_and_on_outside_click() {
         assert!(
             !list.is_visible().await.expect("visible"),
             "a click outside should close the menu"
-        );
-    });
-}
-
-/// The toggle is a real button carrying its expanded state, so the control
-/// is reachable and legible to a screen reader rather than being a
-/// mouse-only affordance.
-#[test]
-fn e2e_menu_toggle_reports_its_expanded_state() {
-    let rt = tokio::runtime::Runtime::new().expect("runtime");
-    rt.block_on(async {
-        let dir = installed_page(&[("a/", "A"), ("b/", "B")]);
-        let playwright = Playwright::launch().await.expect("playwright");
-        let browser = playwright.chromium().launch().await.expect("chromium");
-        let page = browser.new_page().await.expect("page");
-        page.goto(&page_url(dir.path()), None).await.expect("goto");
-
-        let toggle = page.locator(".schema-docs-menu .icon-button");
-        assert_eq!(
-            toggle.get_attribute("aria-expanded").await.expect("attr"),
-            Some("false".to_string()),
-            "closed menu should report aria-expanded=false"
-        );
-        toggle.click(None).await.expect("open");
-        assert_eq!(
-            toggle.get_attribute("aria-expanded").await.expect("attr"),
-            Some("true".to_string()),
-            "opening should update aria-expanded"
         );
     });
 }

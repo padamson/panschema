@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use mdbook_panschema::{InstallReport, run};
+use panschema::mdbook::{InstallReport, run};
 
 /// mdbook plugin for panschema: install a toolbar link from an mdbook
 /// book to its panschema-generated schema docs.

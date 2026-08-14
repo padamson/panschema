@@ -15,6 +15,8 @@
 //! - Specific browser: `BROWSER=firefox cargo nextest run e2e`
 //! - All browsers (CI): `BROWSER=all cargo nextest run e2e`
 
+mod mdbook;
+
 use std::fs;
 use std::net::TcpListener;
 use std::path::PathBuf;

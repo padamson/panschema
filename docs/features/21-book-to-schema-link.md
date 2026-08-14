@@ -4,7 +4,7 @@
 
 **User Story:** As a schema author who publishes both an mdbook book and panschema schema docs on one site, I want panschema to provide the book→schema navigation link as an installable, versioned asset — the way `mdbook-admonish install` drops its CSS/JS — so I get a maintained toolbar button without hand-writing per-book JavaScript that breaks on every mdbook release.
 
-**Related ADR:** [007-mdbook-panschema-plugin.md](../adr/007-mdbook-panschema-plugin.md) — the command lives in a dedicated `mdbook-panschema` plugin (a new workspace member), not a `panschema` subcommand.
+**Related ADR:** [007-mdbook-panschema-plugin.md](../adr/007-mdbook-panschema-plugin.md) — the command lives in the `mdbook-panschema` binary, not a `panschema` subcommand. Originally a dedicated workspace crate; since 2026-08-13 the binary ships as a second `[[bin]]` of the `panschema` crate (see the ADR's addendum).
 
 **Approach:** Vertical Slicing with Outside-In TDD.
 
@@ -22,7 +22,7 @@ A consumer built a working prototype (toolbar button injected via a small `schem
 
 ## Design Decision (settled — ADR 007)
 
-The command lives in a **dedicated `mdbook-panschema` plugin** — a new workspace member crate producing an `mdbook-panschema` binary whose `install [dir]` subcommand (`dir` defaults to `.`) copies the asset and auto-edits `book.toml`, exactly the `mdbook-admonish` idiom. It takes a path dependency on the `panschema` library crate to reuse `[book_link]` parsing and asset bundling. Rejected: a `panschema install-book-link` subcommand (off-idiom — panschema isn't an mdbook plugin) and folding into `panschema publish`. Full rationale and alternatives in [ADR 007](../adr/007-mdbook-panschema-plugin.md).
+The command lives in an **`mdbook-panschema` binary** whose `install [dir]` subcommand (`dir` defaults to `.`) copies the asset and auto-edits `book.toml`, exactly the `mdbook-admonish` idiom. Rejected: a `panschema install-book-link` subcommand (off-idiom — panschema isn't an mdbook plugin) and folding into `panschema publish`. Originally the binary was a dedicated workspace crate with a path dependency on the `panschema` library; it now ships as a second `[[bin]]` of the `panschema` crate itself. Full rationale, alternatives, and the fold are in [ADR 007](../adr/007-mdbook-panschema-plugin.md).
 
 ---
 
@@ -88,7 +88,7 @@ label = "CQ&A contract"
 - [ ] With `[book_link]` absent or `enabled = false`, `install` makes no changes and reports that it did nothing.
 
 **Notes:**
-- Implementation anchors (not ACs): a workspace-member crate with a path dependency on the `panschema` library, assets embedded like the viz/wasm bundle — see [ADR 007](../adr/007-mdbook-panschema-plugin.md). The rendering / selector / href pitfalls live in "Things to watch".
+- Implementation anchors (not ACs): the `mdbook-panschema` binary in the `panschema` crate (originally a dedicated workspace crate — see [ADR 007](../adr/007-mdbook-panschema-plugin.md) and its addendum), assets embedded like the viz/wasm bundle. The rendering / selector / href pitfalls live in "Things to watch".
 
 ---
 

@@ -77,23 +77,25 @@ jobs:
       if: matrix.os != 'windows-latest'
       shell: bash
       run: |
-        if [ -f target/${{ matrix.target }}/release/panschema ]; then
-          strip target/${{ matrix.target }}/release/panschema
-        fi
+        for bin in panschema mdbook-panschema; do
+          if [ -f "target/${{ matrix.target }}/release/$bin" ]; then
+            strip "target/${{ matrix.target }}/release/$bin"
+          fi
+        done
 
     - name: Create archive (Unix)
       if: matrix.os != 'windows-latest'
       shell: bash
       run: |
         cd target/${{ matrix.target }}/release
-        tar czf ../../../panschema-${{ github.ref_name }}-${{ matrix.target }}.tar.gz panschema
+        tar czf ../../../panschema-${{ github.ref_name }}-${{ matrix.target }}.tar.gz panschema mdbook-panschema
 
     - name: Create archive (Windows)
       if: matrix.os == 'windows-latest'
       shell: bash
       run: |
         cd target/${{ matrix.target }}/release
-        7z a ../../../panschema-${{ github.ref_name }}-${{ matrix.target }}.zip panschema.exe
+        7z a ../../../panschema-${{ github.ref_name }}-${{ matrix.target }}.zip panschema.exe mdbook-panschema.exe
 
     - name: Upload artifact
       uses: actions/upload-artifact@v7

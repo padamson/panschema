@@ -17,6 +17,14 @@ readme = "../README.md"
 # compiles with no workspace and no wasm-pack.
 include = ["src/**", "templates/**", "build.rs", "viz-bundle/**", "../README.md"]
 
+# The mdbook toolbar-link installer ships as a second binary: its users
+# are, by definition, repos publishing panschema-generated schema docs,
+# so one install serves both tools and the `mdbook-panschema` name stays
+# reserved for a future preprocessor role (ADR-007).
+[[bin]]
+name = "mdbook-panschema"
+path = "src/bin/mdbook_panschema.rs"
+
 [dependencies]
 # CLI
 clap = { version = "4", features = ["derive"] }

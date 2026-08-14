@@ -1,5 +1,5 @@
 [workspace]
-members = ["panschema", "panschema-viz", "mdbook-panschema"]
+members = ["panschema", "panschema-viz"]
 # The fuzz crate is built only by `cargo +nightly fuzz`, never as part of
 # the workspace — keeping it out means the stable-toolchain gate never
 # tries to compile libfuzzer.

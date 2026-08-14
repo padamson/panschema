@@ -38,3 +38,31 @@ Introduce **`mdbook-panschema`** as a new **workspace member crate** in this rep
 - **`panschema install-book-link [dir]` subcommand** — ships without a new crate, but off-idiom (panschema isn't an mdbook plugin; non-bare verb). Rejected for idiom.
 - **Fold into `panschema publish`** — couples an mdbook-theme asset to versioned-docs orchestration and conflates the book tree with the schema publish output. Rejected.
 - **Defer until the preprocessor exists** — blocks a small, wanted asset on a larger effort. Rejected.
+
+## Addendum — 2026-08-13: same binary, one crate
+
+The dedicated *crate* is retired; the dedicated **binary** stays. The
+`mdbook-panschema` binary now ships as a second `[[bin]]` of the
+`panschema` crate (`src/mdbook.rs` + `src/bin/mdbook_panschema.rs`), so
+`cargo install panschema` provides both tools.
+
+What changed the calculus: the separate crate's only dependency on
+`panschema` was the `[book_link]` config types, yet it compiled the
+entire library — and publishing it to crates.io would have made users
+build that stack for a ~500-line installer, while its actual audience
+(repos publishing panschema-generated schema docs) installs panschema
+anyway. The version-pinned path dependency also created release
+lockstep friction. Everything this ADR valued survives the fold: the
+idiomatic `mdbook-panschema install` bare verb, the binary name (which
+the planned preprocessor role requires — mdbook discovers a
+preprocessor by invoking `mdbook-<name>` — and which the fold keeps as
+a `[[bin]]`), and the config-type reuse — now zero-cost within one
+crate. The two-binaries-one-install shape follows wasm-pack and
+friends.
+
+One thing is given up: the `mdbook-panschema` **crate name** on
+crates.io. The dedicated crate was never actually published there, and
+after the fold it never will be, so nothing stops a third party from
+claiming the name. Accepted: every install instruction points at
+`cargo install panschema`, and a preprocessor would ship from the same
+crate.

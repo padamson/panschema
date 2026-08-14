@@ -524,13 +524,20 @@ pub fn insert_schema(manifest_path: &Path, request: &AddRequest) -> Result<AddOu
 /// absolute path to the manifest file, or `None` if no manifest is found
 /// at any ancestor (mirrors cargo's manifest discovery).
 pub fn discover_manifest(start_dir: &Path) -> Option<PathBuf> {
+    discover_file(start_dir, MANIFEST_FILENAME)
+}
+
+/// Find `filename` by walking up from `start_dir` toward the filesystem
+/// root, cargo-style. A relative `start_dir` is resolved against the
+/// current directory first.
+pub(crate) fn discover_file(start_dir: &Path, filename: &str) -> Option<PathBuf> {
     let mut dir = if start_dir.is_absolute() {
         start_dir.to_path_buf()
     } else {
         std::env::current_dir().ok()?.join(start_dir)
     };
     loop {
-        let candidate = dir.join(MANIFEST_FILENAME);
+        let candidate = dir.join(filename);
         if candidate.is_file() {
             return Some(candidate);
         }

@@ -22,8 +22,9 @@ cargo clippy --all-targets --all-features -- -D warnings  # Lint
 
 ## Project Structure
 
-This is a Cargo workspace with three members (`panschema`, `panschema-viz`,
-`mdbook-panschema`). The layout below groups modules by role rather than
+This is a Cargo workspace with two members (`panschema`, `panschema-viz`);
+the `mdbook-panschema` binary ships from the `panschema` crate. The layout
+below groups modules by role rather than
 listing every file — see `panschema/src/` for the full set.
 
 ```
@@ -31,7 +32,8 @@ panschema/                        # workspace root
 ├── .github/workflows/            # CI (test.yml) and release (release.yml)
 ├── panschema/                    # main crate — CLI + readers + writers
 │   ├── src/
-│   │   ├── main.rs               # CLI entry (generate, serve, styleguide, init, release, publish, verify, completions)
+│   │   ├── main.rs               # CLI entry (generate, init, add, release, fetch, verify, validate, migrate, publish, serve, completions, styleguide)
+│   │   ├── bin/mdbook_panschema.rs  # second binary: mdbook-panschema (mdbook.rs + mdbook_assets/)
 │   │   ├── io.rs                 # Reader/Writer traits + FormatRegistry
 │   │   ├── linkml.rs             # LinkML IR (SchemaDefinition, ClassDefinition, ...)
 │   │   ├── linkml_resolve.rs     # is_a / mixin / slot_usage resolution + effective cardinality
@@ -49,10 +51,11 @@ panschema/                        # workspace root
 │   ├── templates/                # Askama HTML templates + components/
 │   └── tests/
 │       ├── fixtures/reference.ttl  # reference ontology for testing
-│       ├── e2e.rs                # browser tests with Playwright
-│       └── integration.rs        # CLI integration tests
+│       ├── e2e/                  # browser tests with Playwright (mdbook.rs: toolbar-link tests)
+│       ├── integration/          # CLI integration tests
+│       ├── properties.rs         # generated-schema property tests
+│       └── skill_docs.rs         # keeps the shipped agent skill true to the code
 ├── panschema-viz/                # WASM force-graph visualization (embedded in HTML output)
-├── mdbook-panschema/             # installs a book→schema toolbar link (mdbook-panschema install)
 ├── docs/                         # adr/, features/, templates/, ROADMAP.md, linkml-coverage.md
 ├── scripts/                      # mutants.sh, dev-install.sh, ...
 ├── CHANGELOG.md                  # Keep updated with changes

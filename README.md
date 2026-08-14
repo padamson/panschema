@@ -237,10 +237,9 @@ schema_path = "schema/current/"   # book-relative path to the schema docs
 label = "Schema reference"         # button tooltip / aria-label
 ```
 
-Then, from the book directory (the one containing `book.toml`):
+Then, from the book directory (the one containing `book.toml`) — the `mdbook-panschema` binary ships with panschema, so `cargo install panschema` provides it:
 
 ```bash
-cargo install mdbook-panschema
 mdbook-panschema install          # or: mdbook-panschema install <book-dir>
 ```
 

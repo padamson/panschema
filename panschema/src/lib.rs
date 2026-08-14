@@ -17,6 +17,9 @@ pub mod linkml;
 pub mod linkml_resolve;
 pub mod lockfile;
 pub mod manifest;
+/// Backs the `mdbook-panschema` binary; not part of the conversion API.
+#[doc(hidden)]
+pub mod mdbook;
 pub mod openapi_writer;
 pub mod owl_model;
 pub mod owl_reader;

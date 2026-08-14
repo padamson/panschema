@@ -8,14 +8,14 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::publish::{BookLinkConfig, PUBLISH_FILENAME, PublishConfig};
 use anyhow::Context;
-use panschema::publish::{BookLinkConfig, PUBLISH_FILENAME, PublishConfig};
 use toml_edit::{Array, DocumentMut, Item, Table, value};
 
 /// The button asset. `__PANSCHEMA_SCHEMA_PATH__` / `__PANSCHEMA_LABEL__`
 /// are replaced at install time with JSON string literals.
-const SCHEMA_LINK_JS: &str = include_str!("../assets/schema-link.js");
-const SCHEMA_LINK_CSS: &str = include_str!("../assets/schema-link.css");
+const SCHEMA_LINK_JS: &str = include_str!("mdbook_assets/schema-link.js");
+const SCHEMA_LINK_CSS: &str = include_str!("mdbook_assets/schema-link.css");
 
 const JS_FILENAME: &str = "schema-link.js";
 const CSS_FILENAME: &str = "schema-link.css";
@@ -96,21 +96,8 @@ pub fn run(book_dir: &Path) -> anyhow::Result<InstallReport> {
 /// Locate `panschema-publish.toml` by walking up from `start` (the book
 /// dir), mirroring cargo-style manifest discovery. The publish spec
 /// typically sits at the schema-package root, above the book directory.
-pub fn find_publish_toml(start: &Path) -> Option<PathBuf> {
-    let mut dir = if start.is_absolute() {
-        start.to_path_buf()
-    } else {
-        std::env::current_dir().ok()?.join(start)
-    };
-    loop {
-        let candidate = dir.join(PUBLISH_FILENAME);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
+fn find_publish_toml(start: &Path) -> Option<PathBuf> {
+    crate::manifest::discover_file(start, PUBLISH_FILENAME)
 }
 
 /// Add the two assets to `book.toml`'s `output.html.additional-*` arrays,
@@ -127,8 +114,11 @@ fn wire_book_toml(book_toml: &Path) -> anyhow::Result<()> {
     ensure_in_array(&mut doc, "additional-js", JS_ENTRY)?;
     ensure_in_array(&mut doc, "additional-css", CSS_ENTRY)?;
 
-    std::fs::write(book_toml, doc.to_string())
-        .with_context(|| format!("writing {}", book_toml.display()))?;
+    let updated = doc.to_string();
+    if updated != text {
+        std::fs::write(book_toml, updated)
+            .with_context(|| format!("writing {}", book_toml.display()))?;
+    }
     Ok(())
 }
 
@@ -161,7 +151,7 @@ fn ensure_in_array(doc: &mut DocumentMut, key: &str, val: &str) -> anyhow::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use panschema::publish::{BookLinkEntry, BookLinkTable};
+    use crate::publish::{BookLinkEntry, BookLinkTable};
 
     fn cfg(enabled: bool) -> BookLinkConfig {
         BookLinkConfig::Single(BookLinkTable {
