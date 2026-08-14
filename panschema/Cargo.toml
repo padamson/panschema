@@ -9,6 +9,13 @@ license = "Apache-2.0"
 repository = "https://github.com/padamson/panschema"
 keywords = ["ontology", "owl", "rdf", "linkml", "documentation"]
 categories = ["command-line-utilities", "development-tools::build-utils"]
+readme = "../README.md"
+# Explicit package contents: the code, the askama templates, and the viz
+# bundle the release workflow stages into viz-bundle/ before publishing —
+# no tests, fixtures, or dogfood schemas (megabytes the installed binary
+# never reads). build.rs prefers viz-bundle/ so the packaged crate
+# compiles with no workspace and no wasm-pack.
+include = ["src/**", "templates/**", "build.rs", "viz-bundle/**", "../README.md"]
 
 [dependencies]
 # CLI

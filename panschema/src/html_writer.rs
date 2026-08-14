@@ -679,10 +679,10 @@ pub fn parse_graph_aspect(s: &str) -> Result<(u32, u32), String> {
 /// Embedded WASM visualization files (from panschema-viz build)
 mod wasm_files {
     /// JavaScript bindings for WASM visualization
-    pub const VIZ_JS: &str = include_str!("../../panschema-viz/pkg/panschema_viz.js");
+    pub const VIZ_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/panschema_viz.js"));
 
     /// Compiled WASM binary
-    pub const VIZ_WASM: &[u8] = include_bytes!("../../panschema-viz/pkg/panschema_viz_bg.wasm");
+    pub const VIZ_WASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/panschema_viz_bg.wasm"));
 }
 
 impl HtmlWriter {

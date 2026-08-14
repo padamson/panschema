@@ -1,6 +1,15 @@
-//! Builds `panschema-viz/pkg/` (the wasm bundle `html_writer.rs`
-//! pulls in via `include_str!` / `include_bytes!`) so a fresh
-//! checkout compiles without a manual `wasm-pack` step.
+//! Stages the wasm viz bundle (which `html_writer.rs` embeds from
+//! `OUT_DIR` via `include_str!` / `include_bytes!`) from whichever
+//! source this build has, so a fresh checkout compiles without a
+//! manual `wasm-pack` step and a packaged crate compiles with no
+//! workspace at all:
+//!
+//! 1. `viz-bundle/` inside the crate — present only in a published
+//!    package, staged there by the release workflow's publish job.
+//! 2. `../panschema-viz/pkg/` — the workspace bundle (CI's cached
+//!    wasm-pack step, or a previous bootstrap).
+//! 3. Neither present: bootstrap by running `wasm-pack` (workspace
+//!    checkouts only; a packaged crate never reaches this arm).
 //!
 //! After the initial bundle exists, this script does nothing — it is
 //! a one-time bootstrap, not a freshness tracker. Refreshing the
@@ -22,13 +31,22 @@ use std::process::{Command, Stdio};
 
 const PKG_JS: &str = "../panschema-viz/pkg/panschema_viz.js";
 const PKG_WASM: &str = "../panschema-viz/pkg/panschema_viz_bg.wasm";
+const CRATE_JS: &str = "viz-bundle/panschema_viz.js";
+const CRATE_WASM: &str = "viz-bundle/panschema_viz_bg.wasm";
 
 fn main() {
     println!("cargo:rerun-if-changed={PKG_JS}");
     println!("cargo:rerun-if-changed={PKG_WASM}");
+    println!("cargo:rerun-if-changed={CRATE_JS}");
+    println!("cargo:rerun-if-changed={CRATE_WASM}");
     emit_build_version();
 
+    if Path::new(CRATE_JS).exists() && Path::new(CRATE_WASM).exists() {
+        stage_bundle(CRATE_JS, CRATE_WASM);
+        return;
+    }
     if Path::new(PKG_JS).exists() && Path::new(PKG_WASM).exists() {
+        stage_bundle(PKG_JS, PKG_WASM);
         return;
     }
 
@@ -71,6 +89,19 @@ fn main() {
     if !status.success() {
         panic!("wasm-pack build failed (exit {status})");
     }
+    stage_bundle(PKG_JS, PKG_WASM);
+}
+
+/// Copy the bundle into `OUT_DIR`, the one location `html_writer.rs`
+/// embeds from — so the workspace layout and the packaged-crate layout
+/// compile identically.
+fn stage_bundle(js: &str, wasm: &str) {
+    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR set by cargo");
+    let out = Path::new(&out_dir);
+    std::fs::copy(js, out.join("panschema_viz.js"))
+        .unwrap_or_else(|e| panic!("stage {js} into OUT_DIR: {e}"));
+    std::fs::copy(wasm, out.join("panschema_viz_bg.wasm"))
+        .unwrap_or_else(|e| panic!("stage {wasm} into OUT_DIR: {e}"));
 }
 
 fn wasm_pack_available() -> bool {

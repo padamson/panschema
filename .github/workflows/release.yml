@@ -139,8 +139,43 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # crates.io publishing is deliberately absent: the packaged crate cannot
-  # contain ../panschema-viz, so `cargo publish`'s verification build can
-  # never succeed until the wasm bundle ships inside the crate directory.
-  # Tracked as a follow-up; consumers install from the GitHub release
-  # binaries or `cargo install --git`.
+  publish-crate:
+    name: Publish to crates.io
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: stable
+        targets: wasm32-unknown-unknown
+
+    - name: Install wasm-pack
+      uses: taiki-e/install-action@wasm-pack
+
+    # The published package must be self-contained: build the viz bundle
+    # and stage it at the in-crate path build.rs prefers, so `cargo
+    # publish`'s verification build (and every downstream `cargo install`)
+    # needs neither the workspace nor wasm-pack.
+    - name: Build and stage viz bundle
+      run: |
+        wasm-pack build panschema-viz --target web --features webgpu
+        mkdir -p panschema/viz-bundle
+        cp panschema-viz/pkg/panschema_viz.js panschema-viz/pkg/panschema_viz_bg.wasm panschema/viz-bundle/
+
+    # Trusted publishing: a short-lived OIDC-exchanged token, no
+    # long-lived secret. No skip-if-missing guard — failing at auth is
+    # correct; a skipped publish that reports success is the trap.
+    - name: Authenticate with crates.io
+      id: auth
+      uses: rust-lang/crates-io-auth-action@v1
+
+    - name: Publish to crates.io
+      run: cargo publish -p panschema --allow-dirty
+      env:
+        CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

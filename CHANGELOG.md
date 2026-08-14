@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`cargo install panschema` works from crates.io again.** The published package is now self-contained: the WebGPU visualization bundle ships inside the crate, so installing needs neither the workspace nor `wasm-pack` — the requirement that had silently broken crates.io installs once the bundle became a hard build input. Publishing itself moved to crates.io trusted publishing (short-lived OIDC tokens, no long-lived registry secret) and runs from the release pipeline after the binaries build.
+
 ## [0.3.0] - 2026-08-13
 
 ### Added

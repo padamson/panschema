@@ -16,3 +16,4 @@ typos.toml
 # cargo-mutants output (local runs leave these; CI uploads as artifact)
 /mutants.out/
 /mutants.out.old/
+panschema/viz-bundle/
