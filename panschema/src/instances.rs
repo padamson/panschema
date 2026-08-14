@@ -369,7 +369,7 @@ impl InstanceSet {
                         inst.references.push(Reference {
                             property: slot.clone(),
                             target: id.clone(),
-                            external: false,
+                            external: points_outside_dataset(schema, id),
                         });
                         push_slot_value(
                             &mut inst.slot_values,
@@ -1925,6 +1925,53 @@ classes:
             edges,
             vec![("deployments", "d1"), ("deployments", "d2")],
             "each contained record is referenced under the slot that holds it"
+        );
+    }
+
+    #[test]
+    fn an_identified_roots_cross_graph_references_are_external() {
+        // A benchmark-shaped dataset records IRIs into a graph that is by
+        // definition someone else's: the root's own collection slots hold
+        // absolute IRIs naming no record in this file. Those references are
+        // outside the dataset exactly as a record slot's would be, so they
+        // carry the same external marking — exempt from the dangling check
+        // and named in the cross-graph summary.
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: acme\nname: Acme Corp\ndeployments:\n  - https://other.example/d1\n",
+        )
+        .expect("parse");
+        let set = InstanceSet::from_linkml_data(&root_schema(true), &data);
+        let root = set.instances.iter().find(|i| i.id == "acme").expect("root");
+        let r = root.references.first().expect("a reference");
+        assert!(
+            r.external,
+            "an absolute IRI on the root's own slot points outside this dataset; got: {r:?}"
+        );
+        assert!(
+            set.external_references
+                .iter()
+                .any(|e| e.target == "https://other.example/d1" && e.referrer == "acme"),
+            "and it is summarised rather than passing silently; got: {:?}",
+            set.external_references
+        );
+    }
+
+    #[test]
+    fn an_identified_roots_bare_id_references_stay_dangling_checked() {
+        // The external exemption must not swallow the typo case: a bare id
+        // on the root's slot is a promise about *this* dataset, so it stays
+        // non-external and the dangling check still owns it.
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: acme\nname: Acme Corp\ndeployments:\n  - nope\n")
+                .expect("parse");
+        let set = InstanceSet::from_linkml_data(&root_schema(true), &data);
+        let root = set.instances.iter().find(|i| i.id == "acme").expect("root");
+        let r = root.references.first().expect("a reference");
+        assert!(!r.external, "a bare id stays an intra-dataset reference");
+        assert!(
+            set.external_references.is_empty(),
+            "and is not summarised as external; got: {:?}",
+            set.external_references
         );
     }
 

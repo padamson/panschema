@@ -7,7 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.1] - 2026-08-13
+### Fixed
+- **A cross-graph reference on the dataset container's own slots is no longer reported as dangling.** References that point outside the dataset — absolute IRIs, or CURIEs against a declared prefix — are exempt from the dangling-reference check by design and summarised as unchecked cross-graph edges instead. That exemption applied to references held by ordinary records but not to those on the `tree_root` container itself, so a dataset whose root records IRIs into another graph — the shape of a retrieval benchmark, whose anchors name nodes in the graph under evaluation, never in the benchmark file — failed validation with one error per IRI. Such references now take the same external classification as everywhere else: exempt from the dangling check, named in the cross-graph summary, and still subject to the slot-specialization containment check, which compares the values themselves and needs no local record. A bare id on a container slot remains an intra-dataset promise and is still dangling-checked.
 
 ### Added
 - **The `mdbook-panschema` binary ships with the `panschema` crate.** One `cargo install panschema` now provides both tools; the separate crate is retired. Its only tie to panschema was reusing the `[book_link]` config types — for which it compiled the entire library — and its audience (repos publishing panschema-generated schema docs) installs panschema anyway. The binary name — which the planned preprocessor role requires, since mdbook discovers a preprocessor by invoking `mdbook-<name>` — and the idiomatic `mdbook-panschema install` verb are unchanged, and release archives carry both binaries.
