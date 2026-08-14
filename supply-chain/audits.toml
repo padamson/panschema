@@ -259,6 +259,18 @@ user-id = 1 # Alex Crichton (alexcrichton)
 start = "2020-08-04"
 end = "2027-05-10"
 
+[[trusted.panschema]]
+criteria = "safe-to-deploy"
+user-id = 366126
+start = "2026-01-25"
+end = "2027-08-14"
+
+[[trusted.panschema]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:padamson/panschema"
+start = "2026-08-14"
+end = "2027-08-14"
+
 [[trusted.parking_lot]]
 criteria = "safe-to-deploy"
 user-id = 2915 # Amanieu d'Antras (Amanieu)

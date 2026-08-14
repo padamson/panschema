@@ -1,6 +1,6 @@
 {
   "name": "panschema",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Convert, document, and validate data models with panschema: LinkML and OWL schemas to HTML docs, RDF/OWL, JSON Schema, OpenAPI, SHACL, Rust, and Postgres DDL; validate instance data; wire a panschema.toml manifest.",
   "author": {
     "name": "Paul Adamson",

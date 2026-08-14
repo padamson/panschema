@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-13
+
 ### Added
 - **The `mdbook-panschema` binary ships with the `panschema` crate.** One `cargo install panschema` now provides both tools; the separate crate is retired. Its only tie to panschema was reusing the `[book_link]` config types — for which it compiled the entire library — and its audience (repos publishing panschema-generated schema docs) installs panschema anyway. The binary name — which the planned preprocessor role requires, since mdbook discovers a preprocessor by invoking `mdbook-<name>` — and the idiomatic `mdbook-panschema install` verb are unchanged, and release archives carry both binaries.
 
@@ -292,7 +294,8 @@ Initial release of rontodoc — a fast, single-binary ontology documentation gen
 - Responsive two-column layout with dark mode support.
 - Component-driven UI with style guide (`--features dev`).
 
-[Unreleased]: https://github.com/padamson/panschema/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/padamson/panschema/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/padamson/panschema/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/padamson/panschema/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/padamson/panschema/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/padamson/panschema/releases/tag/v0.1.0
