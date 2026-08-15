@@ -893,6 +893,9 @@ pub fn points_outside_dataset(schema: &SchemaDefinition, target: &str) -> bool {
 fn yaml_kind(value: &serde_norway::Value) -> &'static str {
     match value {
         serde_norway::Value::Bool(_) => "a boolean",
+        // Deliberately coarser than the scalar-kind vocabulary: this
+        // phrases a YAML value that fit no slot at all, where the
+        // integer/float split carries no information.
         serde_norway::Value::Number(_) => "a number",
         serde_norway::Value::Mapping(_) => "an object",
         _ => "a value",

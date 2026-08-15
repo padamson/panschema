@@ -124,6 +124,36 @@ pub fn range_typed_literal<'a>(
     Some((lexical, xsd_datatype(primitive)?))
 }
 
+/// A scalar's kind with its indefinite article — `"an integer"`, `"a
+/// string"` — for range-mismatch reports. One spelling for every surface,
+/// so the validator's reports and ingestion's classification cannot drift
+/// apart.
+pub fn scalar_kind_phrase(scalar: &crate::instances::ScalarValue) -> &'static str {
+    use crate::instances::ScalarValue;
+    match scalar {
+        ScalarValue::String(_) => "a string",
+        ScalarValue::Integer(_) => "an integer",
+        ScalarValue::Float(_) => "a float",
+        ScalarValue::Boolean(_) => "a boolean",
+    }
+}
+
+/// A noun with its indefinite article — "an integer", "a float". The
+/// article follows the sound, not the letter: `uri` and `uriorcurie` open
+/// with a consonant sound ("you-"), `ncname` with a vowel sound ("en-").
+pub fn with_article(noun: &str) -> String {
+    let vowel_sound = match noun {
+        "uri" | "uriorcurie" => false,
+        "ncname" => true,
+        _ => matches!(noun.chars().next(), Some('a' | 'e' | 'i' | 'o' | 'u')),
+    };
+    if vowel_sound {
+        format!("an {noun}")
+    } else {
+        format!("a {noun}")
+    }
+}
+
 /// `s` without a trailing XSD timezone (`Z` or `±hh:mm`), for validating the
 /// date/time fields it qualifies.
 fn strip_timezone(s: &str) -> &str {
@@ -430,6 +460,23 @@ mod tests {
 
     fn typed(range: &str, scalar: &ScalarValue) -> Option<(String, &'static str)> {
         range_typed_literal(range, scalar).map(|(lexical, dt)| (lexical.into_owned(), dt))
+    }
+
+    #[test]
+    fn kind_phrases_carry_the_right_article_for_every_scalar_kind() {
+        assert_eq!(
+            scalar_kind_phrase(&ScalarValue::String("x".into())),
+            "a string"
+        );
+        assert_eq!(scalar_kind_phrase(&ScalarValue::Integer(1)), "an integer");
+        assert_eq!(scalar_kind_phrase(&ScalarValue::Float(1.5)), "a float");
+        assert_eq!(scalar_kind_phrase(&ScalarValue::Boolean(true)), "a boolean");
+        assert_eq!(with_article("integer"), "an integer");
+        assert_eq!(with_article("float"), "a float");
+        // The article follows the sound: "a URI", "an NCName".
+        assert_eq!(with_article("uri"), "a uri");
+        assert_eq!(with_article("uriorcurie"), "a uriorcurie");
+        assert_eq!(with_article("ncname"), "an ncname");
     }
 
     #[test]

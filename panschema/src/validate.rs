@@ -205,12 +205,7 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
                     && !expected_primitives.iter().any(|p| kind_matches(p, scalar))
                 {
                     let shown = scalar_to_display(scalar);
-                    let kind = match scalar {
-                        ScalarValue::String(_) => "a string",
-                        ScalarValue::Integer(_) => "an integer",
-                        ScalarValue::Float(_) => "a float",
-                        ScalarValue::Boolean(_) => "a boolean",
-                    };
+                    let kind = crate::primitives::scalar_kind_phrase(scalar);
                     let expected = match (ranges.as_slice(), expected_primitives.as_slice()) {
                         ([range], [primitive]) => format!(
                             "the slot's range `{range}` expects {}",
@@ -570,13 +565,7 @@ fn enum_permits(enum_def: &EnumDefinition, scalar: &ScalarValue) -> bool {
 
 use crate::primitives::kind_matches;
 
-/// The primitive name with its indefinite article — "an integer", "a float".
-fn with_article(noun: &str) -> String {
-    match noun.chars().next() {
-        Some('a' | 'e' | 'i' | 'o' | 'u') => format!("an {noun}"),
-        _ => format!("a {noun}"),
-    }
-}
+use crate::primitives::with_article;
 
 /// Whether two values denote the same thing, with the same number
 /// semantics the kind check applies: `5` and `5.0` are one value, and a
