@@ -1084,6 +1084,66 @@ mod tests {
     }
 
     #[test]
+    fn equals_number_on_a_float_range_uses_a_float_typed_hasvalue() {
+        // The A-box types a float-range slot's literals as xsd:float, and
+        // `sh:hasValue` is term equality — an xsd:double hasValue could
+        // never match conforming data, silently inverting the rule.
+        use crate::linkml::{ClassRule, RuleConditions, SlotCondition};
+        let mut schema = SchemaDefinition::new("test");
+        schema.id = Some(EX.to_string());
+        let mut c = ClassDefinition::new("Task");
+        c.class_uri = Some(format!("{EX}#Task"));
+        let mut score = SlotDefinition::new("score");
+        score.range = Some("float".to_string());
+        c.attributes.insert("score".to_string(), score);
+        let mut region = SlotDefinition::new("region");
+        region.range = Some("string".to_string());
+        c.attributes.insert("region".to_string(), region);
+        c.rules.push(ClassRule {
+            title: Some("scored-needs-region".to_string()),
+            description: None,
+            preconditions: Some(RuleConditions {
+                any_of: Vec::new(),
+                slot_conditions: [(
+                    "score".to_string(),
+                    SlotCondition {
+                        equals_number: Some(4.2),
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            }),
+            postconditions: Some(RuleConditions {
+                any_of: Vec::new(),
+                slot_conditions: [(
+                    "region".to_string(),
+                    SlotCondition {
+                        required: true,
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            }),
+        });
+        schema.classes.insert("Task".to_string(), c);
+
+        let store = render_to_store(&schema);
+        assert!(
+            ask(
+                &store,
+                &format!(
+                    "ASK {{ <{EX}#TaskShape/rule0/pre/score> <{SH}hasValue> \
+                     \"4.2\"^^<http://www.w3.org/2001/XMLSchema#float> }}"
+                )
+            ),
+            "equals_number on a float range must emit an xsd:float hasValue, \
+             matching the datatype the A-box derives for the same slot"
+        );
+    }
+
+    #[test]
     fn a_postcondition_equals_number_is_typed_from_its_own_slots_range() {
         // The postcondition slot must resolve to *its own* definition — the
         // resolved range is what types the `equals_number` hasValue. `amount`

@@ -568,24 +568,7 @@ fn enum_permits(enum_def: &EnumDefinition, scalar: &ScalarValue) -> bool {
             .any(|pv| pv.text == value)
 }
 
-/// Whether a scalar's kind satisfies a primitive range, with JSON Schema
-/// number semantics: an integer is a valid float/double/decimal, and an
-/// integral float (`5.0`) is a valid integer. Everything outside the numeric
-/// and boolean families — strings, dates, URIs — is string-kinded.
-fn kind_matches(primitive: &str, scalar: &ScalarValue) -> bool {
-    match primitive {
-        "integer" => match scalar {
-            ScalarValue::Integer(_) => true,
-            ScalarValue::Float(f) => f.fract() == 0.0,
-            _ => false,
-        },
-        "float" | "double" | "decimal" => {
-            matches!(scalar, ScalarValue::Integer(_) | ScalarValue::Float(_))
-        }
-        "boolean" => matches!(scalar, ScalarValue::Boolean(_)),
-        _ => matches!(scalar, ScalarValue::String(_)),
-    }
-}
+use crate::primitives::kind_matches;
 
 /// The primitive name with its indefinite article — "an integer", "a float".
 fn with_article(noun: &str) -> String {

@@ -742,6 +742,18 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
     Ok(graph)
 }
 
+/// A typed literal carrying one of [`crate::primitives`]' static XSD
+/// datatype IRIs — table-validated, so no per-value IRI parse.
+fn typed_literal<'a>(
+    lexical: &'a str,
+    datatype: &'static str,
+) -> sophia::api::term::SimpleTerm<'a> {
+    sophia::api::term::SimpleTerm::LiteralDatatype(
+        sophia::api::MownStr::from(lexical),
+        sophia::iri::IriRef::new_unchecked(sophia::api::MownStr::from(datatype)),
+    )
+}
+
 /// Helper to create an IRI
 fn make_iri(s: &str) -> IoResult<Iri<String>> {
     Iri::new(s.to_string()).map_err(|e| IoError::Parse(format!("Invalid IRI '{}': {}", s, e)))
@@ -792,10 +804,16 @@ pub fn instance_iri_string(schema: &SchemaDefinition, inst: &crate::instances::I
 
 /// Emit each instance as an `owl:NamedIndividual`: `rdf:type` per declared
 /// class, `rdfs:label` from the display name, one data-property triple per
-/// scalar slot value (datatype following the slot's declared range, so an
-/// integer under a float-ranged slot lands as `xsd:double`), and one
-/// object-property triple per id reference, resolved to the referenced
-/// instance's IRI. A reference whose target id names no instance still emits
+/// scalar slot value, and one object-property triple per id reference,
+/// resolved to the referenced instance's IRI. A conforming scalar's literal
+/// carries the datatype the slot's range implies — the same derivation the
+/// SHACL writer uses for `sh:datatype`, so an integer under a float-ranged
+/// slot lands as `xsd:float` and agrees with the shapes emitted from the
+/// same schema. A value the range cannot faithfully type (wrong kind,
+/// malformed date, `NaN` under `decimal`) emits as authored with its own
+/// value-kind typing: nothing vanishes, and the mismatch stays visible to
+/// the shapes and to the conformance check instead of being silently
+/// converted. A reference whose target id names no instance still emits
 /// against the minted target IRI — RDF is open-world, and the dangling
 /// diagnostic (not the writer) owns reporting the gap.
 fn emit_instances(
@@ -857,7 +875,12 @@ fn emit_instances(
                 None => make_iri(&format!("{}#{}", ontology_iri_string(schema), sv.slot))?,
             };
             let range = slot_def.as_ref().and_then(|d| d.range.as_deref());
-            let float_range = matches!(range, Some("float") | Some("double") | Some("decimal"));
+            // Guard order mirrors the shapes writer: a class or enum range is
+            // an object-property assertion, never a typed literal — so an
+            // enum or class whose name collides with a primitive (an enum
+            // named `date`) can never take the datatype path the shapes
+            // don't take.
+            let range_is_class = range.is_some_and(|r| schema.classes.contains_key(r));
             // An enum-ranged slot is an object property over the enum's value
             // individuals, so its values assert as IRIs rather than literals.
             let range_enum = range.and_then(|r| schema.enums.get(r).map(|e| (r, e)));
@@ -879,13 +902,31 @@ fn emit_instances(
                     // A value the enum doesn't permit: keep it as authored so
                     // nothing is invented, and let validation report it.
                 }
+                if !range_is_class
+                    && range_enum.is_none()
+                    && let Some((lexical, datatype)) =
+                        range.and_then(|r| crate::primitives::range_typed_literal(r, scalar))
+                {
+                    // A conforming value under a primitive range: the literal
+                    // carries the datatype the shapes constrain the property
+                    // to, derived from the same table (`xsd_datatype`).
+                    triple(
+                        graph,
+                        &subject,
+                        &predicate,
+                        typed_literal(&lexical, datatype),
+                    )?;
+                    continue;
+                }
+                // The authored value-kind form: rangeless and custom-typed
+                // slots (which the shapes leave unconstrained), and values a
+                // primitive range cannot faithfully type — present in the
+                // output for the shapes and the conformance check to report,
+                // with nothing invented and nothing dropped.
                 match scalar {
                     ScalarValue::String(s) => graph.insert(&subject, &predicate, s.as_str()),
                     ScalarValue::Boolean(b) => graph.insert(&subject, &predicate, *b),
                     ScalarValue::Float(f) => graph.insert(&subject, &predicate, *f),
-                    ScalarValue::Integer(i) if float_range => {
-                        graph.insert(&subject, &predicate, *i as f64)
-                    }
                     ScalarValue::Integer(i) => graph.insert(&subject, &predicate, *i as isize),
                 }
                 .map_err(|e| IoError::Write(e.to_string()))?;
@@ -1446,22 +1487,44 @@ fn emit_constraint_fields(
     if let Some(max) = c.max_value {
         triple(graph, prop_shape, &t.max_inclusive, max)?;
     }
+    // `sh:hasValue` is term equality (datatype-sensitive), so the literal
+    // must carry the exact datatype the A-box derives from the slot's range
+    // — via the same `range_typed_literal` derivation — or conforming data
+    // could never equal it. A rangeless condition, or a constant the range
+    // cannot faithfully type, keeps the value-kind default the A-box falls
+    // back to for the same case.
     if let Some(v) = c.equals_string {
-        triple(graph, prop_shape, &t.has_value, v)?;
+        let scalar = crate::instances::ScalarValue::String(v.to_string());
+        match c
+            .range
+            .and_then(|r| crate::primitives::range_typed_literal(r, &scalar))
+        {
+            Some((lexical, datatype)) => {
+                triple(
+                    graph,
+                    prop_shape,
+                    &t.has_value,
+                    typed_literal(&lexical, datatype),
+                )?;
+            }
+            None => triple(graph, prop_shape, &t.has_value, v)?,
+        }
     }
     if let Some(n) = c.equals_number {
-        // `sh:hasValue` is term equality (datatype-sensitive), so the
-        // literal must carry the datatype the slot's range declares — an
-        // integer-range slot's data is `xsd:integer`, which a default
-        // `xsd:double` literal can never equal. Insert an integer-typed
-        // literal (sophia types `isize` as `xsd:integer`, matching
-        // `map_linkml_to_xsd`) for integer ranges; keep `xsd:double` for
-        // float/double/decimal or rangeless conditions.
-        let is_integer = matches!(c.range, Some("integer") | Some("int"));
-        if is_integer {
-            triple(graph, prop_shape, &t.has_value, n as isize)?;
-        } else {
-            triple(graph, prop_shape, &t.has_value, n)?;
+        let scalar = crate::instances::ScalarValue::Float(n);
+        match c
+            .range
+            .and_then(|r| crate::primitives::range_typed_literal(r, &scalar))
+        {
+            Some((lexical, datatype)) => {
+                triple(
+                    graph,
+                    prop_shape,
+                    &t.has_value,
+                    typed_literal(&lexical, datatype),
+                )?;
+            }
+            None => triple(graph, prop_shape, &t.has_value, n)?,
         }
     }
     if !c.any_of.is_empty() {
@@ -1855,29 +1918,340 @@ mod tests {
     }
 
     #[test]
-    fn integer_value_under_a_float_range_emits_xsd_double() {
+    fn integer_value_under_a_float_range_emits_xsd_float() {
         let (schema, set) = abox_fixture();
         let graph = build_rdf_graph_with_instances(&schema, Some(&set)).expect("graph");
         // The authored `score: 4` parses as an integer, but the slot's
-        // declared range is float — the literal must carry xsd:double, not
-        // xsd:integer, or SPARQL numeric joins against other doubles fail.
+        // declared range is float — the literal carries the datatype the
+        // schema's own SHACL shapes constrain it to (`sh:datatype
+        // xsd:float`), never the value's parse kind. SPARQL numeric
+        // promotion still joins xsd:float against other numeric types.
+        assert_eq!(
+            literal_parts(
+                &graph,
+                "https://example.org/cellar/b1",
+                "https://example.org/cellar/score"
+            ),
+            vec![(
+                "4".to_string(),
+                "http://www.w3.org/2001/XMLSchema#float".to_string()
+            )],
+            "a float-range slot's integer value must emit as xsd:float"
+        );
+    }
+
+    /// Every literal object at (subject IRI, predicate IRI) as its
+    /// `(lexical form, datatype IRI)` pair, for asserting A-box typing in
+    /// any fixture namespace.
+    fn literal_parts(graph: &FastGraph, subject: &str, predicate: &str) -> Vec<(String, String)> {
         use sophia::api::graph::Graph;
         use sophia::api::term::Term;
         use sophia::api::triple::Triple;
-        let subject = make_iri("https://example.org/cellar/b1").unwrap();
-        let predicate = make_iri("https://example.org/cellar/score").unwrap();
-        let mut found_double = false;
-        for t in graph.triples_matching([subject], [predicate], sophia::api::term::matcher::Any) {
-            let t = t.unwrap();
-            let dt = t.o().datatype().map(|d| d.to_string());
-            assert_eq!(
-                dt.as_deref(),
-                Some("http://www.w3.org/2001/XMLSchema#double"),
-                "a float-range slot's integer value must emit as xsd:double"
-            );
-            found_double = true;
+        let subject = make_iri(subject).unwrap();
+        let predicate = make_iri(predicate).unwrap();
+        graph
+            .triples_matching([subject], [predicate], sophia::api::term::matcher::Any)
+            .map(|t| {
+                let t = t.unwrap();
+                let o = t.o();
+                (
+                    o.lexical_form().expect("a literal object").to_string(),
+                    o.datatype().expect("a literal object").to_string(),
+                )
+            })
+            .collect()
+    }
+
+    /// A schema exercising every range-vs-value-kind combination the A-box
+    /// typing contract covers, with data authored against it. Record `e1`
+    /// conforms throughout (a date under `date`, an integral float under
+    /// `integer`, an integer under `decimal`, a float under `float`, an
+    /// integer at a rangeless slot); record `e2` carries the values a
+    /// primitive range cannot faithfully type (a malformed date, `NaN`
+    /// under `decimal`, an f32-overflowing value under `float`) alongside
+    /// `e1`'s wrong-kinded integer under `string`.
+    fn typed_abox_fixture() -> (SchemaDefinition, crate::instances::InstanceSet) {
+        let mut schema = SchemaDefinition::new("cellar");
+        schema.id = Some("https://example.org/cellar".to_string());
+        schema.default_prefix = Some("cellar".to_string());
+        schema.prefixes.insert(
+            "cellar".to_string(),
+            "https://example.org/cellar/".to_string(),
+        );
+        let mut container = ClassDefinition::new("Ledger");
+        container.tree_root = true;
+        let mut events = SlotDefinition::new("events");
+        events.range = Some("Event".to_string());
+        events.multivalued = true;
+        container.attributes.insert("events".to_string(), events);
+        schema.classes.insert("Ledger".to_string(), container);
+
+        let mut event = ClassDefinition::new("Event");
+        let mut id = SlotDefinition::new("id");
+        id.identifier = true;
+        event.attributes.insert("id".to_string(), id);
+        for (name, range) in [
+            ("on", Some("date")),
+            ("label", Some("string")),
+            ("count", Some("integer")),
+            ("weight", Some("decimal")),
+            ("ratio", Some("float")),
+            ("note", None),
+        ] {
+            let mut slot = SlotDefinition::new(name);
+            slot.range = range.map(str::to_string);
+            event.attributes.insert(name.to_string(), slot);
         }
-        assert!(found_double, "the score literal must be present");
+        schema.classes.insert("Event".to_string(), event);
+
+        let data: serde_norway::Value = serde_norway::from_str(
+            "events:\n  - id: e1\n    on: 2024-06-01\n    label: 42\n    count: 5.0\n    weight: 4\n    ratio: 2.5\n    note: 7\n  - id: e2\n    on: tomorrow\n    weight: .nan\n    ratio: 1.0e300\n",
+        )
+        .unwrap();
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        (schema, set)
+    }
+
+    /// The typed fixture's predicate IRI for `slot`.
+    fn cellar(slot: &str) -> String {
+        format!("https://example.org/cellar/{slot}")
+    }
+
+    #[test]
+    fn a_date_ranged_slots_value_carries_the_shapes_datatype() {
+        // A YAML date is string-kinded, but the slot's range is `date` and
+        // the same run's shapes say `sh:datatype xsd:date` — an xsd:string
+        // literal would fail the shapes the schema itself emitted.
+        let (schema, set) = typed_abox_fixture();
+        let graph = build_rdf_graph_with_instances(&schema, Some(&set)).expect("graph");
+        assert_eq!(
+            literal_parts(&graph, &cellar("e1"), &cellar("on")),
+            vec![(
+                "2024-06-01".to_string(),
+                "http://www.w3.org/2001/XMLSchema#date".to_string()
+            )],
+            "a conforming value is typed by the slot's range, not its parse kind"
+        );
+    }
+
+    #[test]
+    fn a_wrong_kinded_value_emits_as_authored_for_the_shapes_to_reject() {
+        // `label: 42` at a string range is a conformance violation. The
+        // triple still emits, in the value's own kind — the shapes'
+        // `sh:datatype xsd:string` then reports it, nothing vanishes from
+        // the output, and a required slot's `sh:minCount` stays satisfied.
+        let (schema, set) = typed_abox_fixture();
+        let graph = build_rdf_graph_with_instances(&schema, Some(&set)).expect("graph");
+        assert_eq!(
+            literal_parts(&graph, &cellar("e1"), &cellar("label")),
+            vec![(
+                "42".to_string(),
+                "http://www.w3.org/2001/XMLSchema#integer".to_string()
+            )],
+            "a nonconforming value stays present, typed as authored, for the shapes to flag"
+        );
+    }
+
+    #[test]
+    fn a_malformed_date_emits_as_a_well_formed_string_for_the_shapes_to_reject() {
+        // `on: tomorrow` is string-kinded but outside xsd:date's lexical
+        // space: stamping the range's datatype would mint an ill-formed
+        // literal some stores reject at load. As authored xsd:string it is
+        // well-formed RDF that visibly fails the shapes' sh:datatype.
+        let (schema, set) = typed_abox_fixture();
+        let graph = build_rdf_graph_with_instances(&schema, Some(&set)).expect("graph");
+        assert_eq!(
+            literal_parts(&graph, &cellar("e2"), &cellar("on")),
+            vec![(
+                "tomorrow".to_string(),
+                "http://www.w3.org/2001/XMLSchema#string".to_string()
+            )],
+        );
+    }
+
+    #[test]
+    fn a_non_finite_decimal_value_stays_present_as_its_authored_kind() {
+        // xsd:decimal has no lexical form for NaN, and the kind check
+        // cannot flag the value (a float is a valid decimal kind) — so
+        // dropping the triple would be silent data loss on every path.
+        // As authored xsd:double the value is present and the shapes'
+        // sh:datatype xsd:decimal reports the mismatch.
+        let (schema, set) = typed_abox_fixture();
+        let graph = build_rdf_graph_with_instances(&schema, Some(&set)).expect("graph");
+        assert_eq!(
+            literal_parts(&graph, &cellar("e2"), &cellar("weight")),
+            vec![(
+                "NaN".to_string(),
+                "http://www.w3.org/2001/XMLSchema#double".to_string()
+            )],
+        );
+    }
+
+    #[test]
+    fn an_f32_overflowing_float_value_keeps_its_authored_double_typing() {
+        // 1e300 fits xsd:double but overflows xsd:float's single-precision
+        // value space — a conforming processor would read it back as INF.
+        // The authored double typing preserves the value; the shapes'
+        // sh:datatype xsd:float reports that the slot can't hold it.
+        let (schema, set) = typed_abox_fixture();
+        let graph = build_rdf_graph_with_instances(&schema, Some(&set)).expect("graph");
+        let parts = literal_parts(&graph, &cellar("e2"), &cellar("ratio"));
+        let [(lexical, datatype)] = parts.as_slice() else {
+            panic!("the overflowing value must still emit exactly one literal; got: {parts:?}");
+        };
+        assert_eq!(datatype, "http://www.w3.org/2001/XMLSchema#double");
+        assert_eq!(
+            lexical.parse::<f64>().expect("a numeric lexical"),
+            1e300,
+            "the value survives, exactly"
+        );
+    }
+
+    #[test]
+    fn a_conforming_float_emits_the_shapes_xsd_float() {
+        let (schema, set) = typed_abox_fixture();
+        let graph = build_rdf_graph_with_instances(&schema, Some(&set)).expect("graph");
+        assert_eq!(
+            literal_parts(&graph, &cellar("e1"), &cellar("ratio")),
+            vec![(
+                "2.5".to_string(),
+                "http://www.w3.org/2001/XMLSchema#float".to_string()
+            )],
+        );
+    }
+
+    #[test]
+    fn an_integral_float_under_an_integer_range_emits_canonical_xsd_integer() {
+        // `count: 5.0` conforms to `integer` under number semantics, but
+        // `"5.0"^^xsd:integer` is an ill-formed literal — the lexical form
+        // must be canonical for the emitted datatype.
+        let (schema, set) = typed_abox_fixture();
+        let graph = build_rdf_graph_with_instances(&schema, Some(&set)).expect("graph");
+        assert_eq!(
+            literal_parts(&graph, &cellar("e1"), &cellar("count")),
+            vec![(
+                "5".to_string(),
+                "http://www.w3.org/2001/XMLSchema#integer".to_string()
+            )],
+            "the integral float takes integer's lexical space"
+        );
+    }
+
+    #[test]
+    fn a_decimal_ranged_integer_emits_xsd_decimal() {
+        // The shapes for a decimal range say `sh:datatype xsd:decimal`;
+        // collapsing to xsd:double contradicts them.
+        let (schema, set) = typed_abox_fixture();
+        let graph = build_rdf_graph_with_instances(&schema, Some(&set)).expect("graph");
+        assert_eq!(
+            literal_parts(&graph, &cellar("e1"), &cellar("weight")),
+            vec![(
+                "4".to_string(),
+                "http://www.w3.org/2001/XMLSchema#decimal".to_string()
+            )],
+        );
+    }
+
+    #[test]
+    fn a_rangeless_slots_value_keeps_its_value_kind_typing() {
+        // With no range and no `default_range` there is no shape constraint
+        // to agree with, so the value's own kind is the only typing there
+        // is: the fallback neither vanishes nor fabricates a datatype.
+        let (schema, set) = typed_abox_fixture();
+        let graph = build_rdf_graph_with_instances(&schema, Some(&set)).expect("graph");
+        assert_eq!(
+            literal_parts(&graph, &cellar("e1"), &cellar("note")),
+            vec![(
+                "7".to_string(),
+                "http://www.w3.org/2001/XMLSchema#integer".to_string()
+            )],
+        );
+    }
+
+    #[test]
+    fn an_enum_named_like_a_primitive_never_takes_the_datatype_path() {
+        // The shapes writer checks enum ranges before datatypes, so an enum
+        // named `date` gets `sh:in` over value IRIs and no `sh:datatype`.
+        // The A-box takes the same branch order: a non-permitted value
+        // emits as the authored string, never as an ill-formed xsd:date.
+        let mut schema = SchemaDefinition::new("cellar");
+        schema.id = Some("https://example.org/cellar".to_string());
+        schema.default_prefix = Some("cellar".to_string());
+        schema.prefixes.insert(
+            "cellar".to_string(),
+            "https://example.org/cellar/".to_string(),
+        );
+        let mut phases = crate::linkml::EnumDefinition::new("date");
+        phases.permissible_values.insert(
+            "start".to_string(),
+            crate::linkml::PermissibleValue::new("start"),
+        );
+        schema.enums.insert("date".to_string(), phases);
+        let mut container = ClassDefinition::new("Ledger");
+        container.tree_root = true;
+        let mut events = SlotDefinition::new("events");
+        events.range = Some("Event".to_string());
+        events.multivalued = true;
+        container.attributes.insert("events".to_string(), events);
+        schema.classes.insert("Ledger".to_string(), container);
+        let mut event = ClassDefinition::new("Event");
+        let mut id = SlotDefinition::new("id");
+        id.identifier = true;
+        event.attributes.insert("id".to_string(), id);
+        let mut phase = SlotDefinition::new("phase");
+        phase.range = Some("date".to_string());
+        event.attributes.insert("phase".to_string(), phase);
+        schema.classes.insert("Event".to_string(), event);
+
+        let data: serde_norway::Value =
+            serde_norway::from_str("events:\n  - id: e1\n    phase: someday\n").unwrap();
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        let graph = build_rdf_graph_with_instances(&schema, Some(&set)).expect("graph");
+        assert_eq!(
+            literal_parts(&graph, &cellar("e1"), &cellar("phase")),
+            vec![(
+                "someday".to_string(),
+                "http://www.w3.org/2001/XMLSchema#string".to_string()
+            )],
+            "the enum branch wins the name collision, as it does in the shapes"
+        );
+    }
+
+    #[test]
+    fn abox_literal_datatype_and_sh_datatype_agree_for_the_same_slot() {
+        // The contract behind all of the above: the A-box literal's datatype
+        // and the shapes' `sh:datatype` for one slot come from the same
+        // derivation, so `generate` cannot contradict itself in one run.
+        use sophia::api::graph::Graph;
+        use sophia::api::term::Term;
+        use sophia::api::triple::Triple;
+        let (schema, set) = typed_abox_fixture();
+        let abox = build_rdf_graph_with_instances(&schema, Some(&set)).expect("graph");
+        let shapes = build_shacl_graph(&schema).expect("shapes");
+        let sh_datatype = make_iri("http://www.w3.org/ns/shacl#datatype").unwrap();
+        let shape_dt: Vec<String> = shapes
+            .triples_matching(
+                sophia::api::term::matcher::Any,
+                [sh_datatype],
+                sophia::api::term::matcher::Any,
+            )
+            .filter_map(|t| {
+                let t = t.unwrap();
+                // Property shapes carry their path IRI in the shape IRI; the
+                // `on` slot's shape is the one whose subject ends in /on.
+                let subj = t.s().iri()?.to_string();
+                subj.ends_with("/on")
+                    .then(|| t.o().iri().expect("iri").to_string())
+            })
+            .collect();
+        let abox_dt: Vec<String> = literal_parts(&abox, &cellar("e1"), &cellar("on"))
+            .into_iter()
+            .map(|(_, datatype)| datatype)
+            .collect();
+        assert_eq!(
+            shape_dt, abox_dt,
+            "the shape's sh:datatype and the emitted literal's datatype must be one value"
+        );
     }
 
     /// A schema whose `qualifies` slot ranges over an `any_of` union of two
