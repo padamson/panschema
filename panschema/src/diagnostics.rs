@@ -71,9 +71,14 @@ pub fn should_fail_strict(
     unmodeled: &[UnmodeledConstruct],
     dangling: &[DanglingRef],
     colliding: &[CollidingSlot],
+    untyped: &[UntypedSlot],
     strict: bool,
 ) -> bool {
-    strict && (!unmodeled.is_empty() || !dangling.is_empty() || !colliding.is_empty())
+    strict
+        && (!unmodeled.is_empty()
+            || !dangling.is_empty()
+            || !colliding.is_empty()
+            || !untyped.is_empty())
 }
 
 /// A slot name defined at more than one site whose definitions would mint
@@ -141,6 +146,68 @@ pub fn colliding_slot_definitions(schema: &SchemaDefinition) -> Vec<CollidingSlo
         .collect()
 }
 
+/// A slot left untyped after load: it states no `range:`, carries no
+/// `any_of` union, is not voided by `maximum_cardinality: 0`, and no
+/// `default_range` applied to it when its schema file loaded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UntypedSlot {
+    pub name: String,
+    /// Where the slot is defined: `` class `X` `` or `` top-level `slots:` ``.
+    pub site: String,
+}
+
+impl UntypedSlot {
+    pub fn message(&self) -> String {
+        format!(
+            "slot `{}` ({}) resolves with no `range`, and no `default_range` applied to it \
+             at load — the outputs disagree on what that means: JSON Schema types it as \
+             `string` while RDF, SHACL, Postgres, HTML, and `validate` leave it \
+             unconstrained; declare a range (`range:` or `slot_usage` in YAML, `rdfs:range` \
+             in OWL/Turtle) or a `default_range` in the slot's schema file",
+            self.name, self.site
+        )
+    }
+}
+
+/// Slots left untyped after load-time `default_range` materialization,
+/// read from the **resolved** view — each class's effective slots, with
+/// `is_a`/mixin inheritance and `slot_usage` overrides applied — so a
+/// top-level slot every consumer ranges via `slot_usage` is not reported,
+/// and a slot a class introduces *only* through `slot_usage` (which no
+/// default can fill) is. A top-level slot no class uses is checked raw:
+/// the RDF, HTML, and graph writers project it anyway.
+///
+/// "Rangeless" is [`crate::linkml_resolve::default_range_would_fill`] —
+/// the same predicate the loader fills by — so a slot is reported
+/// precisely when no default could have typed it, including a slot from
+/// an imported file that declares no `default_range` of its own, whatever
+/// the root schema declares.
+pub fn untyped_slots(schema: &SchemaDefinition) -> Vec<UntypedSlot> {
+    let untyped = crate::linkml_resolve::default_range_would_fill;
+    let mut used: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for (class_name, class) in &schema.classes {
+        for (name, slot) in crate::linkml_resolve::resolve_effective_slots(class, schema) {
+            if untyped(&slot) {
+                out.push(UntypedSlot {
+                    name: name.clone(),
+                    site: format!("class `{class_name}`"),
+                });
+            }
+            used.insert(name);
+        }
+    }
+    for (name, slot) in &schema.slots {
+        if !used.contains(name) && untyped(slot) {
+            out.push(UntypedSlot {
+                name: name.clone(),
+                site: "top-level `slots:`".to_string(),
+            });
+        }
+    }
+    out
+}
+
 /// The format-independent schema diagnostics the shared load path
 /// ([`crate::import_resolve::load_schema`]) emits for every command —
 /// unmodeled class constructs, and `unique_keys` naming a slot the class
@@ -170,6 +237,7 @@ pub fn schema_load_diagnostics(schema: &SchemaDefinition) -> Vec<String> {
             .iter()
             .map(|c| c.message()),
     );
+    out.extend(untyped_slots(schema).iter().map(|u| u.message()));
     // The metamodel recommends at most one `tree_root` per schema. Several
     // are supported here — each dataset is read against the root it conforms
     // to — but the deviation from that "should" is stated, because upstream
@@ -1147,18 +1215,155 @@ mod tests {
         let no_dangling: Vec<DanglingRef> = Vec::new();
 
         // Not strict ⇒ never fail, whatever is present.
-        assert!(!should_fail_strict(&unmodeled, &dangling, &[], false));
+        assert!(!should_fail_strict(&unmodeled, &dangling, &[], &[], false));
         // Strict + nothing ⇒ ok.
-        assert!(!should_fail_strict(&no_unmodeled, &no_dangling, &[], true));
-        // Strict + either kind of finding ⇒ fail.
+        assert!(!should_fail_strict(
+            &no_unmodeled,
+            &no_dangling,
+            &[],
+            &[],
+            true
+        ));
+        // Strict + any kind of finding ⇒ fail.
         assert!(
-            should_fail_strict(&unmodeled, &no_dangling, &[], true),
+            should_fail_strict(&unmodeled, &no_dangling, &[], &[], true),
             "strict + unmodeled ⇒ fail"
         );
         assert!(
-            should_fail_strict(&no_unmodeled, &dangling, &[], true),
+            should_fail_strict(&no_unmodeled, &dangling, &[], &[], true),
             "strict + dangling ⇒ fail"
         );
+        let untyped = vec![UntypedSlot {
+            name: "x".to_string(),
+            site: "class `C`".to_string(),
+        }];
+        assert!(
+            should_fail_strict(&no_unmodeled, &no_dangling, &[], &untyped, true),
+            "strict + untyped slot ⇒ fail"
+        );
+    }
+
+    /// A slot with no `range:` that no `default_range` covered means each
+    /// output makes its own choice about what untyped means; the diagnostic
+    /// names the slot and its site so the author decides instead.
+    #[test]
+    fn a_rangeless_slot_with_no_default_range_is_reported_with_its_site() {
+        let schema = parse(
+            "name: s\nslots:\n  note: {}\nclasses:\n  Event:\n    attributes:\n      label: {}\n",
+        );
+        let found = super::untyped_slots(&schema);
+        assert_eq!(
+            found,
+            vec![
+                UntypedSlot {
+                    name: "label".to_string(),
+                    site: "class `Event`".to_string(),
+                },
+                UntypedSlot {
+                    name: "note".to_string(),
+                    site: "top-level `slots:`".to_string(),
+                },
+            ],
+            "both definition sites are named"
+        );
+        assert!(
+            found[0]
+                .message()
+                .contains("JSON Schema types it as `string`"),
+            "the message states how the outputs disagree; got: {}",
+            found[0].message()
+        );
+        assert!(
+            schema_load_diagnostics(&schema)
+                .iter()
+                .any(|m| m.contains("slot `note`")),
+            "the shared load path surfaces it for every command"
+        );
+    }
+
+    /// The reporting condition is the loader's own fill predicate:
+    /// a slot the materialization would fill is clean once load runs, and a
+    /// slot it deliberately skips is not "untyped".
+    #[test]
+    fn untyped_slot_reporting_mirrors_default_range_materialization() {
+        let mut schema = parse(
+            "name: s\ndefault_range: string\nslots:\n  note: {}\nclasses:\n  Event:\n    attributes:\n      label: {}\n",
+        );
+        crate::linkml_resolve::materialize_default_range(&mut schema);
+        assert_eq!(
+            super::untyped_slots(&schema),
+            vec![],
+            "a declared default_range covers every rangeless slot at load"
+        );
+
+        let schema = parse(
+            "name: s\nslots:\n  typed: {range: string}\n  union:\n    any_of:\n      - range: string\n      - range: integer\n  voided: {maximum_cardinality: 0}\n",
+        );
+        assert_eq!(
+            super::untyped_slots(&schema),
+            vec![],
+            "an explicit range, a range-carrying any_of, and a voided slot are all typed enough"
+        );
+    }
+
+    /// A top-level slot every consumer ranges through `slot_usage` is fully
+    /// typed in every output, so reporting it (and failing `--strict` on
+    /// it) would punish an ordinary LinkML pattern.
+    #[test]
+    fn a_slot_ranged_by_every_use_via_slot_usage_is_not_untyped() {
+        let schema = parse(
+            "name: s\nslots:\n  note: {}\nclasses:\n  Event:\n    name: Event\n    slots: [note]\n    slot_usage:\n      note: {range: string}\n",
+        );
+        assert_eq!(
+            super::untyped_slots(&schema),
+            vec![],
+            "the resolved view carries the slot_usage range"
+        );
+    }
+
+    /// A slot a class introduces only through `slot_usage` never passes
+    /// through `default_range` materialization, so it is exactly the
+    /// ambiguity this diagnostic exists to surface.
+    #[test]
+    fn a_slot_introduced_only_via_slot_usage_is_reported() {
+        let schema = parse(
+            "name: s\nclasses:\n  Event:\n    name: Event\n    slot_usage:\n      label: {required: true}\n",
+        );
+        assert_eq!(
+            super::untyped_slots(&schema),
+            vec![UntypedSlot {
+                name: "label".to_string(),
+                site: "class `Event`".to_string(),
+            }],
+        );
+    }
+
+    /// An `any_of` whose branches carry only facets constrains values it
+    /// never types — as untyped as a bare rangeless slot, and reported the
+    /// same. The loader agrees: a declared `default_range` fills it.
+    #[test]
+    fn a_facet_only_any_of_is_untyped_and_a_default_fills_it() {
+        let schema = parse(
+            "name: s\nslots:\n  u:\n    any_of:\n      - pattern: '^a'\n      - pattern: '^b'\n",
+        );
+        assert_eq!(
+            super::untyped_slots(&schema),
+            vec![UntypedSlot {
+                name: "u".to_string(),
+                site: "top-level `slots:`".to_string(),
+            }],
+        );
+
+        let mut schema = parse(
+            "name: s\ndefault_range: string\nslots:\n  u:\n    any_of:\n      - pattern: '^a'\n      - pattern: '^b'\n",
+        );
+        crate::linkml_resolve::materialize_default_range(&mut schema);
+        assert_eq!(
+            schema.slots.get("u").and_then(|s| s.range.as_deref()),
+            Some("string"),
+            "the default types the slot; the branches keep constraining values"
+        );
+        assert_eq!(super::untyped_slots(&schema), vec![]);
     }
 
     #[test]

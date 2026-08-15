@@ -2068,6 +2068,71 @@ slots:
     let _ = fs::remove_dir_all(&tmp);
 }
 
+/// An OWL/Turtle property without `rdfs:range` is an untyped slot like any
+/// other: the outputs disagree on what it means, so `--strict` refuses it
+/// and the warning's advice covers the Turtle spelling (`rdfs:range`), not
+/// only YAML's. Without `--strict` it stays a warning.
+#[test]
+fn cli_generate_strict_fails_on_a_rangeless_turtle_property() {
+    let schema_ttl = r#"
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ex: <https://example.org/untyped#> .
+
+ex: a owl:Ontology .
+ex:Server a owl:Class .
+ex:nickname a owl:DatatypeProperty ;
+    rdfs:domain ex:Server .
+"#;
+    let tmp = std::env::temp_dir().join("panschema_strict_untyped_ttl_test");
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).unwrap();
+    let schema_path = tmp.join("schema.ttl");
+    fs::write(&schema_path, schema_ttl).unwrap();
+
+    let run = |extra: &[&str]| {
+        let out_path = tmp.join("out");
+        let mut args = vec![
+            "generate",
+            "--schema",
+            schema_path.to_str().unwrap(),
+            "--output",
+            out_path.to_str().unwrap(),
+            "--format",
+            "ttl",
+        ];
+        args.extend_from_slice(extra);
+        Command::new(env!("CARGO_BIN_EXE_panschema"))
+            .args(&args)
+            .output()
+            .expect("panschema")
+    };
+
+    let strict = run(&["--strict"]);
+    assert!(
+        !strict.status.success(),
+        "--strict must fail on a rangeless property"
+    );
+    assert!(
+        String::from_utf8_lossy(&strict.stderr).contains("untyped slot"),
+        "the failure must count the untyped slots; got:\n{}",
+        String::from_utf8_lossy(&strict.stderr)
+    );
+
+    let lax = run(&[]);
+    assert!(
+        lax.status.success(),
+        "without --strict, an untyped slot is only a warning"
+    );
+    let lax_err = String::from_utf8_lossy(&lax.stderr);
+    assert!(
+        lax_err.contains("nickname") && lax_err.contains("rdfs:range"),
+        "the warning must name the slot and the Turtle remediation; got:\n{lax_err}"
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
 /// `panschema generate` for a schema whose `unique_keys` names a slot the
 /// class doesn't have warns about the unresolved reference — a structural
 /// defect that would otherwise render a broken constraint silently. A key

@@ -229,14 +229,17 @@ fn inherit_unset(child: &mut SlotDefinition, parent: &SlotDefinition) {
 /// defaults exist.
 ///
 /// A slot that states anything more specific is left alone: an explicit
-/// `range`, an `any_of` union, or `maximum_cardinality: 0` (the author
-/// saying "no value", where a range would contradict the induced view).
+/// `range`, an `any_of` union whose branches carry ranges, or
+/// `maximum_cardinality: 0` (the author saying "no value", where a range
+/// would contradict the induced view). An `any_of` whose branches carry
+/// only facets — patterns, bounds — constrains values it never types, so
+/// the default fills its range like any other rangeless slot.
 pub fn materialize_default_range(schema: &mut SchemaDefinition) {
     let Some(default) = schema.default_range.clone() else {
         return;
     };
     let fill = |slot: &mut SlotDefinition| {
-        if slot.range.is_none() && slot.any_of.is_empty() && slot.maximum_cardinality != Some(0) {
+        if default_range_would_fill(slot) {
             slot.range = Some(default.clone());
         }
     };
@@ -248,6 +251,16 @@ pub fn materialize_default_range(schema: &mut SchemaDefinition) {
             fill(attribute);
         }
     }
+}
+
+/// Whether a declared `default_range` would type this slot — the one
+/// definition of "rangeless" shared by [`materialize_default_range`] and
+/// the untyped-slot diagnostic, so what the loader fills and what the
+/// diagnostic reports can never drift apart.
+pub fn default_range_would_fill(slot: &SlotDefinition) -> bool {
+    slot.range.is_none()
+        && !slot.any_of.iter().any(|branch| branch.range.is_some())
+        && slot.maximum_cardinality != Some(0)
 }
 
 /// Recursive worker for [`resolve_effective_slots`]. `visited` holds the
@@ -947,8 +960,26 @@ mod tests {
         explicit.range = Some("integer".to_string());
         class.attributes.insert("count".into(), explicit);
         let mut union = SlotDefinition::new("either");
-        union.any_of = vec![SlotDefinition::new("a"), SlotDefinition::new("b")];
+        let mut branch_a = SlotDefinition::new("a");
+        branch_a.range = Some("string".to_string());
+        let mut branch_b = SlotDefinition::new("b");
+        branch_b.range = Some("integer".to_string());
+        union.any_of = vec![branch_a, branch_b];
         class.attributes.insert("either".into(), union);
+        let mut facets = SlotDefinition::new("coded");
+        facets.any_of = vec![
+            {
+                let mut p = SlotDefinition::new("");
+                p.pattern = Some("^a".to_string());
+                p
+            },
+            {
+                let mut p = SlotDefinition::new("");
+                p.pattern = Some("^b".to_string());
+                p
+            },
+        ];
+        class.attributes.insert("coded".into(), facets);
         let mut no_value = SlotDefinition::new("legacy");
         no_value.maximum_cardinality = Some(0);
         class.attributes.insert("legacy".into(), no_value);
@@ -974,7 +1005,13 @@ mod tests {
         );
         assert!(
             item.attributes["either"].range.is_none(),
-            "an any_of union does not gain a scalar range"
+            "an any_of union whose branches carry ranges does not gain a scalar range"
+        );
+        assert_eq!(
+            item.attributes["coded"].range.as_deref(),
+            Some("string"),
+            "an any_of whose branches carry only facets constrains values it never \
+             types, so the default fills it like any rangeless slot"
         );
         assert!(
             item.attributes["legacy"].range.is_none(),

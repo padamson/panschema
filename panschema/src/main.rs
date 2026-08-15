@@ -453,21 +453,26 @@ fn generate(
     let schema = panschema::import_resolve::load_schema_with_deps(input, &registry, deps)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-    // The unmodeled-construct, unresolved-unique-key, and dangling-reference
-    // warnings are emitted by the shared load path above (so `serve`/`publish`
-    // surface them too). Under `--strict`, an unmodeled construct, a dangling
-    // reference, or a colliding slot definition is additionally a hard error
-    // here.
+    // The unmodeled-construct, unresolved-unique-key, dangling-reference,
+    // and untyped-slot warnings are emitted by the shared load path above
+    // (so `serve`/`publish` surface them too). Under `--strict`, an
+    // unmodeled construct, a dangling reference, a colliding slot
+    // definition, or an untyped slot is additionally a hard error here.
     let unmodeled = panschema::diagnostics::unmodeled_class_constructs(&schema);
     let dangling = panschema::diagnostics::dangling_references(&schema);
     let colliding = panschema::diagnostics::colliding_slot_definitions(&schema);
-    if panschema::diagnostics::should_fail_strict(&unmodeled, &dangling, &colliding, strict) {
+    let untyped = panschema::diagnostics::untyped_slots(&schema);
+    if panschema::diagnostics::should_fail_strict(
+        &unmodeled, &dangling, &colliding, &untyped, strict,
+    ) {
         anyhow::bail!(
-            "{} unmodeled LinkML construct(s), {} dangling reference(s), and \
-             {} colliding slot definition(s) present; failing because --strict is set",
+            "{} unmodeled LinkML construct(s), {} dangling reference(s), \
+             {} colliding slot definition(s), and {} untyped slot(s) present; \
+             failing because --strict is set",
             unmodeled.len(),
             dangling.len(),
-            colliding.len()
+            colliding.len(),
+            untyped.len()
         );
     }
 
