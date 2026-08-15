@@ -163,7 +163,7 @@ impl UntypedSlot {
              at load — the outputs disagree on what that means: JSON Schema types it as \
              `string` while RDF, SHACL, Postgres, HTML, and `validate` leave it \
              unconstrained; declare a range (`range:` or `slot_usage` in YAML, `rdfs:range` \
-             in OWL/Turtle) or a `default_range` in the slot's schema file",
+             in OWL/Turtle)",
             self.name, self.site
         )
     }

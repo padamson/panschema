@@ -130,8 +130,12 @@ pub fn load_schema_with_deps(
 
     // Second inheritance pass, now that the merge has made cross-file
     // parents visible — fills only fields still unset, so per-file
-    // defaults and same-file inheritance keep their precedence.
+    // defaults and same-file inheritance keep their precedence. Then the
+    // deferred default fill: a specializing slot whose parent chain gave
+    // it no range takes the merged default, last — ancestors beat
+    // defaults, per LinkML's derivation order.
     crate::linkml_resolve::resolve_slot_inheritance(&mut schema);
+    crate::linkml_resolve::materialize_deferred_default_range(&mut schema);
 
     // Schema-level diagnostics that don't depend on the output format, so every
     // command surfaces them — previously only `generate` did. `--strict`
@@ -1184,10 +1188,11 @@ mod tests {
     }
 
     #[test]
-    fn an_import_without_a_default_range_keeps_its_slots_rangeless() {
-        // A file that declares no `default_range` gets none — the root's
-        // default must not leak across the merge into slots the import
-        // deliberately left untyped.
+    fn an_import_without_a_default_range_takes_its_own_implicit_string() {
+        // A file that declares no `default_range` carries LinkML's implicit
+        // `string` default — its own, never the root's. The root here
+        // declares `integer`, and the import's rangeless slot must still
+        // come out `string`: per-file scoping survives the implicit default.
         let registry = FormatRegistry::with_defaults();
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
@@ -1199,15 +1204,139 @@ mod tests {
         let root_path = dir.join("root.yaml");
         std::fs::write(
             &root_path,
-            "name: root\nid: https://example.org/root\ndefault_range: string\n\
+            "name: root\nid: https://example.org/root\ndefault_range: integer\n\
              imports:\n  - untyped\nslots:\n  title: {}\n",
         )
         .unwrap();
 
         let schema = load_schema(&root_path, &registry).expect("load");
         assert_eq!(
-            schema.slots["note"].range, None,
-            "no default in the declaring file means no range, whatever the root declares"
+            schema.slots["note"].range.as_deref(),
+            Some("string"),
+            "the declaring file's implicit default applies, not the root's declared one"
+        );
+    }
+
+    /// A specializing slot whose parent chain yields no range falls back
+    /// to a default like any other — and to *its own file's* default,
+    /// declared or implicit, never the importing schema's. The deferred
+    /// fill carries each file's default with the slot, so per-file scoping
+    /// survives the slot being resolved after the merge.
+    #[test]
+    fn an_imported_stragglers_default_comes_from_its_own_file() {
+        let registry = FormatRegistry::with_defaults();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::write(
+            dir.join("implicit_dep.yaml"),
+            "name: implicit_dep\nid: https://example.org/implicit\n\
+             slots:\n  note: {is_a: ghost}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("declared_dep.yaml"),
+            "name: declared_dep\nid: https://example.org/declared\ndefault_range: float\n\
+             slots:\n  score: {is_a: ghost}\n",
+        )
+        .unwrap();
+        let root_path = dir.join("root.yaml");
+        std::fs::write(
+            &root_path,
+            "name: root\nid: https://example.org/root\ndefault_range: integer\n\
+             imports:\n  - implicit_dep\n  - declared_dep\n",
+        )
+        .unwrap();
+
+        let schema = load_schema(&root_path, &registry).expect("load");
+        assert_eq!(
+            schema.slots["note"].range.as_deref(),
+            Some("string"),
+            "an unresolvable-chain slot takes its file's implicit default, not the root's"
+        );
+        assert_eq!(
+            schema.slots["score"].range.as_deref(),
+            Some("float"),
+            "and a declared default scopes the same way for the same shape"
+        );
+    }
+
+    /// A rangeless property in an imported OWL/Turtle file stays genuinely
+    /// rangeless: its file carries no default, so the deferred fill never
+    /// touches it, and the untyped-slot diagnostic still sees it — a mixed
+    /// YAML-root/Turtle-import schema reports what the Turtle file reports
+    /// standalone.
+    #[test]
+    fn an_imported_turtle_files_rangeless_property_stays_untyped() {
+        let registry = FormatRegistry::with_defaults();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::write(
+            dir.join("vocab.ttl"),
+            "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+             @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
+             @prefix ex: <https://example.org/vocab#> .\n\
+             ex: a owl:Ontology .\n\
+             ex:Widget a owl:Class .\n\
+             ex:label a owl:DatatypeProperty ; rdfs:domain ex:Widget .\n",
+        )
+        .unwrap();
+        let root_path = dir.join("root.yaml");
+        std::fs::write(
+            &root_path,
+            "name: root\nid: https://example.org/root\nimports:\n  - vocab\n",
+        )
+        .unwrap();
+
+        let schema = load_schema(&root_path, &registry).expect("load");
+        let label = schema
+            .classes
+            .get("Widget")
+            .and_then(|c| c.attributes.get("label"))
+            .or_else(|| schema.slots.get("label"))
+            .expect("the imported property is in the merged schema");
+        assert_eq!(
+            label.range, None,
+            "no default reaches a property whose own file has none"
+        );
+        assert!(
+            crate::diagnostics::untyped_slots(&schema)
+                .iter()
+                .any(|u| u.name == "label"),
+            "and the untyped-slot diagnostic still reports it"
+        );
+    }
+
+    /// A cross-file specializing slot inherits its parent's *effective*
+    /// range — including one the parent took from its own file's
+    /// `default_range` — rather than falling back to the child file's
+    /// default. Under per-file scoping the materialized default is the
+    /// parent's range; linkml-runtime, which resolves defaults at
+    /// induction against the root schema, would answer differently, the
+    /// same divergence per-file scoping already accepts elsewhere.
+    #[test]
+    fn a_cross_file_parents_materialized_default_reaches_the_child() {
+        let registry = FormatRegistry::with_defaults();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::write(
+            dir.join("lib.yaml"),
+            "name: lib\nid: https://example.org/lib\ndefault_range: integer\n\
+             slots:\n  p: {}\n",
+        )
+        .unwrap();
+        let root_path = dir.join("root.yaml");
+        std::fs::write(
+            &root_path,
+            "name: root\nid: https://example.org/root\ndefault_range: string\n\
+             imports:\n  - lib\nslots:\n  c: {is_a: p}\n",
+        )
+        .unwrap();
+
+        let schema = load_schema(&root_path, &registry).expect("load");
+        assert_eq!(
+            schema.slots["c"].range.as_deref(),
+            Some("integer"),
+            "the parent's effective range (its file's default) wins over the child file's"
         );
     }
 

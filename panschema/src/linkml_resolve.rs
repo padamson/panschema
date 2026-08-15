@@ -146,10 +146,10 @@ pub fn resolve_effective_slots_with_provenance(
 /// child states is never touched. Runs at load time before
 /// [`materialize_default_range`] (an inherited explicit range beats the
 /// file's default) and once more after imports merge, so a parent
-/// declared in another file contributes to fields still unset. One
-/// residual ordering corner: a cross-file parent's field loses to the
-/// child file's own `default_range`, because the default materializes
-/// per file before the merge makes the parent visible.
+/// declared in another file contributes to fields still unset. For
+/// `range` the ordering holds across files too: a specializing slot's
+/// default fill is deferred past the post-merge pass, so a cross-file
+/// parent's range always beats the child file's `default_range`.
 ///
 /// Only `Option`- and list-valued metaslots inherit. The boolean
 /// metaslots (`required`, `multivalued`, …) do not: the IR cannot
@@ -234,21 +234,64 @@ fn inherit_unset(child: &mut SlotDefinition, parent: &SlotDefinition) {
 /// would contradict the induced view). An `any_of` whose branches carry
 /// only facets — patterns, bounds — constrains values it never types, so
 /// the default fills its range like any other rangeless slot.
+///
+/// A still-rangeless slot with `is_a` is not filled here: its parent may
+/// live in a file this pass cannot see, and an inherited range beats any
+/// default — LinkML's derivation order is ancestors first, default last.
+/// Such a slot instead records this file's default with itself, and
+/// [`materialize_deferred_default_range`] completes the fill after the
+/// cross-file inheritance pass — from that recorded per-file default, so
+/// the scoping is exact whether the slot's chain resolves or not.
 pub fn materialize_default_range(schema: &mut SchemaDefinition) {
     let Some(default) = schema.default_range.clone() else {
         return;
     };
-    let fill = |slot: &mut SlotDefinition| {
+    for_each_slot_definition(schema, |slot| {
         if default_range_would_fill(slot) {
-            slot.range = Some(default.clone());
+            if slot.is_a.is_none() {
+                slot.range = Some(default.clone());
+            } else {
+                slot.annotations
+                    .insert(DEFERRED_DEFAULT_KEY.to_string(), default.clone());
+            }
         }
-    };
+    });
+}
+
+/// The transient marker [`materialize_default_range`] leaves on a
+/// specializing slot it deferred, carrying the declaring file's default.
+/// It travels with the definition through the imports merge and is
+/// removed by [`materialize_deferred_default_range`] before anything else
+/// observes the schema.
+const DEFERRED_DEFAULT_KEY: &str = "panschema:deferred_default_range";
+
+/// The post-merge completion of [`materialize_default_range`]: each slot
+/// the per-file pass deferred takes its recorded default now, unless the
+/// cross-file inheritance pass gave it a range — ancestors first, default
+/// last, with each slot's default coming from its own declaring file.
+/// Slots that were never deferred (an OWL/Turtle-sourced property with no
+/// `rdfs:range`, whose file has no default) are untouched and stay
+/// genuinely rangeless.
+pub fn materialize_deferred_default_range(schema: &mut SchemaDefinition) {
+    for_each_slot_definition(schema, |slot| {
+        if let Some(default) = slot.annotations.remove(DEFERRED_DEFAULT_KEY)
+            && default_range_would_fill(slot)
+        {
+            slot.range = Some(default);
+        }
+    });
+}
+
+/// One traversal over every slot definition the default-range passes
+/// touch — top-level `slots:` and class `attributes:` — so the immediate
+/// and deferred passes can never visit different containers.
+fn for_each_slot_definition(schema: &mut SchemaDefinition, mut f: impl FnMut(&mut SlotDefinition)) {
     for slot in schema.slots.values_mut() {
-        fill(slot);
+        f(slot);
     }
     for class in schema.classes.values_mut() {
         for attribute in class.attributes.values_mut() {
-            fill(attribute);
+            f(attribute);
         }
     }
 }
@@ -936,6 +979,39 @@ mod tests {
                 .as_deref(),
             Some("Parent"),
             "a refined inherited slot still points at its origin"
+        );
+    }
+
+    /// LinkML's derivation order for a specializing slot: an inherited
+    /// range beats the default, and the default fills only what the whole
+    /// chain leaves unset.
+    #[test]
+    fn a_specializing_slots_range_comes_from_ancestors_first_default_last() {
+        let mut schema = SchemaDefinition::new("s");
+        schema.default_range = Some("string".to_string());
+        let mut parent = SlotDefinition::new("anchors");
+        parent.range = Some("uriorcurie".to_string());
+        schema.slots.insert("anchors".into(), parent);
+        let mut child = SlotDefinition::new("citations");
+        child.is_a = Some("anchors".to_string());
+        schema.slots.insert("citations".into(), child);
+        let mut orphan = SlotDefinition::new("labels");
+        orphan.is_a = Some("nothing_known".to_string());
+        schema.slots.insert("labels".into(), orphan);
+
+        resolve_slot_inheritance(&mut schema);
+        materialize_default_range(&mut schema);
+        materialize_deferred_default_range(&mut schema);
+
+        assert_eq!(
+            schema.slots["citations"].range.as_deref(),
+            Some("uriorcurie"),
+            "the parent's range wins over the default"
+        );
+        assert_eq!(
+            schema.slots["labels"].range.as_deref(),
+            Some("string"),
+            "a chain that yields no range falls back to the default, last"
         );
     }
 

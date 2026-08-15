@@ -31,6 +31,15 @@ impl Reader for YamlReader {
         let mut schema: SchemaDefinition =
             serde_norway::from_str(&content).map_err(|e| IoError::Parse(e.to_string()))?;
         backfill_names(&mut schema)?;
+        // LinkML's derivation rules give a schema that omits `default_range`
+        // the default `string`, so this document means the same thing here
+        // as through linkml-runtime. Set at read time — per file, before
+        // load-time materialization — so imported files each carry their
+        // own effective default. Deliberately not done for other readers:
+        // an OWL property without `rdfs:range` is genuinely rangeless.
+        if schema.default_range.is_none() {
+            schema.default_range = Some(crate::linkml::LINKML_DEFAULT_RANGE.to_string());
+        }
         Ok(schema)
     }
 
@@ -118,6 +127,32 @@ mod tests {
         assert!(root.tree_root, "tree_root: true parses onto the IR");
         let plain: ClassDefinition = serde_norway::from_str("name: Wine\n").expect("parse");
         assert!(!plain.tree_root, "absent tree_root defaults to false");
+    }
+
+    #[test]
+    fn an_omitted_default_range_reads_as_string() {
+        // LinkML's derivation rules give a schema that declares no
+        // `default_range` the default `string`, so a LinkML YAML document
+        // means the same thing here as through linkml-runtime — and every
+        // rangeless slot gets typed at load like any defaulted one.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schema.yaml");
+        fs::write(&path, "name: s\nslots:\n  note: {}\n").expect("write");
+        let schema = YamlReader::new().read(&path).expect("read");
+        assert_eq!(
+            schema.default_range.as_deref(),
+            Some("string"),
+            "the spec's implicit default is materialized onto the IR"
+        );
+    }
+
+    #[test]
+    fn a_declared_default_range_is_never_overridden() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schema.yaml");
+        fs::write(&path, "name: s\ndefault_range: integer\nslots:\n  n: {}\n").expect("write");
+        let schema = YamlReader::new().read(&path).expect("read");
+        assert_eq!(schema.default_range.as_deref(), Some("integer"));
     }
 
     #[test]

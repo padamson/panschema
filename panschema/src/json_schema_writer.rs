@@ -166,6 +166,11 @@ fn slot_value_schema(slot: &SlotDefinition, schema: &SchemaDefinition) -> Value 
         return json!({ "anyOf": branches });
     }
 
+    // A slot that reaches a writer still rangeless (an OWL/Turtle property
+    // without `rdfs:range`, or a `slot_usage`-introduced slot no default
+    // can fill) renders as `string` here — this writer's own fallback, a
+    // separate decision from the read-time LinkML default the YAML reader
+    // applies.
     let range = slot.range.as_deref().unwrap_or("string");
 
     // Enum range → the permissible values as a JSON `enum` (BTreeMap key order,

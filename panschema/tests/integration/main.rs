@@ -2068,6 +2068,106 @@ slots:
     let _ = fs::remove_dir_all(&tmp);
 }
 
+/// A LinkML YAML schema that declares no `default_range` means
+/// `default_range: string` per LinkML's derivation rules, so a rangeless
+/// slot is string-typed everywhere — including the validator, which
+/// rejects a wrong-kinded value at it exactly as it would under a declared
+/// default.
+#[test]
+fn cli_validate_kind_checks_a_rangeless_slot_via_the_implicit_string_default() {
+    let tmp = std::env::temp_dir().join("panschema_implicit_default_range_test");
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).unwrap();
+    let schema_path = tmp.join("schema.yaml");
+    fs::write(
+        &schema_path,
+        "id: https://example.org/implicit\nname: implicit\nclasses:\n  Event:\n    tree_root: true\n    slots: [events]\n  Item:\n    slots: [id, note]\nslots:\n  id: {identifier: true}\n  events: {range: Item, multivalued: true}\n  note: {}\n",
+    )
+    .unwrap();
+    let data_path = tmp.join("data.yaml");
+    fs::write(&data_path, "events:\n  - id: i1\n    note: 42\n").unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "validate",
+            "--schema",
+            schema_path.to_str().unwrap(),
+            "--data",
+            data_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("panschema");
+    assert!(
+        !out.status.success(),
+        "an integer at an implicitly string-typed slot must not validate clean"
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("expects a string"),
+        "the report names the implicit expectation; got:\n{err}"
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+/// A rangeless Turtle property keeps its untyped-slot warning and its
+/// `--strict` refusal when the Turtle file is *imported* by a YAML root —
+/// the root's default (implicit or declared) never reaches a slot whose
+/// own file carries no default, so a mixed schema behaves as the Turtle
+/// file does standalone.
+#[test]
+fn cli_generate_strict_fails_on_a_rangeless_property_in_an_imported_turtle_file() {
+    let tmp = std::env::temp_dir().join("panschema_strict_imported_ttl_test");
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).unwrap();
+    fs::write(
+        tmp.join("vocab.ttl"),
+        r#"
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ex: <https://example.org/vocab#> .
+
+ex: a owl:Ontology .
+ex:Widget a owl:Class .
+ex:label a owl:DatatypeProperty ;
+    rdfs:domain ex:Widget .
+"#,
+    )
+    .unwrap();
+    let schema_path = tmp.join("root.yaml");
+    fs::write(
+        &schema_path,
+        "id: https://example.org/root\nname: root\nimports:\n  - vocab\n",
+    )
+    .unwrap();
+
+    let out_path = tmp.join("out");
+    let strict = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--schema",
+            schema_path.to_str().unwrap(),
+            "--output",
+            out_path.to_str().unwrap(),
+            "--format",
+            "ttl",
+            "--strict",
+        ])
+        .output()
+        .expect("panschema");
+    assert!(
+        !strict.status.success(),
+        "--strict must refuse the imported rangeless property"
+    );
+    assert!(
+        String::from_utf8_lossy(&strict.stderr).contains("untyped slot"),
+        "the failure must count the untyped slots; got:\n{}",
+        String::from_utf8_lossy(&strict.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
 /// An OWL/Turtle property without `rdfs:range` is an untyped slot like any
 /// other: the outputs disagree on what it means, so `--strict` refuses it
 /// and the warning's advice covers the Turtle spelling (`rdfs:range`), not

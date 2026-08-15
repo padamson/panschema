@@ -71,6 +71,11 @@ pub struct Example {
     pub description: Option<String>,
 }
 
+/// The range LinkML's derivation rules give a schema that omits
+/// `default_range`. Applied at read time by the LinkML YAML reader, so an
+/// omitted default means the same thing here as through linkml-runtime.
+pub const LINKML_DEFAULT_RANGE: &str = "string";
+
 /// Root container for a LinkML schema
 ///
 /// Corresponds to LinkML SchemaDefinition.
