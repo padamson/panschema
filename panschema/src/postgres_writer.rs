@@ -270,11 +270,12 @@ fn render_body(schema: &SchemaDefinition) -> String {
         // must too". A rule that can't be expressed as a column CHECK is
         // dropped here (and separately surfaced by `skipped_rules` on the CLI
         // path) rather than emitted broken.
+        let array_slots = array_column_slots(class, schema);
         for (i, rule) in class.rules.iter().enumerate() {
             if let (Some(pre), Some(post)) = (&rule.preconditions, &rule.postconditions)
                 && let (Some(p_sql), Some(q_sql)) = (
-                    rule_conditions_to_sql(pre, &slot_columns),
-                    rule_conditions_to_sql(post, &slot_columns),
+                    rule_conditions_to_sql(pre, &slot_columns, &array_slots),
+                    rule_conditions_to_sql(post, &slot_columns, &array_slots),
                 )
             {
                 lines.push(format!(
@@ -497,12 +498,19 @@ fn linking_table_for(
 /// expressed as a column `CHECK`. Unexpressible when: the map is empty; a
 /// referenced slot isn't a column of this class (`slot_columns` miss); a
 /// condition carries a `range` or cardinality field (no single-column SQL
-/// form); or a condition has no expressible field at all. The field →
-/// predicate mapping mirrors the HTML "when … then …" sentence
-/// (`html_writer.rs`'s `describe_slot_condition`).
+/// form); a condition puts a pattern or value bound on an array column
+/// (no per-element `CHECK` form exists — the same gap `pattern`/bounds
+/// facets have there); or a condition has no expressible field at all.
+///
+/// On an array column an equals condition is membership — `'v' = ANY(col)`
+/// — the same at-least-one reading the native validator and the SHACL
+/// projection give it, so all three projections enforce one semantics.
+/// The field → predicate mapping mirrors the HTML "when … then …"
+/// sentence (`html_writer.rs`'s `describe_slot_condition`).
 fn rule_conditions_to_sql(
     conds: &crate::linkml::RuleConditions,
     slot_columns: &BTreeMap<String, String>,
+    array_slots: &std::collections::BTreeSet<String>,
 ) -> Option<String> {
     if conds.slot_conditions.is_empty() {
         return None;
@@ -510,6 +518,7 @@ fn rule_conditions_to_sql(
     let mut preds = Vec::new();
     for (slot, cond) in &conds.slot_conditions {
         let col = quote_ident(slot_columns.get(slot.as_str())?);
+        let is_array = array_slots.contains(slot.as_str());
         // Fields with no single-column CHECK form make the whole rule
         // unexpressible (the HTML card can still render them).
         if cond.range.is_some()
@@ -518,11 +527,27 @@ fn rule_conditions_to_sql(
         {
             return None;
         }
+        if is_array
+            && (cond.pattern.is_some()
+                || cond.minimum_value.is_some()
+                || cond.maximum_value.is_some())
+        {
+            return None;
+        }
         if let Some(v) = &cond.equals_string {
-            preds.push(format!("{col} = '{}'", v.replace('\'', "''")));
+            let literal = v.replace('\'', "''");
+            preds.push(if is_array {
+                format!("'{literal}' = ANY({col})")
+            } else {
+                format!("{col} = '{literal}'")
+            });
         }
         if let Some(n) = cond.equals_number {
-            preds.push(format!("{col} = {n}"));
+            preds.push(if is_array {
+                format!("{n} = ANY({col})")
+            } else {
+                format!("{col} = {n}")
+            });
         }
         if cond.required {
             preds.push(format!("{col} IS NOT NULL"));
@@ -541,6 +566,20 @@ fn rule_conditions_to_sql(
         return None;
     }
     Some(preds.join(" AND "))
+}
+
+/// The class's slots that render as array columns — multivalued scalars
+/// and enums — where equality means membership and per-element facet
+/// forms don't exist.
+fn array_column_slots(
+    class: &ClassDefinition,
+    schema: &SchemaDefinition,
+) -> std::collections::BTreeSet<String> {
+    crate::linkml_resolve::resolve_effective_slots(class, schema)
+        .into_iter()
+        .filter(|(_, slot)| slot.multivalued && !is_class_range(slot, schema))
+        .map(|(name, _)| name)
+        .collect()
 }
 
 /// A deferred foreign-key constraint, added after every table is declared.
@@ -653,8 +692,9 @@ pub fn skipped_rules(schema: &SchemaDefinition) -> Vec<SkippedRule> {
             continue;
         }
         let slot_columns = slot_column_map(class, schema);
+        let array_slots = array_column_slots(class, schema);
         for (i, rule) in class.rules.iter().enumerate() {
-            if let Some(reason) = rule_skip_reason(rule, &slot_columns) {
+            if let Some(reason) = rule_skip_reason(rule, &slot_columns, &array_slots) {
                 out.push(SkippedRule {
                     class: class_name.clone(),
                     rule: rule.title.clone().unwrap_or_else(|| format!("rule #{i}")),
@@ -672,17 +712,18 @@ pub fn skipped_rules(schema: &SchemaDefinition) -> Vec<SkippedRule> {
 fn rule_skip_reason(
     rule: &crate::linkml::ClassRule,
     slot_columns: &BTreeMap<String, String>,
+    array_slots: &std::collections::BTreeSet<String>,
 ) -> Option<String> {
     match (&rule.preconditions, &rule.postconditions) {
         (Some(pre), Some(post)) => {
-            if rule_conditions_to_sql(pre, slot_columns).is_none() {
+            if rule_conditions_to_sql(pre, slot_columns, array_slots).is_none() {
                 Some(
-                    "its preconditions can't be expressed as a Postgres CHECK (empty, a `range`/cardinality condition, or a slot the class doesn't have)"
+                    "its preconditions can't be expressed as a Postgres CHECK (empty, a `range`/cardinality condition, a pattern or value bound on an array column, or a slot the class doesn't have)"
                         .to_string(),
                 )
-            } else if rule_conditions_to_sql(post, slot_columns).is_none() {
+            } else if rule_conditions_to_sql(post, slot_columns, array_slots).is_none() {
                 Some(
-                    "its postconditions can't be expressed as a Postgres CHECK (empty, a `range`/cardinality condition, or a slot the class doesn't have)"
+                    "its postconditions can't be expressed as a Postgres CHECK (empty, a `range`/cardinality condition, a pattern or value bound on an array column, or a slot the class doesn't have)"
                         .to_string(),
                 )
             } else {
@@ -2142,6 +2183,188 @@ mod tests {
             ),
             "expected the conditional rule encoded as NOT(pre) OR (post); got:\n{out}"
         );
+    }
+
+    /// On an array column an equals condition compiles to membership —
+    /// `'v' = ANY(col)` — the same at-least-one reading `validate` and the
+    /// SHACL projection enforce, so the database, the validator, and the
+    /// shapes agree on the rule. A plain `col = 'v'` would be a malformed
+    /// array literal Postgres rejects at load.
+    #[test]
+    fn an_equals_condition_on_an_array_column_tests_membership() {
+        use crate::linkml::{ClassRule, RuleConditions, SlotCondition};
+        let mut class = ClassDefinition::new("Post");
+        let mut id = SlotDefinition::new("id");
+        id.identifier = true;
+        class.attributes.insert("id".to_string(), id);
+        let mut tags = SlotDefinition::new("tags");
+        tags.range = Some("string".to_string());
+        tags.multivalued = true;
+        class.attributes.insert("tags".to_string(), tags);
+        let mut region = SlotDefinition::new("region");
+        region.range = Some("string".to_string());
+        class.attributes.insert("region".to_string(), region);
+        class.rules.push(ClassRule {
+            title: Some("featured posts name a region".to_string()),
+            description: None,
+            preconditions: Some(RuleConditions {
+                any_of: Vec::new(),
+                slot_conditions: [(
+                    "tags".to_string(),
+                    SlotCondition {
+                        equals_string: Some("featured".to_string()),
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            }),
+            postconditions: Some(RuleConditions {
+                any_of: Vec::new(),
+                slot_conditions: [(
+                    "region".to_string(),
+                    SlotCondition {
+                        required: true,
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            }),
+        });
+        let schema = schema_with_class(class);
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            out.contains("CHECK (NOT ('featured' = ANY(\"tags\")) OR (\"region\" IS NOT NULL))"),
+            "an array column's equals must be membership; got:\n{out}"
+        );
+        assert!(
+            skipped_rules(&schema).is_empty(),
+            "the membership form is expressible, not skipped; got: {:?}",
+            skipped_rules(&schema)
+        );
+    }
+
+    /// A pattern (or value bound) inside a rule condition on an array
+    /// column has no per-element CHECK form — the same gap the facet
+    /// diagnostics already state — so the rule is dropped and reported
+    /// rather than emitted as SQL that fails at load.
+    #[test]
+    fn a_rule_with_a_pattern_on_an_array_column_is_skipped() {
+        use crate::linkml::{ClassRule, RuleConditions, SlotCondition};
+        let mut class = ClassDefinition::new("Post");
+        let mut id = SlotDefinition::new("id");
+        id.identifier = true;
+        class.attributes.insert("id".to_string(), id);
+        let mut tags = SlotDefinition::new("tags");
+        tags.range = Some("string".to_string());
+        tags.multivalued = true;
+        class.attributes.insert("tags".to_string(), tags);
+        let mut region = SlotDefinition::new("region");
+        region.range = Some("string".to_string());
+        class.attributes.insert("region".to_string(), region);
+        class.rules.push(ClassRule {
+            title: Some("coded tags gate the region".to_string()),
+            description: None,
+            preconditions: Some(RuleConditions {
+                any_of: Vec::new(),
+                slot_conditions: [(
+                    "tags".to_string(),
+                    SlotCondition {
+                        pattern: Some("^t-".to_string()),
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            }),
+            postconditions: Some(RuleConditions {
+                any_of: Vec::new(),
+                slot_conditions: [(
+                    "region".to_string(),
+                    SlotCondition {
+                        required: true,
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            }),
+        });
+        let schema = schema_with_class(class);
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            !out.contains("CHECK"),
+            "no CHECK form exists over the array column; got:\n{out}"
+        );
+        let skipped = skipped_rules(&schema);
+        assert_eq!(skipped.len(), 1, "got: {skipped:?}");
+        assert!(
+            skipped[0].reason.contains("array column"),
+            "the reason names the array-column gap; got: {}",
+            skipped[0].reason
+        );
+    }
+
+    /// Each inexpressible facet on an array column blocks the rule on its
+    /// own — a minimum or maximum value bound needs no accompanying
+    /// pattern to make the CHECK impossible.
+    #[test]
+    fn a_rule_with_a_value_bound_on_an_array_column_is_skipped() {
+        use crate::linkml::{ClassRule, RuleConditions, SlotCondition};
+        for cond in [
+            SlotCondition {
+                minimum_value: Some(1.0),
+                ..Default::default()
+            },
+            SlotCondition {
+                maximum_value: Some(9.0),
+                ..Default::default()
+            },
+        ] {
+            let mut class = ClassDefinition::new("Post");
+            let mut id = SlotDefinition::new("id");
+            id.identifier = true;
+            class.attributes.insert("id".to_string(), id);
+            let mut scores = SlotDefinition::new("scores");
+            scores.range = Some("integer".to_string());
+            scores.multivalued = true;
+            class.attributes.insert("scores".to_string(), scores);
+            let mut region = SlotDefinition::new("region");
+            region.range = Some("string".to_string());
+            class.attributes.insert("region".to_string(), region);
+            class.rules.push(ClassRule {
+                title: Some("bounded scores gate the region".to_string()),
+                description: None,
+                preconditions: Some(RuleConditions {
+                    any_of: Vec::new(),
+                    slot_conditions: [("scores".to_string(), cond.clone())].into_iter().collect(),
+                }),
+                postconditions: Some(RuleConditions {
+                    any_of: Vec::new(),
+                    slot_conditions: [(
+                        "region".to_string(),
+                        SlotCondition {
+                            required: true,
+                            ..Default::default()
+                        },
+                    )]
+                    .into_iter()
+                    .collect(),
+                }),
+            });
+            let schema = schema_with_class(class);
+            let out = PostgresWriter::new().render(&schema);
+            assert!(
+                !out.contains("CHECK"),
+                "a bound on the array column blocks the rule alone; got:\n{out}"
+            );
+            assert_eq!(skipped_rules(&schema).len(), 1, "and it is reported");
+        }
     }
 
     #[test]

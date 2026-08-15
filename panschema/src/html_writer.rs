@@ -88,7 +88,7 @@ pub struct RuleInClass {
     /// Markdown-rendered, like [`ClassData::description`].
     pub description: Option<String>,
     /// Markdown-rendered "when … then …" sentence built from the rule's
-    /// pre/postconditions (e.g. "when `status` = `actual`, then `region`
+    /// pre/postconditions (e.g. "when `status` has value `actual`, then `region`
     /// is required"). `None` when the rule has neither — a
     /// title/description-only entry.
     pub summary: Option<String>,

@@ -257,8 +257,15 @@ pub enum ValuePresence {
 /// Mirrors the subset of LinkML's `SlotDefinition`-shaped slot condition
 /// panschema already renders on ordinary slots (`range` / `required` /
 /// cardinality / value bounds / `pattern`), plus `equals_string` /
-/// `equals_number` — the equality checks a precondition like "`status` =
-/// `actual`" needs, since none of the other fields express equality.
+/// `equals_number` — the equality checks a precondition like "when
+/// `status` has value `actual`" needs, since none of the other fields
+/// express equality.
+///
+/// `equals_string`/`equals_number` are **membership** tests: the condition
+/// holds when at least one of the slot's values equals the constant —
+/// `sh:hasValue` semantics, enforced identically by `validate`, the SHACL
+/// projection, and the Postgres `CHECK` (`= ANY` on an array column). An
+/// absent slot never satisfies one.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SlotCondition {
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -49,8 +49,8 @@ fn condition_slots(conditions: &RuleConditions) -> Vec<String> {
 }
 
 /// Render a rule's pre/postconditions as one markdown "when … then …"
-/// sentence, e.g. "when `status` = `actual`, then `region` is required", or
-/// "when (`verdict` = `approved`) or (`verdict` = `rejected`), then
+/// sentence, e.g. "when `status` has value `actual`, then `region` is required", or
+/// "when (`verdict` has value `approved`) or (`verdict` has value `rejected`), then
 /// `approved_by` is present". `None` when the rule carries no renderable
 /// condition on either side (a title/description-only entry).
 pub fn rule_summary(rule: &ClassRule) -> Option<String> {
@@ -77,7 +77,7 @@ pub fn rule_summary(rule: &ClassRule) -> Option<String> {
 /// plus any `any_of` alternatives. Each `any_of` branch is parenthesized and
 /// the branches are joined with "or", so a precondition that fires when
 /// `verdict` is `approved` or `rejected` reads
-/// "(`verdict` = `approved`) or (`verdict` = `rejected`)". A branch that
+/// "(`verdict` has value `approved`) or (`verdict` has value `rejected`)". A branch that
 /// renders nothing is dropped rather than shown as an empty "()".
 fn describe_conditions(conditions: &RuleConditions) -> Vec<String> {
     let mut clauses = describe_slot_conditions(&conditions.slot_conditions);
@@ -94,9 +94,9 @@ fn describe_conditions(conditions: &RuleConditions) -> Vec<String> {
     clauses
 }
 
-/// Render each slot's condition as a markdown clause, e.g. "`status` =
-/// `actual`" or "`region` is required". Skips a slot whose condition sets
-/// none of the fields panschema renders.
+/// Render each slot's condition as a markdown clause, e.g. "`status` has
+/// value `actual`" or "`region` is required". Skips a slot whose condition
+/// sets none of the fields panschema renders.
 fn describe_slot_conditions(
     slot_conditions: &std::collections::BTreeMap<String, SlotCondition>,
 ) -> Vec<String> {
@@ -108,7 +108,7 @@ fn describe_slot_conditions(
 
 fn describe_slot_condition(slot: &str, cond: &SlotCondition) -> Option<String> {
     // `any_of` on the slot's value: describe each alternative for the same
-    // slot and join with "or", e.g. "`verdict` = `approved` or `verdict` =
+    // slot and join with "or", e.g. "`verdict` has value `approved` or `verdict` has value
     // `rejected`". Alternatives that render nothing are dropped.
     if !cond.any_of.is_empty() {
         let alts: Vec<String> = cond
@@ -122,11 +122,14 @@ fn describe_slot_condition(slot: &str, cond: &SlotCondition) -> Option<String> {
     }
 
     let mut clauses = Vec::new();
+    // "has value" is the membership reading every projection enforces
+    // (`sh:hasValue`): on a multivalued slot at least one value equals,
+    // so "=" would overstate the constraint.
     if let Some(v) = &cond.equals_string {
-        clauses.push(format!("= `{v}`"));
+        clauses.push(format!("has value `{v}`"));
     }
     if let Some(v) = cond.equals_number {
-        clauses.push(format!("= {v}"));
+        clauses.push(format!("has value {v}"));
     }
     if let Some(vp) = cond.value_presence {
         clauses.push(
@@ -246,7 +249,7 @@ mod tests {
         let s = rule_summary(&rule).expect("a slot-level any_of rule must render a summary");
         assert_eq!(
             s,
-            "when `verdict` = `approved` or `verdict` = `rejected`, \
+            "when `verdict` has value `approved` or `verdict` has value `rejected`, \
              then `approved_by` is present"
         );
     }

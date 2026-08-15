@@ -480,25 +480,32 @@ fn slot_condition_failure(cond: &SlotCondition, values: &[InstanceValue]) -> Opt
     {
         return Some("satisfies none of the permitted alternatives".to_string());
     }
+    // Equals conditions are membership tests — at least one value equals,
+    // matching the `sh:hasValue` the SHACL projection emits for the same
+    // condition; an empty or reference-only value set never satisfies one.
+    if let Some(want) = &cond.equals_string
+        && !values
+            .iter()
+            .any(|v| matches!(v, InstanceValue::Scalar(s) if scalar_display_eq(s, want)))
+    {
+        return Some(equals_failure(values, &format!("`{want}`")));
+    }
+    if let Some(want) = cond.equals_number
+        && !values
+            .iter()
+            .any(|v| numeric_value(v).is_some_and(|n| n == want || (n.is_nan() && want.is_nan())))
+    {
+        return Some(equals_failure(values, &want.to_string()));
+    }
     for value in values {
         let InstanceValue::Scalar(scalar) = value else {
             continue;
         };
-        let shown = scalar_to_display(scalar);
-        if let Some(want) = &cond.equals_string
-            && &shown != want
-        {
-            return Some(format!("is `{shown}`, but must equal `{want}`"));
-        }
-        if let Some(want) = cond.equals_number
-            && numeric(scalar) != Some(want)
-        {
-            return Some(format!("is `{shown}`, but must equal {want}"));
-        }
         if cond.minimum_value.is_some() || cond.maximum_value.is_some() {
             let Some(n) = numeric(scalar) else {
                 return Some(format!(
-                    "value `{shown}` is not numeric, but a bound is required"
+                    "value `{}` is not numeric, but a bound is required",
+                    scalar_to_display(scalar)
                 ));
             };
             if let Some(min) = cond.minimum_value
@@ -598,6 +605,28 @@ fn value_display(value: &InstanceValue) -> String {
         InstanceValue::Scalar(s) => scalar_to_display(s),
         InstanceValue::Reference(target) => target.clone(),
         InstanceValue::Unexpected(kind) => kind.to_string(),
+    }
+}
+
+/// The failure message for an unmet equals condition, phrased by how many
+/// values the slot held — references and other non-scalars count and
+/// display, so a populated slot is never reported as having no value.
+/// `want` arrives pre-formatted (backticked for a string, bare for a
+/// number).
+fn equals_failure(values: &[InstanceValue], want: &str) -> String {
+    match values {
+        [] => format!("has no value, but must equal {want}"),
+        [one] => format!("is `{}`, but must equal {want}", value_display(one)),
+        many => format!("none of its {} values equals {want}", many.len()),
+    }
+}
+
+/// Whether a scalar's display form equals `want`, without allocating for
+/// the dominant string case.
+fn scalar_display_eq(scalar: &ScalarValue, want: &str) -> bool {
+    match scalar {
+        ScalarValue::String(text) => text == want,
+        other => scalar_to_display(other) == want,
     }
 }
 
@@ -1617,6 +1646,7 @@ classes:
       shipments: {range: Shipment, multivalued: true}
       batches: {range: Batch, multivalued: true}
       tickets: {range: Ticket, multivalued: true}
+      questions: {range: Question, multivalued: true}
   Deployment:
     attributes:
       id:
@@ -1708,6 +1738,25 @@ classes:
         postconditions:
           slot_conditions:
             score: {minimum_value: 10}
+  Question:
+    attributes:
+      id: {identifier: true}
+      answer_kind: {range: string, multivalued: true}
+      unconnected_anchors: {range: string, multivalued: true}
+      sources: {range: string, multivalued: true}
+    rules:
+      - title: a closed-world negative states its absence
+        preconditions:
+          slot_conditions: {answer_kind: {equals_string: closed-world-negative}}
+        postconditions:
+          slot_conditions:
+            unconnected_anchors: {value_presence: PRESENT}
+      - title: an attributed question cites the vetted source
+        preconditions:
+          slot_conditions: {answer_kind: {equals_string: attribution}}
+        postconditions:
+          slot_conditions:
+            sources: {equals_string: cited}
   Ticket:
     attributes:
       id: {identifier: true}
@@ -1998,6 +2047,132 @@ classes:
             v[0].detail.contains("Claim") && v[0].detail.contains("Method"),
             "a range-kind mismatch at a union slot should name the members, not `?`; got: {}",
             v[0].detail
+        );
+    }
+
+    /// `equals_string` on a multivalued slot means membership — at least
+    /// one value equals — matching the `sh:hasValue` the SHACL projection
+    /// emits for the same condition, so the two agree on when a rule
+    /// fires. A second value must never disable the rule.
+    #[test]
+    fn a_multivalued_precondition_fires_on_membership() {
+        let v = rule_violations(
+            "questions:\n  - {id: q1, answer_kind: [closed-world-negative, attribution], \
+             sources: [cited]}\n",
+        );
+        assert_eq!(
+            v.len(),
+            1,
+            "the rule fires whichever other kinds ride along; got: {v:?}"
+        );
+        assert!(
+            v[0].detail.contains("unconnected_anchors"),
+            "got: {}",
+            v[0].detail
+        );
+        let single = rule_violations(
+            "questions:\n  - {id: q1, answer_kind: [closed-world-negative], sources: []}\n",
+        );
+        assert_eq!(
+            single.len(),
+            1,
+            "a single-element list fires the same way; got: {single:?}"
+        );
+        assert!(
+            rule_violations(
+                "questions:\n  - {id: q2, answer_kind: [attribution], sources: [cited]}\n"
+            )
+            .is_empty(),
+            "a list without the value does not fire the rule"
+        );
+    }
+
+    /// The same membership reading applies to a postcondition: the
+    /// constraint demands the value be present among the slot's values,
+    /// not that it be the only one.
+    #[test]
+    fn a_multivalued_postcondition_equals_holds_on_membership() {
+        assert!(
+            rule_violations(
+                "questions:\n  - {id: q1, answer_kind: [attribution], sources: [cited, reviewed]}\n"
+            )
+            .is_empty(),
+            "the required value among others conforms"
+        );
+        let v = rule_violations(
+            "questions:\n  - {id: q1, answer_kind: [attribution], sources: [reviewed]}\n",
+        );
+        assert_eq!(v.len(), 1, "a list missing the value violates; got: {v:?}");
+    }
+
+    /// An equals condition on an absent slot is unmet, never vacuously
+    /// met: `sh:hasValue` requires at least one value, and "when status is
+    /// actual" cannot hold for a record with no status at all.
+    #[test]
+    fn an_equals_precondition_on_an_absent_slot_does_not_fire() {
+        assert!(
+            rule_violations("deployments:\n  - {id: d1}\n").is_empty(),
+            "no status value means the precondition is unmet"
+        );
+    }
+
+    /// The equals failure message counts and shows what the slot actually
+    /// holds: a slot populated with references is not "has no value" —
+    /// its values simply never equal a literal constant.
+    #[test]
+    fn equals_failure_counts_references_as_the_values_they_are() {
+        let one_ref = [InstanceValue::Reference("r1".to_string())];
+        assert_eq!(
+            equals_failure(&one_ref, "`cited`"),
+            "is `r1`, but must equal `cited`"
+        );
+        let two = [
+            InstanceValue::Reference("r1".to_string()),
+            InstanceValue::Scalar(ScalarValue::String("reviewed".to_string())),
+        ];
+        assert_eq!(
+            equals_failure(&two, "`cited`"),
+            "none of its 2 values equals `cited`"
+        );
+        assert_eq!(
+            equals_failure(&[], "`cited`"),
+            "has no value, but must equal `cited`"
+        );
+    }
+
+    /// `equals_string` compares display forms, so a non-string scalar
+    /// satisfies a string constant that spells it — `42` has value `"42"`.
+    #[test]
+    fn an_equals_string_constant_matches_a_non_string_scalars_spelling() {
+        let cond = SlotCondition {
+            equals_string: Some("42".to_string()),
+            ..Default::default()
+        };
+        let held = [InstanceValue::Scalar(ScalarValue::Integer(42))];
+        assert_eq!(slot_condition_failure(&cond, &held), None);
+        let other = [InstanceValue::Scalar(ScalarValue::Integer(7))];
+        assert!(slot_condition_failure(&cond, &other).is_some());
+    }
+
+    /// `equals_number` follows the same number semantics the containment
+    /// check uses: a NaN constant is satisfied by a NaN value, matching
+    /// `values_match` rather than IEEE comparison.
+    #[test]
+    fn an_equals_number_nan_constant_is_satisfied_by_a_nan_value() {
+        let cond = SlotCondition {
+            equals_number: Some(f64::NAN),
+            ..Default::default()
+        };
+        let held = [InstanceValue::Scalar(ScalarValue::Float(f64::NAN))];
+        assert_eq!(
+            slot_condition_failure(&cond, &held),
+            None,
+            "the exact required value is present"
+        );
+        let other = [InstanceValue::Scalar(ScalarValue::Float(1.0))];
+        assert!(
+            slot_condition_failure(&cond, &other).is_some(),
+            "a finite value does not satisfy a NaN constant"
         );
     }
 
