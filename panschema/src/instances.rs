@@ -877,7 +877,9 @@ pub struct ExternalReference {
 /// dangling-reference error. An undeclared prefix is likewise no licence to
 /// skip checks; it is far likelier a typo than an intended cross-graph link.
 pub fn points_outside_dataset(schema: &SchemaDefinition, target: &str) -> bool {
-    if target.contains("://") {
+    // `urn:` is an absolute scheme with no `://`, treated as absolute by
+    // every other name resolution here (`expand_curie`, instance minting).
+    if target.contains("://") || target.starts_with("urn:") {
         return true;
     }
     match target.split_once(':') {
@@ -1253,7 +1255,7 @@ classes:
             set.external_references
                 .iter()
                 .any(|e| e.target == "catalog:aws" && e.referrer == "d1"),
-            "and it is summarised rather than passing silently; got: {:?}",
+            "and it is summarized rather than passing silently; got: {:?}",
             set.external_references
         );
     }
@@ -1272,6 +1274,29 @@ classes:
     }
 
     #[test]
+    fn a_urn_is_an_external_reference() {
+        // `urn:` is an absolute IRI scheme everywhere else names are
+        // resolved (`expand_curie`, instance minting), so classifying it
+        // as a bare id here would make a URN anchor a false dangling
+        // error and hide it from cross-graph resolution.
+        let set = xref_set("deployments:\n  - {id: d1, on_provider: 'urn:uuid:1234'}\n");
+        let r = set
+            .instances
+            .iter()
+            .find(|i| i.id == "d1")
+            .and_then(|i| i.references.first())
+            .expect("a reference");
+        assert!(r.external, "a URN points outside this dataset");
+        assert!(
+            set.external_references
+                .iter()
+                .any(|e| e.target == "urn:uuid:1234"),
+            "and it is summarized; got: {:?}",
+            set.external_references
+        );
+    }
+
+    #[test]
     fn a_bare_id_is_not_external_even_when_it_names_no_record() {
         // The distinction this slice adds must not swallow the existing
         // dangling case: a bare id is a promise about *this* dataset.
@@ -1285,7 +1310,7 @@ classes:
         assert!(!r.external, "a bare id stays an intra-dataset reference");
         assert!(
             set.external_references.is_empty(),
-            "and is not summarised as external; got: {:?}",
+            "and is not summarized as external; got: {:?}",
             set.external_references
         );
     }
@@ -1954,7 +1979,7 @@ classes:
             set.external_references
                 .iter()
                 .any(|e| e.target == "https://other.example/d1" && e.referrer == "acme"),
-            "and it is summarised rather than passing silently; got: {:?}",
+            "and it is summarized rather than passing silently; got: {:?}",
             set.external_references
         );
     }
@@ -1973,7 +1998,7 @@ classes:
         assert!(!r.external, "a bare id stays an intra-dataset reference");
         assert!(
             set.external_references.is_empty(),
-            "and is not summarised as external; got: {:?}",
+            "and is not summarized as external; got: {:?}",
             set.external_references
         );
     }

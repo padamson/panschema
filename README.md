@@ -6,7 +6,7 @@
 
 ## Vision
 
-**panschema** aims to be the universal tool for data modeling workflows:
+**panschema** aims to be a universal tool for data modeling workflows:
 
 - **Convert** between schema languages (LinkML, OWL/TTL, JSON Schema, SHACL, SQL DDL)
 - **Generate documentation** from any supported format

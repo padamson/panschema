@@ -326,9 +326,143 @@ struct LabelOptions<'a> {
     overrides: &'a std::collections::BTreeMap<String, String>,
 }
 
-// A `generate` CLI-command handler: its parameters mirror the subcommand's
-// flags, so the count exceeds clippy's default. (A `GenerateOptions` struct
-// would tidy this — a future cleanup, orthogonal to any one feature.)
+/// The `resolve_against` check for one `[generate.<name>]` entry: every
+/// external reference in this entry's datasets that lands in a namespace a
+/// declared sibling owns must equal an IRI the sibling's datasets mint —
+/// computed by the sibling schema's own minting rules, so a `key`-scoped
+/// record's dataset-rooted IRI is what a reference must match. References
+/// into namespaces no sibling owns (a shared vocabulary, a graph published
+/// outside this manifest) stay in the cross-graph summary, unchecked here.
+/// Unresolved references warn, and `--strict` fails on them. A sibling
+/// naming no `[schemas]` entry, or the entry itself, is a configuration
+/// error; a sibling with no datasets yet resolves nothing, so references
+/// into its namespace warn like any other unresolved ones.
+fn check_resolve_against(
+    name: &str,
+    manifest: &panschema::manifest::Manifest,
+    manifest_dir: &Path,
+    deps: &std::collections::BTreeMap<String, PathBuf>,
+    strict: bool,
+) -> anyhow::Result<()> {
+    let Some(gen_cfg) = manifest.generate.get(name) else {
+        return Ok(());
+    };
+    if gen_cfg.resolve_against.is_empty() {
+        return Ok(());
+    }
+    let registry = FormatRegistry::with_defaults();
+    let mut owned_namespaces: Vec<String> = Vec::new();
+    let mut minted: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for sibling in &gen_cfg.resolve_against {
+        if sibling == name {
+            anyhow::bail!(
+                "resolve_against names the entry itself — a dataset's own references are \
+                 covered by the dangling check"
+            );
+        }
+        let Some(sibling_path) = deps.get(sibling) else {
+            anyhow::bail!(
+                "resolve_against names `{sibling}`, which is not a [schemas] entry in this \
+                 manifest"
+            );
+        };
+        let sibling_schema =
+            panschema::import_resolve::load_schema_with_deps(sibling_path, &registry, deps)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let sibling_instances: Vec<PathBuf> = match manifest.generate.get(sibling) {
+            Some(cfg) if !cfg.instances.is_empty() => {
+                cfg.instances.iter().map(|p| manifest_dir.join(p)).collect()
+            }
+            Some(_) => {
+                eprintln!(
+                    "note: resolve_against `{sibling}` declares no `instances` yet; \
+                     references into its namespace cannot resolve"
+                );
+                Vec::new()
+            }
+            None => {
+                eprintln!(
+                    "note: resolve_against `{sibling}` has no [generate.{sibling}] block \
+                     declaring datasets; references into its namespace cannot resolve"
+                );
+                Vec::new()
+            }
+        };
+        for path in &sibling_instances {
+            let set = read_instance_set(&sibling_schema, path)?;
+            // A dataset that matched no single root produced no records; an
+            // empty minted set here would misreport every reference as
+            // unresolved, hiding the real problem under a cascade.
+            if let Some(candidates) = &set.root_candidates {
+                anyhow::bail!(
+                    "sibling dataset {} matches no single tree_root (candidates: {}); fix \
+                     the dataset before resolving against it",
+                    path.display(),
+                    candidates.join(", ")
+                );
+            }
+            minted.extend(panschema::diagnostics::minted_instance_iris(
+                &sibling_schema,
+                std::slice::from_ref(&set),
+            ));
+        }
+        owned_namespaces.push(panschema::rdf_serializers::instance_namespace(
+            &sibling_schema,
+        ));
+    }
+
+    let schema = panschema::import_resolve::load_schema_with_deps(&deps[name], &registry, deps)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let siblings = gen_cfg.resolve_against.join("`, `");
+    let mut total = panschema::diagnostics::SiblingResolution::default();
+    for path in gen_cfg.instances.iter().map(|p| manifest_dir.join(p)) {
+        let set = read_instance_set(&schema, &path)?;
+        let resolution = panschema::diagnostics::resolve_sibling_references(
+            &schema,
+            &set,
+            &owned_namespaces,
+            &minted,
+        );
+        for u in &resolution.unresolved {
+            eprintln!("warning: {}: {}", path.display(), u.message());
+        }
+        total.checked += resolution.checked;
+        total.unresolved.extend(resolution.unresolved);
+    }
+    let resolved = total.checked - total.unresolved.len();
+    eprintln!(
+        "note: schema `{name}`: {resolved} of {} cross-graph reference(s) into `{siblings}` \
+         namespace(s) resolve",
+        total.checked
+    );
+    if strict && !total.unresolved.is_empty() {
+        anyhow::bail!(
+            "{} of {} cross-graph reference(s) do not resolve against `{siblings}`; failing \
+             because --strict is set",
+            total.unresolved.len(),
+            total.checked
+        );
+    }
+    Ok(())
+}
+
+/// Read and parse a LinkML instance-data file into the instance model —
+/// the one prologue every loading path shares, so the resolve-against
+/// check, the writers, and `validate` cannot read the same file
+/// differently.
+fn read_instance_set(
+    schema: &panschema::linkml::SchemaDefinition,
+    path: &Path,
+) -> anyhow::Result<panschema::instances::InstanceSet> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| anyhow::anyhow!("reading instances file {}: {}", path.display(), e))?;
+    let data: serde_norway::Value = serde_norway::from_str(&content)
+        .map_err(|e| anyhow::anyhow!("parsing instances file {}: {}", path.display(), e))?;
+    Ok(panschema::instances::InstanceSet::from_linkml_data(
+        schema, &data,
+    ))
+}
+
 /// Read a LinkML instance-data file into the instance model, surfacing each
 /// dangling instance reference (the A-box analog of a dangling schema ref —
 /// the feedback signal an authoring loop uses to self-correct). Fatal under
@@ -340,11 +474,7 @@ fn load_instance_set(
 ) -> anyhow::Result<panschema::instances::InstanceSet> {
     // Each curated graph is judged on its own size: a teaching preview and a
     // worked example sit side by side, and either can outgrow the guideline.
-    let content = std::fs::read_to_string(inst_path)
-        .map_err(|e| anyhow::anyhow!("reading instances file {}: {}", inst_path.display(), e))?;
-    let data: serde_norway::Value = serde_norway::from_str(&content)
-        .map_err(|e| anyhow::anyhow!("parsing instances file {}: {}", inst_path.display(), e))?;
-    let set = panschema::instances::InstanceSet::from_linkml_data(schema, &data);
+    let set = read_instance_set(schema, inst_path)?;
     // ADR-009's role boundary: an exemplar is a curated teaching artifact,
     // rendered whole. A large A-box still renders, but loudly — the
     // query-driven path (subgraph extraction) is the intended tool at scale.
@@ -860,6 +990,10 @@ fn generate_from_manifest(
             .iter()
             .map(|p| manifest_dir.join(p))
             .collect();
+        // Cross-graph resolution runs once per entry, before any writer:
+        // it reads both graphs and writes nothing, so `--check` runs it too.
+        check_resolve_against(name, &manifest, &manifest_dir, &deps, strict)
+            .with_context(|| format!("schema `{name}`, resolve_against"))?;
         if let Some(html_out) = &gen_cfg.html {
             let html_out = manifest_dir.join(html_out);
             generate(

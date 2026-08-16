@@ -163,6 +163,20 @@ pub struct GenerateConfig {
     /// leaves it alone — `panschema migrate` is what writes into it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub migrations: Option<PathBuf>,
+    /// Sibling `[generate.<name>]` entries whose datasets this entry's
+    /// external references must resolve into. A cross-graph reference —
+    /// an absolute IRI, or a CURIE against a declared prefix — is exempt
+    /// from the within-dataset dangling check by design; this key closes
+    /// the loop when the referenced graph lives in the same manifest:
+    /// every external reference landing in a namespace a listed sibling
+    /// owns must equal an IRI that sibling's datasets mint, computed by
+    /// the sibling's own minting rules (`key`-scoped records mint beneath
+    /// their dataset root, not at `namespace + id`). References into
+    /// namespaces no sibling owns stay unchecked, so a dataset can still
+    /// cite outside vocabularies. Unresolved references warn; `--strict`
+    /// fails on them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resolve_against: Vec<String>,
 }
 
 impl GenerateConfig {
@@ -189,6 +203,7 @@ impl GenerateConfig {
             graph_json: Some(PathBuf::from("x")),
             instance_graph_json: Some(PathBuf::from("x")),
             migrations: Some(PathBuf::from("x")),
+            resolve_against: vec!["x".to_string()],
         };
         let toml = toml::to_string(&populated).expect("GenerateConfig serializes");
         toml.lines()
@@ -1262,6 +1277,7 @@ x = { path = "./x-pkg" }
             "graph-json",
             "instance-graph-json",
             "migrations",
+            "resolve_against",
         ];
         for key in expected {
             assert!(

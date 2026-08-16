@@ -1129,7 +1129,7 @@ fn a_single_data_file_reports_no_collisions() {
 }
 
 #[test]
-fn cross_graph_reference_validates_clean_and_is_summarised() {
+fn cross_graph_reference_validates_clean_and_is_summarized() {
     let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "validate",
@@ -1780,6 +1780,208 @@ instances = ["data/preview.yaml", "data/catalog.yaml"]
     assert!(
         html.contains(r#"data-instance-dataset="1" hidden>"#),
         "the first declared dataset opens"
+    );
+}
+
+/// `resolve_against` closes the cross-graph loop inside one manifest: a
+/// benchmark entry's external references must equal IRIs the sibling
+/// entry's datasets mint. Resolving references get a counting note; an
+/// unresolved one warns and, under `--strict`, fails the run; a sibling
+/// that isn't a `[schemas]` entry is a configuration error.
+#[test]
+fn manifest_resolve_against_checks_cross_graph_references() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+
+    let catalog_pkg = consumer.join("catalog-pkg");
+    fs::create_dir_all(&catalog_pkg).unwrap();
+    fs::write(
+        catalog_pkg.join("panschema-publish.toml"),
+        "[schema]\nname = \"catalog\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"catalog.yaml\"\n",
+    )
+    .unwrap();
+    fs::write(
+        catalog_pkg.join("catalog.yaml"),
+        "id: https://example.org/catalog\nname: catalog\ndefault_prefix: cat\nprefixes:\n  cat: https://example.org/catalog/\nclasses:\n  Estate:\n    tree_root: true\n    slots: [id, providers]\n  Provider:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  providers: {range: Provider, multivalued: true}\n",
+    )
+    .unwrap();
+
+    let bench_pkg = consumer.join("bench-pkg");
+    fs::create_dir_all(&bench_pkg).unwrap();
+    fs::write(
+        bench_pkg.join("panschema-publish.toml"),
+        "[schema]\nname = \"bench\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"bench.yaml\"\n",
+    )
+    .unwrap();
+    fs::write(
+        bench_pkg.join("bench.yaml"),
+        "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, anchors]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  anchors: {range: DomainRecord, multivalued: true}\n",
+    )
+    .unwrap();
+
+    fs::write(
+        consumer.join("catalog-data.yaml"),
+        "id: est1\nproviders:\n  - {id: aws}\n",
+    )
+    .unwrap();
+    // Two references into the sibling's namespace, one deliberately
+    // outside every declared graph: the outsider must stay unchecked
+    // rather than failing the run.
+    fs::write(
+        consumer.join("bench-data.yaml"),
+        "id: b1\nanchors:\n  - cat:aws\n  - https://example.org/catalog/est1\n  - https://schema.org/Thing\n",
+    )
+    .unwrap();
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+catalog = { path = "./catalog-pkg" }
+bench = { path = "./bench-pkg" }
+
+[generate.catalog]
+ttl = "catalog.ttl"
+instances = ["catalog-data.yaml"]
+
+[generate.bench]
+ttl = "bench.ttl"
+instances = ["bench-data.yaml"]
+resolve_against = ["catalog"]
+"#,
+    )
+    .unwrap();
+
+    let run = |extra: &[&str]| {
+        let mut args = vec!["generate"];
+        args.extend_from_slice(extra);
+        Command::new(env!("CARGO_BIN_EXE_panschema"))
+            .args(&args)
+            .current_dir(consumer)
+            .output()
+            .expect("run panschema")
+    };
+
+    let ok = run(&["--strict"]);
+    assert!(
+        ok.status.success(),
+        "resolving references pass even under --strict: {}",
+        String::from_utf8_lossy(&ok.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&ok.stderr)
+            .contains("2 of 2 cross-graph reference(s) into `catalog` namespace(s) resolve"),
+        "the note counts only sibling-namespace references; got:\n{}",
+        String::from_utf8_lossy(&ok.stderr)
+    );
+
+    // A reference the sibling doesn't mint: warned, then refused under
+    // --strict.
+    fs::write(
+        consumer.join("bench-data.yaml"),
+        "id: b1\nanchors:\n  - https://example.org/catalog/nope\n",
+    )
+    .unwrap();
+    let lax = run(&[]);
+    assert!(
+        lax.status.success(),
+        "without --strict an unresolved reference is a warning: {}",
+        String::from_utf8_lossy(&lax.stderr)
+    );
+    let lax_err = String::from_utf8_lossy(&lax.stderr);
+    assert!(
+        lax_err.contains("no resolve-against dataset mints")
+            && lax_err.contains("0 of 1 cross-graph reference(s)"),
+        "the warning names the failure and the note still counts; got:\n{lax_err}"
+    );
+    let strict = run(&["--strict"]);
+    assert!(
+        !strict.status.success(),
+        "--strict must fail on an unresolved cross-graph reference"
+    );
+    assert!(
+        String::from_utf8_lossy(&strict.stderr).contains("do not resolve against"),
+        "got:\n{}",
+        String::from_utf8_lossy(&strict.stderr)
+    );
+
+    // A sibling declared in [schemas] but carrying no [generate] block is
+    // a data state, not a config error: the run says why nothing can
+    // resolve and proceeds (strict still fails on the unresolved refs).
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+catalog = { path = "./catalog-pkg" }
+bench = { path = "./bench-pkg" }
+
+[generate.bench]
+ttl = "bench.ttl"
+instances = ["bench-data.yaml"]
+resolve_against = ["catalog"]
+"#,
+    )
+    .unwrap();
+    let scaffolded = run(&[]);
+    assert!(
+        scaffolded.status.success(),
+        "a dataset-less sibling must not block the manifest without --strict: {}",
+        String::from_utf8_lossy(&scaffolded.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&scaffolded.stderr)
+            .contains("has no [generate.catalog] block declaring datasets"),
+        "the note names the missing block; got:\n{}",
+        String::from_utf8_lossy(&scaffolded.stderr)
+    );
+
+    // An entry resolving against itself is a configuration error.
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+bench = { path = "./bench-pkg" }
+
+[generate.bench]
+ttl = "bench.ttl"
+instances = ["bench-data.yaml"]
+resolve_against = ["bench"]
+"#,
+    )
+    .unwrap();
+    let self_ref = run(&[]);
+    assert!(
+        !self_ref.status.success(),
+        "resolve_against naming the entry itself is an error"
+    );
+    assert!(
+        String::from_utf8_lossy(&self_ref.stderr).contains("names the entry itself"),
+        "got:\n{}",
+        String::from_utf8_lossy(&self_ref.stderr)
+    );
+
+    // A sibling that isn't declared at all is a configuration error.
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+bench = { path = "./bench-pkg" }
+
+[generate.bench]
+ttl = "bench.ttl"
+instances = ["bench-data.yaml"]
+resolve_against = ["ghost"]
+"#,
+    )
+    .unwrap();
+    let misconfigured = run(&[]);
+    assert!(
+        !misconfigured.status.success(),
+        "an unknown resolve_against target is an error"
+    );
+    assert!(
+        String::from_utf8_lossy(&misconfigured.stderr).contains("not a [schemas] entry"),
+        "got:\n{}",
+        String::from_utf8_lossy(&misconfigured.stderr)
     );
 }
 

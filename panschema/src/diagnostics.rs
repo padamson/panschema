@@ -504,6 +504,95 @@ pub fn dangling_instance_references(
     out
 }
 
+/// An external reference that resolves to no record of the sibling
+/// datasets it is declared to resolve against.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnresolvedSiblingReference {
+    /// The referring record's id.
+    pub referrer: String,
+    /// The slot carrying the reference.
+    pub property: String,
+    /// The reference as authored (CURIE or absolute IRI).
+    pub target: String,
+    /// The IRI the reference denotes after prefix expansion — what a
+    /// sibling record would have to mint for the reference to resolve.
+    pub expanded: String,
+}
+
+impl UnresolvedSiblingReference {
+    pub fn message(&self) -> String {
+        format!(
+            "instance `{}`: property `{}` references `{}`, which no resolve-against \
+             dataset mints (expected a record whose IRI is {})",
+            self.referrer, self.property, self.target, self.expanded
+        )
+    }
+}
+
+/// The IRIs `sets` mint under `schema`'s rules — the sibling side of a
+/// `resolve_against` check. Uses the same minting the RDF emission uses,
+/// so a `key`-scoped record's IRI (minted beneath its dataset root) is
+/// what a reference must match, never a fabricated `namespace + bare id`.
+pub fn minted_instance_iris(
+    schema: &crate::linkml::SchemaDefinition,
+    sets: &[crate::instances::InstanceSet],
+) -> std::collections::BTreeSet<String> {
+    sets.iter()
+        .flat_map(|set| &set.instances)
+        .map(|inst| crate::rdf_serializers::instance_iri_string(schema, inst))
+        .collect()
+}
+
+/// What a `resolve_against` pass found in one dataset: how many external
+/// references target a sibling-owned namespace at all, and which of those
+/// no sibling record mints.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SiblingResolution {
+    /// External references whose expanded IRI falls in a sibling-owned
+    /// namespace — the ones the check claims jurisdiction over.
+    pub checked: usize,
+    /// The checked references no sibling-minted IRI matches.
+    pub unresolved: Vec<UnresolvedSiblingReference>,
+}
+
+/// Resolve `set`'s external references against sibling datasets.
+///
+/// Targets expand against the *referring* schema through the same
+/// derivation the RDF emission uses ([`crate::rdf_serializers::resolve_reference_iri`]),
+/// so the check and the emitted graphs agree on what each reference
+/// denotes. Only references landing in a sibling-owned namespace are
+/// required to resolve: a dataset can also reference vocabularies outside
+/// the manifest by design, and those stay in the cross-graph summary's
+/// "not checked here" rather than becoming false failures. In-dataset
+/// references are not touched here; the dangling check owns those.
+pub fn resolve_sibling_references(
+    schema: &crate::linkml::SchemaDefinition,
+    set: &crate::instances::InstanceSet,
+    owned_namespaces: &[String],
+    sibling_iris: &std::collections::BTreeSet<String>,
+) -> SiblingResolution {
+    let mut resolution = SiblingResolution::default();
+    for r in &set.external_references {
+        let expanded = crate::rdf_serializers::resolve_reference_iri(schema, &r.target);
+        if !owned_namespaces
+            .iter()
+            .any(|ns| expanded.starts_with(ns.as_str()))
+        {
+            continue;
+        }
+        resolution.checked += 1;
+        if !sibling_iris.contains(&expanded) {
+            resolution.unresolved.push(UnresolvedSiblingReference {
+                referrer: r.referrer.clone(),
+                property: r.property.clone(),
+                target: r.target.clone(),
+                expanded,
+            });
+        }
+    }
+    resolution
+}
+
 /// One IRI that more than one dataset mints, and who minted it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IriCollision {
@@ -1794,6 +1883,157 @@ mod tests {
             msg.contains("aws") && msg.contains("acme.yaml") && msg.contains("contoso.yaml"),
             "the message names the id and both datasets; got: {msg}"
         );
+    }
+
+    /// A benchmark-shaped schema whose `anchors` reference records of
+    /// another dataset by IRI — the referring side of `resolve_against`.
+    fn benchmark_schema() -> SchemaDefinition {
+        let mut schema = SchemaDefinition::new("bench");
+        schema.id = Some("https://example.org/bench".to_string());
+        schema.default_prefix = Some("bench".to_string());
+        schema.prefixes.insert(
+            "bench".to_string(),
+            "https://example.org/bench/".to_string(),
+        );
+        schema.prefixes.insert(
+            "cellar".to_string(),
+            "https://example.org/cellar/".to_string(),
+        );
+        schema.default_range = Some("string".to_string());
+        let mut id = crate::linkml::SlotDefinition::new("id");
+        id.identifier = true;
+        let mut root = crate::linkml::ClassDefinition::new("Bench");
+        root.tree_root = true;
+        root.attributes.insert("id".to_string(), id.clone());
+        let mut anchors = crate::linkml::SlotDefinition::new("anchors");
+        anchors.range = Some("DomainRecord".to_string());
+        anchors.multivalued = true;
+        root.attributes.insert("anchors".to_string(), anchors);
+        schema.classes.insert("Bench".to_string(), root);
+        let mut record = crate::linkml::ClassDefinition::new("DomainRecord");
+        record.attributes.insert("id".to_string(), id);
+        schema.classes.insert("DomainRecord".to_string(), record);
+        schema
+    }
+
+    /// The sibling namespace every resolution test scopes by — what
+    /// `instance_namespace(scoped_schema())` derives.
+    const CELLAR_NS: &str = "https://example.org/cellar/";
+
+    #[test]
+    fn a_reference_matching_a_sibling_minted_iri_resolves() {
+        let sibling_schema = scoped_schema();
+        let estate = scoped_set(
+            &sibling_schema,
+            "id: acme\nproviders:\n  - {id: aws, name: Amazon Web Services}\n",
+        );
+        let minted = minted_instance_iris(&sibling_schema, std::slice::from_ref(&estate));
+        let scoped_aws = minted
+            .iter()
+            .find(|iri| iri.contains("aws"))
+            .expect("the provider mints an IRI")
+            .clone();
+        assert!(
+            scoped_aws.contains("acme"),
+            "the key-scoped record mints beneath its root; got: {scoped_aws}"
+        );
+        let owned = [CELLAR_NS.to_string()];
+
+        let schema = benchmark_schema();
+        let resolved = scoped_set(&schema, &format!("id: b1\nanchors:\n  - {scoped_aws}\n"));
+        let r = resolve_sibling_references(&schema, &resolved, &owned, &minted);
+        assert_eq!(r.checked, 1);
+        assert_eq!(r.unresolved, vec![], "the minted IRI resolves");
+
+        let naive = scoped_set(
+            &schema,
+            "id: b1\nanchors:\n  - https://example.org/cellar/aws\n",
+        );
+        let missed = resolve_sibling_references(&schema, &naive, &owned, &minted).unresolved;
+        assert_eq!(
+            missed.len(),
+            1,
+            "the namespace+bare-id guess does not resolve a scoped record; got: {missed:?}"
+        );
+        assert_eq!(missed[0].referrer, "b1");
+        assert_eq!(missed[0].property, "anchors");
+        assert!(
+            missed[0].message().contains("anchors")
+                && missed[0]
+                    .message()
+                    .contains("https://example.org/cellar/aws"),
+            "the message names the slot and the reference; got: {}",
+            missed[0].message()
+        );
+    }
+
+    #[test]
+    fn a_curie_reference_expands_against_the_referring_schema() {
+        // The reference is authored as a CURIE against the *referring*
+        // schema's declared prefix — the same expansion the RDF emission
+        // performs — and resolves when the sibling mints that IRI.
+        let sibling_schema = scoped_schema();
+        let estate = scoped_set(&sibling_schema, "id: acme\nproviders: []\n");
+        let minted = minted_instance_iris(&sibling_schema, std::slice::from_ref(&estate));
+        assert!(
+            minted.contains("https://example.org/cellar/acme"),
+            "the identifier-bearing root mints globally; got: {minted:?}"
+        );
+
+        let schema = benchmark_schema();
+        let set = scoped_set(&schema, "id: b1\nanchors:\n  - cellar:acme\n");
+        let owned = [CELLAR_NS.to_string()];
+        let r = resolve_sibling_references(&schema, &set, &owned, &minted);
+        assert_eq!(r.checked, 1);
+        assert_eq!(
+            r.unresolved,
+            vec![],
+            "the CURIE denotes the sibling's minted IRI"
+        );
+    }
+
+    #[test]
+    fn a_reference_outside_every_owned_namespace_is_not_checked() {
+        // A dataset can cite vocabularies outside the manifest by design;
+        // only references landing in a sibling-owned namespace are
+        // required to resolve, so one schema.org IRI cannot fail the run.
+        let sibling_schema = scoped_schema();
+        let estate = scoped_set(&sibling_schema, "id: acme\nproviders: []\n");
+        let minted = minted_instance_iris(&sibling_schema, std::slice::from_ref(&estate));
+        let owned = [CELLAR_NS.to_string()];
+
+        let schema = benchmark_schema();
+        let set = scoped_set(
+            &schema,
+            "id: b1\nanchors:\n  - https://schema.org/Thing\n  - cellar:acme\n",
+        );
+        let r = resolve_sibling_references(&schema, &set, &owned, &minted);
+        assert_eq!(
+            r.checked, 1,
+            "only the cellar-namespace reference is in jurisdiction"
+        );
+        assert_eq!(r.unresolved, vec![], "and it resolves");
+    }
+
+    #[test]
+    fn a_fully_qualified_self_reference_is_not_the_siblings_problem() {
+        // A record referencing its own dataset by full IRI is classified
+        // external, but it lands in the referring schema's namespace, not
+        // a sibling's — demanding the sibling mint it would fail valid
+        // data.
+        let sibling_schema = scoped_schema();
+        let estate = scoped_set(&sibling_schema, "id: acme\nproviders: []\n");
+        let minted = minted_instance_iris(&sibling_schema, std::slice::from_ref(&estate));
+        let owned = [CELLAR_NS.to_string()];
+
+        let schema = benchmark_schema();
+        let set = scoped_set(
+            &schema,
+            "id: b1\nanchors:\n  - https://example.org/bench/b1\n",
+        );
+        let r = resolve_sibling_references(&schema, &set, &owned, &minted);
+        assert_eq!(r.checked, 0, "a self-namespace reference is out of scope");
+        assert_eq!(r.unresolved, vec![]);
     }
 
     #[test]

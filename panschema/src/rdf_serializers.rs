@@ -798,8 +798,32 @@ pub fn instance_iri_string(schema: &SchemaDefinition, inst: &crate::instances::I
     if !names_its_own_namespace && let Some(scope) = &inst.scope {
         return format!("{scope}/{}", inst.id);
     }
-    crate::linkml_resolve::expand_curie(schema, &inst.id)
-        .unwrap_or_else(|| format!("{}#{}", ontology_iri_string(schema), inst.id))
+    resolve_reference_iri(schema, &inst.id)
+}
+
+/// The IRI a reference target (or bare record id) denotes: prefix or
+/// absolute-IRI expansion against the schema, falling back to the
+/// ontology-fragment mint for a target nothing expands. One derivation
+/// shared by instance minting, reference emission, and the cross-graph
+/// resolution check, so they cannot disagree on what a name points at.
+pub fn resolve_reference_iri(schema: &SchemaDefinition, target: &str) -> String {
+    crate::linkml_resolve::expand_curie(schema, target)
+        .unwrap_or_else(|| format!("{}#{}", ontology_iri_string(schema), target))
+}
+
+/// The namespace a schema's instance minting expands bare ids under —
+/// the default prefix's expansion, or the ontology IRI's fragment base.
+/// Scoped records start with it too (their scope is itself minted under
+/// it), so this is the ownership test a cross-graph resolution check
+/// scopes references by. A record whose id names its own namespace (an
+/// absolute-IRI id) can mint outside it.
+pub fn instance_namespace(schema: &SchemaDefinition) -> String {
+    schema
+        .default_prefix
+        .as_deref()
+        .and_then(|p| schema.prefixes.get(p))
+        .cloned()
+        .unwrap_or_else(|| format!("{}#", ontology_iri_string(schema)))
 }
 
 /// Emit each instance as an `owl:NamedIndividual`: `rdf:type` per declared
@@ -945,11 +969,7 @@ fn emit_instances(
             let target_iri_str = iri_by_id
                 .get(reference.target.as_str())
                 .cloned()
-                .unwrap_or_else(|| {
-                    crate::linkml_resolve::expand_curie(schema, &reference.target).unwrap_or_else(
-                        || format!("{}#{}", ontology_iri_string(schema), reference.target),
-                    )
-                });
+                .unwrap_or_else(|| resolve_reference_iri(schema, &reference.target));
             let target = make_iri(&target_iri_str)?;
             triple(graph, &subject, &predicate, &target)?;
         }
@@ -1914,6 +1934,22 @@ mod tests {
             objects,
             vec!["https://example.org/catalog/vault".to_string()],
             "and the CURIE expands against the prefix the schema declares"
+        );
+    }
+
+    #[test]
+    fn instance_namespace_is_the_minting_base() {
+        // The ownership test cross-graph resolution scopes by must be the
+        // base bare-id minting expands under — the default prefix's
+        // expansion, or the ontology fragment base without one.
+        let (schema, _) = abox_fixture();
+        assert_eq!(instance_namespace(&schema), "https://example.org/cellar/");
+        let mut bare = SchemaDefinition::new("bare");
+        bare.id = Some("https://example.org/bare".to_string());
+        assert_eq!(
+            instance_namespace(&bare),
+            "https://example.org/bare#",
+            "no default prefix falls back to the ontology fragment base"
         );
     }
 

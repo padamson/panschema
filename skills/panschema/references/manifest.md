@@ -73,6 +73,7 @@ are manifest-relative.
 | `graph-json` | Schema graph wire format — **hyphen** |
 | `instance-graph-json` | A-box graph wire format — **hyphen** |
 | `migrations` | **A directory** of versioned migration files. Written by `panschema migrate`, *not* by `generate` |
+| `resolve_against` | **Not an output** — an **array** of sibling `[generate.<name>]` entries whose datasets this entry's external references must resolve into (e.g. `resolve_against = ["catalog"]`). Only references landing in a namespace a listed sibling owns are checked — outside vocabularies stay unchecked, so one schema.org IRI can't fail the run. Each checked reference must equal an IRI the sibling's datasets mint under the sibling's own rules — a `key`-scoped record mints beneath its dataset root, so `namespace + bare id` guesses miss. Unresolved references warn; `--strict` fails on them. Naming the entry itself, or a name with no `[schemas]` entry, is an error |
 
 Note the naming is not uniform: `json_schema` and `html_graph_aspect` use
 underscores, `graph-json` and `instance-graph-json` use hyphens. With
