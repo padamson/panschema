@@ -333,10 +333,13 @@ struct LabelOptions<'a> {
 /// record's dataset-rooted IRI is what a reference must match. References
 /// into namespaces no sibling owns (a shared vocabulary, a graph published
 /// outside this manifest) stay in the cross-graph summary, unchecked here.
-/// Unresolved references warn, and `--strict` fails on them. A sibling
-/// naming no `[schemas]` entry, or the entry itself, is a configuration
-/// error; a sibling with no datasets yet resolves nothing, so references
-/// into its namespace warn like any other unresolved ones.
+/// With `verify_absences` bound, each record's stated absence claim is
+/// additionally verified against the sibling graphs. Unresolved references
+/// and contradicted or uncheckable claims warn, and `--strict` fails on
+/// them. A sibling naming no `[schemas]` entry, the entry itself, or a
+/// binding naming a slot no class carries is a configuration error; a
+/// sibling with no datasets yet resolves nothing, so references into its
+/// namespace warn like any other unresolved ones.
 fn check_resolve_against(
     name: &str,
     manifest: &panschema::manifest::Manifest,
@@ -348,11 +351,50 @@ fn check_resolve_against(
         return Ok(());
     };
     if gen_cfg.resolve_against.is_empty() {
+        if gen_cfg.verify_absences.is_some() {
+            anyhow::bail!(
+                "verify_absences needs resolve_against — the claims are verified against \
+                 the sibling datasets it names"
+            );
+        }
         return Ok(());
     }
     let registry = FormatRegistry::with_defaults();
+    let schema = panschema::import_resolve::load_schema_with_deps(&deps[name], &registry, deps)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    // Binding errors are pure configuration problems: report them before
+    // any sibling data is read, and against the resolved class view — a
+    // slot no class carries would silently match no record.
+    if let Some(binding) = &gen_cfg.verify_absences {
+        let carried = |slot: &str| {
+            schema.classes.values().any(|class| {
+                panschema::linkml_resolve::resolve_effective_slots(class, &schema)
+                    .contains_key(slot)
+            })
+        };
+        if !carried(&binding.slot) {
+            anyhow::bail!(
+                "verify_absences.slot `{}` is not a slot of any class in schema `{name}`",
+                binding.slot
+            );
+        }
+        if let Some(via) = &binding.via
+            && !carried(via)
+        {
+            anyhow::bail!(
+                "verify_absences.via `{via}` is not a slot of any class in schema `{name}`"
+            );
+        }
+    }
+
     let mut owned_namespaces: Vec<String> = Vec::new();
     let mut minted: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    // Retained only for the absence pass, which is the only reader.
+    let mut sibling_graphs: Vec<(
+        panschema::linkml::SchemaDefinition,
+        Vec<panschema::instances::InstanceSet>,
+    )> = Vec::new();
     for sibling in &gen_cfg.resolve_against {
         if sibling == name {
             anyhow::bail!(
@@ -369,6 +411,7 @@ fn check_resolve_against(
         let sibling_schema =
             panschema::import_resolve::load_schema_with_deps(sibling_path, &registry, deps)
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let mut sibling_sets: Vec<panschema::instances::InstanceSet> = Vec::new();
         let sibling_instances: Vec<PathBuf> = match manifest.generate.get(sibling) {
             Some(cfg) if !cfg.instances.is_empty() => {
                 cfg.instances.iter().map(|p| manifest_dir.join(p)).collect()
@@ -405,16 +448,30 @@ fn check_resolve_against(
                 &sibling_schema,
                 std::slice::from_ref(&set),
             ));
+            if gen_cfg.verify_absences.is_some() {
+                sibling_sets.push(set);
+            }
         }
         owned_namespaces.push(panschema::rdf_serializers::instance_namespace(
             &sibling_schema,
         ));
+        if gen_cfg.verify_absences.is_some() {
+            sibling_graphs.push((sibling_schema, sibling_sets));
+        }
     }
+    let siblings: Vec<(
+        &panschema::linkml::SchemaDefinition,
+        &[panschema::instances::InstanceSet],
+    )> = sibling_graphs
+        .iter()
+        .map(|(s, sets)| (s, sets.as_slice()))
+        .collect();
 
-    let schema = panschema::import_resolve::load_schema_with_deps(&deps[name], &registry, deps)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-    let siblings = gen_cfg.resolve_against.join("`, `");
+    let sibling_names = gen_cfg.resolve_against.join("`, `");
     let mut total = panschema::diagnostics::SiblingResolution::default();
+    let mut absences = panschema::diagnostics::AbsenceVerification::default();
+    // One streamed pass per referring file: each file's warnings flush
+    // before the next file is even opened, and nothing is retained.
     for path in gen_cfg.instances.iter().map(|p| manifest_dir.join(p)) {
         let set = read_instance_set(&schema, &path)?;
         let resolution = panschema::diagnostics::resolve_sibling_references(
@@ -428,20 +485,73 @@ fn check_resolve_against(
         }
         total.checked += resolution.checked;
         total.unresolved.extend(resolution.unresolved);
+        if let Some(binding) = &gen_cfg.verify_absences {
+            let verification = panschema::diagnostics::unverified_absences(
+                &schema,
+                &set,
+                &binding.slot,
+                binding.via.as_deref(),
+                &siblings,
+            );
+            for u in &verification.uncheckable {
+                eprintln!("warning: {}: {}", path.display(), u.message());
+            }
+            for u in &verification.unverified {
+                eprintln!("warning: {}: {}", path.display(), u.message());
+            }
+            absences.claims += verification.claims;
+            absences.contradicted_claims += verification.contradicted_claims;
+            absences.uncheckable.extend(verification.uncheckable);
+            absences.unverified.extend(verification.unverified);
+        }
     }
+
     let resolved = total.checked - total.unresolved.len();
     eprintln!(
-        "note: schema `{name}`: {resolved} of {} cross-graph reference(s) into `{siblings}` \
-         namespace(s) resolve",
+        "note: schema `{name}`: {resolved} of {} cross-graph reference(s) into \
+         `{sibling_names}` namespace(s) resolve",
         total.checked
     );
-    if strict && !total.unresolved.is_empty() {
-        anyhow::bail!(
-            "{} of {} cross-graph reference(s) do not resolve against `{siblings}`; failing \
-             because --strict is set",
-            total.unresolved.len(),
-            total.checked
+    if gen_cfg.verify_absences.is_some() {
+        let mut summary = format!(
+            "note: schema `{name}`: {} of {} stated absence claim(s) hold against \
+             `{sibling_names}`",
+            absences.claims - absences.contradicted_claims,
+            absences.claims
         );
+        if !absences.uncheckable.is_empty() {
+            summary.push_str(&format!(
+                "; {} claim(s) could not be checked",
+                absences.uncheckable.len()
+            ));
+        }
+        eprintln!("{summary}");
+    }
+
+    if strict {
+        let mut problems = Vec::new();
+        if !total.unresolved.is_empty() {
+            problems.push(format!(
+                "{} of {} cross-graph reference(s) do not resolve against `{sibling_names}`",
+                total.unresolved.len(),
+                total.checked
+            ));
+        }
+        if absences.contradicted_claims > 0 {
+            problems.push(format!(
+                "{} stated absence claim(s) do not hold",
+                absences.contradicted_claims
+            ));
+        }
+        if !absences.uncheckable.is_empty() {
+            problems.push(format!(
+                "{} stated absence claim(s) could not be checked",
+                absences.uncheckable.len()
+            ));
+        }
+        if !problems.is_empty() {
+            anyhow::bail!("{}; failing because --strict is set", problems.join("; "));
+        }
     }
     Ok(())
 }

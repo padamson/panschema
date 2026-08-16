@@ -86,7 +86,7 @@ fn class_iri_string(name: &str, class_def: &ClassDefinition, schema: &SchemaDefi
 /// for every site that holds a class *name* rather than its definition
 /// (parents, domains, ranges, union members, inverses), so none of them can
 /// drift from what the class's own declaration emits.
-fn class_iri_by_name(name: &str, schema: &SchemaDefinition) -> String {
+pub(crate) fn class_iri_by_name(name: &str, schema: &SchemaDefinition) -> String {
     match schema.classes.get(name) {
         Some(class_def) => class_iri_string(name, class_def, schema),
         None => fallback_element_iri(name, schema),
@@ -811,6 +811,21 @@ pub fn resolve_reference_iri(schema: &SchemaDefinition, target: &str) -> String 
         .unwrap_or_else(|| format!("{}#{}", ontology_iri_string(schema), target))
 }
 
+/// Every record's minted IRI keyed by its id, across `sets` — the map a
+/// reference target resolves through before falling back to
+/// [`resolve_reference_iri`], shared by the RDF emission and the
+/// cross-graph absence check so both prefer a record's real minted IRI
+/// (scoping included) over a fabricated expansion.
+pub(crate) fn instance_iris_by_id<'a>(
+    schema: &SchemaDefinition,
+    sets: &'a [crate::instances::InstanceSet],
+) -> std::collections::BTreeMap<&'a str, String> {
+    sets.iter()
+        .flat_map(|set| &set.instances)
+        .map(|i| (i.id.as_str(), instance_iri_string(schema, i)))
+        .collect()
+}
+
 /// The namespace a schema's instance minting expands bare ids under —
 /// the default prefix's expansion, or the ontology IRI's fragment base.
 /// Scoped records start with it too (their scope is itself minted under
@@ -872,11 +887,7 @@ fn emit_instances(
         None
     };
 
-    let iri_by_id: std::collections::BTreeMap<&str, String> = set
-        .instances
-        .iter()
-        .map(|i| (i.id.as_str(), instance_iri_string(schema, i)))
-        .collect();
+    let iri_by_id = instance_iris_by_id(schema, std::slice::from_ref(set));
 
     for inst in &set.instances {
         let subject = make_iri(&instance_iri_string(schema, inst))?;

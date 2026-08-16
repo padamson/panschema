@@ -177,6 +177,31 @@ pub struct GenerateConfig {
     /// fails on them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resolve_against: Vec<String>,
+    /// Verify stated absence claims against the `resolve_against`
+    /// siblings: for each record, the values of `slot` are anchors the
+    /// record claims no single sibling record joins, and a sibling record
+    /// referencing all of them is a violation. The binding lives here —
+    /// the schema states the domain semantics in its own terms, and this
+    /// key tells the tool which slot carries them — so the data model
+    /// stays free of tool annotations. Only meaningful beside
+    /// `resolve_against`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verify_absences: Option<VerifyAbsences>,
+}
+
+/// The `verify_absences` binding: which slots of the referring schema
+/// carry an absence claim.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerifyAbsences {
+    /// The multivalued reference slot listing the anchors claimed
+    /// unconnected.
+    pub slot: String,
+    /// Optional slot whose value names (as a URI in the sibling's schema)
+    /// the class a joining record would belong to — narrowing the claim
+    /// from "no record of any kind" to one kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
 }
 
 impl GenerateConfig {
@@ -204,12 +229,20 @@ impl GenerateConfig {
             instance_graph_json: Some(PathBuf::from("x")),
             migrations: Some(PathBuf::from("x")),
             resolve_against: vec!["x".to_string()],
+            verify_absences: Some(VerifyAbsences {
+                slot: "x".to_string(),
+                via: Some("x".to_string()),
+            }),
         };
-        let toml = toml::to_string(&populated).expect("GenerateConfig serializes");
-        toml.lines()
-            .filter_map(|line| line.split_once('='))
-            .map(|(key, _)| key.trim().to_string())
-            .filter(|key| !key.is_empty())
+        // Through `toml::Value` rather than serialized text, so a
+        // table-valued key (which serializes as its own `[section]`, not a
+        // `key = value` line) is still listed as the top-level key it is.
+        let value = toml::Value::try_from(&populated).expect("GenerateConfig serializes");
+        value
+            .as_table()
+            .expect("a struct serializes as a table")
+            .keys()
+            .cloned()
             .collect()
     }
 }
@@ -1278,6 +1311,7 @@ x = { path = "./x-pkg" }
             "instance-graph-json",
             "migrations",
             "resolve_against",
+            "verify_absences",
         ];
         for key in expected {
             assert!(

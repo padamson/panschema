@@ -113,6 +113,12 @@ pub struct InstanceSet {
     /// chosen. `None` for a schema with no root, or when the choice was
     /// ambiguous — see `root_candidates`.
     pub root: Option<String>,
+    /// The id of the emitted dataset-container record itself, when the
+    /// chosen root declares an identifier. The container references every
+    /// record it holds, so checks that ask "which records join these two"
+    /// must exempt it — by identity, not by class, since a root class can
+    /// also appear as ordinary contained records.
+    pub root_record: Option<String>,
     /// When a schema declares several `tree_root` classes and the data
     /// conforms to none of them, or to more than one equally well: the
     /// candidates, for a caller to report. `None` when there was nothing to
@@ -264,6 +270,7 @@ impl InstanceSet {
             metadata: Vec::new(),
             external_references: Vec::new(),
             root: None,
+            root_record: None,
             root_candidates: None,
         }
     }
@@ -438,6 +445,7 @@ impl InstanceSet {
             metadata,
             external_references,
             root: Some(root_name.clone()),
+            root_record: emitted_root_id,
             root_candidates: None,
         }
     }

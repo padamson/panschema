@@ -1985,6 +1985,154 @@ resolve_against = ["ghost"]
     );
 }
 
+/// The manifest-bound absence claim end to end: holds, contradicted,
+/// `--strict`-refused, and misconfigured.
+#[test]
+fn manifest_verify_absences_checks_stated_claims() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+
+    let catalog_pkg = consumer.join("catalog-pkg");
+    fs::create_dir_all(&catalog_pkg).unwrap();
+    fs::write(
+        catalog_pkg.join("panschema-publish.toml"),
+        "[schema]\nname = \"catalog\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"catalog.yaml\"\n",
+    )
+    .unwrap();
+    fs::write(
+        catalog_pkg.join("catalog.yaml"),
+        "id: https://example.org/catalog\nname: catalog\ndefault_prefix: cat\nprefixes:\n  cat: https://example.org/catalog/\nclasses:\n  Estate:\n    tree_root: true\n    slots: [id, providers, pairings]\n  Provider:\n    slots: [id]\n  Pairing:\n    slots: [id, a, b]\nslots:\n  id: {identifier: true}\n  providers: {range: Provider, multivalued: true}\n  pairings: {range: Pairing, multivalued: true}\n  a: {range: Provider}\n  b: {range: Provider}\n",
+    )
+    .unwrap();
+
+    let bench_pkg = consumer.join("bench-pkg");
+    fs::create_dir_all(&bench_pkg).unwrap();
+    fs::write(
+        bench_pkg.join("panschema-publish.toml"),
+        "[schema]\nname = \"bench\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"bench.yaml\"\n",
+    )
+    .unwrap();
+    fs::write(
+        bench_pkg.join("bench.yaml"),
+        "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, questions]\n  Question:\n    slots: [id, unconnected]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  questions: {range: Question, multivalued: true}\n  unconnected: {range: DomainRecord, multivalued: true}\n",
+    )
+    .unwrap();
+
+    fs::write(
+        consumer.join("catalog-data.yaml"),
+        "id: est1\nproviders:\n  - {id: aws}\n  - {id: gcp}\n",
+    )
+    .unwrap();
+    fs::write(
+        consumer.join("bench-data.yaml"),
+        "id: b1\nquestions:\n  - {id: q1, unconnected: [cat:aws, cat:gcp]}\n",
+    )
+    .unwrap();
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+catalog = { path = "./catalog-pkg" }
+bench = { path = "./bench-pkg" }
+
+[generate.catalog]
+ttl = "catalog.ttl"
+instances = ["catalog-data.yaml"]
+
+[generate.bench]
+ttl = "bench.ttl"
+instances = ["bench-data.yaml"]
+resolve_against = ["catalog"]
+verify_absences = { slot = "unconnected" }
+"#,
+    )
+    .unwrap();
+
+    let run = |extra: &[&str]| {
+        let mut args = vec!["generate"];
+        args.extend_from_slice(extra);
+        Command::new(env!("CARGO_BIN_EXE_panschema"))
+            .args(&args)
+            .current_dir(consumer)
+            .output()
+            .expect("run panschema")
+    };
+
+    let holds = run(&["--strict"]);
+    assert!(
+        holds.status.success(),
+        "no pairing joins the anchors, so the claim holds: {}",
+        String::from_utf8_lossy(&holds.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&holds.stderr)
+            .contains("1 of 1 stated absence claim(s) hold against `catalog`"),
+        "the note counts the verified claim; got:\n{}",
+        String::from_utf8_lossy(&holds.stderr)
+    );
+
+    // A pairing joining the two anchors contradicts the claim.
+    fs::write(
+        consumer.join("catalog-data.yaml"),
+        "id: est1\nproviders:\n  - {id: aws}\n  - {id: gcp}\npairings:\n  - {id: p1, a: aws, b: gcp}\n",
+    )
+    .unwrap();
+    let contradicted = run(&[]);
+    assert!(
+        contradicted.status.success(),
+        "without --strict a contradicted claim is a warning: {}",
+        String::from_utf8_lossy(&contradicted.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&contradicted.stderr).contains("the stated absence does not hold"),
+        "the warning names the contradiction; got:\n{}",
+        String::from_utf8_lossy(&contradicted.stderr)
+    );
+    let strict = run(&["--strict"]);
+    assert!(
+        !strict.status.success(),
+        "--strict must refuse a contradicted absence claim"
+    );
+    assert!(
+        String::from_utf8_lossy(&strict.stderr).contains("stated absence claim(s) do not hold"),
+        "got:\n{}",
+        String::from_utf8_lossy(&strict.stderr)
+    );
+
+    // Binding a slot the schema doesn't declare is a configuration error.
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+catalog = { path = "./catalog-pkg" }
+bench = { path = "./bench-pkg" }
+
+[generate.catalog]
+ttl = "catalog.ttl"
+instances = ["catalog-data.yaml"]
+
+[generate.bench]
+ttl = "bench.ttl"
+instances = ["bench-data.yaml"]
+resolve_against = ["catalog"]
+verify_absences = { slot = "nonexistent" }
+"#,
+    )
+    .unwrap();
+    let bad_slot = run(&[]);
+    assert!(
+        !bad_slot.status.success(),
+        "a bound slot the schema lacks is an error"
+    );
+    assert!(
+        String::from_utf8_lossy(&bad_slot.stderr).contains("is not a slot of any class"),
+        "got:\n{}",
+        String::from_utf8_lossy(&bad_slot.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
 /// A manifest naming instance data that isn't there fails loudly, naming the
 /// schema and the path, rather than quietly publishing a T-box-only page.
 #[test]
