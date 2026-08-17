@@ -183,7 +183,7 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
                     // is whether the target's class satisfies one branch of a
                     // union range. A target that names no record is skipped so
                     // one problem yields one report.
-                    InstanceValue::Reference(target) => {
+                    InstanceValue::Reference { target, .. } => {
                         if ranges.len() > 1
                             && let Some(actual) = class_of.get(target.as_str())
                             && !ranges.iter().any(|r| class_satisfies(schema, actual, r))
@@ -593,7 +593,7 @@ fn values_match(a: &InstanceValue, b: &InstanceValue) -> bool {
 fn numeric_value(value: &InstanceValue) -> Option<f64> {
     match value {
         InstanceValue::Scalar(s) => numeric(s),
-        InstanceValue::Reference(_) | InstanceValue::Unexpected(_) => None,
+        InstanceValue::Reference { .. } | InstanceValue::Unexpected(_) => None,
     }
 }
 
@@ -603,7 +603,7 @@ fn numeric_value(value: &InstanceValue) -> Option<f64> {
 fn value_display(value: &InstanceValue) -> String {
     match value {
         InstanceValue::Scalar(s) => scalar_to_display(s),
-        InstanceValue::Reference(target) => target.clone(),
+        InstanceValue::Reference { target, .. } => target.clone(),
         InstanceValue::Unexpected(kind) => kind.to_string(),
     }
 }
@@ -2121,13 +2121,19 @@ classes:
     /// its values simply never equal a literal constant.
     #[test]
     fn equals_failure_counts_references_as_the_values_they_are() {
-        let one_ref = [InstanceValue::Reference("r1".to_string())];
+        let one_ref = [InstanceValue::Reference {
+            target: "r1".to_string(),
+            held: false,
+        }];
         assert_eq!(
             equals_failure(&one_ref, "`cited`"),
             "is `r1`, but must equal `cited`"
         );
         let two = [
-            InstanceValue::Reference("r1".to_string()),
+            InstanceValue::Reference {
+                target: "r1".to_string(),
+                held: false,
+            },
             InstanceValue::Scalar(ScalarValue::String("reviewed".to_string())),
         ];
         assert_eq!(

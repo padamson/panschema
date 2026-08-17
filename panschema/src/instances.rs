@@ -44,7 +44,17 @@ pub enum ScalarValue {
 #[derive(Debug, Clone, PartialEq)]
 pub enum InstanceValue {
     Scalar(ScalarValue),
-    Reference(String),
+    /// A reference to another instance by id. `held` marks the edge as
+    /// containment rather than citation: the target was materialized at
+    /// this edge (an inlined mapping), or the slot is one of the dataset
+    /// container's collection slots. A held edge is still a reference
+    /// for range and integrity checks; consumers asking "who cites this
+    /// record" skip held edges. Restating an already-materialized record
+    /// as an inline mapping is a citation, not containment.
+    Reference {
+        target: String,
+        held: bool,
+    },
     Unexpected(&'static str),
 }
 
@@ -114,10 +124,9 @@ pub struct InstanceSet {
     /// ambiguous — see `root_candidates`.
     pub root: Option<String>,
     /// The id of the emitted dataset-container record itself, when the
-    /// chosen root declares an identifier. The container references every
-    /// record it holds, so checks that ask "which records join these two"
-    /// must exempt it — by identity, not by class, since a root class can
-    /// also appear as ordinary contained records.
+    /// chosen root declares an identifier. Its collection-slot edges are
+    /// marked held (containment by role), so citation-oriented consumers
+    /// need no special case for it.
     pub root_record: Option<String>,
     /// When a schema declares several `tree_root` classes and the data
     /// conforms to none of them, or to more than one equally well: the
@@ -367,7 +376,7 @@ impl InstanceSet {
         let mut emitted_root_id: Option<String> = None;
         if root_slots.values().any(|slot| slot.identifier) {
             let root_value = serde_norway::Value::Mapping(root_fields);
-            if let Some(root_id) = loader.build_record(root_name, None, &root_value)
+            if let Some((root_id, _)) = loader.build_record(root_name, None, &root_value)
                 && let Some(inst) = loader.instances.iter_mut().find(|i| i.id == root_id)
             {
                 emitted_root_id = Some(root_id.clone());
@@ -381,7 +390,12 @@ impl InstanceSet {
                         push_slot_value(
                             &mut inst.slot_values,
                             slot,
-                            InstanceValue::Reference(id.clone()),
+                            // A container's collection slots hold their
+                            // records by role, however each entry is spelled.
+                            InstanceValue::Reference {
+                                target: id.clone(),
+                                held: true,
+                            },
                         );
                     }
                 }
@@ -568,7 +582,7 @@ impl LinkmlLoader<'_> {
                         ids.push(scalar_to_display(&scalar));
                         continue;
                     }
-                    if let Some(id) = self.build_record(class_name, None, item) {
+                    if let Some((id, _)) = self.build_record(class_name, None, item) {
                         ids.push(id.clone());
                         self.note_top_level_id(id);
                     }
@@ -589,7 +603,7 @@ impl LinkmlLoader<'_> {
                     } else {
                         record
                     };
-                    if let Some(id) = self.build_record(class_name, key.as_str(), record) {
+                    if let Some((id, _)) = self.build_record(class_name, key.as_str(), record) {
                         ids.push(id.clone());
                         self.note_top_level_id(id);
                     }
@@ -634,14 +648,17 @@ impl LinkmlLoader<'_> {
     }
 
     /// Materialize one record of `class_name` and return its id (so an inlined
-    /// object can be referenced by its container). `dict_key`, when present,
-    /// is the record's identifier from an identifier-keyed collection.
+    /// object can be referenced by its container) plus whether this call
+    /// materialized it — `false` when the id was already taken, so the caller
+    /// is restating an existing record rather than holding a new one.
+    /// `dict_key`, when present, is the record's identifier from an
+    /// identifier-keyed collection.
     fn build_record(
         &mut self,
         class_name: &str,
         dict_key: Option<&str>,
         record: &serde_norway::Value,
-    ) -> Option<String> {
+    ) -> Option<(String, bool)> {
         let class = self.schema.classes.get(class_name)?;
         let map = record.as_mapping()?;
         // Resolved *with provenance* so each slot's induced range is available:
@@ -743,7 +760,8 @@ impl LinkmlLoader<'_> {
         references.sort_by(|a, b| (&a.property, &a.target).cmp(&(&b.property, &b.target)));
         slot_values.sort_by(|a, b| a.slot.cmp(&b.slot));
 
-        if self.seen.insert(id.clone()) {
+        let materialized = self.seen.insert(id.clone());
+        if materialized {
             self.instances.push(Instance {
                 id: id.clone(),
                 iri: None,
@@ -758,7 +776,7 @@ impl LinkmlLoader<'_> {
                 scope: None,
             });
         }
-        Some(id)
+        Some((id, materialized))
     }
 
     /// Route one slot value into the typed `slot_values` (always) and, when
@@ -802,10 +820,6 @@ impl LinkmlLoader<'_> {
             }
             return;
         }
-        // A null carries no value — treat as absent, not a kind mismatch.
-        if matches!(value, serde_norway::Value::Null) {
-            return;
-        }
 
         let class_targets: Vec<&String> = ranges
             .iter()
@@ -813,19 +827,39 @@ impl LinkmlLoader<'_> {
             .collect();
         let all_classes = !class_targets.is_empty() && class_targets.len() == ranges.len();
 
+        // A null carries no value — treat as absent, not a kind mismatch —
+        // except where only a reference could stand: a null can never
+        // reference a record, and dropping it there would silently shorten
+        // an authored reference list.
+        if matches!(value, serde_norway::Value::Null) {
+            if all_classes {
+                push_slot_value(slot_values, slot, InstanceValue::Unexpected("a null"));
+            }
+            return;
+        }
+
         let schema = self.schema;
-        let reference_to =
-            |target: String, references: &mut Vec<Reference>, slot_values: &mut Vec<SlotValue>| {
-                let external = points_outside_dataset(schema, &target);
-                push_slot_value(slot_values, slot, InstanceValue::Reference(target.clone()));
-                if display {
-                    references.push(Reference {
-                        property: property.to_string(),
-                        target,
-                        external,
-                    });
-                }
-            };
+        let reference_to = |target: String,
+                            held: bool,
+                            references: &mut Vec<Reference>,
+                            slot_values: &mut Vec<SlotValue>| {
+            let external = points_outside_dataset(schema, &target);
+            push_slot_value(
+                slot_values,
+                slot,
+                InstanceValue::Reference {
+                    target: target.clone(),
+                    held,
+                },
+            );
+            if display {
+                references.push(Reference {
+                    property: property.to_string(),
+                    target,
+                    external,
+                });
+            }
+        };
 
         match value {
             // An inlined mapping is its own record; recurse and edge to it.
@@ -833,13 +867,13 @@ impl LinkmlLoader<'_> {
             // meant, so it falls through to be recorded as unusable.
             serde_norway::Value::Mapping(_) if class_targets.len() == 1 => {
                 let class = class_targets[0].clone();
-                if let Some(target) = self.build_record(&class, None, value) {
-                    reference_to(target, references, slot_values);
+                if let Some((target, materialized)) = self.build_record(&class, None, value) {
+                    reference_to(target, materialized, references, slot_values);
                 }
             }
             // A string at an all-class range references a record by id.
             serde_norway::Value::String(text) if all_classes => {
-                reference_to(text.clone(), references, slot_values);
+                reference_to(text.clone(), false, references, slot_values);
             }
             // A number or boolean can never be a reference — record the
             // mismatch rather than dropping it, keeping the display
@@ -2060,7 +2094,7 @@ classes:
             has_input
                 .values
                 .iter()
-                .all(|v| matches!(v, InstanceValue::Reference(_))),
+                .all(|v| matches!(v, InstanceValue::Reference { .. })),
             "got: {:?}",
             has_input.values
         );
@@ -2258,7 +2292,10 @@ wineries:
                 },
                 SlotValue {
                     slot: "produced_by".to_string(),
-                    values: vec![InstanceValue::Reference("morgonEstate".to_string())],
+                    values: vec![InstanceValue::Reference {
+                        target: "morgonEstate".to_string(),
+                        held: false,
+                    }],
                 },
             ]
         );
@@ -2441,10 +2478,20 @@ nodes:
         assert_eq!(
             slot("links").expect("links").values,
             [
-                InstanceValue::Reference("b".to_string()),
-                InstanceValue::Reference("c".to_string()),
-                InstanceValue::Reference("d".to_string()),
-            ]
+                InstanceValue::Reference {
+                    target: "b".to_string(),
+                    held: false,
+                },
+                InstanceValue::Reference {
+                    target: "c".to_string(),
+                    held: false,
+                },
+                InstanceValue::Reference {
+                    target: "d".to_string(),
+                    held: true,
+                },
+            ],
+            "an inlined element's edge is containment; by-id elements are citations"
         );
     }
 }

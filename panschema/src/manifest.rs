@@ -179,7 +179,8 @@ pub struct GenerateConfig {
     pub resolve_against: Vec<String>,
     /// Verify stated absence claims against the `resolve_against`
     /// siblings: for each record, the values of `slot` are anchors the
-    /// record claims no single sibling record joins, and a sibling record
+    /// record claims no single sibling record joins — for one anchor,
+    /// that no record references it at all — and a sibling record
     /// referencing all of them is a violation. The binding lives here —
     /// the schema states the domain semantics in its own terms, and this
     /// key tells the tool which slot carries them — so the data model
@@ -194,8 +195,8 @@ pub struct GenerateConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VerifyAbsences {
-    /// The multivalued reference slot listing the anchors claimed
-    /// unconnected.
+    /// The reference slot listing the anchors claimed unconnected — two
+    /// or more claimed unjoined, a single one claimed unreferenced.
     pub slot: String,
     /// Optional slot whose value names (as a URI in the sibling's schema)
     /// the class a joining record would belong to — narrowing the claim

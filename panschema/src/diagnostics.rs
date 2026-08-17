@@ -601,18 +601,32 @@ pub struct UnverifiedAbsence {
     pub referrer: String,
     /// The anchors as authored on the claiming record.
     pub anchors: Vec<String>,
+    /// The authored `via` narrowing, when the claim carried one.
+    pub via: Option<String>,
     /// The sibling record that references every listed anchor.
     pub joined_by: String,
 }
 
 impl UnverifiedAbsence {
     pub fn message(&self) -> String {
+        let joiner = match &self.via {
+            Some(via) => format!("`{via}` record"),
+            None => "record".to_string(),
+        };
+        let claim = match self.anchors.as_slice() {
+            [one] => format!(
+                "no {joiner} references `{one}`, but sibling record `{}` references it",
+                self.joined_by
+            ),
+            _ => format!(
+                "no {joiner} joins `{}`, but sibling record `{}` references all of them",
+                self.anchors.join("`, `"),
+                self.joined_by
+            ),
+        };
         format!(
-            "instance `{}`: claims no record joins `{}`, but sibling record `{}` references \
-             all of them — the stated absence does not hold",
-            self.referrer,
-            self.anchors.join("`, `"),
-            self.joined_by
+            "instance `{}`: claims {claim} — the stated absence does not hold",
+            self.referrer
         )
     }
 }
@@ -639,9 +653,9 @@ impl UncheckableAbsence {
 /// What an absence-verification pass found over one referring dataset.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AbsenceVerification {
-    /// Claims the check could evaluate: two or more distinct anchors, all
-    /// minted by some sibling dataset, and a `via` (when stated) naming a
-    /// class some sibling declares.
+    /// Claims the check could evaluate: distinct anchors all minted by
+    /// some sibling dataset, and a `via` (when stated) naming a class
+    /// some sibling declares.
     pub claims: usize,
     /// Evaluated claims some sibling record contradicts.
     pub contradicted_claims: usize,
@@ -653,18 +667,24 @@ pub struct AbsenceVerification {
 
 /// Verify each record's stated absence claim against sibling datasets.
 ///
-/// A record listing two or more anchors under `absence_slot` (reference
-/// targets or IRI-valued scalars alike) claims no single sibling record
-/// references them all; the `via` slot's value — expanded against the
-/// referring schema exactly like the anchors — narrows the claim to
-/// joining records of that class. Anchors and joins resolve through the
+/// A record listing anchors under `absence_slot` (reference targets or
+/// IRI-valued scalars alike) claims no single sibling record references
+/// them all — for one anchor, that no record references it at all. A
+/// "reference" here is an authored citation edge; a sibling citing an
+/// anchor's IRI in a plain scalar is not counted, and neither is
+/// containment — the container's collection slots and any edge that
+/// materialized its target (an inlined child) hold records rather than
+/// cite them, while restating an already-declared record inline is a
+/// citation. The `via` slot's value — expanded against the referring
+/// schema exactly like the anchors — narrows the claim to joining
+/// records of that class. Anchors and joins resolve through the
 /// sibling's own minting (its whole dataset list at once, so a join in
-/// one file reaches records declared in another), and the dataset
-/// container is exempt by identity — holding records is not joining
-/// them, and a root-class record that is *not* the container still
-/// counts. A claim that cannot be evaluated — anchors collapsing to one
-/// IRI, an anchor no sibling mints, a `via` naming no sibling class — is
-/// reported as uncheckable, never as holding.
+/// one file reaches records declared in another). A claim that cannot
+/// be evaluated — a null or malformed anchor, anchors collapsing to
+/// fewer distinct IRIs than authored, an anchor no sibling mints,
+/// several `via` values, a malformed `via`, a `via` naming no sibling
+/// class — is reported as uncheckable, never as holding: evaluating
+/// what remains would silently strengthen the claim.
 pub fn unverified_absences(
     schema: &crate::linkml::SchemaDefinition,
     set: &crate::instances::InstanceSet,
@@ -697,15 +717,15 @@ pub fn unverified_absences(
             let mut records = Vec::new();
             for sibling_set in *sibling_sets {
                 for record in &sibling_set.instances {
-                    if sibling_set.root_record.as_deref() == Some(record.id.as_str()) {
-                        continue;
-                    }
                     let referenced = record
                         .slot_values
                         .iter()
                         .flat_map(|sv| &sv.values)
                         .filter_map(|v| match v {
-                            InstanceValue::Reference(t) => Some(t),
+                            InstanceValue::Reference {
+                                target,
+                                held: false,
+                            } => Some(target),
                             _ => None,
                         })
                         .map(|t| {
@@ -740,28 +760,40 @@ pub fn unverified_absences(
 
     let mut out = AbsenceVerification::default();
     for inst in &set.instances {
-        let anchors: Vec<String> = inst
+        let anchors: Result<Vec<String>, &str> = inst
             .slot_values
             .iter()
             .filter(|sv| sv.slot == absence_slot)
             .flat_map(|sv| &sv.values)
-            .filter_map(|v| match v {
-                InstanceValue::Reference(t) => Some(t.clone()),
-                InstanceValue::Scalar(s) => Some(crate::instances::scalar_to_display(s)),
-                InstanceValue::Unexpected(_) => None,
+            .map(|v| match v {
+                InstanceValue::Reference { target, .. } => Ok(target.clone()),
+                InstanceValue::Scalar(s) => Ok(crate::instances::scalar_to_display(s)),
+                InstanceValue::Unexpected(kind) => Err(*kind),
             })
             .collect();
-        if anchors.len() < 2 {
+        let anchors = match anchors {
+            Ok(anchors) => anchors,
+            Err(kind) => {
+                out.uncheckable.push(UncheckableAbsence {
+                    referrer: inst.id.clone(),
+                    reason: format!("an anchor value is {kind}, not a reference or IRI"),
+                });
+                continue;
+            }
+        };
+        if anchors.is_empty() {
             continue;
         }
         let anchor_iris: BTreeSet<String> = anchors
             .iter()
             .map(|t| crate::rdf_serializers::resolve_reference_iri(schema, t))
             .collect();
-        if anchor_iris.len() < 2 {
+        if anchor_iris.len() < anchors.len() {
             out.uncheckable.push(UncheckableAbsence {
                 referrer: inst.id.clone(),
-                reason: "its anchors collapse to a single IRI".to_string(),
+                reason: "its anchors collapse to fewer distinct IRIs than authored — list \
+                         each anchor once"
+                    .to_string(),
             });
             continue;
         }
@@ -772,19 +804,39 @@ pub fn unverified_absences(
             });
             continue;
         }
-        let via_iri: Option<String> = via_slot
-            .and_then(|slot| {
+        let via_values: Vec<&InstanceValue> = via_slot
+            .map(|slot| {
                 inst.slot_values
                     .iter()
-                    .find(|sv| sv.slot == slot)
-                    .and_then(|sv| sv.values.first())
-                    .and_then(|v| match v {
-                        InstanceValue::Scalar(s) => Some(crate::instances::scalar_to_display(s)),
-                        InstanceValue::Reference(t) => Some(t.clone()),
-                        InstanceValue::Unexpected(_) => None,
-                    })
+                    .filter(|sv| sv.slot == slot)
+                    .flat_map(|sv| &sv.values)
+                    .collect()
             })
-            .map(|v| crate::rdf_serializers::resolve_reference_iri(schema, &v));
+            .unwrap_or_default();
+        if via_values.len() > 1 {
+            out.uncheckable.push(UncheckableAbsence {
+                referrer: inst.id.clone(),
+                reason: "a claim narrows by exactly one `via` value, and this record \
+                         carries several"
+                    .to_string(),
+            });
+            continue;
+        }
+        let via_authored: Option<String> = match via_values.first() {
+            Some(InstanceValue::Unexpected(kind)) => {
+                out.uncheckable.push(UncheckableAbsence {
+                    referrer: inst.id.clone(),
+                    reason: format!("its `via` value is {kind}, not a class reference"),
+                });
+                continue;
+            }
+            Some(InstanceValue::Scalar(s)) => Some(crate::instances::scalar_to_display(s)),
+            Some(InstanceValue::Reference { target, .. }) => Some(target.clone()),
+            None => None,
+        };
+        let via_iri: Option<String> = via_authored
+            .as_ref()
+            .map(|v| crate::rdf_serializers::resolve_reference_iri(schema, v));
         if let Some(via) = &via_iri
             && !indexes
                 .iter()
@@ -816,6 +868,7 @@ pub fn unverified_absences(
                     out.unverified.push(UnverifiedAbsence {
                         referrer: inst.id.clone(),
                         anchors: anchors.clone(),
+                        via: via_authored.clone(),
                         joined_by: record.id.to_string(),
                     });
                     contradicted = true;
@@ -2529,9 +2582,9 @@ mod tests {
         );
     }
 
-    /// Two authored anchors that expand to one IRI are not a checkable
-    /// claim: any record referencing that single anchor would otherwise
-    /// read as joining "all of them".
+    /// Anchors that expand to fewer distinct IRIs than authored are
+    /// refused as a suspected authoring error: checking the collapsed
+    /// set would silently strengthen the claim.
     #[test]
     fn anchors_collapsing_to_one_iri_are_uncheckable() {
         let sibling_schema = linked_sibling_schema();
@@ -2551,7 +2604,9 @@ mod tests {
         assert_eq!(found.unverified, vec![], "no false contradiction");
         assert_eq!(found.uncheckable.len(), 1, "got: {found:?}");
         assert!(
-            found.uncheckable[0].message().contains("single IRI"),
+            found.uncheckable[0]
+                .message()
+                .contains("fewer distinct IRIs"),
             "got: {}",
             found.uncheckable[0].message()
         );
@@ -2670,24 +2725,386 @@ mod tests {
         assert_eq!(found.unverified.len(), 2, "one per joining record");
     }
 
+    /// A single-anchor claim states no sibling record references the
+    /// anchor at all, and any authored reference to it contradicts it.
     #[test]
-    fn a_single_anchor_claim_verifies_vacuously() {
-        // "No single record joins them" needs at least two; one anchor
-        // states no connection to check, even though l1 references w1.
+    fn a_single_anchor_claim_is_checked() {
         let sibling_schema = linked_sibling_schema();
         let sibling = scoped_set(&sibling_schema, LINKED_DATA);
         let schema = claiming_schema();
-        let set = scoped_set(&schema, "id: b1\nanchors:\n  - cellar:w1\n");
+
+        let contradicted = scoped_set(&schema, "id: b1\nanchors:\n  - cellar:w1\n");
+        let found = unverified_absences(
+            &schema,
+            &contradicted,
+            "anchors",
+            None,
+            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+        );
+        assert_eq!(found.claims, 1, "one anchor is a checkable claim");
         assert_eq!(
-            unverified_absences(
-                &schema,
-                &set,
-                "anchors",
-                None,
-                &[(&sibling_schema, std::slice::from_ref(&sibling))],
-            ),
-            AbsenceVerification::default(),
-            "one anchor is not a checkable claim"
+            found.unverified.len(),
+            1,
+            "l1 references w1, so the claim is false; got: {found:?}"
+        );
+        assert!(
+            found.unverified[0].message().contains("references it"),
+            "the single-anchor message reads as a reference claim; got: {}",
+            found.unverified[0].message()
+        );
+
+        let holds = scoped_set(&schema, "id: b1\nanchors:\n  - cellar:l1\n");
+        let found = unverified_absences(
+            &schema,
+            &holds,
+            "anchors",
+            None,
+            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+        );
+        assert_eq!(found.claims, 1);
+        assert_eq!(
+            found.unverified,
+            vec![],
+            "only the exempt container references l1, so the claim holds"
+        );
+    }
+
+    /// A via-narrowed single-anchor claim ("no Link references f1") is
+    /// contradicted by the Link that does.
+    #[test]
+    fn a_via_narrowed_single_anchor_claim_is_checked() {
+        let sibling_schema = linked_sibling_schema();
+        let sibling = scoped_set(&sibling_schema, LINKED_DATA);
+        let schema = claiming_schema();
+        let set = scoped_set(
+            &schema,
+            "id: b1\nanchors:\n  - cellar:f1\nvia: cellar:Link\n",
+        );
+        let found = unverified_absences(
+            &schema,
+            &set,
+            "anchors",
+            Some("via"),
+            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+        );
+        assert_eq!(found.claims, 1);
+        assert_eq!(
+            found.unverified.len(),
+            1,
+            "l1 is a Link referencing f1; got: {found:?}"
+        );
+        assert_eq!(found.unverified[0].joined_by, "l1");
+        assert!(
+            found.unverified[0]
+                .message()
+                .contains("`cellar:Link` record"),
+            "a narrowed claim is reported as narrowed, not as the broader one; got: {}",
+            found.unverified[0].message()
+        );
+    }
+
+    /// `linked_sibling_schema` plus a `Shelf` class whose `held` slot
+    /// contains `Item`s, so containment can occur below the root.
+    fn shelved_sibling_schema() -> SchemaDefinition {
+        let mut schema = linked_sibling_schema();
+        let mut id = crate::linkml::SlotDefinition::new("id");
+        id.identifier = true;
+        let mut shelf = crate::linkml::ClassDefinition::new("Shelf");
+        shelf.attributes.insert("id".to_string(), id);
+        let mut held = crate::linkml::SlotDefinition::new("held");
+        held.range = Some("Item".to_string());
+        held.multivalued = true;
+        shelf.attributes.insert("held".to_string(), held);
+        schema.classes.insert("Shelf".to_string(), shelf);
+        let root = schema.classes.get_mut("Root").unwrap();
+        let mut shelves = crate::linkml::SlotDefinition::new("shelves");
+        shelves.range = Some("Shelf".to_string());
+        shelves.multivalued = true;
+        root.attributes.insert("shelves".to_string(), shelves);
+        schema
+    }
+
+    /// Containment is not joining at any depth: a record that inlines the
+    /// anchor merely holds it, while an authored by-id reference from the
+    /// same record still contradicts the claim.
+    #[test]
+    fn a_nested_holder_of_the_anchor_does_not_join_it() {
+        let sibling_schema = shelved_sibling_schema();
+
+        // s1 inlines w1 and references f1 by id, under the same slot.
+        let sibling = scoped_set(
+            &sibling_schema,
+            "id: est\nitems:\n  - {id: f1}\nshelves:\n  - {id: s1, held: [{id: w1}, f1]}\n",
+        );
+        let schema = claiming_schema();
+
+        let held_only = scoped_set(&schema, "id: b1\nanchors:\n  - cellar:w1\n");
+        let found = unverified_absences(
+            &schema,
+            &held_only,
+            "anchors",
+            None,
+            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+        );
+        assert_eq!(found.claims, 1);
+        assert_eq!(
+            found.unverified,
+            vec![],
+            "s1 holds w1 inline, and holding is not joining; got: {found:?}"
+        );
+
+        let referenced = scoped_set(&schema, "id: b1\nanchors:\n  - cellar:f1\n");
+        let found = unverified_absences(
+            &schema,
+            &referenced,
+            "anchors",
+            None,
+            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+        );
+        assert_eq!(
+            found.unverified.len(),
+            1,
+            "s1 references f1 by id, which does join; got: {found:?}"
+        );
+        assert_eq!(found.unverified[0].joined_by, "s1");
+    }
+
+    /// An inline child does not mask a co-authored by-id citation of the
+    /// same target under the same slot: each edge classifies on its own.
+    #[test]
+    fn an_inline_child_does_not_mask_a_citation_of_the_same_target() {
+        let sibling_schema = shelved_sibling_schema();
+        let sibling = scoped_set(
+            &sibling_schema,
+            "id: est\nshelves:\n  - {id: s1, held: [{id: w1}, w1]}\n",
+        );
+        let schema = claiming_schema();
+        let set = scoped_set(&schema, "id: b1\nanchors:\n  - cellar:w1\n");
+        let found = unverified_absences(
+            &schema,
+            &set,
+            "anchors",
+            None,
+            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+        );
+        assert_eq!(
+            found.unverified.len(),
+            1,
+            "s1 also cites w1 by id; got: {found:?}"
+        );
+        assert_eq!(found.unverified[0].joined_by, "s1");
+    }
+
+    /// Restating an already-declared record as an inline mapping is a
+    /// citation, not containment: the record was materialized by its own
+    /// declaration, and the restater joins what it lists.
+    #[test]
+    fn restating_a_declared_record_inline_is_a_citation() {
+        let mut sibling_schema = linked_sibling_schema();
+        let mut cites = crate::linkml::SlotDefinition::new("cites");
+        cites.range = Some("Item".to_string());
+        cites.multivalued = true;
+        sibling_schema
+            .classes
+            .get_mut("Link")
+            .unwrap()
+            .attributes
+            .insert("cites".to_string(), cites);
+        let sibling = scoped_set(
+            &sibling_schema,
+            "id: est\nitems:\n  - {id: w1}\n  - {id: f1}\n\
+             links:\n  - {id: l2, cites: [{id: w1}, {id: f1}]}\n",
+        );
+        let schema = claiming_schema();
+        let set = scoped_set(&schema, "id: b1\nanchors:\n  - cellar:w1\n  - cellar:f1\n");
+        let found = unverified_absences(
+            &schema,
+            &set,
+            "anchors",
+            None,
+            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+        );
+        assert_eq!(
+            found.unverified.len(),
+            1,
+            "l2 joins the records it restates inline; got: {found:?}"
+        );
+        assert_eq!(found.unverified[0].joined_by, "l2");
+    }
+
+    /// A partial collapse — more authored anchors than distinct IRIs —
+    /// is uncheckable for the same reason a total collapse is: checking
+    /// the smaller set would silently strengthen the claim.
+    #[test]
+    fn a_partial_anchor_collapse_is_uncheckable() {
+        let sibling_schema = linked_sibling_schema();
+        let sibling = scoped_set(&sibling_schema, LINKED_DATA);
+        let schema = claiming_schema();
+        let set = scoped_set(
+            &schema,
+            "id: b1\nanchors:\n  - cellar:w1\n  - https://example.org/cellar/w1\n  - cellar:f1\n",
+        );
+        let found = unverified_absences(
+            &schema,
+            &set,
+            "anchors",
+            None,
+            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+        );
+        assert_eq!(found.claims, 0);
+        assert_eq!(
+            found.unverified,
+            vec![],
+            "the collapsed pair must not be checked in the triple's place"
+        );
+        assert_eq!(found.uncheckable.len(), 1, "got: {found:?}");
+    }
+
+    /// `via` narrows by exactly one class: several values are uncheckable
+    /// rather than narrowed by whichever happens to come first.
+    #[test]
+    fn a_multivalued_via_is_uncheckable() {
+        let sibling_schema = linked_sibling_schema();
+        let sibling = scoped_set(&sibling_schema, LINKED_DATA);
+        let schema = claiming_schema();
+        let set = scoped_set(
+            &schema,
+            "id: b1\nanchors:\n  - cellar:f1\nvia: ['cellar:Link', 'cellar:Item']\n",
+        );
+        let found = unverified_absences(
+            &schema,
+            &set,
+            "anchors",
+            Some("via"),
+            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+        );
+        assert_eq!(found.claims, 0);
+        assert_eq!(
+            found.unverified,
+            vec![],
+            "no first-value narrowing may be evaluated"
+        );
+        assert_eq!(found.uncheckable.len(), 1, "got: {found:?}");
+        assert!(
+            found.uncheckable[0].message().contains("one `via` value"),
+            "got: {}",
+            found.uncheckable[0].message()
+        );
+    }
+
+    /// A null anchor is not silently dropped: a null can never reference
+    /// a record, so the claim it sits in is uncheckable, not shortened.
+    #[test]
+    fn a_null_anchor_makes_the_claim_uncheckable() {
+        let sibling_schema = linked_sibling_schema();
+        let sibling = scoped_set(&sibling_schema, LINKED_DATA);
+        let schema = query_claiming_schema();
+        let set = scoped_set(
+            &schema,
+            "id: b1\nqueries:\n  - {id: q1, anchors: ['cellar:w1', ~]}\n",
+        );
+        let found = unverified_absences(
+            &schema,
+            &set,
+            "anchors",
+            None,
+            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+        );
+        assert_eq!(found.claims, 0);
+        assert_eq!(
+            found.unverified,
+            vec![],
+            "the surviving anchor must not be checked alone"
+        );
+        assert_eq!(found.uncheckable.len(), 1, "got: {found:?}");
+        assert!(
+            found.uncheckable[0].message().contains("a null"),
+            "got: {}",
+            found.uncheckable[0].message()
+        );
+    }
+
+    /// `claiming_schema` plus a nested `Query` class carrying its own
+    /// `anchors`/`via`, so claims can sit below the dataset root — where
+    /// a value that fits no slot kind loads as unusable rather than as a
+    /// container-slot reference.
+    fn query_claiming_schema() -> SchemaDefinition {
+        let mut schema = claiming_schema();
+        let mut id = crate::linkml::SlotDefinition::new("id");
+        id.identifier = true;
+        let mut query = crate::linkml::ClassDefinition::new("Query");
+        query.attributes.insert("id".to_string(), id);
+        let mut anchors = crate::linkml::SlotDefinition::new("anchors");
+        anchors.range = Some("DomainRecord".to_string());
+        anchors.multivalued = true;
+        query.attributes.insert("anchors".to_string(), anchors);
+        let mut via = crate::linkml::SlotDefinition::new("via");
+        via.range = Some("uri".to_string());
+        query.attributes.insert("via".to_string(), via);
+        schema.classes.insert("Query".to_string(), query);
+        let bench = schema.classes.get_mut("Bench").unwrap();
+        let mut queries = crate::linkml::SlotDefinition::new("queries");
+        queries.range = Some("Query".to_string());
+        queries.multivalued = true;
+        bench.attributes.insert("queries".to_string(), queries);
+        schema
+    }
+
+    /// A slot value that is neither a reference nor an IRI scalar makes
+    /// the claim uncheckable: dropping the value would silently evaluate
+    /// a stronger claim than authored.
+    #[test]
+    fn a_malformed_anchor_or_via_makes_the_claim_uncheckable() {
+        let sibling_schema = linked_sibling_schema();
+        let sibling = scoped_set(&sibling_schema, LINKED_DATA);
+        let schema = query_claiming_schema();
+
+        let bad_anchor = scoped_set(
+            &schema,
+            "id: b1\nqueries:\n  - {id: q1, anchors: ['cellar:w1', 42]}\n",
+        );
+        let found = unverified_absences(
+            &schema,
+            &bad_anchor,
+            "anchors",
+            None,
+            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+        );
+        assert_eq!(found.claims, 0);
+        assert_eq!(found.unverified, vec![], "no claim to contradict");
+        assert_eq!(found.uncheckable.len(), 1, "got: {found:?}");
+        assert!(
+            found.uncheckable[0]
+                .message()
+                .contains("a number, not a reference or IRI"),
+            "got: {}",
+            found.uncheckable[0].message()
+        );
+
+        let bad_via = scoped_set(
+            &schema,
+            "id: b1\nqueries:\n  - {id: q1, anchors: ['cellar:f1'], via: {oops: 1}}\n",
+        );
+        let found = unverified_absences(
+            &schema,
+            &bad_via,
+            "anchors",
+            Some("via"),
+            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+        );
+        assert_eq!(found.claims, 0);
+        assert_eq!(
+            found.unverified,
+            vec![],
+            "the unnarrowed claim must not be evaluated in the narrowed one's place"
+        );
+        assert_eq!(found.uncheckable.len(), 1, "got: {found:?}");
+        assert!(
+            found.uncheckable[0]
+                .message()
+                .contains("an object, not a class"),
+            "got: {}",
+            found.uncheckable[0].message()
         );
     }
 
