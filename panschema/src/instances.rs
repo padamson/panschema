@@ -47,7 +47,8 @@ pub enum InstanceValue {
     /// A reference to another instance by id. `held` marks the edge as
     /// containment rather than citation: the target was materialized at
     /// this edge (an inlined mapping), or the slot is one of the dataset
-    /// container's collection slots. A held edge is still a reference
+    /// container's single-class collection slots (a union-ranged container
+    /// slot follows the record-level rules). A held edge is still a reference
     /// for range and integrity checks; consumers asking "who cites this
     /// record" skip held edges. Restating an already-materialized record
     /// as an inline mapping is a citation, not containment.
@@ -332,7 +333,17 @@ impl InstanceSet {
             top_level_seen: std::collections::HashSet::new(),
             duplicate_ids: Vec::new(),
             undeclared_fields: Vec::new(),
+            slot_names_by_class: std::collections::BTreeMap::new(),
         };
+        // Whether the container authors a value for its declared identifier
+        // — decided up front because it routes union-ranged container
+        // slots below, and later gates whether a container record emits.
+        let authored_identifier = root_resolved
+            .iter()
+            .find(|(_, rs)| rs.definition.identifier)
+            .and_then(|(name, _)| container.get(serde_norway::Value::String(name.clone())))
+            .and_then(scalar_value)
+            .is_some();
         // What each class-ranged container slot carried, so a root that is
         // itself a record can reference those records under that slot's
         // name — each id paired with whether the edge is containment.
@@ -384,11 +395,17 @@ impl InstanceSet {
                 };
                 contained.push((slot_name.to_string(), ids));
             } else if !class_targets.is_empty() {
-                // Several class targets: which class an entry belongs to is
-                // ambiguous, so the field replays through the record builder,
-                // which cites strings by id and records a mapping as unusable
-                // rather than guessing.
-                root_fields.insert(key.clone(), value.clone());
+                if authored_identifier {
+                    // Several class targets: the record builder replays the
+                    // field on the emitted container, letting the authored
+                    // keys choose each mapping's member and recording what
+                    // nothing names as unusable.
+                    root_fields.insert(key.clone(), value.clone());
+                } else {
+                    // No container record will exist to replay through, but
+                    // the records are still data — build them.
+                    loader.collect_union_records(&class_targets, value);
+                }
             } else if let Some(scalar) = scalar_value(value) {
                 metadata.push((slot_name.to_string(), scalar_to_display(&scalar)));
                 root_fields.insert(key.clone(), value.clone());
@@ -417,12 +434,6 @@ impl InstanceSet {
         // the instance count, and every key-scoped IRI with it.
         let mut emitted_root_id: Option<String> = None;
         let mut root_collision: Option<String> = None;
-        let authored_identifier = root_resolved
-            .iter()
-            .find(|(_, rs)| rs.definition.identifier)
-            .is_some_and(|(name, _)| {
-                root_fields.contains_key(serde_norway::Value::String(name.clone()))
-            });
         if authored_identifier {
             let root_value = serde_norway::Value::Mapping(root_fields);
             match loader.build_record(root_name, None, &root_value) {
@@ -588,7 +599,7 @@ pub fn select_tree_root(
     }
 
     let keys: Vec<&str> = container.keys().filter_map(|k| k.as_str()).collect();
-    let mut scored: Vec<(usize, &String)> = roots
+    let scored: Vec<(usize, &String)> = roots
         .iter()
         .map(|(name, class)| {
             let slots = crate::linkml_resolve::resolve_effective_slots(class, schema);
@@ -596,16 +607,28 @@ pub fn select_tree_root(
             (matched, *name)
         })
         .collect();
-    scored.sort_by_key(|(matched, _)| std::cmp::Reverse(*matched));
-
-    let best = scored[0].0;
-    let winners = scored.iter().filter(|(score, _)| *score == best).count();
-    if best == 0 || winners > 1 {
-        let mut candidates: Vec<String> = roots.iter().map(|(name, _)| (*name).clone()).collect();
-        candidates.sort();
-        return RootSelection::Ambiguous(candidates);
+    match unique_best_scored(&scored) {
+        Some(name) => RootSelection::Chosen((*name).clone()),
+        None => {
+            let mut candidates: Vec<String> =
+                roots.iter().map(|(name, _)| (*name).clone()).collect();
+            candidates.sort();
+            RootSelection::Ambiguous(candidates)
+        }
     }
-    RootSelection::Chosen(scored[0].1.clone())
+}
+
+/// The candidate scoring strictly highest — the one rule for letting
+/// authored keys choose a class, shared by dataset-root selection and
+/// inline-union disambiguation. Callers pass two or more candidates, so a
+/// field where nothing matched is a tie and yields `None`.
+fn unique_best_scored<T>(scored: &[(usize, T)]) -> Option<&T> {
+    let best = scored.iter().map(|(score, _)| *score).max()?;
+    let mut winners = scored.iter().filter(|(score, _)| *score == best);
+    match (winners.next(), winners.next()) {
+        (Some((_, one)), None) => Some(one),
+        _ => None,
+    }
 }
 
 /// Walks a LinkML instance-data tree, accumulating typed records.
@@ -620,6 +643,10 @@ struct LinkmlLoader<'a> {
     top_level_seen: std::collections::HashSet<String>,
     duplicate_ids: Vec<String>,
     undeclared_fields: Vec<UndeclaredField>,
+    /// Effective slot names per class, resolved once per dataset — union
+    /// disambiguation consults these per authored mapping, and the full
+    /// inheritance walk is too costly to repeat per record.
+    slot_names_by_class: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
 }
 
 impl LinkmlLoader<'_> {
@@ -701,6 +728,76 @@ impl LinkmlLoader<'_> {
 
     /// Record a top-level record's id; a second use of an id already claimed by
     /// a top-level record is a duplicate identifier (listed once).
+    /// How many of `keys` are effective slots of `class_name`, resolving
+    /// (and memoizing) the class's slot names on first use.
+    fn key_match_count(&mut self, class_name: &str, keys: &[&str]) -> usize {
+        if !self.slot_names_by_class.contains_key(class_name) {
+            let names = self
+                .schema
+                .classes
+                .get(class_name)
+                .map(|class| {
+                    crate::linkml_resolve::resolve_effective_slots(class, self.schema)
+                        .into_keys()
+                        .collect()
+                })
+                .unwrap_or_default();
+            self.slot_names_by_class
+                .insert(class_name.to_string(), names);
+        }
+        let slots = &self.slot_names_by_class[class_name];
+        keys.iter().filter(|k| slots.contains(**k)).count()
+    }
+
+    /// The union member the authored keys name. Branches repeating one
+    /// class are one candidate; a lone candidate builds regardless of its
+    /// keys, exactly as a plain single-class range does; otherwise the
+    /// member matching the most keys wins, and a tie — or no key matching
+    /// any member — stays ambiguous.
+    fn disambiguate_class(
+        &mut self,
+        candidates: &[&String],
+        map: &serde_norway::Mapping,
+    ) -> Option<String> {
+        let mut seen = std::collections::BTreeSet::new();
+        let unique: Vec<&str> = candidates
+            .iter()
+            .map(|c| c.as_str())
+            .filter(|c| seen.insert(*c))
+            .collect();
+        if let [one] = unique.as_slice() {
+            return Some((*one).to_string());
+        }
+        let keys: Vec<&str> = map.keys().filter_map(|k| k.as_str()).collect();
+        let scored: Vec<(usize, &str)> = unique
+            .into_iter()
+            .map(|name| (self.key_match_count(name, &keys), name))
+            .collect();
+        unique_best_scored(&scored).map(|name| (*name).to_string())
+    }
+
+    /// Build the records of a union-ranged container slot when no
+    /// container record will exist to replay them through: a mapping
+    /// naming one member materializes; nothing else has a holder to be
+    /// recorded on.
+    fn collect_union_records(&mut self, candidates: &[&String], value: &serde_norway::Value) {
+        match value {
+            serde_norway::Value::Sequence(items) => {
+                for item in items {
+                    self.collect_union_records(candidates, item);
+                }
+            }
+            serde_norway::Value::Mapping(map) => {
+                if let Some(class) = self.disambiguate_class(candidates, map)
+                    && let Some((id, _)) = self.build_record(&class, None, value)
+                {
+                    self.note_top_level_id(id);
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Record `id` as claimed by more than one record, listed once.
     fn note_duplicate_id(&mut self, id: String) {
         if !self.duplicate_ids.contains(&id) {
@@ -916,9 +1013,11 @@ impl LinkmlLoader<'_> {
     /// graph draws edges and the integrity pass can check the targets. A
     /// union mixing classes with types or enums keeps strings as scalars —
     /// a string could legitimately be either, and validate resolves the
-    /// ambiguity per branch. An inlined object is only built when exactly
-    /// one range target is a class; with several it is ambiguous which one
-    /// the author meant.
+    /// ambiguity per branch. An inlined object is built when its authored
+    /// fields name one class target — one range class, or the union member
+    /// matching the most authored keys; a mapping that fits several
+    /// members equally, or none at all, is recorded as unusable rather
+    /// than built by guessing.
     fn ingest_field(
         &mut self,
         slot: &str,
@@ -988,12 +1087,22 @@ impl LinkmlLoader<'_> {
 
         match value {
             // An inlined mapping is its own record; recurse and edge to it.
-            // With several class targets it is ambiguous which one the author
-            // meant, so it falls through to be recorded as unusable.
-            serde_norway::Value::Mapping(_) if class_targets.len() == 1 => {
-                let class = class_targets[0].clone();
-                if let Some((target, materialized)) = self.build_record(&class, None, value) {
-                    reference_to(target, materialized, references, slot_values);
+            // At a union, the authored fields choose the class; when they
+            // don't choose one member, the mapping is recorded as unusable
+            // rather than built by guessing.
+            serde_norway::Value::Mapping(map) => {
+                match self.disambiguate_class(&class_targets, map) {
+                    Some(class) => {
+                        if let Some((target, materialized)) = self.build_record(&class, None, value)
+                        {
+                            reference_to(target, materialized, references, slot_values);
+                        }
+                    }
+                    None => push_slot_value(
+                        slot_values,
+                        slot,
+                        InstanceValue::Unexpected(yaml_kind(value)),
+                    ),
                 }
             }
             // A string at an all-class range references a record by id.
@@ -2734,6 +2843,195 @@ classes:
             set.duplicate_ids,
             vec!["dup"],
             "the second shelf's authored content was discarded, which must be reported"
+        );
+    }
+
+    const CLASS_UNION_SCHEMA: &str = "\
+name: Estate
+default_range: string
+classes:
+  Root:
+    tree_root: true
+    attributes:
+      id:
+        identifier: true
+      links:
+        range: Link
+        multivalued: true
+  Link:
+    attributes:
+      id:
+        identifier: true
+      related:
+        any_of:
+          - range: Shelf
+          - range: Crate
+  Shelf:
+    attributes:
+      id:
+        identifier: true
+      held:
+        range: string
+  Crate:
+    attributes:
+      id:
+        identifier: true
+      weight:
+        range: integer
+";
+
+    #[test]
+    fn an_inline_mapping_at_a_class_union_builds_when_fields_disambiguate() {
+        let schema: SchemaDefinition = serde_norway::from_str(CLASS_UNION_SCHEMA).expect("schema");
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: est\nlinks:\n  - {id: l1, related: {id: s1, held: aisle-3}}\n",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        let s1 = set
+            .instances
+            .iter()
+            .find(|i| i.id == "s1")
+            .unwrap_or_else(|| panic!("s1 built as the one covering member; got: {set:?}"));
+        assert_eq!(s1.types, vec!["Shelf"], "held names Shelf, not Crate");
+        let l1 = set.instances.iter().find(|i| i.id == "l1").expect("l1");
+        assert_eq!(
+            l1.slot_values
+                .iter()
+                .find(|sv| sv.slot == "related")
+                .expect("related recorded")
+                .values,
+            [InstanceValue::Reference {
+                target: "s1".to_string(),
+                held: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn an_inline_mapping_no_single_union_member_covers_stays_unusable() {
+        let schema: SchemaDefinition = serde_norway::from_str(CLASS_UNION_SCHEMA).expect("schema");
+        // `{id}` fits Shelf and Crate equally, so the class stays ambiguous.
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: est\nlinks:\n  - {id: l1, related: {id: a1}}\n")
+                .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            !set.instances.iter().any(|i| i.id == "a1"),
+            "no record is built by guessing a class"
+        );
+        let l1 = set.instances.iter().find(|i| i.id == "l1").expect("l1");
+        assert_eq!(
+            l1.slot_values
+                .iter()
+                .find(|sv| sv.slot == "related")
+                .expect("related recorded")
+                .values,
+            [InstanceValue::Unexpected("an object")]
+        );
+    }
+
+    #[test]
+    fn an_extra_key_does_not_forfeit_a_union_member_that_fits_best() {
+        let schema: SchemaDefinition = serde_norway::from_str(CLASS_UNION_SCHEMA).expect("schema");
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: est\nlinks:\n  - {id: l1, related: {id: s1, held: aisle-3, note: oops}}\n",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        let s1 = set
+            .instances
+            .iter()
+            .find(|i| i.id == "s1")
+            .unwrap_or_else(|| panic!("held names Shelf over Crate; got: {set:?}"));
+        assert_eq!(s1.types, vec!["Shelf"]);
+        assert!(
+            set.undeclared_fields
+                .iter()
+                .any(|f| f.record == "s1" && f.field == "note"),
+            "the unknown field is a named diagnostic, not a forfeit; got: {:?}",
+            set.undeclared_fields
+        );
+    }
+
+    #[test]
+    fn duplicate_union_branches_naming_one_class_still_build() {
+        const REPEATED_BRANCH_SCHEMA: &str = "\
+name: Estate
+default_range: string
+classes:
+  Root:
+    tree_root: true
+    attributes:
+      id:
+        identifier: true
+      links:
+        range: Link
+        multivalued: true
+  Link:
+    attributes:
+      id:
+        identifier: true
+      related:
+        any_of:
+          - range: Shelf
+          - range: Shelf
+  Shelf:
+    attributes:
+      id:
+        identifier: true
+      held:
+        range: string
+";
+        let schema: SchemaDefinition =
+            serde_norway::from_str(REPEATED_BRANCH_SCHEMA).expect("schema");
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: est\nlinks:\n  - {id: l1, related: {id: s1, held: aisle-3}}\n",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            set.instances.iter().any(|i| i.id == "s1"),
+            "one class repeated across branches is one candidate; got: {:?}",
+            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_vessel_rooted_union_collection_still_builds_its_records() {
+        const VESSEL_UNION_SCHEMA: &str = "\
+name: Estate
+default_range: string
+classes:
+  Root:
+    tree_root: true
+    attributes:
+      things:
+        multivalued: true
+        any_of:
+          - range: Shelf
+          - range: Crate
+  Shelf:
+    attributes:
+      id:
+        identifier: true
+      held:
+        range: string
+  Crate:
+    attributes:
+      id:
+        identifier: true
+      weight:
+        range: integer
+";
+        let schema: SchemaDefinition = serde_norway::from_str(VESSEL_UNION_SCHEMA).expect("schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("things:\n  - {id: s1, held: aisle-3}\n").expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            set.instances.iter().any(|i| i.id == "s1"),
+            "no container exists to hold it, but the record is data; got: {:?}",
+            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
         );
     }
 

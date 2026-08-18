@@ -174,6 +174,20 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
                         } else {
                             ranges.join(" or ")
                         };
+                        // An object at a union of classes is the right shape
+                        // — what failed is that its fields name no single
+                        // member — so saying the kind is invalid would send
+                        // the author looking in the wrong place.
+                        if *kind == "an object"
+                            && ranges.iter().any(|r| schema.classes.contains_key(r))
+                        {
+                            push(format!(
+                                "slot `{slot_name}` (class `{class_name}`) has an object whose \
+                                 fields name no one of its class ranges `{range}`; give it a \
+                                 field that only the intended one declares"
+                            ));
+                            continue;
+                        }
                         push(format!(
                             "slot `{slot_name}` (class `{class_name}`) has {kind} value, which isn't valid for its range `{range}`"
                         ));
@@ -695,6 +709,25 @@ classes:
 
     fn data(yaml: &str) -> Value {
         serde_norway::from_str(yaml).expect("parse data")
+    }
+
+    #[test]
+    fn an_ambiguous_union_mapping_says_the_fields_name_no_member() {
+        let schema: crate::linkml::SchemaDefinition = serde_norway::from_str(
+            "name: s\nclasses:\n  Root:\n    tree_root: true\n    attributes:\n      id:\n        identifier: true\n      related:\n        any_of:\n          - range: Shelf\n          - range: Crate\n  Shelf:\n    attributes:\n      id:\n        identifier: true\n      held:\n        range: string\n  Crate:\n    attributes:\n      id:\n        identifier: true\n      weight:\n        range: integer\n",
+        )
+        .expect("parse schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: r1\nrelated: {id: a1}\n").expect("parse data");
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        let violations = validate_instances(&schema, &set);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.detail.contains("name no one of its class ranges")),
+            "the report must point at the fields, not call an object invalid for a class range; got: {:?}",
+            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+        );
     }
 
     #[test]
