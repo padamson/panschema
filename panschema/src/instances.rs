@@ -321,9 +321,10 @@ impl InstanceSet {
             duplicate_ids: Vec::new(),
             undeclared_fields: Vec::new(),
         };
-        // What each container slot held, so a root that is itself a record
-        // can reference the records it contains under that slot's name.
-        let mut contained: Vec<(String, Vec<String>)> = Vec::new();
+        // What each class-ranged container slot carried, so a root that is
+        // itself a record can reference those records under that slot's
+        // name — each id paired with whether the edge is containment.
+        let mut contained: Vec<(String, Vec<(String, bool)>)> = Vec::new();
         // The root's own non-collection fields, replayed through the normal
         // record builder rather than reimplementing id/label/scalar handling.
         let mut root_fields = serde_norway::Mapping::new();
@@ -348,7 +349,17 @@ impl InstanceSet {
             // the record builder like any record's values, and shows in
             // the metadata as the joined list.
             if schema.classes.contains_key(&range) {
-                let ids = loader.collect_collection(&range, value);
+                let ids = if slot.multivalued {
+                    // A collection holds its records by role, however each
+                    // entry is spelled.
+                    loader
+                        .collect_collection(&range, value)
+                        .into_iter()
+                        .map(|id| (id, true))
+                        .collect()
+                } else {
+                    loader.collect_single(&range, value)
+                };
                 contained.push((slot_name.to_string(), ids));
             } else if let Some(scalar) = scalar_value(value) {
                 metadata.push((slot_name.to_string(), scalar_to_display(&scalar)));
@@ -381,7 +392,7 @@ impl InstanceSet {
             {
                 emitted_root_id = Some(root_id.clone());
                 for (slot, ids) in &contained {
-                    for id in ids {
+                    for (id, held) in ids {
                         inst.references.push(Reference {
                             property: slot.clone(),
                             target: id.clone(),
@@ -390,11 +401,9 @@ impl InstanceSet {
                         push_slot_value(
                             &mut inst.slot_values,
                             slot,
-                            // A container's collection slots hold their
-                            // records by role, however each entry is spelled.
                             InstanceValue::Reference {
                                 target: id.clone(),
-                                held: true,
+                                held: *held,
                             },
                         );
                     }
@@ -644,6 +653,34 @@ impl LinkmlLoader<'_> {
     fn note_top_level_id(&mut self, id: String) {
         if !self.top_level_seen.insert(id.clone()) && !self.duplicate_ids.contains(&id) {
             self.duplicate_ids.push(id);
+        }
+    }
+
+    /// One record at a single-valued class-ranged container slot: an inline
+    /// mapping materializes that record (containment), a bare scalar cites
+    /// an existing record by id. A sequence recurses per element, so an
+    /// authored arity mistake stays visible to validation instead of
+    /// vanishing.
+    fn collect_single(
+        &mut self,
+        class_name: &str,
+        value: &serde_norway::Value,
+    ) -> Vec<(String, bool)> {
+        match value {
+            serde_norway::Value::Sequence(items) => items
+                .iter()
+                .flat_map(|item| self.collect_single(class_name, item))
+                .collect(),
+            serde_norway::Value::Mapping(_) => self
+                .build_record(class_name, None, value)
+                .map(|(id, materialized)| {
+                    self.note_top_level_id(id.clone());
+                    vec![(id, materialized)]
+                })
+                .unwrap_or_default(),
+            other => scalar_value(other)
+                .map(|s| vec![(scalar_to_display(&s), false)])
+                .unwrap_or_default(),
         }
     }
 
@@ -2492,6 +2529,95 @@ nodes:
                 },
             ],
             "an inlined element's edge is containment; by-id elements are citations"
+        );
+    }
+
+    const SHELVED_SCHEMA: &str = "\
+name: Estate
+default_range: string
+classes:
+  Root:
+    tree_root: true
+    attributes:
+      id:
+        identifier: true
+      shelves:
+        range: Shelf
+        multivalued: true
+      main_shelf:
+        range: Shelf
+  Shelf:
+    attributes:
+      id:
+        identifier: true
+      held:
+        range: Item
+        multivalued: true
+  Item:
+    attributes:
+      id:
+        identifier: true
+";
+
+    /// A single-valued class-ranged container slot holds one record: an
+    /// inline mapping materializes that record — never one phantom
+    /// record per field — and the container's edge to it is containment.
+    #[test]
+    fn a_single_valued_container_slot_materializes_its_record() {
+        let schema: SchemaDefinition = serde_norway::from_str(SHELVED_SCHEMA).expect("schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: est\nmain_shelf:\n  id: s1\n  held:\n    - {id: w1}\n")
+                .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+
+        let mut ids: Vec<&str> = set.instances.iter().map(|i| i.id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec!["est", "s1", "w1"], "no per-field phantom records");
+        let root = set.instances.iter().find(|i| i.id == "est").expect("est");
+        assert_eq!(
+            root.slot_values
+                .iter()
+                .find(|sv| sv.slot == "main_shelf")
+                .expect("main_shelf recorded")
+                .values,
+            [InstanceValue::Reference {
+                target: "s1".to_string(),
+                held: true,
+            }],
+            "the container's edge to the record it materialized is containment"
+        );
+    }
+
+    /// A bare id at a single-valued class-ranged container slot cites an
+    /// existing record: the edge survives as a citation instead of
+    /// vanishing.
+    #[test]
+    fn a_single_valued_container_slot_cites_by_id() {
+        let schema: SchemaDefinition = serde_norway::from_str(SHELVED_SCHEMA).expect("schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: est\nshelves:\n  - {id: s1}\nmain_shelf: s1\n")
+                .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+
+        let root = set.instances.iter().find(|i| i.id == "est").expect("est");
+        assert_eq!(
+            root.slot_values
+                .iter()
+                .find(|sv| sv.slot == "main_shelf")
+                .expect("main_shelf recorded")
+                .values,
+            [InstanceValue::Reference {
+                target: "s1".to_string(),
+                held: false,
+            }],
+            "citing an existing record by id is not containment"
+        );
+        assert!(
+            root.references
+                .iter()
+                .any(|r| r.property == "main_shelf" && r.target == "s1"),
+            "the citation draws a display edge; got: {:?}",
+            root.references
         );
     }
 }
