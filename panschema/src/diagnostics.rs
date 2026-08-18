@@ -543,9 +543,35 @@ pub fn minted_instance_iris(
         .collect()
 }
 
+/// A reference landing in no namespace any resolve-against sibling owns
+/// — outside the check's jurisdiction by design, surfaced for the opt-in
+/// coverage gate so a typo'd namespace cannot pass as an outside
+/// vocabulary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UncoveredSiblingReference {
+    /// The referring record's id.
+    pub referrer: String,
+    /// The slot carrying the reference.
+    pub property: String,
+    /// The reference as authored (CURIE or absolute IRI).
+    pub target: String,
+}
+
+impl UncoveredSiblingReference {
+    pub fn message(&self) -> String {
+        format!(
+            "instance `{}`: `{}` references `{}`, which lands in no namespace covered by \
+             resolve_against",
+            self.referrer, self.property, self.target
+        )
+    }
+}
+
 /// What a `resolve_against` pass found in one dataset: how many external
-/// references target a sibling-owned namespace at all, and which of those
-/// no sibling record mints.
+/// references target a sibling-owned namespace at all, which of those no
+/// sibling record mints, and which references fall outside every owned
+/// namespace — one classification pass, so the jurisdiction rule cannot
+/// drift between the resolution check and the coverage gate.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SiblingResolution {
     /// External references whose expanded IRI falls in a sibling-owned
@@ -553,6 +579,9 @@ pub struct SiblingResolution {
     pub checked: usize,
     /// The checked references no sibling-minted IRI matches.
     pub unresolved: Vec<UnresolvedSiblingReference>,
+    /// References landing in no owned namespace. Unchecked by design;
+    /// the coverage gate reports them when opted in.
+    pub uncovered: Vec<UncoveredSiblingReference>,
 }
 
 /// Resolve `set`'s external references against sibling datasets.
@@ -578,6 +607,11 @@ pub fn resolve_sibling_references(
             .iter()
             .any(|ns| expanded.starts_with(ns.as_str()))
         {
+            resolution.uncovered.push(UncoveredSiblingReference {
+                referrer: r.referrer.clone(),
+                property: r.property.clone(),
+                target: r.target.clone(),
+            });
             continue;
         }
         resolution.checked += 1;
@@ -2302,6 +2336,17 @@ mod tests {
             "only the cellar-namespace reference is in jurisdiction"
         );
         assert_eq!(r.unresolved, vec![], "and it resolves");
+        assert_eq!(
+            r.uncovered.len(),
+            1,
+            "the out-of-jurisdiction reference is classified in the same pass"
+        );
+        assert_eq!(r.uncovered[0].target, "https://schema.org/Thing");
+        assert!(
+            r.uncovered[0].message().contains("no namespace covered"),
+            "got: {}",
+            r.uncovered[0].message()
+        );
     }
 
     #[test]

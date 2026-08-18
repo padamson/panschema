@@ -6,7 +6,7 @@ bare no-subcommand form.
 | Subcommand | What it does |
 |---|---|
 | `generate` | Render a schema to an output format. With no `--schema`, discovers `panschema.toml` and generates every manifested schema |
-| `validate` | Check a LinkML **instance-data** file against a schema. Exits non-zero listing every violation. *Not* schema-vs-metaschema validation |
+| `validate` | With `--schema`/`--data`: check a LinkML **instance-data** file against a schema, exiting non-zero listing every violation. With **no flags**: read `panschema.toml` and check everything it declares — conformance, cross-graph resolution, stated absences — writing nothing; findings warn, `--strict` fails on them. *Not* schema-vs-metaschema validation |
 | `migrate` | Write the schema's Postgres DDL as a versioned migration file. Writes files only — it never connects to a database |
 | `publish` | Build versioned HTML docs per git ref, per `[publishing]` in `panschema-publish.toml` |
 | `serve` | Hot-reload dev server for HTML output |

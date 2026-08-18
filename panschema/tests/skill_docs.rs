@@ -133,6 +133,13 @@ fn every_generate_manifest_key_is_documented() {
              from the manifest reference"
         );
     }
+    for key in panschema::manifest::CheckConfig::key_names() {
+        assert!(
+            doc.contains(key.as_str()),
+            "`[check]` key `{key}` is accepted by the parser but absent \
+             from the manifest reference"
+        );
+    }
 }
 
 #[test]

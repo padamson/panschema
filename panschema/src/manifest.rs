@@ -35,10 +35,47 @@ pub struct Manifest {
     /// Per-schema codegen configuration, keyed by the same name as `schemas`.
     #[serde(default)]
     pub generate: BTreeMap<String, GenerateConfig>,
+    /// Per-schema check policy, keyed by the same name as `schemas` — what
+    /// bare `validate` checks, and what `generate --strict` additionally
+    /// refuses to ship for entries it generates.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub check: BTreeMap<String, CheckConfig>,
     /// Per-prefix overrides for the upstream-label source URL,
     /// keyed by prefix name. Entries win over the built-in map.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub label_sources: BTreeMap<String, String>,
+}
+
+impl Manifest {
+    /// The datasets declared for `name`: the union of the
+    /// `[generate.<name>]` and `[check.<name>]` lists, generate's first,
+    /// each path once. Both commands consume the union — conformance and
+    /// cross-graph checks cover everything declared, so a check list can
+    /// only add datasets, never hide the ones `generate` ships.
+    pub fn declared_instances(&self, name: &str) -> Vec<PathBuf> {
+        let mut out: Vec<PathBuf> = Vec::new();
+        let lists = [
+            self.generate.get(name).map(|g| &g.instances),
+            self.check.get(name).map(|c| &c.instances),
+        ];
+        for path in lists.into_iter().flatten().flatten() {
+            if !out.contains(path) {
+                out.push(path.clone());
+            }
+        }
+        out
+    }
+
+    /// `[check.<name>]` entries naming no `[schemas]` entry — check
+    /// policy nothing will ever run, which every manifest-driven command
+    /// treats as a configuration error rather than a silent no-op.
+    pub fn orphan_check_entries(&self) -> Vec<&str> {
+        self.check
+            .keys()
+            .filter(|name| !self.schemas.contains_key(*name))
+            .map(String::as_str)
+            .collect()
+    }
 }
 
 /// One entry under `[schemas]` — declares where a schema package lives.
@@ -163,14 +200,45 @@ pub struct GenerateConfig {
     /// leaves it alone — `panschema migrate` is what writes into it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub migrations: Option<PathBuf>,
-    /// Sibling `[generate.<name>]` entries whose datasets this entry's
-    /// external references must resolve into. A cross-graph reference —
-    /// an absolute IRI, or a CURIE against a declared prefix — is exempt
-    /// from the within-dataset dangling check by design; this key closes
-    /// the loop when the referenced graph lives in the same manifest:
-    /// every external reference landing in a namespace a listed sibling
-    /// owns must equal an IRI that sibling's datasets mint, computed by
-    /// the sibling's own minting rules (`key`-scoped records mint beneath
+}
+
+/// The `verify_absences` binding: which slots of the referring schema
+/// carry an absence claim.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerifyAbsences {
+    /// The reference slot listing the anchors claimed unconnected — two
+    /// or more claimed unjoined, a single one claimed unreferenced.
+    pub slot: String,
+    /// Optional slot whose value names (as a URI in the sibling's schema)
+    /// the class a joining record would belong to — narrowing the claim
+    /// from "no record of any kind" to one kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
+}
+
+/// The `[check.<name>]` table — validation policy for one schema's
+/// datasets, deliberately separate from `[generate.<name>]` so checking
+/// never requires declaring an output and the policy survives deleting a
+/// generate block. Bare `validate` runs everything here; `generate
+/// --strict` also refuses to ship what these checks reject for entries
+/// it generates.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct CheckConfig {
+    /// Datasets to check, unioned with the `[generate.<name>]` entry's
+    /// `instances` list — a checked-and-generated schema declares its
+    /// datasets once, and this list can add to them but never hide them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub instances: Vec<PathBuf>,
+    /// Sibling entries whose datasets this entry's external references
+    /// must resolve into. A cross-graph reference — an absolute IRI, or a
+    /// CURIE against a declared prefix — is exempt from the
+    /// within-dataset dangling check by design; this key closes the loop
+    /// when the referenced graph lives in the same manifest: every
+    /// external reference landing in a namespace a listed sibling owns
+    /// must equal an IRI that sibling's datasets mint, computed by the
+    /// sibling's own minting rules (`key`-scoped records mint beneath
     /// their dataset root, not at `namespace + id`). References into
     /// namespaces no sibling owns stay unchecked, so a dataset can still
     /// cite outside vocabularies. Unresolved references warn; `--strict`
@@ -188,21 +256,43 @@ pub struct GenerateConfig {
     /// `resolve_against`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verify_absences: Option<VerifyAbsences>,
+    /// Require every external reference to land in a namespace some
+    /// `resolve_against` sibling owns. Off, references into outside
+    /// vocabularies stay unchecked by design; on, a typo'd namespace —
+    /// which otherwise reads as an outside vocabulary and escapes every
+    /// check — warns, and `--strict` fails on it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub require_namespace_coverage: bool,
 }
 
-/// The `verify_absences` binding: which slots of the referring schema
-/// carry an absence claim.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct VerifyAbsences {
-    /// The reference slot listing the anchors claimed unconnected — two
-    /// or more claimed unjoined, a single one claimed unreferenced.
-    pub slot: String,
-    /// Optional slot whose value names (as a URI in the sibling's schema)
-    /// the class a joining record would belong to — narrowing the claim
-    /// from "no record of any kind" to one kind.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub via: Option<String>,
+impl CheckConfig {
+    /// Every key a `[check.<name>]` table accepts, as it must be spelled
+    /// in TOML — same derivation as [`GenerateConfig::key_names`].
+    pub fn key_names() -> Vec<String> {
+        key_names_of(&CheckConfig {
+            instances: vec![PathBuf::from("x")],
+            resolve_against: vec!["x".to_string()],
+            verify_absences: Some(VerifyAbsences {
+                slot: "x".to_string(),
+                via: Some("x".to_string()),
+            }),
+            require_namespace_coverage: true,
+        })
+    }
+}
+
+/// The top-level TOML keys a fully-populated config table serializes to.
+/// Through `toml::Value` rather than serialized text, so a table-valued
+/// key (which serializes as its own `[section]`, not a `key = value`
+/// line) is still listed as the top-level key it is.
+fn key_names_of<T: Serialize>(populated: &T) -> Vec<String> {
+    let value = toml::Value::try_from(populated).expect("config serializes");
+    value
+        .as_table()
+        .expect("a struct serializes as a table")
+        .keys()
+        .cloned()
+        .collect()
 }
 
 impl GenerateConfig {
@@ -229,22 +319,8 @@ impl GenerateConfig {
             graph_json: Some(PathBuf::from("x")),
             instance_graph_json: Some(PathBuf::from("x")),
             migrations: Some(PathBuf::from("x")),
-            resolve_against: vec!["x".to_string()],
-            verify_absences: Some(VerifyAbsences {
-                slot: "x".to_string(),
-                via: Some("x".to_string()),
-            }),
         };
-        // Through `toml::Value` rather than serialized text, so a
-        // table-valued key (which serializes as its own `[section]`, not a
-        // `key = value` line) is still listed as the top-level key it is.
-        let value = toml::Value::try_from(&populated).expect("GenerateConfig serializes");
-        value
-            .as_table()
-            .expect("a struct serializes as a table")
-            .keys()
-            .cloned()
-            .collect()
+        key_names_of(&populated)
     }
 }
 
@@ -1286,6 +1362,90 @@ x = { path = "./x-pkg" }
     }
 
     #[test]
+    fn declared_instances_unions_generate_and_check_lists() {
+        let manifest: Manifest = toml::from_str(
+            r#"
+[schemas]
+x = { path = "./x" }
+
+[generate.x]
+instances = ["a.yaml", "b.yaml"]
+
+[check.x]
+instances = ["b.yaml", "c.yaml"]
+"#,
+        )
+        .expect("parse");
+        assert_eq!(
+            manifest.declared_instances("x"),
+            vec![
+                PathBuf::from("a.yaml"),
+                PathBuf::from("b.yaml"),
+                PathBuf::from("c.yaml")
+            ],
+            "generate's list first, check's additions after, shared paths once"
+        );
+        assert_eq!(
+            manifest.declared_instances("ghost"),
+            Vec::<PathBuf>::new(),
+            "an undeclared name declares nothing"
+        );
+    }
+
+    #[test]
+    fn declared_instances_reads_a_check_only_entry() {
+        let manifest: Manifest = toml::from_str(
+            "[schemas]\nx = { path = \"./x\" }\n\n[check.x]\ninstances = [\"c.yaml\"]\n",
+        )
+        .expect("parse");
+        assert_eq!(
+            manifest.declared_instances("x"),
+            vec![PathBuf::from("c.yaml")]
+        );
+    }
+
+    #[test]
+    fn orphan_check_entries_names_only_unmatched_sections() {
+        let manifest: Manifest = toml::from_str(
+            r#"
+[schemas]
+x = { path = "./x" }
+
+[check.x]
+resolve_against = []
+
+[check.ghost]
+resolve_against = []
+"#,
+        )
+        .expect("parse");
+        assert_eq!(manifest.orphan_check_entries(), vec!["ghost"]);
+
+        let matched: Manifest =
+            toml::from_str("[schemas]\nx = { path = \"./x\" }\n\n[check.x]\n").expect("parse");
+        assert_eq!(matched.orphan_check_entries(), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn check_key_names_lists_every_accepted_check_key() {
+        let keys = CheckConfig::key_names();
+        let expected = [
+            "instances",
+            "require_namespace_coverage",
+            "resolve_against",
+            "verify_absences",
+        ];
+        assert_eq!(
+            keys.len(),
+            expected.len(),
+            "every CheckConfig field appears once; got: {keys:?}"
+        );
+        for key in expected {
+            assert!(keys.contains(&key.to_string()), "missing `{key}`");
+        }
+    }
+
+    #[test]
     fn key_names_lists_every_accepted_generate_key() {
         // The agent-facing reference asserts against this list, so an empty
         // or truncated one would make that check pass vacuously. Pin the
@@ -1311,8 +1471,6 @@ x = { path = "./x-pkg" }
             "graph-json",
             "instance-graph-json",
             "migrations",
-            "resolve_against",
-            "verify_absences",
         ];
         for key in expected {
             assert!(

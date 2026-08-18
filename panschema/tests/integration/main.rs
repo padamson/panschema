@@ -1846,6 +1846,8 @@ instances = ["catalog-data.yaml"]
 [generate.bench]
 ttl = "bench.ttl"
 instances = ["bench-data.yaml"]
+
+[check.bench]
 resolve_against = ["catalog"]
 "#,
     )
@@ -1917,6 +1919,8 @@ bench = { path = "./bench-pkg" }
 [generate.bench]
 ttl = "bench.ttl"
 instances = ["bench-data.yaml"]
+
+[check.bench]
 resolve_against = ["catalog"]
 "#,
     )
@@ -1929,8 +1933,8 @@ resolve_against = ["catalog"]
     );
     assert!(
         String::from_utf8_lossy(&scaffolded.stderr)
-            .contains("has no [generate.catalog] block declaring datasets"),
-        "the note names the missing block; got:\n{}",
+            .contains("resolve_against `catalog` declares no `instances`"),
+        "the note names the dataset-less sibling; got:\n{}",
         String::from_utf8_lossy(&scaffolded.stderr)
     );
 
@@ -1944,6 +1948,8 @@ bench = { path = "./bench-pkg" }
 [generate.bench]
 ttl = "bench.ttl"
 instances = ["bench-data.yaml"]
+
+[check.bench]
 resolve_against = ["bench"]
 "#,
     )
@@ -1969,6 +1975,8 @@ bench = { path = "./bench-pkg" }
 [generate.bench]
 ttl = "bench.ttl"
 instances = ["bench-data.yaml"]
+
+[check.bench]
 resolve_against = ["ghost"]
 "#,
     )
@@ -1982,6 +1990,639 @@ resolve_against = ["ghost"]
         String::from_utf8_lossy(&misconfigured.stderr).contains("not a [schemas] entry"),
         "got:\n{}",
         String::from_utf8_lossy(&misconfigured.stderr)
+    );
+}
+
+const UNION_CATALOG_SCHEMA: &str = "id: https://example.org/catalog\nname: catalog\ndefault_prefix: cat\nprefixes:\n  cat: https://example.org/catalog/\nclasses:\n  Estate:\n    tree_root: true\n    slots: [id, providers]\n  Provider:\n    slots: [id, weight]\nslots:\n  id: {identifier: true}\n  weight: {range: integer}\n  providers: {range: Provider, multivalued: true}\n";
+
+const UNION_BENCH_SCHEMA: &str = "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, anchors]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  anchors: {range: DomainRecord, multivalued: true}\n";
+
+fn run_in(consumer: &Path, args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args(args)
+        .current_dir(consumer)
+        .output()
+        .expect("run panschema")
+}
+
+/// `[check.<name>].instances` and `[generate.<name>].instances` are a
+/// union everywhere: conformance covers both lists, and a sibling's
+/// minted universe spans everything it declares.
+#[test]
+fn check_and_generate_instance_lists_are_a_union() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    write_pkg(
+        &consumer.join("catalog-pkg"),
+        "catalog",
+        "1.0.0",
+        "catalog.yaml",
+        UNION_CATALOG_SCHEMA,
+    );
+    write_pkg(
+        &consumer.join("bench-pkg"),
+        "bench",
+        "1.0.0",
+        "bench.yaml",
+        UNION_BENCH_SCHEMA,
+    );
+    // The generate-listed dataset carries the violation and mints the
+    // referenced record; the check-listed one is clean.
+    fs::write(
+        consumer.join("full.yaml"),
+        "id: est1\nproviders:\n  - {id: aws, weight: heavy}\n",
+    )
+    .unwrap();
+    fs::write(
+        consumer.join("extra.yaml"),
+        "id: est2\nproviders:\n  - {id: gcp}\n",
+    )
+    .unwrap();
+    fs::write(
+        consumer.join("bench-data.yaml"),
+        "id: b1\nanchors:\n  - cat:aws\n",
+    )
+    .unwrap();
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+catalog = { path = "./catalog-pkg" }
+bench = { path = "./bench-pkg" }
+
+[generate.catalog]
+instances = ["full.yaml"]
+
+[check.catalog]
+instances = ["extra.yaml"]
+
+[check.bench]
+instances = ["bench-data.yaml"]
+resolve_against = ["catalog"]
+"#,
+    )
+    .unwrap();
+    let out = run_in(consumer, &["validate"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("weight") && stderr.contains("expects an integer"),
+        "the generate-listed dataset is conformance-checked too; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("1 of 1 cross-graph reference(s) into `catalog` namespace(s) resolve"),
+        "the sibling's minted universe includes its generate-listed dataset; got:\n{stderr}"
+    );
+}
+
+/// `generate --strict` checks at least what it ships: a `[check]` list
+/// cannot narrow the gate below the `[generate]` datasets.
+#[test]
+fn generate_strict_checks_what_it_ships() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    write_pkg(
+        &consumer.join("catalog-pkg"),
+        "catalog",
+        "1.0.0",
+        "catalog.yaml",
+        UNION_CATALOG_SCHEMA,
+    );
+    write_pkg(
+        &consumer.join("bench-pkg"),
+        "bench",
+        "1.0.0",
+        "bench.yaml",
+        UNION_BENCH_SCHEMA,
+    );
+    fs::write(
+        consumer.join("catalog-data.yaml"),
+        "id: est1\nproviders:\n  - {id: aws}\n",
+    )
+    .unwrap();
+    // The shipped dataset references a record no catalog dataset mints;
+    // the check-listed one is clean.
+    fs::write(
+        consumer.join("ship.yaml"),
+        "id: b1\nanchors:\n  - cat:ghost\n",
+    )
+    .unwrap();
+    fs::write(
+        consumer.join("curated.yaml"),
+        "id: b2\nanchors:\n  - cat:aws\n",
+    )
+    .unwrap();
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+catalog = { path = "./catalog-pkg" }
+bench = { path = "./bench-pkg" }
+
+[generate.catalog]
+instances = ["catalog-data.yaml"]
+
+[generate.bench]
+ttl = "bench.ttl"
+instances = ["ship.yaml"]
+
+[check.bench]
+instances = ["curated.yaml"]
+resolve_against = ["catalog"]
+"#,
+    )
+    .unwrap();
+    let out = run_in(consumer, &["generate", "--strict"]);
+    assert!(
+        !out.status.success(),
+        "the shipped dataset's dangling cross-graph reference must fail the gate; got:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// A dataset that ingests nothing is a reported finding, not a vacuous
+/// pass: manifest mode matches flag mode's refusal of non-mapping data.
+#[test]
+fn a_dataset_that_ingests_nothing_is_not_vacuously_clean() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    write_pkg(
+        &consumer.join("catalog-pkg"),
+        "catalog",
+        "1.0.0",
+        "catalog.yaml",
+        UNION_CATALOG_SCHEMA,
+    );
+    fs::write(consumer.join("catalog-data.yaml"), "- id: aws\n").unwrap();
+    fs::write(
+        consumer.join("panschema.toml"),
+        "[schemas]\ncatalog = { path = \"./catalog-pkg\" }\n\n[generate.catalog]\ninstances = [\"catalog-data.yaml\"]\n",
+    )
+    .unwrap();
+    let warned = run_in(consumer, &["validate"]);
+    assert!(
+        String::from_utf8_lossy(&warned.stderr).contains("mapping"),
+        "the non-mapping dataset is reported; got:\n{}",
+        String::from_utf8_lossy(&warned.stderr)
+    );
+    let strict = run_in(consumer, &["validate", "--strict"]);
+    assert!(!strict.status.success(), "--strict fails on it");
+}
+
+/// `--strict` reports everything before failing: one entry's check
+/// failure must not hide another entry's findings.
+#[test]
+fn strict_reports_all_entries_before_failing() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    write_pkg(
+        &consumer.join("catalog-pkg"),
+        "catalog",
+        "1.0.0",
+        "catalog.yaml",
+        UNION_CATALOG_SCHEMA,
+    );
+    write_pkg(
+        &consumer.join("bench-pkg"),
+        "bench",
+        "1.0.0",
+        "bench.yaml",
+        UNION_BENCH_SCHEMA,
+    );
+    // alpha (bench sorts first): a check failure. zeta (catalog): a
+    // conformance violation.
+    fs::write(
+        consumer.join("bench-data.yaml"),
+        "id: b1\nanchors:\n  - cat:ghost\n",
+    )
+    .unwrap();
+    fs::write(
+        consumer.join("catalog-data.yaml"),
+        "id: est1\nproviders:\n  - {id: aws, weight: heavy}\n",
+    )
+    .unwrap();
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+bench = { path = "./bench-pkg" }
+catalog = { path = "./catalog-pkg" }
+
+[generate.catalog]
+instances = ["catalog-data.yaml"]
+
+[check.bench]
+instances = ["bench-data.yaml"]
+resolve_against = ["catalog"]
+"#,
+    )
+    .unwrap();
+    let strict = run_in(consumer, &["validate", "--strict"]);
+    let stderr = String::from_utf8_lossy(&strict.stderr);
+    assert!(!strict.status.success());
+    assert!(
+        stderr.contains("does not resolve") || stderr.contains("no resolve-against dataset mints"),
+        "the check finding is reported; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("expects an integer"),
+        "the later entry's conformance violation is reported too, not hidden \
+         by the earlier check failure; got:\n{stderr}"
+    );
+}
+
+/// A `[check.<name>]` naming no `[schemas]` entry is a configuration
+/// error in both commands — the silent-no-op class the `[check]` section
+/// exists to eliminate.
+#[test]
+fn an_orphan_check_entry_is_a_configuration_error() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    write_pkg(
+        &consumer.join("catalog-pkg"),
+        "catalog",
+        "1.0.0",
+        "catalog.yaml",
+        UNION_CATALOG_SCHEMA,
+    );
+    fs::write(consumer.join("catalog-data.yaml"), "id: est1\n").unwrap();
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+catalog = { path = "./catalog-pkg" }
+
+[generate.catalog]
+ttl = "catalog.ttl"
+instances = ["catalog-data.yaml"]
+
+[check.bnech]
+resolve_against = ["catalog"]
+"#,
+    )
+    .unwrap();
+    for args in [["validate"].as_slice(), ["generate"].as_slice()] {
+        let out = run_in(consumer, args);
+        assert!(
+            !out.status.success(),
+            "{args:?} accepts a check entry that nothing will ever run"
+        );
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("bnech"),
+            "{args:?} names the orphan; got:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+/// `generate`'s skip note for a check-only entry says where the policy
+/// does run, so a generate-gated CI pipeline is not silently uncovered.
+#[test]
+fn generate_names_the_unrun_check_policy() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    write_pkg(
+        &consumer.join("catalog-pkg"),
+        "catalog",
+        "1.0.0",
+        "catalog.yaml",
+        UNION_CATALOG_SCHEMA,
+    );
+    write_pkg(
+        &consumer.join("bench-pkg"),
+        "bench",
+        "1.0.0",
+        "bench.yaml",
+        UNION_BENCH_SCHEMA,
+    );
+    fs::write(
+        consumer.join("catalog-data.yaml"),
+        "id: est1\nproviders:\n  - {id: aws}\n",
+    )
+    .unwrap();
+    fs::write(
+        consumer.join("bench-data.yaml"),
+        "id: b1\nanchors:\n  - cat:aws\n",
+    )
+    .unwrap();
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+catalog = { path = "./catalog-pkg" }
+bench = { path = "./bench-pkg" }
+
+[generate.catalog]
+ttl = "catalog.ttl"
+instances = ["catalog-data.yaml"]
+
+[check.bench]
+instances = ["bench-data.yaml"]
+resolve_against = ["catalog"]
+"#,
+    )
+    .unwrap();
+    let out = run_in(consumer, &["generate"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("[check.bench]") && stderr.contains("validate"),
+        "the skip note points at the check policy's home; got:\n{stderr}"
+    );
+}
+
+/// Bare `validate --strict` promotes the schema-level findings `generate
+/// --strict` refuses — the check verb covers what the build verb would
+/// reject.
+#[test]
+fn bare_validate_strict_promotes_schema_level_findings() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    write_pkg(
+        &consumer.join("pkg"),
+        "g",
+        "1.0.0",
+        "g.yaml",
+        "id: https://example.org/g\nname: g\nclasses:\n  Thing:\n    is_a: Ghost\n    slots: [id]\nslots:\n  id: {identifier: true}\n",
+    );
+    fs::write(
+        consumer.join("panschema.toml"),
+        "[schemas]\ng = { path = \"./pkg\" }\n",
+    )
+    .unwrap();
+    let warned = run_in(consumer, &["validate"]);
+    assert!(
+        warned.status.success(),
+        "schema findings warn without --strict: {}",
+        String::from_utf8_lossy(&warned.stderr)
+    );
+    let strict = run_in(consumer, &["validate", "--strict"]);
+    assert!(
+        !strict.status.success(),
+        "the dangling schema reference fails --strict; got:\n{}",
+        String::from_utf8_lossy(&strict.stderr)
+    );
+}
+
+/// Bare `validate` runs the cross-dataset overlap checks flag mode runs:
+/// the same IRI minted by two declared datasets is reported.
+#[test]
+fn bare_validate_reports_cross_dataset_overlap() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    write_pkg(
+        &consumer.join("catalog-pkg"),
+        "catalog",
+        "1.0.0",
+        "catalog.yaml",
+        UNION_CATALOG_SCHEMA,
+    );
+    fs::write(
+        consumer.join("a.yaml"),
+        "id: est1\nproviders:\n  - {id: aws}\n",
+    )
+    .unwrap();
+    fs::write(
+        consumer.join("b.yaml"),
+        "id: est2\nproviders:\n  - {id: aws}\n",
+    )
+    .unwrap();
+    fs::write(
+        consumer.join("panschema.toml"),
+        "[schemas]\ncatalog = { path = \"./catalog-pkg\" }\n\n[generate.catalog]\ninstances = [\"a.yaml\", \"b.yaml\"]\n",
+    )
+    .unwrap();
+    let out = run_in(consumer, &["validate"]);
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("minted by more than one dataset"),
+        "the overlap note flag mode prints appears in manifest mode too; got:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Bare `validate` reads the manifest and checks everything declared —
+/// conformance, cross-graph resolution, stated absences — writing
+/// nothing; `--strict` promotes the warnings.
+#[test]
+fn bare_validate_checks_the_whole_manifest() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+
+    let catalog_pkg = consumer.join("catalog-pkg");
+    fs::create_dir_all(&catalog_pkg).unwrap();
+    fs::write(
+        catalog_pkg.join("panschema-publish.toml"),
+        "[schema]\nname = \"catalog\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"catalog.yaml\"\n",
+    )
+    .unwrap();
+    fs::write(
+        catalog_pkg.join("catalog.yaml"),
+        "id: https://example.org/catalog\nname: catalog\ndefault_prefix: cat\nprefixes:\n  cat: https://example.org/catalog/\nclasses:\n  Estate:\n    tree_root: true\n    slots: [id, providers]\n  Provider:\n    slots: [id, weight, sponsor]\nslots:\n  id: {identifier: true}\n  weight: {range: integer}\n  sponsor: {range: Provider}\n  providers: {range: Provider, multivalued: true}\n",
+    )
+    .unwrap();
+
+    let bench_pkg = consumer.join("bench-pkg");
+    fs::create_dir_all(&bench_pkg).unwrap();
+    fs::write(
+        bench_pkg.join("panschema-publish.toml"),
+        "[schema]\nname = \"bench\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"bench.yaml\"\n",
+    )
+    .unwrap();
+    fs::write(
+        bench_pkg.join("bench.yaml"),
+        "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, unconnected]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  unconnected: {range: DomainRecord, multivalued: true}\n",
+    )
+    .unwrap();
+
+    // A conformance violation in the catalog (string at an integer slot)
+    // and a contradicted absence claim in the bench (gcp cites aws).
+    fs::write(
+        consumer.join("catalog-data.yaml"),
+        "id: est1\nproviders:\n  - {id: aws, weight: heavy}\n  - {id: gcp, sponsor: aws}\n",
+    )
+    .unwrap();
+    fs::write(
+        consumer.join("bench-data.yaml"),
+        "id: b1\nunconnected:\n  - cat:aws\n",
+    )
+    .unwrap();
+    // The bench entry has no [generate] block at all: check policy alone
+    // must be reachable without declaring any output.
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+catalog = { path = "./catalog-pkg" }
+bench = { path = "./bench-pkg" }
+
+[generate.catalog]
+instances = ["catalog-data.yaml"]
+
+[check.bench]
+instances = ["bench-data.yaml"]
+resolve_against = ["catalog"]
+verify_absences = { slot = "unconnected" }
+"#,
+    )
+    .unwrap();
+
+    let run = |extra: &[&str]| {
+        let mut args = vec!["validate"];
+        args.extend_from_slice(extra);
+        Command::new(env!("CARGO_BIN_EXE_panschema"))
+            .args(&args)
+            .current_dir(consumer)
+            .output()
+            .expect("run panschema")
+    };
+
+    let warned = run(&[]);
+    let stderr = String::from_utf8_lossy(&warned.stderr);
+    assert!(
+        warned.status.success(),
+        "warnings do not fail an unpromoted run: {stderr}"
+    );
+    assert!(
+        stderr.contains("weight") && stderr.contains("expects an integer"),
+        "the catalog's conformance violation is reported; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("stated absence does not hold"),
+        "the bench's contradicted claim is reported; got:\n{stderr}"
+    );
+    assert!(
+        !consumer.join("catalog.ttl").exists() && !consumer.join("bench.ttl").exists(),
+        "validate writes nothing"
+    );
+
+    let strict = run(&["--strict"]);
+    assert!(
+        !strict.status.success(),
+        "--strict promotes the same findings: {}",
+        String::from_utf8_lossy(&strict.stderr)
+    );
+}
+
+/// `require_namespace_coverage` closes the typo'd-namespace hole: an
+/// external reference landing in no covered namespace warns instead of
+/// passing as an outside vocabulary, and `--strict` fails on it.
+#[test]
+fn namespace_coverage_flags_references_outside_every_sibling() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    for (dir, name) in [("catalog-pkg", "catalog"), ("bench-pkg", "bench")] {
+        let pkg = consumer.join(dir);
+        fs::create_dir_all(&pkg).unwrap();
+        fs::write(
+            pkg.join("panschema-publish.toml"),
+            format!(
+                "[schema]\nname = \"{name}\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"{name}.yaml\"\n"
+            ),
+        )
+        .unwrap();
+    }
+    fs::write(
+        consumer.join("catalog-pkg/catalog.yaml"),
+        "id: https://example.org/catalog\nname: catalog\ndefault_prefix: cat\nprefixes:\n  cat: https://example.org/catalog/\nclasses:\n  Estate:\n    tree_root: true\n    slots: [id, providers]\n  Provider:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  providers: {range: Provider, multivalued: true}\n",
+    )
+    .unwrap();
+    fs::write(
+        consumer.join("bench-pkg/bench.yaml"),
+        "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, anchors]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  anchors: {range: DomainRecord, multivalued: true}\n",
+    )
+    .unwrap();
+    fs::write(
+        consumer.join("catalog-data.yaml"),
+        "id: est1\nproviders:\n  - {id: aws}\n",
+    )
+    .unwrap();
+    // One anchor resolves into the covered namespace; the other lands in a
+    // typo'd lookalike that no sibling owns.
+    fs::write(
+        consumer.join("bench-data.yaml"),
+        "id: b1\nanchors:\n  - cat:aws\n  - https://example.org/catalog-typo/gcp\n",
+    )
+    .unwrap();
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+catalog = { path = "./catalog-pkg" }
+bench = { path = "./bench-pkg" }
+
+[generate.catalog]
+instances = ["catalog-data.yaml"]
+
+[check.bench]
+instances = ["bench-data.yaml"]
+resolve_against = ["catalog"]
+require_namespace_coverage = true
+"#,
+    )
+    .unwrap();
+
+    let run = |extra: &[&str]| {
+        let mut args = vec!["validate"];
+        args.extend_from_slice(extra);
+        Command::new(env!("CARGO_BIN_EXE_panschema"))
+            .args(&args)
+            .current_dir(consumer)
+            .output()
+            .expect("run panschema")
+    };
+    let warned = run(&[]);
+    let stderr = String::from_utf8_lossy(&warned.stderr);
+    assert!(
+        warned.status.success(),
+        "warnings only without --strict: {stderr}"
+    );
+    assert!(
+        stderr.contains("catalog-typo") && stderr.contains("no namespace covered"),
+        "the uncovered reference is named; got:\n{stderr}"
+    );
+    let strict = run(&["--strict"]);
+    assert!(
+        !strict.status.success(),
+        "--strict fails on the uncovered reference"
+    );
+    assert!(
+        String::from_utf8_lossy(&strict.stderr).contains("land in no covered namespace"),
+        "got:\n{}",
+        String::from_utf8_lossy(&strict.stderr)
+    );
+}
+
+/// The cross-graph keys live under `[check.<name>]`; the old
+/// `[generate.<name>]` placement is a parse error, not a silent no-op.
+#[test]
+fn resolve_keys_under_generate_are_a_parse_error() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    let pkg = consumer.join("pkg");
+    fs::create_dir_all(&pkg).unwrap();
+    fs::write(
+        pkg.join("panschema-publish.toml"),
+        "[schema]\nname = \"g\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"g.yaml\"\n",
+    )
+    .unwrap();
+    fs::write(
+        pkg.join("g.yaml"),
+        "id: https://example.org/g\nname: g\nclasses:\n  Root:\n    tree_root: true\n    slots: [id]\nslots:\n  id: {identifier: true}\n",
+    )
+    .unwrap();
+    fs::write(
+        consumer.join("panschema.toml"),
+        "[schemas]\ng = { path = \"./pkg\" }\n\n[generate.g]\nttl = \"g.ttl\"\nresolve_against = [\"other\"]\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("generate")
+        .current_dir(consumer)
+        .output()
+        .expect("run panschema");
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("unknown field") && stderr.contains("resolve_against"),
+        "the misplacement is a parse error naming the key; got:\n{stderr}"
     );
 }
 
@@ -2042,6 +2683,8 @@ instances = ["catalog-data.yaml"]
 [generate.bench]
 ttl = "bench.ttl"
 instances = ["bench-data.yaml"]
+
+[check.bench]
 resolve_against = ["catalog"]
 verify_absences = { slot = "unconnected" }
 "#,
@@ -2121,6 +2764,8 @@ instances = ["catalog-data.yaml"]
 [generate.bench]
 ttl = "bench.ttl"
 instances = ["bench-data.yaml"]
+
+[check.bench]
 resolve_against = ["catalog"]
 verify_absences = { slot = "unconnected" }
 "#,
@@ -2193,6 +2838,8 @@ instances = ["catalog-data.yaml"]
 [generate.bench]
 ttl = "bench.ttl"
 instances = ["bench-data.yaml"]
+
+[check.bench]
 resolve_against = ["catalog"]
 verify_absences = { slot = "nonexistent" }
 "#,

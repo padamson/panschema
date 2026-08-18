@@ -215,17 +215,25 @@ enum Commands {
     /// Verify that on-disk schemas match the checksums recorded in
     /// `panschema.lock`. Errors on drift.
     Verify,
-    /// Validate a LinkML instance-data file against its schema, reporting every
-    /// constraint violation. Exits non-zero if the data does not conform.
+    /// Validate instance data, reporting every constraint violation.
+    ///
+    /// With `--schema`/`--data`, checks the given file(s) and exits non-zero
+    /// on any violation. With no flags, reads `panschema.toml` instead and
+    /// checks everything it declares — instance conformance for every
+    /// dataset, cross-graph resolution, stated absences — writing nothing;
+    /// findings warn, and `--strict` fails on them.
     Validate {
         /// Schema file (.yaml, .yml, .ttl) the data must conform to.
-        #[arg(short, long)]
-        schema: PathBuf,
+        #[arg(short, long, requires = "data")]
+        schema: Option<PathBuf>,
         /// LinkML instance-data file (a `tree_root` container A-box).
         /// Repeatable: several datasets are each validated, and ids that mint
         /// to the same IRI across them are reported.
-        #[arg(short, long, required = true)]
+        #[arg(short, long, requires = "schema")]
         data: Vec<PathBuf>,
+        /// Manifest mode only: treat findings as errors.
+        #[arg(long, conflicts_with = "schema")]
+        strict: bool,
     },
     /// Write the schema's Postgres DDL as a versioned migration file.
     ///
@@ -326,51 +334,74 @@ struct LabelOptions<'a> {
     overrides: &'a std::collections::BTreeMap<String, String>,
 }
 
-/// The `resolve_against` check for one `[generate.<name>]` entry: every
-/// external reference in this entry's datasets that lands in a namespace a
-/// declared sibling owns must equal an IRI the sibling's datasets mint —
-/// computed by the sibling schema's own minting rules, so a `key`-scoped
-/// record's dataset-rooted IRI is what a reference must match. References
-/// into namespaces no sibling owns (a shared vocabulary, a graph published
-/// outside this manifest) stay in the cross-graph summary, unchecked here.
-/// With `verify_absences` bound, each record's stated absence claim is
-/// additionally verified against the sibling graphs. Unresolved references
-/// and contradicted or uncheckable claims warn, and `--strict` fails on
-/// them. A sibling naming no `[schemas]` entry, the entry itself, or a
-/// binding naming a slot no class carries is a configuration error; a
-/// sibling with no datasets yet resolves nothing, so references into its
-/// namespace warn like any other unresolved ones.
+/// Resolve every `[schemas]` entry to its main file up front, so an
+/// `imports:` entry naming another `[schemas]` dependency can resolve to
+/// that dependency's schema across the package boundary. Import-only
+/// dependencies (no `[generate]` block) still populate the map.
+fn resolved_deps(
+    manifest: &panschema::manifest::Manifest,
+    manifest_dir: &Path,
+) -> anyhow::Result<std::collections::BTreeMap<String, PathBuf>> {
+    let mut deps = std::collections::BTreeMap::new();
+    for (name, dep) in &manifest.schemas {
+        let panschema::source::Resolved { schema_path, .. } =
+            resolve_source(name, dep, manifest_dir)?;
+        deps.insert(name.clone(), schema_path);
+    }
+    Ok(deps)
+}
+
+/// The `[check.<name>]` cross-graph pass: every external reference in this
+/// entry's datasets that lands in a namespace a declared sibling owns must
+/// equal an IRI the sibling's datasets mint — computed by the sibling
+/// schema's own minting rules, so a `key`-scoped record's dataset-rooted
+/// IRI is what a reference must match. References into namespaces no
+/// sibling owns (a shared vocabulary, a graph published outside this
+/// manifest) stay in the cross-graph summary, unchecked — unless
+/// `require_namespace_coverage` is set, which flags them so a typo'd
+/// namespace cannot pass as an outside vocabulary. With `verify_absences`
+/// bound, each record's stated absence claim is additionally verified
+/// against the sibling graphs. Findings warn as they stream; the
+/// returned problem summaries are what a caller's `--strict` promotes,
+/// so one entry's findings never hide another's. A sibling naming no
+/// `[schemas]` entry, the entry itself, or a binding naming a slot no
+/// class carries is a configuration error; a sibling with no datasets
+/// yet resolves nothing, so references into its namespace warn like any
+/// other unresolved ones.
 fn check_resolve_against(
     name: &str,
     manifest: &panschema::manifest::Manifest,
     manifest_dir: &Path,
     deps: &std::collections::BTreeMap<String, PathBuf>,
-    strict: bool,
-) -> anyhow::Result<()> {
-    let Some(gen_cfg) = manifest.generate.get(name) else {
-        return Ok(());
+    schema: &panschema::linkml::SchemaDefinition,
+    registry: &FormatRegistry,
+) -> anyhow::Result<Vec<String>> {
+    let Some(check_cfg) = manifest.check.get(name) else {
+        return Ok(Vec::new());
     };
-    if gen_cfg.resolve_against.is_empty() {
-        if gen_cfg.verify_absences.is_some() {
+    if check_cfg.resolve_against.is_empty() {
+        if check_cfg.verify_absences.is_some() {
             anyhow::bail!(
                 "verify_absences needs resolve_against — the claims are verified against \
                  the sibling datasets it names"
             );
         }
-        return Ok(());
+        if check_cfg.require_namespace_coverage {
+            anyhow::bail!(
+                "require_namespace_coverage needs resolve_against — coverage means the \
+                 namespaces the listed siblings own"
+            );
+        }
+        return Ok(Vec::new());
     }
-    let registry = FormatRegistry::with_defaults();
-    let schema = panschema::import_resolve::load_schema_with_deps(&deps[name], &registry, deps)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     // Binding errors are pure configuration problems: report them before
     // any sibling data is read, and against the resolved class view — a
     // slot no class carries would silently match no record.
-    if let Some(binding) = &gen_cfg.verify_absences {
+    if let Some(binding) = &check_cfg.verify_absences {
         let carried = |slot: &str| {
             schema.classes.values().any(|class| {
-                panschema::linkml_resolve::resolve_effective_slots(class, &schema)
-                    .contains_key(slot)
+                panschema::linkml_resolve::resolve_effective_slots(class, schema).contains_key(slot)
             })
         };
         if !carried(&binding.slot) {
@@ -395,7 +426,7 @@ fn check_resolve_against(
         panschema::linkml::SchemaDefinition,
         Vec<panschema::instances::InstanceSet>,
     )> = Vec::new();
-    for sibling in &gen_cfg.resolve_against {
+    for sibling in &check_cfg.resolve_against {
         if sibling == name {
             anyhow::bail!(
                 "resolve_against names the entry itself — a dataset's own references are \
@@ -409,28 +440,19 @@ fn check_resolve_against(
             );
         };
         let sibling_schema =
-            panschema::import_resolve::load_schema_with_deps(sibling_path, &registry, deps)
+            panschema::import_resolve::load_schema_with_deps(sibling_path, registry, deps)
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
         let mut sibling_sets: Vec<panschema::instances::InstanceSet> = Vec::new();
-        let sibling_instances: Vec<PathBuf> = match manifest.generate.get(sibling) {
-            Some(cfg) if !cfg.instances.is_empty() => {
-                cfg.instances.iter().map(|p| manifest_dir.join(p)).collect()
-            }
-            Some(_) => {
-                eprintln!(
-                    "note: resolve_against `{sibling}` declares no `instances` yet; \
-                     references into its namespace cannot resolve"
-                );
-                Vec::new()
-            }
-            None => {
-                eprintln!(
-                    "note: resolve_against `{sibling}` has no [generate.{sibling}] block \
-                     declaring datasets; references into its namespace cannot resolve"
-                );
-                Vec::new()
-            }
-        };
+        let declared = manifest.declared_instances(sibling);
+        if declared.is_empty() {
+            eprintln!(
+                "note: resolve_against `{sibling}` declares no `instances` (in \
+                 [check.{sibling}] or [generate.{sibling}]); references into its \
+                 namespace cannot resolve"
+            );
+        }
+        let sibling_instances: Vec<PathBuf> =
+            declared.iter().map(|p| manifest_dir.join(p)).collect();
         for path in &sibling_instances {
             let set = read_instance_set(&sibling_schema, path)?;
             // A dataset that matched no single root produced no records; an
@@ -458,14 +480,14 @@ fn check_resolve_against(
                 &sibling_schema,
                 std::slice::from_ref(&set),
             ));
-            if gen_cfg.verify_absences.is_some() {
+            if check_cfg.verify_absences.is_some() {
                 sibling_sets.push(set);
             }
         }
         owned_namespaces.push(panschema::rdf_serializers::instance_namespace(
             &sibling_schema,
         ));
-        if gen_cfg.verify_absences.is_some() {
+        if check_cfg.verify_absences.is_some() {
             sibling_graphs.push((sibling_schema, sibling_sets));
         }
     }
@@ -477,15 +499,20 @@ fn check_resolve_against(
         .map(|(s, sets)| (s, sets.as_slice()))
         .collect();
 
-    let sibling_names = gen_cfg.resolve_against.join("`, `");
+    let sibling_names = check_cfg.resolve_against.join("`, `");
     let mut total = panschema::diagnostics::SiblingResolution::default();
     let mut absences = panschema::diagnostics::AbsenceVerification::default();
+    let mut uncovered = 0usize;
     // One streamed pass per referring file: each file's warnings flush
     // before the next file is even opened, and nothing is retained.
-    for path in gen_cfg.instances.iter().map(|p| manifest_dir.join(p)) {
-        let set = read_instance_set(&schema, &path)?;
+    for path in manifest
+        .declared_instances(name)
+        .iter()
+        .map(|p| manifest_dir.join(p))
+    {
+        let set = read_instance_set(schema, &path)?;
         let resolution = panschema::diagnostics::resolve_sibling_references(
-            &schema,
+            schema,
             &set,
             &owned_namespaces,
             &minted,
@@ -495,9 +522,15 @@ fn check_resolve_against(
         }
         total.checked += resolution.checked;
         total.unresolved.extend(resolution.unresolved);
-        if let Some(binding) = &gen_cfg.verify_absences {
+        if check_cfg.require_namespace_coverage {
+            for u in &resolution.uncovered {
+                eprintln!("warning: {}: {}", path.display(), u.message());
+            }
+            uncovered += resolution.uncovered.len();
+        }
+        if let Some(binding) = &check_cfg.verify_absences {
             let verification = panschema::diagnostics::unverified_absences(
-                &schema,
+                schema,
                 &set,
                 &binding.slot,
                 binding.via.as_deref(),
@@ -522,7 +555,7 @@ fn check_resolve_against(
          `{sibling_names}` namespace(s) resolve",
         total.checked
     );
-    if gen_cfg.verify_absences.is_some() {
+    if check_cfg.verify_absences.is_some() {
         let mut summary = format!(
             "note: schema `{name}`: {} of {} stated absence claim(s) hold against \
              `{sibling_names}`",
@@ -538,32 +571,32 @@ fn check_resolve_against(
         eprintln!("{summary}");
     }
 
-    if strict {
-        let mut problems = Vec::new();
-        if !total.unresolved.is_empty() {
-            problems.push(format!(
-                "{} of {} cross-graph reference(s) do not resolve against `{sibling_names}`",
-                total.unresolved.len(),
-                total.checked
-            ));
-        }
-        if absences.contradicted_claims > 0 {
-            problems.push(format!(
-                "{} stated absence claim(s) do not hold",
-                absences.contradicted_claims
-            ));
-        }
-        if !absences.uncheckable.is_empty() {
-            problems.push(format!(
-                "{} stated absence claim(s) could not be checked",
-                absences.uncheckable.len()
-            ));
-        }
-        if !problems.is_empty() {
-            anyhow::bail!("{}; failing because --strict is set", problems.join("; "));
-        }
+    let mut problems = Vec::new();
+    if !total.unresolved.is_empty() {
+        problems.push(format!(
+            "{} of {} cross-graph reference(s) do not resolve against `{sibling_names}`",
+            total.unresolved.len(),
+            total.checked
+        ));
     }
-    Ok(())
+    if absences.contradicted_claims > 0 {
+        problems.push(format!(
+            "{} stated absence claim(s) do not hold",
+            absences.contradicted_claims
+        ));
+    }
+    if !absences.uncheckable.is_empty() {
+        problems.push(format!(
+            "{} stated absence claim(s) could not be checked",
+            absences.uncheckable.len()
+        ));
+    }
+    if uncovered > 0 {
+        problems.push(format!(
+            "{uncovered} external reference(s) land in no covered namespace"
+        ));
+    }
+    Ok(problems)
 }
 
 /// Read and parse a LinkML instance-data file into the instance model —
@@ -1036,12 +1069,7 @@ fn migrate_from_manifest() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let mut deps: std::collections::BTreeMap<String, PathBuf> = std::collections::BTreeMap::new();
-    for (name, dep) in &manifest.schemas {
-        let panschema::source::Resolved { schema_path, .. } =
-            resolve_source(name, dep, &manifest_dir)?;
-        deps.insert(name.clone(), schema_path);
-    }
+    let deps = resolved_deps(&manifest, &manifest_dir)?;
 
     let mut emitted_anything = false;
     for name in manifest.schemas.keys() {
@@ -1086,22 +1114,29 @@ fn generate_from_manifest(
         return Ok(());
     }
 
-    // Resolve every declared schema to its main file up front, so an
-    // `imports:` entry naming another `[schemas]` dependency can resolve to
-    // that dependency's schema across the package boundary. Import-only
-    // dependencies (no `[generate]` block) still populate this map.
-    let mut deps: std::collections::BTreeMap<String, PathBuf> = std::collections::BTreeMap::new();
-    for (name, dep) in &manifest.schemas {
-        let panschema::source::Resolved { schema_path, .. } =
-            resolve_source(name, dep, &manifest_dir)?;
-        deps.insert(name.clone(), schema_path);
+    let orphans = manifest.orphan_check_entries();
+    if !orphans.is_empty() {
+        anyhow::bail!(
+            "[check.{}] names no [schemas] entry; check policy nothing will run is a \
+             configuration error",
+            orphans.join("], [check.")
+        );
     }
+    let deps = resolved_deps(&manifest, &manifest_dir)?;
+    let registry = FormatRegistry::with_defaults();
 
     let mut produced_anything = false;
     for name in manifest.schemas.keys() {
         let schema_path = &deps[name];
         let Some(gen_cfg) = manifest.generate.get(name) else {
-            eprintln!("schema `{name}`: no [generate.{name}] block; skipping");
+            if manifest.check.contains_key(name) {
+                eprintln!(
+                    "schema `{name}`: no [generate.{name}] block; skipping — its \
+                     [check.{name}] policy runs under `panschema validate`"
+                );
+            } else {
+                eprintln!("schema `{name}`: no [generate.{name}] block; skipping");
+            }
             continue;
         };
         // Instance-data paths are manifest-relative, like every output path.
@@ -1112,8 +1147,26 @@ fn generate_from_manifest(
             .collect();
         // Cross-graph resolution runs once per entry, before any writer:
         // it reads both graphs and writes nothing, so `--check` runs it too.
-        check_resolve_against(name, &manifest, &manifest_dir, &deps, strict)
-            .with_context(|| format!("schema `{name}`, resolve_against"))?;
+        if manifest.check.contains_key(name) {
+            let check_schema =
+                panschema::import_resolve::load_schema_with_deps(schema_path, &registry, &deps)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+            let problems = check_resolve_against(
+                name,
+                &manifest,
+                &manifest_dir,
+                &deps,
+                &check_schema,
+                &registry,
+            )
+            .with_context(|| format!("schema `{name}`, check"))?;
+            if strict && !problems.is_empty() {
+                anyhow::bail!(
+                    "schema `{name}`, check: {}; failing because --strict is set",
+                    problems.join("; ")
+                );
+            }
+        }
         if let Some(html_out) = &gen_cfg.html {
             let html_out = manifest_dir.join(html_out);
             generate(
@@ -1778,8 +1831,126 @@ fn fetch_from_manifest() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `panschema verify`: re-checksum every manifested schema and compare with
-/// the lockfile. Errors with a clear diff on mismatch.
+/// Bare `validate`: read the manifest and check everything it declares,
+/// writing nothing — each schema's own diagnostics (the same ones
+/// `generate --strict` refuses), every declared dataset's conformance
+/// with the cross-dataset overlap notes, and the `[check.<name>]`
+/// policy. Findings warn as they stream; `--strict` fails once at the
+/// end, after every entry has reported.
+fn validate_manifest(strict: bool) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+    let (manifest, manifest_dir) = load_manifest()?;
+    if manifest.schemas.is_empty() {
+        eprintln!("Manifest has no `[schemas]` entries; nothing to check.");
+        return Ok(());
+    }
+    let orphans = manifest.orphan_check_entries();
+    if !orphans.is_empty() {
+        anyhow::bail!(
+            "[check.{}] names no [schemas] entry; check policy nothing will run is a \
+             configuration error",
+            orphans.join("], [check.")
+        );
+    }
+    let deps = resolved_deps(&manifest, &manifest_dir)?;
+    let registry = FormatRegistry::with_defaults();
+    let mut findings = 0usize;
+    let mut problems: Vec<String> = Vec::new();
+    for name in manifest.schemas.keys() {
+        let schema =
+            panschema::import_resolve::load_schema_with_deps(&deps[name], &registry, &deps)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+        // The shared load path already printed these as warnings; they
+        // count toward the strict gate exactly as `generate --strict`
+        // refuses them, so the check verb covers what the build verb
+        // would reject.
+        findings += panschema::diagnostics::unmodeled_class_constructs(&schema).len()
+            + panschema::diagnostics::dangling_references(&schema).len()
+            + panschema::diagnostics::colliding_slot_definitions(&schema).len()
+            + panschema::diagnostics::untyped_slots(&schema).len();
+        let instances: Vec<PathBuf> = manifest
+            .declared_instances(name)
+            .iter()
+            .map(|p| manifest_dir.join(p))
+            .collect();
+        if !instances.is_empty() {
+            let (count, _) = validate_datasets(&schema, &instances, true, "warning: ")?;
+            findings += count;
+        }
+        problems.extend(
+            check_resolve_against(name, &manifest, &manifest_dir, &deps, &schema, &registry)
+                .with_context(|| format!("schema `{name}`, check"))?,
+        );
+    }
+    if strict && (findings > 0 || !problems.is_empty()) {
+        let mut parts = problems;
+        if findings > 0 {
+            parts.insert(0, format!("{findings} schema or conformance finding(s)"));
+        }
+        anyhow::bail!("{}; failing because --strict is set", parts.join("; "));
+    }
+    Ok(())
+}
+
+/// Validate labeled datasets against a loaded schema — per-file
+/// conformance (a file that cannot be read as instance data is itself a
+/// violation, never a vacuous pass) plus the cross-dataset overlap
+/// notes — printing each violation with `prefix` and returning the
+/// count alongside the loaded sets.
+fn validate_datasets(
+    schema: &panschema::linkml::SchemaDefinition,
+    data_paths: &[PathBuf],
+    label_lines: bool,
+    prefix: &str,
+) -> anyhow::Result<(usize, Vec<(String, panschema::instances::InstanceSet)>)> {
+    let mut violation_count = 0usize;
+    let mut sets: Vec<(String, panschema::instances::InstanceSet)> = Vec::new();
+
+    for data_path in data_paths {
+        let content = std::fs::read_to_string(data_path)
+            .map_err(|e| anyhow::anyhow!("reading data file {}: {}", data_path.display(), e))?;
+        let value: serde_norway::Value = serde_norway::from_str(&content)
+            .map_err(|e| anyhow::anyhow!("parsing data file {}: {}", data_path.display(), e))?;
+
+        let violations = match panschema::validate::instance_set_for(schema, &value) {
+            Ok(set) => {
+                if let Some(summary) = set.external_reference_summary() {
+                    eprintln!("note: {summary}");
+                }
+                let violations = panschema::validate::validate_instances(schema, &set);
+                sets.push((data_path.display().to_string(), set));
+                violations
+            }
+            Err(v) => vec![v],
+        };
+        for v in &violations {
+            if label_lines {
+                eprintln!("{prefix}{}: {v}", data_path.display());
+            } else {
+                eprintln!("{prefix}{v}");
+            }
+        }
+        violation_count += violations.len();
+    }
+
+    // Overlap across datasets is legitimate when it is deliberate — a teaching
+    // preview that is a subset of a worked example — so this reports rather
+    // than fails, and the author decides.
+    let borrowed: Vec<(&str, &panschema::instances::InstanceSet)> = sets
+        .iter()
+        .map(|(label, set)| (label.as_str(), set))
+        .collect();
+    for c in panschema::diagnostics::cross_dataset_iri_collisions(schema, &borrowed) {
+        eprintln!("note: {}", c.message());
+    }
+    // The inverse hazard, which scoping introduces and the collision check
+    // cannot see: one entity each dataset defined for itself.
+    for split in panschema::diagnostics::cross_dataset_unintended_splits(schema, &borrowed) {
+        eprintln!("note: {}", split.message());
+    }
+    Ok((violation_count, sets))
+}
+
 /// Validate LinkML instance-data files against their schema, printing every
 /// violation and exiting non-zero when the data does not conform. Given more
 /// than one file, each is validated on its own and the set is then checked for
@@ -1795,51 +1966,7 @@ fn validate_data(schema_path: &Path, data_paths: &[PathBuf]) -> anyhow::Result<(
     // One file's violations read as its own list; several need labelling, or a
     // reader cannot tell which dataset each line came from.
     let label_lines = data_paths.len() > 1;
-    let mut violation_count = 0usize;
-    let mut sets: Vec<(String, panschema::instances::InstanceSet)> = Vec::new();
-
-    for data_path in data_paths {
-        let content = std::fs::read_to_string(data_path)
-            .map_err(|e| anyhow::anyhow!("reading data file {}: {}", data_path.display(), e))?;
-        let value: serde_norway::Value = serde_norway::from_str(&content)
-            .map_err(|e| anyhow::anyhow!("parsing data file {}: {}", data_path.display(), e))?;
-
-        let violations = match panschema::validate::instance_set_for(&schema, &value) {
-            Ok(set) => {
-                if let Some(summary) = set.external_reference_summary() {
-                    eprintln!("note: {summary}");
-                }
-                let violations = panschema::validate::validate_instances(&schema, &set);
-                sets.push((data_path.display().to_string(), set));
-                violations
-            }
-            Err(v) => vec![v],
-        };
-        for v in &violations {
-            if label_lines {
-                eprintln!("{}: {v}", data_path.display());
-            } else {
-                eprintln!("{v}");
-            }
-        }
-        violation_count += violations.len();
-    }
-
-    // Overlap across datasets is legitimate when it is deliberate — a teaching
-    // preview that is a subset of a worked example — so this reports rather
-    // than fails, and the author decides.
-    let borrowed: Vec<(&str, &panschema::instances::InstanceSet)> = sets
-        .iter()
-        .map(|(label, set)| (label.as_str(), set))
-        .collect();
-    for c in panschema::diagnostics::cross_dataset_iri_collisions(&schema, &borrowed) {
-        eprintln!("note: {}", c.message());
-    }
-    // The inverse hazard, which scoping introduces and the collision check
-    // cannot see: one entity each dataset defined for itself.
-    for split in panschema::diagnostics::cross_dataset_unintended_splits(&schema, &borrowed) {
-        eprintln!("note: {}", split.message());
-    }
+    let (violation_count, sets) = validate_datasets(&schema, data_paths, label_lines, "")?;
 
     if violation_count == 0 {
         // With several roots in play, "conforms" alone is ambiguous: a file
@@ -1883,6 +2010,8 @@ fn validate_data(schema_path: &Path, data_paths: &[PathBuf]) -> anyhow::Result<(
     }
 }
 
+/// `panschema verify`: re-checksum every manifested schema and compare with
+/// the lockfile. Errors with a clear diff on mismatch.
 fn verify_from_manifest() -> anyhow::Result<()> {
     use panschema::lockfile::{LOCKFILE_FILENAME, Lockfile, checksum_file};
 
@@ -2141,7 +2270,14 @@ async fn main() -> anyhow::Result<()> {
         } => release_schema(level, version.as_deref(), git, push, dry_run)?,
         Commands::Fetch => fetch_from_manifest()?,
         Commands::Verify => verify_from_manifest()?,
-        Commands::Validate { schema, data } => validate_data(&schema, &data)?,
+        Commands::Validate {
+            schema,
+            data,
+            strict,
+        } => match schema {
+            Some(schema) => validate_data(&schema, &data)?,
+            None => validate_manifest(strict)?,
+        },
         Commands::Migrate { schema, migrations } => match (schema, migrations) {
             (Some(schema_path), Some(dir)) => {
                 emit_initial_migration(&schema_path, &dir, &std::collections::BTreeMap::new())?;

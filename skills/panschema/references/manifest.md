@@ -73,8 +73,6 @@ are manifest-relative.
 | `graph-json` | Schema graph wire format — **hyphen** |
 | `instance-graph-json` | A-box graph wire format — **hyphen** |
 | `migrations` | **A directory** of versioned migration files. Written by `panschema migrate`, *not* by `generate` |
-| `resolve_against` | **Not an output** — an **array** of sibling `[generate.<name>]` entries whose datasets this entry's external references must resolve into (e.g. `resolve_against = ["catalog"]`). Only references landing in a namespace a listed sibling owns are checked — outside vocabularies stay unchecked, so one schema.org IRI can't fail the run. Each checked reference must equal an IRI the sibling's datasets mint under the sibling's own rules — a `key`-scoped record mints beneath its dataset root, so `namespace + bare id` guesses miss. Unresolved references warn; `--strict` fails on them. Naming the entry itself, or a name with no `[schemas]` entry, is an error |
-| `verify_absences` | **Not an output** — binds a slot as a stated absence claim, verified against the `resolve_against` siblings: `verify_absences = { slot = "unconnected_anchors", via = "connecting_class" }`. A record listing anchors under `slot` (references or IRI scalars) claims no single sibling record references them all — a single anchor claims no record references it at all ("references" = authored object-reference edges, not scalar IRI citations); `via` (optional) names a slot whose value — a class IRI, CURIE or absolute — narrows the claim to joining records of that class. Holding is not joining at any depth: a container's collection slots and inlined children are containment, not citation (restating an already-declared record inline is a citation). A claim the check can't evaluate — a null or malformed anchor or `via` value, several `via` values, anchors collapsing to fewer distinct IRIs than authored, an anchor no sibling mints, a `via` naming no sibling class — is reported uncheckable, never as holding. Contradicted and uncheckable claims warn; `--strict` fails. Needs `resolve_against`; binding a slot no class carries is an error. The binding lives here so the data model carries no tool annotations |
 
 Note the naming is not uniform: `json_schema` and `html_graph_aspect` use
 underscores, `graph-json` and `instance-graph-json` use hyphens. With
@@ -85,6 +83,27 @@ output regenerated from scratch on each run, so `generate` owns it. A
 migration directory is append-only — a runner checksums each file it has
 applied and aborts when the bytes change — so `generate` never writes there.
 Run `panschema migrate` to add to it.
+
+## `[check.<name>]` — what gets validated
+
+Validation policy, deliberately separate from `[generate.<name>]`: checking
+never requires declaring an output, and the policy survives deleting a
+generate block. **Bare `panschema validate`** (no flags) reads the manifest
+and runs everything here plus instance conformance for every declared
+dataset, writing nothing — findings warn, `--strict` fails on them.
+`generate --strict` also refuses to ship what these checks reject for the
+entries it generates, and bare `validate --strict` additionally promotes
+the schema-level diagnostics `generate --strict` refuses (untyped slots,
+dangling schema references), so the check verb covers what the build verb
+would reject. A `[check.<name>]` naming no `[schemas]` entry is a
+configuration error in every manifest-driven command, not a silent no-op.
+
+| Key | Meaning |
+|---|---|
+| `instances` | Datasets to check, **unioned** with the `[generate.<name>]` entry's list — this can add datasets but never hide the ones `generate` ships |
+| `resolve_against` | An **array** of sibling entries whose datasets this entry's external references must resolve into (e.g. `resolve_against = ["catalog"]`). Only references landing in a namespace a listed sibling owns are checked — outside vocabularies stay unchecked, so one schema.org IRI can't fail the run. Each checked reference must equal an IRI the sibling's datasets mint under the sibling's own rules — a `key`-scoped record mints beneath its dataset root, so `namespace + bare id` guesses miss. Unresolved references warn; `--strict` fails on them. Naming the entry itself, or a name with no `[schemas]` entry, is an error |
+| `verify_absences` | Binds a slot as a stated absence claim, verified against the `resolve_against` siblings: `verify_absences = { slot = "unconnected_anchors", via = "connecting_class" }`. A record listing anchors under `slot` (references or IRI scalars) claims no single sibling record references them all — a single anchor claims no record references it at all ("references" = authored object-reference edges, not scalar IRI citations); `via` (optional) names a slot whose value — a class IRI, CURIE or absolute — narrows the claim to joining records of that class. Holding is not joining at any depth: a container's collection slots and inlined children are containment, not citation (restating an already-declared record inline is a citation). A claim the check can't evaluate — a null or malformed anchor or `via` value, several `via` values, anchors collapsing to fewer distinct IRIs than authored, an anchor no sibling mints, a `via` naming no sibling class — is reported uncheckable, never as holding. Contradicted and uncheckable claims warn; `--strict` fails. Needs `resolve_against`; binding a slot no class carries is an error. The binding lives here so the data model carries no tool annotations |
+| `require_namespace_coverage` | Opt-in: every external reference must land in a namespace some `resolve_against` sibling owns. Off, outside vocabularies stay unchecked by design; on, a typo'd namespace — which otherwise reads as an outside vocabulary and escapes every check — warns, and `--strict` fails on it |
 
 ## `[label_sources]`
 
