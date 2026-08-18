@@ -2582,9 +2582,6 @@ mod tests {
         );
     }
 
-    /// Anchors that expand to fewer distinct IRIs than authored are
-    /// refused as a suspected authoring error: checking the collapsed
-    /// set would silently strengthen the claim.
     #[test]
     fn anchors_collapsing_to_one_iri_are_uncheckable() {
         let sibling_schema = linked_sibling_schema();
@@ -2725,8 +2722,6 @@ mod tests {
         assert_eq!(found.unverified.len(), 2, "one per joining record");
     }
 
-    /// A single-anchor claim states no sibling record references the
-    /// anchor at all, and any authored reference to it contradicts it.
     #[test]
     fn a_single_anchor_claim_is_checked() {
         let sibling_schema = linked_sibling_schema();
@@ -2769,8 +2764,6 @@ mod tests {
         );
     }
 
-    /// A via-narrowed single-anchor claim ("no Link references f1") is
-    /// contradicted by the Link that does.
     #[test]
     fn a_via_narrowed_single_anchor_claim_is_checked() {
         let sibling_schema = linked_sibling_schema();
@@ -2824,9 +2817,6 @@ mod tests {
         schema
     }
 
-    /// Containment is not joining at any depth: a record that inlines the
-    /// anchor merely holds it, while an authored by-id reference from the
-    /// same record still contradicts the claim.
     #[test]
     fn a_nested_holder_of_the_anchor_does_not_join_it() {
         let sibling_schema = shelved_sibling_schema();
@@ -2869,8 +2859,6 @@ mod tests {
         assert_eq!(found.unverified[0].joined_by, "s1");
     }
 
-    /// An inline child does not mask a co-authored by-id citation of the
-    /// same target under the same slot: each edge classifies on its own.
     #[test]
     fn an_inline_child_does_not_mask_a_citation_of_the_same_target() {
         let sibling_schema = shelved_sibling_schema();
@@ -2895,9 +2883,6 @@ mod tests {
         assert_eq!(found.unverified[0].joined_by, "s1");
     }
 
-    /// Restating an already-declared record as an inline mapping is a
-    /// citation, not containment: the record was materialized by its own
-    /// declaration, and the restater joins what it lists.
     #[test]
     fn restating_a_declared_record_inline_is_a_citation() {
         let mut sibling_schema = linked_sibling_schema();
@@ -2932,9 +2917,6 @@ mod tests {
         assert_eq!(found.unverified[0].joined_by, "l2");
     }
 
-    /// A partial collapse — more authored anchors than distinct IRIs —
-    /// is uncheckable for the same reason a total collapse is: checking
-    /// the smaller set would silently strengthen the claim.
     #[test]
     fn a_partial_anchor_collapse_is_uncheckable() {
         let sibling_schema = linked_sibling_schema();
@@ -2960,8 +2942,6 @@ mod tests {
         assert_eq!(found.uncheckable.len(), 1, "got: {found:?}");
     }
 
-    /// `via` narrows by exactly one class: several values are uncheckable
-    /// rather than narrowed by whichever happens to come first.
     #[test]
     fn a_multivalued_via_is_uncheckable() {
         let sibling_schema = linked_sibling_schema();
@@ -2992,8 +2972,6 @@ mod tests {
         );
     }
 
-    /// A null anchor is not silently dropped: a null can never reference
-    /// a record, so the claim it sits in is uncheckable, not shortened.
     #[test]
     fn a_null_anchor_makes_the_claim_uncheckable() {
         let sibling_schema = linked_sibling_schema();
@@ -3050,9 +3028,6 @@ mod tests {
         schema
     }
 
-    /// A slot value that is neither a reference nor an IRI scalar makes
-    /// the claim uncheckable: dropping the value would silently evaluate
-    /// a stronger claim than authored.
     #[test]
     fn a_malformed_anchor_or_via_makes_the_claim_uncheckable() {
         let sibling_schema = linked_sibling_schema();

@@ -385,6 +385,17 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
         });
     }
 
+    if let Some(id) = &set.root_collision {
+        out.push(Violation {
+            record: id.clone(),
+            detail: format!(
+                "the dataset container's id `{id}` is already a record's id; no container \
+                 is emitted and key-scoped records mint unscoped until the collision is \
+                 resolved"
+            ),
+        });
+    }
+
     out
 }
 
@@ -684,6 +695,25 @@ classes:
 
     fn data(yaml: &str) -> Value {
         serde_norway::from_str(yaml).expect("parse data")
+    }
+
+    #[test]
+    fn a_container_id_collision_names_its_consequence() {
+        let schema: crate::linkml::SchemaDefinition = serde_norway::from_str(
+            "name: s\nclasses:\n  Root:\n    tree_root: true\n    attributes:\n      id:\n        identifier: true\n      items:\n        range: Item\n        multivalued: true\n  Item:\n    attributes:\n      id:\n        identifier: true\n",
+        )
+        .expect("parse schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: x1\nitems:\n  - {id: x1}\n").expect("parse data");
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        let violations = validate_instances(&schema, &set);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.detail.contains("no container is emitted")),
+            "the degraded state is stated, not just the duplicate id; got: {:?}",
+            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+        );
     }
 
     /// The float family follows number semantics: an integer is a valid

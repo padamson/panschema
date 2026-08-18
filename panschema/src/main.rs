@@ -444,6 +444,16 @@ fn check_resolve_against(
                     candidates.join(", ")
                 );
             }
+            // A collided container loads degraded — no container record, its
+            // citations unreliable — so resolving or verifying against it
+            // would report authoritative results off a broken graph.
+            if let Some(id) = &set.root_collision {
+                anyhow::bail!(
+                    "sibling dataset {} container id `{id}` collides with a record's id; \
+                     fix the dataset before resolving against it",
+                    path.display()
+                );
+            }
             minted.extend(panschema::diagnostics::minted_instance_iris(
                 &sibling_schema,
                 std::slice::from_ref(&set),

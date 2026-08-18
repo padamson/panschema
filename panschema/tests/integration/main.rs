@@ -1985,6 +1985,85 @@ resolve_against = ["ghost"]
     );
 }
 
+#[test]
+fn manifest_declines_checks_against_a_collided_sibling() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+
+    let catalog_pkg = consumer.join("catalog-pkg");
+    fs::create_dir_all(&catalog_pkg).unwrap();
+    fs::write(
+        catalog_pkg.join("panschema-publish.toml"),
+        "[schema]\nname = \"catalog\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"catalog.yaml\"\n",
+    )
+    .unwrap();
+    fs::write(
+        catalog_pkg.join("catalog.yaml"),
+        "id: https://example.org/catalog\nname: catalog\ndefault_prefix: cat\nprefixes:\n  cat: https://example.org/catalog/\nclasses:\n  Estate:\n    tree_root: true\n    slots: [id, providers]\n  Provider:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  providers: {range: Provider, multivalued: true}\n",
+    )
+    .unwrap();
+
+    let bench_pkg = consumer.join("bench-pkg");
+    fs::create_dir_all(&bench_pkg).unwrap();
+    fs::write(
+        bench_pkg.join("panschema-publish.toml"),
+        "[schema]\nname = \"bench\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"bench.yaml\"\n",
+    )
+    .unwrap();
+    fs::write(
+        bench_pkg.join("bench.yaml"),
+        "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, unconnected]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  unconnected: {range: DomainRecord, multivalued: true}\n",
+    )
+    .unwrap();
+
+    // The catalog container reuses a contained record's id, so the sibling
+    // loads without a container and its citations are unreliable.
+    fs::write(
+        consumer.join("catalog-data.yaml"),
+        "id: aws\nproviders:\n  - {id: aws}\n  - {id: gcp}\n",
+    )
+    .unwrap();
+    fs::write(
+        consumer.join("bench-data.yaml"),
+        "id: b1\nunconnected:\n  - cat:gcp\n",
+    )
+    .unwrap();
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+catalog = { path = "./catalog-pkg" }
+bench = { path = "./bench-pkg" }
+
+[generate.catalog]
+ttl = "catalog.ttl"
+instances = ["catalog-data.yaml"]
+
+[generate.bench]
+ttl = "bench.ttl"
+instances = ["bench-data.yaml"]
+resolve_against = ["catalog"]
+verify_absences = { slot = "unconnected" }
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("generate")
+        .current_dir(consumer)
+        .output()
+        .expect("run panschema");
+    assert!(
+        !out.status.success(),
+        "a collided sibling cannot be resolved against"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("collides with a record's id"),
+        "the refusal names the collision; got:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 /// The manifest-bound absence claim end to end: holds, contradicted,
 /// `--strict`-refused, and misconfigured.
 #[test]

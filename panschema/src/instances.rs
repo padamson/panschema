@@ -128,6 +128,13 @@ pub struct InstanceSet {
     /// marked held (containment by role), so citation-oriented consumers
     /// need no special case for it.
     pub root_record: Option<String>,
+    /// The container's authored id when it collides with a record's id.
+    /// No container is emitted then — attaching its edges to that record
+    /// would mislabel an ordinary record as the container — and without a
+    /// container, key-scoped records mint unscoped. Distinct from
+    /// `duplicate_ids` so a caller can tell this degraded state from a
+    /// legitimately vessel-rooted dataset.
+    pub root_collision: Option<String>,
     /// When a schema declares several `tree_root` classes and the data
     /// conforms to none of them, or to more than one equally well: the
     /// candidates, for a caller to report. `None` when there was nothing to
@@ -280,6 +287,7 @@ impl InstanceSet {
             external_references: Vec::new(),
             root: None,
             root_record: None,
+            root_collision: None,
             root_candidates: None,
         }
     }
@@ -310,7 +318,11 @@ impl InstanceSet {
                 None => return Self::default(),
             },
         };
-        let root_slots = crate::linkml_resolve::resolve_effective_slots(root, schema);
+        // Resolved with provenance so each slot's induced range is available,
+        // exactly as record building does below: an `any_of` union carries
+        // its range targets there, not in the scalar `range:`.
+        let root_resolved =
+            crate::linkml_resolve::resolve_effective_slots_with_provenance(root, schema);
 
         let mut metadata: Vec<(String, String)> = Vec::new();
         let mut loader = LinkmlLoader {
@@ -333,13 +345,22 @@ impl InstanceSet {
             let Some(slot_name) = key.as_str() else {
                 continue;
             };
-            let Some(slot) = root_slots.get(slot_name) else {
+            let Some(resolved) = root_resolved.get(slot_name) else {
                 continue;
             };
+            let slot = &resolved.definition;
             // A slot with no range (none declared, none defaulted at load)
             // is still a scalar for metadata purposes — skipping it would
             // drop both the root's id and any such scalar from the metadata.
-            let range = slot.range.clone().unwrap_or_default();
+            let ranges: Vec<String> = if resolved.induced.ranges.is_empty() {
+                slot.range.clone().into_iter().collect()
+            } else {
+                resolved.induced.ranges.clone()
+            };
+            let class_targets: Vec<&String> = ranges
+                .iter()
+                .filter(|r| schema.classes.contains_key(*r))
+                .collect();
             // Class-ranged container slots hold instance records; the
             // container's scalar attributes (a catalog title, a
             // description) describe the dataset itself and surface as its
@@ -348,7 +369,8 @@ impl InstanceSet {
             // of records nor a single metadata scalar — it replays through
             // the record builder like any record's values, and shows in
             // the metadata as the joined list.
-            if schema.classes.contains_key(&range) {
+            if class_targets.len() == 1 {
+                let range = class_targets[0].clone();
                 let ids = if slot.multivalued {
                     // A collection holds its records by role, however each
                     // entry is spelled.
@@ -361,6 +383,12 @@ impl InstanceSet {
                     loader.collect_single(&range, value)
                 };
                 contained.push((slot_name.to_string(), ids));
+            } else if !class_targets.is_empty() {
+                // Several class targets: which class an entry belongs to is
+                // ambiguous, so the field replays through the record builder,
+                // which cites strings by id and records a mapping as unusable
+                // rather than guessing.
+                root_fields.insert(key.clone(), value.clone());
             } else if let Some(scalar) = scalar_value(value) {
                 metadata.push((slot_name.to_string(), scalar_to_display(&scalar)));
                 root_fields.insert(key.clone(), value.clone());
@@ -380,37 +408,59 @@ impl InstanceSet {
             }
         }
 
-        // A container that declares an identifier is a domain individual —
-        // an `Enterprise`, not wine's catalogue vessel — so it emits
-        // as a record in its own right, referencing what it contains. A
-        // vessel has no identifier and stays unemitted.
+        // A container that declares an identifier *and authors a value for
+        // it* is a domain individual — an `Enterprise`, not wine's catalogue
+        // vessel — so it emits as a record in its own right, referencing
+        // what it contains. A vessel has no identifier and stays unemitted;
+        // so does a container that leaves its declared identifier blank,
+        // since building it anyway would fabricate an id that shifts with
+        // the instance count, and every key-scoped IRI with it.
         let mut emitted_root_id: Option<String> = None;
-        if root_slots.values().any(|slot| slot.identifier) {
+        let mut root_collision: Option<String> = None;
+        let authored_identifier = root_resolved
+            .iter()
+            .find(|(_, rs)| rs.definition.identifier)
+            .is_some_and(|(name, _)| {
+                root_fields.contains_key(serde_norway::Value::String(name.clone()))
+            });
+        if authored_identifier {
             let root_value = serde_norway::Value::Mapping(root_fields);
-            if let Some((root_id, _)) = loader.build_record(root_name, None, &root_value)
-                && let Some(inst) = loader.instances.iter_mut().find(|i| i.id == root_id)
-            {
-                emitted_root_id = Some(root_id.clone());
-                for (slot, ids) in &contained {
-                    for (id, held) in ids {
-                        inst.references.push(Reference {
-                            property: slot.clone(),
-                            target: id.clone(),
-                            external: points_outside_dataset(schema, id),
-                        });
-                        push_slot_value(
-                            &mut inst.slot_values,
-                            slot,
-                            InstanceValue::Reference {
-                                target: id.clone(),
-                                held: *held,
-                            },
-                        );
-                    }
+            match loader.build_record(root_name, None, &root_value) {
+                // The container's id is already some record's id. Attaching
+                // the container's edges to that record would silently make
+                // an ordinary record the dataset container, so report the
+                // collision and emit no container at all.
+                Some((root_id, false)) => {
+                    loader.note_duplicate_id(root_id.clone());
+                    root_collision = Some(root_id);
                 }
-                inst.references
-                    .sort_by(|a, b| (&a.property, &a.target).cmp(&(&b.property, &b.target)));
-                inst.slot_values.sort_by(|a, b| a.slot.cmp(&b.slot));
+                Some((root_id, true)) => {
+                    if let Some(inst) = loader.instances.iter_mut().find(|i| i.id == root_id) {
+                        for (slot, ids) in &contained {
+                            for (id, held) in ids {
+                                inst.references.push(Reference {
+                                    property: slot.clone(),
+                                    target: id.clone(),
+                                    external: points_outside_dataset(schema, id),
+                                });
+                                push_slot_value(
+                                    &mut inst.slot_values,
+                                    slot,
+                                    InstanceValue::Reference {
+                                        target: id.clone(),
+                                        held: *held,
+                                    },
+                                );
+                            }
+                        }
+                        inst.references.sort_by(|a, b| {
+                            (&a.property, &a.target).cmp(&(&b.property, &b.target))
+                        });
+                        inst.slot_values.sort_by(|a, b| a.slot.cmp(&b.slot));
+                    }
+                    emitted_root_id = Some(root_id);
+                }
+                None => {}
             }
         }
         // The root individual is the scope, and a record identified by a
@@ -469,6 +519,7 @@ impl InstanceSet {
             external_references,
             root: Some(root_name.clone()),
             root_record: emitted_root_id,
+            root_collision,
             root_candidates: None,
         }
     }
@@ -650,9 +701,16 @@ impl LinkmlLoader<'_> {
 
     /// Record a top-level record's id; a second use of an id already claimed by
     /// a top-level record is a duplicate identifier (listed once).
-    fn note_top_level_id(&mut self, id: String) {
-        if !self.top_level_seen.insert(id.clone()) && !self.duplicate_ids.contains(&id) {
+    /// Record `id` as claimed by more than one record, listed once.
+    fn note_duplicate_id(&mut self, id: String) {
+        if !self.duplicate_ids.contains(&id) {
             self.duplicate_ids.push(id);
+        }
+    }
+
+    fn note_top_level_id(&mut self, id: String) {
+        if !self.top_level_seen.insert(id.clone()) {
+            self.note_duplicate_id(id);
         }
     }
 
@@ -812,6 +870,36 @@ impl LinkmlLoader<'_> {
                 // Set once the dataset's root is known, not here.
                 scope: None,
             });
+        } else if let Some(existing) = self.instances.iter().find(|i| i.id == id) {
+            // Restating an existing record is fine only when nothing is
+            // lost: the same record authored identically in two places is
+            // one entity referenced two ways. A different class, or values
+            // the kept record does not carry, mean a second definition was
+            // discarded — report the id rather than let content vanish.
+            let class_conflict = existing.types != [class_name.to_string()];
+            let value_kept = |slot: &str, v: &InstanceValue| {
+                existing
+                    .slot_values
+                    .iter()
+                    .find(|e| e.slot == slot)
+                    .is_some_and(|e| {
+                        e.values.iter().any(|kept| match (v, kept) {
+                            // Containment vs citation is a spelling of the
+                            // same edge, not a content difference.
+                            (
+                                InstanceValue::Reference { target: a, .. },
+                                InstanceValue::Reference { target: b, .. },
+                            ) => a == b,
+                            _ => v == kept,
+                        })
+                    })
+            };
+            let content_lost = slot_values
+                .iter()
+                .any(|sv| sv.values.iter().any(|v| !value_kept(&sv.slot, v)));
+            if class_conflict || content_lost {
+                self.note_duplicate_id(id.clone());
+            }
         }
         Some((id, materialized))
     }
@@ -2553,15 +2641,14 @@ classes:
       held:
         range: Item
         multivalued: true
+      next:
+        range: Shelf
   Item:
     attributes:
       id:
         identifier: true
 ";
 
-    /// A single-valued class-ranged container slot holds one record: an
-    /// inline mapping materializes that record — never one phantom
-    /// record per field — and the container's edge to it is containment.
     #[test]
     fn a_single_valued_container_slot_materializes_its_record() {
         let schema: SchemaDefinition = serde_norway::from_str(SHELVED_SCHEMA).expect("schema");
@@ -2588,9 +2675,6 @@ classes:
         );
     }
 
-    /// A bare id at a single-valued class-ranged container slot cites an
-    /// existing record: the edge survives as a citation instead of
-    /// vanishing.
     #[test]
     fn a_single_valued_container_slot_cites_by_id() {
         let schema: SchemaDefinition = serde_norway::from_str(SHELVED_SCHEMA).expect("schema");
@@ -2619,5 +2703,156 @@ classes:
             "the citation draws a display edge; got: {:?}",
             root.references
         );
+    }
+
+    #[test]
+    fn a_container_id_collision_is_reported_not_absorbed() {
+        let schema: SchemaDefinition = serde_norway::from_str(SHELVED_SCHEMA).expect("schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: s1\nshelves:\n  - {id: s1}\n  - {id: s2}\n").expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+
+        assert_eq!(set.duplicate_ids, vec!["s1"], "the collision is reported");
+        assert_eq!(set.root_record, None, "no record is promoted to container");
+        let s1 = set.instances.iter().find(|i| i.id == "s1").expect("s1");
+        assert!(
+            !s1.slot_values.iter().any(|sv| sv.slot == "shelves"),
+            "the contained record must not absorb the container's edges; got: {:?}",
+            s1.slot_values
+        );
+    }
+
+    #[test]
+    fn a_record_colliding_with_a_nested_id_is_reported() {
+        let schema: SchemaDefinition = serde_norway::from_str(SHELVED_SCHEMA).expect("schema");
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: est\nshelves:\n  - {id: s1, held: [{id: dup}]}\n  - {id: dup, held: [{id: i9}]}\n",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert_eq!(
+            set.duplicate_ids,
+            vec!["dup"],
+            "the second shelf's authored content was discarded, which must be reported"
+        );
+    }
+
+    #[test]
+    fn identical_top_level_duplicates_are_still_reported() {
+        let schema: SchemaDefinition = serde_norway::from_str(SHELVED_SCHEMA).expect("schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: est\nshelves:\n  - {id: s1}\n  - {id: s1}\n")
+                .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert_eq!(
+            set.duplicate_ids,
+            vec!["s1"],
+            "two top-level claims on one id are a collision even with identical content"
+        );
+    }
+
+    #[test]
+    fn a_respelled_identical_restatement_is_not_a_collision() {
+        let schema: SchemaDefinition = serde_norway::from_str(SHELVED_SCHEMA).expect("schema");
+        // s1's inline child is restated by bare id: same edge, different
+        // spelling, nothing lost.
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: est\nshelves:\n  - {id: s1, held: [{id: w1}]}\n  - {id: s2, next: {id: s1, held: [w1]}}\n",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert_eq!(set.duplicate_ids, Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_cross_class_restatement_is_a_collision() {
+        let schema: SchemaDefinition = serde_norway::from_str(SHELVED_SCHEMA).expect("schema");
+        // x exists as an Item; the Shelf-ranged slot restates its id with
+        // no content of its own, so only the class conflict flags it.
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: est\nshelves:\n  - {id: s1, held: [{id: x}]}\n  - {id: s2, next: {id: x}}\n",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert_eq!(set.duplicate_ids, vec!["x"]);
+    }
+
+    #[test]
+    fn a_bare_same_class_restatement_is_not_a_collision() {
+        let schema: SchemaDefinition = serde_norway::from_str(SHELVED_SCHEMA).expect("schema");
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: est\nshelves:\n  - {id: s1, held: [{id: w1}]}\n  - {id: s2, held: [{id: w1}]}\n",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert_eq!(
+            set.duplicate_ids,
+            Vec::<String>::new(),
+            "restating a record by bare id discards nothing"
+        );
+    }
+
+    #[test]
+    fn an_any_of_class_ranged_container_slot_loads_its_records() {
+        const ANY_OF_SCHEMA: &str = "\
+name: Estate
+default_range: string
+classes:
+  Root:
+    tree_root: true
+    attributes:
+      id:
+        identifier: true
+      things:
+        multivalued: true
+        any_of:
+          - range: Shelf
+  Shelf:
+    attributes:
+      id:
+        identifier: true
+";
+        let schema: SchemaDefinition = serde_norway::from_str(ANY_OF_SCHEMA).expect("schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: est\nthings:\n  - {id: s1}\n").expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            set.instances.iter().any(|i| i.id == "s1"),
+            "the collection's records load through the slot's induced range; got: {:?}",
+            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+        );
+        let root = set.instances.iter().find(|i| i.id == "est").expect("est");
+        assert_eq!(
+            root.slot_values
+                .iter()
+                .find(|sv| sv.slot == "things")
+                .expect("things recorded")
+                .values,
+            [InstanceValue::Reference {
+                target: "s1".to_string(),
+                held: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_container_without_its_authored_identifier_is_not_emitted() {
+        let schema: SchemaDefinition = serde_norway::from_str(SHELVED_SCHEMA).expect("schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("shelves:\n  - {id: s1}\n").expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert_eq!(
+            set.root_record, None,
+            "a declared but never-authored identifier fabricates no container"
+        );
+        assert_eq!(
+            set.instances
+                .iter()
+                .map(|i| i.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["s1"],
+            "no phantom record with a synthesized id"
+        );
+        assert_eq!(set.duplicate_ids, Vec::<String>::new());
     }
 }
