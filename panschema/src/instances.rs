@@ -99,8 +99,9 @@ pub struct Instance {
     pub scope: Option<String>,
 }
 
-/// A container-collection entry that loaded no record — it named no
-/// single class of the slot's range, or its shape can never name one.
+/// A container-collection entry that loaded no record — or loaded one
+/// without its authored key — because it named no single class of the
+/// slot's range, or its shape can never name one.
 /// Kept on the set (not any record) so validation surfaces it whether or
 /// not a container record emits: no collection entry vanishes silently.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,8 +125,10 @@ pub struct InstanceSet {
     /// listed once. Empty for readers that don't track it (e.g. OWL).
     pub duplicate_ids: Vec<String>,
     /// Fields present in the data that the record's class doesn't declare.
-    /// These are **not** dropped — they render and emit as properties minted
-    /// in the schema's namespace — so a validator needs to see them. Sorted.
+    /// String-keyed ones are **not** dropped — they render and emit as
+    /// properties minted in the schema's namespace — while a non-string
+    /// key (`key_kind: Some`) can name no slot, so its value is the one
+    /// thing here that was discarded. Sorted, each finding once.
     /// Empty for readers that don't track it (e.g. OWL).
     pub undeclared_fields: Vec<UndeclaredField>,
     /// The `tree_root` container's own scalar values — a data file's
@@ -173,6 +176,23 @@ pub struct UndeclaredField {
     pub class: String,
     /// The field name as written in the data.
     pub field: String,
+    /// `Some` when the field's key is not a string — such a field cannot
+    /// name a slot, so unlike an ordinary undeclared field its value is
+    /// dropped. `None` for a string-keyed undeclared field, which is
+    /// kept and emitted as an undeclared property.
+    pub key_kind: Option<KeyKind>,
+}
+
+/// What kind of non-string key a field had, deciding the remedy the
+/// report can honestly offer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum KeyKind {
+    /// A number or boolean: `field` shows its exact display, and quoting
+    /// it makes it a string.
+    Quotable,
+    /// A mapping, sequence, or null: nothing quotable exists, and
+    /// `field` carries a kind phrase rather than an authored key.
+    Unquotable,
 }
 
 impl InstanceSet {
@@ -359,15 +379,17 @@ impl InstanceSet {
             unusable_entries: Vec::new(),
             simple_dict_slot_by_class: std::collections::BTreeMap::new(),
         };
-        // Whether the container authors a value for its declared identifier
-        // — decided up front because it routes union-ranged container
-        // slots below, and later gates whether a container record emits.
-        let authored_identifier = root_resolved
+        // The container's authored identifier value, when its declared
+        // identifier slot carries one — decided up front because it names
+        // the container in findings, routes union-ranged container slots
+        // below, and later gates whether a container record emits.
+        let authored_root_id: Option<String> = root_resolved
             .iter()
             .find(|(_, rs)| rs.definition.identifier)
             .and_then(|(name, _)| container.get(serde_norway::Value::String(name.clone())))
             .and_then(scalar_value)
-            .is_some();
+            .map(|s| scalar_to_display(&s));
+        let authored_identifier = authored_root_id.is_some();
         // What each class-ranged container slot carried, so a root that is
         // itself a record can reference those records under that slot's
         // name — each id paired with whether the edge is containment.
@@ -378,9 +400,19 @@ impl InstanceSet {
 
         for (key, value) in container {
             let Some(slot_name) = key.as_str() else {
+                loader.note_non_string_key(
+                    authored_root_id
+                        .clone()
+                        .unwrap_or_else(|| root_name.clone()),
+                    root_name,
+                    key,
+                );
                 continue;
             };
             let Some(resolved) = root_resolved.get(slot_name) else {
+                // An undeclared string field is kept and reported exactly
+                // as on any record: the replayed container carries it.
+                root_fields.insert(key.clone(), value.clone());
                 continue;
             };
             let slot = &resolved.definition;
@@ -534,6 +566,8 @@ impl InstanceSet {
 
         loader.instances.sort_by(|a, b| a.id.cmp(&b.id));
         loader.duplicate_ids.sort();
+        loader.undeclared_fields.sort();
+        loader.undeclared_fields.dedup();
         loader.undeclared_fields.sort();
         let mut external_references: Vec<ExternalReference> = loader
             .instances
@@ -710,6 +744,22 @@ impl LinkmlLoader<'_> {
         self.simple_dict_slot_by_class[class_name].clone()
     }
 
+    /// Report a field key that is not a string: it can name no slot, so
+    /// its value is dropped — unlike a kept undeclared property.
+    fn note_non_string_key(&mut self, record: String, class: &str, key: &serde_norway::Value) {
+        let (field, kind) = match key {
+            serde_norway::Value::Number(n) => (n.to_string(), KeyKind::Quotable),
+            serde_norway::Value::Bool(b) => (b.to_string(), KeyKind::Quotable),
+            other => (yaml_kind(other).to_string(), KeyKind::Unquotable),
+        };
+        self.undeclared_fields.push(UndeclaredField {
+            record,
+            class: class.to_string(),
+            field,
+            key_kind: Some(kind),
+        });
+    }
+
     /// Record a collection entry that loaded nothing, and why.
     fn note_unusable(&mut self, slot: &str, key: Option<String>, reason: String) {
         self.unusable_entries.push(UnusableCollectionEntry {
@@ -865,6 +915,15 @@ impl LinkmlLoader<'_> {
                     }
                     match record {
                         serde_norway::Value::Mapping(entry) => {
+                            if key_str.is_none() {
+                                self.note_unusable(
+                                    slot,
+                                    None,
+                                    "has a non-string key; the record loads by its own id — \
+                                     quote the key to make it the authored one"
+                                        .to_string(),
+                                );
+                            }
                             match self.disambiguate_class(candidates, entry) {
                                 Some(class) => {
                                     if let Some((id, _)) =
@@ -1056,6 +1115,7 @@ impl LinkmlLoader<'_> {
         let mut slot_values: Vec<SlotValue> = Vec::new();
         for (field_key, field_value) in map {
             let Some(field) = field_key.as_str() else {
+                self.note_non_string_key(id.clone(), class_name, field_key);
                 continue;
             };
             let slot = slots.get(field);
@@ -1064,6 +1124,7 @@ impl LinkmlLoader<'_> {
                     record: id.clone(),
                     class: class_name.to_string(),
                     field: field.to_string(),
+                    key_kind: None,
                 });
             }
             // The slot's range targets: the induced set when the schema
@@ -3529,6 +3590,13 @@ classes:
             "the record's own id carries it; got: {:?}",
             set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
         );
+        assert!(
+            set.unusable_collection_entries
+                .iter()
+                .any(|u| u.slot == "things" && u.reason.contains("non-string key")),
+            "the discarded authored key is reported; got: {:?}",
+            set.unusable_collection_entries
+        );
     }
 
     #[test]
@@ -3578,6 +3646,73 @@ classes:
         assert!(
             about_s9.iter().any(|m| m.contains("more than one")),
             "ambiguity is the stated failure, not the value's kind; got: {about_s9:?}"
+        );
+    }
+
+    #[test]
+    fn a_non_string_field_key_is_reported_not_dropped() {
+        let schema: SchemaDefinition = serde_norway::from_str(SHELVED_SCHEMA).expect("schema");
+        // The record is restated identically (one entity, two spellings)
+        // and carries both a quotable and an unquotable non-string key.
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: est\nshelves:\n  - {id: s1, 2024: oops, ~: nix}\n  - {id: s1, 2024: oops, ~: nix}\n",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        let quotable: Vec<_> = set
+            .undeclared_fields
+            .iter()
+            .filter(|f| f.field == "2024")
+            .collect();
+        assert_eq!(
+            quotable.len(),
+            1,
+            "one authored defect is one finding, however many restatements; got: {:?}",
+            set.undeclared_fields
+        );
+        assert_eq!(quotable[0].record, "s1");
+        assert_eq!(quotable[0].key_kind, Some(KeyKind::Quotable));
+        let violations = crate::validate::validate_instances(&schema, &set);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.detail.contains("2024") && v.detail.contains("quote")),
+            "quoting fixes a scalar key, and the report says so; got: {:?}",
+            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.detail.contains("only string keys") && !v.detail.contains("quote")),
+            "an unquotable key gets its own wording, not impossible advice; got: {:?}",
+            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_non_string_container_field_key_is_reported_too() {
+        let schema: SchemaDefinition = serde_norway::from_str(SHELVED_SCHEMA).expect("schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: est\n2024: oops\nbogus: kept\nshelves: []\n")
+                .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        let entry = set
+            .undeclared_fields
+            .iter()
+            .find(|f| f.field == "2024")
+            .unwrap_or_else(|| panic!("got: {:?}", set.undeclared_fields));
+        assert_eq!(
+            entry.record, "est",
+            "the finding names the container's authored id, not its class"
+        );
+        assert_eq!(entry.key_kind, Some(KeyKind::Quotable));
+        assert!(
+            set.undeclared_fields
+                .iter()
+                .any(|f| f.field == "bogus" && f.key_kind.is_none()),
+            "an undeclared string key on the container is kept and reported, \
+             exactly as on any record; got: {:?}",
+            set.undeclared_fields
         );
     }
 

@@ -369,11 +369,23 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
     for u in &set.undeclared_fields {
         out.push(Violation {
             record: u.record.clone(),
-            detail: format!(
-                "field `{}` is not declared by class `{}`; it renders and emits as an \
-                 undeclared property",
-                u.field, u.class
-            ),
+            detail: match u.key_kind {
+                Some(crate::instances::KeyKind::Quotable) => format!(
+                    "field key `{}` (class `{}`) is not a string; its value is dropped — \
+                     quote the key",
+                    u.field, u.class
+                ),
+                Some(crate::instances::KeyKind::Unquotable) => format!(
+                    "a field key on class `{}` is {}, not a string; its value is dropped — \
+                     only string keys can name fields",
+                    u.class, u.field
+                ),
+                None => format!(
+                    "field `{}` is not declared by class `{}`; it renders and emits as an \
+                     undeclared property",
+                    u.field, u.class
+                ),
+            },
         });
     }
 
