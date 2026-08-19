@@ -399,6 +399,16 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
         });
     }
 
+    for u in &set.unusable_collection_entries {
+        out.push(Violation {
+            record: u.key.clone().unwrap_or_else(|| u.slot.clone()),
+            detail: match &u.key {
+                Some(key) => format!("container slot `{}` entry `{key}` {}", u.slot, u.reason),
+                None => format!("a container slot `{}` entry {}", u.slot, u.reason),
+            },
+        });
+    }
+
     if let Some(id) = &set.root_collision {
         out.push(Violation {
             record: id.clone(),
