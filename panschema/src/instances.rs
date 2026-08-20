@@ -7,8 +7,7 @@
 //! (`from_owl_annotations`); the LinkML instance-data reader populates the
 //! same model.
 
-use crate::linkml::{SchemaDefinition, SlotDefinition};
-use std::collections::BTreeMap;
+use crate::linkml::SchemaDefinition;
 
 /// A typed reference from one instance to another — an object-property
 /// assertion whose value is another instance's identifier (a graph edge).
@@ -105,14 +104,17 @@ const UNION_AMBIGUITY_REASON: &str = "names no single class of the union range �
                                       field only the intended member declares, or a type \
                                       designator naming one";
 
-/// A container-collection entry that loaded no record — or loaded one
-/// without its authored key — because it named no single class of the
-/// slot's range, or its shape can never name one.
+/// A collection entry that loaded no record — or loaded one without its
+/// authored key — because it named no single class of the slot's range,
+/// or its shape can never name one.
 /// Kept on the set (not any record) so validation surfaces it whether or
 /// not a container record emits: no collection entry vanishes silently.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnusableCollectionEntry {
-    /// The container slot holding the entry.
+    /// The record whose slot holds the entry; `None` when the collection
+    /// sits on the dataset container (or a vessel root) itself.
+    pub record: Option<String>,
+    /// The slot holding the entry.
     pub slot: String,
     /// The dict key — the entry's would-be id — when the collection was
     /// spelled as a dict with a string key.
@@ -383,6 +385,7 @@ impl InstanceSet {
             undeclared_fields: Vec::new(),
             effective_slots_by_class: std::collections::BTreeMap::new(),
             unusable_entries: Vec::new(),
+            current_holder: None,
         };
         // The container's authored identifier value, when its declared
         // identifier slot carries one — decided up front because it names
@@ -429,15 +432,7 @@ impl InstanceSet {
             } else {
                 resolved.induced.ranges.clone()
             };
-            let all_classes =
-                !ranges.is_empty() && ranges.iter().all(|r| schema.classes.contains_key(r));
-            let mut class_targets: Vec<&String> = ranges
-                .iter()
-                .filter(|r| schema.classes.contains_key(*r))
-                .collect();
-            // Branches repeating one class are one candidate.
-            let mut seen_targets = std::collections::BTreeSet::new();
-            class_targets.retain(|c| seen_targets.insert(c.as_str()));
+            let (class_targets, all_classes) = class_targets_of(schema, &ranges);
             // Class-ranged container slots hold instance records; the
             // container's scalar attributes (a catalog title, a
             // description) describe the dataset itself and surface as its
@@ -446,10 +441,8 @@ impl InstanceSet {
             // of records nor a single metadata scalar — it replays through
             // the record builder like any record's values, and shows in
             // the metadata as the joined list.
-            if slot.multivalued
-                && !class_targets.is_empty()
-                && (class_targets.len() == 1 || all_classes)
-            {
+            let multivalued = crate::linkml_resolve::effective_cardinality(slot).multivalued;
+            if is_record_collection(multivalued, &class_targets, all_classes) {
                 // A collection holds its records by role, however each
                 // entry is spelled; a union of classes chooses each entry's
                 // member individually. A union mixing several classes with
@@ -701,6 +694,31 @@ fn unique_best_scored<T>(scored: &[(usize, T)]) -> Option<&T> {
     }
 }
 
+/// The deduplicated class targets among `ranges` — repeated branches
+/// naming one class are one candidate — and whether every range is a
+/// class, computed one way at every depth.
+fn class_targets_of<'r>(
+    schema: &SchemaDefinition,
+    ranges: &'r [String],
+) -> (Vec<&'r String>, bool) {
+    let all_classes = !ranges.is_empty() && ranges.iter().all(|r| schema.classes.contains_key(r));
+    let mut targets: Vec<&String> = ranges
+        .iter()
+        .filter(|r| schema.classes.contains_key(*r))
+        .collect();
+    let mut seen = std::collections::BTreeSet::new();
+    targets.retain(|c| seen.insert(c.as_str()));
+    (targets, all_classes)
+}
+
+/// Whether a slot's value holds a collection of records: effectively
+/// multivalued, ranging over one class or a union made only of classes.
+/// A union mixing classes with types falls to record-level rules — a
+/// scalar there could legitimately be a literal.
+fn is_record_collection(multivalued: bool, class_targets: &[&String], all_classes: bool) -> bool {
+    multivalued && (class_targets.len() == 1 || all_classes)
+}
+
 /// Walks a LinkML instance-data tree, accumulating typed records.
 /// Deduplicates by id so an instance that appears both inline and in a
 /// collection is emitted once.
@@ -713,33 +731,46 @@ struct LinkmlLoader<'a> {
     top_level_seen: std::collections::HashSet<String>,
     duplicate_ids: Vec<String>,
     undeclared_fields: Vec<UndeclaredField>,
-    /// Each class's effective slots, resolved once per dataset — every
-    /// per-class fact (key matching, SimpleDict admission, the type
-    /// designator) projects from this one map, and the full inheritance
-    /// walk is too costly to repeat per record.
-    effective_slots_by_class:
-        std::collections::BTreeMap<String, std::collections::BTreeMap<String, SlotDefinition>>,
+    /// Each class's effective slots, resolved with provenance once per
+    /// dataset — record building and every per-class fact (key matching,
+    /// SimpleDict admission, the type designator) project from this one
+    /// map, and the full inheritance walk is too costly to repeat per
+    /// record. `Rc` so a caller can hold the map across `&mut self` work.
+    effective_slots_by_class: std::collections::BTreeMap<
+        String,
+        std::rc::Rc<std::collections::BTreeMap<String, crate::linkml_resolve::ResolvedSlot>>,
+    >,
     /// Collection entries that loaded no record, carried to the set.
     unusable_entries: Vec<UnusableCollectionEntry>,
+    /// The id of the record whose fields are being ingested, so a finding
+    /// raised below it can name its holder; `None` between records — a
+    /// collection on the dataset container or a vessel root.
+    current_holder: Option<String>,
 }
 
 impl LinkmlLoader<'_> {
-    /// `class_name`'s effective slots, resolved once and cached.
-    fn effective_slots(
+    /// `class_name`'s effective slots with provenance, resolved once and
+    /// cached; the returned handle stays valid across further loading.
+    fn resolved_slots(
         &mut self,
         class_name: &str,
-    ) -> &std::collections::BTreeMap<String, SlotDefinition> {
+    ) -> std::rc::Rc<std::collections::BTreeMap<String, crate::linkml_resolve::ResolvedSlot>> {
         if !self.effective_slots_by_class.contains_key(class_name) {
             let slots = self
                 .schema
                 .classes
                 .get(class_name)
-                .map(|class| crate::linkml_resolve::resolve_effective_slots(class, self.schema))
+                .map(|class| {
+                    crate::linkml_resolve::resolve_effective_slots_with_provenance(
+                        class,
+                        self.schema,
+                    )
+                })
                 .unwrap_or_default();
             self.effective_slots_by_class
-                .insert(class_name.to_string(), slots);
+                .insert(class_name.to_string(), std::rc::Rc::new(slots));
         }
-        &self.effective_slots_by_class[class_name]
+        std::rc::Rc::clone(&self.effective_slots_by_class[class_name])
     }
 
     /// The slot a compact SimpleDict entry fills for `class_name`: the
@@ -748,10 +779,12 @@ impl LinkmlLoader<'_> {
     /// payload. With zero or several candidates there is no fact about
     /// which slot the scalar fills, so `None` — nothing is invented.
     fn simple_dict_slot(&mut self, class_name: &str) -> Option<String> {
-        let mut open = self
-            .effective_slots(class_name)
+        let slots = self.resolved_slots(class_name);
+        let mut open = slots
             .iter()
-            .filter(|(_, slot)| !slot.identifier && !slot.key && !slot.designates_type)
+            .filter(|(_, rs)| {
+                !rs.definition.identifier && !rs.definition.key && !rs.definition.designates_type
+            })
             .map(|(name, _)| name);
         match (open.next(), open.next()) {
             (Some(name), None) => Some(name.clone()),
@@ -762,20 +795,20 @@ impl LinkmlLoader<'_> {
     /// The `designates_type` slot among `class_name`'s effective slots —
     /// the slot whose authored value names the record's class.
     fn designator_slot(&mut self, class_name: &str) -> Option<String> {
-        self.effective_slots(class_name)
+        self.resolved_slots(class_name)
             .iter()
-            .find(|(_, slot)| slot.designates_type)
+            .find(|(_, rs)| rs.definition.designates_type)
             .map(|(name, _)| name.clone())
     }
 
     /// Whether `slot_name` is an effective slot of `class_name`.
     fn class_carries(&mut self, class_name: &str, slot_name: &str) -> bool {
-        self.effective_slots(class_name).contains_key(slot_name)
+        self.resolved_slots(class_name).contains_key(slot_name)
     }
 
     /// How many of `keys` are effective slots of `class_name`.
     fn key_match_count(&mut self, class_name: &str, keys: &[&str]) -> usize {
-        let slots = self.effective_slots(class_name);
+        let slots = self.resolved_slots(class_name);
         keys.iter().filter(|k| slots.contains_key(**k)).count()
     }
 
@@ -795,9 +828,11 @@ impl LinkmlLoader<'_> {
         });
     }
 
-    /// Record a collection entry that loaded nothing, and why.
+    /// Record a collection entry that loaded nothing, and why, naming the
+    /// record being built when the entry sits below one.
     fn note_unusable(&mut self, slot: &str, key: Option<String>, reason: String) {
         self.unusable_entries.push(UnusableCollectionEntry {
+            record: self.current_holder.clone(),
             slot: slot.to_string(),
             key,
             reason,
@@ -955,69 +990,12 @@ impl LinkmlLoader<'_> {
                 }
             }
             serde_norway::Value::Mapping(map) => {
-                for (key, record) in map {
-                    let key_str = key.as_str();
-                    // A key that is a member's own slot name is almost
-                    // certainly an un-wrapped inline record, not an id —
-                    // building it would mint a phantom named after a field.
-                    if let Some(k) = key_str
-                        && candidates.iter().any(|c| self.key_match_count(c, &[k]) > 0)
-                    {
-                        self.note_unusable(
-                            slot,
-                            Some(k.to_string()),
-                            format!(
-                                "is named like a field of the range (`{k}`), not a record \
-                                 id — wrap records in a list"
-                            ),
-                        );
-                        continue;
-                    }
-                    match record {
-                        serde_norway::Value::Mapping(entry) => {
-                            if key_str.is_none() {
-                                self.note_unusable(
-                                    slot,
-                                    None,
-                                    "has a non-string key; the record loads by its own id — \
-                                     quote the key to make it the authored one"
-                                        .to_string(),
-                                );
-                            }
-                            match self.disambiguate_class(candidates, entry) {
-                                Some(class) => {
-                                    if let Some((id, _)) =
-                                        self.build_record(&class, key_str, record)
-                                    {
-                                        self.note_top_level_id(id.clone());
-                                        ids.push((id, true));
-                                    }
-                                }
-                                None => self.note_unusable(
-                                    slot,
-                                    key_str.map(str::to_string),
-                                    UNION_AMBIGUITY_REASON.to_string(),
-                                ),
-                            }
-                        }
-                        serde_norway::Value::Null => self.note_unusable(
-                            slot,
-                            key_str.map(str::to_string),
-                            "is a null; a null names no record".to_string(),
-                        ),
-                        _ => {
-                            let Some(k) = key_str else {
-                                self.note_unusable(
-                                    slot,
-                                    None,
-                                    "has a non-string key; quote the key to make it an id"
-                                        .to_string(),
-                                );
-                                continue;
-                            };
-                            self.build_simple_dict_entry(slot, candidates, k, record, &mut ids);
-                        }
-                    }
+                // Container entries join top-level duplicate accounting and
+                // are held by role; a record's own dict collection follows
+                // record-level restatement rules instead.
+                for (id, _) in self.collect_dict_entries(slot, candidates, map) {
+                    self.note_top_level_id(id.clone());
+                    ids.push((id, true));
                 }
             }
             _ => {}
@@ -1025,17 +1003,93 @@ impl LinkmlLoader<'_> {
         ids
     }
 
+    /// Build the records of a collection authored in a dict spelling — an
+    /// identifier-keyed mapping of records, or the compact SimpleDict form.
+    /// Returns each built record's id and whether this call materialized
+    /// it; entries that build nothing land in the unusable channel.
+    fn collect_dict_entries(
+        &mut self,
+        slot: &str,
+        candidates: &[&String],
+        map: &serde_norway::Mapping,
+    ) -> Vec<(String, bool)> {
+        let mut ids = Vec::new();
+        for (key, record) in map {
+            let key_str = key.as_str();
+            // A key that is a member's own slot name is almost
+            // certainly an un-wrapped inline record, not an id —
+            // building it would mint a phantom named after a field.
+            if let Some(k) = key_str
+                && candidates.iter().any(|c| self.key_match_count(c, &[k]) > 0)
+            {
+                self.note_unusable(
+                    slot,
+                    Some(k.to_string()),
+                    format!(
+                        "is named like a field of the range (`{k}`), not a record \
+                         id — wrap records in a list"
+                    ),
+                );
+                continue;
+            }
+            match record {
+                serde_norway::Value::Mapping(entry) => {
+                    if key_str.is_none() {
+                        self.note_unusable(
+                            slot,
+                            None,
+                            "has a non-string key; the record loads by its own id — \
+                             quote the key to make it the authored one"
+                                .to_string(),
+                        );
+                    }
+                    match self.disambiguate_class(candidates, entry) {
+                        Some(class) => {
+                            if let Some(built) = self.build_record(&class, key_str, record) {
+                                ids.push(built);
+                            }
+                        }
+                        None => self.note_unusable(
+                            slot,
+                            key_str.map(str::to_string),
+                            UNION_AMBIGUITY_REASON.to_string(),
+                        ),
+                    }
+                }
+                serde_norway::Value::Null => self.note_unusable(
+                    slot,
+                    key_str.map(str::to_string),
+                    "is a null; a null names no record".to_string(),
+                ),
+                _ => {
+                    let Some(k) = key_str else {
+                        self.note_unusable(
+                            slot,
+                            None,
+                            "has a non-string key; quote the key to make it an id".to_string(),
+                        );
+                        continue;
+                    };
+                    if let Some(built) = self.build_simple_dict_entry(slot, candidates, k, record) {
+                        ids.push(built);
+                    }
+                }
+            }
+        }
+        ids
+    }
+
     /// A compact SimpleDict entry builds as the one union member with a
     /// single open slot for the scalar; zero or several members leave no
-    /// fact about which slot it fills, so the entry is unusable.
+    /// fact about which slot it fills, so the entry is unusable. Returns
+    /// the built record's id and whether this call materialized it.
     fn build_simple_dict_entry(
         &mut self,
         slot: &str,
         candidates: &[&String],
         key: &str,
         record: &serde_norway::Value,
-        ids: &mut Vec<(String, bool)>,
-    ) {
+    ) -> Option<(String, bool)> {
         let mut winner: Option<&String> = None;
         for candidate in candidates {
             if self.simple_dict_slot(candidate).is_some() {
@@ -1047,7 +1101,7 @@ impl LinkmlLoader<'_> {
                          record out with its fields"
                             .to_string(),
                     );
-                    return;
+                    return None;
                 }
                 winner = Some(candidate);
             }
@@ -1056,22 +1110,17 @@ impl LinkmlLoader<'_> {
             self.note_unusable(
                 slot,
                 Some(key.to_string()),
-                "is a compact entry, but no union member has a single open slot to fill"
+                "is a compact entry, but no class of the range has a single open slot to fill"
                     .to_string(),
             );
-            return;
+            return None;
         };
         let primary = self
             .simple_dict_slot(class)
             .expect("winner admitted a primary slot");
         let mut widened = serde_norway::Mapping::new();
         widened.insert(serde_norway::Value::String(primary), record.clone());
-        if let Some((id, _)) =
-            self.build_record(class, Some(key), &serde_norway::Value::Mapping(widened))
-        {
-            self.note_top_level_id(id.clone());
-            ids.push((id, true));
-        }
+        self.build_record(class, Some(key), &serde_norway::Value::Mapping(widened))
     }
 
     /// Record `id` as claimed by more than one record, listed once.
@@ -1129,28 +1178,23 @@ impl LinkmlLoader<'_> {
         dict_key: Option<&str>,
         record: &serde_norway::Value,
     ) -> Option<(String, bool)> {
-        let class = self.schema.classes.get(class_name)?;
+        self.schema.classes.get(class_name)?;
         let map = record.as_mapping()?;
-        // Resolved *with provenance* so each slot's induced range is available:
-        // an `any_of` union has several range targets and no scalar `range:`,
-        // so reading `range` alone would see nothing — silently turning
-        // references into literals.
-        let resolved =
-            crate::linkml_resolve::resolve_effective_slots_with_provenance(class, self.schema);
-        let slots: BTreeMap<String, SlotDefinition> = resolved
-            .iter()
-            .map(|(name, rs)| (name.clone(), rs.definition.clone()))
-            .collect();
+        // The provenance-resolved view: each slot's induced range is
+        // available there — an `any_of` union has several range targets
+        // and no scalar `range:`, so reading `range` alone would see
+        // nothing, silently turning references into literals.
+        let resolved = self.resolved_slots(class_name);
 
         // A record is identified by its `identifier` slot or, failing that,
         // its `key` slot — LinkML's globally- and container-unique forms.
-        let id_slot = slots
+        let id_slot = resolved
             .iter()
-            .find(|(_, s)| s.identifier)
-            .or_else(|| slots.iter().find(|(_, s)| s.key))
+            .find(|(_, rs)| rs.definition.identifier)
+            .or_else(|| resolved.iter().find(|(_, rs)| rs.definition.key))
             .map(|(name, _)| name.clone());
         // A name/label/title slot supplies the display label, LinkML-conventionally.
-        let label_slot = slots
+        let label_slot = resolved
             .keys()
             .find(|n| matches!(n.as_str(), "name" | "label" | "title"))
             .cloned();
@@ -1171,12 +1215,13 @@ impl LinkmlLoader<'_> {
         let mut literals: Vec<(String, String)> = Vec::new();
         let mut references: Vec<Reference> = Vec::new();
         let mut slot_values: Vec<SlotValue> = Vec::new();
+        let previous_holder = self.current_holder.replace(id.clone());
         for (field_key, field_value) in map {
             let Some(field) = field_key.as_str() else {
                 self.note_non_string_key(id.clone(), class_name, field_key);
                 continue;
             };
-            let slot = slots.get(field);
+            let slot = resolved.get(field).map(|rs| &rs.definition);
             if slot.is_none() {
                 self.undeclared_fields.push(UndeclaredField {
                     record: id.clone(),
@@ -1210,6 +1255,7 @@ impl LinkmlLoader<'_> {
             self.ingest_field(
                 field,
                 &ranges,
+                slot.is_some_and(|s| crate::linkml_resolve::effective_cardinality(s).multivalued),
                 &property,
                 field_value,
                 display,
@@ -1218,6 +1264,7 @@ impl LinkmlLoader<'_> {
                 &mut slot_values,
             );
         }
+        self.current_holder = previous_holder;
         // An identifier supplied as an identifier-keyed collection's map key is
         // an authored value too — record it so a validator sees it present.
         if let (Some(key), Some(id_name)) = (dict_key, id_slot.as_deref())
@@ -1302,6 +1349,7 @@ impl LinkmlLoader<'_> {
         &mut self,
         slot: &str,
         ranges: &[String],
+        multivalued: bool,
         property: &str,
         value: &serde_norway::Value,
         display: bool,
@@ -1310,10 +1358,13 @@ impl LinkmlLoader<'_> {
         slot_values: &mut Vec<SlotValue>,
     ) {
         if let serde_norway::Value::Sequence(items) = value {
+            // Each list element is one value of the slot; a mapping among
+            // them is a single record, never another dict collection.
             for item in items {
                 self.ingest_field(
                     slot,
                     ranges,
+                    false,
                     property,
                     item,
                     display,
@@ -1325,15 +1376,7 @@ impl LinkmlLoader<'_> {
             return;
         }
 
-        let all_classes =
-            !ranges.is_empty() && ranges.iter().all(|r| self.schema.classes.contains_key(r));
-        let mut class_targets: Vec<&String> = ranges
-            .iter()
-            .filter(|r| self.schema.classes.contains_key(*r))
-            .collect();
-        // Branches repeating one class are one candidate.
-        let mut seen_targets = std::collections::BTreeSet::new();
-        class_targets.retain(|c| seen_targets.insert(c.as_str()));
+        let (class_targets, all_classes) = class_targets_of(self.schema, ranges);
 
         // A null carries no value — treat as absent, not a kind mismatch —
         // except where only a reference could stand: a null can never
@@ -1370,6 +1413,31 @@ impl LinkmlLoader<'_> {
         };
 
         match value {
+            // A mapping at a multivalued class-ranged slot is a collection
+            // in a dict spelling — identifier-keyed records or compact
+            // SimpleDict entries — read as it would be on the container.
+            // One deliberate divergence: restating an already-materialized
+            // record here is a citation (`held: false`), matching this
+            // record level's inline and list spellings, where a container
+            // collection holds every entry by role.
+            serde_norway::Value::Mapping(map)
+                if is_record_collection(multivalued, &class_targets, all_classes) =>
+            {
+                let entries = self.collect_dict_entries(slot, &class_targets, map);
+                if entries.is_empty() && !map.is_empty() {
+                    // Every entry was unusable: leave the authored value
+                    // visible on the record, so a required-slot check or
+                    // an absence claim cannot read the slot as unauthored.
+                    push_slot_value(
+                        slot_values,
+                        slot,
+                        InstanceValue::Unexpected(yaml_kind(value)),
+                    );
+                }
+                for (target, materialized) in entries {
+                    reference_to(target, materialized, references, slot_values);
+                }
+            }
             // An inlined mapping is its own record; recurse and edge to it.
             // At a union, the authored fields choose the class; when they
             // don't choose one member, the mapping is recorded as unusable
@@ -1520,7 +1588,7 @@ fn capitalize_first(id: &str) -> String {
 mod tests {
     use super::*;
     use crate::io::Reader;
-    use crate::linkml::ClassDefinition;
+    use crate::linkml::{ClassDefinition, SlotDefinition};
     use crate::owl_reader::OwlReader;
 
     #[test]
@@ -2660,7 +2728,7 @@ classes:
     fn an_inlined_object_at_a_single_class_range_is_built() {
         // The unambiguous counterpart: exactly one class member, so the
         // object is built and linked.
-        let set = union_set("searches:\n  - {id: ls1, hasInput: {id: q9}}\n");
+        let set = union_set("searches:\n  - {id: ls1, hasInput: [{id: q9}]}\n");
         assert_eq!(
             find(&set, "ls1")
                 .references
@@ -2671,6 +2739,24 @@ classes:
             "a single class target makes the inlined object a record"
         );
         assert!(set.instances.iter().any(|i| i.id == "q9"), "and it exists");
+
+        // Un-wrapped, the mapping is a dict-spelled collection whose key
+        // names a field of the range — the same refusal and advice the
+        // container gives, at any depth.
+        let set = union_set("searches:\n  - {id: ls1, hasInput: {id: q9}}\n");
+        assert!(
+            !set.instances.iter().any(|i| i.id == "q9"),
+            "no record builds from a field-named key"
+        );
+        assert!(
+            set.unusable_collection_entries
+                .iter()
+                .any(|u| u.slot == "hasInput"
+                    && u.reason.contains("wrap records in a list")
+                    && u.record.as_deref() == Some("ls1")),
+            "the entry is reported with the fix, naming its holding record; got: {:?}",
+            set.unusable_collection_entries
+        );
     }
 
     #[test]
@@ -2859,6 +2945,172 @@ wineries:
                     ))],
                 },
             ]
+        );
+
+        // The dict spellings survive below the container too: a record's
+        // own multivalued slots read them the same way, at a single class
+        // and at a union of classes.
+        const NESTED_DICT_SCHEMA: &str = "\
+name: Estate
+default_range: string
+classes:
+  Root:
+    tree_root: true
+    attributes:
+      id:
+        identifier: true
+      buildings:
+        range: Building
+        multivalued: true
+  Building:
+    attributes:
+      id:
+        identifier: true
+      rooms:
+        range: Room
+        multivalued: true
+      bins:
+        range: Room
+        maximum_cardinality: 3
+      prime:
+        range: Room
+        multivalued: true
+        maximum_cardinality: 1
+      fixtures:
+        multivalued: true
+        any_of:
+          - range: Lamp
+          - range: Sink
+  Room:
+    attributes:
+      id:
+        identifier: true
+      area:
+        range: integer
+  Lamp:
+    attributes:
+      id:
+        identifier: true
+      lumen:
+        range: integer
+  Sink:
+    attributes:
+      id:
+        identifier: true
+      basin:
+        range: string
+";
+        let schema: SchemaDefinition = serde_norway::from_str(NESTED_DICT_SCHEMA).expect("schema");
+        let data: serde_norway::Value = serde_norway::from_str(
+            "\
+id: est
+buildings:
+  - id: b1
+    rooms:
+      r1: {area: 9}
+      r2: 12
+    fixtures:
+      f1: {lumen: 800}
+      f2: {basin: steel}
+",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        let ids: Vec<&str> = set.instances.iter().map(|i| i.id.as_str()).collect();
+        for (id, class) in [
+            ("r1", "Room"),
+            ("r2", "Room"),
+            ("f1", "Lamp"),
+            ("f2", "Sink"),
+        ] {
+            let entry = set
+                .instances
+                .iter()
+                .find(|i| i.id == id)
+                .unwrap_or_else(|| panic!("{id} loads from the nested dict; got: {ids:?}"));
+            assert_eq!(entry.types, vec![class], "{id} builds as its own member");
+        }
+        assert!(
+            !set.instances.iter().any(|i| i.id.starts_with("Room-")),
+            "no phantom record is minted from the dict itself; got: {ids:?}"
+        );
+        assert!(
+            set.undeclared_fields.is_empty() && set.unusable_collection_entries.is_empty(),
+            "every entry is read as data; got: {:?} / {:?}",
+            set.undeclared_fields,
+            set.unusable_collection_entries
+        );
+        let b1 = set.instances.iter().find(|i| i.id == "b1").expect("b1");
+        for target in ["r1", "r2", "f1", "f2"] {
+            assert!(
+                b1.slot_values.iter().any(|sv| sv.values.iter().any(
+                    |v| matches!(v, InstanceValue::Reference { target: t, .. } if t == target)
+                )),
+                "b1 holds an edge to {target}; got: {:?}",
+                b1.slot_values
+            );
+        }
+        assert!(
+            b1.slot_values.iter().all(|sv| sv
+                .values
+                .iter()
+                .all(|v| !matches!(v, InstanceValue::Unexpected(_)))),
+            "a collection that loads leaves no unexpected-value residue; got: {:?}",
+            b1.slot_values
+        );
+
+        // Cardinality decides multivalued-ness the same way it does
+        // everywhere else: `maximum_cardinality: 3` admits the dict
+        // spelling without a `multivalued` flag, and `maximum_cardinality:
+        // 1` keeps a flagged slot single-valued, so its mapping is one
+        // inline record, never a dict.
+        let data: serde_norway::Value = serde_norway::from_str(
+            "\
+id: est
+buildings:
+  - id: b2
+    bins:
+      n1: {area: 4}
+    prime: {id: p1, area: 2}
+",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        let ids: Vec<&str> = set.instances.iter().map(|i| i.id.as_str()).collect();
+        for id in ["n1", "p1"] {
+            assert!(
+                set.instances.iter().any(|i| i.id == id),
+                "{id} loads under cardinality-spelled arity; got: {ids:?}"
+            );
+        }
+        assert!(
+            set.unusable_collection_entries.is_empty(),
+            "neither spelling is refused; got: {:?}",
+            set.unusable_collection_entries
+        );
+
+        // A dict whose every entry is unusable still marks the slot as
+        // authored, so a required-slot check cannot call it absent.
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: est\nbuildings:\n  - id: b3\n    rooms:\n      r9: null\n")
+                .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            set.unusable_collection_entries
+                .iter()
+                .any(|u| u.record.as_deref() == Some("b3") && u.slot == "rooms"),
+            "the finding names its holding record; got: {:?}",
+            set.unusable_collection_entries
+        );
+        let b3 = set.instances.iter().find(|i| i.id == "b3").expect("b3");
+        assert!(
+            b3.slot_values.iter().any(|sv| sv.slot == "rooms"
+                && sv
+                    .values
+                    .iter()
+                    .any(|v| matches!(v, InstanceValue::Unexpected(_)))),
+            "the authored-but-unusable value is present on the record; got: {:?}",
+            b3.slot_values
         );
     }
 
