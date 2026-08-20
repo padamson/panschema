@@ -12,11 +12,10 @@ use std::path::Path;
 use std::process::Command;
 
 /// Write a `panschema-publish.toml` + main schema file into `pkg_dir`.
-/// Mirrors the unified package shape: every path source is a directory
-/// containing a publish file + the main file.
-fn write_pkg(pkg_dir: &Path, name: &str, version: &str, main_filename: &str, schema_body: &str) {
-    fs::create_dir_all(pkg_dir).expect("mkdir pkg");
-    let publish = format!(
+/// The one spelling of `panschema-publish.toml` every package fixture
+/// uses; a format change edits this and reaches them all.
+fn publish_toml(name: &str, version: &str, main_filename: &str) -> String {
+    format!(
         r#"[schema]
 name = "{name}"
 version = "{version}"
@@ -25,8 +24,18 @@ linkml = "1.7.0"
 [files]
 main = "{main_filename}"
 "#
-    );
-    fs::write(pkg_dir.join("panschema-publish.toml"), publish).expect("write publish toml");
+    )
+}
+
+/// Mirrors the unified package shape: every path source is a directory
+/// containing a publish file + the main file.
+fn write_pkg(pkg_dir: &Path, name: &str, version: &str, main_filename: &str, schema_body: &str) {
+    fs::create_dir_all(pkg_dir).expect("mkdir pkg");
+    fs::write(
+        pkg_dir.join("panschema-publish.toml"),
+        publish_toml(name, version, main_filename),
+    )
+    .expect("write publish toml");
     fs::write(pkg_dir.join(main_filename), schema_body).expect("write schema body");
 }
 
@@ -34,24 +43,13 @@ main = "{main_filename}"
 /// `sample_schema.yaml` fixture. Returns the absolute `pkg_dir` path.
 fn write_sample_pkg(parent: &Path, dirname: &str) -> std::path::PathBuf {
     let pkg = parent.join(dirname);
-    fs::create_dir_all(&pkg).expect("mkdir pkg");
-    fs::copy(
-        "tests/fixtures/sample_schema.yaml",
-        pkg.join("sample_schema.yaml"),
-    )
-    .expect("copy sample schema");
-    fs::write(
-        pkg.join("panschema-publish.toml"),
-        r#"[schema]
-name = "sample_schema"
-version = "1.0.0"
-linkml = "1.7.0"
-
-[files]
-main = "sample_schema.yaml"
-"#,
-    )
-    .expect("write publish toml");
+    write_pkg(
+        &pkg,
+        "sample_schema",
+        "1.0.0",
+        "sample_schema.yaml",
+        &fs::read_to_string("tests/fixtures/sample_schema.yaml").expect("read sample schema"),
+    );
     pkg
 }
 
@@ -1722,7 +1720,7 @@ fn manifest_instances_render_the_local_a_boxes_with_the_imported_schema() {
     .expect("copy schema");
     fs::write(
         pkg.join("panschema-publish.toml"),
-        "[schema]\nname = \"wine\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"wine_catalog.yaml\"\n",
+        publish_toml("wine", "1.0.0", "wine_catalog.yaml"),
     )
     .expect("write publish toml");
 
@@ -1794,30 +1792,22 @@ fn manifest_resolve_against_checks_cross_graph_references() {
     let consumer = tmp.path();
 
     let catalog_pkg = consumer.join("catalog-pkg");
-    fs::create_dir_all(&catalog_pkg).unwrap();
-    fs::write(
-        catalog_pkg.join("panschema-publish.toml"),
-        "[schema]\nname = \"catalog\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"catalog.yaml\"\n",
-    )
-    .unwrap();
-    fs::write(
-        catalog_pkg.join("catalog.yaml"),
+    write_pkg(
+        &catalog_pkg,
+        "catalog",
+        "1.0.0",
+        "catalog.yaml",
         "id: https://example.org/catalog\nname: catalog\ndefault_prefix: cat\nprefixes:\n  cat: https://example.org/catalog/\nclasses:\n  Estate:\n    tree_root: true\n    slots: [id, providers]\n  Provider:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  providers: {range: Provider, multivalued: true}\n",
-    )
-    .unwrap();
+    );
 
     let bench_pkg = consumer.join("bench-pkg");
-    fs::create_dir_all(&bench_pkg).unwrap();
-    fs::write(
-        bench_pkg.join("panschema-publish.toml"),
-        "[schema]\nname = \"bench\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"bench.yaml\"\n",
-    )
-    .unwrap();
-    fs::write(
-        bench_pkg.join("bench.yaml"),
+    write_pkg(
+        &bench_pkg,
+        "bench",
+        "1.0.0",
+        "bench.yaml",
         "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, anchors]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  anchors: {range: DomainRecord, multivalued: true}\n",
-    )
-    .unwrap();
+    );
 
     fs::write(
         consumer.join("catalog-data.yaml"),
@@ -2407,30 +2397,22 @@ fn bare_validate_checks_the_whole_manifest() {
     let consumer = tmp.path();
 
     let catalog_pkg = consumer.join("catalog-pkg");
-    fs::create_dir_all(&catalog_pkg).unwrap();
-    fs::write(
-        catalog_pkg.join("panschema-publish.toml"),
-        "[schema]\nname = \"catalog\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"catalog.yaml\"\n",
-    )
-    .unwrap();
-    fs::write(
-        catalog_pkg.join("catalog.yaml"),
+    write_pkg(
+        &catalog_pkg,
+        "catalog",
+        "1.0.0",
+        "catalog.yaml",
         "id: https://example.org/catalog\nname: catalog\ndefault_prefix: cat\nprefixes:\n  cat: https://example.org/catalog/\nclasses:\n  Estate:\n    tree_root: true\n    slots: [id, providers]\n  Provider:\n    slots: [id, weight, sponsor]\nslots:\n  id: {identifier: true}\n  weight: {range: integer}\n  sponsor: {range: Provider}\n  providers: {range: Provider, multivalued: true}\n",
-    )
-    .unwrap();
+    );
 
     let bench_pkg = consumer.join("bench-pkg");
-    fs::create_dir_all(&bench_pkg).unwrap();
-    fs::write(
-        bench_pkg.join("panschema-publish.toml"),
-        "[schema]\nname = \"bench\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"bench.yaml\"\n",
-    )
-    .unwrap();
-    fs::write(
-        bench_pkg.join("bench.yaml"),
+    write_pkg(
+        &bench_pkg,
+        "bench",
+        "1.0.0",
+        "bench.yaml",
         "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, unconnected]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  unconnected: {range: DomainRecord, multivalued: true}\n",
-    )
-    .unwrap();
+    );
 
     // A conformance violation in the catalog (string at an integer slot)
     // and a contradicted absence claim in the bench (gcp cites aws).
@@ -2508,27 +2490,20 @@ verify_absences = { slot = "unconnected" }
 fn namespace_coverage_flags_references_outside_every_sibling() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let consumer = tmp.path();
-    for (dir, name) in [("catalog-pkg", "catalog"), ("bench-pkg", "bench")] {
-        let pkg = consumer.join(dir);
-        fs::create_dir_all(&pkg).unwrap();
-        fs::write(
-            pkg.join("panschema-publish.toml"),
-            format!(
-                "[schema]\nname = \"{name}\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"{name}.yaml\"\n"
-            ),
-        )
-        .unwrap();
-    }
-    fs::write(
-        consumer.join("catalog-pkg/catalog.yaml"),
+    write_pkg(
+        &consumer.join("catalog-pkg"),
+        "catalog",
+        "1.0.0",
+        "catalog.yaml",
         "id: https://example.org/catalog\nname: catalog\ndefault_prefix: cat\nprefixes:\n  cat: https://example.org/catalog/\nclasses:\n  Estate:\n    tree_root: true\n    slots: [id, providers]\n  Provider:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  providers: {range: Provider, multivalued: true}\n",
-    )
-    .unwrap();
-    fs::write(
-        consumer.join("bench-pkg/bench.yaml"),
+    );
+    write_pkg(
+        &consumer.join("bench-pkg"),
+        "bench",
+        "1.0.0",
+        "bench.yaml",
         "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, anchors]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  anchors: {range: DomainRecord, multivalued: true}\n",
-    )
-    .unwrap();
+    );
     fs::write(
         consumer.join("catalog-data.yaml"),
         "id: est1\nproviders:\n  - {id: aws}\n",
@@ -2597,17 +2572,13 @@ fn resolve_keys_under_generate_are_a_parse_error() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let consumer = tmp.path();
     let pkg = consumer.join("pkg");
-    fs::create_dir_all(&pkg).unwrap();
-    fs::write(
-        pkg.join("panschema-publish.toml"),
-        "[schema]\nname = \"g\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"g.yaml\"\n",
-    )
-    .unwrap();
-    fs::write(
-        pkg.join("g.yaml"),
+    write_pkg(
+        &pkg,
+        "g",
+        "1.0.0",
+        "g.yaml",
         "id: https://example.org/g\nname: g\nclasses:\n  Root:\n    tree_root: true\n    slots: [id]\nslots:\n  id: {identifier: true}\n",
-    )
-    .unwrap();
+    );
     fs::write(
         consumer.join("panschema.toml"),
         "[schemas]\ng = { path = \"./pkg\" }\n\n[generate.g]\nttl = \"g.ttl\"\nresolve_against = [\"other\"]\n",
@@ -2632,30 +2603,22 @@ fn manifest_declines_checks_against_a_collided_sibling() {
     let consumer = tmp.path();
 
     let catalog_pkg = consumer.join("catalog-pkg");
-    fs::create_dir_all(&catalog_pkg).unwrap();
-    fs::write(
-        catalog_pkg.join("panschema-publish.toml"),
-        "[schema]\nname = \"catalog\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"catalog.yaml\"\n",
-    )
-    .unwrap();
-    fs::write(
-        catalog_pkg.join("catalog.yaml"),
+    write_pkg(
+        &catalog_pkg,
+        "catalog",
+        "1.0.0",
+        "catalog.yaml",
         "id: https://example.org/catalog\nname: catalog\ndefault_prefix: cat\nprefixes:\n  cat: https://example.org/catalog/\nclasses:\n  Estate:\n    tree_root: true\n    slots: [id, providers]\n  Provider:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  providers: {range: Provider, multivalued: true}\n",
-    )
-    .unwrap();
+    );
 
     let bench_pkg = consumer.join("bench-pkg");
-    fs::create_dir_all(&bench_pkg).unwrap();
-    fs::write(
-        bench_pkg.join("panschema-publish.toml"),
-        "[schema]\nname = \"bench\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"bench.yaml\"\n",
-    )
-    .unwrap();
-    fs::write(
-        bench_pkg.join("bench.yaml"),
+    write_pkg(
+        &bench_pkg,
+        "bench",
+        "1.0.0",
+        "bench.yaml",
         "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, unconnected]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  unconnected: {range: DomainRecord, multivalued: true}\n",
-    )
-    .unwrap();
+    );
 
     // The catalog container reuses a contained record's id, so the sibling
     // loads without a container and its citations are unreliable.
@@ -2715,30 +2678,22 @@ fn manifest_verify_absences_checks_stated_claims() {
     let consumer = tmp.path();
 
     let catalog_pkg = consumer.join("catalog-pkg");
-    fs::create_dir_all(&catalog_pkg).unwrap();
-    fs::write(
-        catalog_pkg.join("panschema-publish.toml"),
-        "[schema]\nname = \"catalog\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"catalog.yaml\"\n",
-    )
-    .unwrap();
-    fs::write(
-        catalog_pkg.join("catalog.yaml"),
+    write_pkg(
+        &catalog_pkg,
+        "catalog",
+        "1.0.0",
+        "catalog.yaml",
         "id: https://example.org/catalog\nname: catalog\ndefault_prefix: cat\nprefixes:\n  cat: https://example.org/catalog/\nclasses:\n  Estate:\n    tree_root: true\n    slots: [id, providers, pairings]\n  Provider:\n    slots: [id]\n  Pairing:\n    slots: [id, a, b]\nslots:\n  id: {identifier: true}\n  providers: {range: Provider, multivalued: true}\n  pairings: {range: Pairing, multivalued: true}\n  a: {range: Provider}\n  b: {range: Provider}\n",
-    )
-    .unwrap();
+    );
 
     let bench_pkg = consumer.join("bench-pkg");
-    fs::create_dir_all(&bench_pkg).unwrap();
-    fs::write(
-        bench_pkg.join("panschema-publish.toml"),
-        "[schema]\nname = \"bench\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"bench.yaml\"\n",
-    )
-    .unwrap();
-    fs::write(
-        bench_pkg.join("bench.yaml"),
+    write_pkg(
+        &bench_pkg,
+        "bench",
+        "1.0.0",
+        "bench.yaml",
         "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, questions]\n  Question:\n    slots: [id, unconnected]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  questions: {range: Question, multivalued: true}\n  unconnected: {range: DomainRecord, multivalued: true}\n",
-    )
-    .unwrap();
+    );
 
     fs::write(
         consumer.join("catalog-data.yaml"),
@@ -3480,9 +3435,11 @@ fn manifest_driven_generate_resolves_cross_package_import_by_dependency_name() {
 
     // Base package: a Widget class in its own namespace.
     let base = root.join("base-pkg");
-    fs::create_dir_all(&base).expect("mkdir base");
-    fs::write(
-        base.join("base.yaml"),
+    write_pkg(
+        &base,
+        "base",
+        "1.0.0",
+        "base.yaml",
         r#"
 name: base
 id: https://example.org/base
@@ -3496,20 +3453,16 @@ classes:
       label:
         range: string
 "#,
-    )
-    .expect("write base schema");
-    fs::write(
-        base.join("panschema-publish.toml"),
-        "[schema]\nname = \"base\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"base.yaml\"\n",
-    )
-    .expect("write base publish toml");
+    );
 
     // App package: a Gadget class referencing base's Widget, importing base
     // by its dependency name (the `[schemas]` key), not a local path.
     let app = root.join("app-pkg");
-    fs::create_dir_all(&app).expect("mkdir app");
-    fs::write(
-        app.join("app.yaml"),
+    write_pkg(
+        &app,
+        "app",
+        "1.0.0",
+        "app.yaml",
         r#"
 name: app
 id: https://example.org/app
@@ -3527,13 +3480,7 @@ classes:
       widget:
         range: Widget
 "#,
-    )
-    .expect("write app schema");
-    fs::write(
-        app.join("panschema-publish.toml"),
-        "[schema]\nname = \"app\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"app.yaml\"\n",
-    )
-    .expect("write app publish toml");
+    );
 
     fs::write(
         root.join("panschema.toml"),
@@ -3578,9 +3525,11 @@ fn manifest_driven_generate_diagnoses_undeclared_cross_package_import() {
     let root = tmp.path();
 
     let app = root.join("app-pkg");
-    fs::create_dir_all(&app).expect("mkdir app");
-    fs::write(
-        app.join("app.yaml"),
+    write_pkg(
+        &app,
+        "app",
+        "1.0.0",
+        "app.yaml",
         r#"
 name: app
 id: https://example.org/app
@@ -3593,13 +3542,7 @@ classes:
       name:
         range: string
 "#,
-    )
-    .expect("write app schema");
-    fs::write(
-        app.join("panschema-publish.toml"),
-        "[schema]\nname = \"app\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"app.yaml\"\n",
-    )
-    .expect("write app publish toml");
+    );
 
     fs::write(
         root.join("panschema.toml"),
@@ -3643,45 +3586,37 @@ fn manifest_driven_generate_merges_a_diamond_of_cross_package_imports() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let root = tmp.path();
 
-    // Helper: write a package dir with a schema file + publish toml.
-    let write_pkg = |dir: &str, file: &str, name: &str, body: &str| {
-        let pkg = root.join(dir);
-        fs::create_dir_all(&pkg).expect("mkdir pkg");
-        fs::write(pkg.join(file), body).expect("write schema");
-        fs::write(
-            pkg.join("panschema-publish.toml"),
-            format!("[schema]\nname = \"{name}\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"{file}\"\n"),
-        )
-        .expect("write publish toml");
-    };
-
     write_pkg(
-        "base-pkg",
-        "base.yaml",
+        &root.join("base-pkg"),
         "base",
+        "1.0.0",
+        "base.yaml",
         "name: base\nid: https://example.org/base\ndefault_range: string\n\
          classes:\n  Base:\n    attributes:\n      a:\n        range: string\n",
     );
     // Two siblings, each importing base and referencing Base.
     write_pkg(
-        "dep1-pkg",
-        "dep1.yaml",
+        &root.join("dep1-pkg"),
         "dep1",
+        "1.0.0",
+        "dep1.yaml",
         "name: dep1\nid: https://example.org/dep1\ndefault_range: string\n\
          imports:\n  - base\nclasses:\n  Dep1:\n    attributes:\n      b:\n        range: Base\n",
     );
     write_pkg(
-        "dep2-pkg",
-        "dep2.yaml",
+        &root.join("dep2-pkg"),
         "dep2",
+        "1.0.0",
+        "dep2.yaml",
         "name: dep2\nid: https://example.org/dep2\ndefault_range: string\n\
          imports:\n  - base\nclasses:\n  Dep2:\n    attributes:\n      c:\n        range: Base\n",
     );
     // App imports both siblings and references each.
     write_pkg(
-        "app-pkg",
-        "app.yaml",
+        &root.join("app-pkg"),
         "app",
+        "1.0.0",
+        "app.yaml",
         "name: app\nid: https://example.org/app\ndefault_range: string\n\
          imports:\n  - dep1\n  - dep2\nclasses:\n  App:\n    attributes:\n      \
          d1:\n        range: Dep1\n      d2:\n        range: Dep2\n",
@@ -3743,36 +3678,28 @@ fn manifest_driven_generate_errors_on_conflicting_cross_package_definitions() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let root = tmp.path();
 
-    let write_pkg = |dir: &str, file: &str, name: &str, body: &str| {
-        let pkg = root.join(dir);
-        fs::create_dir_all(&pkg).expect("mkdir pkg");
-        fs::write(pkg.join(file), body).expect("write schema");
-        fs::write(
-            pkg.join("panschema-publish.toml"),
-            format!("[schema]\nname = \"{name}\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"{file}\"\n"),
-        )
-        .expect("write publish toml");
-    };
-
     // Two deps define `Shared` incompatibly; neither is the app.
     write_pkg(
-        "dep1-pkg",
-        "dep1.yaml",
+        &root.join("dep1-pkg"),
         "dep1",
+        "1.0.0",
+        "dep1.yaml",
         "name: dep1\nid: https://example.org/dep1\ndefault_range: string\n\
          classes:\n  Shared:\n    description: from dep1\n    attributes:\n      a:\n        range: string\n",
     );
     write_pkg(
-        "dep2-pkg",
-        "dep2.yaml",
+        &root.join("dep2-pkg"),
         "dep2",
+        "1.0.0",
+        "dep2.yaml",
         "name: dep2\nid: https://example.org/dep2\ndefault_range: string\n\
          classes:\n  Shared:\n    description: from dep2 (incompatible)\n    attributes:\n      b:\n        range: integer\n",
     );
     write_pkg(
-        "app-pkg",
-        "app.yaml",
+        &root.join("app-pkg"),
         "app",
+        "1.0.0",
+        "app.yaml",
         "name: app\nid: https://example.org/app\ndefault_range: string\n\
          imports:\n  - dep1\n  - dep2\nclasses:\n  App:\n    attributes:\n      x:\n        range: string\n",
     );
@@ -3860,17 +3787,13 @@ fn manifest_rust_time_selects_the_jiff_mapping_and_rejects_typos() {
     let consumer = tmp.path();
 
     let pkg = consumer.join("temporal-pkg");
-    fs::create_dir_all(&pkg).expect("mkdir pkg");
-    fs::write(
-        pkg.join("temporal.yaml"),
+    write_pkg(
+        &pkg,
+        "temporal",
+        "1.0.0",
+        "temporal.yaml",
         "name: temporal\nid: https://example.org/temporal\nclasses:\n  Event:\n    attributes:\n      id:\n        identifier: true\n        range: string\n      at:\n        range: datetime\n",
-    )
-    .expect("write schema");
-    fs::write(
-        pkg.join("panschema-publish.toml"),
-        "[schema]\nname = \"temporal\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"temporal.yaml\"\n",
-    )
-    .expect("write publish toml");
+    );
 
     fs::write(
         consumer.join("panschema.toml"),
@@ -4110,14 +4033,7 @@ fn manifest_flow_handles_ttl_input() {
     fs::copy("tests/fixtures/reference.ttl", pkg.join("reference.ttl")).expect("copy fixture");
     fs::write(
         pkg.join("panschema-publish.toml"),
-        r#"[schema]
-name = "reference"
-version = "1.0.0"
-linkml = "1.7.0"
-
-[files]
-main = "reference.ttl"
-"#,
+        publish_toml("reference", "1.0.0", "reference.ttl"),
     )
     .expect("write publish toml");
 
@@ -4659,14 +4575,7 @@ fn add_github_source_succeeds_with_subdirectory_main_layout() {
     fs::create_dir_all(pkg_dir.join("schema")).expect("mkdir cached schema/");
     fs::write(
         pkg_dir.join("panschema-publish.toml"),
-        r#"[schema]
-name = "scimantic"
-version = "0.1.0"
-linkml = "1.7.0"
-
-[files]
-main = "schema/scimantic.yaml"
-"#,
+        publish_toml("scimantic", "0.1.0", "schema/scimantic.yaml"),
     )
     .expect("write cached publish.toml");
     fs::write(
@@ -4889,9 +4798,7 @@ fn init_warns_when_main_file_missing_but_still_writes() {
 fn seed_publish(dir: &Path, version: &str) {
     fs::write(
         dir.join("panschema-publish.toml"),
-        format!(
-            "[schema]\nname = \"x\"\nversion = \"{version}\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"schema.yaml\"\n"
-        ),
+        publish_toml("x", version, "schema.yaml"),
     )
     .expect("write publish");
 }
@@ -5626,14 +5533,7 @@ fn cli_publish_errors_when_publishing_section_absent() {
     let tmp = tempfile::tempdir().expect("tempdir");
     fs::write(
         tmp.path().join("panschema-publish.toml"),
-        r#"[schema]
-name = "x"
-version = "0.1.0"
-linkml = "1.7.0"
-
-[files]
-main = "schema.yaml"
-"#,
+        publish_toml("x", "0.1.0", "schema.yaml"),
     )
     .unwrap();
     fs::write(tmp.path().join("schema.yaml"), "id: x\nname: x\n").unwrap();

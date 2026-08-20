@@ -2600,13 +2600,38 @@ mod tests {
         );
     }
 
-    /// A `via` denoting no class any sibling declares is uncheckable —
-    /// said so, never counted as holding.
+    /// A multivalued `via`, a `via` naming no sibling class, and a
+    /// malformed `via` value are each uncheckable — said so, never holding.
     #[test]
-    fn a_via_naming_no_sibling_class_is_uncheckable() {
+    fn uncheckable_via_claims_are_reported_never_holding() {
         let sibling_schema = linked_sibling_schema();
         let sibling = scoped_set(&sibling_schema, LINKED_DATA);
         let schema = claiming_schema();
+
+        let set = scoped_set(
+            &schema,
+            "id: b1\nanchors:\n  - cellar:f1\nvia: ['cellar:Link', 'cellar:Item']\n",
+        );
+        let found = unverified_absences(
+            &schema,
+            &set,
+            "anchors",
+            Some("via"),
+            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+        );
+        assert_eq!(found.claims, 0);
+        assert_eq!(
+            found.unverified,
+            vec![],
+            "no first-value narrowing may be evaluated"
+        );
+        assert_eq!(found.uncheckable.len(), 1, "got: {found:?}");
+        assert!(
+            found.uncheckable[0].message().contains("one `via` value"),
+            "got: {}",
+            found.uncheckable[0].message()
+        );
+
         let set = scoped_set(
             &schema,
             "id: b1\nanchors:\n  - cellar:w1\n  - cellar:f1\nvia: cellar:Pairings\n",
@@ -2625,13 +2650,43 @@ mod tests {
             "got: {}",
             found.uncheckable[0].message()
         );
+
+        let schema = query_claiming_schema();
+        let bad_via = scoped_set(
+            &schema,
+            "id: b1\nqueries:\n  - {id: q1, anchors: ['cellar:f1'], via: {oops: 1}}\n",
+        );
+        let found = unverified_absences(
+            &schema,
+            &bad_via,
+            "anchors",
+            Some("via"),
+            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+        );
+        assert_eq!(found.claims, 0);
+        assert_eq!(
+            found.unverified,
+            vec![],
+            "the unnarrowed claim must not be evaluated in the narrowed one's place"
+        );
+        assert_eq!(found.uncheckable.len(), 1, "got: {found:?}");
+        assert!(
+            found.uncheckable[0]
+                .message()
+                .contains("an object, not a class"),
+            "got: {}",
+            found.uncheckable[0].message()
+        );
     }
 
+    /// Anchors that collapse to fewer distinct IRIs, resolve to no sibling
+    /// record, or load as null or malformed are each uncheckable.
     #[test]
-    fn anchors_collapsing_to_one_iri_are_uncheckable() {
+    fn uncheckable_anchor_claims_are_reported_never_holding() {
         let sibling_schema = linked_sibling_schema();
         let sibling = scoped_set(&sibling_schema, LINKED_DATA);
         let schema = claiming_schema();
+
         let set = scoped_set(
             &schema,
             "id: b1\nanchors:\n  - cellar:w1\n  - https://example.org/cellar/w1\n",
@@ -2652,16 +2707,26 @@ mod tests {
             "got: {}",
             found.uncheckable[0].message()
         );
-    }
 
-    /// An anchor no sibling dataset mints makes the claim uncheckable —
-    /// a claim about records the graphs don't hold cannot be reported as
-    /// holding against them.
-    #[test]
-    fn an_anchor_no_sibling_mints_is_uncheckable() {
-        let sibling_schema = linked_sibling_schema();
-        let sibling = scoped_set(&sibling_schema, LINKED_DATA);
-        let schema = claiming_schema();
+        let set = scoped_set(
+            &schema,
+            "id: b1\nanchors:\n  - cellar:w1\n  - https://example.org/cellar/w1\n  - cellar:f1\n",
+        );
+        let found = unverified_absences(
+            &schema,
+            &set,
+            "anchors",
+            None,
+            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+        );
+        assert_eq!(found.claims, 0);
+        assert_eq!(
+            found.unverified,
+            vec![],
+            "the collapsed pair must not be checked in the triple's place"
+        );
+        assert_eq!(found.uncheckable.len(), 1, "got: {found:?}");
+
         let set = scoped_set(
             &schema,
             "id: b1\nanchors:\n  - cellar:w1\n  - cellar:ghost\n",
@@ -2679,6 +2744,53 @@ mod tests {
             found.uncheckable[0]
                 .message()
                 .contains("resolves to no sibling record"),
+            "got: {}",
+            found.uncheckable[0].message()
+        );
+
+        let schema = query_claiming_schema();
+        let set = scoped_set(
+            &schema,
+            "id: b1\nqueries:\n  - {id: q1, anchors: ['cellar:w1', ~]}\n",
+        );
+        let found = unverified_absences(
+            &schema,
+            &set,
+            "anchors",
+            None,
+            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+        );
+        assert_eq!(found.claims, 0);
+        assert_eq!(
+            found.unverified,
+            vec![],
+            "the surviving anchor must not be checked alone"
+        );
+        assert_eq!(found.uncheckable.len(), 1, "got: {found:?}");
+        assert!(
+            found.uncheckable[0].message().contains("a null"),
+            "got: {}",
+            found.uncheckable[0].message()
+        );
+
+        let bad_anchor = scoped_set(
+            &schema,
+            "id: b1\nqueries:\n  - {id: q1, anchors: ['cellar:w1', 42]}\n",
+        );
+        let found = unverified_absences(
+            &schema,
+            &bad_anchor,
+            "anchors",
+            None,
+            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+        );
+        assert_eq!(found.claims, 0);
+        assert_eq!(found.unverified, vec![], "no claim to contradict");
+        assert_eq!(found.uncheckable.len(), 1, "got: {found:?}");
+        assert!(
+            found.uncheckable[0]
+                .message()
+                .contains("a number, not a reference or IRI"),
             "got: {}",
             found.uncheckable[0].message()
         );
@@ -2768,7 +2880,7 @@ mod tests {
     }
 
     #[test]
-    fn a_single_anchor_claim_is_checked() {
+    fn single_anchor_claims_are_checked_plain_and_via_narrowed() {
         let sibling_schema = linked_sibling_schema();
         let sibling = scoped_set(&sibling_schema, LINKED_DATA);
         let schema = claiming_schema();
@@ -2807,13 +2919,7 @@ mod tests {
             vec![],
             "only the exempt container references l1, so the claim holds"
         );
-    }
 
-    #[test]
-    fn a_via_narrowed_single_anchor_claim_is_checked() {
-        let sibling_schema = linked_sibling_schema();
-        let sibling = scoped_set(&sibling_schema, LINKED_DATA);
-        let schema = claiming_schema();
         let set = scoped_set(
             &schema,
             "id: b1\nanchors:\n  - cellar:f1\nvia: cellar:Link\n",
@@ -2862,8 +2968,10 @@ mod tests {
         schema
     }
 
+    /// Holding a record — nested or inline — is not joining it; citing it
+    /// by id or restating a declared record inline is.
     #[test]
-    fn a_nested_holder_of_the_anchor_does_not_join_it() {
+    fn containment_never_joins_and_citations_always_do() {
         let sibling_schema = shelved_sibling_schema();
 
         // s1 inlines w1 and references f1 by id, under the same slot.
@@ -2902,16 +3010,11 @@ mod tests {
             "s1 references f1 by id, which does join; got: {found:?}"
         );
         assert_eq!(found.unverified[0].joined_by, "s1");
-    }
 
-    #[test]
-    fn an_inline_child_does_not_mask_a_citation_of_the_same_target() {
-        let sibling_schema = shelved_sibling_schema();
         let sibling = scoped_set(
             &sibling_schema,
             "id: est\nshelves:\n  - {id: s1, held: [{id: w1}, w1]}\n",
         );
-        let schema = claiming_schema();
         let set = scoped_set(&schema, "id: b1\nanchors:\n  - cellar:w1\n");
         let found = unverified_absences(
             &schema,
@@ -2926,10 +3029,7 @@ mod tests {
             "s1 also cites w1 by id; got: {found:?}"
         );
         assert_eq!(found.unverified[0].joined_by, "s1");
-    }
 
-    #[test]
-    fn restating_a_declared_record_inline_is_a_citation() {
         let mut sibling_schema = linked_sibling_schema();
         let mut cites = crate::linkml::SlotDefinition::new("cites");
         cites.range = Some("Item".to_string());
@@ -2962,91 +3062,6 @@ mod tests {
         assert_eq!(found.unverified[0].joined_by, "l2");
     }
 
-    #[test]
-    fn a_partial_anchor_collapse_is_uncheckable() {
-        let sibling_schema = linked_sibling_schema();
-        let sibling = scoped_set(&sibling_schema, LINKED_DATA);
-        let schema = claiming_schema();
-        let set = scoped_set(
-            &schema,
-            "id: b1\nanchors:\n  - cellar:w1\n  - https://example.org/cellar/w1\n  - cellar:f1\n",
-        );
-        let found = unverified_absences(
-            &schema,
-            &set,
-            "anchors",
-            None,
-            &[(&sibling_schema, std::slice::from_ref(&sibling))],
-        );
-        assert_eq!(found.claims, 0);
-        assert_eq!(
-            found.unverified,
-            vec![],
-            "the collapsed pair must not be checked in the triple's place"
-        );
-        assert_eq!(found.uncheckable.len(), 1, "got: {found:?}");
-    }
-
-    #[test]
-    fn a_multivalued_via_is_uncheckable() {
-        let sibling_schema = linked_sibling_schema();
-        let sibling = scoped_set(&sibling_schema, LINKED_DATA);
-        let schema = claiming_schema();
-        let set = scoped_set(
-            &schema,
-            "id: b1\nanchors:\n  - cellar:f1\nvia: ['cellar:Link', 'cellar:Item']\n",
-        );
-        let found = unverified_absences(
-            &schema,
-            &set,
-            "anchors",
-            Some("via"),
-            &[(&sibling_schema, std::slice::from_ref(&sibling))],
-        );
-        assert_eq!(found.claims, 0);
-        assert_eq!(
-            found.unverified,
-            vec![],
-            "no first-value narrowing may be evaluated"
-        );
-        assert_eq!(found.uncheckable.len(), 1, "got: {found:?}");
-        assert!(
-            found.uncheckable[0].message().contains("one `via` value"),
-            "got: {}",
-            found.uncheckable[0].message()
-        );
-    }
-
-    #[test]
-    fn a_null_anchor_makes_the_claim_uncheckable() {
-        let sibling_schema = linked_sibling_schema();
-        let sibling = scoped_set(&sibling_schema, LINKED_DATA);
-        let schema = query_claiming_schema();
-        let set = scoped_set(
-            &schema,
-            "id: b1\nqueries:\n  - {id: q1, anchors: ['cellar:w1', ~]}\n",
-        );
-        let found = unverified_absences(
-            &schema,
-            &set,
-            "anchors",
-            None,
-            &[(&sibling_schema, std::slice::from_ref(&sibling))],
-        );
-        assert_eq!(found.claims, 0);
-        assert_eq!(
-            found.unverified,
-            vec![],
-            "the surviving anchor must not be checked alone"
-        );
-        assert_eq!(found.uncheckable.len(), 1, "got: {found:?}");
-        assert!(
-            found.uncheckable[0].message().contains("a null"),
-            "got: {}",
-            found.uncheckable[0].message()
-        );
-    }
-
     /// `claiming_schema` plus a nested `Query` class carrying its own
     /// `anchors`/`via`, so claims can sit below the dataset root — where
     /// a value that fits no slot kind loads as unusable rather than as a
@@ -3071,61 +3086,6 @@ mod tests {
         queries.multivalued = true;
         bench.attributes.insert("queries".to_string(), queries);
         schema
-    }
-
-    #[test]
-    fn a_malformed_anchor_or_via_makes_the_claim_uncheckable() {
-        let sibling_schema = linked_sibling_schema();
-        let sibling = scoped_set(&sibling_schema, LINKED_DATA);
-        let schema = query_claiming_schema();
-
-        let bad_anchor = scoped_set(
-            &schema,
-            "id: b1\nqueries:\n  - {id: q1, anchors: ['cellar:w1', 42]}\n",
-        );
-        let found = unverified_absences(
-            &schema,
-            &bad_anchor,
-            "anchors",
-            None,
-            &[(&sibling_schema, std::slice::from_ref(&sibling))],
-        );
-        assert_eq!(found.claims, 0);
-        assert_eq!(found.unverified, vec![], "no claim to contradict");
-        assert_eq!(found.uncheckable.len(), 1, "got: {found:?}");
-        assert!(
-            found.uncheckable[0]
-                .message()
-                .contains("a number, not a reference or IRI"),
-            "got: {}",
-            found.uncheckable[0].message()
-        );
-
-        let bad_via = scoped_set(
-            &schema,
-            "id: b1\nqueries:\n  - {id: q1, anchors: ['cellar:f1'], via: {oops: 1}}\n",
-        );
-        let found = unverified_absences(
-            &schema,
-            &bad_via,
-            "anchors",
-            Some("via"),
-            &[(&sibling_schema, std::slice::from_ref(&sibling))],
-        );
-        assert_eq!(found.claims, 0);
-        assert_eq!(
-            found.unverified,
-            vec![],
-            "the unnarrowed claim must not be evaluated in the narrowed one's place"
-        );
-        assert_eq!(found.uncheckable.len(), 1, "got: {found:?}");
-        assert!(
-            found.uncheckable[0]
-                .message()
-                .contains("an object, not a class"),
-            "got: {}",
-            found.uncheckable[0].message()
-        );
     }
 
     #[test]

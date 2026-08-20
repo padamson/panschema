@@ -1,3 +1,7 @@
+# `default-filter` below needs this floor; older nextest would either
+# reject the config or silently run the browser tests under `quick`.
+nextest-version = "0.9.77"
+
 # Every e2e test launches its own Chromium; running the whole suite's
 # browsers at once starves page loads and first paints into flaky
 # timeouts. Cap how many run concurrently — the rest of the test run
@@ -8,3 +12,10 @@ browser = { max-threads = 6 }
 [[profile.default.overrides]]
 filter = "binary(e2e)"
 test-group = "browser"
+
+# Opt-in inner-loop profile (`cargo nextest run --profile quick`):
+# skips *running* the browser e2e tests — the e2e binary still builds.
+# The default profile and CI run everything. Keep this filter's binary
+# name in step with the `browser` override's filter above.
+[profile.quick]
+default-filter = "not binary(e2e)"

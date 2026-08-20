@@ -2985,7 +2985,7 @@ classes:
 ";
 
     #[test]
-    fn a_single_valued_container_slot_materializes_its_record() {
+    fn a_single_valued_container_slot_materializes_or_cites() {
         let schema: SchemaDefinition = serde_norway::from_str(SHELVED_SCHEMA).expect("schema");
         let data: serde_norway::Value =
             serde_norway::from_str("id: est\nmain_shelf:\n  id: s1\n  held:\n    - {id: w1}\n")
@@ -3008,10 +3008,7 @@ classes:
             }],
             "the container's edge to the record it materialized is containment"
         );
-    }
 
-    #[test]
-    fn a_single_valued_container_slot_cites_by_id() {
         let schema: SchemaDefinition = serde_norway::from_str(SHELVED_SCHEMA).expect("schema");
         let data: serde_norway::Value =
             serde_norway::from_str("id: est\nshelves:\n  - {id: s1}\nmain_shelf: s1\n")
@@ -3041,7 +3038,7 @@ classes:
     }
 
     #[test]
-    fn a_container_id_collision_is_reported_not_absorbed() {
+    fn id_collisions_are_reported_wherever_they_hide() {
         let schema: SchemaDefinition = serde_norway::from_str(SHELVED_SCHEMA).expect("schema");
         let data: serde_norway::Value =
             serde_norway::from_str("id: s1\nshelves:\n  - {id: s1}\n  - {id: s2}\n").expect("data");
@@ -3055,10 +3052,7 @@ classes:
             "the contained record must not absorb the container's edges; got: {:?}",
             s1.slot_values
         );
-    }
 
-    #[test]
-    fn a_record_colliding_with_a_nested_id_is_reported() {
         let schema: SchemaDefinition = serde_norway::from_str(SHELVED_SCHEMA).expect("schema");
         let data: serde_norway::Value = serde_norway::from_str(
             "id: est\nshelves:\n  - {id: s1, held: [{id: dup}]}\n  - {id: dup, held: [{id: i9}]}\n",
@@ -3069,6 +3063,27 @@ classes:
             set.duplicate_ids,
             vec!["dup"],
             "the second shelf's authored content was discarded, which must be reported"
+        );
+
+        let schema: SchemaDefinition = serde_norway::from_str(SHELVED_SCHEMA).expect("schema");
+        // x exists as an Item; the Shelf-ranged slot restates its id with
+        // no content of its own, so only the class conflict flags it.
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: est\nshelves:\n  - {id: s1, held: [{id: x}]}\n  - {id: s2, next: {id: x}}\n",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert_eq!(set.duplicate_ids, vec!["x"]);
+
+        let schema: SchemaDefinition = serde_norway::from_str(SHELVED_SCHEMA).expect("schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: est\nshelves:\n  - {id: s1}\n  - {id: s1}\n")
+                .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert_eq!(
+            set.duplicate_ids,
+            vec!["s1"],
+            "two top-level claims on one id are a collision even with identical content"
         );
     }
 
@@ -3107,7 +3122,7 @@ classes:
 ";
 
     #[test]
-    fn an_inline_mapping_at_a_class_union_builds_when_fields_disambiguate() {
+    fn an_inline_mapping_at_a_class_union_builds_when_fields_name_one_member() {
         let schema: SchemaDefinition = serde_norway::from_str(CLASS_UNION_SCHEMA).expect("schema");
         let data: serde_norway::Value = serde_norway::from_str(
             "id: est\nlinks:\n  - {id: l1, related: {id: s1, held: aisle-3}}\n",
@@ -3132,10 +3147,7 @@ classes:
                 held: true,
             }]
         );
-    }
 
-    #[test]
-    fn an_inline_mapping_no_single_union_member_covers_stays_unusable() {
         let schema: SchemaDefinition = serde_norway::from_str(CLASS_UNION_SCHEMA).expect("schema");
         // `{id}` fits Shelf and Crate equally, so the class stays ambiguous.
         let data: serde_norway::Value =
@@ -3155,10 +3167,7 @@ classes:
                 .values,
             [InstanceValue::Unexpected("an object")]
         );
-    }
 
-    #[test]
-    fn an_extra_key_does_not_forfeit_a_union_member_that_fits_best() {
         let schema: SchemaDefinition = serde_norway::from_str(CLASS_UNION_SCHEMA).expect("schema");
         let data: serde_norway::Value = serde_norway::from_str(
             "id: est\nlinks:\n  - {id: l1, related: {id: s1, held: aisle-3, note: oops}}\n",
@@ -3247,10 +3256,12 @@ classes:
         identifier: true
       weight:
         range: integer
+      label:
+        range: string
 ";
 
     #[test]
-    fn a_vessel_rooted_union_collection_still_builds_its_records() {
+    fn a_vessel_rooted_union_collection_builds_and_reports_in_every_spelling() {
         let schema: SchemaDefinition = serde_norway::from_str(VESSEL_UNION_SCHEMA).expect("schema");
         let data: serde_norway::Value =
             serde_norway::from_str("things:\n  - {id: s1, held: aisle-3}\n").expect("data");
@@ -3259,6 +3270,32 @@ classes:
             set.instances.iter().any(|i| i.id == "s1"),
             "no container exists to hold it, but the record is data; got: {:?}",
             set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+        );
+
+        let data: serde_norway::Value =
+            serde_norway::from_str("things:\n  s1: {held: aisle-3}\n").expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            set.instances.iter().any(|i| i.id == "s1"),
+            "dict spelling loads for a vessel root too; got: {:?}",
+            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+        );
+
+        let data: serde_norway::Value =
+            serde_norway::from_str("things:\n  s1: {held: aisle-3}\n  a1: {}\n").expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            set.unusable_collection_entries
+                .iter()
+                .any(|u| u.key.as_deref() == Some("a1")),
+            "no container record exists, and the entry is still reported; got: {:?}",
+            set.unusable_collection_entries
+        );
+        let violations = crate::validate::validate_instances(&schema, &set);
+        assert!(
+            violations.iter().any(|v| v.detail.contains("a1")),
+            "validation names the entry; got: {:?}",
+            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
         );
     }
 
@@ -3293,7 +3330,7 @@ classes:
 ";
 
     #[test]
-    fn a_union_collection_in_dict_form_loads_its_records() {
+    fn union_dict_entries_choose_their_member_or_are_reported() {
         let schema: SchemaDefinition =
             serde_norway::from_str(UNION_CONTAINER_SCHEMA).expect("schema");
         let data: serde_norway::Value =
@@ -3324,10 +3361,7 @@ classes:
                 things.values
             );
         }
-    }
 
-    #[test]
-    fn a_union_simple_dict_entry_expands_by_the_one_admitting_member() {
         let schema: SchemaDefinition =
             serde_norway::from_str(UNION_CONTAINER_SCHEMA).expect("schema");
         // Shelf has exactly one non-key slot, Crate has two — only Shelf
@@ -3351,10 +3385,7 @@ classes:
                 "aisle-4".to_string()
             ))]
         );
-    }
 
-    #[test]
-    fn an_ambiguous_union_dict_entry_is_unusable_beside_a_loading_one() {
         let schema: SchemaDefinition =
             serde_norway::from_str(UNION_CONTAINER_SCHEMA).expect("schema");
         let data: serde_norway::Value =
@@ -3377,45 +3408,60 @@ classes:
             "the unusable entry stays visible; got: {:?}",
             set.unusable_collection_entries
         );
-    }
 
-    #[test]
-    fn a_vessel_rooted_union_dict_collection_still_builds_its_records() {
-        const VESSEL: &str = "\
-name: Estate
-default_range: string
-classes:
-  Root:
-    tree_root: true
-    attributes:
-      things:
-        multivalued: true
-        any_of:
-          - range: Shelf
-          - range: Crate
-  Shelf:
-    attributes:
-      id:
-        identifier: true
-      held:
-        range: string
-  Crate:
-    attributes:
-      id:
-        identifier: true
-      weight:
-        range: integer
-      label:
-        range: string
-";
-        let schema: SchemaDefinition = serde_norway::from_str(VESSEL).expect("schema");
+        let schema: SchemaDefinition =
+            serde_norway::from_str(UNION_CONTAINER_SCHEMA).expect("schema");
+        // An un-wrapped inline record: `weight` is Crate's slot, not an id.
         let data: serde_norway::Value =
-            serde_norway::from_str("things:\n  s1: {held: aisle-3}\n").expect("data");
+            serde_norway::from_str("id: est\nthings:\n  weight: 5\n").expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            !set.instances.iter().any(|i| i.id == "weight"),
+            "no phantom record named after a field; got: {:?}",
+            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+        );
+        assert!(
+            set.unusable_collection_entries
+                .iter()
+                .any(|u| u.key.as_deref() == Some("weight") && u.reason.contains("field")),
+            "the report points at the wrapping, not the value; got: {:?}",
+            set.unusable_collection_entries
+        );
+
+        let schema: SchemaDefinition =
+            serde_norway::from_str(UNION_CONTAINER_SCHEMA).expect("schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: est\nthings:\n  s9: ~\n").expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            !set.instances.iter().any(|i| i.id == "s9"),
+            "a null cannot choose a class; got: {:?}",
+            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+        );
+        assert!(
+            set.unusable_collection_entries
+                .iter()
+                .any(|u| u.key.as_deref() == Some("s9")),
+            "got: {:?}",
+            set.unusable_collection_entries
+        );
+
+        let schema: SchemaDefinition =
+            serde_norway::from_str(UNION_CONTAINER_SCHEMA).expect("schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: est\nthings:\n  5: {id: s1, held: x}\n").expect("data");
         let set = InstanceSet::from_linkml_data(&schema, &data);
         assert!(
             set.instances.iter().any(|i| i.id == "s1"),
-            "dict spelling loads for a vessel root too; got: {:?}",
+            "the record's own id carries it; got: {:?}",
             set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+        );
+        assert!(
+            set.unusable_collection_entries
+                .iter()
+                .any(|u| u.slot == "things" && u.reason.contains("non-string key")),
+            "the discarded authored key is reported; got: {:?}",
+            set.unusable_collection_entries
         );
     }
 
@@ -3479,13 +3525,18 @@ classes:
     }
 
     #[test]
-    fn a_number_in_a_union_collection_is_unusable_not_a_citation() {
+    fn union_list_entries_cite_build_or_are_reported() {
         let schema: SchemaDefinition =
             serde_norway::from_str(UNION_CONTAINER_SCHEMA).expect("schema");
         let data: serde_norway::Value =
-            serde_norway::from_str("id: est\nthings:\n  - 5\n").expect("data");
+            serde_norway::from_str("id: est\nthings:\n  - s9\n  - 5\n").expect("data");
         let set = InstanceSet::from_linkml_data(&schema, &data);
         let root = set.instances.iter().find(|i| i.id == "est").expect("est");
+        assert!(
+            root.references.iter().any(|r| r.target == "s9"),
+            "a bare id cites; got: {:?}",
+            root.references
+        );
         assert!(
             !root.references.iter().any(|r| r.target == "5"),
             "a number can never cite a record; got: {:?}",
@@ -3498,10 +3549,7 @@ classes:
             "the entry is reported, not dropped; got: {:?}",
             set.unusable_collection_entries
         );
-    }
 
-    #[test]
-    fn a_nested_sequence_in_a_union_collection_flattens() {
         let schema: SchemaDefinition =
             serde_norway::from_str(UNION_CONTAINER_SCHEMA).expect("schema");
         let data: serde_norway::Value =
@@ -3511,91 +3559,6 @@ classes:
             set.instances.iter().any(|i| i.id == "s1"),
             "an authored arity mistake stays loadable; got: {:?}",
             set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn a_vessel_reports_its_unusable_union_entries() {
-        let schema: SchemaDefinition = serde_norway::from_str(VESSEL_UNION_SCHEMA).expect("schema");
-        let data: serde_norway::Value =
-            serde_norway::from_str("things:\n  s1: {held: aisle-3}\n  a1: {}\n").expect("data");
-        let set = InstanceSet::from_linkml_data(&schema, &data);
-        assert!(
-            set.unusable_collection_entries
-                .iter()
-                .any(|u| u.key.as_deref() == Some("a1")),
-            "no container record exists, and the entry is still reported; got: {:?}",
-            set.unusable_collection_entries
-        );
-        let violations = crate::validate::validate_instances(&schema, &set);
-        assert!(
-            violations.iter().any(|v| v.detail.contains("a1")),
-            "validation names the entry; got: {:?}",
-            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn a_dict_entry_keyed_by_a_member_slot_name_is_not_a_record() {
-        let schema: SchemaDefinition =
-            serde_norway::from_str(UNION_CONTAINER_SCHEMA).expect("schema");
-        // An un-wrapped inline record: `weight` is Crate's slot, not an id.
-        let data: serde_norway::Value =
-            serde_norway::from_str("id: est\nthings:\n  weight: 5\n").expect("data");
-        let set = InstanceSet::from_linkml_data(&schema, &data);
-        assert!(
-            !set.instances.iter().any(|i| i.id == "weight"),
-            "no phantom record named after a field; got: {:?}",
-            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
-        );
-        assert!(
-            set.unusable_collection_entries
-                .iter()
-                .any(|u| u.key.as_deref() == Some("weight") && u.reason.contains("field")),
-            "the report points at the wrapping, not the value; got: {:?}",
-            set.unusable_collection_entries
-        );
-    }
-
-    #[test]
-    fn a_null_union_dict_entry_names_no_member() {
-        let schema: SchemaDefinition =
-            serde_norway::from_str(UNION_CONTAINER_SCHEMA).expect("schema");
-        let data: serde_norway::Value =
-            serde_norway::from_str("id: est\nthings:\n  s9: ~\n").expect("data");
-        let set = InstanceSet::from_linkml_data(&schema, &data);
-        assert!(
-            !set.instances.iter().any(|i| i.id == "s9"),
-            "a null cannot choose a class; got: {:?}",
-            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
-        );
-        assert!(
-            set.unusable_collection_entries
-                .iter()
-                .any(|u| u.key.as_deref() == Some("s9")),
-            "got: {:?}",
-            set.unusable_collection_entries
-        );
-    }
-
-    #[test]
-    fn a_non_string_key_with_a_record_value_still_loads() {
-        let schema: SchemaDefinition =
-            serde_norway::from_str(UNION_CONTAINER_SCHEMA).expect("schema");
-        let data: serde_norway::Value =
-            serde_norway::from_str("id: est\nthings:\n  5: {id: s1, held: x}\n").expect("data");
-        let set = InstanceSet::from_linkml_data(&schema, &data);
-        assert!(
-            set.instances.iter().any(|i| i.id == "s1"),
-            "the record's own id carries it; got: {:?}",
-            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
-        );
-        assert!(
-            set.unusable_collection_entries
-                .iter()
-                .any(|u| u.slot == "things" && u.reason.contains("non-string key")),
-            "the discarded authored key is reported; got: {:?}",
-            set.unusable_collection_entries
         );
     }
 
@@ -3717,21 +3680,7 @@ classes:
     }
 
     #[test]
-    fn identical_top_level_duplicates_are_still_reported() {
-        let schema: SchemaDefinition = serde_norway::from_str(SHELVED_SCHEMA).expect("schema");
-        let data: serde_norway::Value =
-            serde_norway::from_str("id: est\nshelves:\n  - {id: s1}\n  - {id: s1}\n")
-                .expect("data");
-        let set = InstanceSet::from_linkml_data(&schema, &data);
-        assert_eq!(
-            set.duplicate_ids,
-            vec!["s1"],
-            "two top-level claims on one id are a collision even with identical content"
-        );
-    }
-
-    #[test]
-    fn a_respelled_identical_restatement_is_not_a_collision() {
+    fn identical_restatements_are_one_entity_not_a_collision() {
         let schema: SchemaDefinition = serde_norway::from_str(SHELVED_SCHEMA).expect("schema");
         // s1's inline child is restated by bare id: same edge, different
         // spelling, nothing lost.
@@ -3741,23 +3690,7 @@ classes:
         .expect("data");
         let set = InstanceSet::from_linkml_data(&schema, &data);
         assert_eq!(set.duplicate_ids, Vec::<String>::new());
-    }
 
-    #[test]
-    fn a_cross_class_restatement_is_a_collision() {
-        let schema: SchemaDefinition = serde_norway::from_str(SHELVED_SCHEMA).expect("schema");
-        // x exists as an Item; the Shelf-ranged slot restates its id with
-        // no content of its own, so only the class conflict flags it.
-        let data: serde_norway::Value = serde_norway::from_str(
-            "id: est\nshelves:\n  - {id: s1, held: [{id: x}]}\n  - {id: s2, next: {id: x}}\n",
-        )
-        .expect("data");
-        let set = InstanceSet::from_linkml_data(&schema, &data);
-        assert_eq!(set.duplicate_ids, vec!["x"]);
-    }
-
-    #[test]
-    fn a_bare_same_class_restatement_is_not_a_collision() {
         let schema: SchemaDefinition = serde_norway::from_str(SHELVED_SCHEMA).expect("schema");
         let data: serde_norway::Value = serde_norway::from_str(
             "id: est\nshelves:\n  - {id: s1, held: [{id: w1}]}\n  - {id: s2, held: [{id: w1}]}\n",
