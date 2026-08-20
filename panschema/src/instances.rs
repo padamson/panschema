@@ -99,6 +99,12 @@ pub struct Instance {
     pub scope: Option<String>,
 }
 
+/// Why a union-ranged entry chose no member, phrased to follow
+/// "entry `k` …" — one spelling for every reporting site.
+const UNION_AMBIGUITY_REASON: &str = "names no single class of the union range — give it a \
+                                      field only the intended member declares, or a type \
+                                      designator naming one";
+
 /// A container-collection entry that loaded no record — or loaded one
 /// without its authored key — because it named no single class of the
 /// slot's range, or its shape can never name one.
@@ -375,9 +381,8 @@ impl InstanceSet {
             top_level_seen: std::collections::HashSet::new(),
             duplicate_ids: Vec::new(),
             undeclared_fields: Vec::new(),
-            slot_names_by_class: std::collections::BTreeMap::new(),
+            effective_slots_by_class: std::collections::BTreeMap::new(),
             unusable_entries: Vec::new(),
-            simple_dict_slot_by_class: std::collections::BTreeMap::new(),
         };
         // The container's authored identifier value, when its declared
         // identifier slot carries one — decided up front because it names
@@ -466,7 +471,7 @@ impl InstanceSet {
                 } else {
                     // No container record will exist to replay through, but
                     // the records are still data — build them.
-                    loader.collect_union_records(&class_targets, value);
+                    loader.collect_union_records(slot_name, &class_targets, value);
                 }
             } else if let Some(scalar) = scalar_value(value) {
                 metadata.push((slot_name.to_string(), scalar_to_display(&scalar)));
@@ -708,40 +713,70 @@ struct LinkmlLoader<'a> {
     top_level_seen: std::collections::HashSet<String>,
     duplicate_ids: Vec<String>,
     undeclared_fields: Vec<UndeclaredField>,
-    /// Effective slot names per class, resolved once per dataset — union
-    /// disambiguation consults these per authored mapping, and the full
-    /// inheritance walk is too costly to repeat per record.
-    slot_names_by_class: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+    /// Each class's effective slots, resolved once per dataset — every
+    /// per-class fact (key matching, SimpleDict admission, the type
+    /// designator) projects from this one map, and the full inheritance
+    /// walk is too costly to repeat per record.
+    effective_slots_by_class:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, SlotDefinition>>,
     /// Collection entries that loaded no record, carried to the set.
     unusable_entries: Vec<UnusableCollectionEntry>,
-    /// The one slot a compact SimpleDict entry fills, per class — `None`
-    /// when zero or several candidates exist. Memoized: the answer is a
-    /// per-class constant and the resolution walk is not.
-    simple_dict_slot_by_class: std::collections::BTreeMap<String, Option<String>>,
 }
 
 impl LinkmlLoader<'_> {
-    /// The slot a compact SimpleDict entry fills for `class_name`: the
-    /// class's **one** effective slot beyond its key/identifier. With
-    /// zero or several candidates there is no fact about which slot the
-    /// scalar fills, so `None` — nothing is invented.
-    fn simple_dict_slot(&mut self, class_name: &str) -> Option<String> {
-        if !self.simple_dict_slot_by_class.contains_key(class_name) {
-            let primary = self.schema.classes.get(class_name).and_then(|class| {
-                let slots = crate::linkml_resolve::resolve_effective_slots(class, self.schema);
-                let mut non_identifying = slots
-                    .iter()
-                    .filter(|(_, slot)| !slot.identifier && !slot.key)
-                    .map(|(name, _)| name);
-                match (non_identifying.next(), non_identifying.next()) {
-                    (Some(name), None) => Some(name.clone()),
-                    _ => None,
-                }
-            });
-            self.simple_dict_slot_by_class
-                .insert(class_name.to_string(), primary);
+    /// `class_name`'s effective slots, resolved once and cached.
+    fn effective_slots(
+        &mut self,
+        class_name: &str,
+    ) -> &std::collections::BTreeMap<String, SlotDefinition> {
+        if !self.effective_slots_by_class.contains_key(class_name) {
+            let slots = self
+                .schema
+                .classes
+                .get(class_name)
+                .map(|class| crate::linkml_resolve::resolve_effective_slots(class, self.schema))
+                .unwrap_or_default();
+            self.effective_slots_by_class
+                .insert(class_name.to_string(), slots);
         }
-        self.simple_dict_slot_by_class[class_name].clone()
+        &self.effective_slots_by_class[class_name]
+    }
+
+    /// The slot a compact SimpleDict entry fills for `class_name`: the
+    /// class's **one** effective slot beyond its key/identifier — and
+    /// beyond any type designator, which carries the class, not the
+    /// payload. With zero or several candidates there is no fact about
+    /// which slot the scalar fills, so `None` — nothing is invented.
+    fn simple_dict_slot(&mut self, class_name: &str) -> Option<String> {
+        let mut open = self
+            .effective_slots(class_name)
+            .iter()
+            .filter(|(_, slot)| !slot.identifier && !slot.key && !slot.designates_type)
+            .map(|(name, _)| name);
+        match (open.next(), open.next()) {
+            (Some(name), None) => Some(name.clone()),
+            _ => None,
+        }
+    }
+
+    /// The `designates_type` slot among `class_name`'s effective slots —
+    /// the slot whose authored value names the record's class.
+    fn designator_slot(&mut self, class_name: &str) -> Option<String> {
+        self.effective_slots(class_name)
+            .iter()
+            .find(|(_, slot)| slot.designates_type)
+            .map(|(name, _)| name.clone())
+    }
+
+    /// Whether `slot_name` is an effective slot of `class_name`.
+    fn class_carries(&mut self, class_name: &str, slot_name: &str) -> bool {
+        self.effective_slots(class_name).contains_key(slot_name)
+    }
+
+    /// How many of `keys` are effective slots of `class_name`.
+    fn key_match_count(&mut self, class_name: &str, keys: &[&str]) -> usize {
+        let slots = self.effective_slots(class_name);
+        keys.iter().filter(|k| slots.contains_key(**k)).count()
     }
 
     /// Report a field key that is not a string: it can name no slot, so
@@ -769,32 +804,15 @@ impl LinkmlLoader<'_> {
         });
     }
 
-    /// How many of `keys` are effective slots of `class_name`, resolving
-    /// (and memoizing) the class's slot names on first use.
-    fn key_match_count(&mut self, class_name: &str, keys: &[&str]) -> usize {
-        if !self.slot_names_by_class.contains_key(class_name) {
-            let names = self
-                .schema
-                .classes
-                .get(class_name)
-                .map(|class| {
-                    crate::linkml_resolve::resolve_effective_slots(class, self.schema)
-                        .into_keys()
-                        .collect()
-                })
-                .unwrap_or_default();
-            self.slot_names_by_class
-                .insert(class_name.to_string(), names);
-        }
-        let slots = &self.slot_names_by_class[class_name];
-        keys.iter().filter(|k| slots.contains(**k)).count()
-    }
-
     /// The union member the authored keys name. Candidates arrive
-    /// deduplicated; a lone one builds regardless of its keys, exactly as
-    /// a plain single-class range does; otherwise the member matching the
-    /// most keys wins, and a tie — or no key matching any member — stays
-    /// ambiguous.
+    /// deduplicated. LinkML's type designator decides first: every
+    /// designator key any member declares is consulted; a string value
+    /// naming a member (by name, IRI, or CURIE) wins, and two designators
+    /// naming different members — or an unusable value on a key every
+    /// carrier marks as a designator — leave the entry ambiguous, never
+    /// guessed. A key that is an ordinary slot for some member may be
+    /// plain data, so an unresolved value there falls to the heuristic:
+    /// the member matching the most keys wins, ties stay ambiguous.
     fn disambiguate_class(
         &mut self,
         candidates: &[&String],
@@ -802,6 +820,44 @@ impl LinkmlLoader<'_> {
     ) -> Option<String> {
         if let [one] = candidates {
             return Some((*one).clone());
+        }
+        let mut designator_keys: Vec<String> = Vec::new();
+        for candidate in candidates {
+            if let Some(key) = self.designator_slot(candidate)
+                && !designator_keys.contains(&key)
+            {
+                designator_keys.push(key);
+            }
+        }
+        let mut chosen: Option<&str> = None;
+        for key in &designator_keys {
+            let Some(value) = map.get(key.as_str()) else {
+                continue;
+            };
+            let resolved = value.as_str().map(|named| {
+                crate::rdf_serializers::class_named_by(self.schema, candidates, named)
+            });
+            match resolved {
+                Some(crate::rdf_serializers::ClassMatch::One(name)) => {
+                    if chosen.is_some_and(|already| already != name) {
+                        return None;
+                    }
+                    chosen = Some(name);
+                }
+                Some(crate::rdf_serializers::ClassMatch::Several) => return None,
+                Some(crate::rdf_serializers::ClassMatch::None) | None => {
+                    let designator_for_all = candidates.iter().all(|c| {
+                        !self.class_carries(c, key)
+                            || self.designator_slot(c).as_deref() == Some(key)
+                    });
+                    if designator_for_all {
+                        return None;
+                    }
+                }
+            }
+        }
+        if let Some(name) = chosen {
+            return Some(name.to_string());
         }
         let keys: Vec<&str> = map.keys().filter_map(|k| k.as_str()).collect();
         let scored: Vec<(usize, &str)> = candidates
@@ -815,20 +871,26 @@ impl LinkmlLoader<'_> {
     /// container record — a vessel root's single-valued union slot, or
     /// its mixed class-and-type union: a mapping naming one member
     /// materializes; nothing else has a holder to be recorded on.
-    fn collect_union_records(&mut self, candidates: &[&String], value: &serde_norway::Value) {
+    fn collect_union_records(
+        &mut self,
+        slot: &str,
+        candidates: &[&String],
+        value: &serde_norway::Value,
+    ) {
         match value {
             serde_norway::Value::Sequence(items) => {
                 for item in items {
-                    self.collect_union_records(candidates, item);
+                    self.collect_union_records(slot, candidates, item);
                 }
             }
-            serde_norway::Value::Mapping(map) => {
-                if let Some(class) = self.disambiguate_class(candidates, map)
-                    && let Some((id, _)) = self.build_record(&class, None, value)
-                {
-                    self.note_top_level_id(id);
+            serde_norway::Value::Mapping(map) => match self.disambiguate_class(candidates, map) {
+                Some(class) => {
+                    if let Some((id, _)) = self.build_record(&class, None, value) {
+                        self.note_top_level_id(id);
+                    }
                 }
-            }
+                None => self.note_unusable(slot, None, UNION_AMBIGUITY_REASON.to_string()),
+            },
             _ => {}
         }
     }
@@ -872,9 +934,7 @@ impl LinkmlLoader<'_> {
                                 None => self.note_unusable(
                                     slot,
                                     None,
-                                    "names no single class of the union range — give it a \
-                                     field only the intended member declares"
-                                        .to_string(),
+                                    UNION_AMBIGUITY_REASON.to_string(),
                                 ),
                             }
                         }
@@ -936,9 +996,7 @@ impl LinkmlLoader<'_> {
                                 None => self.note_unusable(
                                     slot,
                                     key_str.map(str::to_string),
-                                    "names no single class of the union range — give it a \
-                                     field only the intended member declares"
-                                        .to_string(),
+                                    UNION_AMBIGUITY_REASON.to_string(),
                                 ),
                             }
                         }
@@ -3034,6 +3092,302 @@ classes:
                 .any(|r| r.property == "main_shelf" && r.target == "s1"),
             "the citation draws a display edge; got: {:?}",
             root.references
+        );
+    }
+
+    #[test]
+    fn a_type_designator_names_the_union_member_outright() {
+        // Both members designate via `kind`, so key-matching alone ties.
+        const DESIGNATED_UNION_SCHEMA: &str = "\
+id: https://example.org/estate
+name: Estate
+default_prefix: est
+prefixes:
+  est: https://example.org/estate/
+default_range: string
+classes:
+  Root:
+    tree_root: true
+    attributes:
+      id:
+        identifier: true
+      things:
+        multivalued: true
+        any_of:
+          - range: Shelf
+          - range: Crate
+  Shelf:
+    attributes:
+      id:
+        identifier: true
+      kind:
+        designates_type: true
+      held:
+        range: string
+  Crate:
+    attributes:
+      id:
+        identifier: true
+      kind:
+        designates_type: true
+      weight:
+        range: integer
+";
+        let schema: SchemaDefinition =
+            serde_norway::from_str(DESIGNATED_UNION_SCHEMA).expect("schema");
+
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: est\nthings:\n  - {id: x1, kind: Crate, held: misleading}\n",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        let x1 = set.instances.iter().find(|i| i.id == "x1").expect("x1");
+        assert_eq!(
+            x1.types,
+            vec!["Crate"],
+            "an authored designator beats a key that scores for another member"
+        );
+
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: est\nthings:\n  - {id: x2, kind: Basket, held: y}\n")
+                .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            !set.instances.iter().any(|i| i.id == "x2"),
+            "a designator naming no member must not fall back to guessing; got: {:?}",
+            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+        );
+        assert!(
+            set.unusable_collection_entries
+                .iter()
+                .any(|u| u.reason.contains("type designator")),
+            "the report names the mechanism that can fix it; got: {:?}",
+            set.unusable_collection_entries
+        );
+
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: est\nthings:\n  - {id: x3, kind: 42, held: y}\n")
+                .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            !set.instances.iter().any(|i| i.id == "x3"),
+            "a non-string designator is explicit-but-unusable, never a guess; got: {:?}",
+            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+        );
+
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: est\nthings:\n  - {id: c2, kind: est:Crate}\n")
+                .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        let c2 = set
+            .instances
+            .iter()
+            .find(|i| i.id == "c2")
+            .unwrap_or_else(|| {
+                panic!("the designator accepts the class IRI or CURIE; got: {set:?}")
+            });
+        assert_eq!(c2.types, vec!["Crate"]);
+
+        // Two members declaring the same class_uri: an IRI designator
+        // naming it names both, and a designation must name one thing.
+        let shared_iri_schema = DESIGNATED_UNION_SCHEMA
+            .replace("  Shelf:\n", "  Shelf:\n    class_uri: est:Thing\n")
+            .replace("  Crate:\n", "  Crate:\n    class_uri: est:Thing\n");
+        let schema: SchemaDefinition = serde_norway::from_str(&shared_iri_schema).expect("schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: est\nthings:\n  - {id: x4, kind: est:Thing}\n")
+                .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            !set.instances.iter().any(|i| i.id == "x4"),
+            "an IRI naming several members is a conflict, never a pick; got: {:?}",
+            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+        );
+        assert!(
+            !set.unusable_collection_entries.is_empty(),
+            "the ambiguous designation is reported"
+        );
+    }
+
+    #[test]
+    fn a_designator_on_one_member_does_not_hijack_the_others() {
+        // Shelf designates via `kind`; Crate carries `kind` as an ordinary
+        // slot and designates via `category` instead.
+        const MIXED_DESIGNATOR_SCHEMA: &str = "\
+id: https://example.org/estate
+name: Estate
+default_prefix: est
+prefixes:
+  est: https://example.org/estate/
+default_range: string
+classes:
+  Root:
+    tree_root: true
+    attributes:
+      id:
+        identifier: true
+      things:
+        multivalued: true
+        any_of:
+          - range: Shelf
+          - range: Crate
+  Shelf:
+    attributes:
+      id:
+        identifier: true
+      kind:
+        designates_type: true
+      held:
+        range: string
+  Crate:
+    attributes:
+      id:
+        identifier: true
+      kind:
+        range: string
+      category:
+        designates_type: true
+      weight:
+        range: integer
+";
+        let schema: SchemaDefinition =
+            serde_norway::from_str(MIXED_DESIGNATOR_SCHEMA).expect("schema");
+
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: est\nthings:\n  - {id: c3, kind: wooden, weight: 3}\n")
+                .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        let c3 = set
+            .instances
+            .iter()
+            .find(|i| i.id == "c3")
+            .unwrap_or_else(|| {
+                panic!("a key that is ordinary for the true member stays data; got: {set:?}")
+            });
+        assert_eq!(
+            c3.types,
+            vec!["Crate"],
+            "the key heuristic still decides when no designator resolves"
+        );
+
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: est\nthings:\n  - {id: c4, kind: wooden, category: Crate}\n",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        let c4 = set.instances.iter().find(|i| i.id == "c4").expect("c4");
+        assert_eq!(
+            c4.types,
+            vec!["Crate"],
+            "every member's designator is consulted, not just the first's"
+        );
+
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: est\nthings:\n  - {id: x5, kind: Shelf, category: Crate}\n",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            !set.instances.iter().any(|i| i.id == "x5"),
+            "two designators naming different members conflict, never a pick; got: {:?}",
+            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+        );
+
+        // A compact SimpleDict entry: excluding the designator, Shelf has
+        // exactly one open slot (`held`), so the entry still loads.
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: est\nthings:\n  s5: aisle-9\n").expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        let s5 = set
+            .instances
+            .iter()
+            .find(|i| i.id == "s5")
+            .unwrap_or_else(|| panic!("a designator is not an open slot; got: {set:?}"));
+        assert_eq!(s5.types, vec!["Shelf"]);
+
+        // `category` is unanswerable and Shelf never carries it, so no
+        // member reads it as plain data — the refusal stands even though
+        // the key heuristic alone would have scored Crate ahead.
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: est\nthings:\n  - {id: x6, category: Basket}\n")
+                .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            !set.instances.iter().any(|i| i.id == "x6"),
+            "a member without the key cannot turn the refusal into a guess; got: {:?}",
+            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+        );
+        assert!(
+            set.unusable_collection_entries
+                .iter()
+                .any(|u| u.slot == "things"),
+            "the unanswerable designation is reported; got: {:?}",
+            set.unusable_collection_entries
+        );
+    }
+
+    #[test]
+    fn a_vessel_root_reports_a_designator_miss() {
+        const VESSEL_DESIGNATED_SCHEMA: &str = "\
+name: Estate
+default_range: string
+classes:
+  Root:
+    tree_root: true
+    attributes:
+      thing:
+        any_of:
+          - range: Shelf
+          - range: Crate
+  Shelf:
+    attributes:
+      id:
+        identifier: true
+      kind:
+        designates_type: true
+      held:
+        range: string
+  Crate:
+    attributes:
+      id:
+        identifier: true
+      kind:
+        designates_type: true
+      weight:
+        range: integer
+";
+        let schema: SchemaDefinition =
+            serde_norway::from_str(VESSEL_DESIGNATED_SCHEMA).expect("schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("thing: {id: x6, kind: Basket}\n").expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            !set.instances.iter().any(|i| i.id == "x6"),
+            "got: {:?}",
+            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+        );
+        assert!(
+            !set.unusable_collection_entries.is_empty(),
+            "the miss is reported even with no container record to carry it"
+        );
+
+        // A list under the same slot walks entry by entry: hits build,
+        // the miss is still reported.
+        let data: serde_norway::Value = serde_norway::from_str(
+            "thing:\n  - {id: v1, kind: Crate, weight: 2}\n  - {id: x7, kind: Basket}\n",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        let v1 = set
+            .instances
+            .iter()
+            .find(|i| i.id == "v1")
+            .unwrap_or_else(|| panic!("list entries materialize; got: {set:?}"));
+        assert_eq!(v1.types, vec!["Crate"]);
+        assert!(
+            !set.instances.iter().any(|i| i.id == "x7")
+                && !set.unusable_collection_entries.is_empty(),
+            "the miss inside the list is refused and reported; got: {set:?}"
         );
     }
 

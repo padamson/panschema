@@ -504,6 +504,7 @@ fn merge_slot_override(target: &mut SlotDefinition, source: &SlotDefinition) {
         ifabsent: _,
         required: _,
         multivalued: _,
+        designates_type: _,
         minimum_cardinality: _,
         maximum_cardinality: _,
         pattern: _,
@@ -563,6 +564,9 @@ fn merge_slot_override(target: &mut SlotDefinition, source: &SlotDefinition) {
     }
     if source.multivalued {
         target.multivalued = true;
+    }
+    if source.designates_type {
+        target.designates_type = true;
     }
     // LinkML's two uniqueness forms are mutually exclusive: `identifier` is
     // globally unique, `key` is unique within its container. So an override

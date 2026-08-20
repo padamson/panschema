@@ -489,6 +489,11 @@ pub struct SlotDefinition {
     /// Whether this slot can hold multiple values
     #[serde(default, skip_serializing_if = "is_false")]
     pub multivalued: bool,
+    /// LinkML `designates_type`: this slot's authored value names the
+    /// record's class (by name, IRI, or CURIE), taking precedence over
+    /// any key-based inference when a union range must choose a member.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub designates_type: bool,
     /// Minimum number of values (for multivalued slots)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub minimum_cardinality: Option<u32>,
@@ -594,6 +599,7 @@ impl SlotDefinition {
             ifabsent: None,
             required: false,
             multivalued: false,
+            designates_type: false,
             minimum_cardinality: None,
             maximum_cardinality: None,
             pattern: None,

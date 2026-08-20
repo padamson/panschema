@@ -81,6 +81,54 @@ fn class_iri_string(name: &str, class_def: &ClassDefinition, schema: &SchemaDefi
         .unwrap_or_else(|| fallback_element_iri(name, schema))
 }
 
+/// How an authored class designation matches a candidate set.
+pub(crate) enum ClassMatch<'a> {
+    One(&'a str),
+    Several,
+    None,
+}
+
+/// The candidate `authored` names — by exact class name, or by IRI/CURIE
+/// equality with the class's minted IRI ([`class_iri_by_name`]); the name
+/// arm is load-bearing for a class whose declared `class_uri` differs
+/// from its default-prefix mint. Several matches (duplicate `class_uri`
+/// declarations) are no match: a designation must name one thing. The
+/// absence check's `via` narrowing matches by IRI only for now — keep
+/// the two rules in sight of each other if either changes.
+pub(crate) fn class_named_by<'a>(
+    schema: &crate::linkml::SchemaDefinition,
+    candidates: &[&'a String],
+    authored: &str,
+) -> ClassMatch<'a> {
+    let mut hit: Option<&'a str> = None;
+    let note = |name: &'a str, hit: &mut Option<&'a str>| -> bool {
+        if hit.is_some_and(|h| h != name) {
+            return true;
+        }
+        *hit = Some(name);
+        false
+    };
+    for candidate in candidates {
+        if candidate.as_str() == authored && note(candidate, &mut hit) {
+            return ClassMatch::Several;
+        }
+    }
+    if hit.is_none() {
+        // The IRI derivation only runs when no bare name matched — the
+        // dominant authoring style never pays for it.
+        let authored_iri = resolve_reference_iri(schema, authored);
+        for candidate in candidates {
+            if class_iri_by_name(candidate, schema) == authored_iri && note(candidate, &mut hit) {
+                return ClassMatch::Several;
+            }
+        }
+    }
+    match hit {
+        Some(name) => ClassMatch::One(name),
+        None => ClassMatch::None,
+    }
+}
+
 /// Absolute IRI for a class referenced by name — its declaration's
 /// `class_uri` when it has one, else the shared fallback. The one derivation
 /// for every site that holds a class *name* rather than its definition
