@@ -3007,6 +3007,17 @@ classes:
             "{format}'s warning must name the actually-requested format; got:\n{stderr}"
         );
         assert!(
+            stderr.lines().any(|l| l.contains("declares `rules`")
+                && l.contains("the `shacl` format carries them as shapes")),
+            "{format}'s rules warning points at the projection that carries them; got:\n{stderr}"
+        );
+        assert!(
+            stderr
+                .lines()
+                .any(|l| l.contains("declares `unique_keys`") && !l.contains("shacl")),
+            "the shapes pointer belongs to `rules` alone; got:\n{stderr}"
+        );
+        assert!(
             !stderr.contains("RDF/OWL"),
             "{format}'s warning must not hardcode RDF/OWL; got:\n{stderr}"
         );

@@ -1108,12 +1108,20 @@ pub struct UnprojectedConstruct {
 impl UnprojectedConstruct {
     /// A user-facing warning line naming the format that was actually
     /// requested — not a hardcoded one, so `--format rust` doesn't claim
-    /// an RDF-specific gap it has nothing to do with.
+    /// an RDF-specific gap it has nothing to do with. For `rules` the
+    /// line also names the projection that does carry the constraint:
+    /// OWL has no native construct for conditional rules, so the `shacl`
+    /// output is the constraint-bearing RDF projection by design — and an
+    /// RDF consumer wanting one graph can union it with the ontology.
     pub fn message(&self, format: &str) -> String {
-        format!(
+        let mut message = format!(
             "class `{}` declares `{}`, which panschema does not emit to the `{}` format",
             self.class, self.construct, format
-        )
+        );
+        if self.construct == "rules" {
+            message.push_str(" — the `shacl` format carries them as shapes");
+        }
+        message
     }
 }
 
@@ -1797,6 +1805,18 @@ mod tests {
                     construct: "unique_keys",
                 },
             ]
+        );
+        assert_eq!(
+            found[0].message("ttl"),
+            "class `Deployment` declares `rules`, which panschema does not emit to the `ttl` \
+             format — the `shacl` format carries them as shapes",
+            "the rules warning names the projection that carries the constraint"
+        );
+        assert_eq!(
+            found[1].message("ttl"),
+            "class `Offering` declares `unique_keys`, which panschema does not emit to the \
+             `ttl` format",
+            "the shapes pointer belongs to `rules` alone"
         );
     }
 
