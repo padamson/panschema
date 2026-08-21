@@ -854,20 +854,100 @@ impl LinkmlLoader<'_> {
             return crate::linkml_resolve::class_satisfies(schema, authored, class_name)
                 .then(|| authored.to_string());
         }
-        if !self.family_by_class.contains_key(class_name) {
-            let family: Vec<String> = schema
-                .classes
-                .keys()
-                .filter(|name| crate::linkml_resolve::class_satisfies(schema, name, class_name))
-                .cloned()
-                .collect();
-            self.family_by_class.insert(class_name.to_string(), family);
-        }
-        let candidates: Vec<&String> = self.family_by_class[class_name].iter().collect();
+        let candidates: Vec<&String> = self.family(class_name).iter().collect();
         match crate::rdf_serializers::class_named_by(schema, &candidates, authored) {
             crate::rdf_serializers::ClassMatch::One(name) => Some(name.to_string()),
             _ => None,
         }
+    }
+
+    /// The classes `class_name`'s type designator may name — itself and
+    /// its `is_a` descendants — resolved once per class.
+    fn family(&mut self, class_name: &str) -> &Vec<String> {
+        if !self.family_by_class.contains_key(class_name) {
+            let family: Vec<String> = self
+                .schema
+                .classes
+                .keys()
+                .filter(|name| {
+                    crate::linkml_resolve::class_satisfies(self.schema, name, class_name)
+                })
+                .cloned()
+                .collect();
+            self.family_by_class.insert(class_name.to_string(), family);
+        }
+        &self.family_by_class[class_name]
+    }
+
+    /// What an authored designator value names, members first: a
+    /// member's own name or IRI wins outright. Otherwise — and only when
+    /// every carrier of the key treats it as a designator, since a value
+    /// on a key some member reads as plain data could simply be that
+    /// member's content — the owners' `is_a` families answer through
+    /// [`Self::member_by_family`].
+    fn designator_names<'c>(
+        &mut self,
+        candidates: &[&'c String],
+        owners: &[&'c String],
+        ordinary_carrier: bool,
+        named: &str,
+    ) -> crate::rdf_serializers::ClassMatch<'c> {
+        match crate::rdf_serializers::class_named_by(self.schema, candidates, named) {
+            crate::rdf_serializers::ClassMatch::None if !ordinary_carrier => {
+                self.member_by_family(owners, named)
+            }
+            direct => direct,
+        }
+    }
+
+    /// The one designator-owning member whose `is_a` family contains the
+    /// class the authored value names — how a designator picks a member
+    /// by naming its subclass. Consulting only the key's owners is what
+    /// guarantees the chosen member's own designator re-resolves the
+    /// same value at build time, so the record builds as the named
+    /// subclass. A value reaching into several owners' families names no
+    /// single member; the caller reports it, never guesses. (This is the
+    /// unique-winner-else-ambiguous rule again — see
+    /// [`unique_best_scored`] — over family membership.)
+    fn member_by_family<'c>(
+        &mut self,
+        owners: &[&'c String],
+        named: &str,
+    ) -> crate::rdf_serializers::ClassMatch<'c> {
+        let schema = self.schema;
+        // A bare class name answers with one chain walk per owner; the
+        // family materializes only for the IRI/CURIE spellings.
+        if schema.classes.contains_key(named) {
+            let mut hits = owners
+                .iter()
+                .filter(|m| crate::linkml_resolve::class_satisfies(schema, named, m));
+            return match (hits.next(), hits.next()) {
+                (Some(one), None) => crate::rdf_serializers::ClassMatch::One(one.as_str()),
+                (Some(_), Some(_)) => crate::rdf_serializers::ClassMatch::Several,
+                (None, _) => crate::rdf_serializers::ClassMatch::None,
+            };
+        }
+        let mut winner: Option<&'c str> = None;
+        for member in owners {
+            let family: Vec<&String> = self.family(member).iter().collect();
+            // Within one family even an ambiguous hit determines the
+            // member — which subclass is blurred, and the builder
+            // degrades that to the plain member, as a single-class range
+            // would.
+            if !matches!(
+                crate::rdf_serializers::class_named_by(schema, &family, named),
+                crate::rdf_serializers::ClassMatch::None
+            ) {
+                if winner.is_some() {
+                    return crate::rdf_serializers::ClassMatch::Several;
+                }
+                winner = Some(member.as_str());
+            }
+        }
+        winner.map_or(
+            crate::rdf_serializers::ClassMatch::None,
+            crate::rdf_serializers::ClassMatch::One,
+        )
     }
 
     /// Record a collection entry that loaded nothing, and why, naming the
@@ -911,9 +991,19 @@ impl LinkmlLoader<'_> {
             let Some(value) = map.get(key.as_str()) else {
                 continue;
             };
-            let resolved = value.as_str().map(|named| {
-                crate::rdf_serializers::class_named_by(self.schema, candidates, named)
+            // Who reads this key: the members whose own designator it is,
+            // and whether any member reads it as plain data instead.
+            let owners: Vec<&String> = candidates
+                .iter()
+                .filter(|c| self.designator_slot(c).as_deref() == Some(key))
+                .copied()
+                .collect();
+            let ordinary_carrier = candidates.iter().any(|c| {
+                self.designator_slot(c).as_deref() != Some(key) && self.class_carries(c, key)
             });
+            let resolved = value
+                .as_str()
+                .map(|named| self.designator_names(candidates, &owners, ordinary_carrier, named));
             match resolved {
                 Some(crate::rdf_serializers::ClassMatch::One(name)) => {
                     if chosen.is_some_and(|already| already != name) {
@@ -923,11 +1013,10 @@ impl LinkmlLoader<'_> {
                 }
                 Some(crate::rdf_serializers::ClassMatch::Several) => return None,
                 Some(crate::rdf_serializers::ClassMatch::None) | None => {
-                    let designator_for_all = candidates.iter().all(|c| {
-                        !self.class_carries(c, key)
-                            || self.designator_slot(c).as_deref() == Some(key)
-                    });
-                    if designator_for_all {
+                    // Every carrier treats the key as a designator, so an
+                    // unanswerable value is explicit-but-unanswerable —
+                    // a report, never a guess.
+                    if !ordinary_carrier {
                         return None;
                     }
                 }
@@ -3487,6 +3576,212 @@ classes:
             });
         assert_eq!(c2.types, vec!["Crate"]);
 
+        // A value naming a member's subclass chooses that member and
+        // builds as the named subclass — the same answer the single-class
+        // range gives the same record.
+        let subclassed = DESIGNATED_UNION_SCHEMA
+            .replace("  Crate:\n", "  SteelCrate:\n    is_a: Crate\n  Crate:\n");
+        let schema: SchemaDefinition = serde_norway::from_str(&subclassed).expect("schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: est\nthings:\n  - {id: sc1, kind: SteelCrate}\n")
+                .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        let sc1 = set
+            .instances
+            .iter()
+            .find(|i| i.id == "sc1")
+            .unwrap_or_else(|| panic!("a subclass designation loads at a union too; got: {set:?}"));
+        assert_eq!(sc1.types, vec!["SteelCrate"]);
+
+        // Nested members make a subclass designation reach both families:
+        // that names no single member, so it stays a conflict.
+        const NESTED_MEMBERS_SCHEMA: &str = "\
+name: Kennel
+default_range: string
+classes:
+  Root:
+    tree_root: true
+    attributes:
+      id:
+        identifier: true
+      residents:
+        multivalued: true
+        any_of:
+          - range: Animal
+          - range: Dog
+  Animal:
+    attributes:
+      id:
+        identifier: true
+      kind:
+        designates_type: true
+  Dog:
+    is_a: Animal
+  Puppy:
+    is_a: Dog
+";
+        let schema: SchemaDefinition =
+            serde_norway::from_str(NESTED_MEMBERS_SCHEMA).expect("schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: k\nresidents:\n  - {id: p1, kind: Puppy}\n").expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            !set.instances.iter().any(|i| i.id == "p1"),
+            "a value in several members' families picks no one member; got: {:?}",
+            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+        );
+        assert!(
+            !set.unusable_collection_entries.is_empty(),
+            "the overlapping designation is reported"
+        );
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: k\nresidents:\n  - {id: d1, kind: Dog}\n").expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        let d1 = set.instances.iter().find(|i| i.id == "d1").expect("d1");
+        assert_eq!(
+            d1.types,
+            vec!["Dog"],
+            "a value naming a member directly is that member, families notwithstanding"
+        );
+
+        // Members with designators of their own: one member's key never
+        // resolves through another member's family — an unanswerable
+        // value on it is a report — and a member with no designator at
+        // all cannot be chosen through someone else's key.
+        const TWO_KEYS_SCHEMA: &str = "\
+name: Shelter
+default_range: string
+classes:
+  Root:
+    tree_root: true
+    attributes:
+      id:
+        identifier: true
+      wards:
+        multivalued: true
+        any_of:
+          - range: Dog
+          - range: Cat
+      lots:
+        multivalued: true
+        any_of:
+          - range: Yard
+          - range: Barn
+  Dog:
+    attributes:
+      id:
+        identifier: true
+      dog_kind:
+        designates_type: true
+  Cat:
+    attributes:
+      id:
+        identifier: true
+      cat_kind:
+        designates_type: true
+  Kitten:
+    is_a: Cat
+  Yard:
+    attributes:
+      id:
+        identifier: true
+      area:
+        range: integer
+  Barn:
+    attributes:
+      id:
+        identifier: true
+      barn_kind:
+        designates_type: true
+  SideYard:
+    is_a: Yard
+";
+        let schema: SchemaDefinition = serde_norway::from_str(TWO_KEYS_SCHEMA).expect("schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: sh\nwards:\n  - {id: k1, dog_kind: Kitten}\n")
+                .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            !set.instances.iter().any(|i| i.id == "k1"),
+            "Dog's key cannot choose through Cat's family; got: {:?}",
+            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+        );
+        assert!(
+            set.unusable_collection_entries
+                .iter()
+                .any(|u| u.slot == "wards"),
+            "the cross-member designation is reported; got: {:?}",
+            set.unusable_collection_entries
+        );
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: sh\nlots:\n  - {id: y1, barn_kind: SideYard}\n")
+                .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            !set.instances.iter().any(|i| i.id == "y1"),
+            "a member without a designator is never chosen through another's key; got: {:?}",
+            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+        );
+
+        // A shared IRI among one member's own subclasses blurs which
+        // subclass, never which member: the record loads as the member,
+        // exactly as it would at a single-class range, and conformance
+        // judges the value.
+        const BLURRED_SUBCLASS_SCHEMA: &str = "\
+name: Depot
+default_prefix: dp
+prefixes:
+  dp: https://example.org/depot/
+default_range: string
+classes:
+  Root:
+    tree_root: true
+    attributes:
+      id:
+        identifier: true
+      units:
+        multivalued: true
+        any_of:
+          - range: Hall
+          - range: Silo
+  Hall:
+    attributes:
+      id:
+        identifier: true
+      kind:
+        designates_type: true
+  HallA:
+    is_a: Hall
+    class_uri: dp:Widget
+  HallB:
+    is_a: Hall
+    class_uri: dp:Widget
+  Silo:
+    attributes:
+      id:
+        identifier: true
+      kind:
+        designates_type: true
+";
+        let schema: SchemaDefinition =
+            serde_norway::from_str(BLURRED_SUBCLASS_SCHEMA).expect("schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: dp\nunits:\n  - {id: h1, kind: dp:Widget}\n")
+                .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        let h1 = set
+            .instances
+            .iter()
+            .find(|i| i.id == "h1")
+            .unwrap_or_else(|| {
+                panic!("a blurred subclass still loads as its member; got: {set:?}")
+            });
+        assert_eq!(
+            h1.types,
+            vec!["Hall"],
+            "which subclass is blurred, which member is not"
+        );
+
         // Two members declaring the same class_uri: an IRI designator
         // naming it names both, and a designation must name one thing.
         let shared_iri_schema = DESIGNATED_UNION_SCHEMA
@@ -3621,6 +3916,51 @@ classes:
                 .iter()
                 .any(|u| u.slot == "things"),
             "the unanswerable designation is reported; got: {:?}",
+            set.unusable_collection_entries
+        );
+
+        // Subclasses widen what a designator can name, but never a key
+        // some member reads as plain data: `kind` is ordinary for Crate,
+        // so a Crate whose kind coincides with a Shelf subclass stays a
+        // Crate by its own fields.
+        let subclassed = MIXED_DESIGNATOR_SCHEMA.replace(
+            "  Crate:\n",
+            "  Cubby:\n    is_a: Shelf\n  WireShelf:\n    is_a: Shelf\n  Crate:\n",
+        );
+        let schema: SchemaDefinition = serde_norway::from_str(&subclassed).expect("schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: est\nthings:\n  - {id: probe1, kind: Cubby, weight: 3}\n")
+                .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        let probe1 = set
+            .instances
+            .iter()
+            .find(|i| i.id == "probe1")
+            .unwrap_or_else(|| panic!("plain data does not hijack the record; got: {set:?}"));
+        assert_eq!(
+            probe1.types,
+            vec!["Crate"],
+            "a data value coinciding with another member's subclass stays data"
+        );
+
+        // A designator key can only name its own members' subclasses:
+        // Crate's `category` naming a Shelf subclass answers nothing, and
+        // an unanswerable all-designator key is a report, never a
+        // silently plain-typed record.
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: est\nthings:\n  - {id: s9, category: WireShelf}\n")
+                .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            !set.instances.iter().any(|i| i.id == "s9"),
+            "another member's subclass under this key picks nothing; got: {:?}",
+            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+        );
+        assert!(
+            set.unusable_collection_entries
+                .iter()
+                .any(|u| u.slot == "things"),
+            "the cross-member designation is reported; got: {:?}",
             set.unusable_collection_entries
         );
     }
