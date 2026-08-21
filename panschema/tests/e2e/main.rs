@@ -143,6 +143,26 @@ fn generate_docs_with_several_instances(
     output_dir
 }
 
+/// Click an element through the DOM rather than Playwright's
+/// actionability machinery. The embedded wasm force-graph can hog the
+/// main thread on slow runners, starving the actionability wait
+/// (visible/stable/receives-events) until its ~30s timeout even though
+/// the element is fine. The trade is explicit: a DOM click fires on a
+/// hidden element too, so callers assert presence beforehand and the
+/// click's *effect* afterwards; interactions whose visibility is the
+/// point should keep a real `locator.click`.
+async fn dom_click(page: &playwright_rs::Page, selector: &str) {
+    page.evaluate::<(), ()>(
+        &format!(
+            "document.querySelector({}).click()",
+            serde_json::json!(selector)
+        ),
+        None,
+    )
+    .await
+    .unwrap_or_else(|e| panic!("DOM click on `{selector}` failed: {e:?}"));
+}
+
 /// Poll (up to ~12s) until a JS readiness expression is truthy. Robust to
 /// variable CI load — e.g. a page that renders both a schema graph and a
 /// second instance graph, each loading wasm — where a fixed sleep would
@@ -668,11 +688,9 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         browser_name
     );
 
-    // Verify link is clickable (doesn't throw)
-    classes_link
-        .click(None)
-        .await
-        .expect("Failed to click classes link");
+    // Presence is asserted above and the hash poll below verifies the
+    // click took effect.
+    dom_click(&page, ".sidebar-link[href='#classes']").await;
 
     // Wait for URL hash to update (page.url() now reflects hash changes in 0.8.3)
     let mut url_updated = false;
@@ -3705,7 +3723,8 @@ fn e2e_instance_graph_renders_from_linkml_data() {
             link_text.contains("4 / 2"),
             "badge should show node/edge counts; got: {link_text}"
         );
-        sidebar_link.click(None).await.expect("click sidebar");
+        // Text asserted above, hash asserted below.
+        dom_click(&page, "a.sidebar-link[href='#individuals']").await;
         let hash = page
             .evaluate_value("window.location.hash")
             .await
