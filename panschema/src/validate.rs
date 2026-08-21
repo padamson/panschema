@@ -81,11 +81,8 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
             // A union slot has several range targets and no scalar `range:`.
             let ranges = &rs.induced.ranges;
             let card = effective_cardinality(slot);
-            let count = inst
-                .slot_values
-                .iter()
-                .find(|sv| &sv.slot == slot_name)
-                .map_or(0, |sv| sv.values.len());
+            let authored = inst.slot_values.iter().find(|sv| &sv.slot == slot_name);
+            let count = authored.map_or(0, |sv| sv.values.len());
             let mut push = |detail: String| {
                 out.push(Violation {
                     record: inst.id.clone(),
@@ -122,6 +119,37 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
                 ));
             }
 
+            // A type designator's authored value must name the record's
+            // own class — by name, IRI, or CURIE, the same matching that
+            // chose the class at load. Anything else emits a graph whose
+            // `rdf:type` and designator contradict each other.
+            if slot.designates_type
+                && let Some(sv) = authored
+            {
+                for value in &sv.values {
+                    match value {
+                        InstanceValue::Scalar(ScalarValue::String(authored)) => {
+                            let named = crate::rdf_serializers::class_named_by(
+                                schema,
+                                &[class_name],
+                                authored,
+                            );
+                            if !matches!(named, crate::rdf_serializers::ClassMatch::One(_)) {
+                                push(format!(
+                                    "type designator `{slot_name}` value `{authored}` does not \
+                                     name the record's class `{class_name}`"
+                                ));
+                            }
+                        }
+                        InstanceValue::Scalar(_) => push(format!(
+                            "type designator `{slot_name}` (class `{class_name}`) has a \
+                             non-string value; a designator names a class"
+                        )),
+                        _ => {}
+                    }
+                }
+            }
+
             // Per-value constraints: enum membership, numeric bounds, pattern.
             let range_enum = slot
                 .range
@@ -156,13 +184,7 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
             } else {
                 Vec::new()
             };
-            for value in inst
-                .slot_values
-                .iter()
-                .find(|sv| &sv.slot == slot_name)
-                .map(|sv| sv.values.as_slice())
-                .unwrap_or_default()
-            {
+            for value in authored.map(|sv| sv.values.as_slice()).unwrap_or_default() {
                 let scalar = match value {
                     InstanceValue::Scalar(s) => s,
                     // A value the reader couldn't fit to the slot's range kind
@@ -200,7 +222,9 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
                     InstanceValue::Reference { target, .. } => {
                         if ranges.len() > 1
                             && let Some(actual) = class_of.get(target.as_str())
-                            && !ranges.iter().any(|r| class_satisfies(schema, actual, r))
+                            && !ranges
+                                .iter()
+                                .any(|r| crate::linkml_resolve::class_satisfies(schema, actual, r))
                         {
                             push(format!(
                                 "slot `{slot_name}` (class `{class_name}`) references `{target}`, \
@@ -592,28 +616,6 @@ fn slot_condition_failure(cond: &SlotCondition, values: &[InstanceValue]) -> Opt
     None
 }
 
-/// Whether `class` satisfies a range naming `target`: the same class, or a
-/// descendant of it through `is_a`. Mixins are not walked — a union branch
-/// names a class an instance is expected to *be*, and `is_a` is the relation
-/// that answers that.
-fn class_satisfies(schema: &SchemaDefinition, class: &str, target: &str) -> bool {
-    let mut current = class;
-    // Revisiting a class means a malformed `is_a` cycle; stop rather than spin.
-    let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
-    loop {
-        if current == target {
-            return true;
-        }
-        if !seen.insert(current) {
-            return false;
-        }
-        match schema.classes.get(current).and_then(|c| c.is_a.as_deref()) {
-            Some(parent) => current = parent,
-            None => return false,
-        }
-    }
-}
-
 /// Whether `scalar`'s string form is one of the enum's permissible values —
 /// matched against either the value key or its `text`.
 fn enum_permits(enum_def: &EnumDefinition, scalar: &ScalarValue) -> bool {
@@ -739,6 +741,79 @@ classes:
 
     fn data(yaml: &str) -> Value {
         serde_norway::from_str(yaml).expect("parse data")
+    }
+
+    #[test]
+    fn a_type_designator_must_name_the_records_class() {
+        let schema: crate::linkml::SchemaDefinition = serde_norway::from_str(
+            "\
+name: Menagerie
+default_prefix: ex
+prefixes:
+  ex: https://example.org/zoo/
+default_range: string
+classes:
+  Root:
+    tree_root: true
+    attributes:
+      id:
+        identifier: true
+      pets:
+        range: Animal
+        multivalued: true
+  Animal:
+    attributes:
+      id:
+        identifier: true
+      kind:
+        designates_type: true
+  Dog:
+    is_a: Animal
+    attributes:
+      bark:
+        range: string
+",
+        )
+        .expect("parse schema");
+
+        // Agreeing designators — the bare name and the CURIE form — are
+        // clean; a value naming no class of the record's is a violation
+        // that names both sides, and a non-string value can name nothing.
+        let data: serde_norway::Value = serde_norway::from_str(
+            "\
+id: zoo
+pets:
+  - {id: d1, kind: Dog, bark: loud}
+  - {id: d2, kind: ex:Dog}
+  - {id: a1, kind: Hamster}
+  - {id: a2, kind: 42}
+",
+        )
+        .expect("parse data");
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        let violations = validate_instances(&schema, &set);
+        let designator_faults: Vec<&Violation> = violations
+            .iter()
+            .filter(|v| v.detail.contains("type designator"))
+            .collect();
+        assert!(
+            !designator_faults
+                .iter()
+                .any(|v| v.record == "d1" || v.record == "d2"),
+            "an agreeing designator, spelled as name or CURIE, is clean; got: {designator_faults:?}"
+        );
+        assert!(
+            designator_faults.iter().any(|v| v.record == "a1"
+                && v.detail.contains("Hamster")
+                && v.detail.contains("Animal")),
+            "a value naming no class of the record's is reported with both sides; got: {designator_faults:?}"
+        );
+        assert!(
+            designator_faults
+                .iter()
+                .any(|v| v.record == "a2" && v.detail.contains("non-string")),
+            "a non-string designator value is reported; got: {designator_faults:?}"
+        );
     }
 
     #[test]

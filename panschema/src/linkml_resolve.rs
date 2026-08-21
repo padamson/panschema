@@ -127,6 +127,28 @@ pub fn resolve_effective_slots(
         .collect()
 }
 
+/// Whether `class` satisfies a range naming `target`: the same class, or a
+/// descendant of it through `is_a`. Mixins are not walked — a range (or a
+/// type designator) names a class an instance is expected to *be*, and
+/// `is_a` is the relation that answers that.
+pub fn class_satisfies(schema: &SchemaDefinition, class: &str, target: &str) -> bool {
+    let mut current = class;
+    // Revisiting a class means a malformed `is_a` cycle; stop rather than spin.
+    let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    loop {
+        if current == target {
+            return true;
+        }
+        if !seen.insert(current) {
+            return false;
+        }
+        match schema.classes.get(current).and_then(|c| c.is_a.as_deref()) {
+            Some(parent) => current = parent,
+            None => return false,
+        }
+    }
+}
+
 /// [`resolve_effective_slots`] plus per-slot [`Provenance`]. Same
 /// walk, same precedence; the provenance is rebased at each hop so
 /// every entry answers "where did this come from?" relative to the

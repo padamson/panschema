@@ -386,6 +386,7 @@ impl InstanceSet {
             effective_slots_by_class: std::collections::BTreeMap::new(),
             unusable_entries: Vec::new(),
             current_holder: None,
+            family_by_class: std::collections::BTreeMap::new(),
         };
         // The container's authored identifier value, when its declared
         // identifier slot carries one — decided up front because it names
@@ -746,6 +747,10 @@ struct LinkmlLoader<'a> {
     /// raised below it can name its holder; `None` between records — a
     /// collection on the dataset container or a vessel root.
     current_holder: Option<String>,
+    /// Per class, the classes its type designator may name — itself and
+    /// its `is_a` descendants — built once for the IRI/CURIE spellings;
+    /// bare names answer without it.
+    family_by_class: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 impl LinkmlLoader<'_> {
@@ -826,6 +831,43 @@ impl LinkmlLoader<'_> {
             field,
             key_kind: Some(kind),
         });
+    }
+
+    /// The class of the record, when its type designator names one in
+    /// `class_name`'s family — itself or an `is_a` descendant, by name,
+    /// IRI, or CURIE, exactly as at a union. `None` leaves the declared
+    /// class standing: a value naming no family member (or several,
+    /// through a shared IRI) is a conformance question, not a loading
+    /// one. Naming the class itself is a harmless self-redirect.
+    fn designated_subclass(
+        &mut self,
+        class_name: &str,
+        map: &serde_norway::Mapping,
+    ) -> Option<String> {
+        let key = self.designator_slot(class_name)?;
+        let authored = map.get(key.as_str())?.as_str()?;
+        let schema = self.schema;
+        // The dominant spelling — a bare class name — answers with one
+        // chain walk, no family scan. The class naming itself resolves to
+        // a self-redirect, which changes nothing downstream.
+        if schema.classes.contains_key(authored) {
+            return crate::linkml_resolve::class_satisfies(schema, authored, class_name)
+                .then(|| authored.to_string());
+        }
+        if !self.family_by_class.contains_key(class_name) {
+            let family: Vec<String> = schema
+                .classes
+                .keys()
+                .filter(|name| crate::linkml_resolve::class_satisfies(schema, name, class_name))
+                .cloned()
+                .collect();
+            self.family_by_class.insert(class_name.to_string(), family);
+        }
+        let candidates: Vec<&String> = self.family_by_class[class_name].iter().collect();
+        match crate::rdf_serializers::class_named_by(schema, &candidates, authored) {
+            crate::rdf_serializers::ClassMatch::One(name) => Some(name.to_string()),
+            _ => None,
+        }
     }
 
     /// Record a collection entry that loaded nothing, and why, naming the
@@ -1180,6 +1222,11 @@ impl LinkmlLoader<'_> {
     ) -> Option<(String, bool)> {
         self.schema.classes.get(class_name)?;
         let map = record.as_mapping()?;
+        // LinkML's single-class designator use: the record instantiates
+        // the subclass its authored type designator names, not the
+        // declared range.
+        let designated = self.designated_subclass(class_name, map);
+        let class_name = designated.as_deref().unwrap_or(class_name);
         // The provenance-resolved view: each slot's induced range is
         // available there — an `any_of` union has several range targets
         // and no scalar `range:`, so reading `range` alone would see
@@ -3574,6 +3621,113 @@ classes:
                 .iter()
                 .any(|u| u.slot == "things"),
             "the unanswerable designation is reported; got: {:?}",
+            set.unusable_collection_entries
+        );
+    }
+
+    #[test]
+    fn a_designator_names_a_subclass_of_the_declared_range() {
+        // LinkML's canonical single-class designator use: at
+        // `range: Animal`, the authored `kind` names which subclass the
+        // record instantiates.
+        const SUBCLASS_DESIGNATED_SCHEMA: &str = "\
+name: Menagerie
+default_prefix: ex
+prefixes:
+  ex: https://example.org/zoo/
+default_range: string
+classes:
+  Root:
+    tree_root: true
+    attributes:
+      id:
+        identifier: true
+      pets:
+        range: Animal
+        multivalued: true
+      companion:
+        range: Animal
+  Animal:
+    attributes:
+      id:
+        identifier: true
+      kind:
+        designates_type: true
+  Dog:
+    is_a: Animal
+    attributes:
+      bark:
+        range: string
+  Cat:
+    is_a: Animal
+    attributes:
+      purr:
+        range: string
+  Rock:
+    attributes:
+      id:
+        identifier: true
+";
+        let schema: SchemaDefinition =
+            serde_norway::from_str(SUBCLASS_DESIGNATED_SCHEMA).expect("schema");
+
+        // List, dict, and single-valued spellings all re-type; the CURIE
+        // form names the subclass as well as the bare name does.
+        let data: serde_norway::Value = serde_norway::from_str(
+            "\
+id: zoo
+pets:
+  - {id: d1, kind: Dog, bark: loud}
+  - {id: c1, kind: ex:Cat}
+companion: {id: d2, kind: Dog, bark: soft}
+",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        for (id, class) in [("d1", "Dog"), ("c1", "Cat"), ("d2", "Dog")] {
+            let record = set
+                .instances
+                .iter()
+                .find(|i| i.id == id)
+                .unwrap_or_else(|| panic!("{id} loads; got: {set:?}"));
+            assert_eq!(
+                record.types,
+                vec![class],
+                "{id} instantiates the subclass its designator names"
+            );
+        }
+        assert!(
+            set.undeclared_fields.is_empty(),
+            "a subclass's own fields are declared fields; got: {:?}",
+            set.undeclared_fields
+        );
+
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: zoo\npets:\n  d3: {kind: Dog, bark: low}\n").expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        let d3 = set.instances.iter().find(|i| i.id == "d3").expect("d3");
+        assert_eq!(d3.types, vec!["Dog"], "the dict spelling re-types too");
+
+        // A value naming no descendant leaves the declared range standing
+        // — whether it names nothing at all or a class outside the family
+        // — the record still loads, and conformance, not loading, judges
+        // the value.
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: zoo\npets:\n  - {id: a1, kind: Hamster}\n  - {id: a2, kind: Rock}\n",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        for id in ["a1", "a2"] {
+            let record = set.instances.iter().find(|i| i.id == id).expect(id);
+            assert_eq!(
+                record.types,
+                vec!["Animal"],
+                "{id} stays the declared range, never an out-of-family class"
+            );
+        }
+        assert!(
+            set.unusable_collection_entries.is_empty(),
+            "an unanswerable subclass designator is not a refusal; got: {:?}",
             set.unusable_collection_entries
         );
     }

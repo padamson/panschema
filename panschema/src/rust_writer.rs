@@ -800,6 +800,13 @@ fn render_kind_enum<W: Write>(
          /// field type when a slot's range is `{name}`.\n"
     )?;
     writeln!(out, "#[derive({})]", enum_derive_line(eq_hash_ok))?;
+    // Deliberately shape-based even when the trait class declares a type
+    // designator: an internally tagged enum rejects data the loader and
+    // `validate` accept — a record omitting the optional designator, a
+    // CURIE- or IRI-spelled value, a subclass name — because serde
+    // matches the tag against exact variant names and requires it
+    // present. Designator dispatch needs a custom deserializer honoring
+    // the same matching the loader uses.
     out.write_str("#[serde(untagged)]\n")?;
     out.write_str("#[non_exhaustive]\n")?;
     writeln!(out, "pub enum {} {{", type_ident(&format!("{name}Kind")))?;
@@ -818,6 +825,8 @@ fn render_any_of_enum<W: Write>(
 ) -> fmt::Result {
     out.write_str("/// Polymorphic range union for the slot identified by this type name.\n")?;
     writeln!(out, "#[derive({})]", enum_derive_line(eq_hash_ok))?;
+    // Shape-based even when every member shares a type designator — see
+    // the same choice on the `<Name>Kind` enum above.
     out.write_str("#[serde(untagged)]\n")?;
     out.write_str("#[non_exhaustive]\n")?;
     writeln!(out, "pub enum {} {{", type_ident(name))?;
@@ -2745,9 +2754,31 @@ mod tests {
         assert!(out.contains("pub enum AnimalKind"));
         assert!(out.contains("Cat(Box<Cat>)"));
         assert!(out.contains("Dog(Box<Dog>)"));
-        assert!(out.contains("#[serde(untagged)]"));
+        assert!(
+            out.contains("#[serde(untagged)]"),
+            "with no designator, shape decides the variant; got: {out}"
+        );
         assert!(out.contains("#[non_exhaustive]"));
         assert!(out.contains("PartialEq"));
+
+        // A type designator on the trait class does not change dispatch:
+        // an internally tagged enum would reject accepted spellings (an
+        // absent optional designator, a CURIE or IRI value, a subclass
+        // name), so the enum stays shape-based.
+        let mut kind = SlotDefinition::new("kind");
+        kind.designates_type = true;
+        schema
+            .classes
+            .get_mut("Animal")
+            .unwrap()
+            .attributes
+            .insert("kind".to_string(), kind);
+        let mut out = String::new();
+        render_kind_enum(&mut out, "Animal", &schema, &roles, &BTreeMap::new()).unwrap();
+        assert!(
+            out.contains("#[serde(untagged)]"),
+            "a designator does not switch the enum to serde's tag dispatch; got: {out}"
+        );
     }
 
     #[test]

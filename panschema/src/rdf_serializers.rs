@@ -92,10 +92,25 @@ pub(crate) enum ClassMatch<'a> {
 /// equality with the class's minted IRI ([`class_iri_by_name`]); the name
 /// arm is load-bearing for a class whose declared `class_uri` differs
 /// from its default-prefix mint. Several matches (duplicate `class_uri`
-/// declarations) are no match: a designation must name one thing. The
-/// absence check's `via` narrowing matches by IRI only for now — keep
-/// the two rules in sight of each other if either changes.
+/// declarations) are no match: a designation must name one thing. Type
+/// designators and the absence check's `via` narrowing both resolve
+/// through here, so the two rules cannot drift apart.
 pub(crate) fn class_named_by<'a>(
+    schema: &crate::linkml::SchemaDefinition,
+    candidates: &[&'a String],
+    authored: &str,
+) -> ClassMatch<'a> {
+    class_named_by_expanded(schema, schema, candidates, authored)
+}
+
+/// [`class_named_by`] with the two schema roles split: an IRI or CURIE
+/// spelling of `authored` expands against `expansion_schema` — the
+/// schema whose document authored the value — while the candidates'
+/// IRIs mint from their own `schema`. A type designator's record and
+/// classes share one schema; an absence claim's `via` is authored in
+/// the claiming schema and names a sibling's class.
+pub(crate) fn class_named_by_expanded<'a>(
+    expansion_schema: &crate::linkml::SchemaDefinition,
     schema: &crate::linkml::SchemaDefinition,
     candidates: &[&'a String],
     authored: &str,
@@ -116,7 +131,7 @@ pub(crate) fn class_named_by<'a>(
     if hit.is_none() {
         // The IRI derivation only runs when no bare name matched — the
         // dominant authoring style never pays for it.
-        let authored_iri = resolve_reference_iri(schema, authored);
+        let authored_iri = resolve_reference_iri(expansion_schema, authored);
         for candidate in candidates {
             if class_iri_by_name(candidate, schema) == authored_iri && note(candidate, &mut hit) {
                 return ClassMatch::Several;

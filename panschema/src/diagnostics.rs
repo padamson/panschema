@@ -730,7 +730,7 @@ pub fn unverified_absences(
     )],
 ) -> AbsenceVerification {
     use crate::instances::InstanceValue;
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeSet;
 
     struct SiblingRecord<'a> {
         id: &'a str,
@@ -739,7 +739,8 @@ pub fn unverified_absences(
     }
     struct SiblingIndex<'a> {
         records: Vec<SiblingRecord<'a>>,
-        class_names_by_iri: BTreeMap<String, Vec<&'a str>>,
+        schema: &'a SchemaDefinition,
+        class_names: Vec<&'a String>,
     }
 
     let mut minted_union: BTreeSet<String> = BTreeSet::new();
@@ -775,19 +776,10 @@ pub fn unverified_absences(
                     });
                 }
             }
-            let mut class_names_by_iri: BTreeMap<String, Vec<&str>> = BTreeMap::new();
-            for name in sibling_schema.classes.keys() {
-                class_names_by_iri
-                    .entry(crate::rdf_serializers::class_iri_by_name(
-                        name,
-                        sibling_schema,
-                    ))
-                    .or_default()
-                    .push(name);
-            }
             SiblingIndex {
                 records,
-                class_names_by_iri,
+                schema: sibling_schema,
+                class_names: sibling_schema.classes.keys().collect(),
             }
         })
         .collect();
@@ -868,33 +860,65 @@ pub fn unverified_absences(
             Some(InstanceValue::Reference { target, .. }) => Some(target.clone()),
             None => None,
         };
-        let via_iri: Option<String> = via_authored
-            .as_ref()
-            .map(|v| crate::rdf_serializers::resolve_reference_iri(schema, v));
-        if let Some(via) = &via_iri
-            && !indexes
+        // The `via` value narrows by the same matching a type designator
+        // uses — a sibling's class name first, its IRI or CURIE second,
+        // the spelling expanded against the claiming schema exactly like
+        // the anchors beside it — and like a designation it must name
+        // one thing: an IRI shared by several sibling classes narrows to
+        // nothing checkable. Resolved once per sibling and reused below.
+        let via_matches: Vec<crate::rdf_serializers::ClassMatch> = match &via_authored {
+            Some(via) => indexes
                 .iter()
-                .any(|index| index.class_names_by_iri.contains_key(via))
-        {
-            out.uncheckable.push(UncheckableAbsence {
-                referrer: inst.id.clone(),
-                reason: format!("`{via}` names no class any sibling declares"),
-            });
-            continue;
+                .map(|index| {
+                    crate::rdf_serializers::class_named_by_expanded(
+                        schema,
+                        index.schema,
+                        &index.class_names,
+                        via,
+                    )
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        if let Some(via) = &via_authored {
+            let any_named = via_matches
+                .iter()
+                .any(|m| matches!(m, crate::rdf_serializers::ClassMatch::One(_)));
+            let ambiguous = via_matches
+                .iter()
+                .any(|m| matches!(m, crate::rdf_serializers::ClassMatch::Several));
+            if ambiguous {
+                out.uncheckable.push(UncheckableAbsence {
+                    referrer: inst.id.clone(),
+                    reason: format!(
+                        "`{via}` names more than one class of a sibling — a narrowing must \
+                         name one"
+                    ),
+                });
+                continue;
+            }
+            if !any_named {
+                out.uncheckable.push(UncheckableAbsence {
+                    referrer: inst.id.clone(),
+                    reason: format!("`{via}` names no class any sibling declares"),
+                });
+                continue;
+            }
         }
 
         out.claims += 1;
         let mut contradicted = false;
-        for index in &indexes {
-            let allowed = via_iri
-                .as_ref()
-                .and_then(|via| index.class_names_by_iri.get(via));
-            if via_iri.is_some() && allowed.is_none() {
+        for (position, index) in indexes.iter().enumerate() {
+            let allowed: Option<&str> = match via_matches.get(position) {
+                Some(crate::rdf_serializers::ClassMatch::One(name)) => Some(name),
+                _ => None,
+            };
+            if via_authored.is_some() && allowed.is_none() {
                 continue;
             }
             for record in &index.records {
                 if let Some(allowed) = allowed
-                    && !record.types.iter().any(|t| allowed.contains(&t.as_str()))
+                    && !record.types.iter().any(|t| t == allowed)
                 {
                     continue;
                 }
@@ -2540,6 +2564,24 @@ mod tests {
             vec![],
             "no Item joins the anchors, so the narrowed claim holds"
         );
+
+        let named_via = scoped_set(
+            &schema,
+            "id: b1\nanchors:\n  - cellar:w1\n  - cellar:f1\nvia: Link\n",
+        );
+        assert_eq!(
+            unverified_absences(
+                &schema,
+                &named_via,
+                "anchors",
+                Some("via"),
+                &[(&sibling_schema, std::slice::from_ref(&sibling))],
+            )
+            .unverified
+            .len(),
+            1,
+            "a bare class name narrows like the designator's matcher: name first, IRI second"
+        );
     }
 
     /// A subset absence claim: only the bound slot's values form the
@@ -2617,6 +2659,31 @@ mod tests {
             found.unverified.len(),
             1,
             "cellar:Link denotes the Link class; got: {found:?}"
+        );
+
+        // The prefix is the claiming schema's vocabulary: a sibling
+        // minting the same namespace under its own prefix name still
+        // answers to the claimer's spelling.
+        let mut renamed_sibling = linked_sibling_schema();
+        renamed_sibling.default_prefix = Some("store".to_string());
+        renamed_sibling.prefixes.remove("cellar");
+        renamed_sibling.prefixes.insert(
+            "store".to_string(),
+            "https://example.org/cellar/".to_string(),
+        );
+        let sibling = scoped_set(&renamed_sibling, LINKED_DATA);
+        let found = unverified_absences(
+            &schema,
+            &set,
+            "anchors",
+            Some("via"),
+            &[(&renamed_sibling, std::slice::from_ref(&sibling))],
+        );
+        assert_eq!(
+            found.unverified.len(),
+            1,
+            "the CURIE expands against the claiming schema, like the anchors beside it; \
+             got: {found:?}"
         );
     }
 
