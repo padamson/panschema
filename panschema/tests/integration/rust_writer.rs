@@ -540,6 +540,52 @@ fn main() {
         "an unanswerable kind designator falls back to shape, never an error"
     );
 
+    // A union over the designated Pen hierarchy: the trait member's
+    // variant wraps PenKind, and a subclass designation dispatches
+    // through both layers.
+    let gear: codegen::WorkshopGear =
+        serde_json::from_str(r#"{"designator":"BallPen","tip":"fine"}"#)
+            .expect("subclass designator through a union");
+    let codegen::WorkshopGear::Pen(pen) = &gear else {
+        panic!("the designator picks the trait member");
+    };
+    assert!(
+        matches!(pen, codegen::PenKind::BallPen(_)),
+        "and the member's Kind enum picks the concrete class"
+    );
+    let gear: codegen::WorkshopGear =
+        serde_json::from_str(r#"{"designator":"Lamp","lumen":3}"#).expect("leaf member");
+    assert!(
+        matches!(gear, codegen::WorkshopGear::Lamp(_)),
+        "a leaf member's own name names it"
+    );
+
+    // The parent itself has no struct: designating it exactly is an
+    // error naming the limit, never a silent retype into whichever
+    // subclass shape fits first.
+    let parent = serde_json::from_str::<codegen::WorkshopGear>(
+        r#"{"designator":"Pen","cartridge":"converter"}"#,
+    );
+    assert!(
+        parent.is_err(),
+        "designating the abstract parent is refused, not shape-guessed; got: {parent:?}"
+    );
+
+    // The undesignated trait-member union resolves by shape through
+    // nested untagged enums: a record only QuestionFormation fits lands
+    // there, not in the all-optional Lamp.
+    let history: codegen::WorkshopHistory = serde_json::from_str(
+        r#"{"prompt":"why","completedAt":"2024-01-01T00:00:00Z"}"#,
+    )
+    .expect("shape reaches through the nested Kind enum");
+    assert!(
+        matches!(
+            &history,
+            codegen::WorkshopHistory::Activity(codegen::ActivityKind::QuestionFormation(_))
+        ),
+        "shape picks the concrete descendant; got: {history:?}"
+    );
+
     // any_of union: a `wasDerivedFrom` entry round-trips untagged.
     let mut q2 = codegen::Question::new("derived".to_string());
     q2.was_derived_from

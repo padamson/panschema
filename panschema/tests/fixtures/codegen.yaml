@@ -305,7 +305,8 @@ classes:
   # ---------------------------------------------------------------
   Workshop:
     name: Workshop
-    description: A room whose one fixture is chosen by its designator.
+    description: A room whose fixture and gear are unions, designated
+      and trait-membered.
     attributes:
       fixture:
         name: fixture
@@ -313,6 +314,22 @@ classes:
         any_of:
           - range: Lamp
           - range: Sink
+      # Union over a trait-role member: the designated `Pen` hierarchy
+      # beside a leaf struct — the variant carries `PenKind`.
+      gear:
+        name: gear
+        description: The workshop's gear.
+        any_of:
+          - range: Pen
+          - range: Lamp
+      # The same trait-member shape undesignated (`Activity` carries no
+      # designator), resolved by shape through nested untagged enums.
+      history:
+        name: history
+        description: What happened here.
+        any_of:
+          - range: Activity
+          - range: Lamp
   Lamp:
     name: Lamp
     description: A light fixture.

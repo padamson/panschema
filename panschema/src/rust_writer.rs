@@ -147,7 +147,7 @@ impl RustWriter {
                 &mut body,
                 enum_name,
                 members,
-                schema,
+                &ctx,
                 &designator_by_class,
                 eq_hash_ok,
             )?;
@@ -848,8 +848,10 @@ fn render_kind_enum<W: Write>(
         let ty = type_ident(desc).into_owned();
         writeln!(out, "    {ty}(Box<{ty}>),")?;
         variants.push(DesignatedVariant {
+            member: desc.clone(),
             variant: ty.clone(),
             ty,
+            boxed: true,
             spellings: Vec::new(),
         });
     }
@@ -882,19 +884,26 @@ fn render_kind_enum<W: Write>(
         &enum_name,
         &key,
         &variants,
+        &[],
         Unresolvable::FallsBackToShape,
     )?;
     Ok(true)
 }
 
+/// Render a polymorphic `any_of` union enum. Returns whether the union
+/// dispatches on a designator (and so needs `serde_json` at the
+/// consumer): every member a class, all designating through one slot
+/// name. Anything less stays shape-based — a record whose tag serde
+/// could not find must still deserialize.
 fn render_any_of_enum<W: Write>(
     out: &mut W,
     name: &str,
     members: &[String],
-    schema: &SchemaDefinition,
+    ctx: &RenderCtx<'_>,
     designators: &BTreeMap<String, Option<String>>,
     eq_hash_ok: bool,
 ) -> Result<bool, fmt::Error> {
+    let RenderCtx { schema, roles, .. } = *ctx;
     let shared = {
         let mut per_member = members
             .iter()
@@ -913,14 +922,39 @@ fn render_any_of_enum<W: Write>(
     out.write_str("#[serde(untagged)]\n")?;
     out.write_str("#[non_exhaustive]\n")?;
     writeln!(out, "pub enum {} {{", type_ident(name))?;
+    // Variant payloads go through the one range mapping field sites use:
+    // a Struct-role class boxes (self-reference is legal there); Kind
+    // enums, enums, and primitives are sized without it. A trait member
+    // with no concrete descendant has no payload type at all — its
+    // variant is skipped with a breadcrumb, and a designator naming it
+    // answers with an error below.
     let mut variants: Vec<DesignatedVariant> = Vec::new();
     for member in members {
         let variant = type_ident(&pascal_case(member)).into_owned();
-        let ty = type_ident(member).into_owned();
-        writeln!(out, "    {variant}(Box<{ty}>),")?;
+        let trait_role = roles.get(member) == Some(&ClassRole::Trait);
+        if trait_role && !has_concrete_descendants(member, schema, roles) {
+            writeln!(
+                out,
+                "    // NOTE: `{member}` has no concrete descendants; its variant is omitted."
+            )?;
+            continue;
+        }
+        let ty = type_for_range(member, ctx);
+        // Box exactly the class-like payloads (declared or unresolved
+        // names the mapping passed through, where self-reference is
+        // possible); Kind enums box internally, and primitives, time
+        // types, and `types:` entries are sized scalars.
+        let boxed = !trait_role && ty == type_ident(member).as_ref();
+        if boxed {
+            writeln!(out, "    {variant}(Box<{ty}>),")?;
+        } else {
+            writeln!(out, "    {variant}({ty}),")?;
+        }
         variants.push(DesignatedVariant {
+            member: member.clone(),
             variant,
             ty,
+            boxed,
             spellings: Vec::new(),
         });
     }
@@ -928,33 +962,78 @@ fn render_any_of_enum<W: Write>(
     let Some(key) = shared else {
         return Ok(false);
     };
-    // A member's own name chooses it outright; every other spelling
-    // belongs to the one member whose `is_a` family holds its class —
+    // A struct member's own name chooses it outright; a concrete class's
+    // spellings belong to the one member whose `is_a` family holds it —
     // a class in several members' families names no single member, the
-    // loader's own rule.
-    let own_names: Vec<Option<String>> = members.iter().map(|m| Some(m.clone())).collect();
+    // loader's own rule. Spellings of trait-role classes — a member
+    // itself, or an intermediate — name nothing the projection can
+    // instantiate, so they answer with an error rather than a silent
+    // retype into whichever subclass shape fits first.
+    let own_names: Vec<Option<String>> = variants
+        .iter()
+        .map(|v| (roles.get(&v.member) != Some(&ClassRole::Trait)).then(|| v.member.clone()))
+        .collect();
     let mut contributions: Vec<(String, usize)> = Vec::new();
+    let mut abstract_spellings: Vec<String> = Vec::new();
     for class in schema.classes.keys() {
         let mut holders = members
             .iter()
             .enumerate()
             .filter(|(_, m)| crate::linkml_resolve::class_satisfies(schema, class, m))
             .map(|(i, _)| i);
-        if let (Some(owner), None) = (holders.next(), holders.next()) {
-            for spelling in crate::rdf_serializers::class_spellings(schema, class) {
-                contributions.push((spelling, owner));
-            }
+        let (Some(owner_member), None) = (holders.next(), holders.next()) else {
+            continue;
+        };
+        if roles.get(class) == Some(&ClassRole::Trait) {
+            abstract_spellings.extend(crate::rdf_serializers::class_spellings(schema, class));
+            continue;
+        }
+        let Some(position) = variants
+            .iter()
+            .position(|v| v.member == members[owner_member])
+        else {
+            continue;
+        };
+        for spelling in crate::rdf_serializers::class_spellings(schema, class) {
+            contributions.push((spelling, position));
         }
     }
     assign_spellings(&mut variants, &own_names, contributions);
+    abstract_spellings.sort();
+    abstract_spellings.dedup();
+    abstract_spellings.retain(|s| {
+        !variants
+            .iter()
+            .any(|v| v.spellings.iter().any(|vs| vs == s))
+    });
     render_designated_deserialize(
         out,
         &type_ident(name),
         &key,
         &variants,
+        &abstract_spellings,
         Unresolvable::Errors,
     )?;
     Ok(true)
+}
+
+/// The Rust type a reference to a Trait-role class takes: the
+/// closed-enum wrapper of its concrete descendants — unless there are
+/// none, in which case no Kind enum is emitted and the reference falls
+/// back to `String` (URI/identifier), mirroring the breadcrumb comment
+/// `render_kind_enum` emits. Field sites route here through
+/// `type_for_range`; union variants skip their member entirely in the
+/// descendant-less case instead of taking the `String` fallback.
+fn class_reference_type(
+    name: &str,
+    schema: &SchemaDefinition,
+    roles: &BTreeMap<String, ClassRole>,
+) -> String {
+    if has_concrete_descendants(name, schema, roles) {
+        type_ident(&format!("{name}Kind")).into_owned()
+    } else {
+        "String".to_string()
+    }
 }
 
 /// Each class's effective designator slot, resolved once per render —
@@ -989,8 +1068,10 @@ fn enum_derive_line(eq_hash_ok: bool, derive_deserialize: bool) -> &'static str 
 /// variant ident, the payload type, and the designator spellings that
 /// choose it.
 struct DesignatedVariant {
+    member: String,
     variant: String,
     ty: String,
+    boxed: bool,
     spellings: Vec<String>,
 }
 
@@ -1046,13 +1127,13 @@ fn assign_spellings(
 /// non-string value, and an unresolvable one, follow `unresolvable`.
 /// The `serde_json::Value` buffer is a documented trade: non-JSON data
 /// models degrade (a YAML `NaN` reads as null, non-string keys are
-/// refused), and a subclass-designated record deserializes into its
-/// member's struct, dropping subclass-only fields.
+/// refused).
 fn render_designated_deserialize<W: Write>(
     out: &mut W,
     enum_name: &str,
     key: &str,
     variants: &[DesignatedVariant],
+    abstract_spellings: &[String],
     unresolvable: Unresolvable,
 ) -> fmt::Result {
     writeln!(out, "impl<'de> serde::Deserialize<'de> for {enum_name} {{")?;
@@ -1085,15 +1166,37 @@ fn render_designated_deserialize<W: Write>(
             "                    return {}::deserialize(&value)",
             entry.ty
         )?;
-        writeln!(
-            out,
-            "                        .map(|v| Self::{}(Box::new(v)))",
-            entry.variant
-        )?;
+        if entry.boxed {
+            writeln!(
+                out,
+                "                        .map(|v| Self::{}(Box::new(v)))",
+                entry.variant
+            )?;
+        } else {
+            writeln!(out, "                        .map(Self::{})", entry.variant)?;
+        }
         writeln!(
             out,
             "                        .map_err(serde::de::Error::custom);"
         )?;
+        writeln!(out, "                }}")?;
+    }
+    if !abstract_spellings.is_empty() {
+        let arms = abstract_spellings
+            .iter()
+            .map(|s| format!("\"{}\"", escape_str(s)))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        writeln!(out, "                named_abstract @ ({arms}) => {{")?;
+        writeln!(
+            out,
+            "                    return Err(serde::de::Error::custom(format!("
+        )?;
+        writeln!(
+            out,
+            "                        \"designator `{{named_abstract}}` names an abstract class the Rust projection cannot instantiate\""
+        )?;
+        writeln!(out, "                    )));")?;
         writeln!(out, "                }}")?;
     }
     match unresolvable {
@@ -1154,11 +1257,15 @@ fn render_designated_deserialize<W: Write>(
             "        if let Ok(v) = {}::deserialize(&value) {{",
             entry.ty
         )?;
-        writeln!(
-            out,
-            "            return Ok(Self::{}(Box::new(v)));",
-            entry.variant
-        )?;
+        if entry.boxed {
+            writeln!(
+                out,
+                "            return Ok(Self::{}(Box::new(v)));",
+                entry.variant
+            )?;
+        } else {
+            writeln!(out, "            return Ok(Self::{}(v));", entry.variant)?;
+        }
         writeln!(out, "        }}")?;
     }
     writeln!(
@@ -1385,17 +1492,7 @@ fn type_for_range(range: &str, ctx: &RenderCtx<'_>) -> String {
         },
         other => {
             if roles.get(other) == Some(&ClassRole::Trait) {
-                // Has subclasses or used as a mixin; field type uses the
-                // closed-enum wrapper of concrete descendants — unless
-                // there are no concrete descendants, in which case the
-                // Kind enum isn't emitted and the field falls back to
-                // `String` (URI/identifier). Mirrors the breadcrumb
-                // comment `render_kind_enum` emits.
-                if has_concrete_descendants(other, schema, roles) {
-                    type_ident(&format!("{other}Kind")).into_owned()
-                } else {
-                    "String".to_string()
-                }
+                class_reference_type(other, schema, roles)
             } else if schema.classes.contains_key(other) || schema.enums.contains_key(other) {
                 type_ident(other).into_owned()
             } else if schema.types.contains_key(other) {
@@ -3678,7 +3775,7 @@ mod tests {
             &mut out,
             "QuestionWasDerivedFrom",
             &["Question".to_string(), "Annotation".to_string()],
-            &schema,
+            &chrono_ctx(&schema, &compute_class_roles(&schema)),
             &designators_by_class(&schema),
             true,
         )
@@ -3692,6 +3789,56 @@ mod tests {
         assert!(
             out.contains("Deserialize"),
             "an undesignated union derives its Deserialize; got: {out}"
+        );
+
+        // A subclassed member is a trait, not a struct: its variant
+        // wraps the member's Kind enum, exactly as a field ranging over
+        // it would — never the uncompilable `Box<TraitName>`.
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .classes
+            .insert("Lamp".to_string(), ClassDefinition::new("Lamp"));
+        schema
+            .classes
+            .insert("Sink".to_string(), ClassDefinition::new("Sink"));
+        let mut steel = ClassDefinition::new("SteelSink");
+        steel.is_a = Some("Sink".to_string());
+        schema.classes.insert("SteelSink".to_string(), steel);
+        let mut out = String::new();
+        render_any_of_enum(
+            &mut out,
+            "Fixture",
+            &["Lamp".to_string(), "Sink".to_string()],
+            &chrono_ctx(&schema, &compute_class_roles(&schema)),
+            &designators_by_class(&schema),
+            true,
+        )
+        .unwrap();
+        assert!(
+            out.contains("Sink(SinkKind)"),
+            "a trait-role member takes its Kind enum unboxed, as a field would; got: {out}"
+        );
+        assert!(
+            out.contains("Lamp(Box<Lamp>)"),
+            "a struct-role member stays a struct; got: {out}"
+        );
+
+        // Non-class members route through the same range mapping fields
+        // use: a primitive branch is a sized `String`, never the
+        // uncompilable `Box<string>`.
+        let mut out = String::new();
+        render_any_of_enum(
+            &mut out,
+            "Fixture",
+            &["string".to_string(), "Lamp".to_string()],
+            &chrono_ctx(&schema, &compute_class_roles(&schema)),
+            &designators_by_class(&schema),
+            true,
+        )
+        .unwrap();
+        assert!(
+            out.contains("String(String)") && !out.contains("Box<string>"),
+            "a primitive member maps like a field would; got: {out}"
         );
     }
 
@@ -3726,7 +3873,7 @@ mod tests {
             &mut out,
             "Fixture",
             &["Lamp".to_string(), "Sink".to_string()],
-            &schema,
+            &chrono_ctx(&schema, &compute_class_roles(&schema)),
             &designators_by_class(&schema),
             true,
         )
@@ -3762,6 +3909,20 @@ mod tests {
             out.contains("value.get(\"designator\")"),
             "the impl peeks the members' shared designator slot; got: {out}"
         );
+        assert!(
+            out.lines()
+                .any(|l| l.contains("named_abstract @") && l.contains("\"Sink\"")),
+            "the trait member's own name answers in the abstract-refusal arm; got: {out}"
+        );
+        let lines: Vec<&str> = out.lines().collect();
+        let whisk_arm = lines
+            .iter()
+            .position(|l| l.contains("\"Whisk\"") && !l.contains("named_abstract"))
+            .unwrap_or_else(|| panic!("Whisk dispatches through a concrete arm; got: {out}"));
+        assert!(
+            lines[whisk_arm + 1].contains("SinkKind::deserialize"),
+            "the subclass spelling dispatches into its member's Kind enum; got: {out}"
+        );
 
         // One member not designating breaks the shared key: the union
         // keeps its derived untagged form, no generated impl.
@@ -3771,7 +3932,7 @@ mod tests {
             &mut out,
             "Fixture",
             &["Lamp".to_string(), "Sink".to_string()],
-            &schema,
+            &chrono_ctx(&schema, &compute_class_roles(&schema)),
             &designators_by_class(&schema),
             true,
         )
