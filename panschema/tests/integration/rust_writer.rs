@@ -84,6 +84,10 @@ fn extract_struct<'a>(body: &'a str, name: &str) -> &'a str {
 fn codegen_fixture_compiles_and_round_trips_in_downstream_crate() {
     let schema = read_codegen_fixture();
     let body = RustWriter::new().render(&schema);
+    assert!(
+        body.contains("serde_json = \"1\""),
+        "designated enums put serde_json in the header's requirements"
+    );
 
     syn::parse_file(&body).unwrap_or_else(|e| {
         let preview = body.chars().take(2000).collect::<String>();
@@ -454,6 +458,86 @@ fn main() {
         dirty,
         codegen::ItemStatus::in_progress,
         "`in progress` wire value maps to the sanitized variant"
+    );
+
+    // Designated union: the generated deserializer dispatches on the
+    // designator value, so a record naming `Sink` builds the Sink
+    // variant even though Lamp's all-optional shape would fit first
+    // under the shape fallback — and the designator key is peeked, not
+    // consumed, so the variant struct keeps its own field.
+    let fixture: codegen::WorkshopFixture =
+        serde_json::from_str(r#"{"designator":"Sink","basin":"steel"}"#)
+            .expect("designated union deserializes");
+    let codegen::WorkshopFixture::Sink(sink) = &fixture else {
+        panic!("the designator must pick the variant, not the first fitting shape");
+    };
+    assert_eq!(sink.basin.as_deref(), Some("steel"), "payload survives dispatch");
+    assert_eq!(
+        sink.designator.as_deref(),
+        Some("Sink"),
+        "the struct field still owns the designator value"
+    );
+    let wire = serde_json::to_string(&fixture).expect("serialize designated union");
+    assert_eq!(
+        wire.matches("designator").count(),
+        1,
+        "one owner, one key on the wire: {wire}"
+    );
+    let _back: codegen::WorkshopFixture =
+        serde_json::from_str(&wire).expect("designated union round-trips");
+
+    // CURIE and bare-local spellings resolve like the loader's
+    // matching: Sink's class_uri mints at `ex:basin_unit`, so both the
+    // CURIE and the bare word the default prefix expands name it.
+    for spelling in ["ex:basin_unit", "basin_unit"] {
+        let fixture: codegen::WorkshopFixture =
+            serde_json::from_str(&format!(r#"{{"designator":"{spelling}"}}"#))
+                .unwrap_or_else(|e| panic!("`{spelling}` names Sink like the loader says: {e}"));
+        assert!(
+            matches!(fixture, codegen::WorkshopFixture::Sink(_)),
+            "`{spelling}` names the class"
+        );
+    }
+
+    // A present-but-non-string designator can name nothing; the union
+    // errors rather than letting shape guess, as the loader refuses.
+    assert!(
+        serde_json::from_str::<codegen::WorkshopFixture>(r#"{"designator":null,"lumen":5}"#)
+            .is_err(),
+        "a null designator is refused, never shape-guessed"
+    );
+
+    // Absent designator: shape decides, as under `untagged`.
+    let fixture: codegen::WorkshopFixture =
+        serde_json::from_str(r#"{"lumen":5}"#).expect("shape fallback");
+    assert!(
+        matches!(fixture, codegen::WorkshopFixture::Lamp(_)),
+        "an absent designator falls back to shape"
+    );
+
+    // An unresolvable designator at a union is an error, as the loader
+    // refuses the record rather than guessing.
+    assert!(
+        serde_json::from_str::<codegen::WorkshopFixture>(r#"{"designator":"Basket"}"#).is_err(),
+        "a designator naming nothing must not be guessed around"
+    );
+
+    // Designated subclass hierarchy: the PenKind enum dispatches on the
+    // designator by name or CURIE, and an absent or unanswerable value
+    // falls back to shape — the loader keeps the declared class there.
+    let pen: codegen::PenKind =
+        serde_json::from_str(r#"{"designator":"InkPen","cartridge":"long"}"#)
+            .expect("kind designator");
+    let codegen::PenKind::InkPen(ink) = &pen else {
+        panic!("the designator picks the concrete class, not the first fitting shape");
+    };
+    assert_eq!(ink.cartridge.as_deref(), Some("long"), "payload survives dispatch");
+    let pen: codegen::PenKind =
+        serde_json::from_str(r#"{"designator":"ex:InkPen"}"#).expect("kind CURIE designator");
+    assert!(matches!(pen, codegen::PenKind::InkPen(_)), "a CURIE names the class");
+    assert!(
+        serde_json::from_str::<codegen::PenKind>(r#"{"designator":"Quill"}"#).is_ok(),
+        "an unanswerable kind designator falls back to shape, never an error"
     );
 
     // any_of union: a `wasDerivedFrom` entry round-trips untagged.

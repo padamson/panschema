@@ -103,6 +103,32 @@ pub(crate) fn class_named_by<'a>(
     class_named_by_expanded(schema, schema, candidates, authored)
 }
 
+/// Every spelling [`class_named_by`] resolves to `class`: its name, its
+/// minted IRI, each CURIE the schema's prefixes can form for that IRI,
+/// and the bare local name the default prefix expands to it. This is
+/// the enumeration inverse of the matcher — the Rust writer compiles it
+/// into generated dispatch tables — and the equivalence test in this
+/// module keeps the two from drifting apart.
+pub(crate) fn class_spellings(
+    schema: &crate::linkml::SchemaDefinition,
+    class: &str,
+) -> Vec<String> {
+    let iri = class_iri_by_name(class, schema);
+    let mut spellings = vec![class.to_string()];
+    for (prefix, base) in &schema.prefixes {
+        if let Some(rest) = iri.strip_prefix(base.as_str()) {
+            spellings.push(format!("{prefix}:{rest}"));
+            // A bare word expands through the default prefix, so the
+            // IRI's local name under it is a spelling of its own.
+            if schema.default_prefix.as_deref() == Some(prefix) && rest != class {
+                spellings.push(rest.to_string());
+            }
+        }
+    }
+    spellings.push(iri);
+    spellings
+}
+
 /// [`class_named_by`] with the two schema roles split: an IRI or CURIE
 /// spelling of `authored` expands against `expansion_schema` — the
 /// schema whose document authored the value — while the candidates'
@@ -1854,6 +1880,70 @@ mod tests {
     use crate::linkml::{ClassDefinition, SlotDefinition};
     use std::fs;
     use tempfile::TempDir;
+
+    /// `class_spellings` is the enumeration inverse of `class_named_by`:
+    /// every spelling it emits must resolve to its class through the
+    /// matcher, and the matcher-accepted spellings — the bare local name
+    /// the default prefix expands included — must all be emitted.
+    #[test]
+    fn class_spellings_and_the_matcher_agree() {
+        let mut schema = crate::linkml::SchemaDefinition::new("s");
+        schema.default_prefix = Some("ex".to_string());
+        schema
+            .prefixes
+            .insert("ex".to_string(), "https://example.org/x/".to_string());
+        schema
+            .classes
+            .insert("Lamp".to_string(), ClassDefinition::new("Lamp"));
+        // A class whose `class_uri` local name differs from its class
+        // name answers to both.
+        let mut bar = ClassDefinition::new("Bar");
+        bar.class_uri = Some("ex:Foo".to_string());
+        schema.classes.insert("Bar".to_string(), bar);
+
+        for class in ["Lamp", "Bar"] {
+            let spellings = class_spellings(&schema, class);
+            let class_string = class.to_string();
+            let candidates = [&class_string];
+            for spelling in &spellings {
+                assert!(
+                    matches!(
+                        class_named_by(&schema, &candidates, spelling),
+                        ClassMatch::One(_)
+                    ),
+                    "every emitted spelling resolves through the matcher: `{spelling}`"
+                );
+            }
+        }
+        let bar_spellings = class_spellings(&schema, "Bar");
+        for accepted in ["Bar", "Foo", "ex:Foo", "https://example.org/x/Foo"] {
+            assert!(
+                bar_spellings.iter().any(|s| s == accepted),
+                "the matcher accepts `{accepted}`, so the enumeration must emit it; got: \
+                 {bar_spellings:?}"
+            );
+        }
+
+        // Without a default prefix there is no bare-word expansion, so
+        // the bare local name must not be emitted — the matcher would
+        // resolve it to nothing.
+        schema.default_prefix = None;
+        let mut bar = ClassDefinition::new("Bar");
+        bar.class_uri = Some("ex:Foo".to_string());
+        schema.classes.insert("Bar".to_string(), bar);
+        let spellings = class_spellings(&schema, "Bar");
+        let bar_string = "Bar".to_string();
+        for spelling in &spellings {
+            assert!(
+                matches!(
+                    class_named_by(&schema, &[&bar_string], spelling),
+                    ClassMatch::One(_)
+                ),
+                "every emitted spelling must still resolve without a default prefix: \
+                 `{spelling}`; got: {spellings:?}"
+            );
+        }
+    }
 
     // ========== A-box emission ==========
 

@@ -9,6 +9,7 @@ description: >-
 prefixes:
   linkml: https://w3id.org/linkml/
   ex: https://example.org/codegen-fixture/
+default_prefix: ex
 
 default_range: string
 
@@ -294,6 +295,79 @@ classes:
         name: kind
         description: The kind of move, from a keyword-named enum.
         range: type
+
+  # ---------------------------------------------------------------
+  # Designated union: both members answer to `designator`, so the
+  # `WorkshopFixture` union gets a generated deserializer that
+  # dispatches on the authored value — name, CURIE, or IRI — and
+  # falls back to shape when the designator is absent. Lamp's
+  # all-optional shape would otherwise swallow every record.
+  # ---------------------------------------------------------------
+  Workshop:
+    name: Workshop
+    description: A room whose one fixture is chosen by its designator.
+    attributes:
+      fixture:
+        name: fixture
+        description: The workshop's fixture.
+        any_of:
+          - range: Lamp
+          - range: Sink
+  Lamp:
+    name: Lamp
+    description: A light fixture.
+    attributes:
+      designator:
+        name: designator
+        description: Names the record's class.
+        designates_type: true
+      lumen:
+        name: lumen
+        description: Light output.
+        range: integer
+  Sink:
+    name: Sink
+    description: A basin fixture.
+    class_uri: ex:basin_unit
+    attributes:
+      designator:
+        name: designator
+        description: Names the record's class.
+        designates_type: true
+      basin:
+        name: basin
+        description: Basin material.
+        range: string
+  # ---------------------------------------------------------------
+  # Designated subclass hierarchy: `Pen` designates and is a parent,
+  # so `PenKind` gets a generated deserializer where each concrete
+  # descendant answers to its own spellings, with shape fallback for
+  # an absent or unanswerable designator.
+  # ---------------------------------------------------------------
+  Pen:
+    name: Pen
+    description: A writing instrument, designated by kind.
+    attributes:
+      designator:
+        name: designator
+        description: Names the record's class.
+        designates_type: true
+  BallPen:
+    name: BallPen
+    description: A ballpoint pen.
+    is_a: Pen
+    attributes:
+      tip:
+        name: tip
+        description: Tip width.
+  InkPen:
+    name: InkPen
+    description: A fountain pen.
+    is_a: Pen
+    attributes:
+      cartridge:
+        name: cartridge
+        description: Cartridge style.
 
 slots:
   label:

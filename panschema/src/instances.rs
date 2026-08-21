@@ -800,10 +800,8 @@ impl LinkmlLoader<'_> {
     /// The `designates_type` slot among `class_name`'s effective slots —
     /// the slot whose authored value names the record's class.
     fn designator_slot(&mut self, class_name: &str) -> Option<String> {
-        self.resolved_slots(class_name)
-            .iter()
-            .find(|(_, rs)| rs.definition.designates_type)
-            .map(|(name, _)| name.clone())
+        let slots = self.resolved_slots(class_name);
+        crate::linkml_resolve::designator_in(slots.iter().map(|(name, rs)| (name, &rs.definition)))
     }
 
     /// Whether `slot_name` is an effective slot of `class_name`.

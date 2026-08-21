@@ -127,6 +127,24 @@ pub fn resolve_effective_slots(
         .collect()
 }
 
+/// The class's effective `designates_type` slot name, when it carries
+/// one — the slot whose authored value names a record's class.
+pub fn designator_slot_of(class: &ClassDefinition, schema: &SchemaDefinition) -> Option<String> {
+    designator_in(resolve_effective_slots(class, schema).iter())
+}
+
+/// The `designates_type` slot among an already-resolved slot set — the
+/// one selection rule, shared by every consumer however it caches its
+/// resolution.
+pub fn designator_in<'a>(
+    slots: impl IntoIterator<Item = (&'a String, &'a SlotDefinition)>,
+) -> Option<String> {
+    slots
+        .into_iter()
+        .find(|(_, slot)| slot.designates_type)
+        .map(|(name, _)| name.clone())
+}
+
 /// Whether `class` satisfies a range naming `target`: the same class, or a
 /// descendant of it through `is_a`. Mixins are not walked — a range (or a
 /// type designator) names a class an instance is expected to *be*, and
