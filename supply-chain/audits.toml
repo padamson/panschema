@@ -1,6 +1,12 @@
 
 # cargo-vet audits file
 
+[[audits.base64]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.22.1 -> 0.23.1"
+notes = "Minor release whose substance is the new default-on simd-unsafe feature: a single new module (src/engine/simd.rs) adds AVX2/NEON encode/decode kernels plus Simd/Avx2/Neon engine types. All unsafe is confined to that module behind a crate-level deny(unsafe_code) with a localized allow; every raw load/store is guarded by an explicit loop bound over input.len()/output.len()/quads_end (which decode_helper derives from the input, so it cannot exceed it), and the caller contract (whole quads only, output == input/4*3) is debug_asserted at the seam. The runtime Simd engine dispatches only after is_x86_feature_detected!/is_aarch64_feature_detected!; the no-detection Avx2/Neon constructors are either checked (Option, gated on detection) or marked unsafe with the contract documented. Invalid input makes the SIMD prefix stop so the scalar decoder reports the exact offset — no silent acceptance. Remainder: edition 2018→2021, MSRV 1.71, custom padding symbols and more consts (safe code), dev-dependency bumps, CI/docs churn. build = false, no new runtime dependencies, no filesystem/network/process access anywhere in src/."
+
 [[audits.getrandom]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-deploy"
