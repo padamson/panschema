@@ -143,6 +143,17 @@ pub struct GenerateConfig {
     /// for an `is_a`-heavy schema.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub html_default_layout: Option<String>,
+    /// Page composition for HTML output: which half of the page leads.
+    /// A bad value fails at manifest parse, like every enum-valued key
+    /// here. Only meaningful when `html` is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub html_page_layout: Option<crate::html_writer::PageLayout>,
+    /// Render the schema reference sections in HTML output — the schema
+    /// graph and class/slot/enumeration/type cards. `false` builds the
+    /// page around its instance data alone. Only meaningful when `html`
+    /// is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub html_schema_sections: Option<bool>,
     /// Rust module output file path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rust: Option<PathBuf>,
@@ -306,6 +317,8 @@ impl GenerateConfig {
             instances: vec![PathBuf::from("x")],
             html_graph_aspect: Some("16:9".to_string()),
             html_default_layout: Some("sgd".to_string()),
+            html_page_layout: Some(crate::html_writer::PageLayout::SchemaFirst),
+            html_schema_sections: Some(true),
             rust: Some(PathBuf::from("x")),
             rust_time: Some("jiff".to_string()),
             postgres: Some(PathBuf::from("x")),
@@ -1464,6 +1477,8 @@ resolve_against = []
             "shacl",
             "json_schema",
             "openapi",
+            "html_page_layout",
+            "html_schema_sections",
             "ttl",
             "jsonld",
             "rdfxml",

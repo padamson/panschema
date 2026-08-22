@@ -2,6 +2,8 @@
     <h2 class="sidebar-title">Navigation</h2>
     <ul class="sidebar-nav">
         <li><a href="#metadata" class="sidebar-link{% if active_section == "metadata" %} active{% endif %}">Metadata</a></li>
+{%- if instances_first %}{% include "components/sidebar_instances_link.html" %}{% endif %}
+{%- if show_schema_sections %}
 {%- if graph_json.is_some() %}
         <li><a href="#graph-visualization" class="sidebar-link{% if active_section == "graph-visualization" %} active{% endif %}">Schema Graph <span class="badge" title="{{ graph_node_count }} node{% if graph_node_count != 1 %}s{% endif %}, {{ graph_edge_count }} edge{% if graph_edge_count != 1 %}s{% endif %}" aria-label="{{ graph_node_count }} node{% if graph_node_count != 1 %}s{% endif %}, {{ graph_edge_count }} edge{% if graph_edge_count != 1 %}s{% endif %}">{{ graph_node_count }} / {{ graph_edge_count }}</span></a></li>
 {%- endif %}
@@ -18,9 +20,8 @@
 {%- if !types.is_empty() %}
         <li><a href="#types" class="sidebar-link{% if active_section == "types" %} active{% endif %}">Types <span class="badge">{{ types.len() }}</span></a></li>
 {%- endif %}
-{%- if has_instances %}
-        <li><a href="#individuals" class="sidebar-link{% if active_section == "individuals" %} active{% endif %}">Instance Graph{% if instance_dataset_count > 1 %}s{% endif %} <span class="badge" id="instance-graph-sidebar-count" title="{{ instance_node_count }} node{% if instance_node_count != 1 %}s{% endif %}, {{ instance_edge_count }} edge{% if instance_edge_count != 1 %}s{% endif %}" aria-label="{{ instance_node_count }} node{% if instance_node_count != 1 %}s{% endif %}, {{ instance_edge_count }} edge{% if instance_edge_count != 1 %}s{% endif %}">{{ instance_node_count }} / {{ instance_edge_count }}</span></a></li>
 {%- endif %}
+{%- if !instances_first %}{% include "components/sidebar_instances_link.html" %}{% endif %}
     </ul>
 </nav>
 <style>

@@ -163,6 +163,27 @@ panschema generate --schema schema.yaml \
   --output docs/
 ```
 
+#### Page composition
+
+A page built around its data can lead with the instance graph, or drop the
+schema reference sections entirely. In a manifest's `[generate.<name>]`
+table (and, for versioned sites, under `[publishing]` in
+`panschema-publish.toml` as `layout` / `schema_sections`):
+
+```toml
+[generate.myschema]
+html = "docs/"
+html_page_layout = "instances-first"   # default: "schema-first"
+html_schema_sections = false           # default: true — keep the class/slot/enum cards
+```
+
+The defaults reproduce today's page exactly; the sidebar follows whatever
+order and sections the page renders. A page without the schema sections
+keeps its metadata card and the namespace table — the instance cards'
+CURIEs expand through it — and warns if it would otherwise be empty.
+(`panschema serve` does not yet apply composition keys; preview composed
+pages with `generate`.)
+
 Repeat `--instances` to carry more than one curated graph. Each is labelled by
 its file stem and gets its own cards, provenance line, and node/edge counts;
 the first is shown until the reader picks another, and switching happens in the

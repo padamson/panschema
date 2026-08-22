@@ -1664,6 +1664,55 @@ html = "docs/"
         html.contains("Sample LinkML Schema"),
         "Missing schema title from manifest-generated HTML"
     );
+
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+sample_schema = { path = "./sample-pkg" }
+
+[generate.sample_schema]
+html = "docs/"
+html_page_layout = "instances-first"
+html_schema_sections = false
+"#,
+    )
+    .expect("write manifest");
+    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("generate")
+        .current_dir(consumer)
+        .status()
+        .expect("Failed to execute panschema");
+    assert!(status.success(), "composed generate exited with error");
+    let html = fs::read_to_string(&index).expect("read index.html");
+    assert!(
+        !html.contains(r#"<section id="classes""#),
+        "html_schema_sections = false omits the schema reference"
+    );
+
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+sample_schema = { path = "./sample-pkg" }
+
+[generate.sample_schema]
+html = "docs/"
+html_page_layout = "sideways"
+"#,
+    )
+    .expect("write manifest");
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("generate")
+        .current_dir(consumer)
+        .output()
+        .expect("Failed to execute panschema");
+    assert!(!output.status.success(), "an unknown layout must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("sideways") && stderr.contains("instances-first"),
+        "the error names the offending and accepted values; got: {stderr}"
+    );
 }
 
 /// A repository that authors *data* against a schema published elsewhere: the

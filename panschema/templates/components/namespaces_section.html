@@ -1,0 +1,8 @@
+<section id="namespaces">
+    {%- let id = "namespaces" %}
+    {%- let title = "Namespaces" %}
+    {%- let count = Some(namespaces.len()) %}
+    {%- let description = Some("Namespace prefixes used in this ontology.") %}
+    {% include "components/section_header.html" %}
+    {% include "components/namespace_table.html" %}
+</section>

@@ -7,290 +7,30 @@
 
 {% block main_content %}
 {% include "components/metadata_card.html" %}
-
-{# Graph Visualization - only if graph_json is provided #}
-{% if let Some(json) = graph_json %}
-<script>
-    window.__PANSCHEMA_GRAPH_DATA__ = {{ json|safe }};
-</script>
-{% include "components/graph_shell.html" %}
-{% include "components/graph_viz.html" %}
-{% endif %}
-<section id="namespaces">
-    {%- let id = "namespaces" %}
-    {%- let title = "Namespaces" %}
-    {%- let count = Some(namespaces.len()) %}
-    {%- let description = Some("Namespace prefixes used in this ontology.") %}
-    {% include "components/section_header.html" %}
-    {% include "components/namespace_table.html" %}
-</section>
-
-<section id="classes">
-    {%- let id = "classes" %}
-    {%- let title = "Classes" %}
-    {%- let count = Some(classes.len()) %}
-    {%- let description = Some("Classes defined in this ontology.") %}
-    {% include "components/section_header.html" %}
-{%- if classes.is_empty() %}
-    <p class="placeholder-text">No classes defined in this ontology.</p>
-{%- else %}
-    <div class="entity-list">
-{%- for class in classes %}
-        <a href="#class-{{ class.id }}" class="entity-link class-link">{{ class.label }}</a>
-{%- endfor %}
-    </div>
-    <div class="view-toggle" role="group" aria-label="Classes view">
-        <button type="button" class="view-toggle-btn" data-view="tree">Tree</button>
-        <button type="button" class="view-toggle-btn" data-view="flat">Flat</button>
-    </div>
-    <div class="class-cards" id="class-cards" data-view="tree">
-        <ul class="class-tree">
-{%- for entry in class_tree %}
-        {%- let class = class_data[entry.index] %}
-        <li class="class-tree-node" style="--flat-order: {{ entry.index }}">
-        {%- let id = class.id.as_str() %}
-        {%- let label = class.label.as_str() %}
-        {%- let iri = class.iri.as_str() %}
-        {%- let iri_href = class.iri_href.as_deref() %}
-        {%- let description = class.description.as_deref() %}
-        {%- let superclass = class.superclass.as_ref() %}
-        {%- let subclasses = class.subclasses.as_slice() %}
-        {%- let mixins = class.mixins.as_slice() %}
-        {%- let slots = class.slots.as_slice() %}
-        {%- let mappings = class.mappings.as_slice() %}
-        {%- let external_superclasses = class.external_superclasses.as_slice() %}
-        {%- let is_abstract = class.is_abstract %}
-        {%- let deprecated = class.deprecated.as_deref() %}
-        {%- let aliases = class.aliases.as_slice() %}
-        {%- let see_also = class.see_also.as_slice() %}
-        {%- let examples = class.examples.as_slice() %}
-        {%- let rules = class.rules.as_slice() %}
-        {%- let unique_keys = class.unique_keys.as_slice() %}
-        {% include "components/class_card.html" %}
-        {%- if entry.has_children %}
-        <ul class="class-tree-children">
-        {%- else %}
-        </li>{{ entry.close_tags()|safe }}
-        {%- endif %}
-{%- endfor %}
-        </ul>
-    </div>
-    <script>
-    (function () {
-        var KEY = 'panschema-classes-view';
-        var container = document.getElementById('class-cards');
-        var buttons = document.querySelectorAll('.view-toggle-btn');
-        if (!container || buttons.length === 0) return;
-        function apply(view) {
-            container.dataset.view = view;
-            buttons.forEach(function (b) {
-                b.classList.toggle('active', b.dataset.view === view);
-            });
-        }
-        var view = 'tree';
-        try {
-            var stored = localStorage.getItem(KEY);
-            if (stored === 'flat' || stored === 'tree') view = stored;
-        } catch (e) { /* localStorage may be unavailable */ }
-        apply(view);
-        buttons.forEach(function (b) {
-            b.addEventListener('click', function () {
-                apply(b.dataset.view);
-                try { localStorage.setItem(KEY, b.dataset.view); }
-                catch (e) { /* localStorage may be unavailable */ }
-            });
-        });
-    })();
-    </script>
-{%- endif %}
-</section>
-
-<section id="slots">
-    {%- let id = "slots" %}
-    {%- let title = "Slots" %}
-    {%- let count = Some(slots.len()) %}
-    {%- let description = Some("Slots defined in this ontology.") %}
-    {% include "components/section_header.html" %}
-{%- if slots.is_empty() %}
-    <p class="placeholder-text">No slots defined in this ontology.</p>
-{%- else %}
-    <div class="entity-list">
-{%- for slot in slots %}
-        <a href="#slot-{{ slot.id }}" class="entity-link slot-link">{{ slot.label }}</a>
-{%- endfor %}
-    </div>
-    <div class="slot-cards">
-{%- for slot in slot_data %}
-        {%- let id = slot.id.as_str() %}
-        {%- let label = slot.label.as_str() %}
-        {%- let iri = slot.iri.as_str() %}
-        {%- let iri_href = slot.iri_href.as_deref() %}
-        {%- let slot_type = slot.slot_type.as_str() %}
-        {%- let description = slot.description.as_deref() %}
-        {%- let domains = slot.domains.as_slice() %}
-        {%- let range = slot.range.as_ref() %}
-        {%- let any_of = slot.any_of.as_slice() %}
-        {%- let pattern = slot.pattern.as_deref() %}
-        {%- let characteristics = slot.characteristics.as_slice() %}
-        {%- let mappings = slot.mappings.as_slice() %}
-        {%- let deprecated = slot.deprecated.as_deref() %}
-        {%- let aliases = slot.aliases.as_slice() %}
-        {%- let see_also = slot.see_also.as_slice() %}
-        {%- let examples = slot.examples.as_slice() %}
-        {%- let default = slot.default.as_deref() %}
-        {%- let governing_rules = slot.governing_rules.as_slice() %}
-        {% include "components/slot_card.html" %}
-{%- endfor %}
-    </div>
-{%- endif %}
-</section>
-
-{%- if !enums.is_empty() %}
-<section id="enums">
-    {%- let id = "enums" %}
-    {%- let title = "Enumerations" %}
-    {%- let count = Some(enums.len()) %}
-    {%- let description = Some("Enumerations defined in this ontology.") %}
-    {% include "components/section_header.html" %}
-    <div class="entity-list">
-{%- for en in enums %}
-        <a href="#enum-{{ en.id }}" class="entity-link enum-link">{{ en.label }}</a>
-{%- endfor %}
-    </div>
-    <div class="enum-cards">
-{%- for en in enum_data %}
-        {%- let id = en.id.as_str() %}
-        {%- let label = en.label.as_str() %}
-        {%- let description = en.description.as_deref() %}
-        {%- let permissible_values = en.permissible_values.as_slice() %}
-        {%- let deprecated = en.deprecated.as_deref() %}
-        {%- let aliases = en.aliases.as_slice() %}
-        {%- let see_also = en.see_also.as_slice() %}
-        {%- let examples = en.examples.as_slice() %}
-        {% include "components/enum_card.html" %}
-{%- endfor %}
-    </div>
-</section>
-{%- endif %}
-
-{%- if !types.is_empty() %}
-<section id="types">
-    {%- let id = "types" %}
-    {%- let title = "Types" %}
-    {%- let count = Some(types.len()) %}
-    {%- let description = Some("Types defined in this ontology.") %}
-    {% include "components/section_header.html" %}
-    <div class="entity-list">
-{%- for ty in types %}
-        <a href="#type-{{ ty.id }}" class="entity-link type-link">{{ ty.label }}</a>
-{%- endfor %}
-    </div>
-    <div class="type-cards">
-{%- for ty in type_data %}
-        {%- let id = ty.id.as_str() %}
-        {%- let label = ty.label.as_str() %}
-        {%- let description = ty.description.as_deref() %}
-        {%- let base_type = ty.base_type.as_ref() %}
-        {%- let uri = ty.uri.as_ref() %}
-        {%- let pattern = ty.pattern.as_deref() %}
-        {%- let deprecated = ty.deprecated.as_deref() %}
-        {%- let aliases = ty.aliases.as_slice() %}
-        {%- let see_also = ty.see_also.as_slice() %}
-        {%- let examples = ty.examples.as_slice() %}
-        {% include "components/type_card.html" %}
-{%- endfor %}
-    </div>
-</section>
-{%- endif %}
-
-<section id="individuals">
-    <div class="section-header">
-        <h2 class="section-title">
-            Instance Graph{% if instance_datasets.len() > 1 %}s{% endif %}
+{# Page composition: the schema reference and the instance section are
+   one include each, so a page can lead with either and can omit the
+   schema reference entirely. Three flat conditionals, one whitespace
+   convention. #}
+{%- if !show_schema_sections %}
+{# The graph shell script normally rides in the schema sections; every
+   graph canvas needs it, so a data-only page carries it itself — and
+   keeps the namespace table, which expands the CURIEs its own instance
+   cards use. #}
 {%- if !instance_datasets.is_empty() %}
-            {# The default dataset's counts; the selector updates these. #}
-            <span class="section-count" id="instance-graph-count"
-                  title="{{ instance_node_count }} node{% if instance_node_count != 1 %}s{% endif %}, {{ instance_edge_count }} edge{% if instance_edge_count != 1 %}s{% endif %}"
-                  aria-label="{{ instance_node_count }} node{% if instance_node_count != 1 %}s{% endif %}, {{ instance_edge_count }} edge{% if instance_edge_count != 1 %}s{% endif %}"
-                  >{{ instance_node_count }} / {{ instance_edge_count }}</span>
+{% include "components/graph_shell.html" %}
 {%- endif %}
-        </h2>
-        <p class="section-description">Curated instance graph{% if instance_datasets.len() > 1 %}s{% endif %} (A-box): individuals conforming to this schema.</p>
-    </div>
-{%- if instance_datasets.is_empty() %}
-    <p class="placeholder-text">No individuals defined in this ontology.</p>
-{%- else %}
-{# Several curated A-boxes share this section: the reader picks one and the
-   cards, provenance, and viz all follow. One needs no selector. #}
-{%- if instance_datasets.len() > 1 %}
-    <div class="instance-dataset-selector" role="tablist" aria-label="Instance graphs">
-{%- for ds in instance_datasets %}
-        <button type="button" role="tab" class="instance-dataset-tab{% if ds.is_default %} active{% endif %}"
-                data-instance-dataset="{{ loop.index0 }}"
-                aria-selected="{% if ds.is_default %}true{% else %}false{% endif %}">{{ ds.name }}
-            <span class="badge" title="{{ ds.node_count }} node{% if ds.node_count != 1 %}s{% endif %}, {{ ds.edge_count }} edge{% if ds.edge_count != 1 %}s{% endif %}"
-                  aria-label="{{ ds.node_count }} node{% if ds.node_count != 1 %}s{% endif %}, {{ ds.edge_count }} edge{% if ds.edge_count != 1 %}s{% endif %}"
-                  >{{ ds.node_count }} / {{ ds.edge_count }}</span>
-        </button>
-{%- endfor %}
-    </div>
+
+{% include "components/namespaces_section.html" %}
 {%- endif %}
-{# Within a dataset the graph comes first — the overview — then the
-   individuals, matching how the schema side reads. The metadata block
-   describes the dataset itself: the container's own scalar values and the
-   source file. Both per-dataset groups share the data-instance-dataset
-   index, so the selector swaps them together. #}
-{%- for ds in instance_datasets %}
-    <div class="instance-dataset-panel instance-dataset-meta" data-instance-dataset="{{ loop.index0 }}"{% if !ds.is_default %} hidden{% endif %}>
-{%- for entry in ds.metadata %}
-        <div class="instance-meta-row"><span class="instance-meta-key">{{ entry.0 }}</span><span class="instance-meta-val">{{ entry.1 }}</span></div>
-{%- endfor %}
-{%- if let Some(src) = ds.provenance %}
-        <p class="instance-provenance">Source: <code class="mono">{{ src }}</code></p>
-{%- else %}
-        <p class="instance-provenance">Source: individuals embedded in the schema</p>
+{%- if instances_first %}
+{% include "components/instances_section.html" %}
 {%- endif %}
-    </div>
-{%- endfor %}
-{# The dataset as a connected instance graph — a distinct A-box viz, not
-   the schema graph. Every declared dataset's payload rides in one array so
-   switching is client-side; the viz renders the selected entry. #}
-    <script>
-        window.__PANSCHEMA_INSTANCE_GRAPHS__ = [
-{%- for ds in instance_datasets %}
-            {"name": {{ ds.name_json|safe }}, "data": {% match ds.graph_json %}{% when Some with (json) %}{{ json|safe }}{% when None %}null{% endmatch %}}{% if !loop.last %},{% endif %}
-{%- endfor %}
-        ];
-    </script>
-    {% include "components/instance_graph.html" %}
-{%- for ds in instance_datasets %}
-    <div class="instance-dataset-panel" data-instance-dataset="{{ loop.index0 }}"{% if !ds.is_default %} hidden{% endif %}>
-{%- if !ds.individuals.is_empty() %}
-        <h3 class="instance-subheading">Individuals</h3>
-        <div class="entity-list">
-{#- The class tag disambiguates individuals of different classes that
-    share a display name (a region and a wine can both be `Bordeaux`). #}
-{%- for ind in ds.individual_data %}
-            <a href="#{{ ds.anchor_prefix }}ind-{{ ind.id }}" class="entity-link individual-link">{{ ind.label }}{% if let Some(t) = ind.types.first() %}<span class="entity-class-tag">{{ t.label }}</span>{% endif %}</a>
-{%- endfor %}
-        </div>
-        <div class="individual-cards">
-{%- for ind in ds.individual_data %}
-            {%- let id = ind.id.as_str() %}
-            {%- let label = ind.label.as_str() %}
-            {%- let iri = ind.iri.as_str() %}
-            {%- let description = ind.description.as_deref() %}
-            {%- let types = ind.types.as_slice() %}
-            {%- let property_values = ind.property_values.as_slice() %}
-            {%- let anchor_prefix = ds.anchor_prefix.as_str() %}
-            {% include "components/individual_card.html" %}
-{%- endfor %}
-        </div>
+{%- if show_schema_sections -%}
+{% include "components/schema_sections.html" %}
 {%- endif %}
-    </div>
-{%- endfor %}
+{%- if !instances_first %}
+{% include "components/instances_section.html" %}
 {%- endif %}
-</section>
 {% endblock %}
 
 {% block page_styles %}

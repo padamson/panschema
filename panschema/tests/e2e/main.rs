@@ -2566,6 +2566,87 @@ fn e2e_instance_graph_renders_individuals_beneath_the_cards() {
     });
 }
 
+/// A data-only composition (`html_schema_sections = false`) still boots
+/// the instance viz: the graph shell script ships with the page even
+/// though the schema sections that normally carry it are omitted, and no
+/// schema reference section renders.
+#[test]
+fn e2e_data_only_composition_boots_the_instance_viz() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        // Composition keys are manifest keys, so this page builds through
+        // a minimal consumer manifest around the embedded-individuals
+        // fixture.
+        let consumer = std::env::temp_dir().join(format!(
+            "panschema_e2e_composed_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&consumer);
+        fs::create_dir_all(consumer.join("pkg")).expect("mkdir pkg");
+        fs::copy(
+            "tests/fixtures/instance_graph.ttl",
+            consumer.join("pkg/schema.ttl"),
+        )
+        .expect("copy fixture");
+        fs::write(
+            consumer.join("pkg/panschema-publish.toml"),
+            "[schema]\nname = \"ig\"\nversion = \"0.1.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"schema.ttl\"\n",
+        )
+        .expect("write publish toml");
+        fs::write(
+            consumer.join("panschema.toml"),
+            "[schemas]\nig = { path = \"./pkg\" }\n\n[generate.ig]\nhtml = \"docs/\"\nhtml_schema_sections = false\n",
+        )
+        .expect("write manifest");
+        let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
+            .arg("generate")
+            .current_dir(&consumer)
+            .status()
+            .expect("run panschema");
+        assert!(status.success(), "composed generate failed");
+        let output_dir = consumer.join("docs");
+
+        let (listener, port) = bind_ephemeral();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("goto");
+
+        assert_eq!(
+            page.locator("section#classes").count().await.expect("count"),
+            0,
+            "no schema reference section renders"
+        );
+        assert_eq!(
+            page.locator("#instance-graph-canvas")
+                .count()
+                .await
+                .expect("count"),
+            1,
+            "the instance canvas renders"
+        );
+        assert!(
+            wait_until_ready(&page, "!!window.PanschemaGraphShell").await,
+            "the graph shell script must load on a data-only page"
+        );
+        assert!(
+            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
+            "instance graph viz never became ready on the data-only page"
+        );
+
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(&consumer);
+    });
+}
+
 /// Several curated instance graphs share the schema page: the selector names
 /// each, and picking one swaps the cards, the provenance, and the rendered
 /// graph together. A selector that moved the canvas but left the cards

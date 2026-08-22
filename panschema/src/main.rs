@@ -676,6 +676,8 @@ struct GenerateOptions<'a> {
     include_graph: bool,
     html_graph_aspect: Option<&'a str>,
     html_default_layout: Option<&'a str>,
+    html_page_layout: Option<panschema::html_writer::PageLayout>,
+    html_schema_sections: Option<bool>,
     rust_time: Option<&'a str>,
     /// Promote load-time diagnostics to hard errors.
     strict: bool,
@@ -697,6 +699,8 @@ fn generate(
         include_graph,
         html_graph_aspect,
         html_default_layout,
+        html_page_layout,
+        html_schema_sections,
         rust_time,
         strict,
         check,
@@ -788,7 +792,12 @@ fn generate(
         }
         let mut writer = HtmlWriter::with_options(include_graph)
             .with_graph_aspect(aw, ah)
-            .with_default_layout(layout);
+            .with_default_layout(layout)
+            .with_instances_first(matches!(
+                html_page_layout.unwrap_or_default(),
+                panschema::html_writer::PageLayout::InstancesFirst
+            ))
+            .with_schema_sections(html_schema_sections.unwrap_or(true));
         // A LinkML instance-data file overrides the schema's embedded OWL
         // individuals as the source for the instance graph.
         for inst_path in instances {
@@ -1178,6 +1187,8 @@ fn generate_from_manifest(
                     include_graph: true,
                     html_graph_aspect: gen_cfg.html_graph_aspect.as_deref(),
                     html_default_layout: gen_cfg.html_default_layout.as_deref(),
+                    html_page_layout: gen_cfg.html_page_layout,
+                    html_schema_sections: gen_cfg.html_schema_sections,
                     rust_time: None,
                     strict,
                     check,

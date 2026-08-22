@@ -514,6 +514,10 @@ struct IndexTemplate<'a> {
     /// supplies this explicitly from the manifest's
     /// `[publishing].site_root_url` (default `"../current/"`).
     site_root_href: &'a str,
+    /// Page composition: lead with the instance section.
+    instances_first: bool,
+    /// Page composition: render the schema reference sections.
+    show_schema_sections: bool,
 }
 
 /// Per-page context describing the multi-version cohort this page is
@@ -568,6 +572,18 @@ impl VersionContext {
 }
 
 /// Writer for HTML documentation output
+/// Which half of a composed page leads. One shared type for the
+/// manifest's `html_page_layout`, the publish spec's `layout`, and the
+/// writer, so the accepted spellings and the default live in one place
+/// and a bad value fails at parse wherever it is written.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PageLayout {
+    #[default]
+    SchemaFirst,
+    InstancesFirst,
+}
+
 pub struct HtmlWriter {
     /// Whether to include graph visualization (default: true)
     pub include_graph: bool,
@@ -585,6 +601,13 @@ pub struct HtmlWriter {
     /// JS picker falls back to force-directed in 3D mode since SGD and
     /// the static layouts are 2D-only.
     pub graph_default_layout: String,
+    /// Lead the page with the instance section instead of the schema
+    /// reference. Off by default — today's page order.
+    pub instances_first: bool,
+    /// Render the schema reference sections (schema graph, namespaces,
+    /// class/slot/enumeration/type cards). On by default; a page built
+    /// around its data alone turns it off.
+    pub schema_sections: bool,
     /// Optional multi-version cohort context. Set by `panschema publish`;
     /// `None` for the single-version `panschema generate` path. When
     /// present, the rendered page gains a version dropdown in the header
@@ -694,6 +717,8 @@ impl HtmlWriter {
             include_graph: true,
             graph_aspect: (16, 8),
             graph_default_layout: "auto".to_string(),
+            instances_first: false,
+            schema_sections: true,
             version_context: None,
             site_root_href: None,
             label_store: None,
@@ -707,11 +732,29 @@ impl HtmlWriter {
             include_graph,
             graph_aspect: (16, 8),
             graph_default_layout: "auto".to_string(),
+            instances_first: false,
+            schema_sections: true,
             version_context: None,
             site_root_href: None,
             label_store: None,
             instance_datasets: Vec::new(),
         }
+    }
+
+    /// Lead the page with the instance section instead of the schema
+    /// reference.
+    #[must_use]
+    pub fn with_instances_first(mut self, instances_first: bool) -> Self {
+        self.instances_first = instances_first;
+        self
+    }
+
+    /// Render (or omit) the schema reference sections — the schema
+    /// graph, namespaces, and class/slot/enumeration/type cards.
+    #[must_use]
+    pub fn with_schema_sections(mut self, schema_sections: bool) -> Self {
+        self.schema_sections = schema_sections;
+        self
     }
 
     /// Attach a populated upstream-label cache so external CURIEs
@@ -770,7 +813,7 @@ impl HtmlWriter {
     /// (external references render as CURIEs).
     #[cfg(test)]
     fn build_template_data(schema: &SchemaDefinition) -> TemplateData {
-        Self::build_template_data_with_labels(schema, None)
+        Self::build_template_data_with_labels(schema, None, true)
     }
 
     /// Individual card data from the instance model: one entry per
@@ -859,17 +902,47 @@ impl HtmlWriter {
         (refs, data)
     }
 
+    /// Whether this composition produces a page with nothing on it: the
+    /// schema reference omitted and no dataset loaded to feature.
+    fn renders_empty(schema_sections: bool, datasets_loaded: usize) -> bool {
+        !schema_sections && datasets_loaded == 0
+    }
+
     /// Build template data, rendering upstream labels for external
     /// references when a populated [`crate::labels::LabelStore`] is
     /// supplied.
     fn build_template_data_with_labels(
         schema: &SchemaDefinition,
         labels: Option<&crate::labels::LabelStore>,
+        schema_sections: bool,
     ) -> TemplateData {
         let iri = schema.id.clone().unwrap_or_else(|| schema.name.clone());
         let title = schema.title.clone().unwrap_or_else(|| schema.name.clone());
 
+        // The namespace table renders on every composition — a data-only
+        // page still expands its instance cards' CURIEs through it.
         let namespaces = build_namespaces(schema, &iri);
+
+        // A page without the schema reference renders none of the card
+        // sections, so their (quadratic, per-entity) builds are skipped.
+        if !schema_sections {
+            return TemplateData {
+                title,
+                iri,
+                version: schema.version.clone(),
+                comment: schema.description.clone(),
+                namespaces,
+                class_refs: Vec::new(),
+                class_data: Vec::new(),
+                class_tree: Vec::new(),
+                slot_refs: Vec::new(),
+                slot_data: Vec::new(),
+                enum_refs: Vec::new(),
+                enum_data: Vec::new(),
+                type_refs: Vec::new(),
+                type_data: Vec::new(),
+            };
+        }
 
         // Build class data
         let mut class_refs = Vec::new();
@@ -1407,27 +1480,34 @@ impl Writer for HtmlWriter {
         fs::create_dir_all(output).map_err(IoError::Io)?;
 
         let datasets = self.effective_datasets(schema);
-        let data = Self::build_template_data_with_labels(schema, self.label_store.as_ref());
+        let data = Self::build_template_data_with_labels(
+            schema,
+            self.label_store.as_ref(),
+            self.schema_sections,
+        );
 
-        // Generate graph JSON for visualization (only if enabled)
-        let (graph_json_string, graph_node_count, graph_edge_count) = if self.include_graph {
-            let graph_data =
-                GraphWriter::new().schema_to_graph_with_labels(schema, self.label_store.as_ref());
-            let node_count = graph_data.nodes.len();
-            let edge_count = graph_data.edges.len();
-            // The JSON is embedded in an inline <script>; serde_json does
-            // not escape `<`, so a `</script>` inside any schema string
-            // would close the element mid-JSON and execute what follows.
-            // Escaping `<` as its `<` form keeps the JSON byte-for-byte
-            // equivalent (JSON.parse decodes it back), so panschema-viz reads
-            // the identical wire shape — only the on-page bytes change.
-            let json = serde_json::to_string(&graph_data)
-                .map_err(|e| IoError::Write(e.to_string()))?
-                .replace('<', "\\u003c");
-            (Some(json), node_count, edge_count)
-        } else {
-            (None, 0, 0)
-        };
+        // Generate graph JSON for visualization — only when a section
+        // will carry it: the schema graph lives in the schema reference,
+        // so a page without those sections never embeds it.
+        let (graph_json_string, graph_node_count, graph_edge_count) =
+            if self.include_graph && self.schema_sections {
+                let graph_data = GraphWriter::new()
+                    .schema_to_graph_with_labels(schema, self.label_store.as_ref());
+                let node_count = graph_data.nodes.len();
+                let edge_count = graph_data.edges.len();
+                // The JSON is embedded in an inline <script>; serde_json does
+                // not escape `<`, so a `</script>` inside any schema string
+                // would close the element mid-JSON and execute what follows.
+                // Escaping `<` as its `<` form keeps the JSON byte-for-byte
+                // equivalent (JSON.parse decodes it back), so panschema-viz reads
+                // the identical wire shape — only the on-page bytes change.
+                let json = serde_json::to_string(&graph_data)
+                    .map_err(|e| IoError::Write(e.to_string()))?
+                    .replace('<', "\\u003c");
+                (Some(json), node_count, edge_count)
+            } else {
+                (None, 0, 0)
+            };
 
         // Each curated A-box gets its own cards and its own viz payload,
         // rendered as a graph distinct from the schema (T-box) one. A
@@ -1490,6 +1570,16 @@ impl Writer for HtmlWriter {
             )
             .collect();
 
+        // The one composition that renders an empty page: no schema
+        // reference and no data to feature. Said out loud rather than
+        // shipped silently.
+        if Self::renders_empty(self.schema_sections, dataset_views.len()) {
+            eprintln!(
+                "warning: schema sections are off and no instance dataset loaded — the page \
+                 holds only the metadata card and namespace table"
+            );
+        }
+
         let mut dataset_views = dataset_views;
         // Several datasets share one page, and their records may overlap, so
         // each gets its own anchor namespace. A lone dataset keeps the bare
@@ -1546,6 +1636,8 @@ impl Writer for HtmlWriter {
             // `./` always resolves to the deploy root. `panschema publish`
             // sets this explicitly from the manifest's `site_root_url`.
             site_root_href: self.site_root_href.as_deref().unwrap_or("./"),
+            instances_first: self.instances_first,
+            show_schema_sections: self.schema_sections,
         };
 
         let html = template
@@ -1555,8 +1647,16 @@ impl Writer for HtmlWriter {
         let output_path = output.join("index.html");
         fs::write(&output_path, html).map_err(IoError::Io)?;
 
-        // Copy WASM visualization files if graph is enabled
-        if self.include_graph {
+        // Copy the viz assets only when some canvas on the page imports
+        // them — a composed page with neither a schema graph nor any
+        // instance graph would otherwise ship megabytes of dead wasm.
+        let any_viz = graph_json_string.is_some()
+            || dataset_parts
+                .iter()
+                .any(|(_, _, json, _, _, _)| json.is_some());
+        // `any_viz` is only ever set when `include_graph` allowed a
+        // build, so it alone decides.
+        if any_viz {
             fs::write(output.join("panschema_viz.js"), wasm_files::VIZ_JS).map_err(IoError::Io)?;
             fs::write(output.join("panschema_viz_bg.wasm"), wasm_files::VIZ_WASM)
                 .map_err(IoError::Io)?;
@@ -3715,6 +3815,110 @@ mod tests {
     }
 
     #[test]
+    fn page_composition_orders_and_omits_sections() {
+        let schema = bottle_rack_schema();
+        let data = instance_set_from_yaml(&schema, "bottles:\n  - id: b1\n    name: Morgon\n");
+
+        let render = |writer: HtmlWriter| {
+            let temp_dir = std::env::temp_dir()
+                .join(format!("panschema_composition_test_{}", std::process::id()));
+            let _ = fs::remove_dir_all(&temp_dir);
+            writer.write(&schema, &temp_dir).expect("write");
+            let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+            let wasm = temp_dir.join("panschema_viz_bg.wasm").is_file();
+            let _ = fs::remove_dir_all(&temp_dir);
+            (html, wasm)
+        };
+
+        let (html, wasm) = render(
+            HtmlWriter::with_options(false)
+                .with_instance_dataset(InstanceDataset::new("catalog", data.clone())),
+        );
+        assert!(!wasm, "no graph requested, no wasm shipped");
+        let classes = html
+            .find(r#"<section id="classes""#)
+            .expect("schema sections render by default");
+        let individuals = html
+            .find(r#"<section id="individuals""#)
+            .expect("instance section renders");
+        assert!(classes < individuals, "schema-first is the default order");
+
+        let (html, _) = render(
+            HtmlWriter::with_options(false)
+                .with_instance_dataset(InstanceDataset::new("catalog", data.clone()))
+                .with_instances_first(true),
+        );
+        let classes = html
+            .find(r#"<section id="classes""#)
+            .expect("still present");
+        let individuals = html
+            .find(r#"<section id="individuals""#)
+            .expect("still present");
+        assert!(
+            individuals < classes,
+            "instances-first puts the instance section before the schema reference"
+        );
+        let sidebar_individuals = html.find(r##"href="#individuals""##).expect("sidebar link");
+        let sidebar_classes = html.find(r##"href="#classes""##).expect("sidebar link");
+        assert!(
+            sidebar_individuals < sidebar_classes,
+            "the sidebar follows the page order"
+        );
+
+        let (html, wasm) = render(
+            HtmlWriter::new()
+                .with_instance_dataset(InstanceDataset::new("catalog", data))
+                .with_schema_sections(false),
+        );
+        assert!(
+            wasm,
+            "the data-only page's instance canvas still ships its wasm"
+        );
+        for gone in [
+            r#"<section id="classes""#,
+            r#"<section id="slots""#,
+            r#"<section id="enums""#,
+            r#"<section id="types""#,
+            r##"href="#classes""##,
+            r##"href="#graph-visualization""##,
+            r##"href="#class-"##,
+            r##"href="#slot-"##,
+        ] {
+            assert!(
+                !html.contains(gone),
+                "schema_sections = false omits the schema reference: found `{gone}`"
+            );
+        }
+        assert!(
+            html.contains(r#"<section id="individuals""#),
+            "the instance section stays"
+        );
+        assert!(
+            html.contains(r#"<section id="namespaces""#),
+            "the namespace table stays — the instance cards' CURIEs expand through it"
+        );
+        assert!(
+            html.contains("window.PanschemaGraphShell"),
+            "the graph shell script ships with the instance canvas it serves"
+        );
+
+        let (_, wasm) = render(HtmlWriter::new().with_schema_sections(false));
+        assert!(
+            !wasm,
+            "a page with no canvas at all ships no wasm, whatever the graph flag says"
+        );
+
+        assert!(
+            HtmlWriter::renders_empty(false, 0),
+            "no sections and no data is the empty page"
+        );
+        assert!(
+            !HtmlWriter::renders_empty(true, 0) && !HtmlWriter::renders_empty(false, 1),
+            "either half present means the page has content"
+        );
+    }
+
+    #[test]
     fn multiple_instance_datasets_render_a_switchable_selector() {
         let schema = bottle_rack_schema();
         let preview = instance_set_from_yaml(&schema, "bottles:\n  - id: b1\n    name: Morgon\n");
@@ -4686,7 +4890,7 @@ mod tests {
         act.close_mappings = vec!["cco:ont99999999".to_string()];
         schema.classes.insert("Act".to_string(), act);
 
-        let data = HtmlWriter::build_template_data_with_labels(&schema, Some(&store));
+        let data = HtmlWriter::build_template_data_with_labels(&schema, Some(&store), true);
         let card = data.class_data.iter().find(|c| c.id == "Act").unwrap();
 
         assert_eq!(

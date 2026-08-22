@@ -33,6 +33,7 @@ pub enum PublishError {
     InvalidVersion { value: String },
     #[error("at most one `[[instances]]` entry may set `exemplar = true`; found: {names}")]
     MultipleExemplars { names: String },
+
     #[error(
         "[publishing].current = `{current}` must appear in [publishing].versions = {versions:?} or equal [publishing].edge = {edge:?}"
     )]
@@ -262,6 +263,7 @@ fn default_book_link_label() -> String {
 /// so a minimal block (`versions = [...]`, `current = "..."`) works
 /// out-of-the-box.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PublishingConfig {
     /// Git tag names whose docs should be built. Each must resolve via
     /// `git rev-parse` (validated at extraction time, not parse time).
@@ -296,6 +298,18 @@ pub struct PublishingConfig {
     /// Output format — reserved for future writer fan-out.
     #[serde(default = "default_format")]
     pub format: String,
+    /// Page composition: which half of the page leads.
+    #[serde(default)]
+    pub layout: crate::html_writer::PageLayout,
+    /// Render the schema reference sections — the schema graph and the
+    /// class/slot/enumeration/type cards. `false` builds the page around
+    /// its data alone.
+    #[serde(default = "default_schema_sections")]
+    pub schema_sections: bool,
+}
+
+fn default_schema_sections() -> bool {
+    true
 }
 
 fn default_url_pattern() -> String {
@@ -712,6 +726,10 @@ struct CohortContext {
     url_pattern: String,
     site_root_href: String,
     label_sources: std::collections::BTreeMap<String, String>,
+    /// Page composition, from `[publishing]`: instance section first?
+    instances_first: bool,
+    /// Page composition, from `[publishing]`: schema reference rendered?
+    schema_sections: bool,
 }
 
 fn build_cohort_context(publishing: &PublishingConfig) -> CohortContext {
@@ -732,6 +750,8 @@ fn build_cohort_context(publishing: &PublishingConfig) -> CohortContext {
         url_pattern: publishing.url_pattern.clone(),
         site_root_href: publishing.site_root_url.clone(),
         label_sources: std::collections::BTreeMap::new(),
+        instances_first: publishing.layout == crate::html_writer::PageLayout::InstancesFirst,
+        schema_sections: publishing.schema_sections,
     }
 }
 
@@ -773,7 +793,9 @@ fn generate_html_for_version(
     })?;
     let mut writer = HtmlWriter::with_options(true)
         .with_version_context(cohort.context_for(version))
-        .with_site_root_href(cohort.site_root_href.clone());
+        .with_site_root_href(cohort.site_root_href.clone())
+        .with_instances_first(cohort.instances_first)
+        .with_schema_sections(cohort.schema_sections);
     // The file is read from the first path (a per-ref extraction lands in a
     // tempfile) while provenance shows the declared name.
     let mut loaded: Vec<(String, crate::instances::InstanceSet, &InstanceEntry)> = Vec::new();
@@ -1342,6 +1364,21 @@ current = "v9.9.9"
         assert!(msg.contains("current"));
         assert!(msg.contains("v9.9.9"));
         assert!(msg.contains("versions"));
+
+        let bad_layout = toml.replace(
+            "current = \"v9.9.9\"",
+            "current = \"v0.1.0\"\nlayout = \"sideways\"",
+        );
+        let text = bad_layout
+            .parse::<PublishConfig>()
+            .expect_err("should reject an unknown layout")
+            .to_string();
+        assert!(
+            text.contains("sideways")
+                && text.contains("schema-first")
+                && text.contains("instances-first"),
+            "the error names the offending and accepted layout values; got: {text}"
+        );
     }
 
     #[test]
@@ -1859,6 +1896,8 @@ versions = ["v0.1.0"]
                 site_root_url: default_site_root_url(),
                 output_dir: PathBuf::from("site/schema"),
                 format: default_format(),
+                layout: crate::html_writer::PageLayout::default(),
+                schema_sections: default_schema_sections(),
             }),
             label_sources: std::collections::BTreeMap::new(),
             book_link: None,
@@ -2524,6 +2563,42 @@ exemplur = true
     }
 
     #[test]
+    fn publishing_layout_composes_the_page() {
+        let repo = make_versioned_linkml_repo();
+        let out = tempfile::tempdir().unwrap();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], None, "v0.2.0");
+        cfg.publishing.as_mut().unwrap().layout = crate::html_writer::PageLayout::InstancesFirst;
+        cfg.publishing.as_mut().unwrap().schema_sections = false;
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
+        let html = std::fs::read_to_string(out.path().join("v0.2.0/index.html")).unwrap();
+        assert!(
+            !html.contains(r#"<section id="classes""#),
+            "schema_sections = false omits the schema reference"
+        );
+        assert!(
+            html.contains(r#"<section id="individuals""#),
+            "the instance section renders"
+        );
+
+        // With the sections kept, the layout key decides the order.
+        let out = tempfile::tempdir().unwrap();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], None, "v0.2.0");
+        cfg.publishing.as_mut().unwrap().layout = crate::html_writer::PageLayout::InstancesFirst;
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
+        let html = std::fs::read_to_string(out.path().join("v0.2.0/index.html")).unwrap();
+        let individuals = html
+            .find(r#"<section id="individuals""#)
+            .expect("instance section renders");
+        let classes = html
+            .find(r#"<section id="classes""#)
+            .expect("schema sections render");
+        assert!(
+            individuals < classes,
+            "instances-first leads the published page"
+        );
+    }
+
+    #[test]
     fn publish_versioned_overwrites_existing_current_directory() {
         // Running publish twice in a row should produce the same
         // result — the second run's current/ overwrite must not leak
@@ -2595,6 +2670,8 @@ exemplur = true
             url_pattern: "../{version}/".to_string(),
             site_root_href: "../current/".to_string(),
             label_sources: std::collections::BTreeMap::new(),
+            instances_first: false,
+            schema_sections: true,
         };
 
         generate_html_for_version("1.0.0", &main, &out, &cohort, &[])

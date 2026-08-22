@@ -1,0 +1,3 @@
+{%- if has_instances %}
+        <li><a href="#individuals" class="sidebar-link{% if active_section == "individuals" %} active{% endif %}">Instance Graph{% if instance_dataset_count > 1 %}s{% endif %} <span class="badge" id="instance-graph-sidebar-count" title="{{ instance_node_count }} node{% if instance_node_count != 1 %}s{% endif %}, {{ instance_edge_count }} edge{% if instance_edge_count != 1 %}s{% endif %}" aria-label="{{ instance_node_count }} node{% if instance_node_count != 1 %}s{% endif %}, {{ instance_edge_count }} edge{% if instance_edge_count != 1 %}s{% endif %}">{{ instance_node_count }} / {{ instance_edge_count }}</span></a></li>
+{%- endif %}

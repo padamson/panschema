@@ -24,7 +24,11 @@
             <dt>Type</dt>
             <dd>
 {%- for t in types %}
+{%- if show_schema_sections %}
                 <a href="#class-{{ t.id }}" class="entity-ref class-ref">{{ t.label }}</a>{%- if !loop.last %},{% endif %}
+{%- else %}
+                <span class="entity-ref class-ref">{{ t.label }}</span>{%- if !loop.last %},{% endif %}
+{%- endif %}
 {%- endfor %}
             </dd>
         </div>
@@ -33,7 +37,11 @@
         <div class="detail-row">
             <dt>
 {%- if let Some(pr) = pv.property_ref.as_ref() %}
+{%- if show_schema_sections %}
                 <a href="#slot-{{ pr.id }}" class="entity-ref slot-ref">{{ pv.property_label }}</a>
+{%- else %}
+                <span class="entity-ref slot-ref">{{ pv.property_label }}</span>
+{%- endif %}
 {%- else %}
                 {{ pv.property_label }}
 {%- endif %}

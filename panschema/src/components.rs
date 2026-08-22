@@ -212,6 +212,8 @@ pub struct SidebarComponent<'a> {
     pub has_instances: bool,
     /// Matches IndexTemplate: dataset count for the plural label.
     pub instance_dataset_count: usize,
+    pub instances_first: bool,
+    pub show_schema_sections: bool,
 }
 
 /// Namespace table component template.
@@ -296,6 +298,9 @@ pub struct IndividualCardComponent<'a> {
     pub description: Option<&'a str>,
     pub types: &'a [EntityRef],
     pub property_values: &'a [PropertyValueSpec],
+    /// Whether type/property names link into the schema reference; a
+    /// standalone preview always shows them linked.
+    pub show_schema_sections: bool,
 }
 
 /// Enum card component template.
@@ -423,6 +428,8 @@ pub struct StyleGuideTemplate<'a> {
     pub has_instances: bool,
     /// Matches IndexTemplate: dataset count for the plural label.
     pub instance_dataset_count: usize,
+    pub instances_first: bool,
+    pub show_schema_sections: bool,
 }
 
 /// Renders individual components for testing and preview.
@@ -490,6 +497,8 @@ impl ComponentRenderer {
             instance_edge_count: 0,
             has_instances: !individuals.is_empty(),
             instance_dataset_count: usize::from(!individuals.is_empty()),
+            instances_first: false,
+            show_schema_sections: true,
         };
         Ok(template.render()?)
     }
@@ -605,6 +614,7 @@ impl ComponentRenderer {
             description,
             types,
             property_values,
+            show_schema_sections: true,
         };
         Ok(template.render()?)
     }
@@ -861,6 +871,8 @@ impl ComponentRenderer {
             // should show its Instance Graph entry.
             has_instances: true,
             instance_dataset_count: 1,
+            instances_first: false,
+            show_schema_sections: true,
             sample_class,
             sample_slot,
             sample_data_slot,

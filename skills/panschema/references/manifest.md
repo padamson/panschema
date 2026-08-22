@@ -60,6 +60,8 @@ are manifest-relative.
 | `instances` | Array of LinkML instance-data files (A-boxes). Declaration order drives the in-page selector |
 | `html_graph_aspect` | `"W:H"`, default `16:8`. Only meaningful with `html` |
 | `html_default_layout` | Layout name; see the formats reference |
+| `html_page_layout` | `"schema-first"` (default) or `"instances-first"` — which half of the page leads |
+| `html_schema_sections` | `false` omits the schema graph and class/slot/enum/type cards (metadata + namespaces stay); default `true` |
 | `rust` | Rust structs/enums |
 | `rust_time` | Time crate for generated temporal fields: `"chrono"` (default) or `"jiff"`. Wire format (RFC 3339 / ISO 8601 strings) is identical either way; pick the crate the consuming workspace already carries. Only meaningful beside `rust` |
 | `postgres` | Postgres DDL — **the key is `postgres`, there is no `sql`** |
