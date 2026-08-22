@@ -142,7 +142,7 @@
             <dd>
                 <ul class="governing-rules">
 {%- for rule in governing_rules %}
-                    <li data-participants="{{ rule.participants }}"><a href="#class-{{ rule.class.id }}" class="entity-link">{{ rule.class.label }}</a>{% match rule.summary %}{% when Some with (s) %} — {{ s|safe }}{% when None %}{% endmatch %}</li>
+                    <li data-participants="{{ rule.participants }}"><a href="#class-{{ rule.class.id }}" class="entity-link">{{ rule.class.label }}</a>{% if rule.title.is_some() || rule.summary.is_some() %} — {% endif %}{% if let Some(t) = rule.title.as_deref() %}<em class="rule-title-inline">{{ t }}</em>{% endif %}{% if let Some(s) = rule.summary.as_deref() %}{% if rule.title.is_some() %}: {% endif %}{{ s|safe }}{% endif %}</li>
 {%- endfor %}
                 </ul>
             </dd>
@@ -158,6 +158,13 @@
 
     .datatype-ref {
         color: var(--color-datatype);
+    }
+
+    /* Same treatment the class card gives .rule-title, kept upright —
+       the <em> is semantic emphasis, not a request for italics. */
+    .rule-title-inline {
+        font-style: normal;
+        font-weight: 500;
     }
 
     .any-of-sep {

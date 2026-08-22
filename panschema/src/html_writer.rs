@@ -1735,19 +1735,40 @@ fn slot_display_label(schema: &SchemaDefinition, name: &str) -> String {
 /// rendered HTML to substitute them is safe — they only appear in
 /// text nodes, never inside tag attributes.
 fn render_description(text: &str, schema: &SchemaDefinition) -> String {
-    use pulldown_cmark::{Event, Parser, html};
+    render_markdown(text, schema, false)
+}
+
+/// [`render_description`] for text spliced into an inline layout:
+/// paragraph tags are dropped in the renderer's event stream, with
+/// paragraph boundaries becoming single spaces, so the result flows in
+/// the surrounding line. Other block constructs (a list, a code block)
+/// keep their block form — the caller's line layout degrades, but no
+/// content is dropped or rearranged.
+fn render_description_inline(text: &str, schema: &SchemaDefinition) -> String {
+    render_markdown(text, schema, true)
+}
+
+fn render_markdown(text: &str, schema: &SchemaDefinition, inline: bool) -> String {
+    use pulldown_cmark::{Event, Parser, Tag, TagEnd, html};
 
     // Route raw HTML through text escaping so author-embedded
     // `<a href="…">` cannot inject markup into the output. The
     // pulldown-cmark HTML renderer escapes `< > &` in `Event::Text`
     // automatically.
-    let events = Parser::new(text).map(|ev| match ev {
-        Event::Html(s) | Event::InlineHtml(s) => Event::Text(s),
-        other => other,
+    let events = Parser::new(text).flat_map(|ev| match ev {
+        Event::Html(s) | Event::InlineHtml(s) => Some(Event::Text(s)),
+        Event::Start(Tag::Paragraph) if inline => None,
+        Event::End(TagEnd::Paragraph) if inline => Some(Event::Text(" ".into())),
+        other => Some(other),
     });
     let mut rendered = String::with_capacity(text.len());
     html::push_html(&mut rendered, events);
-    substitute_xref_markers(&rendered, schema)
+    let rendered = if inline {
+        rendered.trim_end()
+    } else {
+        &rendered
+    };
+    substitute_xref_markers(rendered, schema)
 }
 
 /// Walk the markdown-rendered HTML, replacing `[[Name]]` markers
@@ -1902,17 +1923,19 @@ fn build_see_also(
         .collect()
 }
 
-/// Build the rendered `rules` list. Title/description pass through the
-/// same markdown pipeline as [`ClassData::description`]; `summary` is
-/// built from the pre/postconditions and rendered the same way, so
-/// slot/value names referenced in either come out as `<code>`.
 /// Rules across every class that reference `slot_name` (on either the
 /// trigger or governed side), for the slot card's "Governed by" section — so
 /// a reader viewing a slot sees the conditional logic that constrains it.
+/// The `summary` is rendered inline (no block wrapper), since the slot
+/// card splices it into the entry's line; a blank title is treated as
+/// absent, so the entry never shows an empty title's punctuation.
 /// Classes iterate in sorted (`BTreeMap`) order for deterministic output.
 fn governing_rules_for_slot(slot_name: &str, schema: &SchemaDefinition) -> Vec<GoverningRule> {
     let mut governing = Vec::new();
     for (class_id, class_def) in &schema.classes {
+        if class_def.rules.is_empty() {
+            continue;
+        }
         let class_label = class_def
             .annotations
             .get("panschema:label")
@@ -1931,10 +1954,10 @@ fn governing_rules_for_slot(slot_name: &str, schema: &SchemaDefinition) -> Vec<G
                         id: class_id.clone(),
                         label: class_label.clone(),
                     },
-                    title: rule.title.clone(),
+                    title: rule.title.clone().filter(|t| !t.trim().is_empty()),
                     summary: crate::rules::rule_summary(rule)
-                        .map(|s| render_description(&s, schema)),
-                    participants: rule_participant_ids(class_id, rule),
+                        .map(|s| render_description_inline(&s, schema)),
+                    participants: rule_participant_ids(class_id, &participants),
                 });
             }
         }
@@ -1943,22 +1966,28 @@ fn governing_rules_for_slot(slot_name: &str, schema: &SchemaDefinition) -> Vec<G
 }
 
 /// Graph node ids a rule on `class_id` touches — `class:<id>` plus a
-/// `slot:<s>` for each trigger/governed slot — as one space-separated string
-/// for the `data-participants` attribute the graph highlight-on-hover reads.
-fn rule_participant_ids(class_id: &str, rule: &crate::linkml::ClassRule) -> String {
-    let participants = crate::rules::rule_participants(rule);
+/// `slot:<s>` for each trigger/governed slot, each slot once however
+/// many sides name it — as one space-separated string for the
+/// `data-participants` attribute the graph highlight-on-hover reads.
+fn rule_participant_ids(class_id: &str, participants: &crate::rules::RuleParticipants) -> String {
     let mut ids = vec![format!("class:{class_id}")];
+    let mut seen = std::collections::BTreeSet::new();
     for s in participants
         .trigger
         .iter()
         .chain(participants.governed.iter())
     {
-        ids.push(format!("slot:{s}"));
+        if seen.insert(s.as_str()) {
+            ids.push(format!("slot:{s}"));
+        }
     }
-    ids.dedup();
     ids.join(" ")
 }
 
+/// Build the class card's rendered `rules` list. The description and
+/// generated summary pass through the markdown pipeline (block form —
+/// the card gives each its own block), so slot/value names come out as
+/// `<code>`; the title renders as escaped literal text.
 fn build_rules(
     class_id: &str,
     rules: &[crate::linkml::ClassRule],
@@ -1967,13 +1996,13 @@ fn build_rules(
     rules
         .iter()
         .map(|rule| RuleInClass {
-            title: rule.title.clone(),
+            title: rule.title.clone().filter(|t| !t.trim().is_empty()),
             description: rule
                 .description
                 .as_deref()
                 .map(|d| render_description(d, schema)),
             summary: crate::rules::rule_summary(rule).map(|s| render_description(&s, schema)),
-            participants: rule_participant_ids(class_id, rule),
+            participants: rule_participant_ids(class_id, &crate::rules::rule_participants(rule)),
         })
         .collect()
 }
@@ -2686,6 +2715,28 @@ mod tests {
             document.mixins.is_empty(),
             "expected unresolved mixin to be skipped; got: {:?}",
             document.mixins
+        );
+    }
+
+    #[test]
+    fn render_description_inline_unwraps_one_paragraph_and_only_one() {
+        use crate::linkml::SchemaDefinition;
+        let schema = SchemaDefinition::new("s");
+        assert_eq!(
+            render_description_inline("one `sentence`", &schema),
+            "one <code>sentence</code>",
+            "a single paragraph sheds its block wrapper to flow inline"
+        );
+        assert_eq!(
+            render_description("one `sentence`", &schema),
+            "<p>one <code>sentence</code></p>\n",
+            "block rendering keeps its paragraph wrapper"
+        );
+        assert_eq!(
+            render_description_inline("first paragraph\n\nsecond paragraph", &schema),
+            "first paragraph second paragraph",
+            "paragraph boundaries become single spaces, so even text with a blank \
+             line flows in the surrounding line"
         );
     }
 
@@ -3558,10 +3609,7 @@ mod tests {
 
     #[test]
     fn slot_card_lists_the_rules_that_govern_the_slot() {
-        use crate::linkml::{
-            ClassDefinition, ClassRule, RuleConditions, SchemaDefinition, SlotCondition,
-            SlotDefinition, ValuePresence,
-        };
+        use crate::linkml::{ClassDefinition, SchemaDefinition, SlotDefinition};
         // A slot named in a class rule shows that rule on its card, naming
         // the class — so a reader on the slot sees why it is conditional.
         let mut schema = SchemaDefinition::new("approvals");
@@ -3578,30 +3626,7 @@ mod tests {
             .insert("image".to_string(), SlotDefinition::new("image"));
         let mut cls = ClassDefinition::new("ImageApproval");
         cls.slots = vec!["verdict".into(), "approved_by".into(), "image".into()];
-        cls.rules = vec![ClassRule {
-            title: None,
-            description: None,
-            preconditions: Some(RuleConditions {
-                any_of: Vec::new(),
-                slot_conditions: std::collections::BTreeMap::from([(
-                    "verdict".to_string(),
-                    SlotCondition {
-                        equals_string: Some("approved".to_string()),
-                        ..Default::default()
-                    },
-                )]),
-            }),
-            postconditions: Some(RuleConditions {
-                any_of: Vec::new(),
-                slot_conditions: std::collections::BTreeMap::from([(
-                    "approved_by".to_string(),
-                    SlotCondition {
-                        value_presence: Some(ValuePresence::Present),
-                        ..Default::default()
-                    },
-                )]),
-            }),
-        }];
+        cls.rules = vec![approval_rule(None)];
         schema.classes.insert("ImageApproval".to_string(), cls);
 
         let data = HtmlWriter::build_template_data(&schema);
@@ -3811,6 +3836,36 @@ mod tests {
     /// Two-class schema (`Bottle` referencing `Rack`) plus the `tree_root`
     /// container the LinkML data loader keys off, the minimum shape for
     /// building distinct A-boxes.
+    /// A when-verdict-approved-then-approved-by-present rule, the shape
+    /// several rule-rendering tests share.
+    fn approval_rule(title: Option<&str>) -> crate::linkml::ClassRule {
+        use crate::linkml::{ClassRule, RuleConditions, SlotCondition, ValuePresence};
+        ClassRule {
+            title: title.map(String::from),
+            description: None,
+            preconditions: Some(RuleConditions {
+                any_of: Vec::new(),
+                slot_conditions: std::collections::BTreeMap::from([(
+                    "verdict".to_string(),
+                    SlotCondition {
+                        equals_string: Some("approved".to_string()),
+                        ..Default::default()
+                    },
+                )]),
+            }),
+            postconditions: Some(RuleConditions {
+                any_of: Vec::new(),
+                slot_conditions: std::collections::BTreeMap::from([(
+                    "approved_by".to_string(),
+                    SlotCondition {
+                        value_presence: Some(ValuePresence::Present),
+                        ..Default::default()
+                    },
+                )]),
+            }),
+        }
+    }
+
     fn bottle_rack_schema() -> SchemaDefinition {
         use crate::linkml::{ClassDefinition, SlotDefinition};
         let mut schema = SchemaDefinition::new("cellar");
@@ -3848,6 +3903,81 @@ mod tests {
     ) -> crate::instances::InstanceSet {
         let data: serde_norway::Value = serde_norway::from_str(yaml).unwrap();
         crate::instances::InstanceSet::from_linkml_data(schema, &data)
+    }
+
+    #[test]
+    fn governing_rule_renders_as_one_line_with_its_title() {
+        use crate::linkml::{ClassDefinition, SchemaDefinition, SlotDefinition};
+        let mut schema = SchemaDefinition::new("approvals");
+        schema
+            .slots
+            .insert("verdict".to_string(), SlotDefinition::new("verdict"));
+        schema.slots.insert(
+            "approved_by".to_string(),
+            SlotDefinition::new("approved_by"),
+        );
+        let mut cls = ClassDefinition::new("ImageApproval");
+        cls.slots = vec!["verdict".into(), "approved_by".into()];
+        cls.rules = vec![
+            approval_rule(Some("approvals_are_signed")),
+            approval_rule(None),
+            approval_rule(Some("   ")),
+        ];
+        schema.classes.insert("ImageApproval".to_string(), cls);
+
+        let out = tempfile::tempdir().unwrap();
+        HtmlWriter::with_options(false)
+            .write(&schema, out.path())
+            .expect("write");
+        let html = fs::read_to_string(out.path().join("index.html")).expect("read");
+
+        assert!(
+            !html.contains("— <p>") && !html.contains(": <p>"),
+            "the governing-rule summary flows inline after its separator, never as a \
+             block that strands it"
+        );
+        assert!(
+            html.contains(
+                r#"approvals_are_signed</em>: when <code>verdict</code> has value <code>approved</code>"#
+            ),
+            "a titled rule renders its title inline, the summary flowing right after"
+        );
+        assert!(
+            html.contains(r#"class="entity-link">ImageApproval</a> — when <code>verdict</code>"#),
+            "an untitled rule keeps the plain class-dash-summary shape"
+        );
+        assert!(
+            !html.contains(r#"<em class="rule-title-inline"></em>"#)
+                && !html.contains("— :")
+                && !html.contains("—: "),
+            "a blank title is treated as absent, never rendered as empty punctuation"
+        );
+    }
+
+    #[test]
+    fn rule_participants_list_a_slot_once_across_both_sides() {
+        use crate::linkml::{SlotCondition, ValuePresence};
+        // `verdict` triggers the rule AND is governed by it; the graph
+        // attribute lists it once.
+        let mut rule = approval_rule(None);
+        rule.postconditions
+            .as_mut()
+            .unwrap()
+            .slot_conditions
+            .insert(
+                "verdict".to_string(),
+                SlotCondition {
+                    value_presence: Some(ValuePresence::Present),
+                    ..Default::default()
+                },
+            );
+        let ids = rule_participant_ids("ImageApproval", &crate::rules::rule_participants(&rule));
+        assert_eq!(
+            ids.matches("slot:verdict").count(),
+            1,
+            "a slot on both rule sides appears once; got: {ids}"
+        );
+        assert!(ids.starts_with("class:ImageApproval"));
     }
 
     #[test]

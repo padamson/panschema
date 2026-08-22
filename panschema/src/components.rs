@@ -785,6 +785,14 @@ impl ComponentRenderer {
         let range = RangeSpec::class(EntityRef::new("organization", "Organization"));
         let characteristics = vec!["Functional".to_string()];
         let slot_mappings: Vec<panschema::html_writer::Mapping> = vec![];
+        let slot_governing_rules = vec![panschema::html_writer::GoverningRule {
+            class: EntityRef::new("person", "Person"),
+            title: Some("adults must give an email".to_string()),
+            summary: Some(
+                "when <code>age</code> &gt;= 18, then <code>email</code> is required".to_string(),
+            ),
+            participants: "class:person slot:age slot:email".to_string(),
+        }];
 
         let sample_slot = SampleSlot {
             id: "member-of",
@@ -804,7 +812,7 @@ impl ComponentRenderer {
             see_also: &[],
             examples: &[],
             default: None,
-            governing_rules: &[],
+            governing_rules: &slot_governing_rules,
         };
 
         let domain2 = EntityRef::new("person", "Person");

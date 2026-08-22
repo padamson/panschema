@@ -1,5 +1,6 @@
 ---
 source: panschema/src/components.rs
+assertion_line: 1391
 expression: html
 ---
 <article class="entity-card slot-card" id="slot-member-of">
@@ -49,6 +50,13 @@ expression: html
 
     .datatype-ref {
         color: var(--color-datatype);
+    }
+
+    /* Same treatment the class card gives .rule-title, kept upright —
+       the <em> is semantic emphasis, not a request for italics. */
+    .rule-title-inline {
+        font-style: normal;
+        font-weight: 500;
     }
 
     .any-of-sep {
