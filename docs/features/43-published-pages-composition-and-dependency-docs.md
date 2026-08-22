@@ -99,25 +99,25 @@ instance graph, or publish it without the schema reference sections.
 
 ### Slice 2: A page per dependency schema with local instances
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** A repo can publish a dependency schema's docs with its
 own local datasets embedded — the contract-plus-local-records page.
 
 **Acceptance Criteria:**
-- [ ] An `[[instances]]` entry with `schema = "<dep>"` places its dataset
+- [x] An `[[instances]]` entry with `schema = "<dep>"` places its dataset
       on a second published page rendering that dependency's schema;
       several entries naming one dependency share that page.
-- [ ] The dependency page lives at a configured directory inside the
+- [x] The dependency page lives at a configured directory inside the
       output tree, versioned and aliased like the own page, and its
       version dropdown offers only refs where the page exists.
-- [ ] At each published ref, the page renders the data as of that ref
+- [x] At each published ref, the page renders the data as of that ref
       against the dependency as pinned at that ref.
-- [ ] Naming a dependency the manifest does not declare is a
+- [x] Naming a dependency the manifest does not declare is a
       configuration error naming the entry and the missing dependency.
-- [ ] The dependency page takes the same composition options as the own
+- [x] The dependency page takes the same composition options as the own
       page, configured per page.
-- [ ] The dataset's external references render as the external links the
+- [x] The dataset's external references render as the external links the
       instance graph draws elsewhere.
 
 ### Slice 3: The pages link to each other
@@ -138,7 +138,7 @@ without knowing the URL scheme.
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | Slice 1 | Must Have | None | Completed |
-| Slice 2 | Must Have | Slice 1 | Not Started |
+| Slice 2 | Must Have | Slice 1 | Completed |
 | Slice 3 | Should Have | Slice 2 | Not Started |
 
 ---
@@ -152,11 +152,29 @@ without knowing the URL scheme.
 
 ## Notes / Things to Watch
 
-- Dependency resolution at publish time goes through the cached fetch
-  and lockfile — never a live network fetch — so publishes are
-  reproducible from a clean checkout with a warm cache. Old refs pin the
-  dependency by that ref's lockfile, so historical pages show the
-  contract as it was.
+- Dependency resolution at publish time goes through the local cache
+  only — never a live network fetch — so publishes are reproducible
+  from a clean checkout with a warm cache (`panschema fetch` first).
+  Old refs pin the dependency by the version that ref's own
+  `panschema.toml` declares (exact versions, so the manifest is the
+  pin), and historical pages show the contract as it was. `path:`
+  dependencies carry no pin at all and resolve from the working tree
+  at every ref — the local-development shape, documented as such.
+- A dependency page that resolves at no ref publishes nothing and says
+  so with a warning; per-ref skips (data or dependency absent there)
+  are notes, matching the own page's missing-data behavior. A declared
+  dependency that *fails* to resolve (cold cache, corrupt package,
+  unparseable manifest at the ref) is distinguished from one not yet
+  declared: its note carries the resolver's message, including the
+  `panschema fetch` remedy for a cold cache.
+- `url_pattern` and `site_root_url` are site-level; their
+  parent-relative defaults are depth-correct on every page, but
+  absolute or depth-sensitive overrides target the own page's depth.
+  Per-page URL overrides wait for a consumer who needs them.
+- Publish resolves the dependency by the version the ref's manifest
+  declares but does not checksum the cached content against the ref's
+  lockfile — `panschema verify` does; folding that gate into publish is
+  tracked as a follow-up.
 - A dataset's version identity is the publish cohort's ref; there is no
   per-dataset semver.
 - Composition presets were chosen over independent per-section toggles:

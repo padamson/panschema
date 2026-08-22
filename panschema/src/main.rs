@@ -952,27 +952,8 @@ fn resolve_source(
     dep: &panschema::manifest::SchemaDep,
     manifest_dir: &Path,
 ) -> anyhow::Result<panschema::source::Resolved> {
-    use panschema::cache::cache_root;
-    use panschema::source::{CodeloadGithubSource, SchemaSource, resolve_github, resolve_path};
-
-    let source = SchemaSource::from_dep(name, dep)?;
-    match source {
-        SchemaSource::Path { path } => {
-            Ok(resolve_path(name, &path, manifest_dir).map_err(|e| anyhow::anyhow!("{e}"))?)
-        }
-        SchemaSource::Github {
-            owner,
-            repo,
-            version,
-        } => {
-            let cache = cache_root().map_err(|e| anyhow::anyhow!("{e}"))?;
-            let github = CodeloadGithubSource;
-            Ok(
-                resolve_github(name, &owner, &repo, &version, &cache, &github)
-                    .map_err(|e| anyhow::anyhow!("{e}"))?,
-            )
-        }
-    }
+    use panschema::source::{CodeloadGithubSource, resolve_dep};
+    resolve_dep(name, dep, manifest_dir, &CodeloadGithubSource).map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 /// The version every first migration carries. A runner rejects a migration

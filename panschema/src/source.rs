@@ -221,9 +221,38 @@ pub enum ResolveError {
     #[error("schema `{name}`: {message}")]
     Other { name: String, message: String },
     #[error(transparent)]
+    Source(#[from] SourceError),
+    #[error(transparent)]
     Cache(#[from] crate::cache::CacheError),
     #[error(transparent)]
     Publish(#[from] crate::publish::PublishError),
+}
+
+/// Resolve one manifest dependency to its package, dispatching on the
+/// source kind: `path:` sources resolve relative to `manifest_dir`,
+/// `github:` sources through the local cache, populated via `tarballs`
+/// when absent. Callers choose the network policy by the source they
+/// inject — [`CodeloadGithubSource`] to allow fetching, a refusing
+/// implementation to stay offline. The one dispatcher every consumer of
+/// `[schemas]` entries shares, so a manifest entry means the same
+/// package everywhere.
+pub fn resolve_dep(
+    name: &str,
+    dep: &SchemaDep,
+    manifest_dir: &Path,
+    tarballs: &dyn TarballSource,
+) -> Result<Resolved, ResolveError> {
+    match SchemaSource::from_dep(name, dep)? {
+        SchemaSource::Path { path } => resolve_path(name, &path, manifest_dir),
+        SchemaSource::Github {
+            owner,
+            repo,
+            version,
+        } => {
+            let cache = crate::cache::cache_root()?;
+            resolve_github(name, &owner, &repo, &version, &cache, tarballs)
+        }
+    }
 }
 
 /// Open a "package directory" (or the `panschema-publish.toml` inside one),

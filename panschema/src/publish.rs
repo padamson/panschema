@@ -67,6 +67,55 @@ pub enum PublishError {
     MissingPublishingSection,
     #[error("failed to generate docs for version `{version}`: {message}")]
     GenerateFailed { version: String, message: String },
+    #[error(
+        "[publishing.pages.{dep}] configures a page, but no [[instances]] entry publishes to it (none has schema = \"{dep}\")"
+    )]
+    PageWithoutEntries { dep: String },
+    #[error("could not read the repo's panschema.toml manifest: {message}")]
+    ManifestUnreadable { message: String },
+    #[error("[[instances]] entry `{entry}` publishes to dependency `{dep}`, but {reason}")]
+    UnknownDependency {
+        entry: String,
+        dep: String,
+        reason: String,
+    },
+    #[error("`{value}` cannot be used as {what}: {problem}")]
+    InvalidSegment {
+        what: String,
+        value: String,
+        problem: String,
+    },
+}
+
+/// Whether a configured value may become one directory name in the
+/// publish output tree: non-empty, no path separators, and not the
+/// `.`/`..` traversal names. Version labels, the edge label, and page
+/// directories all pass through this — one rule for every path segment
+/// the publish tree writes.
+fn is_single_path_segment(s: &str) -> bool {
+    !s.is_empty() && s != "." && s != ".." && !s.contains(['/', '\\'])
+}
+
+/// The full gate a value passes before it may become one fresh
+/// directory name in the publish output tree: a single path segment,
+/// and not the reserved `current`. Version labels, the edge label, and
+/// every page directory — configured or defaulted — go through here.
+fn require_fresh_segment(what: &str, value: &str) -> Result<(), PublishError> {
+    if !is_single_path_segment(value) {
+        return Err(PublishError::InvalidSegment {
+            what: what.to_string(),
+            value: value.to_string(),
+            problem: "it must be a single path segment (no `/`, `.`, or `..`)".to_string(),
+        });
+    }
+    if value == "current" {
+        return Err(PublishError::InvalidSegment {
+            what: what.to_string(),
+            value: value.to_string(),
+            problem: "`current` is reserved for the alias directory".to_string(),
+        });
+    }
+    Ok(())
 }
 
 /// Which component of a semver version to bump.
@@ -118,6 +167,12 @@ pub struct InstanceEntry {
     /// one entry may set it.
     #[serde(default)]
     pub exemplar: bool,
+    /// Names a `[schemas.<dep>]` dependency from the repo's manifest.
+    /// The dataset then publishes on that dependency's page instead of
+    /// the own-schema page; entries naming the same dependency share
+    /// one page. `None` keeps the dataset on the own-schema page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
 }
 
 /// `[schema]` table — identity and versioning metadata.
@@ -306,6 +361,34 @@ pub struct PublishingConfig {
     /// its data alone.
     #[serde(default = "default_schema_sections")]
     pub schema_sections: bool,
+    /// Per-dependency-page settings, keyed by the dependency name the
+    /// page renders (`[publishing.pages.<dep>]`). A table may only name
+    /// a dependency some `[[instances]]` entry publishes to; pages for
+    /// unconfigured dependencies use every default.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub pages: std::collections::BTreeMap<String, PageConfig>,
+}
+
+/// One `[publishing.pages.<dep>]` table: where a dependency's page
+/// lives inside the output tree and how it composes. Unknown keys are
+/// rejected so a typo'd setting fails loudly instead of silently
+/// reverting to its default.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct PageConfig {
+    /// Directory the page's version tree lands in, relative to (and
+    /// always inside) the publish output dir. Defaults to the
+    /// dependency's name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dir: Option<String>,
+    /// Page composition: which half of the page leads. Defaults to the
+    /// own page's default, not the own page's setting — each page
+    /// composes independently.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<crate::html_writer::PageLayout>,
+    /// Render the schema reference sections on this page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema_sections: Option<bool>,
 }
 
 fn default_schema_sections() -> bool {
@@ -352,7 +435,21 @@ impl PublishingConfig {
                 edge: self.edge.clone(),
             });
         }
+        for label in self.versions.iter().chain(self.edge.as_ref()) {
+            require_fresh_segment("a version label", label)?;
+        }
         Ok(())
+    }
+
+    /// Where dependency `dep`'s page lands, relative to the output dir:
+    /// the configured `[publishing.pages.<dep>] dir`, defaulting to the
+    /// dependency's name. The one derivation validation and page
+    /// planning both use, so what is validated is what gets written.
+    fn page_dir(&self, dep: &str) -> String {
+        self.pages
+            .get(dep)
+            .and_then(|c| c.dir.clone())
+            .unwrap_or_else(|| dep.to_string())
     }
 }
 
@@ -363,6 +460,7 @@ impl FromStr for PublishConfig {
         let cfg: PublishConfig = toml::from_str(s)?;
         if let Some(publishing) = &cfg.publishing {
             publishing.validate()?;
+            cfg.validate_pages(publishing)?;
         }
         let exemplars: Vec<&str> = cfg
             .instances
@@ -384,6 +482,57 @@ impl PublishConfig {
     pub fn from_path(path: &Path) -> Result<Self, PublishError> {
         let content = std::fs::read_to_string(path)?;
         content.parse()
+    }
+
+    /// Cross-check `[publishing.pages.*]` against the `[[instances]]`
+    /// entries: every configured page must have at least one dataset,
+    /// and every page directory must be a fresh single path segment —
+    /// not the reserved `current`, not a version or edge label, and not
+    /// another page's directory.
+    fn validate_pages(&self, publishing: &PublishingConfig) -> Result<(), PublishError> {
+        for dep in publishing.pages.keys() {
+            if !self
+                .instances
+                .iter()
+                .any(|e| e.schema.as_deref() == Some(dep.as_str()))
+            {
+                return Err(PublishError::PageWithoutEntries { dep: dep.clone() });
+            }
+        }
+        // Every page directory goes through the gate — a dependency
+        // without a `[publishing.pages]` table still becomes a directory
+        // (its own name), and manifest keys are arbitrary strings.
+        let mut deps: Vec<&str> = Vec::new();
+        for entry in &self.instances {
+            if let Some(dep) = entry.schema.as_deref()
+                && !deps.contains(&dep)
+            {
+                deps.push(dep);
+            }
+        }
+        let mut seen_dirs = std::collections::BTreeSet::new();
+        for dep in deps {
+            let dir = publishing.page_dir(dep);
+            let what = format!("the page directory for dependency `{dep}`");
+            require_fresh_segment(&what, &dir)?;
+            if publishing.versions.iter().any(|v| v == &dir)
+                || publishing.edge.as_deref() == Some(dir.as_str())
+            {
+                return Err(PublishError::InvalidSegment {
+                    what,
+                    value: dir.clone(),
+                    problem: format!("it collides with the version label `{dir}`"),
+                });
+            }
+            if !seen_dirs.insert(dir.clone()) {
+                return Err(PublishError::InvalidSegment {
+                    what,
+                    value: dir,
+                    problem: "another page already uses this directory".to_string(),
+                });
+            }
+        }
+        Ok(())
     }
 }
 
@@ -593,125 +742,439 @@ pub fn publish_versioned(
     }
     resolve_refs(repo_root, &all_refs)?;
 
-    let manifest_main = &publish_cfg.files.main;
-    let mut cohort = build_cohort_context(publishing);
-    cohort.label_sources = publish_cfg.label_sources.clone();
-
-    // Every declared curated graph embeds in the schema page, behind the
-    // in-page selector; `exemplar` picks which one opens.
-    let instances = publish_cfg.instances.as_slice();
-
-    for version in &publishing.versions {
-        build_version(
-            repo_root,
-            version,
-            manifest_main,
-            instances,
-            output_dir,
-            &cohort,
-            BuildSource::GitRef(version),
-        )?;
-    }
+    // The build order for every page: edge first (it heads the version
+    // dropdown), then released versions in manifest order.
+    let mut refs: Vec<(String, BuildSource)> = Vec::new();
     if let Some(edge) = &publishing.edge {
         let source = if edge_from_worktree {
             BuildSource::WorkingTree
         } else {
             BuildSource::GitRef(edge)
         };
-        build_version(
-            repo_root,
-            edge,
-            manifest_main,
-            instances,
-            output_dir,
-            &cohort,
-            source,
-        )?;
+        refs.push((edge.clone(), source));
     }
+    // A version label equal to the edge label is one build, not two:
+    // the edge's source wins, so `--edge-from-worktree` keeps meaning
+    // the worktree, and the label appears once in every dropdown.
+    refs.extend(
+        publishing
+            .versions
+            .iter()
+            .filter(|v| Some(v.as_str()) != publishing.edge.as_deref())
+            .map(|v| (v.clone(), BuildSource::GitRef(v))),
+    );
 
-    // current/ is a copy of the configured version's output, not a
-    // symlink (static hosts handle directories cleanly; symlinks are
-    // flaky on GH Pages) and not a re-render (would duplicate work and
-    // risk byte divergence). The src is guaranteed to exist because
-    // `current` is parse-time-validated to be in `versions` or equal
-    // `edge`, both of which we just built.
-    let current_src = output_dir.join(&publishing.current);
-    let current_dst = output_dir.join("current");
-    if current_dst.exists() {
-        std::fs::remove_dir_all(&current_dst)?;
+    let pages = plan_pages(repo_root, publish_cfg, publishing, output_dir)?;
+    for page in &pages {
+        build_page(repo_root, page, &refs, publish_cfg, publishing)?;
     }
-    copy_dir_recursive(&current_src, &current_dst)?;
 
     Ok(())
 }
 
-/// The declared instance graphs `publish` does not yet put on the site:
-/// everything except the exemplar (sibling instance pages are deferred).
-fn build_version(
+/// One published schema-docs page: the own-schema page, or one
+/// dependency's page with the datasets that publish to it.
+struct PageSpec<'a> {
+    /// `None` is the own-schema page; `Some(dep)` renders that
+    /// dependency's schema.
+    dep: Option<String>,
+    /// Where the page's version tree lands. The own page sits at the
+    /// output root; every dependency page in a directory inside it.
+    out_dir: PathBuf,
+    entries: Vec<&'a InstanceEntry>,
+    instances_first: bool,
+    schema_sections: bool,
+}
+
+/// Group the `[[instances]]` entries into pages and cross-check every
+/// named dependency against the repo's `panschema.toml` — publishing to
+/// a dependency the manifest doesn't declare is a configuration error,
+/// caught before any output is written.
+fn plan_pages<'a>(
     repo_root: &Path,
-    label: &str,
-    manifest_main: &Path,
-    instances: &[InstanceEntry],
+    publish_cfg: &'a PublishConfig,
+    publishing: &PublishingConfig,
     output_dir: &Path,
-    cohort: &CohortContext,
-    source: BuildSource<'_>,
-) -> Result<(), PublishError> {
-    let version_out = output_dir.join(label);
-    std::fs::create_dir_all(&version_out)?;
-    match source {
-        BuildSource::GitRef(ref_) => {
-            let extracted = extract_main_at_ref(repo_root, ref_, manifest_main)?;
-            // Each version renders its own ref's data. A ref where a data
-            // file doesn't exist (it predates that dataset) publishes
-            // without it — a note, not an error.
-            let extracted_data: Vec<_> = instances
-                .iter()
-                .filter_map(
-                    |entry| match extract_main_at_ref(repo_root, ref_, &entry.data) {
-                        Ok(file) => Some((file, entry)),
-                        Err(_) => {
-                            eprintln!(
-                                "note: {label}: instance data `{}` not present at `{ref_}`; \
-                             publishing this version without that instance graph",
-                                entry.data.display()
-                            );
-                            None
+) -> Result<Vec<PageSpec<'a>>, PublishError> {
+    let mut pages: Vec<PageSpec<'a>> = vec![PageSpec {
+        dep: None,
+        out_dir: output_dir.to_path_buf(),
+        entries: Vec::new(),
+        instances_first: publishing.layout == crate::html_writer::PageLayout::InstancesFirst,
+        schema_sections: publishing.schema_sections,
+    }];
+
+    // The manifest is consulted only once some entry names a dependency
+    // — a publish with no dependency pages must not fail on a manifest
+    // it never needed (one written for a newer panschema, say).
+    let mut manifest: Option<Option<crate::manifest::Manifest>> = None;
+
+    for entry in &publish_cfg.instances {
+        let Some(dep) = &entry.schema else {
+            pages[0].entries.push(entry);
+            continue;
+        };
+        let loaded = match &manifest {
+            Some(m) => m,
+            None => {
+                let path = repo_root.join(crate::manifest::MANIFEST_FILENAME);
+                let m = if path.is_file() {
+                    Some(crate::manifest::Manifest::from_path(&path).map_err(|e| {
+                        PublishError::ManifestUnreadable {
+                            message: e.to_string(),
                         }
-                    },
+                    })?)
+                } else {
+                    None
+                };
+                manifest.insert(m)
+            }
+        };
+        let declared = loaded.as_ref().is_some_and(|m| m.schemas.contains_key(dep));
+        if !declared {
+            let reason = if loaded.is_some() {
+                format!(
+                    "the repo's {} declares no [schemas.{dep}]",
+                    crate::manifest::MANIFEST_FILENAME
                 )
-                .collect();
-            let datasets: Vec<_> = extracted_data
-                .iter()
-                .map(|(file, entry)| (file.path(), *entry))
-                .collect();
-            generate_html_for_version(label, extracted.path(), &version_out, cohort, &datasets)
+            } else {
+                format!(
+                    "the repo has no {} manifest to declare it in",
+                    crate::manifest::MANIFEST_FILENAME
+                )
+            };
+            return Err(PublishError::UnknownDependency {
+                entry: entry.name.clone(),
+                dep: dep.clone(),
+                reason,
+            });
+        }
+        match pages.iter_mut().find(|p| p.dep.as_ref() == Some(dep)) {
+            Some(page) => page.entries.push(entry),
+            None => {
+                let cfg = publishing.pages.get(dep);
+                pages.push(PageSpec {
+                    dep: Some(dep.clone()),
+                    out_dir: output_dir.join(publishing.page_dir(dep)),
+                    entries: vec![entry],
+                    instances_first: cfg.and_then(|c| c.layout)
+                        == Some(crate::html_writer::PageLayout::InstancesFirst),
+                    schema_sections: cfg.and_then(|c| c.schema_sections).unwrap_or(true),
+                });
+            }
+        }
+    }
+    Ok(pages)
+}
+
+/// A schema or data file pinned down for one ref's build — either
+/// extracted out of git into a tempfile, or already on disk (the
+/// working tree, or a resolved dependency package).
+enum Materialized {
+    Extracted(tempfile::NamedTempFile),
+    OnDisk(PathBuf),
+}
+
+impl Materialized {
+    fn path(&self) -> &Path {
+        match self {
+            Materialized::Extracted(f) => f.path(),
+            Materialized::OnDisk(p) => p.as_path(),
+        }
+    }
+}
+
+/// Whether `path_in_repo` exists at `ref_` — a metadata-only probe
+/// (`git cat-file -e`), so a page's presence at a ref can be decided
+/// without extracting content or holding open files.
+fn exists_at_ref(repo_root: &Path, ref_: &str, path_in_repo: &Path) -> bool {
+    let spec = format!("{ref_}:{}", path_in_repo.display());
+    Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args(["cat-file", "-e", &spec])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Build every version of one page, then refresh its `current/` alias.
+///
+/// Two passes. The presence pass decides which refs the page exists at
+/// — a dependency page exists only where the dependency resolves and
+/// at least one of its datasets does — using metadata probes and path
+/// resolution alone, so the version dropdown is known before any
+/// render. The render pass then extracts, renders, and drops one ref's
+/// files at a time, keeping the number of open files bounded by one
+/// ref's needs however long the version list grows. The own page
+/// builds at every ref, as it always has.
+fn build_page(
+    repo_root: &Path,
+    page: &PageSpec<'_>,
+    refs: &[(String, BuildSource<'_>)],
+    publish_cfg: &PublishConfig,
+    publishing: &PublishingConfig,
+) -> Result<(), PublishError> {
+    struct RefPlan<'r, 'e> {
+        label: &'r str,
+        source: BuildSource<'r>,
+        /// A dependency page's resolved schema file; `None` on the own
+        /// page, whose schema comes from the publish spec's `files.main`.
+        dep_schema: Option<PathBuf>,
+        datasets: Vec<&'e InstanceEntry>,
+    }
+    let mut plans: Vec<RefPlan> = Vec::new();
+    for (label, source) in refs {
+        let dep_schema = match &page.dep {
+            None => None,
+            Some(dep) => match resolve_dep_schema_at(repo_root, *source, dep) {
+                DepAtRef::Resolved(path) => Some(path),
+                DepAtRef::NotDeclared => {
+                    eprintln!(
+                        "note: {label}: dependency `{dep}` is not declared at this ref; \
+                         publishing without its page for this version"
+                    );
+                    continue;
+                }
+                DepAtRef::Failed(reason) => {
+                    eprintln!(
+                        "note: {label}: dependency `{dep}` does not resolve at this ref \
+                         ({reason}); publishing without its page for this version"
+                    );
+                    continue;
+                }
+            },
+        };
+
+        let datasets: Vec<&InstanceEntry> = page
+            .entries
+            .iter()
+            .copied()
+            .filter(|entry| {
+                let present = match source {
+                    BuildSource::GitRef(ref_) => exists_at_ref(repo_root, ref_, &entry.data),
+                    BuildSource::WorkingTree => repo_root.join(&entry.data).is_file(),
+                };
+                if present {
+                    return true;
+                }
+                let place = match source {
+                    BuildSource::GitRef(ref_) => format!("at `{ref_}`"),
+                    BuildSource::WorkingTree => "in the working tree".to_string(),
+                };
+                eprintln!(
+                    "note: {label}: instance data `{}` not present {place}; \
+                     publishing this version without that instance graph",
+                    entry.data.display()
+                );
+                false
+            })
+            .collect();
+
+        // A dependency page is its datasets; without any there is
+        // nothing to publish at this ref. The own page still builds
+        // dataless — the schema reference is its content.
+        if let Some(dep) = &page.dep
+            && datasets.is_empty()
+        {
+            eprintln!(
+                "note: {label}: no instance data for dependency `{dep}` at this ref; \
+                 publishing without its page for this version"
+            );
+            continue;
+        }
+
+        plans.push(RefPlan {
+            label,
+            source: *source,
+            dep_schema,
+            datasets,
+        });
+    }
+
+    if let Some(dep) = &page.dep
+        && plans.is_empty()
+    {
+        eprintln!(
+            "warning: dependency `{dep}` has a page configured but no ref where both the \
+             dependency and its data resolve; no page was published for it"
+        );
+        return Ok(());
+    }
+
+    let present: Vec<String> = plans.iter().map(|p| p.label.to_string()).collect();
+    let cohort = cohort_for(publishing, publish_cfg, page, &present);
+    for plan in &plans {
+        let schema = match &plan.dep_schema {
+            Some(path) => Materialized::OnDisk(path.clone()),
+            None => match plan.source {
+                BuildSource::GitRef(ref_) => Materialized::Extracted(extract_main_at_ref(
+                    repo_root,
+                    ref_,
+                    &publish_cfg.files.main,
+                )?),
+                // The manifest's `files.main` is documented as relative
+                // to the publish-spec's location; in the supported v1
+                // layout that's the repo root. Resolve there.
+                BuildSource::WorkingTree => {
+                    Materialized::OnDisk(repo_root.join(&publish_cfg.files.main))
+                }
+            },
+        };
+        let extracted: Vec<(Materialized, &InstanceEntry)> = plan
+            .datasets
+            .iter()
+            .filter_map(|entry| {
+                let materialized = match plan.source {
+                    BuildSource::GitRef(ref_) => extract_main_at_ref(repo_root, ref_, &entry.data)
+                        .ok()
+                        .map(Materialized::Extracted),
+                    BuildSource::WorkingTree => {
+                        let path = repo_root.join(&entry.data);
+                        path.is_file().then(|| Materialized::OnDisk(path))
+                    }
+                };
+                if materialized.is_none() {
+                    eprintln!(
+                        "note: {}: instance data `{}` could not be extracted; \
+                         publishing this version without that instance graph",
+                        plan.label,
+                        entry.data.display()
+                    );
+                }
+                materialized.map(|m| (m, *entry))
+            })
+            .collect();
+        let version_out = page.out_dir.join(plan.label);
+        std::fs::create_dir_all(&version_out)?;
+        let datasets: Vec<(&Path, &InstanceEntry)> = extracted
+            .iter()
+            .map(|(file, entry)| (file.path(), *entry))
+            .collect();
+        generate_html_for_version(plan.label, schema.path(), &version_out, &cohort, &datasets)?;
+    }
+
+    // current/ is a copy of the page-current version's output, not a
+    // symlink (static hosts handle directories cleanly; symlinks are
+    // flaky on GH Pages) and not a re-render (would duplicate work and
+    // risk byte divergence). For the own page the source always exists:
+    // `current` is parse-time-validated to be in `versions` or equal
+    // `edge`, both of which were just built.
+    refresh_current(&page.out_dir, &publishing.current)?;
+    Ok(())
+}
+
+/// Refresh one page's `current/` alias from its `<current>` version
+/// directory. The source is checked before the old alias is touched, so
+/// a missing source never destroys an alias it was about to replace —
+/// but an alias whose source no longer exists is stale output from a
+/// previous run into the same tree, and is removed rather than left
+/// serving content the version dropdown no longer offers. A page ending
+/// up without an alias is said out loud here, where the state is known.
+fn refresh_current(page_out: &Path, current: &str) -> Result<(), PublishError> {
+    let src = page_out.join(current);
+    let dst = page_out.join("current");
+    if !src.is_dir() {
+        if dst.is_dir() {
+            std::fs::remove_dir_all(&dst)?;
+        }
+        eprintln!(
+            "note: `{current}` was not built for the page at `{}`; it publishes without a \
+             current/ alias",
+            page_out.display()
+        );
+        return Ok(());
+    }
+    if dst.exists() {
+        std::fs::remove_dir_all(&dst)?;
+    }
+    copy_dir_recursive(&src, &dst)?;
+    Ok(())
+}
+
+/// Resolve dependency `dep`'s main schema file as pinned at one ref:
+/// the ref's own `panschema.toml` names the source, so a historical
+/// page shows the contract as it was. `github:` sources resolve from
+/// the local cache only — publish never fetches over the network —
+/// and `path:` sources resolve against the working tree, since a path
+/// dependency carries no pin to honor.
+///
+/// The two skip outcomes are different facts and print differently: a
+/// ref that predates the dependency is quiet history, while a declared
+/// dependency that fails to resolve — a cold cache, a corrupt package,
+/// a malformed manifest at the ref — carries the resolver's own message
+/// so the fix (often `panschema fetch`) reaches the user.
+enum DepAtRef {
+    Resolved(PathBuf),
+    /// No manifest at this ref, or the dependency not declared there —
+    /// the ref predates the page.
+    NotDeclared,
+    /// The dependency is declared at this ref but unusable; the reason
+    /// to print.
+    Failed(String),
+}
+
+fn resolve_dep_schema_at(repo_root: &Path, source: BuildSource<'_>, dep: &str) -> DepAtRef {
+    let manifest = match source {
+        BuildSource::GitRef(ref_) => {
+            let Ok(extracted) = extract_main_at_ref(
+                repo_root,
+                ref_,
+                Path::new(crate::manifest::MANIFEST_FILENAME),
+            ) else {
+                return DepAtRef::NotDeclared;
+            };
+            match crate::manifest::Manifest::from_path(extracted.path()) {
+                Ok(m) => m,
+                Err(e) => {
+                    return DepAtRef::Failed(format!(
+                        "the ref's panschema.toml does not parse: {e}"
+                    ));
+                }
+            }
         }
         BuildSource::WorkingTree => {
-            // The manifest's `files.main` is documented as relative
-            // to the publish-spec's location; in the supported v1
-            // layout that's the repo root. Resolve there.
-            let input = repo_root.join(manifest_main);
-            let resolved: Vec<_> = instances
-                .iter()
-                .map(|entry| (repo_root.join(&entry.data), entry))
-                .collect();
-            let datasets: Vec<_> = resolved
-                .iter()
-                .filter_map(|(path, entry)| {
-                    if path.is_file() {
-                        Some((path.as_path(), *entry))
-                    } else {
-                        eprintln!(
-                            "note: {label}: instance data `{}` not present in the working tree; \
-                             publishing this version without that instance graph",
-                            path.display()
-                        );
-                        None
-                    }
-                })
-                .collect();
-            generate_html_for_version(label, &input, &version_out, cohort, &datasets)
+            match crate::manifest::Manifest::from_path(
+                &repo_root.join(crate::manifest::MANIFEST_FILENAME),
+            ) {
+                Ok(m) => m,
+                Err(e) => {
+                    return DepAtRef::Failed(format!("panschema.toml does not parse: {e}"));
+                }
+            }
         }
+    };
+    let Some(dep_spec) = manifest.schemas.get(dep) else {
+        return DepAtRef::NotDeclared;
+    };
+    match crate::source::resolve_dep(dep, dep_spec, repo_root, &OfflineTarballs) {
+        Ok(resolved) => DepAtRef::Resolved(resolved.schema_path),
+        Err(e) => DepAtRef::Failed(e.to_string()),
+    }
+}
+
+/// A [`crate::source::TarballSource`] that refuses to fetch: handed to
+/// [`crate::source::resolve_github`], it turns resolution into a pure
+/// cache lookup, keeping publish reproducible offline. The error names
+/// the fix.
+struct OfflineTarballs;
+
+impl crate::source::TarballSource for OfflineTarballs {
+    fn fetch(
+        &self,
+        owner: &str,
+        repo: &str,
+        tag: &str,
+        _sink: &mut dyn std::io::Write,
+    ) -> Result<(), crate::source::TarballFetchError> {
+        Err(crate::source::TarballFetchError::Network {
+            owner: owner.to_string(),
+            repo: repo.to_string(),
+            tag: tag.to_string(),
+            source: "publish resolves dependencies from the local cache only; \
+                     run `panschema fetch` first"
+                .into(),
+        })
     }
 }
 
@@ -732,26 +1195,47 @@ struct CohortContext {
     schema_sections: bool,
 }
 
-fn build_cohort_context(publishing: &PublishingConfig) -> CohortContext {
-    // Dropdown ordering: edge first (so it shows up as the topmost
-    // "what's coming next" option), then released versions in the
-    // manifest's input order. The manifest is the source of truth on
-    // ordering — consumers may list newest-first or oldest-first per
-    // their own preference.
-    let mut all_versions: Vec<String> = Vec::new();
-    if let Some(edge) = &publishing.edge {
-        all_versions.push(edge.clone());
-    }
-    all_versions.extend(publishing.versions.iter().cloned());
+/// One page's version context. `present` is the page's build list —
+/// already in dropdown order (edge first, then released versions in
+/// manifest order), already filtered to the refs where the page exists,
+/// so the dropdown offers exactly what was built. A page absent at the
+/// configured current treats its first present *released* ref as
+/// current — never the edge build, which is unreleased by definition —
+/// and, since such a page publishes without a `current/` alias, its
+/// default brand link points at that version directly instead of at an
+/// alias that does not exist.
+fn cohort_for(
+    publishing: &PublishingConfig,
+    publish_cfg: &PublishConfig,
+    page: &PageSpec<'_>,
+    present: &[String],
+) -> CohortContext {
+    let current_present = present.iter().any(|v| v == &publishing.current);
+    let current = if current_present {
+        publishing.current.clone()
+    } else {
+        present
+            .iter()
+            .find(|v| Some(v.as_str()) != publishing.edge.as_deref())
+            .or_else(|| present.first())
+            .expect("a page with no built refs is skipped before rendering")
+            .clone()
+    };
+    let site_root_href = if !current_present && publishing.site_root_url == default_site_root_url()
+    {
+        format!("../{current}/")
+    } else {
+        publishing.site_root_url.clone()
+    };
     CohortContext {
-        all_versions,
-        current: publishing.current.clone(),
+        all_versions: present.to_vec(),
+        current,
         edge: publishing.edge.clone(),
         url_pattern: publishing.url_pattern.clone(),
-        site_root_href: publishing.site_root_url.clone(),
-        label_sources: std::collections::BTreeMap::new(),
-        instances_first: publishing.layout == crate::html_writer::PageLayout::InstancesFirst,
-        schema_sections: publishing.schema_sections,
+        site_root_href,
+        label_sources: publish_cfg.label_sources.clone(),
+        instances_first: page.instances_first,
+        schema_sections: page.schema_sections,
     }
 }
 
@@ -1898,6 +2382,7 @@ versions = ["v0.1.0"]
                 format: default_format(),
                 layout: crate::html_writer::PageLayout::default(),
                 schema_sections: default_schema_sections(),
+                pages: std::collections::BTreeMap::new(),
             }),
             label_sources: std::collections::BTreeMap::new(),
             book_link: None,
@@ -2080,6 +2565,254 @@ exemplur = true
         tmp
     }
 
+    /// A repo that consumes a dependency schema (`path:` package in-tree)
+    /// and curates instance data for it: v0.1.0 predates the dependency,
+    /// the manifest, and the data; v0.2.0 (and the worktree) carry all
+    /// three. The dep data's `related` reference points outside the
+    /// dataset, so the page draws it as an external node.
+    fn make_repo_with_dependency_data() -> tempfile::TempDir {
+        let tmp = make_repo_with_instance_data();
+        let path = tmp.path();
+        std::fs::create_dir_all(path.join("dep-pkg")).unwrap();
+        std::fs::write(
+            path.join("dep-pkg/panschema-publish.toml"),
+            concat!(
+                "[schema]\n",
+                "name = \"cqa\"\n",
+                "version = \"0.1.0\"\n",
+                "linkml = \"1.7.0\"\n",
+                "\n",
+                "[files]\n",
+                "main = \"cqa.yaml\"\n",
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            path.join("dep-pkg/cqa.yaml"),
+            concat!(
+                "id: https://example.org/cqa\n",
+                "name: fixture_cqa\n",
+                "version: 0.1.0\n",
+                "prefixes:\n",
+                "  cqa: https://example.org/cqa/\n",
+                "default_prefix: cqa\n",
+                "default_range: string\n",
+                "classes:\n",
+                "  Ledger:\n",
+                "    tree_root: true\n",
+                "    attributes:\n",
+                "      assessments:\n",
+                "        range: Assessment\n",
+                "        multivalued: true\n",
+                "  Assessment:\n",
+                "    attributes:\n",
+                "      id:\n",
+                "        identifier: true\n",
+                "      verdict:\n",
+                "        range: string\n",
+                "      related:\n",
+                "        range: Assessment\n",
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            path.join("panschema.toml"),
+            "[schemas.cqa]\npath = \"./dep-pkg\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            path.join("data/assessments.yaml"),
+            concat!(
+                "assessments:\n",
+                "  - id: a1\n",
+                "    verdict: pass\n",
+                "    related: https://example.org/wine/offsite\n",
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            path.join("data/extra-assessments.yaml"),
+            "assessments:\n  - id: x1\n    verdict: fail\n",
+        )
+        .unwrap();
+        run(path, &["add", "."]);
+        run(
+            path,
+            &["commit", "-m", "add cqa dependency and data", "--quiet"],
+        );
+        run(path, &["tag", "-f", "v0.2.0"]);
+        tmp
+    }
+
+    fn dep_entry() -> InstanceEntry {
+        InstanceEntry {
+            name: "assessments".into(),
+            data: PathBuf::from("data/assessments.yaml"),
+            exemplar: false,
+            schema: Some("cqa".into()),
+        }
+    }
+
+    #[test]
+    fn dependency_entries_publish_on_the_dependencys_page() {
+        let repo = make_repo_with_dependency_data();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.1.0", "v0.2.0"], None, "v0.2.0");
+        cfg.instances.push(InstanceEntry {
+            name: "catalog".into(),
+            data: PathBuf::from("data/instances.yaml"),
+            exemplar: true,
+            schema: None,
+        });
+        cfg.instances.push(dep_entry());
+        cfg.instances.push(InstanceEntry {
+            name: "extra-assessments".into(),
+            data: PathBuf::from("data/extra-assessments.yaml"),
+            exemplar: false,
+            schema: Some("cqa".into()),
+        });
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
+
+        let dep_page = std::fs::read_to_string(out.path().join("cqa/v0.2.0/index.html"))
+            .expect("the dependency page publishes under its own directory");
+        assert!(
+            dep_page.contains("ind-x1"),
+            "every entry naming the dependency shares its one page"
+        );
+        assert!(
+            dep_page.contains("Assessment"),
+            "the dependency page renders the dependency's schema"
+        );
+        assert!(
+            dep_page.contains("ind-a1"),
+            "the dependency page embeds the entry's dataset"
+        );
+        assert!(
+            dep_page.contains("external:"),
+            "a reference leaving the dataset draws as an external node"
+        );
+        assert!(
+            !dep_page.contains("v0.1.0"),
+            "the dependency page's version dropdown offers only refs where the page exists"
+        );
+
+        assert!(
+            !out.path().join("cqa/v0.1.0").exists(),
+            "no dependency page is built for a ref that predates its data"
+        );
+        let dep_current = std::fs::read_to_string(out.path().join("cqa/current/index.html"))
+            .expect("the dependency page gets a current/ alias when current is present there");
+        assert!(dep_current.contains("ind-a1"));
+
+        let own = std::fs::read_to_string(out.path().join("v0.2.0/index.html")).unwrap();
+        assert!(
+            own.contains("ind-morgon"),
+            "the own page keeps its own datasets"
+        );
+        assert!(
+            !own.contains("ind-a1"),
+            "a dataset published to a dependency page leaves the own page"
+        );
+        assert!(
+            out.path().join("v0.1.0/index.html").exists(),
+            "the own page still builds at every ref"
+        );
+    }
+
+    #[test]
+    fn dependency_page_composes_independently_of_the_own_page() {
+        let repo = make_repo_with_dependency_data();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], None, "v0.2.0");
+        cfg.instances.push(dep_entry());
+        cfg.publishing.as_mut().unwrap().pages.insert(
+            "cqa".into(),
+            PageConfig {
+                dir: None,
+                layout: None,
+                schema_sections: Some(false),
+            },
+        );
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
+
+        let own = std::fs::read_to_string(out.path().join("v0.2.0/index.html")).unwrap();
+        assert!(
+            own.contains(r#"<section id="classes">"#),
+            "the own page keeps its schema sections"
+        );
+        let dep_page = std::fs::read_to_string(out.path().join("cqa/v0.2.0/index.html")).unwrap();
+        assert!(
+            !dep_page.contains(r#"<section id="classes">"#),
+            "pages.cqa.schema_sections = false strips the dependency page's schema reference"
+        );
+        assert!(dep_page.contains("ind-a1"));
+
+        // A configured `dir` moves the page inside the output tree, and a
+        // per-page layout leads with the instance graph.
+        cfg.publishing.as_mut().unwrap().pages.insert(
+            "cqa".into(),
+            PageConfig {
+                dir: Some("contracts".into()),
+                layout: Some(crate::html_writer::PageLayout::InstancesFirst),
+                schema_sections: None,
+            },
+        );
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
+        assert!(
+            !out.path().join("cqa").exists(),
+            "a configured dir replaces the dependency-name default"
+        );
+        let dep_page =
+            std::fs::read_to_string(out.path().join("contracts/v0.2.0/index.html")).unwrap();
+        let instances_at = dep_page
+            .find(r#"<section id="individuals">"#)
+            .expect("instance section renders");
+        let classes_at = dep_page
+            .find(r#"<section id="classes">"#)
+            .expect("schema sections render by default");
+        assert!(
+            instances_at < classes_at,
+            "pages.cqa.layout = instances-first leads with the instance graph"
+        );
+    }
+
+    #[test]
+    fn a_dependency_page_absent_at_current_skips_its_alias() {
+        let repo = make_repo_with_dependency_data();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.1.0", "v0.2.0"], None, "v0.1.0");
+        cfg.instances.push(dep_entry());
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
+
+        assert!(
+            out.path().join("current/index.html").exists(),
+            "the own page's alias still points at the configured current"
+        );
+        assert!(
+            !out.path().join("cqa/current").exists(),
+            "a page absent at the configured current publishes without an alias"
+        );
+        assert!(out.path().join("cqa/v0.2.0/index.html").exists());
+    }
+
+    #[test]
+    fn publishing_to_an_undeclared_dependency_is_a_config_error() {
+        let repo = make_repo_with_dependency_data();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], None, "v0.2.0");
+        let mut entry = dep_entry();
+        entry.schema = Some("nimbly".into());
+        cfg.instances.push(entry);
+        let out = tempfile::tempdir().unwrap();
+        let err = publish_versioned(repo.path(), &cfg, out.path(), false)
+            .expect_err("an undeclared dependency must fail the publish");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("nimbly") && msg.contains("assessments"),
+            "the error names the entry and the missing dependency; got: {msg}"
+        );
+    }
+
     #[test]
     fn edge_worktree_build_renders_the_working_tree_data() {
         let repo = make_repo_with_instance_data();
@@ -2088,6 +2821,7 @@ exemplur = true
             name: "catalog".into(),
             data: PathBuf::from("data/instances.yaml"),
             exemplar: true,
+            schema: None,
         });
         let out = tempfile::tempdir().unwrap();
         publish_versioned(repo.path(), &cfg, out.path(), true).expect("publish succeeds");
@@ -2114,6 +2848,7 @@ exemplur = true
             name: "catalog".into(),
             data: PathBuf::from("data/instances.yaml"),
             exemplar: true,
+            schema: None,
         });
         let out = tempfile::tempdir().unwrap();
         publish_versioned(repo.path(), &cfg, out.path(), true)
@@ -2135,11 +2870,13 @@ exemplur = true
             name: "preview".into(),
             data: PathBuf::from("data/preview.yaml"),
             exemplar: false,
+            schema: None,
         });
         cfg.instances.push(InstanceEntry {
             name: "catalog".into(),
             data: PathBuf::from("data/instances.yaml"),
             exemplar: true,
+            schema: None,
         });
         let out = tempfile::tempdir().unwrap();
         publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
@@ -2177,6 +2914,7 @@ exemplur = true
             name: "preview".into(),
             data: PathBuf::from("data/preview.yaml"),
             exemplar: false,
+            schema: None,
         });
         let out = tempfile::tempdir().unwrap();
         publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
@@ -2205,6 +2943,7 @@ exemplur = true
             name: "catalog".into(),
             data: PathBuf::from("data/instances.yaml"),
             exemplar: true,
+            schema: None,
         });
         let out = tempfile::tempdir().unwrap();
         publish_versioned(repo.path(), &cfg, out.path(), true).expect("publish succeeds");
@@ -2223,6 +2962,7 @@ exemplur = true
             name: "catalog".into(),
             data: PathBuf::from("data/instances.yaml"),
             exemplar: true,
+            schema: None,
         });
         let out = tempfile::tempdir().unwrap();
         publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
@@ -2560,6 +3300,258 @@ exemplur = true
                 .is_file(),
             "edge subdir is named by the ref label even when working-tree mode bypasses ref resolution"
         );
+    }
+
+    #[test]
+    fn dependency_page_config_parses_and_validates() {
+        let base = r#"[schema]
+name = "s"
+version = "0.1.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+
+[[instances]]
+name = "wine-cqa"
+data = "data/wine-cqa.yaml"
+schema = "cqa"
+
+[publishing]
+versions = ["v0.1.0"]
+current = "v0.1.0"
+
+[publishing.pages.cqa]
+layout = "instances-first"
+schema_sections = false
+"#;
+        let cfg: PublishConfig = base.parse().expect("dependency page config parses");
+        assert_eq!(cfg.instances[0].schema.as_deref(), Some("cqa"));
+        let pages = &cfg.publishing.as_ref().unwrap().pages;
+        assert_eq!(
+            pages["cqa"].layout,
+            Some(crate::html_writer::PageLayout::InstancesFirst)
+        );
+        assert_eq!(pages["cqa"].schema_sections, Some(false));
+
+        let orphan = base.replace("[publishing.pages.cqa]", "[publishing.pages.nimbly]");
+        let err = orphan.parse::<PublishConfig>().unwrap_err().to_string();
+        assert!(
+            err.contains("nimbly"),
+            "a page for a dependency no entry names is a config error; got: {err}"
+        );
+
+        let bad_dir = base.replace(
+            "layout = \"instances-first\"",
+            "dir = \"../escape\"\nlayout = \"instances-first\"",
+        );
+        let err = bad_dir.parse::<PublishConfig>().unwrap_err().to_string();
+        assert!(
+            err.contains("../escape"),
+            "a page dir must be a single path segment; got: {err}"
+        );
+
+        let reserved = base.replace(
+            "layout = \"instances-first\"",
+            "dir = \"current\"\nlayout = \"instances-first\"",
+        );
+        let err = reserved.parse::<PublishConfig>().unwrap_err().to_string();
+        assert!(
+            err.contains("current"),
+            "`current` is the alias, never a page dir; got: {err}"
+        );
+
+        let colliding = base.replace(
+            "layout = \"instances-first\"",
+            "dir = \"v0.1.0\"\nlayout = \"instances-first\"",
+        );
+        let err = colliding.parse::<PublishConfig>().unwrap_err().to_string();
+        assert!(
+            err.contains("v0.1.0"),
+            "a page dir colliding with a version label is a config error; got: {err}"
+        );
+    }
+
+    #[test]
+    fn default_page_dirs_pass_the_same_validation_as_configured_ones() {
+        let base = r#"[schema]
+name = "s"
+version = "0.1.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+
+[[instances]]
+name = "records"
+data = "data/records.yaml"
+schema = "DEP"
+
+[publishing]
+versions = ["v0.1.0"]
+current = "v0.1.0"
+"#;
+        for (dep, tell) in [
+            ("../escape", "../escape"),
+            ("current", "current"),
+            ("v0.1.0", "v0.1.0"),
+        ] {
+            let toml = base.replace("DEP", dep);
+            let err = toml.parse::<PublishConfig>().unwrap_err().to_string();
+            assert!(
+                err.contains(tell),
+                "a dependency page's default directory (`{dep}`) must pass the segment \
+                 checks even without a [publishing.pages] table; got: {err}"
+            );
+        }
+
+        let colliding = format!(
+            "{}\n[[instances]]\nname = \"more\"\ndata = \"data/more.yaml\"\nschema = \"b\"\n\n[publishing.pages.DEP]\ndir = \"b\"\n",
+            base
+        )
+        .replace("DEP", "a");
+        let err = colliding.parse::<PublishConfig>().unwrap_err().to_string();
+        assert!(
+            err.contains('b'),
+            "a configured dir colliding with another dependency's default dir is an error; got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_publish_without_dependency_entries_ignores_a_broken_manifest() {
+        let repo = make_repo_with_instance_data();
+        std::fs::write(repo.path().join("panschema.toml"), "not = valid = toml").unwrap();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], None, "v0.2.0");
+        cfg.instances.push(InstanceEntry {
+            name: "catalog".into(),
+            data: PathBuf::from("data/instances.yaml"),
+            exemplar: true,
+            schema: None,
+        });
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), false)
+            .expect("no entry names a dependency, so the manifest is never consulted");
+    }
+
+    #[test]
+    fn a_broken_manifest_error_names_the_manifest_not_a_version() {
+        let repo = make_repo_with_dependency_data();
+        std::fs::write(repo.path().join("panschema.toml"), "not = valid = toml").unwrap();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], None, "v0.2.0");
+        cfg.instances.push(dep_entry());
+        let out = tempfile::tempdir().unwrap();
+        let err = publish_versioned(repo.path(), &cfg, out.path(), false)
+            .expect_err("a dependency entry needs the manifest, and this one is broken");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("panschema.toml") && !msg.contains("generate docs"),
+            "the error says the manifest is unreadable, not that a version failed to \
+             generate; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_stale_alias_from_a_previous_run_is_removed_when_current_leaves_the_page() {
+        let repo = make_repo_with_dependency_data();
+        let out = tempfile::tempdir().unwrap();
+
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.1.0", "v0.2.0"], None, "v0.2.0");
+        cfg.instances.push(dep_entry());
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("first publish");
+        assert!(out.path().join("cqa/current/index.html").exists());
+
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.1.0", "v0.2.0"], None, "v0.1.0");
+        cfg.instances.push(dep_entry());
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("second publish");
+        assert!(
+            !out.path().join("cqa/current").exists(),
+            "a persistent output tree must not keep serving the previous run's alias \
+             after current moved to a ref where the page does not exist"
+        );
+    }
+
+    #[test]
+    fn an_edge_label_matching_a_version_builds_once_with_the_edge_source() {
+        let repo = make_repo_with_instance_data();
+        std::fs::write(
+            repo.path().join("data/instances.yaml"),
+            "wines:\n  - id: worktreeWine\n    name: Worktree Wine\n",
+        )
+        .unwrap();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], Some("v0.2.0"), "v0.2.0");
+        cfg.instances.push(InstanceEntry {
+            name: "catalog".into(),
+            data: PathBuf::from("data/instances.yaml"),
+            exemplar: true,
+            schema: None,
+        });
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), true).expect("publish succeeds");
+        let page = std::fs::read_to_string(out.path().join("v0.2.0/index.html")).unwrap();
+        assert!(
+            page.contains("ind-worktreeWine"),
+            "with --edge-from-worktree, the worktree build wins the shared label"
+        );
+        assert_eq!(
+            page.matches(r#"<option value="v0.2.0""#).count(),
+            1,
+            "a label shared by edge and versions appears once in the dropdown"
+        );
+    }
+
+    #[test]
+    fn a_page_absent_at_current_treats_its_newest_release_as_current() {
+        let repo = make_repo_with_dependency_data();
+        let mut cfg =
+            make_publish_cfg_with_versions(vec!["v0.1.0", "v0.2.0"], Some("main"), "v0.1.0");
+        cfg.instances.push(dep_entry());
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
+
+        let released = std::fs::read_to_string(out.path().join("cqa/v0.2.0/index.html")).unwrap();
+        assert!(
+            !released.contains(r#"<div class="version-banner version-banner-stale"#),
+            "the released ref stands as the page's current, not the edge build"
+        );
+        let edge = std::fs::read_to_string(out.path().join("cqa/main/index.html")).unwrap();
+        assert!(
+            edge.contains(r#"<div class="version-banner version-banner-edge"#),
+            "the edge build keeps its edge banner"
+        );
+        assert!(
+            !released.contains(r#"href="../current/""#),
+            "a page without a current/ alias must not link to one"
+        );
+    }
+
+    #[test]
+    fn a_ref_with_the_dependency_but_no_data_skips_its_page() {
+        let repo = make_repo_with_dependency_data();
+        let path = repo.path();
+        run(path, &["rm", "--quiet", "data/assessments.yaml"]);
+        run(path, &["commit", "-m", "retire the dataset", "--quiet"]);
+        run(path, &["tag", "v0.3.0"]);
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0", "v0.3.0"], None, "v0.2.0");
+        cfg.instances.push(dep_entry());
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
+        assert!(out.path().join("cqa/v0.2.0/index.html").exists());
+        assert!(
+            !out.path().join("cqa/v0.3.0").exists(),
+            "a ref where the dependency resolves but its data is gone gets no page"
+        );
+    }
+
+    #[test]
+    fn offline_tarballs_refuse_and_name_the_fix() {
+        let mut sink: Vec<u8> = Vec::new();
+        let err = crate::source::TarballSource::fetch(&OfflineTarballs, "o", "r", "v1", &mut sink)
+            .expect_err("publish must never fetch over the network");
+        assert!(
+            err.to_string().contains("panschema fetch"),
+            "the refusal names the fix; got: {err}"
+        );
+        assert!(sink.is_empty(), "nothing may be written to the cache");
     }
 
     #[test]

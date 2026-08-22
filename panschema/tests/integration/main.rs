@@ -5491,6 +5491,225 @@ output_dir = "site"
     );
 }
 
+/// Each published ref renders its dependency page against the
+/// dependency version that ref's own manifest pins — resolved from the
+/// local cache only, with no network fetch — so a historical page shows
+/// the contract as it was.
+#[test]
+fn publish_renders_each_ref_against_its_pinned_dependency() {
+    fn git(cwd: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(cwd)
+            .args(args)
+            .status()
+            .expect("git on PATH");
+        assert!(status.success(), "git {args:?} failed");
+    }
+    fn contract_pkg(cache_root: &Path, version: &str, marker_class: &str) {
+        let pkg = cache_root
+            .join("github")
+            .join("test-owner")
+            .join("contract")
+            .join(version)
+            .join(format!("contract-{version}"));
+        fs::create_dir_all(&pkg).unwrap();
+        fs::write(
+            pkg.join("panschema-publish.toml"),
+            format!(
+                "[schema]\nname = \"contract\"\nversion = \"{version}\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"contract.yaml\"\n"
+            ),
+        )
+        .unwrap();
+        fs::write(
+            pkg.join("contract.yaml"),
+            format!(
+                "id: https://example.org/contract\n\
+                 name: contract\n\
+                 version: {version}\n\
+                 prefixes:\n  contract: https://example.org/contract/\n\
+                 default_prefix: contract\n\
+                 default_range: string\n\
+                 classes:\n\
+                \x20 Ledger:\n    tree_root: true\n    attributes:\n\
+                \x20     records: {{range: Record, multivalued: true}}\n\
+                \x20 Record:\n    attributes:\n      id: {{identifier: true}}\n\
+                \x20 {marker_class}:\n    attributes:\n      id: {{identifier: true}}\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    let repo = repo.as_path();
+    let cache_root = tmp.path().join("cache");
+    contract_pkg(&cache_root, "0.1.0", "ContractV1");
+    contract_pkg(&cache_root, "0.2.0", "ContractV2");
+
+    git(repo, &["init", "--initial-branch=main", "--quiet"]);
+    git(repo, &["config", "user.email", "test@example.com"]);
+    git(repo, &["config", "user.name", "Test"]);
+    git(repo, &["config", "commit.gpgsign", "false"]);
+    fs::write(
+        repo.join("schema.yaml"),
+        "id: https://example.org/own\nname: own_schema\nversion: 0.1.0\n",
+    )
+    .unwrap();
+    fs::write(repo.join("records.yaml"), "records:\n  - id: r1\n").unwrap();
+    fs::write(
+        repo.join("panschema-publish.toml"),
+        r#"[schema]
+name = "own_schema"
+version = "0.1.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+
+[[instances]]
+name = "records"
+data = "records.yaml"
+schema = "contract"
+
+[publishing]
+versions = ["v0.1.0", "v0.2.0"]
+current = "v0.2.0"
+output_dir = "site"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        repo.join("panschema.toml"),
+        "[schemas.contract]\nsource = \"github:test-owner/contract\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-m", "release v0.1.0", "--quiet"]);
+    git(repo, &["tag", "v0.1.0"]);
+    fs::write(
+        repo.join("panschema.toml"),
+        "[schemas.contract]\nsource = \"github:test-owner/contract\"\nversion = \"0.2.0\"\n",
+    )
+    .unwrap();
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-m", "bump contract to 0.2.0", "--quiet"]);
+    git(repo, &["tag", "v0.2.0"]);
+
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("publish")
+        .current_dir(repo)
+        .env("PANSCHEMA_CACHE_ROOT", &cache_root)
+        .output()
+        .expect("panschema");
+    assert!(
+        out.status.success(),
+        "publish must succeed from a warm cache; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let old_page = fs::read_to_string(repo.join("site/contract/v0.1.0/index.html"))
+        .expect("dependency page exists at the ref pinning 0.1.0");
+    assert!(
+        old_page.contains("ContractV1") && !old_page.contains("ContractV2"),
+        "the v0.1.0 page renders the dependency as pinned by that ref's manifest"
+    );
+    let new_page = fs::read_to_string(repo.join("site/contract/v0.2.0/index.html"))
+        .expect("dependency page exists at the ref pinning 0.2.0");
+    assert!(
+        new_page.contains("ContractV2") && !new_page.contains("ContractV1"),
+        "the v0.2.0 page renders the dependency as pinned by that ref's manifest"
+    );
+}
+
+/// A cold cache does not fail the publish, but the skip note carries
+/// the resolver's own message — naming `panschema fetch` as the fix —
+/// rather than reading like the dependency was never declared.
+#[test]
+fn publish_with_a_cold_cache_names_the_fetch_fix() {
+    fn git(cwd: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(cwd)
+            .args(args)
+            .status()
+            .expect("git on PATH");
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    let repo = repo.as_path();
+    let cache_root = tmp.path().join("empty-cache");
+
+    git(repo, &["init", "--initial-branch=main", "--quiet"]);
+    git(repo, &["config", "user.email", "test@example.com"]);
+    git(repo, &["config", "user.name", "Test"]);
+    git(repo, &["config", "commit.gpgsign", "false"]);
+    fs::write(
+        repo.join("schema.yaml"),
+        "id: https://example.org/own\nname: own_schema\nversion: 0.1.0\n",
+    )
+    .unwrap();
+    fs::write(repo.join("records.yaml"), "records:\n  - id: r1\n").unwrap();
+    fs::write(
+        repo.join("panschema-publish.toml"),
+        r#"[schema]
+name = "own_schema"
+version = "0.1.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+
+[[instances]]
+name = "records"
+data = "records.yaml"
+schema = "contract"
+
+[publishing]
+versions = ["v0.1.0"]
+current = "v0.1.0"
+output_dir = "site"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        repo.join("panschema.toml"),
+        "[schemas.contract]\nsource = \"github:test-owner/contract\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-m", "release v0.1.0", "--quiet"]);
+    git(repo, &["tag", "v0.1.0"]);
+
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("publish")
+        .current_dir(repo)
+        .env("PANSCHEMA_CACHE_ROOT", &cache_root)
+        .output()
+        .expect("panschema");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "a cold cache skips the page, never fails the publish; stderr: {stderr}"
+    );
+    assert!(
+        repo.join("site/v0.1.0/index.html").exists(),
+        "the own page still publishes"
+    );
+    assert!(
+        !repo.join("site/contract").exists(),
+        "no dependency page can build from a cold cache"
+    );
+    assert!(
+        stderr.contains("panschema fetch"),
+        "the skip note names the fix; got: {stderr}"
+    );
+}
+
 #[test]
 fn cli_publish_builds_per_version_subdirs_and_current_alias() {
     fn git(cwd: &Path, args: &[&str]) {

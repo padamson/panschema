@@ -184,6 +184,46 @@ CURIEs expand through it — and warns if it would otherwise be empty.
 (`panschema serve` does not yet apply composition keys; preview composed
 pages with `generate`.)
 
+#### Dependency pages
+
+A versioned publish can also document a *dependency* schema alongside your
+own — the contract-plus-local-records page. An `[[instances]]` entry that
+names a dependency from the repo's `panschema.toml` moves its dataset onto
+a second published page rendering that dependency's schema; entries naming
+the same dependency share the page:
+
+```toml
+[[instances]]
+name = "assessments"
+data = "data/assessments.yaml"
+schema = "cqa"                   # a [schemas.cqa] dependency
+
+[publishing.pages.cqa]           # optional per-page settings
+dir = "contracts"                # default: the dependency's name
+layout = "instances-first"
+schema_sections = false
+```
+
+The page lives in its own directory inside the publish output tree, with
+the same per-version + `current/` layout as the main page. It is built
+only for refs where both the dependency and some of its data exist, and
+its version dropdown offers exactly those refs; when the configured
+`current` version isn't among them, the page publishes without a
+`current/` alias (noted on stderr). Each ref renders that ref's data
+against the dependency version the ref's own manifest pins, resolved from
+the local cache — publish never fetches over the network, so run
+`panschema fetch` first for `github:` sources. (`path:` dependencies
+carry no pin and always resolve from the working tree.) Naming a
+dependency the manifest doesn't declare fails the publish.
+
+One sizing note: dependency pages sit one directory deeper than the main
+page, so the parent-relative defaults for `url_pattern` and
+`site_root_url` resolve correctly on every page, but an absolute
+`url_pattern` (like `/docs/{version}/`) or a depth-sensitive
+`site_root_url` override (like `../../`) targets the main page's depth
+only. Keep the defaults when publishing dependency pages; per-page
+overrides can follow if a site needs them.
+
 Repeat `--instances` to carry more than one curated graph. Each is labelled by
 its file stem and gets its own cards, provenance line, and node/edge counts;
 the first is shown until the reader picks another, and switching happens in the
