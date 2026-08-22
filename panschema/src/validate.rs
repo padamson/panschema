@@ -191,6 +191,12 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
                     // (an object where a scalar is declared, or a non-reference
                     // scalar where a class is) — a range-kind mismatch.
                     InstanceValue::Unexpected(kind) => {
+                        // The unusable-entry finding beside it names the
+                        // fix; this value exists so the slot reads as
+                        // authored — one problem yields one report.
+                        if *kind == "an identifier-keyed dict" {
+                            continue;
+                        }
                         let range = if ranges.is_empty() {
                             slot.range.as_deref().unwrap_or("?").to_string()
                         } else {

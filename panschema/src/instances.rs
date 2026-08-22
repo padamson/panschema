@@ -104,6 +104,35 @@ const UNION_AMBIGUITY_REASON: &str = "names no single class of the union range �
                                       field only the intended member declares, or a type \
                                       designator naming one";
 
+/// What a mapping's authored keys say about which class it instantiates.
+enum ClassChoice {
+    /// The one class the record builds as.
+    One(String),
+    /// Several classes fit equally, or an explicit designator answered
+    /// nothing — reported, never guessed.
+    Ambiguous,
+    /// The mapping reads as an identifier-keyed dict of records, not a
+    /// record at all ([`WRAPPED_DICT_REASON`]).
+    WrappedDict,
+}
+
+/// Why a value that reads as an id-keyed dict of records is refused
+/// where one record belongs, phrased to follow "entry …" — one spelling
+/// for every depth and cardinality. [`field_named_key_reason`] is the
+/// mirror-image refusal; the pair is one vocabulary.
+const WRAPPED_DICT_REASON: &str = "reads as an identifier-keyed dict of records, not one \
+                                   record — no key names a field of the range; give each \
+                                   record its own entry in a multivalued collection";
+
+/// Why a dict entry keyed like a member's own field is refused — the
+/// other direction of the list-vs-dict confusion [`WRAPPED_DICT_REASON`]
+/// reports.
+fn field_named_key_reason(key: &str) -> String {
+    format!(
+        "is named like a field of the range (`{key}`), not a record id — wrap records in a list"
+    )
+}
+
 /// A collection entry that loaded no record — or loaded one without its
 /// authored key — because it named no single class of the slot's range,
 /// or its shape can never name one.
@@ -455,7 +484,10 @@ impl InstanceSet {
                 // Single-valued: the collection arm above took every
                 // multivalued shape.
                 let range = class_targets[0].clone();
-                contained.push((slot_name.to_string(), loader.collect_single(&range, value)));
+                contained.push((
+                    slot_name.to_string(),
+                    loader.collect_single(slot_name, &range, value),
+                ));
             } else if !class_targets.is_empty() {
                 if authored_identifier {
                     // The field replays through the record builder on the
@@ -948,6 +980,39 @@ impl LinkmlLoader<'_> {
         )
     }
 
+    /// Whether any candidate class carries `key` as an effective slot —
+    /// the one fact behind both halves of the list-vs-dict question:
+    /// [`Self::reads_as_wrapped_dict`] and the field-named-key guard in
+    /// [`Self::collect_dict_entries`].
+    fn any_candidate_carries(&mut self, candidates: &[&String], key: &str) -> bool {
+        candidates.iter().any(|c| self.class_carries(c, key))
+    }
+
+    /// Whether a mapping reads as an identifier-keyed dict of records
+    /// rather than one record: at least two entries (a single unknown
+    /// field is far likelier a typo'd or extension field on a record,
+    /// which builds and is reported by name), at least one value itself
+    /// a mapping, no sequence values, and no string key naming an
+    /// effective slot of any candidate — an unquoted number or boolean
+    /// key names no slot either. Building such a mapping as a record
+    /// would mint one phantom named after nothing the data authored.
+    fn reads_as_wrapped_dict(
+        &mut self,
+        candidates: &[&String],
+        map: &serde_norway::Mapping,
+    ) -> bool {
+        map.len() >= 2
+            && map
+                .iter()
+                .any(|(_, value)| matches!(value, serde_norway::Value::Mapping(_)))
+            && map.iter().all(|(key, value)| {
+                !matches!(value, serde_norway::Value::Sequence(_))
+                    && key
+                        .as_str()
+                        .is_none_or(|k| !self.any_candidate_carries(candidates, k))
+            })
+    }
+
     /// Record a collection entry that loaded nothing, and why, naming the
     /// record being built when the entry sits below one.
     fn note_unusable(&mut self, slot: &str, key: Option<String>, reason: String) {
@@ -972,9 +1037,15 @@ impl LinkmlLoader<'_> {
         &mut self,
         candidates: &[&String],
         map: &serde_norway::Mapping,
-    ) -> Option<String> {
+    ) -> ClassChoice {
+        // The dict-of-records shape is checked before any class can be
+        // chosen — the single-candidate shortcut below would otherwise
+        // commit to a record no key of the data describes.
+        if self.reads_as_wrapped_dict(candidates, map) {
+            return ClassChoice::WrappedDict;
+        }
         if let [one] = candidates {
-            return Some((*one).clone());
+            return ClassChoice::One((*one).clone());
         }
         let mut designator_keys: Vec<String> = Vec::new();
         for candidate in candidates {
@@ -1005,30 +1076,33 @@ impl LinkmlLoader<'_> {
             match resolved {
                 Some(crate::rdf_serializers::ClassMatch::One(name)) => {
                     if chosen.is_some_and(|already| already != name) {
-                        return None;
+                        return ClassChoice::Ambiguous;
                     }
                     chosen = Some(name);
                 }
-                Some(crate::rdf_serializers::ClassMatch::Several) => return None,
+                Some(crate::rdf_serializers::ClassMatch::Several) => return ClassChoice::Ambiguous,
                 Some(crate::rdf_serializers::ClassMatch::None) | None => {
                     // Every carrier treats the key as a designator, so an
                     // unanswerable value is explicit-but-unanswerable —
                     // a report, never a guess.
                     if !ordinary_carrier {
-                        return None;
+                        return ClassChoice::Ambiguous;
                     }
                 }
             }
         }
         if let Some(name) = chosen {
-            return Some(name.to_string());
+            return ClassChoice::One(name.to_string());
         }
         let keys: Vec<&str> = map.keys().filter_map(|k| k.as_str()).collect();
         let scored: Vec<(usize, &str)> = candidates
             .iter()
             .map(|name| (self.key_match_count(name, &keys), name.as_str()))
             .collect();
-        unique_best_scored(&scored).map(|name| (*name).to_string())
+        match unique_best_scored(&scored) {
+            Some(name) => ClassChoice::One((*name).to_string()),
+            None => ClassChoice::Ambiguous,
+        }
     }
 
     /// Build the records of a union field that cannot replay through a
@@ -1048,12 +1122,17 @@ impl LinkmlLoader<'_> {
                 }
             }
             serde_norway::Value::Mapping(map) => match self.disambiguate_class(candidates, map) {
-                Some(class) => {
+                ClassChoice::One(class) => {
                     if let Some((id, _)) = self.build_record(&class, None, value) {
                         self.note_top_level_id(id);
                     }
                 }
-                None => self.note_unusable(slot, None, UNION_AMBIGUITY_REASON.to_string()),
+                ClassChoice::Ambiguous => {
+                    self.note_unusable(slot, None, UNION_AMBIGUITY_REASON.to_string())
+                }
+                ClassChoice::WrappedDict => {
+                    self.note_unusable(slot, None, WRAPPED_DICT_REASON.to_string())
+                }
             },
             _ => {}
         }
@@ -1089,17 +1168,20 @@ impl LinkmlLoader<'_> {
                         }
                         serde_norway::Value::Mapping(map) => {
                             match self.disambiguate_class(candidates, map) {
-                                Some(class) => {
+                                ClassChoice::One(class) => {
                                     if let Some((id, _)) = self.build_record(&class, None, item) {
                                         self.note_top_level_id(id.clone());
                                         ids.push((id, true));
                                     }
                                 }
-                                None => self.note_unusable(
+                                ClassChoice::Ambiguous => self.note_unusable(
                                     slot,
                                     None,
                                     UNION_AMBIGUITY_REASON.to_string(),
                                 ),
+                                ClassChoice::WrappedDict => {
+                                    self.note_unusable(slot, None, WRAPPED_DICT_REASON.to_string())
+                                }
                             }
                         }
                         serde_norway::Value::Null => self.note_unusable(
@@ -1149,16 +1231,9 @@ impl LinkmlLoader<'_> {
             // certainly an un-wrapped inline record, not an id —
             // building it would mint a phantom named after a field.
             if let Some(k) = key_str
-                && candidates.iter().any(|c| self.key_match_count(c, &[k]) > 0)
+                && self.any_candidate_carries(candidates, k)
             {
-                self.note_unusable(
-                    slot,
-                    Some(k.to_string()),
-                    format!(
-                        "is named like a field of the range (`{k}`), not a record \
-                         id — wrap records in a list"
-                    ),
-                );
+                self.note_unusable(slot, Some(k.to_string()), field_named_key_reason(k));
                 continue;
             }
             match record {
@@ -1173,15 +1248,20 @@ impl LinkmlLoader<'_> {
                         );
                     }
                     match self.disambiguate_class(candidates, entry) {
-                        Some(class) => {
+                        ClassChoice::One(class) => {
                             if let Some(built) = self.build_record(&class, key_str, record) {
                                 ids.push(built);
                             }
                         }
-                        None => self.note_unusable(
+                        ClassChoice::Ambiguous => self.note_unusable(
                             slot,
                             key_str.map(str::to_string),
                             UNION_AMBIGUITY_REASON.to_string(),
+                        ),
+                        ClassChoice::WrappedDict => self.note_unusable(
+                            slot,
+                            key_str.map(str::to_string),
+                            WRAPPED_DICT_REASON.to_string(),
                         ),
                     }
                 }
@@ -1274,21 +1354,35 @@ impl LinkmlLoader<'_> {
     /// vanishing.
     fn collect_single(
         &mut self,
+        slot: &str,
         class_name: &str,
         value: &serde_norway::Value,
     ) -> Vec<(String, bool)> {
         match value {
             serde_norway::Value::Sequence(items) => items
                 .iter()
-                .flat_map(|item| self.collect_single(class_name, item))
+                .flat_map(|item| self.collect_single(slot, class_name, item))
                 .collect(),
-            serde_norway::Value::Mapping(_) => self
-                .build_record(class_name, None, value)
-                .map(|(id, materialized)| {
-                    self.note_top_level_id(id.clone());
-                    vec![(id, materialized)]
-                })
-                .unwrap_or_default(),
+            serde_norway::Value::Mapping(map) => {
+                // The class is fixed, but the shape still chooses: a
+                // mapping reading as an id-keyed dict is refused here
+                // exactly as a collection entry would be.
+                let class_string = class_name.to_string();
+                match self.disambiguate_class(&[&class_string], map) {
+                    ClassChoice::One(class) => self
+                        .build_record(&class, None, value)
+                        .map(|(id, materialized)| {
+                            self.note_top_level_id(id.clone());
+                            vec![(id, materialized)]
+                        })
+                        .unwrap_or_default(),
+                    ClassChoice::Ambiguous => Vec::new(),
+                    ClassChoice::WrappedDict => {
+                        self.note_unusable(slot, None, WRAPPED_DICT_REASON.to_string());
+                        Vec::new()
+                    }
+                }
+            }
             other => scalar_value(other)
                 .map(|s| vec![(scalar_to_display(&s), false)])
                 .unwrap_or_default(),
@@ -1493,7 +1587,9 @@ impl LinkmlLoader<'_> {
     ) {
         if let serde_norway::Value::Sequence(items) = value {
             // Each list element is one value of the slot; a mapping among
-            // them is a single record, never another dict collection.
+            // them is a single record, never another dict collection —
+            // the element that only reads as one is refused where every
+            // mapping chooses its class, in `disambiguate_class`.
             for item in items {
                 self.ingest_field(
                     slot,
@@ -1578,17 +1674,28 @@ impl LinkmlLoader<'_> {
             // rather than built by guessing.
             serde_norway::Value::Mapping(map) => {
                 match self.disambiguate_class(&class_targets, map) {
-                    Some(class) => {
+                    ClassChoice::One(class) => {
                         if let Some((target, materialized)) = self.build_record(&class, None, value)
                         {
                             reference_to(target, materialized, references, slot_values);
                         }
                     }
-                    None => push_slot_value(
+                    ClassChoice::Ambiguous => push_slot_value(
                         slot_values,
                         slot,
                         InstanceValue::Unexpected(yaml_kind(value)),
                     ),
+                    ClassChoice::WrappedDict => {
+                        self.note_unusable(slot, None, WRAPPED_DICT_REASON.to_string());
+                        // A distinct kind: validate reports the unusable
+                        // entry and leaves this value as slot presence, so
+                        // one problem yields one report.
+                        push_slot_value(
+                            slot_values,
+                            slot,
+                            InstanceValue::Unexpected("an identifier-keyed dict"),
+                        );
+                    }
                 }
             }
             // A string at an all-class range references a record by id.
@@ -3081,6 +3188,102 @@ wineries:
             ]
         );
 
+        // The dict spelling wrapped in a stray list is a reported arity
+        // mistake, never one phantom record named after nothing: a list
+        // element whose keys name no field and whose values are all
+        // nested reads as an id-keyed dict.
+        let data: serde_norway::Value = serde_norway::from_str(
+            "\
+wineries:
+  - morgonEstate:
+      name: Morgon Estate
+    chateauNord:
+      name: Chateau Nord
+",
+        )
+        .expect("parse data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            set.instances.is_empty(),
+            "no record builds from the wrapped dict; got: {:?}",
+            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+        );
+        assert!(
+            set.unusable_collection_entries
+                .iter()
+                .any(|u| u.slot == "wineries" && u.reason.contains("its own entry")),
+            "the entry is reported with the fix; got: {:?}",
+            set.unusable_collection_entries
+        );
+
+        // One entry is one record: a single unknown object-valued field is
+        // a typo'd or extension field on a record, kept and named — never
+        // read as a one-record dict collection.
+        let data: serde_norway::Value =
+            serde_norway::from_str("wineries:\n  - provenance:\n      source: registry\n")
+                .expect("parse data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert_eq!(
+            set.instances.len(),
+            1,
+            "the typo record builds; got: {:?}",
+            set.unusable_collection_entries
+        );
+        assert!(
+            set.undeclared_fields
+                .iter()
+                .any(|u| u.field == "provenance"),
+            "and the offending key is named; got: {:?}",
+            set.undeclared_fields
+        );
+        assert!(set.unusable_collection_entries.is_empty());
+
+        // Unquoted keys name no field either: a wrapped dict keyed by
+        // numbers is the same mistake as one keyed by strings.
+        let data: serde_norway::Value = serde_norway::from_str(
+            "wineries:\n  - 1990:\n      name: Morgon\n    1991:\n      name: Nord\n",
+        )
+        .expect("parse data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            set.instances.is_empty() && !set.unusable_collection_entries.is_empty(),
+            "number-keyed wrapped dicts are refused too; got: {:?} / {:?}",
+            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>(),
+            set.unusable_collection_entries
+        );
+
+        // A mixed dict — one record entry beside a null — still reads as
+        // a dict, not as one record with two odd fields.
+        let data: serde_norway::Value =
+            serde_norway::from_str("wineries:\n  - morgon:\n      name: Morgon\n    nord: null\n")
+                .expect("parse data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            set.instances.is_empty() && !set.unusable_collection_entries.is_empty(),
+            "mixed wrapped dicts are refused; got: {:?}",
+            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+        );
+
+        // A dict entry whose value is itself an id-keyed dict is the same
+        // mistake one level down: no record materializes under the outer
+        // key, and the entry is reported by it.
+        let data: serde_norway::Value =
+            serde_norway::from_str("wineries:\n  group1:\n    w1: {name: A}\n    w2: {name: B}\n")
+                .expect("parse data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            !set.instances.iter().any(|i| i.id == "group1"),
+            "no record is minted from the grouping key; got: {:?}",
+            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+        );
+        assert!(
+            set.unusable_collection_entries
+                .iter()
+                .any(|u| u.key.as_deref() == Some("group1")),
+            "the entry is reported by its key; got: {:?}",
+            set.unusable_collection_entries
+        );
+
         // The dict spellings survive below the container too: a record's
         // own multivalued slots read them the same way, at a single class
         // and at a union of classes.
@@ -3246,6 +3449,72 @@ buildings:
             "the authored-but-unusable value is present on the record; got: {:?}",
             b3.slot_values
         );
+
+        // A record's own slot refuses the list-wrapped dict the same way
+        // the container does, naming its holder.
+        let data: serde_norway::Value = serde_norway::from_str(
+            "\
+id: est
+buildings:
+  - id: b4
+    rooms:
+      - r4: {area: 9}
+        r5: {area: 12}
+",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            !set.instances
+                .iter()
+                .any(|i| i.id == "r4" || i.id.starts_with("Room-")),
+            "neither a phantom nor a guessed record builds; got: {:?}",
+            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+        );
+        assert!(
+            set.unusable_collection_entries
+                .iter()
+                .any(|u| u.slot == "rooms"
+                    && u.record.as_deref() == Some("b4")
+                    && u.reason.contains("its own entry")),
+            "the wrapped dict is reported against its holder; got: {:?}",
+            set.unusable_collection_entries
+        );
+        let b4 = set.instances.iter().find(|i| i.id == "b4").expect("b4");
+        assert!(
+            b4.slot_values.iter().any(|sv| sv.slot == "rooms"
+                && sv
+                    .values
+                    .iter()
+                    .any(|v| matches!(v, InstanceValue::Unexpected(_)))),
+            "the authored value stays visible on the record; got: {:?}",
+            b4.slot_values
+        );
+
+        // One more stray bracket changes nothing: the wrapped dict is
+        // refused however deep the arity mistake nests, and a dict at a
+        // single-valued class slot is the same mistake without a list.
+        for yaml in [
+            "id: est\nbuildings:\n  - id: b5\n    rooms:\n      - - r6: {area: 9}\n          r7: {area: 12}\n",
+            "id: est\nbuildings:\n  - id: b5\n    prime:\n      p1: {area: 1}\n      p2: {area: 2}\n",
+        ] {
+            let data: serde_norway::Value = serde_norway::from_str(yaml).expect("data");
+            let set = InstanceSet::from_linkml_data(&schema, &data);
+            assert!(
+                set.instances
+                    .iter()
+                    .all(|i| i.id == "b5" || i.id == "est" || i.types == vec!["Root"]),
+                "no phantom or guessed record builds; got: {:?}",
+                set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+            );
+            assert!(
+                set.unusable_collection_entries
+                    .iter()
+                    .any(|u| u.record.as_deref() == Some("b5")),
+                "the mistake is reported against its holder; got: {:?}",
+                set.unusable_collection_entries
+            );
+        }
     }
 
     #[test]
