@@ -509,6 +509,8 @@ struct IndexTemplate<'a> {
     /// version dropdown and the body may show a stale/edge banner.
     /// Always `None` for the `panschema generate` path.
     version_context: Option<&'a VersionContext>,
+    /// Pages of the published site for the header nav; empty hides it.
+    page_links: &'a [PageLink],
     /// URL the header brand link targets. `"./"` for single-version
     /// output (page sits at the deploy root). `panschema publish`
     /// supplies this explicitly from the manifest's
@@ -518,6 +520,23 @@ struct IndexTemplate<'a> {
     instances_first: bool,
     /// Page composition: render the schema reference sections.
     show_schema_sections: bool,
+}
+
+/// One entry in the header's page nav: a page of the published site,
+/// labeled by the schema it documents. `href` is relative to the page
+/// the nav renders on; every page of a site sits at one depth per
+/// page kind, so the value holds for each of its versions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageLink {
+    /// The name the site knows the page's schema by: the repo's own
+    /// schema name, or the dependency's manifest key — which also
+    /// names the page's directory by default.
+    pub label: String,
+    /// Relative URL from the rendering page's version directory.
+    pub href: String,
+    /// This entry is the page being rendered; drawn as a marker, not a
+    /// link.
+    pub active: bool,
 }
 
 /// Per-page context describing the multi-version cohort this page is
@@ -613,6 +632,10 @@ pub struct HtmlWriter {
     /// present, the rendered page gains a version dropdown in the header
     /// and a banner when `viewing` differs from `current` or matches `edge`.
     pub version_context: Option<VersionContext>,
+    /// The published site's pages, for the header's page nav. Set by
+    /// `panschema publish` when the site has more than one page; empty
+    /// renders no nav — the single-page and `generate` default.
+    pub page_links: Vec<PageLink>,
     /// Override for the header brand link target. `None` means use the
     /// per-flow default: `"./"` for single-version output (page sits at
     /// the deploy root) — `panschema publish` always sets this explicitly
@@ -720,6 +743,7 @@ impl HtmlWriter {
             instances_first: false,
             schema_sections: true,
             version_context: None,
+            page_links: Vec::new(),
             site_root_href: None,
             label_store: None,
             instance_datasets: Vec::new(),
@@ -735,6 +759,7 @@ impl HtmlWriter {
             instances_first: false,
             schema_sections: true,
             version_context: None,
+            page_links: Vec::new(),
             site_root_href: None,
             label_store: None,
             instance_datasets: Vec::new(),
@@ -778,6 +803,16 @@ impl HtmlWriter {
     #[must_use]
     pub fn with_version_context(mut self, ctx: VersionContext) -> Self {
         self.version_context = Some(ctx);
+        self
+    }
+
+    /// Give the header a nav across the published site's pages. Used by
+    /// `panschema publish` when the site publishes more than one page;
+    /// the entry for the page being rendered has `active` set and
+    /// renders as a marker rather than a link.
+    #[must_use]
+    pub fn with_page_links(mut self, links: Vec<PageLink>) -> Self {
+        self.page_links = links;
         self
     }
 
@@ -1632,6 +1667,7 @@ impl Writer for HtmlWriter {
             graph_aspect_h: self.graph_aspect.1,
             graph_default_layout: &self.graph_default_layout,
             version_context: self.version_context.as_ref(),
+            page_links: &self.page_links,
             // `panschema generate` writes the page at the output root, so
             // `./` always resolves to the deploy root. `panschema publish`
             // sets this explicitly from the manifest's `site_root_url`.

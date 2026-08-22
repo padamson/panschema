@@ -122,14 +122,14 @@ own local datasets embedded — the contract-plus-local-records page.
 
 ### Slice 3: The pages link to each other
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** A reader on any published page can reach the others
 without knowing the URL scheme.
 
 **Acceptance Criteria:**
-- [ ] Each published page links to the site's other pages by name.
-- [ ] README documents the composition keys, the dependency-page
+- [x] Each published page links to the site's other pages by name.
+- [x] README documents the composition keys, the dependency-page
       pattern, and how a book's `[[book_link]]` selector fronts the
       pages — in the same change that ships each key it names.
 
@@ -139,16 +139,16 @@ without knowing the URL scheme.
 |-------|----------|------------|--------|
 | Slice 1 | Must Have | None | Completed |
 | Slice 2 | Must Have | Slice 1 | Completed |
-| Slice 3 | Should Have | Slice 2 | Not Started |
+| Slice 3 | Should Have | Slice 2 | Completed |
 
 ---
 
 ## Definition of Done
 
-- [ ] All acceptance criteria met, slices Completed
-- [ ] All tests passing: `cargo nextest run`
-- [ ] CHANGELOG.md and README.md updated
-- [ ] Docs build cleanly: `cargo doc`
+- [x] All acceptance criteria met, slices Completed
+- [x] All tests passing: `cargo nextest run`
+- [x] CHANGELOG.md and README.md updated
+- [x] Docs build cleanly: `cargo doc`
 
 ## Notes / Things to Watch
 

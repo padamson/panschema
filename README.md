@@ -221,8 +221,17 @@ page, so the parent-relative defaults for `url_pattern` and
 `site_root_url` resolve correctly on every page, but an absolute
 `url_pattern` (like `/docs/{version}/`) or a depth-sensitive
 `site_root_url` override (like `../../`) targets the main page's depth
-only. Keep the defaults when publishing dependency pages; per-page
-overrides can follow if a site needs them.
+only, and the header's cross-page nav likewise assumes the
+parent-relative layout. Keep the defaults when publishing dependency
+pages; per-page overrides can follow if a site needs them.
+
+Once a site publishes more than one page, every page's header gains a
+small nav listing the site's pages by schema name, with the page you
+are on marked rather than linked. Links target each sibling's
+`current/` alias — or, for a page publishing without one, the version
+standing as its current (the first released ref present, in the
+manifest's version order) — so they never point at a directory that
+was not built. A single-page site keeps today's header untouched.
 
 Repeat `--instances` to carry more than one curated graph. Each is labelled by
 its file stem and gets its own cards, provenance line, and node/edge counts;
@@ -305,6 +314,20 @@ mdbook-panschema install          # or: mdbook-panschema install <book-dir>
 ```
 
 This writes `schema-link.js` / `schema-link.css` into the book and wires them into `book.toml`'s `additional-js` / `additional-css`, idempotently — re-run after upgrading to refresh the asset. With `[book_link]` absent or `enabled = false`, `install` does nothing.
+
+A book fronting a site with several published pages — the main schema plus dependency pages — writes one `[[book_link]]` entry per page instead; the button becomes a menu listing each entry by its label:
+
+```toml
+[[book_link]]
+schema_path = "schema/current/"
+label = "Catalog schema"
+
+[[book_link]]
+schema_path = "schema/cqa/current/"
+label = "CQA contract"
+```
+
+Writing an entry is itself the opt-in, so the list form has no `enabled` switch; an empty list means off.
 
 ## Generating a Postgres schema
 

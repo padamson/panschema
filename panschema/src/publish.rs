@@ -765,8 +765,16 @@ pub fn publish_versioned(
     );
 
     let pages = plan_pages(repo_root, publish_cfg, publishing, output_dir)?;
-    for page in &pages {
-        build_page(repo_root, page, &refs, publish_cfg, publishing)?;
+    let planned: Vec<PagePlan> = pages
+        .iter()
+        .map(|page| plan_page(repo_root, page, &refs))
+        .collect();
+    for (i, plan) in planned.iter().enumerate() {
+        if plan.plans.is_empty() {
+            continue;
+        }
+        let links = links_for(&planned, i, publish_cfg, publishing);
+        render_page(repo_root, plan, links, publish_cfg, publishing)?;
     }
 
     Ok(())
@@ -779,7 +787,10 @@ struct PageSpec<'a> {
     /// dependency's schema.
     dep: Option<String>,
     /// Where the page's version tree lands. The own page sits at the
-    /// output root; every dependency page in a directory inside it.
+    /// output root; every dependency page in a directory inside it,
+    /// derived by [`PublishingConfig::page_dir`] — the same derivation
+    /// sibling links use, so what links navigate into is what was
+    /// written.
     out_dir: PathBuf,
     entries: Vec<&'a InstanceEntry>,
     instances_first: bool,
@@ -898,32 +909,46 @@ fn exists_at_ref(repo_root: &Path, ref_: &str, path_in_repo: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Build every version of one page, then refresh its `current/` alias.
-///
-/// Two passes. The presence pass decides which refs the page exists at
-/// — a dependency page exists only where the dependency resolves and
-/// at least one of its datasets does — using metadata probes and path
-/// resolution alone, so the version dropdown is known before any
-/// render. The render pass then extracts, renders, and drops one ref's
-/// files at a time, keeping the number of open files bounded by one
-/// ref's needs however long the version list grows. The own page
-/// builds at every ref, as it always has.
-fn build_page(
-    repo_root: &Path,
-    page: &PageSpec<'_>,
-    refs: &[(String, BuildSource<'_>)],
-    publish_cfg: &PublishConfig,
-    publishing: &PublishingConfig,
-) -> Result<(), PublishError> {
-    struct RefPlan<'r, 'e> {
-        label: &'r str,
-        source: BuildSource<'r>,
-        /// A dependency page's resolved schema file; `None` on the own
-        /// page, whose schema comes from the publish spec's `files.main`.
-        dep_schema: Option<PathBuf>,
-        datasets: Vec<&'e InstanceEntry>,
+/// One ref's contribution to one page, decided by the presence pass:
+/// which files exist and where the schema comes from, held as paths
+/// only — nothing is extracted until the render pass.
+struct RefPlan<'a> {
+    label: &'a str,
+    source: BuildSource<'a>,
+    /// A dependency page's resolved schema file; `None` on the own
+    /// page, whose schema comes from the publish spec's `files.main`.
+    dep_schema: Option<PathBuf>,
+    datasets: Vec<&'a InstanceEntry>,
+}
+
+/// One page's full build plan: the refs it exists at, in dropdown
+/// order. A dependency page with no live refs has an empty `plans` and
+/// publishes nothing.
+struct PagePlan<'a> {
+    page: &'a PageSpec<'a>,
+    plans: Vec<RefPlan<'a>>,
+}
+
+impl PagePlan<'_> {
+    /// The refs this page exists at, in dropdown order — always derived
+    /// from `plans`, so the dropdown, the current decision, and what
+    /// actually renders cannot drift apart.
+    fn present(&self) -> Vec<String> {
+        self.plans.iter().map(|p| p.label.to_string()).collect()
     }
-    let mut plans: Vec<RefPlan> = Vec::new();
+}
+
+/// The presence pass for one page: decide which refs it exists at — a
+/// dependency page exists only where the dependency resolves and at
+/// least one of its datasets does — using metadata probes and path
+/// resolution alone, so every page's version list is known before any
+/// page renders. The own page builds at every ref, as it always has.
+fn plan_page<'a>(
+    repo_root: &Path,
+    page: &'a PageSpec<'a>,
+    refs: &'a [(String, BuildSource<'a>)],
+) -> PagePlan<'a> {
+    let mut plans: Vec<RefPlan<'a>> = Vec::new();
     for (label, source) in refs {
         let dep_schema = match &page.dep {
             None => None,
@@ -999,15 +1024,76 @@ fn build_page(
             "warning: dependency `{dep}` has a page configured but no ref where both the \
              dependency and its data resolve; no page was published for it"
         );
-        return Ok(());
     }
 
-    let present: Vec<String> = plans.iter().map(|p| p.label.to_string()).collect();
-    let cohort = cohort_for(publishing, publish_cfg, page, &present);
-    for plan in &plans {
-        let schema = match &plan.dep_schema {
+    PagePlan { page, plans }
+}
+
+/// The header nav for page `me`: every live page of the site, self
+/// marked active. A site with fewer than two live pages gets no nav —
+/// the policy lives here, with the mechanism, so every caller inherits
+/// it. Hrefs are relative to a version directory, climbing to the
+/// output root by the page's own directory depth, and target the
+/// sibling's `current/` alias when [`page_current`] says it will
+/// exist, else the version standing as that page's current — so no
+/// link points at a directory that was not built.
+fn links_for(
+    planned: &[PagePlan<'_>],
+    me: usize,
+    publish_cfg: &PublishConfig,
+    publishing: &PublishingConfig,
+) -> Vec<crate::html_writer::PageLink> {
+    if planned.iter().filter(|p| !p.plans.is_empty()).count() < 2 {
+        return Vec::new();
+    }
+    let dir_of = |page: &PageSpec<'_>| page.dep.as_ref().map(|d| publishing.page_dir(d));
+    let depth_of = |dir: &Option<String>| 1 + dir.as_ref().map_or(0, |d| d.split('/').count());
+    let up = "../".repeat(depth_of(&dir_of(planned[me].page)));
+    planned
+        .iter()
+        .enumerate()
+        .filter(|(_, q)| !q.plans.is_empty())
+        .map(|(j, q)| {
+            let label = match &q.page.dep {
+                None => publish_cfg.schema.name.clone(),
+                Some(dep) => dep.clone(),
+            };
+            let current = page_current(publishing, &q.present());
+            let seg = if current.aliased {
+                "current".to_string()
+            } else {
+                current.version
+            };
+            let href = match dir_of(q.page) {
+                None => format!("{up}{seg}/"),
+                Some(dir) => format!("{up}{dir}/{seg}/"),
+            };
+            crate::html_writer::PageLink {
+                label,
+                href,
+                active: j == me,
+            }
+        })
+        .collect()
+}
+
+/// Render every planned version of one page, then refresh its
+/// `current/` alias. Extraction happens here, one ref at a time, so
+/// the number of open files stays bounded by one ref's needs however
+/// long the version list grows.
+fn render_page(
+    repo_root: &Path,
+    plan: &PagePlan<'_>,
+    links: Vec<crate::html_writer::PageLink>,
+    publish_cfg: &PublishConfig,
+    publishing: &PublishingConfig,
+) -> Result<(), PublishError> {
+    let page = plan.page;
+    let cohort = cohort_for(publishing, publish_cfg, page, &plan.present(), links);
+    for rp in &plan.plans {
+        let schema = match &rp.dep_schema {
             Some(path) => Materialized::OnDisk(path.clone()),
-            None => match plan.source {
+            None => match rp.source {
                 BuildSource::GitRef(ref_) => Materialized::Extracted(extract_main_at_ref(
                     repo_root,
                     ref_,
@@ -1021,11 +1107,11 @@ fn build_page(
                 }
             },
         };
-        let extracted: Vec<(Materialized, &InstanceEntry)> = plan
+        let extracted: Vec<(Materialized, &InstanceEntry)> = rp
             .datasets
             .iter()
             .filter_map(|entry| {
-                let materialized = match plan.source {
+                let materialized = match rp.source {
                     BuildSource::GitRef(ref_) => extract_main_at_ref(repo_root, ref_, &entry.data)
                         .ok()
                         .map(Materialized::Extracted),
@@ -1038,20 +1124,20 @@ fn build_page(
                     eprintln!(
                         "note: {}: instance data `{}` could not be extracted; \
                          publishing this version without that instance graph",
-                        plan.label,
+                        rp.label,
                         entry.data.display()
                     );
                 }
                 materialized.map(|m| (m, *entry))
             })
             .collect();
-        let version_out = page.out_dir.join(plan.label);
+        let version_out = page.out_dir.join(rp.label);
         std::fs::create_dir_all(&version_out)?;
         let datasets: Vec<(&Path, &InstanceEntry)> = extracted
             .iter()
             .map(|(file, entry)| (file.path(), *entry))
             .collect();
-        generate_html_for_version(plan.label, schema.path(), &version_out, &cohort, &datasets)?;
+        generate_html_for_version(rp.label, schema.path(), &version_out, &cohort, &datasets)?;
     }
 
     // current/ is a copy of the page-current version's output, not a
@@ -1193,6 +1279,8 @@ struct CohortContext {
     instances_first: bool,
     /// Page composition, from `[publishing]`: schema reference rendered?
     schema_sections: bool,
+    /// The site's pages for the header nav; empty on single-page sites.
+    page_links: Vec<crate::html_writer::PageLink>,
 }
 
 /// One page's version context. `present` is the page's build list —
@@ -1209,33 +1297,59 @@ fn cohort_for(
     publish_cfg: &PublishConfig,
     page: &PageSpec<'_>,
     present: &[String],
+    page_links: Vec<crate::html_writer::PageLink>,
 ) -> CohortContext {
-    let current_present = present.iter().any(|v| v == &publishing.current);
-    let current = if current_present {
-        publishing.current.clone()
-    } else {
-        present
-            .iter()
-            .find(|v| Some(v.as_str()) != publishing.edge.as_deref())
-            .or_else(|| present.first())
-            .expect("a page with no built refs is skipped before rendering")
-            .clone()
-    };
-    let site_root_href = if !current_present && publishing.site_root_url == default_site_root_url()
+    let current = page_current(publishing, present);
+    let site_root_href = if !current.aliased && publishing.site_root_url == default_site_root_url()
     {
-        format!("../{current}/")
+        format!("../{}/", current.version)
     } else {
         publishing.site_root_url.clone()
     };
     CohortContext {
         all_versions: present.to_vec(),
-        current,
+        current: current.version,
         edge: publishing.edge.clone(),
         url_pattern: publishing.url_pattern.clone(),
         site_root_href,
         label_sources: publish_cfg.label_sources.clone(),
         instances_first: page.instances_first,
         schema_sections: page.schema_sections,
+        page_links,
+    }
+}
+
+/// One page's current-version decision, made in one place so the nav
+/// links, the banner, the brand link, and the alias can never disagree
+/// about it.
+struct PageCurrent {
+    /// The version standing as the page's current: the configured
+    /// current when the page exists there, else the first present
+    /// released ref in the manifest's version order — never the edge
+    /// build, which is unreleased by definition — else the edge itself
+    /// when it is all the page has.
+    version: String,
+    /// The configured current is among the page's built refs, so
+    /// [`refresh_current`] will build the `current/` alias from it.
+    aliased: bool,
+}
+
+fn page_current(publishing: &PublishingConfig, present: &[String]) -> PageCurrent {
+    if present.iter().any(|v| v == &publishing.current) {
+        return PageCurrent {
+            version: publishing.current.clone(),
+            aliased: true,
+        };
+    }
+    let version = present
+        .iter()
+        .find(|v| Some(v.as_str()) != publishing.edge.as_deref())
+        .or_else(|| present.first())
+        .expect("a page with no built refs is skipped before rendering")
+        .clone();
+    PageCurrent {
+        version,
+        aliased: false,
     }
 }
 
@@ -1279,7 +1393,8 @@ fn generate_html_for_version(
         .with_version_context(cohort.context_for(version))
         .with_site_root_href(cohort.site_root_href.clone())
         .with_instances_first(cohort.instances_first)
-        .with_schema_sections(cohort.schema_sections);
+        .with_schema_sections(cohort.schema_sections)
+        .with_page_links(cohort.page_links.clone());
     // The file is read from the first path (a per-ref extraction lands in a
     // tempfile) while provenance shows the declared name.
     let mut loaded: Vec<(String, crate::instances::InstanceSet, &InstanceEntry)> = Vec::new();
@@ -3555,6 +3670,73 @@ current = "v0.1.0"
     }
 
     #[test]
+    fn published_pages_link_to_each_other_by_name() {
+        let repo = make_repo_with_dependency_data();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.1.0", "v0.2.0"], None, "v0.2.0");
+        cfg.instances.push(InstanceEntry {
+            name: "catalog".into(),
+            data: PathBuf::from("data/instances.yaml"),
+            exemplar: true,
+            schema: None,
+        });
+        cfg.instances.push(dep_entry());
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
+
+        let own = std::fs::read_to_string(out.path().join("v0.2.0/index.html")).unwrap();
+        assert!(
+            own.contains(r#"href="../cqa/current/""#) && own.contains(">cqa<"),
+            "the own page links to the dependency page by name"
+        );
+        assert!(
+            own.contains(r#"aria-current="page""#) && own.contains(">fixture<"),
+            "the page marks itself in the nav rather than linking to itself"
+        );
+        let dep_page = std::fs::read_to_string(out.path().join("cqa/v0.2.0/index.html")).unwrap();
+        assert!(
+            dep_page.contains(r#"href="../../current/""#) && dep_page.contains(">fixture<"),
+            "the dependency page links back to the own page by schema name"
+        );
+    }
+
+    #[test]
+    fn a_sibling_without_an_alias_is_linked_at_its_page_current() {
+        let repo = make_repo_with_dependency_data();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.1.0", "v0.2.0"], None, "v0.1.0");
+        cfg.instances.push(dep_entry());
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
+        let own = std::fs::read_to_string(out.path().join("v0.1.0/index.html")).unwrap();
+        assert!(
+            own.contains(r#"href="../cqa/v0.2.0/""#),
+            "a sibling absent at current is linked at the version standing as its page current"
+        );
+        assert!(
+            !own.contains(r#"href="../cqa/current/""#),
+            "no link may point at an alias that does not exist"
+        );
+    }
+
+    #[test]
+    fn a_single_page_site_renders_no_page_nav() {
+        let repo = make_repo_with_instance_data();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], None, "v0.2.0");
+        cfg.instances.push(InstanceEntry {
+            name: "catalog".into(),
+            data: PathBuf::from("data/instances.yaml"),
+            exemplar: true,
+            schema: None,
+        });
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
+        let own = std::fs::read_to_string(out.path().join("v0.2.0/index.html")).unwrap();
+        assert!(
+            !own.contains("page-links"),
+            "a site with one page has no other pages to offer"
+        );
+    }
+
+    #[test]
     fn publishing_layout_composes_the_page() {
         let repo = make_versioned_linkml_repo();
         let out = tempfile::tempdir().unwrap();
@@ -3664,6 +3846,7 @@ current = "v0.1.0"
             label_sources: std::collections::BTreeMap::new(),
             instances_first: false,
             schema_sections: true,
+            page_links: Vec::new(),
         };
 
         generate_html_for_version("1.0.0", &main, &out, &cohort, &[])

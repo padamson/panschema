@@ -1,6 +1,17 @@
 <header class="site-header">
     <div class="container">
         <a href="{{ site_root_href }}" class="site-title">{{ title }}</a>
+        {%- if !page_links.is_empty() %}
+        <nav class="page-links" aria-label="Published pages">
+            {%- for link in page_links %}
+            {%- if link.active %}
+            <span class="page-link page-link-active" aria-current="page">{{ link.label }}</span>
+            {%- else %}
+            <a class="page-link" href="{{ link.href }}">{{ link.label }}</a>
+            {%- endif %}
+            {%- endfor %}
+        </nav>
+        {% endif %}
         {% if let Some(vc) = version_context %}
         <div class="version-picker" role="navigation" aria-label="Version navigation">
             <label for="version-select" class="version-picker-label">Version</label>
@@ -64,6 +75,37 @@
         justify-content: space-between;
         gap: 1rem;
     }
+
+    {%- if !page_links.is_empty() %}
+    /* The header row cannot wrap (fixed height), so on a narrow
+       viewport the nav shrinks and scrolls within itself instead of
+       overflowing the page. */
+    .page-links {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        font-size: 0.875rem;
+        margin-right: auto;
+        min-width: 0;
+        overflow-x: auto;
+        white-space: nowrap;
+    }
+    .page-link {
+        color: var(--color-text-muted, var(--color-text));
+        padding: 0.25rem 0.5rem;
+        border-radius: 4px;
+    }
+    .page-link:hover {
+        text-decoration: none;
+        color: var(--color-primary);
+        background-color: color-mix(in srgb, var(--color-primary) 10%, transparent);
+    }
+    .page-link-active {
+        color: var(--color-text);
+        font-weight: 600;
+        border: 1px solid var(--color-border);
+    }
+    {%- endif %}
 
     .version-picker {
         display: flex;
