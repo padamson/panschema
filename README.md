@@ -212,7 +212,10 @@ its version dropdown offers exactly those refs; when the configured
 `current/` alias (noted on stderr). Each ref renders that ref's data
 against the dependency version the ref's own manifest pins, resolved from
 the local cache — publish never fetches over the network, so run
-`panschema fetch` first for `github:` sources. (`path:` dependencies
+`panschema fetch` first for `github:` sources — and checked against the
+ref's committed `panschema.lock`: cached content failing its checksum
+(covering the schema's main file, the content `panschema fetch` locks)
+skips the page at that ref with the mismatch named. (`path:` dependencies
 carry no pin and always resolve from the working tree.) Naming a
 dependency the manifest doesn't declare fails the publish.
 

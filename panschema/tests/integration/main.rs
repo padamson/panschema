@@ -5491,67 +5491,63 @@ output_dir = "site"
     );
 }
 
-/// Each published ref renders its dependency page against the
-/// dependency version that ref's own manifest pins — resolved from the
-/// local cache only, with no network fetch — so a historical page shows
-/// the contract as it was.
-#[test]
-fn publish_renders_each_ref_against_its_pinned_dependency() {
-    fn git(cwd: &Path, args: &[&str]) {
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(cwd)
-            .args(args)
-            .status()
-            .expect("git on PATH");
-        assert!(status.success(), "git {args:?} failed");
-    }
-    fn contract_pkg(cache_root: &Path, version: &str, marker_class: &str) {
-        let pkg = cache_root
-            .join("github")
-            .join("test-owner")
-            .join("contract")
-            .join(version)
-            .join(format!("contract-{version}"));
-        fs::create_dir_all(&pkg).unwrap();
-        fs::write(
-            pkg.join("panschema-publish.toml"),
-            format!(
-                "[schema]\nname = \"contract\"\nversion = \"{version}\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"contract.yaml\"\n"
-            ),
-        )
-        .unwrap();
-        fs::write(
-            pkg.join("contract.yaml"),
-            format!(
-                "id: https://example.org/contract\n\
-                 name: contract\n\
-                 version: {version}\n\
-                 prefixes:\n  contract: https://example.org/contract/\n\
-                 default_prefix: contract\n\
-                 default_range: string\n\
-                 classes:\n\
-                \x20 Ledger:\n    tree_root: true\n    attributes:\n\
-                \x20     records: {{range: Record, multivalued: true}}\n\
-                \x20 Record:\n    attributes:\n      id: {{identifier: true}}\n\
-                \x20 {marker_class}:\n    attributes:\n      id: {{identifier: true}}\n"
-            ),
-        )
-        .unwrap();
-    }
+/// Run a git command in `cwd`, asserting success. Shared by the
+/// publish fixtures that build tagged repos.
+fn publish_git(cwd: &Path, args: &[&str]) {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(args)
+        .status()
+        .expect("git on PATH");
+    assert!(status.success(), "git {args:?} failed");
+}
 
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let repo = tmp.path().join("repo");
-    fs::create_dir_all(&repo).unwrap();
-    let repo = repo.as_path();
-    let cache_root = tmp.path().join("cache");
-    contract_pkg(&cache_root, "0.1.0", "ContractV1");
-    contract_pkg(&cache_root, "0.2.0", "ContractV2");
+/// Lay one extracted `contract` package version into a local cache
+/// tree, so `github:test-owner/contract` resolves offline via
+/// `PANSCHEMA_CACHE_ROOT`. `marker_class` adds a version-identifying
+/// class for pin assertions.
+fn contract_cache_pkg(cache_root: &Path, version: &str, marker_class: Option<&str>) {
+    let pkg = cache_root
+        .join("github")
+        .join("test-owner")
+        .join("contract")
+        .join(version)
+        .join(format!("contract-{version}"));
+    fs::create_dir_all(&pkg).unwrap();
+    fs::write(
+        pkg.join("panschema-publish.toml"),
+        format!(
+            "[schema]\nname = \"contract\"\nversion = \"{version}\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"contract.yaml\"\n"
+        ),
+    )
+    .unwrap();
+    let marker = marker_class
+        .map(|m| format!("\x20 {m}:\n    attributes:\n      id: {{identifier: true}}\n"))
+        .unwrap_or_default();
+    fs::write(
+        pkg.join("contract.yaml"),
+        format!(
+            "id: https://example.org/contract\n\
+             name: contract\n\
+             version: {version}\n\
+             prefixes:\n  contract: https://example.org/contract/\n\
+             default_prefix: contract\ndefault_range: string\n\
+             classes:\n  Ledger:\n    tree_root: true\n    attributes:\n\
+            \x20     records: {{range: Record, multivalued: true}}\n\
+            \x20 Record:\n    attributes:\n      id: {{identifier: true}}\n{marker}"
+        ),
+    )
+    .unwrap();
+}
 
-    git(repo, &["init", "--initial-branch=main", "--quiet"]);
-    git(repo, &["config", "user.email", "test@example.com"]);
-    git(repo, &["config", "user.name", "Test"]);
-    git(repo, &["config", "commit.gpgsign", "false"]);
+/// Initialize a git repo publishing a trivial own schema plus one
+/// `records` dataset against the `contract` dependency, ready to tag.
+fn init_contract_consumer(repo: &Path, versions: &str) {
+    publish_git(repo, &["init", "--initial-branch=main", "--quiet"]);
+    publish_git(repo, &["config", "user.email", "test@example.com"]);
+    publish_git(repo, &["config", "user.name", "Test"]);
+    publish_git(repo, &["config", "commit.gpgsign", "false"]);
     fs::write(
         repo.join("schema.yaml"),
         "id: https://example.org/own\nname: own_schema\nversion: 0.1.0\n",
@@ -5560,7 +5556,8 @@ fn publish_renders_each_ref_against_its_pinned_dependency() {
     fs::write(repo.join("records.yaml"), "records:\n  - id: r1\n").unwrap();
     fs::write(
         repo.join("panschema-publish.toml"),
-        r#"[schema]
+        format!(
+            r#"[schema]
 name = "own_schema"
 version = "0.1.0"
 linkml = "1.7.0"
@@ -5574,10 +5571,11 @@ data = "records.yaml"
 schema = "contract"
 
 [publishing]
-versions = ["v0.1.0", "v0.2.0"]
-current = "v0.2.0"
+versions = [{versions}]
+current = "v0.1.0"
 output_dir = "site"
-"#,
+"#
+        ),
     )
     .unwrap();
     fs::write(
@@ -5585,17 +5583,34 @@ output_dir = "site"
         "[schemas.contract]\nsource = \"github:test-owner/contract\"\nversion = \"0.1.0\"\n",
     )
     .unwrap();
-    git(repo, &["add", "."]);
-    git(repo, &["commit", "-m", "release v0.1.0", "--quiet"]);
-    git(repo, &["tag", "v0.1.0"]);
+}
+
+/// Each published ref renders its dependency page against the
+/// dependency version that ref's own manifest pins — resolved from the
+/// local cache only, with no network fetch — so a historical page shows
+/// the contract as it was.
+#[test]
+fn publish_renders_each_ref_against_its_pinned_dependency() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    let repo = repo.as_path();
+    let cache_root = tmp.path().join("cache");
+    contract_cache_pkg(&cache_root, "0.1.0", Some("ContractV1"));
+    contract_cache_pkg(&cache_root, "0.2.0", Some("ContractV2"));
+
+    init_contract_consumer(repo, "\"v0.1.0\", \"v0.2.0\"");
+    publish_git(repo, &["add", "."]);
+    publish_git(repo, &["commit", "-m", "release v0.1.0", "--quiet"]);
+    publish_git(repo, &["tag", "v0.1.0"]);
     fs::write(
         repo.join("panschema.toml"),
         "[schemas.contract]\nsource = \"github:test-owner/contract\"\nversion = \"0.2.0\"\n",
     )
     .unwrap();
-    git(repo, &["add", "."]);
-    git(repo, &["commit", "-m", "bump contract to 0.2.0", "--quiet"]);
-    git(repo, &["tag", "v0.2.0"]);
+    publish_git(repo, &["add", "."]);
+    publish_git(repo, &["commit", "-m", "bump contract to 0.2.0", "--quiet"]);
+    publish_git(repo, &["tag", "v0.2.0"]);
 
     let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .arg("publish")
@@ -5623,67 +5638,107 @@ output_dir = "site"
     );
 }
 
+#[test]
+fn publish_refuses_cached_content_that_fails_the_refs_lockfile() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    let repo = repo.as_path();
+    let cache_root = tmp.path().join("cache");
+    contract_cache_pkg(&cache_root, "0.1.0", None);
+    let good = panschema::lockfile::checksum_file(
+        &cache_root
+            .join("github/test-owner/contract/0.1.0/contract-0.1.0")
+            .join("contract.yaml"),
+    )
+    .unwrap();
+
+    init_contract_consumer(repo, "\"v0.1.0\", \"v0.2.0\", \"v0.3.0\", \"v0.4.0\"");
+    let lock = |version: &str, checksum: &str| {
+        format!(
+            "[[schema]]\nname = \"contract\"\nversion = \"{version}\"\nsource = \"github:test-owner/contract\"\nchecksum = \"{checksum}\"\n"
+        )
+    };
+    fs::write(repo.join("panschema.lock"), lock("0.1.0", &good)).unwrap();
+    publish_git(repo, &["add", "."]);
+    publish_git(repo, &["commit", "-m", "release v0.1.0", "--quiet"]);
+    publish_git(repo, &["tag", "v0.1.0"]);
+    fs::write(
+        repo.join("panschema.lock"),
+        lock(
+            "0.1.0",
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        ),
+    )
+    .unwrap();
+    publish_git(repo, &["add", "."]);
+    publish_git(repo, &["commit", "-m", "drift the lockfile", "--quiet"]);
+    publish_git(repo, &["tag", "v0.2.0"]);
+    fs::write(repo.join("panschema.lock"), "not = valid = toml").unwrap();
+    publish_git(repo, &["add", "."]);
+    publish_git(repo, &["commit", "-m", "break the lockfile", "--quiet"]);
+    publish_git(repo, &["tag", "v0.3.0"]);
+    fs::write(repo.join("panschema.lock"), lock("0.9.9", &good)).unwrap();
+    publish_git(repo, &["add", "."]);
+    publish_git(
+        repo,
+        &["commit", "-m", "stale the lockfile version", "--quiet"],
+    );
+    publish_git(repo, &["tag", "v0.4.0"]);
+
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("publish")
+        .current_dir(repo)
+        .env("PANSCHEMA_CACHE_ROOT", &cache_root)
+        .output()
+        .expect("panschema");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "a drifted ref skips its page, never fails the publish; stderr: {stderr}"
+    );
+    assert!(
+        repo.join("site/contract/v0.1.0/index.html").exists(),
+        "the ref whose lockfile matches renders its dependency page"
+    );
+    assert!(
+        !repo.join("site/contract/v0.2.0").exists(),
+        "the ref whose lockfile disagrees with the cache gets no dependency page"
+    );
+    assert!(
+        stderr.contains("checksum") && stderr.contains("v0.2.0"),
+        "the skip note names the checksum mismatch at the drifted ref; got: {stderr}"
+    );
+    assert!(
+        !repo.join("site/contract/v0.3.0").exists()
+            && stderr.contains("panschema.lock does not parse"),
+        "a committed lockfile that fails to parse refuses the page instead of silently \
+         disabling the gate; got: {stderr}"
+    );
+    assert!(
+        !repo.join("site/contract/v0.4.0").exists()
+            && stderr.contains("lockfile records version 0.9.9")
+            && stderr.contains("stale"),
+        "a lock disagreeing with its own ref's manifest is called stale, not blamed on \
+         the cache; got: {stderr}"
+    );
+}
+
 /// A cold cache does not fail the publish, but the skip note carries
 /// the resolver's own message — naming `panschema fetch` as the fix —
 /// rather than reading like the dependency was never declared.
 #[test]
 fn publish_with_a_cold_cache_names_the_fetch_fix() {
-    fn git(cwd: &Path, args: &[&str]) {
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(cwd)
-            .args(args)
-            .status()
-            .expect("git on PATH");
-        assert!(status.success(), "git {args:?} failed");
-    }
-
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path().join("repo");
     fs::create_dir_all(&repo).unwrap();
     let repo = repo.as_path();
     let cache_root = tmp.path().join("empty-cache");
 
-    git(repo, &["init", "--initial-branch=main", "--quiet"]);
-    git(repo, &["config", "user.email", "test@example.com"]);
-    git(repo, &["config", "user.name", "Test"]);
-    git(repo, &["config", "commit.gpgsign", "false"]);
-    fs::write(
-        repo.join("schema.yaml"),
-        "id: https://example.org/own\nname: own_schema\nversion: 0.1.0\n",
-    )
-    .unwrap();
-    fs::write(repo.join("records.yaml"), "records:\n  - id: r1\n").unwrap();
-    fs::write(
-        repo.join("panschema-publish.toml"),
-        r#"[schema]
-name = "own_schema"
-version = "0.1.0"
-linkml = "1.7.0"
-
-[files]
-main = "schema.yaml"
-
-[[instances]]
-name = "records"
-data = "records.yaml"
-schema = "contract"
-
-[publishing]
-versions = ["v0.1.0"]
-current = "v0.1.0"
-output_dir = "site"
-"#,
-    )
-    .unwrap();
-    fs::write(
-        repo.join("panschema.toml"),
-        "[schemas.contract]\nsource = \"github:test-owner/contract\"\nversion = \"0.1.0\"\n",
-    )
-    .unwrap();
-    git(repo, &["add", "."]);
-    git(repo, &["commit", "-m", "release v0.1.0", "--quiet"]);
-    git(repo, &["tag", "v0.1.0"]);
+    init_contract_consumer(repo, "\"v0.1.0\"");
+    publish_git(repo, &["add", "."]);
+    publish_git(repo, &["commit", "-m", "release v0.1.0", "--quiet"]);
+    publish_git(repo, &["tag", "v0.1.0"]);
 
     let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .arg("publish")

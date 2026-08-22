@@ -90,6 +90,19 @@ impl Lockfile {
     }
 }
 
+impl LockEntry {
+    /// Compare this entry's pinned checksum against a file's current
+    /// content. `Ok(None)` means they agree; `Ok(Some(observed))`
+    /// carries the observed checksum on disagreement, for the caller's
+    /// own message. The one comparison `panschema verify` and
+    /// `panschema publish` both gate on, so the two can never disagree
+    /// about whether content drifted.
+    pub fn checksum_drift(&self, path: &Path) -> std::io::Result<Option<String>> {
+        let observed = checksum_file(path)?;
+        Ok((observed != self.checksum).then_some(observed))
+    }
+}
+
 /// Compute the SHA-256 hex digest of a file's content, returned as
 /// `sha256:<64-hex>`.
 pub fn checksum_file(path: &Path) -> std::io::Result<String> {

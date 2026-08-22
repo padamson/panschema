@@ -2005,7 +2005,7 @@ fn validate_data(schema_path: &Path, data_paths: &[PathBuf]) -> anyhow::Result<(
 /// `panschema verify`: re-checksum every manifested schema and compare with
 /// the lockfile. Errors with a clear diff on mismatch.
 fn verify_from_manifest() -> anyhow::Result<()> {
-    use panschema::lockfile::{LOCKFILE_FILENAME, Lockfile, checksum_file};
+    use panschema::lockfile::{LOCKFILE_FILENAME, Lockfile};
 
     let (manifest, manifest_dir) = load_manifest()?;
     let lock_path = manifest_dir.join(LOCKFILE_FILENAME);
@@ -2022,10 +2022,12 @@ fn verify_from_manifest() -> anyhow::Result<()> {
     for (name, dep) in &manifest.schemas {
         let panschema::source::Resolved { schema_path, .. } =
             resolve_source(name, dep, &manifest_dir)?;
-        let observed = checksum_file(&schema_path)?;
         match lockfile.entry(name) {
-            Some(entry) if entry.checksum == observed => {}
-            Some(entry) => drift.push((name.clone(), entry.checksum.clone(), observed)),
+            Some(entry) => {
+                if let Some(observed) = entry.checksum_drift(&schema_path)? {
+                    drift.push((name.clone(), entry.checksum.clone(), observed));
+                }
+            }
             None => missing_in_lock.push(name.clone()),
         }
     }

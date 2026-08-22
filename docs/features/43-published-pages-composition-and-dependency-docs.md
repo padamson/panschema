@@ -172,9 +172,19 @@ without knowing the URL scheme.
   absolute or depth-sensitive overrides target the own page's depth.
   Per-page URL overrides wait for a consumer who needs them.
 - Publish resolves the dependency by the version the ref's manifest
-  declares but does not checksum the cached content against the ref's
-  lockfile — `panschema verify` does; folding that gate into publish is
-  tracked as a follow-up.
+  declares, and checks the cached content against the ref's committed
+  lockfile checksum. Whether a pin exists to honor is decided by the
+  manifest's parsed source, never the lock entry's spelling; an entry
+  disagreeing with its own ref's manifest (version or source) is
+  reported as a stale lock, since the cache may be pristine and no
+  fetch repairs committed history; a lockfile that is present but
+  unparseable refuses the page rather than failing open. Refs without
+  a lockfile entry publish ungated, and `path:` dependencies are never
+  gated. The checksum covers the schema's main file — the content
+  `fetch` locks and `verify` checks, through the same shared
+  comparison — so imported sibling files in the cached package are
+  outside the gate until the lockfile format records a package-level
+  digest (tracked as a follow-up).
 - A dataset's version identity is the publish cohort's ref; there is no
   per-dataset semver.
 - Composition presets were chosen over independent per-section toggles:

@@ -963,7 +963,7 @@ fn plan_page<'a>(
                 }
                 DepAtRef::Failed(reason) => {
                     eprintln!(
-                        "note: {label}: dependency `{dep}` does not resolve at this ref \
+                        "note: {label}: dependency `{dep}` cannot be published at this ref \
                          ({reason}); publishing without its page for this version"
                     );
                     continue;
@@ -1201,41 +1201,153 @@ enum DepAtRef {
 }
 
 fn resolve_dep_schema_at(repo_root: &Path, source: BuildSource<'_>, dep: &str) -> DepAtRef {
-    let manifest = match source {
-        BuildSource::GitRef(ref_) => {
-            let Ok(extracted) = extract_main_at_ref(
-                repo_root,
-                ref_,
-                Path::new(crate::manifest::MANIFEST_FILENAME),
-            ) else {
-                return DepAtRef::NotDeclared;
-            };
-            match crate::manifest::Manifest::from_path(extracted.path()) {
-                Ok(m) => m,
-                Err(e) => {
-                    return DepAtRef::Failed(format!(
-                        "the ref's panschema.toml does not parse: {e}"
-                    ));
-                }
-            }
+    let manifest = match content_at(
+        repo_root,
+        source,
+        Path::new(crate::manifest::MANIFEST_FILENAME),
+    ) {
+        ContentAt::Absent => return DepAtRef::NotDeclared,
+        ContentAt::Unreadable(e) => {
+            return DepAtRef::Failed(format!("the ref's panschema.toml is unreadable: {e}"));
         }
-        BuildSource::WorkingTree => {
-            match crate::manifest::Manifest::from_path(
-                &repo_root.join(crate::manifest::MANIFEST_FILENAME),
-            ) {
-                Ok(m) => m,
-                Err(e) => {
-                    return DepAtRef::Failed(format!("panschema.toml does not parse: {e}"));
-                }
+        ContentAt::Content(content) => match content.parse::<crate::manifest::Manifest>() {
+            Ok(m) => m,
+            Err(e) => {
+                return DepAtRef::Failed(format!("the ref's panschema.toml does not parse: {e}"));
             }
-        }
+        },
     };
     let Some(dep_spec) = manifest.schemas.get(dep) else {
         return DepAtRef::NotDeclared;
     };
-    match crate::source::resolve_dep(dep, dep_spec, repo_root, &OfflineTarballs) {
-        Ok(resolved) => DepAtRef::Resolved(resolved.schema_path),
-        Err(e) => DepAtRef::Failed(e.to_string()),
+    // The manifest's parsed source kind decides whether a pin exists to
+    // honor. The lock entry's own spelling never does: a stale entry
+    // left from before a dependency switched to `path:` must not gate
+    // the working tree, and one recorded as `path:` must not let a
+    // pinned source escape the gate.
+    let pinned = matches!(
+        crate::source::SchemaSource::from_dep(dep, dep_spec),
+        Ok(crate::source::SchemaSource::Github { .. })
+    );
+    let resolved = match crate::source::resolve_dep(dep, dep_spec, repo_root, &OfflineTarballs) {
+        Ok(resolved) => resolved,
+        Err(e) => return DepAtRef::Failed(e.to_string()),
+    };
+
+    // The ref's committed lockfile is the contract the page claims to
+    // show; cached content that fails its checksum must not render as
+    // "the contract as it was". A ref without a lockfile (or without an
+    // entry for this dependency) publishes ungated, as before locking —
+    // but a lockfile that is present and broken refuses the page, since
+    // failing open would disable the gate exactly when a hand-edit or
+    // version skew makes it matter.
+    if pinned {
+        match content_at(
+            repo_root,
+            source,
+            Path::new(crate::lockfile::LOCKFILE_FILENAME),
+        ) {
+            ContentAt::Absent => {}
+            ContentAt::Unreadable(e) => {
+                return DepAtRef::Failed(format!("the ref's panschema.lock is unreadable: {e}"));
+            }
+            ContentAt::Content(content) => match content.parse::<crate::lockfile::Lockfile>() {
+                Err(e) => {
+                    return DepAtRef::Failed(format!(
+                        "the ref's panschema.lock does not parse: {e}"
+                    ));
+                }
+                Ok(lockfile) => {
+                    if let Some(reason) = lockfile_drift(&lockfile, dep, dep_spec, &resolved) {
+                        return DepAtRef::Failed(reason);
+                    }
+                }
+            },
+        }
+    }
+    DepAtRef::Resolved(resolved.schema_path)
+}
+
+/// One repo file's content as of a build source: read from the ref's
+/// tree, or from the working tree. Absence — often legitimate history —
+/// is distinguished from a file that is present but cannot be read,
+/// which callers surface rather than swallow.
+enum ContentAt {
+    Absent,
+    Content(String),
+    Unreadable(String),
+}
+
+fn content_at(repo_root: &Path, source: BuildSource<'_>, rel: &Path) -> ContentAt {
+    match source {
+        BuildSource::GitRef(ref_) => {
+            if !exists_at_ref(repo_root, ref_, rel) {
+                return ContentAt::Absent;
+            }
+            let spec = format!("{ref_}:{}", rel.display());
+            match run_git_capture(repo_root, &["show", &spec]) {
+                Ok(content) => ContentAt::Content(content),
+                Err(e) => ContentAt::Unreadable(e.to_string()),
+            }
+        }
+        BuildSource::WorkingTree => {
+            let path = repo_root.join(rel);
+            if !path.is_file() {
+                return ContentAt::Absent;
+            }
+            match std::fs::read_to_string(&path) {
+                Ok(content) => ContentAt::Content(content),
+                Err(e) => ContentAt::Unreadable(e.to_string()),
+            }
+        }
+    }
+}
+
+/// Why the ref's lockfile refuses the resolved dependency, if it does.
+/// `None` passes: the entry agrees with the ref's own manifest and the
+/// cached content matches its checksum — or the lockfile never
+/// recorded this dependency, which publishes ungated. An entry that
+/// disagrees with the manifest is reported as a stale lock, never as
+/// drifted content: the cache may be pristine, and no fetch can repair
+/// a committed historical lockfile.
+fn lockfile_drift(
+    lockfile: &crate::lockfile::Lockfile,
+    dep: &str,
+    dep_spec: &crate::manifest::SchemaDep,
+    resolved: &crate::source::Resolved,
+) -> Option<String> {
+    let entry = lockfile.entry(dep)?;
+    let manifest_spec = crate::source::SchemaSource::from_dep(dep, dep_spec)
+        .ok()
+        .map(|s| s.source_spec());
+    if manifest_spec.as_deref() != Some(entry.source.as_str()) {
+        return Some(format!(
+            "the ref's lockfile records source `{}` where its manifest declares `{}` — \
+             the lock is stale relative to the manifest at this ref (re-run \
+             `panschema fetch` before tagging)",
+            entry.source,
+            manifest_spec.unwrap_or_default(),
+        ));
+    }
+    if let Some(locked_version) = &entry.version
+        && locked_version != &resolved.version
+    {
+        return Some(format!(
+            "the ref's lockfile records version {locked_version} where its manifest pins \
+             {} — the lock is stale relative to the manifest at this ref (re-run \
+             `panschema fetch` before tagging)",
+            resolved.version,
+        ));
+    }
+    match entry.checksum_drift(&resolved.schema_path) {
+        Err(e) => Some(format!("the cached schema could not be checksummed: {e}")),
+        Ok(Some(observed)) => Some(format!(
+            "the cached content fails the ref's lockfile checksum (locked {}, cached \
+             {observed}) — a re-published tag or an edited cache; `panschema verify` \
+             inspects, `panschema fetch` refreshes",
+            entry.checksum
+        )),
+        Ok(None) => None,
     }
 }
 
@@ -3733,6 +3845,118 @@ current = "v0.1.0"
         assert!(
             !own.contains("page-links"),
             "a site with one page has no other pages to offer"
+        );
+    }
+
+    #[test]
+    fn a_path_dependency_is_never_gated_by_a_stale_lock_entry() {
+        // The manifest's parsed source decides whether a pin exists to
+        // honor; a leftover `github:` lock entry from before the dep
+        // switched to `path:` must not checksum the working tree.
+        let repo = make_repo_with_dependency_data();
+        std::fs::write(
+            repo.path().join("panschema.lock"),
+            concat!(
+                "[[schema]]\n",
+                "name = \"cqa\"\n",
+                "version = \"0.1.0\"\n",
+                "source = \"github:old-owner/cqa\"\n",
+                "checksum = \"sha256:0000000000000000000000000000000000000000000000000000000000000000\"\n",
+            ),
+        )
+        .unwrap();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], Some("main"), "v0.2.0");
+        cfg.instances.push(dep_entry());
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), true).expect("publish succeeds");
+        assert!(
+            out.path().join("cqa/main/index.html").exists(),
+            "a path dependency carries no pin, so a stale lock entry cannot gate it"
+        );
+    }
+
+    #[test]
+    fn lockfile_drift_gates_cached_content_for_pinned_sources() {
+        use crate::lockfile::{LockEntry, Lockfile, checksum_file};
+        use crate::manifest::SchemaDep;
+        let schema = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(schema.path(), "id: https://example.org/c\nname: c\n").unwrap();
+        let good = checksum_file(schema.path()).unwrap();
+        let dep_spec = SchemaDep {
+            path: None,
+            source: Some("github:o/r".into()),
+            version: Some("0.1.0".into()),
+        };
+        let resolved = crate::source::Resolved {
+            pkg_dir: schema.path().parent().unwrap().to_path_buf(),
+            schema_path: schema.path().to_path_buf(),
+            version: "0.1.0".into(),
+            revision: None,
+        };
+        let lock = |version: &str, source: &str, checksum: &str| Lockfile {
+            entries: vec![LockEntry {
+                name: "cqa".into(),
+                version: Some(version.into()),
+                source: source.into(),
+                revision: None,
+                checksum: checksum.into(),
+            }],
+        };
+
+        assert_eq!(
+            lockfile_drift(
+                &lock("0.1.0", "github:o/r", &good),
+                "cqa",
+                &dep_spec,
+                &resolved
+            ),
+            None,
+            "an entry agreeing with the manifest and the content passes the gate"
+        );
+
+        let drift = lockfile_drift(
+            &lock("0.1.0", "github:o/r", "sha256:0000"),
+            "cqa",
+            &dep_spec,
+            &resolved,
+        )
+        .expect("drifted content is refused");
+        assert!(
+            drift.contains("sha256:0000") && drift.contains(&good) && drift.contains("cache"),
+            "the mismatch names both checksums and blames the cache side; got: {drift}"
+        );
+
+        let stale_version = lockfile_drift(
+            &lock("0.9.9", "github:o/r", &good),
+            "cqa",
+            &dep_spec,
+            &resolved,
+        )
+        .expect("a version disagreeing with the manifest is refused");
+        assert!(
+            stale_version.contains("0.9.9")
+                && stale_version.contains("stale")
+                && !stale_version.contains("edited cache"),
+            "a stale lock is named as stale, never blamed on the cache; got: {stale_version}"
+        );
+
+        let stale_source = lockfile_drift(
+            &lock("0.1.0", "github:other/r", &good),
+            "cqa",
+            &dep_spec,
+            &resolved,
+        )
+        .expect("a source disagreeing with the manifest is refused");
+        assert!(
+            stale_source.contains("github:other/r") && stale_source.contains("github:o/r"),
+            "the stale-source message names both specs; got: {stale_source}"
+        );
+
+        let other_dep = lock("0.1.0", "github:o/r", "sha256:0000");
+        assert_eq!(
+            lockfile_drift(&other_dep, "nimbly", &dep_spec, &resolved),
+            None,
+            "a dependency the lockfile does not record is ungated"
         );
     }
 
