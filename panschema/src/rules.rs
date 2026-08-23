@@ -6,7 +6,10 @@
 //! `equals_string` / `equals_number`, `value_presence`, `required`, `range`,
 //! `pattern`, value bounds, cardinality, and `any_of` alternatives.
 
-use crate::linkml::{ClassRule, RuleConditions, SlotCondition, ValuePresence};
+use crate::linkml::{
+    ClassRule, EnumDefinition, RuleConditions, SchemaDefinition, SlotCondition, ValuePresence,
+};
+use crate::linkml_resolve::ResolvedSlot;
 
 /// The slots a rule names, split by side: `trigger` slots appear in its
 /// preconditions (what makes the rule fire), `governed` slots in its
@@ -33,6 +36,158 @@ impl RuleParticipants {
         slots.sort_unstable();
         slots.dedup();
         slots
+    }
+}
+
+/// The permissible-value map key `value` names — matched by key or by
+/// the value's `text`, the same membership `validate` enforces — so
+/// what the never-fires diagnostic condemns and the enum card points
+/// at is exactly what conforming data may hold. `None` when the value
+/// names nothing.
+pub fn permitted_value_key<'e>(enum_def: &'e EnumDefinition, value: &str) -> Option<&'e str> {
+    enum_def
+        .permissible_values
+        .get_key_value(value)
+        .map(|(key, _)| key.as_str())
+        .or_else(|| {
+            // Several rows sharing one `text` is pathological; the first
+            // by key order answers.
+            enum_def
+                .permissible_values
+                .iter()
+                .find(|(_, pv)| pv.text == value)
+                .map(|(key, _)| key.as_str())
+        })
+}
+
+/// How a rule is named to a human: its title, or its 1-based position
+/// (`#2`) when untitled — a blank title counting as untitled. Callers
+/// supply the noun (`` rule `{label}` ``), so titled and untitled rules
+/// read uniformly; the one spelling every diagnostic and message uses,
+/// so a reader can match a report against the schema.
+pub fn rule_label(rule: &ClassRule, index: usize) -> String {
+    rule.title
+        .clone()
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or_else(|| format!("#{}", index + 1))
+}
+
+/// The enumerations a rule participates in through its slots: each
+/// participant slot whose class-induced range set touches an
+/// enumeration. The induced view is the class's own — a `slot_usage`
+/// that narrows an inherited union narrows this too. The rule's
+/// conditions constrain that enum's value space, so the enum
+/// participates through its values. Deduplicated, in participant-slot
+/// order; the one derivation the HTML hover ids and the graph payload
+/// share.
+pub fn participant_enums(
+    participants: &RuleParticipants,
+    resolved: &std::collections::BTreeMap<String, ResolvedSlot>,
+    schema: &SchemaDefinition,
+) -> Vec<String> {
+    let mut enums = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for slot in participants.all_slots() {
+        let Some(rs) = resolved.get(slot) else {
+            continue;
+        };
+        for range in &rs.induced.ranges {
+            if schema.enums.contains_key(range) && seen.insert(range.clone()) {
+                enums.push(range.clone());
+            }
+        }
+    }
+    enums
+}
+
+/// One `equals_string` constant a condition set tests against an
+/// enum-ranged slot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumConstant {
+    pub slot: String,
+    pub enum_name: String,
+    pub value: String,
+    /// The constant sits in an `any_of` alternative — one of several
+    /// ways to satisfy its side — rather than being demanded outright.
+    /// A postcondition alternative is not "required": satisfying a
+    /// sibling suffices.
+    pub alternative: bool,
+}
+
+/// Every `equals_string` constant a condition set tests against an
+/// enum-ranged slot — walking the slot conditions, their value-level
+/// `any_of` alternatives, and every branch of the set's own `any_of`.
+/// A slot counts when its class-induced range set is exactly one
+/// enumeration (so a `slot_usage` narrowing an inherited union counts
+/// for that class), and that enum has modeled permissible values — a
+/// dynamic enum's value forms are not modeled, so nothing sane can be
+/// said about its space. Note the deliberate asymmetry with
+/// [`participant_enums`]: participation (the graph ring) is true of
+/// any enum a union touches, while a value-level claim — a card
+/// pointer, a never-fires finding — needs the certainty a union
+/// cannot give. Both the never-fires diagnostic and the enum card's
+/// pointers consume this walk, so the two can never disagree about
+/// which constants are in scope.
+pub fn enum_equals_constants(
+    conditions: &RuleConditions,
+    resolved: &std::collections::BTreeMap<String, ResolvedSlot>,
+    schema: &SchemaDefinition,
+) -> Vec<EnumConstant> {
+    let mut out: Vec<EnumConstant> = Vec::new();
+    collect_enum_constants(conditions, resolved, schema, false, &mut out);
+    // The `any_of` recursion revisits repeated constants; duplicates are
+    // this walk's artifact, so they end here, not at each caller.
+    let mut seen = std::collections::BTreeSet::new();
+    out.retain(|c| {
+        seen.insert((
+            c.slot.clone(),
+            c.enum_name.clone(),
+            c.value.clone(),
+            c.alternative,
+        ))
+    });
+    out
+}
+
+fn collect_enum_constants(
+    conditions: &RuleConditions,
+    resolved: &std::collections::BTreeMap<String, ResolvedSlot>,
+    schema: &SchemaDefinition,
+    in_alternative: bool,
+    out: &mut Vec<EnumConstant>,
+) {
+    for (slot_name, cond) in &conditions.slot_conditions {
+        let Some(rs) = resolved.get(slot_name) else {
+            continue;
+        };
+        let [range] = rs.induced.ranges.as_slice() else {
+            continue;
+        };
+        let Some(enum_def) = schema.enums.get(range) else {
+            continue;
+        };
+        if enum_def.permissible_values.is_empty() {
+            continue;
+        }
+        let mut push = |value: &str, alternative: bool| {
+            out.push(EnumConstant {
+                slot: slot_name.clone(),
+                enum_name: range.to_string(),
+                value: value.to_string(),
+                alternative,
+            });
+        };
+        if let Some(v) = &cond.equals_string {
+            push(v, in_alternative);
+        }
+        for alt in &cond.any_of {
+            if let Some(v) = &alt.equals_string {
+                push(v, true);
+            }
+        }
+    }
+    for branch in &conditions.any_of {
+        collect_enum_constants(branch, resolved, schema, true, out);
     }
 }
 

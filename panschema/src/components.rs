@@ -1517,6 +1517,12 @@ mod tests {
             use panschema::html_writer::{ExternalLink, PermissibleValueData};
             let permissible_values = vec![
                 PermissibleValueData {
+                    rule_pointers: vec![panschema::html_writer::ValueRulePointer {
+                        class: EntityRef::new("person", "Person"),
+                        triggers: 1,
+                        governed: 0,
+                        participants: "class:person slot:age".to_string(),
+                    }],
                     text: "open".to_string(),
                     description: Some("The item is open for changes.".to_string()),
                     meaning: Some(ExternalLink {
@@ -1527,6 +1533,7 @@ mod tests {
                     }),
                 },
                 PermissibleValueData {
+                    rule_pointers: Vec::new(),
                     text: "closed".to_string(),
                     description: None,
                     meaning: None,

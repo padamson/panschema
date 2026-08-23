@@ -254,6 +254,13 @@ pub struct RuleSummary {
     /// governed-slot glyphs and highlighting the governed nodes on hover.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub governed_slots: Vec<String>,
+    /// Enumerations the rule participates in through its slots — a
+    /// participant slot whose class-effective range (directly or via an
+    /// `any_of` branch) is an enum. The rule's conditions constrain that
+    /// enum's value space, so its node rings and highlights with the
+    /// other participants.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub participant_enums: Vec<String>,
 }
 
 /// One permissible value of an enum in the hover card: the value
@@ -347,11 +354,11 @@ pub(crate) fn resolve_node_uri(
     }
 }
 
-fn resolve_class_slots(schema: &SchemaDefinition, class_name: &str) -> Vec<SlotSummary> {
-    let Some(class_def) = schema.classes.get(class_name) else {
-        return Vec::new();
-    };
-    crate::linkml_resolve::resolve_effective_slots_with_provenance(class_def, schema)
+fn resolve_class_slots(
+    resolved: std::collections::BTreeMap<String, crate::linkml_resolve::ResolvedSlot>,
+    class_name: &str,
+) -> Vec<SlotSummary> {
+    resolved
         .into_iter()
         .map(|(name, rs)| {
             let cardinality = crate::linkml_resolve::effective_cardinality(&rs.definition);
@@ -897,24 +904,36 @@ impl GraphWriter {
                 color[3] = colors::ABSTRACT_ALPHA;
             }
 
+            // One inheritance walk serves both the slot summaries and the
+            // rules' enum participants.
+            let resolved =
+                crate::linkml_resolve::resolve_effective_slots_with_provenance(class_def, schema);
+            // Participant ids are emitted whatever the preset holds —
+            // like trigger/governed slots, they describe the rule, and a
+            // consumer resolving ids to nodes ignores ones a preset
+            // omitted (documented on `highlight_nodes`).
+            let rules = class_def
+                .rules
+                .iter()
+                .map(|r| {
+                    let participants = crate::rules::rule_participants(r);
+                    let participant_enums =
+                        crate::rules::participant_enums(&participants, &resolved, schema);
+                    RuleSummary {
+                        title: r.title.clone().filter(|t| !t.trim().is_empty()),
+                        description: r.description.clone(),
+                        summary: crate::rules::rule_summary(r),
+                        trigger_slots: participants.trigger,
+                        governed_slots: participants.governed,
+                        participant_enums,
+                    }
+                })
+                .collect();
             let kind_metadata = Some(KindMetadata::Class {
-                slots: resolve_class_slots(schema, name),
+                slots: resolve_class_slots(resolved, name),
                 parents: class_def.is_a.iter().cloned().collect(),
                 mixins: class_def.mixins.clone(),
-                rules: class_def
-                    .rules
-                    .iter()
-                    .map(|r| {
-                        let participants = crate::rules::rule_participants(r);
-                        RuleSummary {
-                            title: r.title.clone(),
-                            description: r.description.clone(),
-                            summary: crate::rules::rule_summary(r),
-                            trigger_slots: participants.trigger,
-                            governed_slots: participants.governed,
-                        }
-                    })
-                    .collect(),
+                rules,
             });
 
             let (uri, uri_unresolved) = resolve_node_uri(schema, class_def.class_uri.as_deref());
@@ -2553,13 +2572,60 @@ mod tests {
     }
 
     #[test]
+    fn rule_summary_wire_keys_are_the_contract_the_viz_mirrors() {
+        // The viz crate hand-mirrors RuleSummary with no dependency edge,
+        // so the JSON key set is the contract: a renamed or mis-cased
+        // field on either side would deserialize to its default in
+        // silence. This pins the writer side; the viz mirror declares
+        // the same names under the same camelCase rename.
+        let full = RuleSummary {
+            title: Some("t".into()),
+            description: Some("d".into()),
+            summary: Some("s".into()),
+            trigger_slots: vec!["a".into()],
+            governed_slots: vec!["b".into()],
+            participant_enums: vec!["E".into()],
+        };
+        let json = serde_json::to_value(&full).expect("serializes");
+        let mut keys: Vec<&str> = json
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec![
+                "description",
+                "governedSlots",
+                "participantEnums",
+                "summary",
+                "title",
+                "triggerSlots",
+            ],
+            "the wire key set is the viz mirror's contract"
+        );
+    }
+
+    #[test]
     fn class_kind_metadata_carries_rules_for_the_hover_payload() {
         use crate::linkml::{ClassRule, RuleConditions, SlotCondition, ValuePresence};
-        // The graph export must carry class rules so the viz popup can show
-        // them (today it emits nothing). Same full projection as the HTML
-        // card: an `any_of` trigger and a `value_presence` consequence.
+        // The graph export carries class rules so the viz popup can show
+        // them. Same full projection as the HTML card: an `any_of`
+        // trigger and a `value_presence` consequence.
         let mut schema = SchemaDefinition::new("approvals");
+        let mut verdict_enum = crate::linkml::EnumDefinition::new("Verdict");
+        verdict_enum.permissible_values.insert(
+            "approved".to_string(),
+            crate::linkml::PermissibleValue::new("approved"),
+        );
+        schema.enums.insert("Verdict".to_string(), verdict_enum);
+        let mut verdict = crate::linkml::SlotDefinition::new("verdict");
+        verdict.range = Some("Verdict".to_string());
+        schema.slots.insert("verdict".to_string(), verdict);
         let mut cls = ClassDefinition::new("ImageApproval");
+        cls.slots = vec!["verdict".into()];
         let alt = |v: &str| RuleConditions {
             any_of: Vec::new(),
             slot_conditions: std::collections::BTreeMap::from([(
@@ -2606,6 +2672,12 @@ mod tests {
         assert!(
             summary.contains("approved_by") && summary.contains("is present"),
             "consequence must render the value_presence postcondition; got: {summary}"
+        );
+        assert_eq!(
+            rules[0].participant_enums,
+            vec!["Verdict".to_string()],
+            "the payload names the enum the trigger slot ranges over, so its \
+             node can ring with the other participants"
         );
     }
 

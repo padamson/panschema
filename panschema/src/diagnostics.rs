@@ -63,22 +63,121 @@ pub fn unmodeled_class_constructs(schema: &SchemaDefinition) -> Vec<UnmodeledCon
     scan(schema, IGNORED_CLASS_KEYS)
 }
 
-/// Whether `generate` should fail rather than merely warn: true only when
-/// strict mode is on and the schema has at least one blocking problem — an
-/// unmodeled construct or a dangling reference. Keeping the decision here (not
-/// inline in the CLI) keeps it unit-testable.
-pub fn should_fail_strict(
-    unmodeled: &[UnmodeledConstruct],
-    dangling: &[DanglingRef],
-    colliding: &[CollidingSlot],
-    untyped: &[UntypedSlot],
-    strict: bool,
-) -> bool {
-    strict
-        && (!unmodeled.is_empty()
-            || !dangling.is_empty()
-            || !colliding.is_empty()
-            || !untyped.is_empty())
+/// Whether `generate` should fail rather than merely warn: true only
+/// when strict mode is on and the schema has at least one blocking
+/// finding. The caller sums the counts it already computes for its own
+/// message, so adding a finding kind never widens this signature.
+pub fn should_fail_strict(strict: bool, blocking_findings: usize) -> bool {
+    strict && blocking_findings > 0
+}
+
+/// Which side of a rule carries an impossible constant — the sides fail
+/// differently, so the message says which.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RuleSide {
+    Precondition,
+    Postcondition,
+}
+
+/// A rule's `equals_string` constant that is not a permissible value of
+/// its slot's enum: at a precondition the rule can never fire, at a
+/// postcondition no record can ever satisfy it — either way a defect
+/// that otherwise dies silently.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImpossibleRuleValue {
+    pub class: String,
+    /// The rule's title, or its 1-based position (`#2`) when untitled.
+    pub rule: String,
+    pub slot: String,
+    pub value: String,
+    pub enum_name: String,
+    pub side: RuleSide,
+    /// The constant sits in an `any_of` alternative: a dead branch, not
+    /// a dead rule — a sibling alternative may still satisfy the side.
+    pub alternative: bool,
+}
+
+impl ImpossibleRuleValue {
+    pub fn message(&self) -> String {
+        let (where_, consequence) = match (self.side, self.alternative) {
+            (RuleSide::Precondition, false) => ("precondition", "the rule can never fire"),
+            (RuleSide::Precondition, true) => (
+                "precondition alternative",
+                "this alternative can never hold, though a sibling may still fire the rule",
+            ),
+            (RuleSide::Postcondition, false) => ("postcondition", "no record can satisfy the rule"),
+            (RuleSide::Postcondition, true) => (
+                "postcondition alternative",
+                "this alternative can never hold, though a sibling may still satisfy the rule",
+            ),
+        };
+        format!(
+            "class `{}` rule `{}`: {where_} tests `{}` for `{}`, which is not a \
+             permissible value of enum `{}` — {consequence}",
+            self.class, self.rule, self.slot, self.value, self.enum_name
+        )
+    }
+}
+
+/// Rule constants checked against their slots' enum value spaces, on
+/// the resolved view (each class's effective slots), so `slot_usage`
+/// ranges count. The walk and its conservatism live in
+/// [`crate::rules::enum_equals_constants`], and membership is
+/// [`crate::rules::permitted_value_key`] — the same matching `validate`
+/// enforces — so what this refuses is exactly what conforming data
+/// could never hold. One finding per distinct defect, however many
+/// `any_of` branches repeat it.
+pub fn impossible_rule_values(schema: &SchemaDefinition) -> Vec<ImpossibleRuleValue> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for (class_name, class) in &schema.classes {
+        if class.rules.is_empty() {
+            continue;
+        }
+        let resolved =
+            crate::linkml_resolve::resolve_effective_slots_with_provenance(class, schema);
+        for (index, rule) in class.rules.iter().enumerate() {
+            let rule_name = crate::rules::rule_label(rule, index);
+            for (side, conditions) in [
+                (RuleSide::Precondition, rule.preconditions.as_ref()),
+                (RuleSide::Postcondition, rule.postconditions.as_ref()),
+            ] {
+                let Some(conditions) = conditions else {
+                    continue;
+                };
+                for constant in crate::rules::enum_equals_constants(conditions, &resolved, schema) {
+                    if schema
+                        .enums
+                        .get(&constant.enum_name)
+                        .and_then(|e| crate::rules::permitted_value_key(e, &constant.value))
+                        .is_some()
+                    {
+                        continue;
+                    }
+                    // Keyed by rule position, not label: same-titled
+                    // rules are distinct defects.
+                    if seen.insert((
+                        class_name.clone(),
+                        index,
+                        constant.slot.clone(),
+                        constant.value.clone(),
+                        side,
+                    )) {
+                        out.push(ImpossibleRuleValue {
+                            class: class_name.clone(),
+                            rule: rule_name.clone(),
+                            slot: constant.slot,
+                            value: constant.value,
+                            enum_name: constant.enum_name,
+                            side,
+                            alternative: constant.alternative,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 /// A slot name defined at more than one site whose definitions would mint
@@ -238,6 +337,7 @@ pub fn schema_load_diagnostics(schema: &SchemaDefinition) -> Vec<String> {
             .map(|c| c.message()),
     );
     out.extend(untyped_slots(schema).iter().map(|u| u.message()));
+    out.extend(impossible_rule_values(schema).iter().map(|i| i.message()));
     // The metamodel recommends at most one `tree_root` per schema. Several
     // are supported here — each dataset is read against the root it conforms
     // to — but the deviation from that "should" is stated, because upstream
@@ -1336,6 +1436,324 @@ pub fn unresolved_unique_key_slots(schema: &SchemaDefinition) -> Vec<UnresolvedK
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_lint_shares_validates_membership_and_reports_each_defect_once() {
+        use crate::linkml::{
+            ClassDefinition, ClassRule, EnumDefinition, PermissibleValue, RuleConditions,
+            SchemaDefinition, SlotCondition, SlotDefinition,
+        };
+        let mut schema = SchemaDefinition::new("s");
+        // An OWL-loaded shape: map key `approved`, display text `Approved`.
+        let mut kinds = EnumDefinition::new("Verdict");
+        let mut pv = PermissibleValue::new("Approved");
+        pv.text = "Approved".to_string();
+        kinds.permissible_values.insert("approved".to_string(), pv);
+        schema.enums.insert("Verdict".to_string(), kinds);
+        // A dynamic enum whose value forms are not modeled: empty space.
+        schema
+            .enums
+            .insert("Country".to_string(), EnumDefinition::new("Country"));
+        let mut verdict = SlotDefinition::new("verdict");
+        verdict.range = Some("Verdict".to_string());
+        schema.slots.insert("verdict".to_string(), verdict);
+        let mut country = SlotDefinition::new("country");
+        country.range = Some("Country".to_string());
+        schema.slots.insert("country".to_string(), country);
+        let equals = |slot: &str, v: &str| RuleConditions {
+            any_of: Vec::new(),
+            slot_conditions: std::collections::BTreeMap::from([(
+                slot.to_string(),
+                SlotCondition {
+                    equals_string: Some(v.to_string()),
+                    ..Default::default()
+                },
+            )]),
+        };
+        let mut cls = ClassDefinition::new("Answer");
+        cls.slots = vec!["verdict".into(), "country".into()];
+        cls.rules = vec![
+            // Matches by text, as `validate` would accept it: no finding.
+            ClassRule {
+                title: None,
+                description: None,
+                preconditions: Some(equals("verdict", "Approved")),
+                postconditions: None,
+            },
+            // An empty value space has nothing to check against: no finding.
+            ClassRule {
+                title: None,
+                description: None,
+                preconditions: Some(equals("country", "US")),
+                postconditions: None,
+            },
+            // One typo repeated across alternatives: one finding.
+            ClassRule {
+                title: None,
+                description: None,
+                preconditions: Some(RuleConditions {
+                    any_of: vec![equals("verdict", "aproved"), equals("verdict", "aproved")],
+                    slot_conditions: std::collections::BTreeMap::new(),
+                }),
+                postconditions: None,
+            },
+        ];
+        schema.classes.insert("Answer".to_string(), cls);
+
+        let findings = impossible_rule_values(&schema);
+        assert_eq!(
+            findings.len(),
+            1,
+            "text-matched and unmodeled-space constants pass; the one typo reports \
+             once; got: {:?}",
+            findings.iter().map(|f| f.message()).collect::<Vec<_>>()
+        );
+        assert!(findings[0].message().contains("aproved"));
+    }
+
+    #[test]
+    fn a_dead_alternative_is_not_reported_as_the_whole_rule_dead() {
+        use crate::linkml::{
+            ClassDefinition, ClassRule, EnumDefinition, PermissibleValue, RuleConditions,
+            SchemaDefinition, SlotCondition, SlotDefinition,
+        };
+        let mut schema = SchemaDefinition::new("s");
+        let mut kinds = EnumDefinition::new("Verdict");
+        for v in ["approved", "rejected"] {
+            kinds
+                .permissible_values
+                .insert(v.to_string(), PermissibleValue::new(v));
+        }
+        schema.enums.insert("Verdict".to_string(), kinds);
+        let mut verdict = SlotDefinition::new("verdict");
+        verdict.range = Some("Verdict".to_string());
+        schema.slots.insert("verdict".to_string(), verdict);
+        let equals = |v: &str| RuleConditions {
+            any_of: Vec::new(),
+            slot_conditions: std::collections::BTreeMap::from([(
+                "verdict".to_string(),
+                SlotCondition {
+                    equals_string: Some(v.to_string()),
+                    ..Default::default()
+                },
+            )]),
+        };
+        let mut cls = ClassDefinition::new("Answer");
+        cls.slots = vec!["verdict".into()];
+        cls.rules = vec![ClassRule {
+            title: Some("escalate".to_string()),
+            description: None,
+            // One good branch, one typo: the rule still fires.
+            preconditions: Some(RuleConditions {
+                any_of: vec![equals("approved"), equals("rejcted")],
+                slot_conditions: std::collections::BTreeMap::new(),
+            }),
+            postconditions: None,
+        }];
+        schema.classes.insert("Answer".to_string(), cls);
+
+        let findings = impossible_rule_values(&schema);
+        assert_eq!(findings.len(), 1, "the dead branch is still a defect");
+        let msg = findings[0].message();
+        assert!(
+            msg.contains("alternative")
+                && msg.contains("never hold")
+                && !msg.contains("never fire"),
+            "a dead alternative is named as a dead alternative, not as the whole \
+             rule being dead — a sibling branch still fires it; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn same_titled_rules_report_their_defects_separately() {
+        use crate::linkml::{
+            ClassDefinition, ClassRule, EnumDefinition, PermissibleValue, RuleConditions,
+            SchemaDefinition, SlotCondition, SlotDefinition,
+        };
+        let mut schema = SchemaDefinition::new("s");
+        let mut kinds = EnumDefinition::new("Verdict");
+        kinds
+            .permissible_values
+            .insert("approved".to_string(), PermissibleValue::new("approved"));
+        schema.enums.insert("Verdict".to_string(), kinds);
+        let mut verdict = SlotDefinition::new("verdict");
+        verdict.range = Some("Verdict".to_string());
+        schema.slots.insert("verdict".to_string(), verdict);
+        let bad_rule = ClassRule {
+            title: Some("verdict_gate".to_string()),
+            description: None,
+            preconditions: Some(RuleConditions {
+                any_of: Vec::new(),
+                slot_conditions: std::collections::BTreeMap::from([(
+                    "verdict".to_string(),
+                    SlotCondition {
+                        equals_string: Some("aproved".to_string()),
+                        ..Default::default()
+                    },
+                )]),
+            }),
+            postconditions: None,
+        };
+        let mut cls = ClassDefinition::new("Answer");
+        cls.slots = vec!["verdict".into()];
+        cls.rules = vec![bad_rule.clone(), bad_rule];
+        schema.classes.insert("Answer".to_string(), cls);
+
+        assert_eq!(
+            impossible_rule_values(&schema).len(),
+            2,
+            "two copy-pasted rules sharing a title are two defects, not one"
+        );
+    }
+
+    #[test]
+    fn a_slot_usage_narrowed_union_is_still_linted() {
+        use crate::linkml::{
+            ClassDefinition, EnumDefinition, PermissibleValue, RuleConditions, SchemaDefinition,
+            SlotCondition, SlotDefinition,
+        };
+        // The top-level slot is a union; the class narrows it to the one
+        // enum through `slot_usage`. The induced view knows that, so the
+        // class's rule constants are checked.
+        let mut schema = SchemaDefinition::new("s");
+        let mut kinds = EnumDefinition::new("Verdict");
+        kinds
+            .permissible_values
+            .insert("approved".to_string(), PermissibleValue::new("approved"));
+        schema.enums.insert("Verdict".to_string(), kinds);
+        let mut verdict = SlotDefinition::new("verdict");
+        let mut enum_branch = SlotDefinition::new("verdict");
+        enum_branch.range = Some("Verdict".to_string());
+        let mut string_branch = SlotDefinition::new("verdict");
+        string_branch.range = Some("string".to_string());
+        verdict.any_of = vec![enum_branch, string_branch];
+        schema.slots.insert("verdict".to_string(), verdict);
+        let mut cls = ClassDefinition::new("Answer");
+        cls.slots = vec!["verdict".into()];
+        let mut narrowed = SlotDefinition::new("verdict");
+        narrowed.range = Some("Verdict".to_string());
+        cls.slot_usage.insert("verdict".to_string(), narrowed);
+        cls.rules = vec![crate::linkml::ClassRule {
+            title: None,
+            description: None,
+            preconditions: Some(RuleConditions {
+                any_of: Vec::new(),
+                slot_conditions: std::collections::BTreeMap::from([(
+                    "verdict".to_string(),
+                    SlotCondition {
+                        equals_string: Some("aproved".to_string()),
+                        ..Default::default()
+                    },
+                )]),
+            }),
+            postconditions: None,
+        }];
+        schema.classes.insert("Answer".to_string(), cls);
+
+        assert_eq!(
+            impossible_rule_values(&schema).len(),
+            1,
+            "the class-narrowed slot is single-enum in the induced view, so its \
+             typo'd constant is caught"
+        );
+    }
+
+    #[test]
+    fn a_rule_constant_outside_its_enums_value_space_is_reported() {
+        use crate::linkml::{
+            ClassDefinition, ClassRule, EnumDefinition, PermissibleValue, RuleConditions,
+            SchemaDefinition, SlotCondition, SlotDefinition,
+        };
+        let mut schema = SchemaDefinition::new("s");
+        let mut kinds = EnumDefinition::new("AnswerKind");
+        kinds.permissible_values.insert(
+            "closed-world-negative".to_string(),
+            PermissibleValue::new("closed-world-negative"),
+        );
+        schema.enums.insert("AnswerKind".to_string(), kinds);
+        let mut answer_kind = SlotDefinition::new("answer_kind");
+        answer_kind.range = Some("AnswerKind".to_string());
+        schema.slots.insert("answer_kind".to_string(), answer_kind);
+        let mut status = SlotDefinition::new("status");
+        status.range = Some("string".to_string());
+        schema.slots.insert("status".to_string(), status);
+        let equals = |slot: &str, v: &str| {
+            Some(RuleConditions {
+                any_of: Vec::new(),
+                slot_conditions: std::collections::BTreeMap::from([(
+                    slot.to_string(),
+                    SlotCondition {
+                        equals_string: Some(v.to_string()),
+                        ..Default::default()
+                    },
+                )]),
+            })
+        };
+        let mut cls = ClassDefinition::new("Answer");
+        cls.slots = vec!["answer_kind".into(), "status".into()];
+        cls.rules = vec![
+            // Typo'd precondition constant: the rule can never fire.
+            ClassRule {
+                title: Some("negatives_state_absence".to_string()),
+                description: None,
+                preconditions: equals("answer_kind", "closed-word-negative"),
+                postconditions: None,
+            },
+            // Valid constant: no finding.
+            ClassRule {
+                title: None,
+                description: None,
+                preconditions: equals("answer_kind", "closed-world-negative"),
+                postconditions: None,
+            },
+            // Impossible postcondition: no record can satisfy the rule.
+            ClassRule {
+                title: None,
+                description: None,
+                preconditions: None,
+                postconditions: equals("answer_kind", "open-world"),
+            },
+            // Non-enum slot: constants are unconstrained, no finding.
+            ClassRule {
+                title: None,
+                description: None,
+                preconditions: equals("status", "anything"),
+                postconditions: None,
+            },
+        ];
+        schema.classes.insert("Answer".to_string(), cls);
+
+        let findings = impossible_rule_values(&schema);
+        assert_eq!(
+            findings.len(),
+            2,
+            "exactly the two out-of-space constants are reported; got: {:?}",
+            findings.iter().map(|f| f.message()).collect::<Vec<_>>()
+        );
+        let first = findings[0].message();
+        assert!(
+            first.contains("negatives_state_absence")
+                && first.contains("closed-word-negative")
+                && first.contains("AnswerKind")
+                && first.contains("never fire"),
+            "a dead precondition names the rule, the constant, the enum, and the \
+             consequence; got: {first}"
+        );
+        let second = findings[1].message();
+        assert!(
+            second.contains("open-world") && second.contains("satisf"),
+            "an impossible postcondition states its own consequence; got: {second}"
+        );
+
+        assert!(
+            should_fail_strict(true, findings.len()),
+            "--strict refuses a schema whose rule can never fire"
+        );
+        assert!(
+            !should_fail_strict(true, 0),
+            "no findings, no strict failure"
+        );
+    }
+
     /// Two classes declaring same-named `attributes:` are distinct slots in
     /// LinkML but mint one property IRI in RDF — only one survives a
     /// read-back, and the emitted OWL asserts one property about both
@@ -1646,45 +2064,12 @@ mod tests {
 
     #[test]
     fn strict_fails_only_when_strict_and_findings_present() {
-        let unmodeled = vec![UnmodeledConstruct {
-            class: "C".to_string(),
-            construct: "rules".to_string(),
-        }];
-        let dangling = vec![DanglingRef {
-            referrer: "slot `x`".to_string(),
-            kind: "range",
-            name: "Missing".to_string(),
-        }];
-        let no_unmodeled: Vec<UnmodeledConstruct> = Vec::new();
-        let no_dangling: Vec<DanglingRef> = Vec::new();
-
         // Not strict ⇒ never fail, whatever is present.
-        assert!(!should_fail_strict(&unmodeled, &dangling, &[], &[], false));
-        // Strict + nothing ⇒ ok.
-        assert!(!should_fail_strict(
-            &no_unmodeled,
-            &no_dangling,
-            &[],
-            &[],
-            true
-        ));
-        // Strict + any kind of finding ⇒ fail.
-        assert!(
-            should_fail_strict(&unmodeled, &no_dangling, &[], &[], true),
-            "strict + unmodeled ⇒ fail"
-        );
-        assert!(
-            should_fail_strict(&no_unmodeled, &dangling, &[], &[], true),
-            "strict + dangling ⇒ fail"
-        );
-        let untyped = vec![UntypedSlot {
-            name: "x".to_string(),
-            site: "class `C`".to_string(),
-        }];
-        assert!(
-            should_fail_strict(&no_unmodeled, &no_dangling, &[], &untyped, true),
-            "strict + untyped slot ⇒ fail"
-        );
+        assert!(!should_fail_strict(false, 2));
+        // Strict + nothing blocking ⇒ ok.
+        assert!(!should_fail_strict(true, 0));
+        // Strict + any blocking finding ⇒ fail.
+        assert!(should_fail_strict(true, 1), "strict + one finding ⇒ fail");
     }
 
     /// A slot with no `range:` that no `default_range` covered means each

@@ -358,7 +358,7 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
             let Some(post) = &rule.postconditions else {
                 continue;
             };
-            let label = rule.title.clone().unwrap_or_else(|| format!("#{}", i + 1));
+            let label = crate::rules::rule_label(rule, i);
             for (slot_name, cond) in &post.slot_conditions {
                 let values = slot_values(inst, slot_name);
                 if let Some(reason) = slot_condition_failure(cond, values) {
@@ -625,12 +625,7 @@ fn slot_condition_failure(cond: &SlotCondition, values: &[InstanceValue]) -> Opt
 /// Whether `scalar`'s string form is one of the enum's permissible values —
 /// matched against either the value key or its `text`.
 fn enum_permits(enum_def: &EnumDefinition, scalar: &ScalarValue) -> bool {
-    let value = scalar_to_display(scalar);
-    enum_def.permissible_values.contains_key(&value)
-        || enum_def
-            .permissible_values
-            .values()
-            .any(|pv| pv.text == value)
+    crate::rules::permitted_value_key(enum_def, &scalar_to_display(scalar)).is_some()
 }
 
 use crate::primitives::kind_matches;
@@ -2488,7 +2483,7 @@ classes:
         let d = data("deployments:\n  - id: d1\n    status: actual\n");
         let v = validate_instance_data(&schema, &d);
         assert!(
-            v.iter().all(|x| x.detail.contains("`#1`")),
+            v.iter().all(|x| x.detail.contains("rule `#1`")),
             "an untitled rule falls back to its 1-based position; got: {v:?}"
         );
     }

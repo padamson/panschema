@@ -697,7 +697,7 @@ pub fn skipped_rules(schema: &SchemaDefinition) -> Vec<SkippedRule> {
             if let Some(reason) = rule_skip_reason(rule, &slot_columns, &array_slots) {
                 out.push(SkippedRule {
                     class: class_name.clone(),
-                    rule: rule.title.clone().unwrap_or_else(|| format!("rule #{i}")),
+                    rule: crate::rules::rule_label(rule, i),
                     reason,
                 });
             }
@@ -2455,7 +2455,10 @@ mod tests {
         );
         let skipped = skipped_rules(&schema);
         assert_eq!(skipped.len(), 1, "got: {skipped:?}");
-        assert_eq!(skipped[0].rule, "rule #0", "untitled rule labeled by index");
+        assert_eq!(
+            skipped[0].rule, "#1",
+            "untitled rule labeled by 1-based position"
+        );
     }
 
     #[test]

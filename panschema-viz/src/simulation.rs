@@ -224,6 +224,9 @@ impl CpuSimulation {
                     for slot in rule.trigger_slots.iter().chain(rule.governed_slots.iter()) {
                         rule_ids.insert(format!("slot:{slot}"));
                     }
+                    for e in &rule.participant_enums {
+                        rule_ids.insert(format!("enum:{e}"));
+                    }
                 }
             }
         }
@@ -775,12 +778,21 @@ mod tests {
                             summary: None,
                             trigger_slots: vec!["verdict".to_string()],
                             governed_slots: vec!["approved_by".to_string()],
+                            participant_enums: vec!["Verdict".to_string()],
                         }],
                     }),
                 },
                 slot_node("slot:verdict"),
                 slot_node("slot:approved_by"),
                 slot_node("slot:url"),
+                GraphNode {
+                    node_type: NodeType::Enum,
+                    ..slot_node("enum:Verdict")
+                },
+                GraphNode {
+                    node_type: NodeType::Enum,
+                    ..slot_node("enum:Bystander")
+                },
             ],
             edges: vec![],
         };
@@ -791,6 +803,17 @@ mod tests {
         assert!(
             in_rule("slot:approved_by"),
             "a governed slot should be flagged in_rule"
+        );
+        // An enum the rule's conditions constrain rings at rest too, and
+        // one no rule touches does not — the at-rest set matches the
+        // on-hover highlight set for enums as for slots.
+        assert!(
+            in_rule("enum:Verdict"),
+            "a participating enum should be flagged in_rule"
+        );
+        assert!(
+            !in_rule("enum:Bystander"),
+            "an enum no rule touches must not ring"
         );
         // A trigger slot is equally touched — it must ring at rest too, so
         // the at-rest set matches the on-hover highlight set.

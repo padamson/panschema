@@ -404,7 +404,7 @@ mod tests {
         // fixture's class declares one.
         assert!(s.nodes.iter().any(|n| n.in_rule));
         let rings: Vec<&str> = ring_rows_for(&spec).iter().map(|r| r.4).collect();
-        assert!(rings.contains(&"Slot in a rule") && rings.contains(&"Selected node"));
+        assert!(rings.contains(&"Rule participant") && rings.contains(&"Selected node"));
 
         // And the deliberate absences stay absent.
         assert!(!shown_nodes.contains("Enum") && !shown_nodes.contains("Type"));

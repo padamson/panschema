@@ -741,26 +741,32 @@ fn generate(
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     // The unmodeled-construct, unresolved-unique-key, dangling-reference,
-    // and untyped-slot warnings are emitted by the shared load path above
-    // (so `serve`/`publish` surface them too). Under `--strict`, an
-    // unmodeled construct, a dangling reference, a colliding slot
-    // definition, or an untyped slot is additionally a hard error here.
-    let unmodeled = panschema::diagnostics::unmodeled_class_constructs(&schema);
-    let dangling = panschema::diagnostics::dangling_references(&schema);
-    let colliding = panschema::diagnostics::colliding_slot_definitions(&schema);
-    let untyped = panschema::diagnostics::untyped_slots(&schema);
-    if panschema::diagnostics::should_fail_strict(
-        &unmodeled, &dangling, &colliding, &untyped, strict,
-    ) {
-        anyhow::bail!(
-            "{} unmodeled LinkML construct(s), {} dangling reference(s), \
-             {} colliding slot definition(s), and {} untyped slot(s) present; \
-             failing because --strict is set",
-            unmodeled.len(),
-            dangling.len(),
-            colliding.len(),
-            untyped.len()
-        );
+    // untyped-slot, and impossible-rule-value warnings are emitted by the
+    // shared load path above (so `serve`/`publish` surface them too).
+    // Under `--strict`, an unmodeled construct, a dangling reference, a
+    // colliding slot definition, an untyped slot, or a rule constant
+    // outside its enum's values is additionally a hard error here.
+    if strict {
+        let unmodeled = panschema::diagnostics::unmodeled_class_constructs(&schema);
+        let dangling = panschema::diagnostics::dangling_references(&schema);
+        let colliding = panschema::diagnostics::colliding_slot_definitions(&schema);
+        let untyped = panschema::diagnostics::untyped_slots(&schema);
+        let impossible = panschema::diagnostics::impossible_rule_values(&schema);
+        let blocking =
+            unmodeled.len() + dangling.len() + colliding.len() + untyped.len() + impossible.len();
+        if panschema::diagnostics::should_fail_strict(strict, blocking) {
+            anyhow::bail!(
+                "{} unmodeled LinkML construct(s), {} dangling reference(s), \
+                 {} colliding slot definition(s), {} untyped slot(s), and {} rule \
+                 constant(s) outside their enum's values present; failing because \
+                 --strict is set",
+                unmodeled.len(),
+                dangling.len(),
+                colliding.len(),
+                untyped.len(),
+                impossible.len()
+            );
+        }
     }
 
     // Each writer owns its own gap story — what it drops or degrades when
@@ -1859,7 +1865,8 @@ fn validate_manifest(strict: bool) -> anyhow::Result<()> {
         findings += panschema::diagnostics::unmodeled_class_constructs(&schema).len()
             + panschema::diagnostics::dangling_references(&schema).len()
             + panschema::diagnostics::colliding_slot_definitions(&schema).len()
-            + panschema::diagnostics::untyped_slots(&schema).len();
+            + panschema::diagnostics::untyped_slots(&schema).len()
+            + panschema::diagnostics::impossible_rule_values(&schema).len();
         let instances: Vec<PathBuf> = manifest
             .declared_instances(name)
             .iter()

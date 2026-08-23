@@ -45,9 +45,10 @@ worth more than skimming everything else.
    `graph-json` / `instance-graph-json` with hyphens.
 
 4. **`--strict` is narrower than it sounds.** It fails on unmodeled
-   constructs, dangling references, and instance-data violations. It does
-   *not* fail on unprojected-construct, Postgres-skip, or SHACL-skip
-   warnings — those stay warnings.
+   constructs, dangling references, colliding slot definitions, untyped
+   slots, rule constants outside their enum's values, and instance-data
+   violations. It does *not* fail on unprojected-construct, Postgres-skip,
+   or SHACL-skip warnings — those stay warnings.
 
 ## Instance data (A-boxes)
 

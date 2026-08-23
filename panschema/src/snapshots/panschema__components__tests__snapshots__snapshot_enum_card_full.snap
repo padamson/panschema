@@ -1,5 +1,6 @@
 ---
 source: panschema/src/components.rs
+assertion_line: 1549
 expression: html
 ---
 <article class="entity-card enum-card" id="enum-status">
@@ -18,6 +19,7 @@ expression: html
                     <li class="pv-entry">
                         <span class="pv-text">open</span>
                         <a href="https://example.org/ontology#OpenStatus" class="entity-ref enum-meaning" target="_blank" rel="noopener" title="ex:OpenStatus = https://example.org/ontology#OpenStatus">Open Status</a>
+                        <span class="pv-rule-pointer" data-participants="class:person slot:age">triggers 1 rule on <a href="#class-person" class="entity-link">Person</a></span>
                         <div class="pv-description">The item is open for changes.</div>
                     </li>
                     <li class="pv-entry">
@@ -32,6 +34,12 @@ expression: html
     .enum-badge {
         background-color: color-mix(in srgb, var(--color-enum) 15%, transparent);
         color: var(--color-enum);
+    }
+
+    .pv-rule-pointer {
+        margin-left: var(--space-2);
+        font-size: var(--text-xs);
+        color: var(--color-text-muted);
     }
 
     .pv-list {

@@ -214,10 +214,8 @@ fn enum_value_iri(
     authored: &str,
     schema: &SchemaDefinition,
 ) -> Option<String> {
-    let (key, pv) = enum_def
-        .permissible_values
-        .iter()
-        .find(|(key, pv)| key.as_str() == authored || pv.text == authored)?;
+    let key = crate::rules::permitted_value_key(enum_def, authored)?;
+    let pv = &enum_def.permissible_values[key];
     Some(
         pv.meaning
             .as_deref()
@@ -1349,7 +1347,7 @@ pub fn shacl_skipped_rules(schema: &SchemaDefinition) -> Vec<ShaclSkippedRule> {
             if let Some(reason) = shacl_rule_skip_reason(rule, &slot_names) {
                 out.push(ShaclSkippedRule {
                     class: class_name.clone(),
-                    rule: rule.title.clone().unwrap_or_else(|| format!("rule #{i}")),
+                    rule: crate::rules::rule_label(rule, i),
                     reason,
                 });
             }

@@ -250,6 +250,11 @@ pub struct RangeRef {
 pub struct PermissibleValueData {
     pub text: String,
     pub description: Option<String>,
+    /// The rules that key on this value, one pointer per class: choosing
+    /// the value entails what those rules require. The canonical rule
+    /// text stays on the class card; the pointer links there and carries
+    /// the rules' hover participants.
+    pub rule_pointers: Vec<ValueRulePointer>,
     /// The value's `meaning` — a concept IRI grounding it in an
     /// upstream vocabulary — as a hyperlink with its cached label, or
     /// `None` when the value declares no meaning.
@@ -414,6 +419,32 @@ pub struct SlotData {
 pub struct GoverningRuleGroup {
     pub class: EntityRef,
     pub rules: Vec<RuleInClass>,
+}
+
+/// One class's rules keying on a permissible value, for the enum
+/// card's value rows: how many test the value to fire (`triggers`) and
+/// how many require it of a record (`governed`), with the union of
+/// those rules' hover participants.
+#[derive(Debug, Clone)]
+pub struct ValueRulePointer {
+    pub class: EntityRef,
+    pub triggers: usize,
+    pub governed: usize,
+    pub participants: String,
+}
+
+impl ValueRulePointer {
+    /// The counts as prose — "triggers 2 rules, required by 1 rule" —
+    /// with each side elided at zero and pluralized on its own count.
+    pub fn phrase(&self) -> String {
+        let side =
+            |verb: &str, n: usize| format!("{verb} {n} rule{}", if n == 1 { "" } else { "s" });
+        match (self.triggers, self.governed) {
+            (0, g) => side("required by", g),
+            (t, 0) => side("triggers", t),
+            (t, g) => format!("{}, {}", side("triggers", t), side("required by", g)),
+        }
+    }
 }
 
 /// A resolved property value for rendering individual cards.
@@ -1000,6 +1031,13 @@ impl HtmlWriter {
         // cards' order.
         let mut rules_by_slot: std::collections::BTreeMap<String, Vec<GoverningRuleGroup>> =
             std::collections::BTreeMap::new();
+        // Per (enum, permissible-value key): the classes whose rules key
+        // on that value, accumulated while each class's rules are walked
+        // once.
+        let mut value_rule_pointers: std::collections::BTreeMap<
+            (String, String),
+            Vec<ValuePointerDraft>,
+        > = std::collections::BTreeMap::new();
 
         for (class_id, class_def) in &sorted_classes {
             let label = class_def
@@ -1008,7 +1046,19 @@ impl HtmlWriter {
                 .cloned()
                 .unwrap_or_else(|| (*class_id).clone());
 
-            let rule_blocks = build_rule_blocks(class_id, class_def, schema);
+            // One inheritance walk per class serves the rule blocks, the
+            // enum-value pointers, and the slot-card rows below.
+            let resolved =
+                crate::linkml_resolve::resolve_effective_slots_with_provenance(class_def, schema);
+            let rule_blocks = build_rule_blocks(class_id, class_def, &resolved, schema);
+            build_value_rule_pointers(
+                class_id,
+                &label,
+                class_def,
+                &resolved,
+                schema,
+                &mut value_rule_pointers,
+            );
             for (block, participants) in &rule_blocks {
                 for slot in participants.all_slots() {
                     let groups = rules_by_slot.entry(slot.to_string()).or_default();
@@ -1087,8 +1137,6 @@ impl HtmlWriter {
                 })
                 .collect();
 
-            let resolved =
-                crate::linkml_resolve::resolve_effective_slots_with_provenance(class_def, schema);
             let slots: Vec<SlotInClass> = resolved
                 .iter()
                 .map(|(slot_name, rs)| {
@@ -1422,6 +1470,21 @@ impl HtmlWriter {
                 .map(|(text, pv)| PermissibleValueData {
                     text: text.clone(),
                     description: pv.description.clone(),
+                    rule_pointers: value_rule_pointers
+                        .remove(&(enum_id.clone(), text.clone()))
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|draft| ValueRulePointer {
+                            class: draft.class,
+                            triggers: draft.triggers,
+                            governed: draft.governed,
+                            participants: draft
+                                .participant_ids
+                                .into_iter()
+                                .collect::<Vec<_>>()
+                                .join(" "),
+                        })
+                        .collect(),
                     meaning: pv.meaning.as_deref().map(|raw| {
                         let href = crate::linkml_resolve::expand_curie(schema, raw);
                         let (label, definitions) = lookup_term(labels, href.as_deref());
@@ -1977,30 +2040,114 @@ fn build_see_also(
 fn rule_participant_ids(
     class_id: &str,
     participants: &crate::rules::RuleParticipants,
-    effective: &std::collections::BTreeMap<String, crate::linkml::SlotDefinition>,
+    resolved: &std::collections::BTreeMap<String, crate::linkml_resolve::ResolvedSlot>,
     schema: &SchemaDefinition,
 ) -> String {
+    rule_participant_id_vec(class_id, participants, resolved, schema).join(" ")
+}
+
+/// The ids as a list — the form set operations consume, so callers
+/// union and dedup ids without re-splitting the joined attribute
+/// string.
+fn rule_participant_id_vec(
+    class_id: &str,
+    participants: &crate::rules::RuleParticipants,
+    resolved: &std::collections::BTreeMap<String, crate::linkml_resolve::ResolvedSlot>,
+    schema: &SchemaDefinition,
+) -> Vec<String> {
     let mut ids = vec![format!("class:{class_id}")];
-    let mut enum_ids = Vec::new();
-    let mut seen_enums = std::collections::BTreeSet::new();
     for s in participants.all_slots() {
         ids.push(format!("slot:{s}"));
-        let Some(def) = effective.get(s) else {
-            continue;
-        };
-        let ranges = def.range.as_deref().into_iter().chain(
-            def.any_of
-                .iter()
-                .filter_map(|branch| branch.range.as_deref()),
-        );
-        for range in ranges {
-            if schema.enums.contains_key(range) && seen_enums.insert(range.to_string()) {
-                enum_ids.push(format!("enum:{range}"));
+    }
+    for e in crate::rules::participant_enums(participants, resolved, schema) {
+        ids.push(format!("enum:{e}"));
+    }
+    ids
+}
+
+/// Accumulator for one class's contribution to a permissible value's
+/// rule pointers, finalized into [`ValueRulePointer`] once every class
+/// is walked.
+struct ValuePointerDraft {
+    class: EntityRef,
+    triggers: usize,
+    governed: usize,
+    participant_ids: std::collections::BTreeSet<String>,
+}
+
+/// Walk one class's rules for the enum values they key on, folding the
+/// results into `out` keyed by (enum, permissible-value key). Counts
+/// are per rule, not per constant — a rule naming a value on several
+/// slots or in several alternatives still counts once — and a
+/// postcondition alternative does not count as "required", since
+/// satisfying a sibling alternative suffices. Constants resolve
+/// through [`crate::rules::permitted_value_key`], the membership
+/// `validate` enforces; a constant naming no value is the never-fires
+/// diagnostic's business, not a pointer on a row that does not exist.
+fn build_value_rule_pointers(
+    class_id: &str,
+    class_label: &str,
+    class_def: &crate::linkml::ClassDefinition,
+    resolved: &std::collections::BTreeMap<String, crate::linkml_resolve::ResolvedSlot>,
+    schema: &SchemaDefinition,
+    out: &mut std::collections::BTreeMap<(String, String), Vec<ValuePointerDraft>>,
+) {
+    for rule in &class_def.rules {
+        let participants = crate::rules::rule_participants(rule);
+        // Built only when the rule actually keys on a resolvable value —
+        // most rules touch no enum constant and never need the ids.
+        let mut participant_ids: Option<Vec<String>> = None;
+        for (is_trigger, conditions) in [
+            (true, rule.preconditions.as_ref()),
+            (false, rule.postconditions.as_ref()),
+        ] {
+            let Some(conditions) = conditions else {
+                continue;
+            };
+            // Dedup within the rule: one rule, one count per value.
+            let mut keyed: std::collections::BTreeSet<(String, String)> =
+                std::collections::BTreeSet::new();
+            for constant in crate::rules::enum_equals_constants(conditions, resolved, schema) {
+                if !is_trigger && constant.alternative {
+                    continue;
+                }
+                let Some(enum_def) = schema.enums.get(&constant.enum_name) else {
+                    continue;
+                };
+                let Some(key) = crate::rules::permitted_value_key(enum_def, &constant.value) else {
+                    continue;
+                };
+                keyed.insert((constant.enum_name, key.to_string()));
+            }
+            for slot_key in keyed {
+                let ids = participant_ids.get_or_insert_with(|| {
+                    rule_participant_id_vec(class_id, &participants, resolved, schema)
+                });
+                let pointers = out.entry(slot_key).or_default();
+                if pointers
+                    .last()
+                    .is_none_or(|p: &ValuePointerDraft| p.class.id != class_id)
+                {
+                    pointers.push(ValuePointerDraft {
+                        class: EntityRef {
+                            id: class_id.to_string(),
+                            label: class_label.to_string(),
+                        },
+                        triggers: 0,
+                        governed: 0,
+                        participant_ids: std::collections::BTreeSet::new(),
+                    });
+                }
+                let draft = pointers.last_mut().expect("pushed above");
+                if is_trigger {
+                    draft.triggers += 1;
+                } else {
+                    draft.governed += 1;
+                }
+                draft.participant_ids.extend(ids.iter().cloned());
             }
         }
     }
-    ids.extend(enum_ids);
-    ids.join(" ")
 }
 
 /// Build one class's rendered rule blocks, each paired with the slots
@@ -2015,12 +2162,12 @@ fn rule_participant_ids(
 fn build_rule_blocks(
     class_id: &str,
     class_def: &crate::linkml::ClassDefinition,
+    resolved: &std::collections::BTreeMap<String, crate::linkml_resolve::ResolvedSlot>,
     schema: &SchemaDefinition,
 ) -> Vec<(RuleInClass, crate::rules::RuleParticipants)> {
     if class_def.rules.is_empty() {
         return Vec::new();
     }
-    let effective = crate::linkml_resolve::resolve_effective_slots(class_def, schema);
     class_def
         .rules
         .iter()
@@ -2033,7 +2180,7 @@ fn build_rule_blocks(
                     .as_deref()
                     .map(|d| render_description(d, schema)),
                 summary: crate::rules::rule_summary(rule).map(|s| render_description(&s, schema)),
-                participants: rule_participant_ids(class_id, &participants, &effective, schema),
+                participants: rule_participant_ids(class_id, &participants, resolved, schema),
             };
             (block.title.is_some() || block.description.is_some() || block.summary.is_some())
                 .then_some((block, participants))
@@ -4177,6 +4324,305 @@ mod tests {
         assert!(
             verdict.governing_rule_groups.is_empty(),
             "the slot card renders no empty group"
+        );
+    }
+
+    #[test]
+    fn a_permissible_value_a_rule_keys_on_points_at_the_rules_class() {
+        use crate::linkml::{
+            ClassDefinition, EnumDefinition, PermissibleValue, SchemaDefinition, SlotDefinition,
+        };
+        let mut schema = SchemaDefinition::new("approvals");
+        let mut kinds = EnumDefinition::new("Verdict");
+        for v in ["approved", "rejected"] {
+            kinds
+                .permissible_values
+                .insert(v.to_string(), PermissibleValue::new(v));
+        }
+        schema.enums.insert("Verdict".to_string(), kinds);
+        let mut verdict = SlotDefinition::new("verdict");
+        verdict.range = Some("Verdict".to_string());
+        schema.slots.insert("verdict".to_string(), verdict);
+        schema.slots.insert(
+            "approved_by".to_string(),
+            SlotDefinition::new("approved_by"),
+        );
+        let mut cls = ClassDefinition::new("ImageApproval");
+        cls.slots = vec!["verdict".into(), "approved_by".into()];
+        // Two rules key on `approved` (trigger side); one requires
+        // `rejected` of a record (governed side).
+        let mut demoting = approval_rule(None);
+        demoting.postconditions = Some(crate::linkml::RuleConditions {
+            any_of: Vec::new(),
+            slot_conditions: std::collections::BTreeMap::from([(
+                "verdict".to_string(),
+                crate::linkml::SlotCondition {
+                    equals_string: Some("rejected".to_string()),
+                    ..Default::default()
+                },
+            )]),
+        });
+        cls.rules = vec![approval_rule(None), demoting];
+        schema.classes.insert("ImageApproval".to_string(), cls);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let verdict_enum = data
+            .enum_data
+            .iter()
+            .find(|e| e.id == "Verdict")
+            .expect("enum card");
+        let approved = verdict_enum
+            .permissible_values
+            .iter()
+            .find(|pv| pv.text == "approved")
+            .unwrap();
+        assert_eq!(
+            approved.rule_pointers.len(),
+            1,
+            "one class's rules merge into one pointer, however many key the value"
+        );
+        let ptr = &approved.rule_pointers[0];
+        assert_eq!(ptr.class.id, "ImageApproval");
+        assert_eq!(
+            (ptr.triggers, ptr.governed),
+            (2, 0),
+            "both rules test the value on their trigger side"
+        );
+        let rejected_ptr = &verdict_enum
+            .permissible_values
+            .iter()
+            .find(|pv| pv.text == "rejected")
+            .unwrap()
+            .rule_pointers;
+        assert_eq!(
+            (rejected_ptr[0].triggers, rejected_ptr[0].governed),
+            (0, 1),
+            "a postcondition constant counts on the governed side"
+        );
+        assert!(
+            ptr.participants.contains("class:ImageApproval")
+                && ptr.participants.contains("enum:Verdict"),
+            "the pointer carries the rule's hover participants; got: {}",
+            ptr.participants
+        );
+        // A value no rule keys on carries no pointer at all.
+        let mut kinds2 = verdict_enum
+            .permissible_values
+            .iter()
+            .filter(|pv| pv.rule_pointers.is_empty());
+        assert!(
+            kinds2.next().is_none(),
+            "every value of this enum is keyed by some rule"
+        );
+
+        let out = tempfile::tempdir().unwrap();
+        HtmlWriter::with_options(false)
+            .write(&schema, out.path())
+            .expect("write");
+        let html = fs::read_to_string(out.path().join("index.html")).expect("read");
+        assert!(
+            html.contains("triggers 2 rules on")
+                && html.contains("required by 1 rule on")
+                && html.contains(r#"class="entity-link">ImageApproval</a>"#),
+            "the enum card renders each side's count with the class linked"
+        );
+    }
+
+    #[test]
+    fn value_pointers_count_rules_not_constants() {
+        use crate::linkml::{
+            ClassDefinition, ClassRule, EnumDefinition, PermissibleValue, RuleConditions,
+            SchemaDefinition, SlotCondition, SlotDefinition,
+        };
+        let mut schema = SchemaDefinition::new("approvals");
+        let mut kinds = EnumDefinition::new("Verdict");
+        for v in ["approved", "rejected"] {
+            kinds
+                .permissible_values
+                .insert(v.to_string(), PermissibleValue::new(v));
+        }
+        schema.enums.insert("Verdict".to_string(), kinds);
+        for slot in ["verdict", "second_verdict"] {
+            let mut def = SlotDefinition::new(slot);
+            def.range = Some("Verdict".to_string());
+            schema.slots.insert(slot.to_string(), def);
+        }
+        let equals = |slot: &str, v: &str| {
+            (
+                slot.to_string(),
+                SlotCondition {
+                    equals_string: Some(v.to_string()),
+                    ..Default::default()
+                },
+            )
+        };
+        let mut cls = ClassDefinition::new("ImageApproval");
+        cls.slots = vec!["verdict".into(), "second_verdict".into()];
+        cls.rules = vec![
+            // One rule testing the same value on two same-enum slots.
+            ClassRule {
+                title: None,
+                description: None,
+                preconditions: Some(RuleConditions {
+                    any_of: Vec::new(),
+                    slot_conditions: std::collections::BTreeMap::from([
+                        equals("verdict", "approved"),
+                        equals("second_verdict", "approved"),
+                    ]),
+                }),
+                postconditions: None,
+            },
+            // A governed alternation: satisfying either value suffices, so
+            // neither is "required by" the rule.
+            ClassRule {
+                title: None,
+                description: None,
+                preconditions: None,
+                postconditions: Some(RuleConditions {
+                    any_of: vec![
+                        RuleConditions {
+                            any_of: Vec::new(),
+                            slot_conditions: std::collections::BTreeMap::from([equals(
+                                "verdict", "approved",
+                            )]),
+                        },
+                        RuleConditions {
+                            any_of: Vec::new(),
+                            slot_conditions: std::collections::BTreeMap::from([equals(
+                                "verdict", "rejected",
+                            )]),
+                        },
+                    ],
+                    slot_conditions: std::collections::BTreeMap::new(),
+                }),
+            },
+        ];
+        schema.classes.insert("ImageApproval".to_string(), cls);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let verdict_enum = data.enum_data.iter().find(|e| e.id == "Verdict").unwrap();
+        let approved = verdict_enum
+            .permissible_values
+            .iter()
+            .find(|pv| pv.text == "approved")
+            .unwrap();
+        assert_eq!(
+            (
+                approved.rule_pointers[0].triggers,
+                approved.rule_pointers[0].governed
+            ),
+            (1, 0),
+            "one rule counts once however many of its constants name the value, \
+             and an alternation's values are not required"
+        );
+        let rejected = verdict_enum
+            .permissible_values
+            .iter()
+            .find(|pv| pv.text == "rejected")
+            .unwrap();
+        assert!(
+            rejected.rule_pointers.is_empty(),
+            "a value only an alternation names is neither trigger nor requirement"
+        );
+    }
+
+    #[test]
+    fn a_text_matched_constant_points_at_its_values_row() {
+        use crate::linkml::{
+            ClassDefinition, EnumDefinition, PermissibleValue, SchemaDefinition, SlotDefinition,
+        };
+        // OWL-loaded shape: the row's map key is `approved`, its display
+        // text `Approved`; a rule constant spelled like the text attaches
+        // to that row — the membership `validate` enforces.
+        let mut schema = SchemaDefinition::new("approvals");
+        let mut kinds = EnumDefinition::new("Verdict");
+        let mut pv = PermissibleValue::new("Approved");
+        pv.text = "Approved".to_string();
+        kinds.permissible_values.insert("approved".to_string(), pv);
+        schema.enums.insert("Verdict".to_string(), kinds);
+        let mut verdict = SlotDefinition::new("verdict");
+        verdict.range = Some("Verdict".to_string());
+        schema.slots.insert("verdict".to_string(), verdict);
+        schema.slots.insert(
+            "approved_by".to_string(),
+            SlotDefinition::new("approved_by"),
+        );
+        let mut cls = ClassDefinition::new("ImageApproval");
+        cls.slots = vec!["verdict".into(), "approved_by".into()];
+        let mut rule = approval_rule(None);
+        rule.preconditions
+            .as_mut()
+            .unwrap()
+            .slot_conditions
+            .get_mut("verdict")
+            .unwrap()
+            .equals_string = Some("Approved".to_string());
+        cls.rules = vec![rule];
+        schema.classes.insert("ImageApproval".to_string(), cls);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let verdict_enum = data.enum_data.iter().find(|e| e.id == "Verdict").unwrap();
+        let row = verdict_enum
+            .permissible_values
+            .iter()
+            .find(|pv| pv.text == "approved")
+            .unwrap();
+        assert_eq!(
+            row.rule_pointers.len(),
+            1,
+            "the constant resolves to the row whose text it matches"
+        );
+    }
+
+    #[test]
+    fn a_union_ranged_slot_rings_its_enum_but_stakes_no_value_claim() {
+        use crate::linkml::{
+            ClassDefinition, EnumDefinition, PermissibleValue, SchemaDefinition, SlotDefinition,
+        };
+        // The deliberate asymmetry, pinned: a rule on a slot whose induced
+        // range is a union touching an enum participates in that enum (the
+        // graph ring), but a value-level claim — a card pointer, a
+        // never-fires finding — needs the certainty a union cannot give.
+        let mut schema = SchemaDefinition::new("approvals");
+        let mut kinds = EnumDefinition::new("Verdict");
+        kinds
+            .permissible_values
+            .insert("approved".to_string(), PermissibleValue::new("approved"));
+        schema.enums.insert("Verdict".to_string(), kinds);
+        let mut verdict = SlotDefinition::new("verdict");
+        let mut enum_branch = SlotDefinition::new("verdict");
+        enum_branch.range = Some("Verdict".to_string());
+        let mut string_branch = SlotDefinition::new("verdict");
+        string_branch.range = Some("string".to_string());
+        verdict.any_of = vec![enum_branch, string_branch];
+        schema.slots.insert("verdict".to_string(), verdict);
+        schema.slots.insert(
+            "approved_by".to_string(),
+            SlotDefinition::new("approved_by"),
+        );
+        let mut cls = ClassDefinition::new("ImageApproval");
+        cls.slots = vec!["verdict".into(), "approved_by".into()];
+        cls.rules = vec![approval_rule(None)];
+        schema.classes.insert("ImageApproval".to_string(), cls);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let verdict_slot = data.slot_data.iter().find(|s| s.id == "verdict").unwrap();
+        let parts = &verdict_slot.governing_rule_groups[0].rules[0].participants;
+        assert!(
+            parts.contains("enum:Verdict"),
+            "the union's enum participates for the ring; got: {parts}"
+        );
+        let verdict_enum = data.enum_data.iter().find(|e| e.id == "Verdict").unwrap();
+        assert!(
+            verdict_enum
+                .permissible_values
+                .iter()
+                .all(|pv| pv.rule_pointers.is_empty()),
+            "no value-level pointer from a union-ranged constant"
+        );
+        assert!(
+            crate::diagnostics::impossible_rule_values(&schema).is_empty(),
+            "and no never-fires finding either — the union admits other values"
         );
     }
 

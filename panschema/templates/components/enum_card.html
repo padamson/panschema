@@ -29,6 +29,9 @@
                         <span class="entity-ref mapping-unresolved" title="prefix not declared in schema.prefixes">{{ m.display }}</span>
 {%- endmatch %}
 {%- endif %}
+{%- for ptr in pv.rule_pointers %}
+                        <span class="pv-rule-pointer" data-participants="{{ ptr.participants }}">{{ ptr.phrase() }} on <a href="#class-{{ ptr.class.id }}" class="entity-link">{{ ptr.class.label }}</a></span>
+{%- endfor %}
 {%- if let Some(d) = pv.description.as_deref() %}
                         <div class="pv-description">{{ d }}</div>
 {%- endif %}
@@ -77,6 +80,12 @@
     .enum-badge {
         background-color: color-mix(in srgb, var(--color-enum) 15%, transparent);
         color: var(--color-enum);
+    }
+
+    .pv-rule-pointer {
+        margin-left: var(--space-2);
+        font-size: var(--text-xs);
+        color: var(--color-text-muted);
     }
 
     .pv-list {

@@ -277,7 +277,7 @@ pub(crate) fn ring_legend_rows() -> [(&'static str, f64, NodeShape, [f32; 4], &'
             RING_W_RULE,
             NodeShape::Pill,
             colors::SLOT,
-            "Slot in a rule",
+            "Rule participant",
         ),
         (
             AMBER,

@@ -29,7 +29,8 @@ bare no-subcommand form.
 - `--strict` — **narrower than it sounds.** It fails on unmodeled
   constructs, dangling references, colliding slot definitions (the same
   slot name defined at several sites, which would mint one RDF property
-  IRI), and instance-data violations. It does *not* promote
+  IRI), untyped slots, rule constants that name no permissible value of
+  their slot's enum, and instance-data violations. It does *not* promote
   unprojected-construct, Postgres-skip, or SHACL-skip warnings to errors.
 - **Pointing at a record in another graph.** In instance data, a
   class-ranged value that is an absolute IRI or a CURIE against a prefix the

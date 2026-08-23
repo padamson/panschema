@@ -237,6 +237,10 @@ pub struct RuleSummary {
     pub trigger_slots: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub governed_slots: Vec<String>,
+    /// Enumerations the rule participates in through its slots; their
+    /// nodes ring and highlight with the other participants.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub participant_enums: Vec<String>,
 }
 
 /// One permissible value of an enum in the hover card. Mirrors the

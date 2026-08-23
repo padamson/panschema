@@ -1300,7 +1300,7 @@ mod tests {
         );
         let skipped = shacl_skipped_rules(&schema);
         assert_eq!(skipped.len(), 1, "got: {skipped:?}");
-        assert_eq!(skipped[0].rule, "rule #0");
+        assert_eq!(skipped[0].rule, "#1");
     }
 
     #[test]
