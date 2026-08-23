@@ -124,17 +124,7 @@
             <dd>
                 <ul class="rule-list">
 {%- for rule in rules %}
-                    <li class="rule-entry" data-participants="{{ rule.participants }}">
-{%- if let Some(title) = rule.title.as_deref() %}
-                        <div class="rule-title">{{ title }}</div>
-{%- endif %}
-{%- if let Some(desc) = rule.description.as_deref() %}
-                        <div class="rule-description">{{ desc|safe }}</div>
-{%- endif %}
-{%- if let Some(summary) = rule.summary.as_deref() %}
-                        <div class="rule-summary">{{ summary|safe }}</div>
-{%- endif %}
-                    </li>
+{% include "components/rule_block.html" %}
 {%- endfor %}
                 </ul>
             </dd>
@@ -473,35 +463,7 @@
         font-size: var(--text-sm);
         color: var(--color-text-muted);
     }
-
-    .rule-list {
-        list-style: none;
-        padding: 0;
-        margin: 0;
-    }
-
-    .rule-entry + .rule-entry {
-        margin-top: var(--space-3);
-        padding-top: var(--space-3);
-        border-top: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
-    }
-
-    .rule-title {
-        font-weight: 500;
-    }
-
-    .rule-description,
-    .rule-summary {
-        margin-top: var(--space-1);
-        font-size: var(--text-sm);
-        color: var(--color-text-muted);
-    }
-
-    .rule-summary code,
-    .rule-description code {
-        font-size: var(--text-sm);
-        color: var(--color-text);
-    }
+{% include "components/rule_block_styles.html" %}
 
     .unique-key-list {
         list-style: none;

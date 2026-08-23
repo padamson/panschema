@@ -19,6 +19,23 @@ pub struct RuleParticipants {
     pub governed: Vec<String>,
 }
 
+impl RuleParticipants {
+    /// Every slot the rule names on either side, deduplicated and
+    /// sorted — the one definition of "participant slot", shared by
+    /// the hover-id builder and the slot-card distribution.
+    pub fn all_slots(&self) -> Vec<&str> {
+        let mut slots: Vec<&str> = self
+            .trigger
+            .iter()
+            .chain(self.governed.iter())
+            .map(String::as_str)
+            .collect();
+        slots.sort_unstable();
+        slots.dedup();
+        slots
+    }
+}
+
 /// Collect the trigger and governed slot names a rule references, walking
 /// both the direct `slot_conditions` and every `any_of` branch on each side.
 pub fn rule_participants(rule: &ClassRule) -> RuleParticipants {
@@ -106,6 +123,37 @@ fn describe_slot_conditions(
         .collect()
 }
 
+/// Wrap `text` in a markdown code span that renders as one intact
+/// `<code>` element: the delimiter grows past any backtick run inside
+/// (CommonMark's out-fencing rule), and content whose edges CommonMark
+/// would eat — a boundary backtick, or the space pair its strip rule
+/// removes — takes the one-space padding the renderer strips back out.
+/// An empty value becomes `` ` ` `` rather than two bare backticks.
+/// One representable limit: a value containing a blank line cannot form
+/// a code span at all (a span cannot cross a paragraph break) and will
+/// render fragmented; the schema itself still carries it faithfully.
+/// Slot names take the same wrapping — an identifier never needs it,
+/// but a reader-supplied schema (an OWL local name, say) is not obliged
+/// to be one, and uniformity costs nothing.
+fn code_span(text: &str) -> String {
+    if text.is_empty() {
+        return "` `".to_string();
+    }
+    let longest_run = text
+        .split(|c: char| c != '`')
+        .map(str::len)
+        .max()
+        .unwrap_or(0);
+    let fence = "`".repeat(longest_run + 1);
+    // A newline edge pads like a space edge: the renderer turns line
+    // endings into spaces, and the strip rule would then eat them.
+    let edges = ['`', ' ', '\n', '\r'];
+    let needs_padding =
+        !text.chars().all(|c| c == ' ') && (text.starts_with(edges) || text.ends_with(edges));
+    let pad = if needs_padding { " " } else { "" };
+    format!("{fence}{pad}{text}{pad}{fence}")
+}
+
 fn describe_slot_condition(slot: &str, cond: &SlotCondition) -> Option<String> {
     // `any_of` on the slot's value: describe each alternative for the same
     // slot and join with "or", e.g. "`verdict` has value `approved` or `verdict` has value
@@ -126,10 +174,10 @@ fn describe_slot_condition(slot: &str, cond: &SlotCondition) -> Option<String> {
     // (`sh:hasValue`): on a multivalued slot at least one value equals,
     // so "=" would overstate the constraint.
     if let Some(v) = &cond.equals_string {
-        clauses.push(format!("has value `{v}`"));
+        clauses.push(format!("has value {}", code_span(v)));
     }
     if let Some(v) = cond.equals_number {
-        clauses.push(format!("has value {v}"));
+        clauses.push(format!("has value {}", code_span(&v.to_string())));
     }
     if let Some(vp) = cond.value_presence {
         clauses.push(
@@ -144,10 +192,10 @@ fn describe_slot_condition(slot: &str, cond: &SlotCondition) -> Option<String> {
         clauses.push("is required".to_string());
     }
     if let Some(r) = &cond.range {
-        clauses.push(format!("is a `{r}`"));
+        clauses.push(format!("is a {}", code_span(r)));
     }
     if let Some(p) = &cond.pattern {
-        clauses.push(format!("matches `{p}`"));
+        clauses.push(format!("matches {}", code_span(p)));
     }
     if let Some(min) = cond.minimum_value {
         clauses.push(format!(">= {min}"));
@@ -164,12 +212,85 @@ fn describe_slot_condition(slot: &str, cond: &SlotCondition) -> Option<String> {
     if clauses.is_empty() {
         return None;
     }
-    Some(format!("`{slot}` {}", clauses.join(" and ")))
+    Some(format!("{} {}", code_span(slot), clauses.join(" and ")))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn values_containing_backticks_stay_one_code_span() {
+        let summary_for = |cond: SlotCondition| {
+            rule_summary(&ClassRule {
+                title: None,
+                description: None,
+                preconditions: Some(conds(&[("s", cond)], Vec::new())),
+                postconditions: None,
+            })
+            .expect("summarizes")
+        };
+        let equals = |v: &str| SlotCondition {
+            equals_string: Some(v.to_string()),
+            ..Default::default()
+        };
+        let pattern = |v: &str| SlotCondition {
+            pattern: Some(v.to_string()),
+            ..Default::default()
+        };
+
+        for (cond, expected, why) in [
+            (
+                pattern("^`x`$"),
+                "when `s` matches ``^`x`$``",
+                "a value's own backticks are out-fenced so the span stays intact",
+            ),
+            (
+                pattern("^a``b$"),
+                "when `s` matches ```^a``b$```",
+                "the delimiter grows past the longest backtick run, not to a fixed width",
+            ),
+            (
+                equals("`quoted`"),
+                "when `s` has value `` `quoted` ``",
+                "a value starting or ending with a backtick gets the space padding \
+                 CommonMark strips back out",
+            ),
+            (
+                equals(" actual "),
+                "when `s` has value `  actual  `",
+                "a value starting or ending with a space is padded too — CommonMark \
+                 strips one space pair, which must eat the padding, not the value",
+            ),
+            (
+                equals(""),
+                "when `s` has value ` `",
+                "an empty value still forms a code span instead of two bare backticks",
+            ),
+            (
+                equals("\nactual\n"),
+                "when `s` has value ` \nactual\n `",
+                "a newline edge is padded like a space edge — the renderer turns \
+                 it into a space the strip rule would otherwise eat",
+            ),
+            (
+                equals("tail`"),
+                "when `s` has value `` tail` ``",
+                "a backtick at either end alone triggers the padding — both ends \
+                 need not match",
+            ),
+            (
+                SlotCondition {
+                    equals_number: Some(3.5),
+                    ..Default::default()
+                },
+                "when `s` has value `3.5`",
+                "a numeric constant is a schema value and renders as code like a string one",
+            ),
+        ] {
+            assert_eq!(summary_for(cond), expected, "{why}");
+        }
+    }
 
     fn conds(slots: &[(&str, SlotCondition)], any_of: Vec<RuleConditions>) -> RuleConditions {
         RuleConditions {

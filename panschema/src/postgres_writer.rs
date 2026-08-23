@@ -506,7 +506,7 @@ fn linking_table_for(
 /// — the same at-least-one reading the native validator and the SHACL
 /// projection give it, so all three projections enforce one semantics.
 /// The field → predicate mapping mirrors the HTML "when … then …"
-/// sentence (`html_writer.rs`'s `describe_slot_condition`).
+/// sentence (`rules.rs`'s `describe_slot_condition`).
 fn rule_conditions_to_sql(
     conds: &crate::linkml::RuleConditions,
     slot_columns: &BTreeMap<String, String>,

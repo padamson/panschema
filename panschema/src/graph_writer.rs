@@ -230,10 +230,13 @@ pub struct PropertyLiteral {
 }
 
 /// One class rule in the hover payload: its title/description plus the
-/// rendered "when … then …" summary — the same projection the HTML card
-/// uses (see [`crate::rules`]). Carried so the viz popup can surface rules;
-/// the viz-side `KindMetadata::Class` mirror gains this field when it
-/// consumes it (the popup redesign), and ignores it until then.
+/// "when … then …" summary — the same projection the HTML card uses
+/// (see [`crate::rules`]). The summary is **markdown source**, not
+/// display text: values render as code spans (out-fenced when they
+/// carry backticks), so a consumer must run it through a markdown
+/// renderer before drawing it. Carried so the viz popup can surface
+/// rules; the viz-side `KindMetadata::Class` mirror gains this field
+/// when a viz-side consumer needs it, and ignores it until then.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct RuleSummary {

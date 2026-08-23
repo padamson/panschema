@@ -216,11 +216,14 @@ pub struct PropertyLiteral {
     pub value: String,
 }
 
-/// One class rule in the graph metadata — its rendered summary plus
-/// the slots it touches, split into trigger (precondition) and governed
-/// (postcondition) sides. Mirrors the writer-side struct so the JSON
-/// round-trips; the viz uses `governed_slots` to place governed-slot
-/// marker glyphs.
+/// One class rule in the graph metadata — its summary plus the slots
+/// it touches, split into trigger (precondition) and governed
+/// (postcondition) sides. The summary is **markdown source**, not
+/// display text: values render as code spans (out-fenced when they
+/// carry backticks), so a consumer must run it through a markdown
+/// renderer before drawing it. Mirrors the writer-side struct so the
+/// JSON round-trips; the viz uses `governed_slots` to place
+/// governed-slot marker glyphs.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct RuleSummary {

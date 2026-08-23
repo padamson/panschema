@@ -396,21 +396,24 @@ pub struct SlotData {
     /// Class rules that reference this slot (on either side), each naming
     /// the class and carrying the rendered rule summary — the slot card's
     /// "Governed by" section. Empty when no rule names the slot.
-    pub governing_rules: Vec<GoverningRule>,
+    pub governing_rule_groups: Vec<GoverningRuleGroup>,
+    /// Name each rule group's class. `false` when every governing rule
+    /// comes from the slot's sole domain — the label would only repeat
+    /// the Domain row; `true` whenever the class disambiguates (several
+    /// governing classes, or a governing class among several domains).
+    pub show_rule_group_labels: bool,
 }
 
-/// A class rule that references a slot, for the slot card's "Governed by"
-/// section: which class's rule it is, its title, and the rendered "when …
-/// then …" summary.
+/// One class's rules governing a slot, for the slot card's Rules
+/// section. The entries are the same [`RuleInClass`] blocks the class
+/// card renders — one struct, one builder, one template partial, so
+/// the two cards cannot drift apart. The group label renders only when
+/// it says something the card's Domain row does not — see
+/// `show_rule_group_labels`.
 #[derive(Debug, Clone)]
-pub struct GoverningRule {
+pub struct GoverningRuleGroup {
     pub class: EntityRef,
-    pub title: Option<String>,
-    pub summary: Option<String>,
-    /// Space-separated graph node ids this rule touches (`class:<C>` plus a
-    /// `slot:<s>` per trigger/governed slot), for the `data-participants`
-    /// attribute the graph reads to highlight the rule's nodes on hover.
-    pub participants: String,
+    pub rules: Vec<RuleInClass>,
 }
 
 /// A resolved property value for rendering individual cards.
@@ -991,12 +994,40 @@ impl HtmlWriter {
             label_a.cmp(label_b)
         });
 
+        // Each class's rule blocks are built exactly once, here, and
+        // distributed to every participant slot's group — the slot loop
+        // below only collects. Groups therefore arrive in the class
+        // cards' order.
+        let mut rules_by_slot: std::collections::BTreeMap<String, Vec<GoverningRuleGroup>> =
+            std::collections::BTreeMap::new();
+
         for (class_id, class_def) in &sorted_classes {
             let label = class_def
                 .annotations
                 .get("panschema:label")
                 .cloned()
                 .unwrap_or_else(|| (*class_id).clone());
+
+            let rule_blocks = build_rule_blocks(class_id, class_def, schema);
+            for (block, participants) in &rule_blocks {
+                for slot in participants.all_slots() {
+                    let groups = rules_by_slot.entry(slot.to_string()).or_default();
+                    if groups.last().is_none_or(|g| g.class.id != **class_id) {
+                        groups.push(GoverningRuleGroup {
+                            class: EntityRef {
+                                id: (*class_id).clone(),
+                                label: label.clone(),
+                            },
+                            rules: Vec::new(),
+                        });
+                    }
+                    groups
+                        .last_mut()
+                        .expect("group pushed above")
+                        .rules
+                        .push(block.clone());
+                }
+            }
 
             class_refs.push(EntityRef {
                 id: (*class_id).clone(),
@@ -1168,7 +1199,7 @@ impl HtmlWriter {
                 aliases: class_def.aliases.clone(),
                 see_also: build_see_also(&class_def.see_also, schema, labels),
                 examples: class_def.examples.clone(),
-                rules: build_rules(class_id, &class_def.rules, schema),
+                rules: rule_blocks.into_iter().map(|(block, _)| block).collect(),
                 unique_keys: build_unique_keys(&class_def.unique_keys, schema),
             });
         }
@@ -1334,6 +1365,18 @@ impl HtmlWriter {
                 .and_then(|s| crate::linkml_resolve::expand_curie(schema, s))
                 .or_else(|| crate::linkml_resolve::expand_curie(schema, slot_id));
 
+            let governing_rule_groups = rules_by_slot.remove(*slot_id).unwrap_or_default();
+            // The group label earns its place only when it says something
+            // the Domain row does not: labels hide only when every rule
+            // comes from the slot's sole domain. A governing class need
+            // not be a domain at all — a subclass ruling an inherited
+            // slot, an explicit `domain:` — so this checks every group.
+            let show_rule_group_labels = !governing_rule_groups.is_empty()
+                && !(domains.len() == 1
+                    && governing_rule_groups
+                        .iter()
+                        .all(|g| g.class.id == domains[0].id));
+
             slot_data_list.push(SlotData {
                 id: (*slot_id).clone(),
                 label,
@@ -1358,7 +1401,8 @@ impl HtmlWriter {
                 see_also: build_see_also(&slot_def.see_also, schema, labels),
                 examples: slot_def.examples.clone(),
                 default: slot_def.ifabsent.as_deref().map(format_ifabsent_default),
-                governing_rules: governing_rules_for_slot(slot_id, schema),
+                governing_rule_groups,
+                show_rule_group_labels,
             });
         }
 
@@ -1735,40 +1779,19 @@ fn slot_display_label(schema: &SchemaDefinition, name: &str) -> String {
 /// rendered HTML to substitute them is safe — they only appear in
 /// text nodes, never inside tag attributes.
 fn render_description(text: &str, schema: &SchemaDefinition) -> String {
-    render_markdown(text, schema, false)
-}
-
-/// [`render_description`] for text spliced into an inline layout:
-/// paragraph tags are dropped in the renderer's event stream, with
-/// paragraph boundaries becoming single spaces, so the result flows in
-/// the surrounding line. Other block constructs (a list, a code block)
-/// keep their block form — the caller's line layout degrades, but no
-/// content is dropped or rearranged.
-fn render_description_inline(text: &str, schema: &SchemaDefinition) -> String {
-    render_markdown(text, schema, true)
-}
-
-fn render_markdown(text: &str, schema: &SchemaDefinition, inline: bool) -> String {
-    use pulldown_cmark::{Event, Parser, Tag, TagEnd, html};
+    use pulldown_cmark::{Event, Parser, html};
 
     // Route raw HTML through text escaping so author-embedded
     // `<a href="…">` cannot inject markup into the output. The
     // pulldown-cmark HTML renderer escapes `< > &` in `Event::Text`
     // automatically.
-    let events = Parser::new(text).flat_map(|ev| match ev {
-        Event::Html(s) | Event::InlineHtml(s) => Some(Event::Text(s)),
-        Event::Start(Tag::Paragraph) if inline => None,
-        Event::End(TagEnd::Paragraph) if inline => Some(Event::Text(" ".into())),
-        other => Some(other),
+    let events = Parser::new(text).map(|ev| match ev {
+        Event::Html(s) | Event::InlineHtml(s) => Event::Text(s),
+        other => other,
     });
     let mut rendered = String::with_capacity(text.len());
     html::push_html(&mut rendered, events);
-    let rendered = if inline {
-        rendered.trim_end()
-    } else {
-        &rendered
-    };
-    substitute_xref_markers(rendered, schema)
+    substitute_xref_markers(&rendered, schema)
 }
 
 /// Walk the markdown-rendered HTML, replacing `[[Name]]` markers
@@ -1778,9 +1801,29 @@ fn render_markdown(text: &str, schema: &SchemaDefinition, inline: bool) -> Strin
 fn substitute_xref_markers(html: &str, schema: &SchemaDefinition) -> String {
     let mut out = String::with_capacity(html.len());
     let mut remainder = html;
+    // A marker substitutes only in prose text. `<code>` content is
+    // literal by definition — a `[[Name]]` there (a regex character
+    // class, a quoted value) must stay exactly as authored — and a
+    // marker inside a tag (an image's alt text, a link title) must stay
+    // too, since the injected anchor's quotes would terminate the
+    // attribute. The renderer emits the tags, so counting them tracks
+    // both regions reliably.
+    let mut code_depth = 0usize;
+    let mut in_tag = false;
     while let Some((before, after_open)) = remainder.split_once("[[") {
         out.push_str(before);
-        if let Some((name, after_close)) = after_open.split_once("]]")
+        code_depth += before.matches("<code").count();
+        code_depth = code_depth.saturating_sub(before.matches("</code>").count());
+        for c in before.chars() {
+            match c {
+                '<' => in_tag = true,
+                '>' => in_tag = false,
+                _ => {}
+            }
+        }
+        if code_depth == 0
+            && !in_tag
+            && let Some((name, after_close)) = after_open.split_once("]]")
             && is_xref_ident(name)
         {
             out.push_str(&render_xref(name, schema));
@@ -1923,86 +1966,77 @@ fn build_see_also(
         .collect()
 }
 
-/// Rules across every class that reference `slot_name` (on either the
-/// trigger or governed side), for the slot card's "Governed by" section — so
-/// a reader viewing a slot sees the conditional logic that constrains it.
-/// The `summary` is rendered inline (no block wrapper), since the slot
-/// card splices it into the entry's line; a blank title is treated as
-/// absent, so the entry never shows an empty title's punctuation.
-/// Classes iterate in sorted (`BTreeMap`) order for deterministic output.
-fn governing_rules_for_slot(slot_name: &str, schema: &SchemaDefinition) -> Vec<GoverningRule> {
-    let mut governing = Vec::new();
-    for (class_id, class_def) in &schema.classes {
-        if class_def.rules.is_empty() {
+/// Graph node ids a rule on `class_id` touches — `class:<id>`, a
+/// `slot:<s>` for each participant slot, and an `enum:<E>` for each
+/// participant slot whose class-effective range (directly or through an
+/// `any_of` branch) is an enumeration: the rule's condition constrains
+/// that enum's value space, so the enum participates through its values
+/// and lights up with the others on hover. One space-separated string
+/// for the `data-participants` attribute the graph highlight-on-hover
+/// reads.
+fn rule_participant_ids(
+    class_id: &str,
+    participants: &crate::rules::RuleParticipants,
+    effective: &std::collections::BTreeMap<String, crate::linkml::SlotDefinition>,
+    schema: &SchemaDefinition,
+) -> String {
+    let mut ids = vec![format!("class:{class_id}")];
+    let mut enum_ids = Vec::new();
+    let mut seen_enums = std::collections::BTreeSet::new();
+    for s in participants.all_slots() {
+        ids.push(format!("slot:{s}"));
+        let Some(def) = effective.get(s) else {
             continue;
-        }
-        let class_label = class_def
-            .annotations
-            .get("panschema:label")
-            .cloned()
-            .unwrap_or_else(|| class_id.clone());
-        for rule in &class_def.rules {
-            let participants = crate::rules::rule_participants(rule);
-            let names_slot = participants
-                .trigger
+        };
+        let ranges = def.range.as_deref().into_iter().chain(
+            def.any_of
                 .iter()
-                .chain(participants.governed.iter())
-                .any(|s| s == slot_name);
-            if names_slot {
-                governing.push(GoverningRule {
-                    class: EntityRef {
-                        id: class_id.clone(),
-                        label: class_label.clone(),
-                    },
-                    title: rule.title.clone().filter(|t| !t.trim().is_empty()),
-                    summary: crate::rules::rule_summary(rule)
-                        .map(|s| render_description_inline(&s, schema)),
-                    participants: rule_participant_ids(class_id, &participants),
-                });
+                .filter_map(|branch| branch.range.as_deref()),
+        );
+        for range in ranges {
+            if schema.enums.contains_key(range) && seen_enums.insert(range.to_string()) {
+                enum_ids.push(format!("enum:{range}"));
             }
         }
     }
-    governing
-}
-
-/// Graph node ids a rule on `class_id` touches — `class:<id>` plus a
-/// `slot:<s>` for each trigger/governed slot, each slot once however
-/// many sides name it — as one space-separated string for the
-/// `data-participants` attribute the graph highlight-on-hover reads.
-fn rule_participant_ids(class_id: &str, participants: &crate::rules::RuleParticipants) -> String {
-    let mut ids = vec![format!("class:{class_id}")];
-    let mut seen = std::collections::BTreeSet::new();
-    for s in participants
-        .trigger
-        .iter()
-        .chain(participants.governed.iter())
-    {
-        if seen.insert(s.as_str()) {
-            ids.push(format!("slot:{s}"));
-        }
-    }
+    ids.extend(enum_ids);
     ids.join(" ")
 }
 
-/// Build the class card's rendered `rules` list. The description and
-/// generated summary pass through the markdown pipeline (block form —
-/// the card gives each its own block), so slot/value names come out as
-/// `<code>`; the title renders as escaped literal text.
-fn build_rules(
+/// Build one class's rendered rule blocks, each paired with the slots
+/// it names — built once per class and shared by the class card's
+/// Rules section and every participant slot's card, so the two present
+/// a rule identically. The description and generated summary pass
+/// through the markdown pipeline (block form — the card gives each its
+/// own block), so slot/value names come out as `<code>`; the title
+/// renders as escaped literal text, and a blank title is treated as
+/// absent. A rule with nothing renderable at all is skipped: an empty
+/// block would be an invisible hover target.
+fn build_rule_blocks(
     class_id: &str,
-    rules: &[crate::linkml::ClassRule],
+    class_def: &crate::linkml::ClassDefinition,
     schema: &SchemaDefinition,
-) -> Vec<RuleInClass> {
-    rules
+) -> Vec<(RuleInClass, crate::rules::RuleParticipants)> {
+    if class_def.rules.is_empty() {
+        return Vec::new();
+    }
+    let effective = crate::linkml_resolve::resolve_effective_slots(class_def, schema);
+    class_def
+        .rules
         .iter()
-        .map(|rule| RuleInClass {
-            title: rule.title.clone().filter(|t| !t.trim().is_empty()),
-            description: rule
-                .description
-                .as_deref()
-                .map(|d| render_description(d, schema)),
-            summary: crate::rules::rule_summary(rule).map(|s| render_description(&s, schema)),
-            participants: rule_participant_ids(class_id, &crate::rules::rule_participants(rule)),
+        .filter_map(|rule| {
+            let participants = crate::rules::rule_participants(rule);
+            let block = RuleInClass {
+                title: rule.title.clone().filter(|t| !t.trim().is_empty()),
+                description: rule
+                    .description
+                    .as_deref()
+                    .map(|d| render_description(d, schema)),
+                summary: crate::rules::rule_summary(rule).map(|s| render_description(&s, schema)),
+                participants: rule_participant_ids(class_id, &participants, &effective, schema),
+            };
+            (block.title.is_some() || block.description.is_some() || block.summary.is_some())
+                .then_some((block, participants))
         })
         .collect()
 }
@@ -2719,24 +2753,37 @@ mod tests {
     }
 
     #[test]
-    fn render_description_inline_unwraps_one_paragraph_and_only_one() {
-        use crate::linkml::SchemaDefinition;
-        let schema = SchemaDefinition::new("s");
-        assert_eq!(
-            render_description_inline("one `sentence`", &schema),
-            "one <code>sentence</code>",
-            "a single paragraph sheds its block wrapper to flow inline"
+    fn xref_markers_inside_html_attributes_stay_literal() {
+        use crate::linkml::{ClassDefinition, SchemaDefinition};
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .classes
+            .insert("Ab".to_string(), ClassDefinition::new("Ab"));
+        let html = render_description("![see [[Ab]] here](d.png)", &schema);
+        assert!(
+            html.contains(r#"alt="see [[Ab]] here""#),
+            "a marker inside an attribute stays literal — an injected anchor's \
+             quote would terminate the attribute and corrupt the markup; got: {html}"
+        );
+    }
+
+    #[test]
+    fn xref_markers_inside_code_spans_stay_literal() {
+        use crate::linkml::{ClassDefinition, SchemaDefinition};
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .classes
+            .insert("Ab".to_string(), ClassDefinition::new("Ab"));
+        let html = render_description("match `^[[Ab]]+$` or see [[Ab]]", &schema);
+        assert!(
+            html.contains("<code>^[[Ab]]+$</code>"),
+            "a code span's content is literal — no link or warning is injected \
+             into it; got: {html}"
         );
         assert_eq!(
-            render_description("one `sentence`", &schema),
-            "<p>one <code>sentence</code></p>\n",
-            "block rendering keeps its paragraph wrapper"
-        );
-        assert_eq!(
-            render_description_inline("first paragraph\n\nsecond paragraph", &schema),
-            "first paragraph second paragraph",
-            "paragraph boundaries become single spaces, so even text with a blank \
-             line flows in the surrounding line"
+            html.matches(r##"href="#class-Ab""##).count(),
+            1,
+            "the marker outside the span still links; got: {html}"
         );
     }
 
@@ -3610,8 +3657,9 @@ mod tests {
     #[test]
     fn slot_card_lists_the_rules_that_govern_the_slot() {
         use crate::linkml::{ClassDefinition, SchemaDefinition, SlotDefinition};
-        // A slot named in a class rule shows that rule on its card, naming
-        // the class — so a reader on the slot sees why it is conditional.
+        // A slot named in a class rule shows that rule on its card, grouped
+        // by the class whose rule it is — so a reader on the slot sees why
+        // it is conditional.
         let mut schema = SchemaDefinition::new("approvals");
         schema
             .slots
@@ -3636,21 +3684,23 @@ mod tests {
             .find(|s| s.id == "approved_by")
             .expect("approved_by slot card");
         assert_eq!(
-            approved_by.governing_rules.len(),
+            approved_by.governing_rule_groups.len(),
             1,
-            "approved_by is governed by one rule"
+            "approved_by is governed by one class's rules"
         );
-        assert_eq!(approved_by.governing_rules[0].class.id, "ImageApproval");
+        let group = &approved_by.governing_rule_groups[0];
+        assert_eq!(group.class.id, "ImageApproval");
+        assert_eq!(group.rules.len(), 1);
         // Participants carry the graph node ids the rule touches (class +
-        // each trigger/governed slot), for highlight-on-hover.
-        let parts = &approved_by.governing_rules[0].participants;
+        // each participant slot), for highlight-on-hover.
+        let parts = &group.rules[0].participants;
         assert!(
             parts.contains("class:ImageApproval")
                 && parts.contains("slot:verdict")
                 && parts.contains("slot:approved_by"),
             "participants should list the class and each participant slot; got: {parts}"
         );
-        let summary = approved_by.governing_rules[0]
+        let summary = group.rules[0]
             .summary
             .as_deref()
             .expect("a rendered rule summary");
@@ -3658,11 +3708,16 @@ mod tests {
             summary.contains("approved_by") && summary.contains("present"),
             "summary should name the slot and its consequence; got: {summary}"
         );
+        assert!(
+            !approved_by.show_rule_group_labels,
+            "every rule comes from the slot's sole domain, so the group label \
+             would only repeat the Domain row"
+        );
 
         // The trigger slot also lists the rule (it's a participant).
         let verdict = data.slot_data.iter().find(|s| s.id == "verdict").unwrap();
         assert_eq!(
-            verdict.governing_rules.len(),
+            verdict.governing_rule_groups.len(),
             1,
             "verdict triggers the rule"
         );
@@ -3671,7 +3726,7 @@ mod tests {
         // (a slot is included only when a rule actually names it).
         let image = data.slot_data.iter().find(|s| s.id == "image").unwrap();
         assert!(
-            image.governing_rules.is_empty(),
+            image.governing_rule_groups.is_empty(),
             "a slot no rule references must list no rules"
         );
     }
@@ -3932,25 +3987,241 @@ mod tests {
         let html = fs::read_to_string(out.path().join("index.html")).expect("read");
 
         assert!(
-            !html.contains("— <p>") && !html.contains(": <p>"),
-            "the governing-rule summary flows inline after its separator, never as a \
-             block that strands it"
+            html.contains(r#"<div class="rule-title">approvals_are_signed</div>"#),
+            "a titled rule renders its title line exactly as the class card does"
         );
         assert!(
             html.contains(
-                r#"approvals_are_signed</em>: when <code>verdict</code> has value <code>approved</code>"#
+                r#"<div class="rule-summary"><p>when <code>verdict</code> has value <code>approved</code>"#
             ),
-            "a titled rule renders its title inline, the summary flowing right after"
+            "the summary is the same block the class card renders"
+        );
+        let rules_at = html.find("governing-rules").expect("rules section renders");
+        let rules_region = &html[rules_at..];
+        let rules_region =
+            &rules_region[..rules_region.find("</ul>").unwrap_or(rules_region.len())];
+        assert!(
+            !rules_region.contains(r#"entity-link">ImageApproval"#),
+            "every rule comes from the slot's sole domain, so no entry renders \
+             the class — the Domain row already names it (the hover metadata \
+             still carries it); got: {rules_region}"
         );
         assert!(
-            html.contains(r#"class="entity-link">ImageApproval</a> — when <code>verdict</code>"#),
-            "an untitled rule keeps the plain class-dash-summary shape"
+            !html.contains(r#"<div class="rule-title"></div>"#),
+            "a blank title is treated as absent, never rendered as an empty line"
+        );
+    }
+
+    #[test]
+    fn a_governing_class_among_several_domains_is_named() {
+        use crate::linkml::{ClassDefinition, SchemaDefinition, SlotDefinition};
+        // Three classes carry the slot but only one governs it: the group
+        // label renders, because the Domain row alone cannot say which of
+        // the three the rule belongs to.
+        let mut schema = SchemaDefinition::new("approvals");
+        schema
+            .slots
+            .insert("verdict".to_string(), SlotDefinition::new("verdict"));
+        schema.slots.insert(
+            "approved_by".to_string(),
+            SlotDefinition::new("approved_by"),
+        );
+        for name in ["AlphaReview", "BetaReview", "GammaReview"] {
+            let mut cls = ClassDefinition::new(name);
+            cls.slots = vec!["verdict".into(), "approved_by".into()];
+            if name == "AlphaReview" {
+                cls.rules = vec![approval_rule(None)];
+            }
+            schema.classes.insert(name.to_string(), cls);
+        }
+        let data = HtmlWriter::build_template_data(&schema);
+        let verdict = data.slot_data.iter().find(|s| s.id == "verdict").unwrap();
+        assert_eq!(verdict.governing_rule_groups.len(), 1);
+        assert!(
+            verdict.show_rule_group_labels,
+            "one governing class among three domains must be named"
+        );
+    }
+
+    #[test]
+    fn a_subclass_governing_an_inherited_slot_is_named() {
+        use crate::linkml::{ClassDefinition, SchemaDefinition, SlotDefinition};
+        // The parent lists the slot (so it is the sole domain); the
+        // subclass inherits it without relisting and adds its own rule.
+        // Both classes govern, one class is a domain — the labels must
+        // render, or the subclass's rule reads as the parent's.
+        let mut schema = SchemaDefinition::new("approvals");
+        schema
+            .slots
+            .insert("verdict".to_string(), SlotDefinition::new("verdict"));
+        schema.slots.insert(
+            "approved_by".to_string(),
+            SlotDefinition::new("approved_by"),
+        );
+        let mut parent = ClassDefinition::new("Approval");
+        parent.slots = vec!["verdict".into(), "approved_by".into()];
+        parent.rules = vec![approval_rule(None)];
+        schema.classes.insert("Approval".to_string(), parent);
+        let mut child = ClassDefinition::new("PriorityApproval");
+        child.is_a = Some("Approval".to_string());
+        child.rules = vec![approval_rule(Some("priority_reviews_are_signed"))];
+        schema.classes.insert("PriorityApproval".to_string(), child);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let verdict = data.slot_data.iter().find(|s| s.id == "verdict").unwrap();
+        assert_eq!(
+            verdict.governing_rule_groups.len(),
+            2,
+            "both the parent's and the subclass's rules govern the slot"
         );
         assert!(
-            !html.contains(r#"<em class="rule-title-inline"></em>"#)
-                && !html.contains("— :")
-                && !html.contains("—: "),
-            "a blank title is treated as absent, never rendered as empty punctuation"
+            verdict.show_rule_group_labels,
+            "rules from several classes need their class named even when only \
+             one of them is a domain"
+        );
+    }
+
+    #[test]
+    fn an_any_of_enum_range_joins_the_rule_participants() {
+        use crate::linkml::{ClassDefinition, EnumDefinition, SchemaDefinition, SlotDefinition};
+        let mut schema = SchemaDefinition::new("approvals");
+        schema
+            .enums
+            .insert("Verdict".to_string(), EnumDefinition::new("Verdict"));
+        let mut verdict = SlotDefinition::new("verdict");
+        let mut branch = SlotDefinition::new("verdict");
+        branch.range = Some("Verdict".to_string());
+        verdict.any_of = vec![branch];
+        schema.slots.insert("verdict".to_string(), verdict);
+        let mut approved_by = SlotDefinition::new("approved_by");
+        approved_by.range = Some("string".to_string());
+        schema.slots.insert("approved_by".to_string(), approved_by);
+        let mut cls = ClassDefinition::new("ImageApproval");
+        cls.slots = vec!["verdict".into(), "approved_by".into()];
+        cls.rules = vec![approval_rule(None)];
+        schema.classes.insert("ImageApproval".to_string(), cls);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let verdict = data.slot_data.iter().find(|s| s.id == "verdict").unwrap();
+        let parts = &verdict.governing_rule_groups[0].rules[0].participants;
+        assert!(
+            parts.contains("enum:Verdict"),
+            "an enum reached through any_of participates like a direct range; got: {parts}"
+        );
+        assert_eq!(
+            parts.matches("enum:").count(),
+            1,
+            "a participant slot's non-enum range contributes no enum id; got: {parts}"
+        );
+    }
+
+    #[test]
+    fn a_rule_rendering_nothing_produces_no_block() {
+        use crate::linkml::{ClassDefinition, ClassRule, SchemaDefinition, SlotDefinition};
+        // No title, no description, and conditions the summary cannot
+        // describe: there is nothing to show, so no entry renders on
+        // either card — not an invisible hover target.
+        let mut schema = SchemaDefinition::new("approvals");
+        schema
+            .slots
+            .insert("verdict".to_string(), SlotDefinition::new("verdict"));
+        let mut cls = ClassDefinition::new("ImageApproval");
+        cls.slots = vec!["verdict".into()];
+        cls.rules = vec![ClassRule {
+            title: None,
+            description: None,
+            preconditions: None,
+            postconditions: None,
+        }];
+        schema.classes.insert("ImageApproval".to_string(), cls);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let class = data
+            .class_data
+            .iter()
+            .find(|c| c.id == "ImageApproval")
+            .unwrap();
+        assert!(
+            class.rules.is_empty(),
+            "the class card renders no empty rule entry"
+        );
+
+        // A title alone is renderable content: the block stays.
+        let mut schema = crate::linkml::SchemaDefinition::new("approvals");
+        schema.slots.insert(
+            "verdict".to_string(),
+            crate::linkml::SlotDefinition::new("verdict"),
+        );
+        let mut cls = crate::linkml::ClassDefinition::new("ImageApproval");
+        cls.slots = vec!["verdict".into()];
+        cls.rules = vec![ClassRule {
+            title: Some("reviewers_sign_off".to_string()),
+            description: None,
+            preconditions: None,
+            postconditions: None,
+        }];
+        schema.classes.insert("ImageApproval".to_string(), cls);
+        let data = HtmlWriter::build_template_data(&schema);
+        let class = data
+            .class_data
+            .iter()
+            .find(|c| c.id == "ImageApproval")
+            .unwrap();
+        assert_eq!(
+            class.rules.len(),
+            1,
+            "a title-only rule renders its title block"
+        );
+        assert_eq!(class.rules[0].title.as_deref(), Some("reviewers_sign_off"));
+        let verdict = data.slot_data.iter().find(|s| s.id == "verdict").unwrap();
+        assert!(
+            verdict.governing_rule_groups.is_empty(),
+            "the slot card renders no empty group"
+        );
+    }
+
+    #[test]
+    fn shared_slot_rules_group_by_class() {
+        use crate::linkml::{ClassDefinition, SchemaDefinition, SlotDefinition};
+        // Two classes carry the slot and each governs it with a rule: the
+        // card groups the rules under each class's name, once per class.
+        let mut schema = SchemaDefinition::new("approvals");
+        schema
+            .slots
+            .insert("verdict".to_string(), SlotDefinition::new("verdict"));
+        schema.slots.insert(
+            "approved_by".to_string(),
+            SlotDefinition::new("approved_by"),
+        );
+        for name in ["AlphaReview", "BetaReview"] {
+            let mut cls = ClassDefinition::new(name);
+            cls.slots = vec!["verdict".into(), "approved_by".into()];
+            cls.rules = vec![approval_rule(None)];
+            schema.classes.insert(name.to_string(), cls);
+        }
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let verdict = data.slot_data.iter().find(|s| s.id == "verdict").unwrap();
+        assert_eq!(
+            verdict.governing_rule_groups.len(),
+            2,
+            "each governing class is its own group"
+        );
+        assert!(
+            verdict.show_rule_group_labels,
+            "rules from more than one class need their class named"
+        );
+
+        let out = tempfile::tempdir().unwrap();
+        HtmlWriter::with_options(false)
+            .write(&schema, out.path())
+            .expect("write");
+        let html = fs::read_to_string(out.path().join("index.html")).expect("read");
+        assert!(
+            html.contains(r#"governing-rule-group"#)
+                && html.contains(r#"#class-AlphaReview" class="entity-link">AlphaReview"#)
+                && html.contains(r#"#class-BetaReview" class="entity-link">BetaReview"#),
+            "the shared slot's card names each governing class once as a group label"
         );
     }
 
@@ -3971,7 +4242,13 @@ mod tests {
                     ..Default::default()
                 },
             );
-        let ids = rule_participant_ids("ImageApproval", &crate::rules::rule_participants(&rule));
+        let schema = crate::linkml::SchemaDefinition::new("approvals");
+        let ids = rule_participant_ids(
+            "ImageApproval",
+            &crate::rules::rule_participants(&rule),
+            &std::collections::BTreeMap::new(),
+            &schema,
+        );
         assert_eq!(
             ids.matches("slot:verdict").count(),
             1,

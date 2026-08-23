@@ -136,13 +136,28 @@
             </dd>
         </div>
 {%- endif %}
-{%- if !governing_rules.is_empty() %}
+{%- if !governing_rule_groups.is_empty() %}
         <div class="detail-row">
             <dt>Rules</dt>
             <dd>
-                <ul class="governing-rules">
-{%- for rule in governing_rules %}
-                    <li data-participants="{{ rule.participants }}"><a href="#class-{{ rule.class.id }}" class="entity-link">{{ rule.class.label }}</a>{% if rule.title.is_some() || rule.summary.is_some() %} — {% endif %}{% if let Some(t) = rule.title.as_deref() %}<em class="rule-title-inline">{{ t }}</em>{% endif %}{% if let Some(s) = rule.summary.as_deref() %}{% if rule.title.is_some() %}: {% endif %}{{ s|safe }}{% endif %}</li>
+                {#- `governing-rules` is unstyled by design: it marks the
+                    section for tests and future styling. -#}
+                <ul class="governing-rules rule-list">
+{%- for group in governing_rule_groups %}
+{%- if show_rule_group_labels %}
+                    <li class="governing-rule-group">
+                        <a href="#class-{{ group.class.id }}" class="entity-link">{{ group.class.label }}</a>
+                        <ul class="governing-rule-group-rules rule-list">
+{%- for rule in group.rules %}
+{% include "components/rule_block.html" %}
+{%- endfor %}
+                        </ul>
+                    </li>
+{%- else %}
+{%- for rule in group.rules %}
+{% include "components/rule_block.html" %}
+{%- endfor %}
+{%- endif %}
 {%- endfor %}
                 </ul>
             </dd>
@@ -159,12 +174,17 @@
     .datatype-ref {
         color: var(--color-datatype);
     }
+{% include "components/rule_block_styles.html" %}
 
-    /* Same treatment the class card gives .rule-title, kept upright —
-       the <em> is semantic emphasis, not a request for italics. */
-    .rule-title-inline {
-        font-style: normal;
-        font-weight: 500;
+    .governing-rule-group-rules {
+        margin-top: var(--space-1);
+        padding-left: var(--space-4);
+    }
+
+    .governing-rule-group + .governing-rule-group {
+        margin-top: var(--space-3);
+        padding-top: var(--space-3);
+        border-top: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
     }
 
     .any-of-sep {

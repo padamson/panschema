@@ -1,6 +1,6 @@
 ---
 source: panschema/src/components.rs
-assertion_line: 1036
+assertion_line: 1118
 expression: html
 ---
 <article class="entity-card class-card" id="class-thing">

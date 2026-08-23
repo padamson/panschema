@@ -1,6 +1,6 @@
 ---
 source: panschema/src/components.rs
-assertion_line: 1391
+assertion_line: 1400
 expression: html
 ---
 <article class="entity-card slot-card" id="slot-member-of">
@@ -52,11 +52,44 @@ expression: html
         color: var(--color-datatype);
     }
 
-    /* Same treatment the class card gives .rule-title, kept upright —
-       the <em> is semantic emphasis, not a request for italics. */
-    .rule-title-inline {
-        font-style: normal;
+    .rule-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+    }
+
+    .rule-entry + .rule-entry {
+        margin-top: var(--space-3);
+        padding-top: var(--space-3);
+        border-top: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
+    }
+
+    .rule-title {
         font-weight: 500;
+    }
+
+    .rule-description,
+    .rule-summary {
+        margin-top: var(--space-1);
+        font-size: var(--text-sm);
+        color: var(--color-text-muted);
+    }
+
+    .rule-summary code,
+    .rule-description code {
+        font-size: var(--text-sm);
+        color: var(--color-text);
+    }
+
+    .governing-rule-group-rules {
+        margin-top: var(--space-1);
+        padding-left: var(--space-4);
+    }
+
+    .governing-rule-group + .governing-rule-group {
+        margin-top: var(--space-3);
+        padding-top: var(--space-3);
+        border-top: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
     }
 
     .any-of-sep {

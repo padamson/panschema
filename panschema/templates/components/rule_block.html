@@ -1,0 +1,16 @@
+{#- One rule as a block: title line, description, then the generated
+    when/then sentence — the single rendering of a rule, included by the
+    class card's Rules section and the slot card's governing-rule
+    groups, so the two cannot drift apart. Expects `rule` in scope
+    (a RuleInClass). #}
+                    <li class="rule-entry" data-participants="{{ rule.participants }}">
+{%- if let Some(title) = rule.title.as_deref() %}
+                        <div class="rule-title">{{ title }}</div>
+{%- endif %}
+{%- if let Some(desc) = rule.description.as_deref() %}
+                        <div class="rule-description">{{ desc|safe }}</div>
+{%- endif %}
+{%- if let Some(summary) = rule.summary.as_deref() %}
+                        <div class="rule-summary">{{ summary|safe }}</div>
+{%- endif %}
+                    </li>

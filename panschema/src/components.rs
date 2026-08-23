@@ -285,7 +285,8 @@ pub struct SlotCardComponent<'a> {
     /// Default row.
     pub default: Option<&'a str>,
     /// Class rules that govern the slot; empty in the standalone preview.
-    pub governing_rules: &'a [panschema::html_writer::GoverningRule],
+    pub governing_rule_groups: &'a [panschema::html_writer::GoverningRuleGroup],
+    pub show_rule_group_labels: bool,
 }
 
 /// Individual card component template.
@@ -381,7 +382,8 @@ pub struct SampleSlot<'a> {
     /// Default row.
     pub default: Option<&'a str>,
     /// Class rules that govern the slot; empty in previews.
-    pub governing_rules: &'a [panschema::html_writer::GoverningRule],
+    pub governing_rule_groups: &'a [panschema::html_writer::GoverningRuleGroup],
+    pub show_rule_group_labels: bool,
 }
 
 /// Sample individual data for styleguide previews.
@@ -597,7 +599,8 @@ impl ComponentRenderer {
             see_also: &[],
             examples: &[],
             default,
-            governing_rules: &[],
+            governing_rule_groups: &[],
+            show_rule_group_labels: false,
         };
         Ok(template.render()?)
     }
@@ -785,13 +788,17 @@ impl ComponentRenderer {
         let range = RangeSpec::class(EntityRef::new("organization", "Organization"));
         let characteristics = vec!["Functional".to_string()];
         let slot_mappings: Vec<panschema::html_writer::Mapping> = vec![];
-        let slot_governing_rules = vec![panschema::html_writer::GoverningRule {
+        let slot_governing_rule_groups = vec![panschema::html_writer::GoverningRuleGroup {
             class: EntityRef::new("person", "Person"),
-            title: Some("adults must give an email".to_string()),
-            summary: Some(
-                "when <code>age</code> &gt;= 18, then <code>email</code> is required".to_string(),
-            ),
-            participants: "class:person slot:age slot:email".to_string(),
+            rules: vec![panschema::html_writer::RuleInClass {
+                title: Some("adults must give an email".to_string()),
+                description: None,
+                summary: Some(
+                    "<p>when <code>age</code> &gt;= 18, then <code>email</code> is required</p>\n"
+                        .to_string(),
+                ),
+                participants: "class:person slot:age slot:email".to_string(),
+            }],
         }];
 
         let sample_slot = SampleSlot {
@@ -812,7 +819,8 @@ impl ComponentRenderer {
             see_also: &[],
             examples: &[],
             default: None,
-            governing_rules: &slot_governing_rules,
+            governing_rule_groups: &slot_governing_rule_groups,
+            show_rule_group_labels: false,
         };
 
         let domain2 = EntityRef::new("person", "Person");
@@ -841,7 +849,8 @@ impl ComponentRenderer {
             see_also: &[],
             examples: &data_slot_examples,
             default: Some("\"Anonymous\""),
-            governing_rules: &[],
+            governing_rule_groups: &[],
+            show_rule_group_labels: false,
         };
 
         let ind_types = vec![EntityRef::new("person", "Person")];
