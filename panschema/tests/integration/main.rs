@@ -2460,7 +2460,7 @@ fn bare_validate_checks_the_whole_manifest() {
         "bench",
         "1.0.0",
         "bench.yaml",
-        "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, unconnected]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  unconnected: {range: DomainRecord, multivalued: true}\n",
+        "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, unconnected]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  unconnected:\n    range: DomainRecord\n    multivalued: true\n    annotations:\n      asserts_absence:\n        value: null\n",
     );
 
     // A conformance violation in the catalog (string at an integer slot)
@@ -2490,7 +2490,6 @@ instances = ["catalog-data.yaml"]
 [check.bench]
 instances = ["bench-data.yaml"]
 resolve_against = ["catalog"]
-verify_absences = { slot = "unconnected" }
 "#,
     )
     .unwrap();
@@ -2666,7 +2665,7 @@ fn manifest_declines_checks_against_a_collided_sibling() {
         "bench",
         "1.0.0",
         "bench.yaml",
-        "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, unconnected]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  unconnected: {range: DomainRecord, multivalued: true}\n",
+        "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, unconnected]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  unconnected:\n    range: DomainRecord\n    multivalued: true\n    annotations:\n      asserts_absence:\n        value: null\n",
     );
 
     // The catalog container reuses a contained record's id, so the sibling
@@ -2698,7 +2697,6 @@ instances = ["bench-data.yaml"]
 
 [check.bench]
 resolve_against = ["catalog"]
-verify_absences = { slot = "unconnected" }
 "#,
     )
     .unwrap();
@@ -2719,10 +2717,12 @@ verify_absences = { slot = "unconnected" }
     );
 }
 
-/// The manifest-bound absence claim end to end: holds, contradicted,
-/// `--strict`-refused, and misconfigured.
+/// The schema-declared absence claim end to end: the `asserts_absence`
+/// annotation on the slot drives the check — holds, contradicted,
+/// `--strict`-refused — and a manifest still carrying the retired
+/// `verify_absences` key is refused.
 #[test]
-fn manifest_verify_absences_checks_stated_claims() {
+fn schema_declared_absence_claims_are_checked() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let consumer = tmp.path();
 
@@ -2741,17 +2741,17 @@ fn manifest_verify_absences_checks_stated_claims() {
         "bench",
         "1.0.0",
         "bench.yaml",
-        "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, questions]\n  Question:\n    slots: [id, unconnected]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  questions: {range: Question, multivalued: true}\n  unconnected: {range: DomainRecord, multivalued: true}\n",
+        "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, questions]\n  Question:\n    slots: [id, unconnected, unreferenced]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  questions: {range: Question, multivalued: true}\n  unconnected:\n    range: DomainRecord\n    multivalued: true\n    annotations:\n      asserts_absence:\n        value: null\n  unreferenced:\n    range: uri\n    multivalued: true\n    annotations:\n      asserts_absence:\n        value: null\n",
     );
 
     fs::write(
         consumer.join("catalog-data.yaml"),
-        "id: est1\nproviders:\n  - {id: aws}\n  - {id: gcp}\n",
+        "id: est1\nproviders:\n  - {id: aws}\n  - {id: gcp}\n  - {id: silent}\n",
     )
     .unwrap();
     fs::write(
         consumer.join("bench-data.yaml"),
-        "id: b1\nquestions:\n  - {id: q1, unconnected: [cat:aws, cat:gcp]}\n",
+        "id: b1\nquestions:\n  - {id: q1, unconnected: [cat:aws, cat:gcp], unreferenced: [cat:silent]}\n",
     )
     .unwrap();
     fs::write(
@@ -2771,7 +2771,6 @@ instances = ["bench-data.yaml"]
 
 [check.bench]
 resolve_against = ["catalog"]
-verify_absences = { slot = "unconnected" }
 "#,
     )
     .unwrap();
@@ -2794,15 +2793,15 @@ verify_absences = { slot = "unconnected" }
     );
     assert!(
         String::from_utf8_lossy(&holds.stderr)
-            .contains("1 of 1 stated absence claim(s) hold against `catalog`"),
-        "the note counts the verified claim; got:\n{}",
+            .contains("2 of 2 stated absence claim(s) hold against `catalog`"),
+        "every annotated slot's claim is counted; got:\n{}",
         String::from_utf8_lossy(&holds.stderr)
     );
 
     // A pairing joining the two anchors contradicts the claim.
     fs::write(
         consumer.join("catalog-data.yaml"),
-        "id: est1\nproviders:\n  - {id: aws}\n  - {id: gcp}\npairings:\n  - {id: p1, a: aws, b: gcp}\n",
+        "id: est1\nproviders:\n  - {id: aws}\n  - {id: gcp}\n  - {id: silent}\npairings:\n  - {id: p1, a: aws, b: gcp}\n",
     )
     .unwrap();
     let contradicted = run(&[]);
@@ -2827,7 +2826,8 @@ verify_absences = { slot = "unconnected" }
         String::from_utf8_lossy(&strict.stderr)
     );
 
-    // Binding a slot the schema doesn't declare is a configuration error.
+    // The binding lives on the schema now; a manifest still carrying the
+    // retired key is refused, naming it.
     fs::write(
         consumer.join("panschema.toml"),
         r#"
@@ -2845,21 +2845,108 @@ instances = ["bench-data.yaml"]
 
 [check.bench]
 resolve_against = ["catalog"]
-verify_absences = { slot = "nonexistent" }
+verify_absences = { slot = "unconnected" }
 "#,
     )
     .unwrap();
-    let bad_slot = run(&[]);
+    let retired_key = run(&[]);
     assert!(
-        !bad_slot.status.success(),
-        "a bound slot the schema lacks is an error"
+        !retired_key.status.success(),
+        "the retired manifest key is refused"
     );
     assert!(
-        String::from_utf8_lossy(&bad_slot.stderr).contains("is not a slot of any class"),
-        "got:\n{}",
-        String::from_utf8_lossy(&bad_slot.stderr)
+        String::from_utf8_lossy(&retired_key.stderr).contains("verify_absences"),
+        "the refusal names the retired key; got:\n{}",
+        String::from_utf8_lossy(&retired_key.stderr)
     );
 
+    // Declared claims nothing verifies are noted: without
+    // resolve_against, the consumer would otherwise silently weaken the
+    // contract to nothing.
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+catalog = { path = "./catalog-pkg" }
+bench = { path = "./bench-pkg" }
+
+[generate.catalog]
+ttl = "catalog.ttl"
+instances = ["catalog-data.yaml"]
+
+[generate.bench]
+ttl = "bench.ttl"
+instances = ["bench-data.yaml"]
+"#,
+    )
+    .unwrap();
+    let unverified = run(&[]);
+    assert!(
+        unverified.status.success(),
+        "declared-but-unverified claims are a note, not an error: {}",
+        String::from_utf8_lossy(&unverified.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&unverified.stderr).contains("declares 2 absence-claim slot(s)"),
+        "the note counts the unverified declarations; got:\n{}",
+        String::from_utf8_lossy(&unverified.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+/// A defective `asserts_absence` declaration — here a `via_slot` no
+/// class carries — warns at load and fails `--strict`, on the generate
+/// path and the bare-validate path alike.
+#[test]
+fn a_defective_absence_declaration_fails_strict() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    let pkg = consumer.join("pkg");
+    write_pkg(
+        &pkg,
+        "bench",
+        "1.0.0",
+        "bench.yaml",
+        "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, unconnected]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  unconnected:\n    range: DomainRecord\n    multivalued: true\n    annotations:\n      asserts_absence:\n        value:\n          via_slot: ghost\n",
+    );
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+bench = { path = "./pkg" }
+
+[generate.bench]
+ttl = "bench.ttl"
+"#,
+    )
+    .unwrap();
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_panschema"))
+            .args(args)
+            .current_dir(consumer)
+            .output()
+            .expect("run panschema")
+    };
+    let warned = run(&["generate"]);
+    assert!(
+        warned.status.success(),
+        "without --strict the defect is a warning: {}",
+        String::from_utf8_lossy(&warned.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&warned.stderr).contains("asserts_absence"),
+        "the warning names the declaration; got:\n{}",
+        String::from_utf8_lossy(&warned.stderr)
+    );
+    for args in [&["generate", "--strict"][..], &["validate", "--strict"][..]] {
+        let strict = run(args);
+        assert!(
+            !strict.status.success(),
+            "`{}` refuses the defective declaration",
+            args.join(" ")
+        );
+    }
     let _ = fs::remove_dir_all(&tmp);
 }
 

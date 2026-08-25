@@ -213,21 +213,6 @@ pub struct GenerateConfig {
     pub migrations: Option<PathBuf>,
 }
 
-/// The `verify_absences` binding: which slots of the referring schema
-/// carry an absence claim.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct VerifyAbsences {
-    /// The reference slot listing the anchors claimed unconnected — two
-    /// or more claimed unjoined, a single one claimed unreferenced.
-    pub slot: String,
-    /// Optional slot whose value names (as a URI in the sibling's schema)
-    /// the class a joining record would belong to — narrowing the claim
-    /// from "no record of any kind" to one kind.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub via: Option<String>,
-}
-
 /// The `[check.<name>]` table — validation policy for one schema's
 /// datasets, deliberately separate from `[generate.<name>]` so checking
 /// never requires declaring an output and the policy survives deleting a
@@ -256,17 +241,6 @@ pub struct CheckConfig {
     /// fails on them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resolve_against: Vec<String>,
-    /// Verify stated absence claims against the `resolve_against`
-    /// siblings: for each record, the values of `slot` are anchors the
-    /// record claims no single sibling record joins — for one anchor,
-    /// that no record references it at all — and a sibling record
-    /// referencing all of them is a violation. The binding lives here —
-    /// the schema states the domain semantics in its own terms, and this
-    /// key tells the tool which slot carries them — so the data model
-    /// stays free of tool annotations. Only meaningful beside
-    /// `resolve_against`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub verify_absences: Option<VerifyAbsences>,
     /// Require every external reference to land in a namespace some
     /// `resolve_against` sibling owns. Off, references into outside
     /// vocabularies stay unchecked by design; on, a typo'd namespace —
@@ -283,10 +257,6 @@ impl CheckConfig {
         key_names_of(&CheckConfig {
             instances: vec![PathBuf::from("x")],
             resolve_against: vec!["x".to_string()],
-            verify_absences: Some(VerifyAbsences {
-                slot: "x".to_string(),
-                via: Some("x".to_string()),
-            }),
             require_namespace_coverage: true,
         })
     }
@@ -1439,15 +1409,26 @@ resolve_against = []
         assert_eq!(matched.orphan_check_entries(), Vec::<&str>::new());
     }
 
+    /// Absence semantics live on the schema's slots (`asserts_absence`),
+    /// not in consumer manifests; the old binding key is refused so a
+    /// stale manifest cannot silently re-state a claim more weakly.
+    #[test]
+    fn a_manifest_carrying_verify_absences_fails_to_parse() {
+        let err = "[schemas.a]\npath = \"a.yaml\"\n\n[schemas.b]\npath = \"b.yaml\"\n\n\
+                   [check.a]\nresolve_against = [\"b\"]\nverify_absences = { slot = \
+                   \"unconnected\" }\n"
+            .parse::<Manifest>()
+            .expect_err("the retired key is refused");
+        assert!(
+            err.to_string().contains("verify_absences"),
+            "the error names the retired key; got: {err}"
+        );
+    }
+
     #[test]
     fn check_key_names_lists_every_accepted_check_key() {
         let keys = CheckConfig::key_names();
-        let expected = [
-            "instances",
-            "require_namespace_coverage",
-            "resolve_against",
-            "verify_absences",
-        ];
+        let expected = ["instances", "require_namespace_coverage", "resolve_against"];
         assert_eq!(
             keys.len(),
             expected.len(),

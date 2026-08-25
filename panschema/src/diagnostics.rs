@@ -467,6 +467,11 @@ pub fn schema_load_diagnostics(schema: &SchemaDefinition) -> Vec<String> {
             .iter()
             .map(|o| o.message()),
     );
+    out.extend(
+        absence_declaration_issues(schema)
+            .iter()
+            .map(|i| i.message()),
+    );
     out.extend(impossible_rule_values(schema).iter().map(|i| i.message()));
     // The metamodel recommends at most one `tree_root` per schema. Several
     // are supported here — each dataset is read against the root it conforms
@@ -929,9 +934,243 @@ pub struct AbsenceVerification {
     pub unverified: Vec<UnverifiedAbsence>,
 }
 
+/// How an `asserts_absence` declaration narrows its claims.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AbsenceVia {
+    /// No narrowing: no record of any kind may join the anchors.
+    Unnarrowed,
+    /// Narrowed to joining records of the class the named slot's value
+    /// designates on each claiming record.
+    Slot(String),
+    /// The declaration's `via_slot` was not a string, so the narrowing
+    /// is unreadable: the claims it governs are uncheckable — never
+    /// evaluated wide of what the author wrote.
+    Malformed,
+}
+
+/// One slot's `asserts_absence` declarations across scopes: the
+/// top-level `slots:` declaration binds every class carrying the slot;
+/// a class's own declaration (attribute, or `slot_usage` — which
+/// overrides the attribute, as `slot_usage` does for every slot
+/// property) binds that class's records and wins over the schema-wide
+/// one. Class-scoped declarations do not yet propagate to subclasses:
+/// the resolved slot view deliberately drops `slot_usage` annotations,
+/// so inheritance here would drift from it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SlotAbsenceDeclarations {
+    pub schema_wide: Option<AbsenceVia>,
+    pub by_class: std::collections::BTreeMap<String, AbsenceVia>,
+}
+
+/// Every `asserts_absence` declaration in the schema, keyed by the
+/// declaring slot. Built by [`absence_declarations`] — the one parse
+/// both the check and the load diagnostics consume, so what is
+/// enforced and what is reported can never drift apart.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AbsenceBindings {
+    pub by_slot: std::collections::BTreeMap<String, SlotAbsenceDeclarations>,
+}
+
+impl AbsenceBindings {
+    pub fn is_empty(&self) -> bool {
+        self.by_slot.is_empty()
+    }
+
+    /// How many slots declare claims — the enablement note's count.
+    pub fn len(&self) -> usize {
+        self.by_slot.len()
+    }
+
+    /// The narrowing governing `slot` for a record of `types`: the
+    /// record's own class declaration wins over the schema-wide one;
+    /// `None` when no declaration applies to this record at all.
+    pub fn governing(&self, types: &[String], slot: &str) -> Option<&AbsenceVia> {
+        let declarations = self.by_slot.get(slot)?;
+        types
+            .iter()
+            .find_map(|t| declarations.by_class.get(t))
+            .or(declarations.schema_wide.as_ref())
+    }
+
+    /// A single schema-wide binding — the shape a caller that already
+    /// knows its one slot (and every direct test) exercises.
+    pub fn schema_wide(slot: &str, via: Option<&str>) -> Self {
+        let mut by_slot = std::collections::BTreeMap::new();
+        by_slot.insert(
+            slot.to_string(),
+            SlotAbsenceDeclarations {
+                schema_wide: Some(match via {
+                    Some(v) => AbsenceVia::Slot(v.to_string()),
+                    None => AbsenceVia::Unnarrowed,
+                }),
+                by_class: std::collections::BTreeMap::new(),
+            },
+        );
+        AbsenceBindings { by_slot }
+    }
+}
+
+/// A defect in an `asserts_absence` declaration. The declaration still
+/// binds — the defect is reported (and `--strict` refuses it), never
+/// silently repaired into a narrower or wider check than the author
+/// wrote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AbsenceDeclarationIssue {
+    pub slot: String,
+    pub detail: String,
+}
+
+impl AbsenceDeclarationIssue {
+    pub fn message(&self) -> String {
+        format!("`asserts_absence` on slot `{}`: {}", self.slot, self.detail)
+    }
+}
+
+/// Every slot name any class's resolved view carries — the test a
+/// declared slot and its `via` target must pass to ever match a record.
+fn carried_slot_names(schema: &SchemaDefinition) -> std::collections::BTreeSet<String> {
+    let mut carried = std::collections::BTreeSet::new();
+    for class in schema.classes.values() {
+        carried.extend(
+            crate::linkml_resolve::resolve_effective_slots(class, schema)
+                .keys()
+                .cloned(),
+        );
+    }
+    carried
+}
+
+/// The one parse of an `asserts_absence` annotation value: null is a
+/// bare assertion, a mapping takes `via_slot` (a string) and nothing
+/// else, and anything else — including a non-string `via_slot` — reads
+/// as [`AbsenceVia::Malformed`] beside an issue naming the defect.
+fn parse_absence_declaration(
+    slot: &str,
+    value: &serde_norway::Value,
+    issues: &mut Vec<AbsenceDeclarationIssue>,
+) -> AbsenceVia {
+    match value {
+        serde_norway::Value::Null => AbsenceVia::Unnarrowed,
+        serde_norway::Value::Mapping(m) => {
+            let mut via = AbsenceVia::Unnarrowed;
+            for (key, field) in m {
+                match key.as_str() {
+                    Some("via_slot") => match field.as_str() {
+                        Some(v) => via = AbsenceVia::Slot(v.to_string()),
+                        None => {
+                            issues.push(AbsenceDeclarationIssue {
+                                slot: slot.to_string(),
+                                detail: "`via_slot` must be a string naming a slot; the \
+                                         claims are uncheckable until it is"
+                                    .to_string(),
+                            });
+                            via = AbsenceVia::Malformed;
+                        }
+                    },
+                    _ => issues.push(AbsenceDeclarationIssue {
+                        slot: slot.to_string(),
+                        detail: format!(
+                            "unrecognized field `{}` — the declaration takes only `via_slot`",
+                            key.as_str().unwrap_or("<non-string key>")
+                        ),
+                    }),
+                }
+            }
+            via
+        }
+        _ => {
+            issues.push(AbsenceDeclarationIssue {
+                slot: slot.to_string(),
+                detail: "the value must be a mapping under `value:` (optional `via_slot`), \
+                         or null for a bare assertion; the claims are uncheckable until it is"
+                    .to_string(),
+            });
+            AbsenceVia::Malformed
+        }
+    }
+}
+
+/// Every `asserts_absence` declaration and every defect in one, from a
+/// single walk: top-level `slots:` bind schema-wide; a class's
+/// `attributes:` bind that class; its `slot_usage:` overrides both for
+/// that class. Consumed whole by the check and split by the two
+/// wrappers below.
+pub fn absence_declarations(
+    schema: &SchemaDefinition,
+) -> (AbsenceBindings, Vec<AbsenceDeclarationIssue>) {
+    let mut bindings = AbsenceBindings::default();
+    let mut issues = Vec::new();
+    let mut declared_vias: Vec<(String, AbsenceVia)> = Vec::new();
+
+    for (name, slot) in &schema.slots {
+        if let Some(value) = slot.annotations.get("asserts_absence") {
+            let via = parse_absence_declaration(name, value, &mut issues);
+            declared_vias.push((name.clone(), via.clone()));
+            bindings
+                .by_slot
+                .entry(name.clone())
+                .or_default()
+                .schema_wide = Some(via);
+        }
+    }
+    for (class_name, class) in &schema.classes {
+        // Attributes first, slot_usage second: a plain map insert makes
+        // the `slot_usage` declaration override the attribute's, the
+        // direction `slot_usage` overrides everywhere else in LinkML.
+        for (name, slot) in class.attributes.iter().chain(class.slot_usage.iter()) {
+            if let Some(value) = slot.annotations.get("asserts_absence") {
+                let via = parse_absence_declaration(name, value, &mut issues);
+                declared_vias.push((name.clone(), via.clone()));
+                bindings
+                    .by_slot
+                    .entry(name.clone())
+                    .or_default()
+                    .by_class
+                    .insert(class_name.clone(), via);
+            }
+        }
+    }
+
+    let carried = carried_slot_names(schema);
+    for slot in bindings.by_slot.keys() {
+        if !carried.contains(slot) {
+            issues.push(AbsenceDeclarationIssue {
+                slot: slot.clone(),
+                detail: "no class carries this slot, so no record can state its claim".to_string(),
+            });
+        }
+    }
+    for (slot, via) in &declared_vias {
+        if let AbsenceVia::Slot(target) = via
+            && !carried.contains(target)
+        {
+            issues.push(AbsenceDeclarationIssue {
+                slot: slot.clone(),
+                detail: format!(
+                    "`via_slot` names `{target}`, which no class carries; the narrowed \
+                     claims will be reported uncheckable"
+                ),
+            });
+        }
+    }
+    (bindings, issues)
+}
+
+/// The declarations alone — the checker's half of
+/// [`absence_declarations`].
+pub fn absence_bindings(schema: &SchemaDefinition) -> AbsenceBindings {
+    absence_declarations(schema).0
+}
+
+/// The defects alone — the load diagnostics' half of
+/// [`absence_declarations`].
+pub fn absence_declaration_issues(schema: &SchemaDefinition) -> Vec<AbsenceDeclarationIssue> {
+    absence_declarations(schema).1
+}
+
 /// Verify each record's stated absence claim against sibling datasets.
 ///
-/// A record listing anchors under `absence_slot` (reference targets or
+/// A record listing anchors under a declared slot (reference targets or
 /// IRI-valued scalars alike) claims no single sibling record references
 /// them all — for one anchor, that no record references it at all. A
 /// "reference" here is an authored citation edge; a sibling citing an
@@ -952,8 +1191,7 @@ pub struct AbsenceVerification {
 pub fn unverified_absences(
     schema: &crate::linkml::SchemaDefinition,
     set: &crate::instances::InstanceSet,
-    absence_slot: &str,
-    via_slot: Option<&str>,
+    declarations: &AbsenceBindings,
     siblings: &[(
         &crate::linkml::SchemaDefinition,
         &[crate::instances::InstanceSet],
@@ -1015,156 +1253,192 @@ pub fn unverified_absences(
         .collect();
 
     let mut out = AbsenceVerification::default();
+    // The record's governing declaration decides the narrowing; a
+    // record whose classes no declaration touches states no claim. The
+    // carried set is schema-wide and loop-invariant.
+    let carried = carried_slot_names(schema);
     for inst in &set.instances {
-        let anchors: Result<Vec<String>, &str> = inst
-            .slot_values
-            .iter()
-            .filter(|sv| sv.slot == absence_slot)
-            .flat_map(|sv| &sv.values)
-            .map(|v| match v {
-                InstanceValue::Reference { target, .. } => Ok(target.clone()),
-                InstanceValue::Scalar(s) => Ok(crate::instances::scalar_to_display(s)),
-                InstanceValue::Unexpected(kind) => Err(*kind),
-            })
-            .collect();
-        let anchors = match anchors {
-            Ok(anchors) => anchors,
-            Err(kind) => {
-                out.uncheckable.push(UncheckableAbsence {
-                    referrer: inst.id.clone(),
-                    reason: format!("an anchor value is {kind}, not a reference or IRI"),
-                });
+        for slot_name in declarations.by_slot.keys() {
+            let Some(governing) = declarations.governing(&inst.types, slot_name) else {
                 continue;
-            }
-        };
-        if anchors.is_empty() {
-            continue;
-        }
-        let anchor_iris: BTreeSet<String> = anchors
-            .iter()
-            .map(|t| crate::rdf_serializers::resolve_reference_iri(schema, t))
-            .collect();
-        if anchor_iris.len() < anchors.len() {
-            out.uncheckable.push(UncheckableAbsence {
-                referrer: inst.id.clone(),
-                reason: "its anchors collapse to fewer distinct IRIs than authored — list \
-                         each anchor once"
-                    .to_string(),
-            });
-            continue;
-        }
-        if let Some(missing) = anchor_iris.iter().find(|iri| !minted_union.contains(*iri)) {
-            out.uncheckable.push(UncheckableAbsence {
-                referrer: inst.id.clone(),
-                reason: format!("anchor {missing} resolves to no sibling record"),
-            });
-            continue;
-        }
-        let via_values: Vec<&InstanceValue> = via_slot
-            .map(|slot| {
-                inst.slot_values
-                    .iter()
-                    .filter(|sv| sv.slot == slot)
-                    .flat_map(|sv| &sv.values)
-                    .collect()
-            })
-            .unwrap_or_default();
-        if via_values.len() > 1 {
-            out.uncheckable.push(UncheckableAbsence {
-                referrer: inst.id.clone(),
-                reason: "a claim narrows by exactly one `via` value, and this record \
-                         carries several"
-                    .to_string(),
-            });
-            continue;
-        }
-        let via_authored: Option<String> = match via_values.first() {
-            Some(InstanceValue::Unexpected(kind)) => {
-                out.uncheckable.push(UncheckableAbsence {
-                    referrer: inst.id.clone(),
-                    reason: format!("its `via` value is {kind}, not a class reference"),
-                });
-                continue;
-            }
-            Some(InstanceValue::Scalar(s)) => Some(crate::instances::scalar_to_display(s)),
-            Some(InstanceValue::Reference { target, .. }) => Some(target.clone()),
-            None => None,
-        };
-        // The `via` value narrows by the same matching a type designator
-        // uses — a sibling's class name first, its IRI or CURIE second,
-        // the spelling expanded against the claiming schema exactly like
-        // the anchors beside it — and like a designation it must name
-        // one thing: an IRI shared by several sibling classes narrows to
-        // nothing checkable. Resolved once per sibling and reused below.
-        let via_matches: Vec<crate::rdf_serializers::ClassMatch> = match &via_authored {
-            Some(via) => indexes
-                .iter()
-                .map(|index| {
-                    crate::rdf_serializers::class_named_by_expanded(
-                        schema,
-                        index.schema,
-                        &index.class_names,
-                        via,
-                    )
-                })
-                .collect(),
-            None => Vec::new(),
-        };
-        if let Some(via) = &via_authored {
-            let any_named = via_matches
-                .iter()
-                .any(|m| matches!(m, crate::rdf_serializers::ClassMatch::One(_)));
-            let ambiguous = via_matches
-                .iter()
-                .any(|m| matches!(m, crate::rdf_serializers::ClassMatch::Several));
-            if ambiguous {
-                out.uncheckable.push(UncheckableAbsence {
-                    referrer: inst.id.clone(),
-                    reason: format!(
-                        "`{via}` names more than one class of a sibling — a narrowing must \
-                         name one"
-                    ),
-                });
-                continue;
-            }
-            if !any_named {
-                out.uncheckable.push(UncheckableAbsence {
-                    referrer: inst.id.clone(),
-                    reason: format!("`{via}` names no class any sibling declares"),
-                });
-                continue;
-            }
-        }
-
-        out.claims += 1;
-        let mut contradicted = false;
-        for (position, index) in indexes.iter().enumerate() {
-            let allowed: Option<&str> = match via_matches.get(position) {
-                Some(crate::rdf_serializers::ClassMatch::One(name)) => Some(name),
-                _ => None,
             };
-            if via_authored.is_some() && allowed.is_none() {
-                continue;
-            }
-            for record in &index.records {
-                if let Some(allowed) = allowed
-                    && !record.types.iter().any(|t| t == allowed)
-                {
+            let anchors: Result<Vec<String>, &str> = inst
+                .slot_values
+                .iter()
+                .filter(|sv| sv.slot == *slot_name)
+                .flat_map(|sv| &sv.values)
+                .map(|v| match v {
+                    InstanceValue::Reference { target, .. } => Ok(target.clone()),
+                    InstanceValue::Scalar(s) => Ok(crate::instances::scalar_to_display(s)),
+                    InstanceValue::Unexpected(kind) => Err(*kind),
+                })
+                .collect();
+            let anchors = match anchors {
+                Ok(anchors) => anchors,
+                Err(kind) => {
+                    out.uncheckable.push(UncheckableAbsence {
+                        referrer: inst.id.clone(),
+                        reason: format!("an anchor value is {kind}, not a reference or IRI"),
+                    });
                     continue;
                 }
-                if anchor_iris.is_subset(&record.referenced) {
-                    out.unverified.push(UnverifiedAbsence {
+            };
+            if anchors.is_empty() {
+                continue;
+            }
+            // A narrowing that cannot be read (malformed) or can never hold
+            // a record's value (uncarried slot) would silently evaluate the
+            // claim wide — a strictly stronger check than declared.
+            // Uncheckable instead.
+            let via_slot: Option<&str> = match governing {
+                AbsenceVia::Unnarrowed => None,
+                AbsenceVia::Malformed => {
+                    out.uncheckable.push(UncheckableAbsence {
                         referrer: inst.id.clone(),
-                        anchors: anchors.clone(),
-                        via: via_authored.clone(),
-                        joined_by: record.id.to_string(),
+                        reason: "the declaration's `via_slot` is malformed, so the narrowing \
+                             cannot be evaluated"
+                            .to_string(),
                     });
-                    contradicted = true;
+                    continue;
+                }
+                AbsenceVia::Slot(via) if !carried.contains(via) => {
+                    out.uncheckable.push(UncheckableAbsence {
+                        referrer: inst.id.clone(),
+                        reason: format!(
+                            "the declared `via_slot` `{via}` is not a slot of any class, so \
+                         the narrowing cannot be evaluated"
+                        ),
+                    });
+                    continue;
+                }
+                AbsenceVia::Slot(via) => Some(via.as_str()),
+            };
+            let anchor_iris: BTreeSet<String> = anchors
+                .iter()
+                .map(|t| crate::rdf_serializers::resolve_reference_iri(schema, t))
+                .collect();
+            if anchor_iris.len() < anchors.len() {
+                out.uncheckable.push(UncheckableAbsence {
+                    referrer: inst.id.clone(),
+                    reason: "its anchors collapse to fewer distinct IRIs than authored — list \
+                         each anchor once"
+                        .to_string(),
+                });
+                continue;
+            }
+            if let Some(missing) = anchor_iris.iter().find(|iri| !minted_union.contains(*iri)) {
+                out.uncheckable.push(UncheckableAbsence {
+                    referrer: inst.id.clone(),
+                    reason: format!("anchor {missing} resolves to no sibling record"),
+                });
+                continue;
+            }
+            let via_values: Vec<&InstanceValue> = via_slot
+                .map(|slot| {
+                    inst.slot_values
+                        .iter()
+                        .filter(|sv| sv.slot == slot)
+                        .flat_map(|sv| &sv.values)
+                        .collect()
+                })
+                .unwrap_or_default();
+            if via_values.len() > 1 {
+                out.uncheckable.push(UncheckableAbsence {
+                    referrer: inst.id.clone(),
+                    reason: "a claim narrows by exactly one `via` value, and this record \
+                         carries several"
+                        .to_string(),
+                });
+                continue;
+            }
+            let via_authored: Option<String> = match via_values.first() {
+                Some(InstanceValue::Unexpected(kind)) => {
+                    out.uncheckable.push(UncheckableAbsence {
+                        referrer: inst.id.clone(),
+                        reason: format!("its `via` value is {kind}, not a class reference"),
+                    });
+                    continue;
+                }
+                Some(InstanceValue::Scalar(s)) => Some(crate::instances::scalar_to_display(s)),
+                Some(InstanceValue::Reference { target, .. }) => Some(target.clone()),
+                None => None,
+            };
+            // The `via` value narrows by the same matching a type designator
+            // uses — a sibling's class name first, its IRI or CURIE second,
+            // the spelling expanded against the claiming schema exactly like
+            // the anchors beside it — and like a designation it must name
+            // one thing: an IRI shared by several sibling classes narrows to
+            // nothing checkable. Resolved once per sibling and reused below.
+            let via_matches: Vec<crate::rdf_serializers::ClassMatch> = match &via_authored {
+                Some(via) => indexes
+                    .iter()
+                    .map(|index| {
+                        crate::rdf_serializers::class_named_by_expanded(
+                            schema,
+                            index.schema,
+                            &index.class_names,
+                            via,
+                        )
+                    })
+                    .collect(),
+                None => Vec::new(),
+            };
+            if let Some(via) = &via_authored {
+                let any_named = via_matches
+                    .iter()
+                    .any(|m| matches!(m, crate::rdf_serializers::ClassMatch::One(_)));
+                let ambiguous = via_matches
+                    .iter()
+                    .any(|m| matches!(m, crate::rdf_serializers::ClassMatch::Several));
+                if ambiguous {
+                    out.uncheckable.push(UncheckableAbsence {
+                        referrer: inst.id.clone(),
+                        reason: format!(
+                            "`{via}` names more than one class of a sibling — a narrowing must \
+                         name one"
+                        ),
+                    });
+                    continue;
+                }
+                if !any_named {
+                    out.uncheckable.push(UncheckableAbsence {
+                        referrer: inst.id.clone(),
+                        reason: format!("`{via}` names no class any sibling declares"),
+                    });
+                    continue;
                 }
             }
-        }
-        if contradicted {
-            out.contradicted_claims += 1;
+
+            out.claims += 1;
+            let mut contradicted = false;
+            for (position, index) in indexes.iter().enumerate() {
+                let allowed: Option<&str> = match via_matches.get(position) {
+                    Some(crate::rdf_serializers::ClassMatch::One(name)) => Some(name),
+                    _ => None,
+                };
+                if via_authored.is_some() && allowed.is_none() {
+                    continue;
+                }
+                for record in &index.records {
+                    if let Some(allowed) = allowed
+                        && !record.types.iter().any(|t| t == allowed)
+                    {
+                        continue;
+                    }
+                    if anchor_iris.is_subset(&record.referenced) {
+                        out.unverified.push(UnverifiedAbsence {
+                            referrer: inst.id.clone(),
+                            anchors: anchors.clone(),
+                            via: via_authored.clone(),
+                            joined_by: record.id.to_string(),
+                        });
+                        contradicted = true;
+                    }
+                }
+            }
+            if contradicted {
+                out.contradicted_claims += 1;
+            }
         }
     }
     out
@@ -3029,6 +3303,267 @@ mod tests {
         schema
     }
 
+    /// A schema states which slots carry absence claims by annotating
+    /// them: a top-level declaration binds schema-wide, a class
+    /// attribute's binds that class, and both surface in the bindings.
+    #[test]
+    fn absence_bindings_read_every_annotated_slot() {
+        let schema = parse(
+            "id: https://example.org/t\nname: t\nslots:\n  unconnected:\n    range: uri\n    \
+             annotations:\n      asserts_absence:\n        value:\n          via_slot: \
+             connecting_class\n  connecting_class:\n    range: uri\nclasses:\n  Bench:\n    \
+             slots: [unconnected, connecting_class]\n    attributes:\n      lone:\n        \
+             range: uri\n        multivalued: true\n        annotations:\n          \
+             asserts_absence:\n            value: null\n",
+        );
+        let (bindings, issues) = absence_declarations(&schema);
+        assert_eq!(
+            bindings.by_slot.keys().collect::<Vec<_>>(),
+            vec!["lone", "unconnected"],
+            "each annotated slot is one entry, in slot order"
+        );
+        assert_eq!(
+            bindings.governing(&["Bench".to_string()], "unconnected"),
+            Some(&AbsenceVia::Slot("connecting_class".to_string())),
+            "the top-level declaration governs every carrying class"
+        );
+        assert_eq!(
+            bindings.governing(&["Bench".to_string()], "lone"),
+            Some(&AbsenceVia::Unnarrowed),
+            "the attribute declaration governs its class"
+        );
+        assert_eq!(
+            bindings.governing(&["Other".to_string()], "lone"),
+            None,
+            "a class-scoped declaration does not govern other classes"
+        );
+        assert!(issues.is_empty(), "well-formed declarations raise no issue");
+        assert!(
+            !bindings.is_empty(),
+            "a schema with declarations reports them present"
+        );
+        assert_eq!(
+            bindings.len(),
+            2,
+            "the enablement note counts declaring slots"
+        );
+        assert!(
+            absence_bindings(&SchemaDefinition::new("bare")).is_empty(),
+            "a schema without declarations reports none"
+        );
+    }
+
+    /// A malformed absence declaration warns instead of silently
+    /// narrowing or widening the check: an unknown field is named, a
+    /// `via_slot` no class carries is named (and the binding stays,
+    /// reported uncheckable downstream rather than silently widened),
+    /// and an annotated slot no class carries is named.
+    #[test]
+    fn absence_declaration_defects_are_load_warnings() {
+        let schema = parse(
+            "id: https://example.org/t\nname: t\nslots:\n  unconnected:\n    range: uri\n    \
+             annotations:\n      asserts_absence:\n        value:\n          via_slot: ghost\n          \
+             joint_referent: true\n  orphan:\n    range: uri\n    annotations:\n      \
+             asserts_absence:\n        value: null\nclasses:\n  Bench:\n    slots: \
+             [unconnected]\n",
+        );
+        let issues = absence_declaration_issues(&schema);
+        let details: Vec<&str> = issues.iter().map(|i| i.detail.as_str()).collect();
+        assert!(
+            details.iter().any(|d| d.contains("joint_referent")),
+            "the unknown field is named; got: {details:?}"
+        );
+        assert!(
+            details
+                .iter()
+                .any(|d| d.contains("ghost") && d.contains("no class")),
+            "the missing via target is named; got: {details:?}"
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.slot == "orphan" && i.detail.contains("no class")),
+            "the annotated-but-uncarried slot is named; got: {issues:?}"
+        );
+        let messages = schema_load_diagnostics(&schema);
+        assert!(
+            messages.iter().any(|m| m.contains("asserts_absence")),
+            "the load diagnostics carry the warnings; got: {messages:?}"
+        );
+        assert_eq!(
+            absence_bindings(&schema).by_slot.keys().collect::<Vec<_>>(),
+            vec!["orphan", "unconnected"],
+            "defective declarations still bind; the defect is the warning's job"
+        );
+    }
+
+    /// A class-scoped declaration (attribute or `slot_usage`) binds only
+    /// records of that class: another class's same-named slot holds
+    /// ordinary data, not absence claims.
+    #[test]
+    fn a_class_scoped_declaration_does_not_claim_other_classes_data() {
+        let sibling_schema = linked_sibling_schema();
+        let sibling = scoped_set(&sibling_schema, LINKED_DATA);
+        // `Bench` (the tree_root) carries plain `unconnected` references;
+        // an unrelated class `Audit` declares the same-named attribute
+        // with the assertion.
+        let mut schema = claiming_schema();
+        let mut audit = crate::linkml::ClassDefinition::new("Audit");
+        let mut marked = crate::linkml::SlotDefinition::new("unconnected");
+        marked.range = Some("uri".to_string());
+        marked.multivalued = true;
+        marked
+            .annotations
+            .insert_raw("asserts_absence", serde_norway::Value::Null);
+        audit.attributes.insert("unconnected".to_string(), marked);
+        schema.classes.insert("Audit".to_string(), audit);
+
+        let set = scoped_set(
+            &schema,
+            "id: b1\nunconnected:\n  - cellar:w1\n  - cellar:f1\n",
+        );
+        let declarations = absence_bindings(&schema);
+        let found = unverified_absences(
+            &schema,
+            &set,
+            &declarations,
+            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+        );
+        assert_eq!(
+            (
+                found.claims,
+                found.unverified.len(),
+                found.uncheckable.len()
+            ),
+            (0, 0, 0),
+            "a Bench record's values are not Audit's claims; got unverified: {:?}",
+            found.unverified
+        );
+    }
+
+    /// `slot_usage` overrides the top-level declaration for its class,
+    /// as it does for every other LinkML slot property: the class's
+    /// records use the narrowed `via_slot`, so a joining record of an
+    /// excluded class does not contradict the claim.
+    #[test]
+    fn slot_usage_narrowing_overrides_the_top_level_declaration() {
+        let sibling_schema = linked_sibling_schema();
+        let sibling = scoped_set(&sibling_schema, LINKED_DATA);
+        let mut schema = claiming_schema();
+        // Top-level: bare assertion. The claiming class narrows to
+        // records of the class named by `via` — LINKED_DATA's joining
+        // record `l1` is a `Link`, so narrowing to a class that is not
+        // `Link` excludes it.
+        let bench = schema.classes.get_mut("Bench").unwrap();
+        let unconnected = bench.attributes.get_mut("unconnected").unwrap();
+        unconnected
+            .annotations
+            .insert_raw("asserts_absence", serde_norway::Value::Null);
+        let mut narrowed = crate::linkml::SlotDefinition::new("unconnected");
+        let mut via_body = serde_norway::Mapping::new();
+        via_body.insert("via_slot".into(), "via".into());
+        narrowed
+            .annotations
+            .insert_raw("asserts_absence", serde_norway::Value::Mapping(via_body));
+        bench.slot_usage.insert("unconnected".to_string(), narrowed);
+
+        // The record narrows to the sibling's `Item` class: `l1` (a
+        // `Link`) joining the anchors is outside the narrowed claim.
+        let set = scoped_set(
+            &schema,
+            "id: b1\nvia: https://example.org/cellar/Item\nunconnected:\n  - cellar:w1\n  - cellar:f1\n",
+        );
+        let declarations = absence_bindings(&schema);
+        let found = unverified_absences(
+            &schema,
+            &set,
+            &declarations,
+            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+        );
+        assert_eq!(found.claims, 1);
+        assert!(
+            found.unverified.is_empty(),
+            "the slot_usage narrowing governs, so the Link join is outside the claim; got: {:?}",
+            found.unverified
+        );
+    }
+
+    /// A malformed `via_slot` (non-string) poisons the binding: its
+    /// claims are uncheckable, never evaluated wide of the author's
+    /// declaration — the same rule as a `via_slot` no class carries.
+    #[test]
+    fn a_malformed_via_slot_makes_claims_uncheckable_not_wider() {
+        let sibling_schema = linked_sibling_schema();
+        let sibling = scoped_set(&sibling_schema, LINKED_DATA);
+        let mut schema = claiming_schema();
+        let bench = schema.classes.get_mut("Bench").unwrap();
+        let unconnected = bench.attributes.get_mut("unconnected").unwrap();
+        let mut body = serde_norway::Mapping::new();
+        body.insert("via_slot".into(), serde_norway::Value::Number(42.into()));
+        unconnected
+            .annotations
+            .insert_raw("asserts_absence", serde_norway::Value::Mapping(body));
+
+        let set = scoped_set(
+            &schema,
+            "id: b1\nunconnected:\n  - cellar:w1\n  - cellar:f1\n",
+        );
+        let declarations = absence_bindings(&schema);
+        let found = unverified_absences(
+            &schema,
+            &set,
+            &declarations,
+            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+        );
+        assert_eq!(
+            found.claims, 0,
+            "an uncheckable claim is not counted as evaluated"
+        );
+        assert_eq!(
+            (found.unverified.len(), found.uncheckable.len()),
+            (0, 1),
+            "the poisoned binding is uncheckable, not widened; got unverified: {:?}",
+            found.unverified
+        );
+    }
+
+    /// A binding whose `via_slot` no class carries narrows to a class no
+    /// record can name: the claims it governs are reported uncheckable —
+    /// never silently widened to "no record of any kind", which is a
+    /// strictly stronger check than the author declared.
+    #[test]
+    fn an_uncarried_via_slot_makes_claims_uncheckable_not_wider() {
+        let sibling_schema = linked_sibling_schema();
+        let sibling = scoped_set(&sibling_schema, LINKED_DATA);
+        let schema = claiming_schema();
+        let set = scoped_set(
+            &schema,
+            "id: b1\nunconnected:\n  - cellar:w1\n  - cellar:f1\n",
+        );
+        let found = unverified_absences(
+            &schema,
+            &set,
+            &AbsenceBindings::schema_wide("unconnected", Some("ghost")),
+            &[(&sibling_schema, std::slice::from_ref(&sibling))],
+        );
+        assert_eq!(
+            found.claims, 0,
+            "an uncheckable claim is not counted as evaluated"
+        );
+        assert_eq!(
+            found.uncheckable.len(),
+            1,
+            "the narrowed claim is uncheckable; got unverified: {:?}, uncheckable: {:?}",
+            found.unverified,
+            found.uncheckable
+        );
+        assert!(
+            found.unverified.is_empty(),
+            "an uncheckable claim is not evaluated wide; got: {:?}",
+            found.unverified
+        );
+    }
+
     /// The claiming side: `anchors` carries the record's full anchor set,
     /// `unconnected` the absence claim (a subset of it), `unconnected_iris`
     /// the same claim as IRI-valued scalars, `via` the optional class
@@ -3066,8 +3601,7 @@ mod tests {
         let found = unverified_absences(
             &schema,
             &set,
-            "anchors",
-            None,
+            &AbsenceBindings::schema_wide("anchors", None),
             &[(&sibling_schema, std::slice::from_ref(&sibling))],
         );
         assert_eq!(found.claims, 1);
@@ -3097,8 +3631,7 @@ mod tests {
             unverified_absences(
                 &schema,
                 &set,
-                "anchors",
-                None,
+                &AbsenceBindings::schema_wide("anchors", None),
                 &[(&sibling_schema, std::slice::from_ref(&sibling))],
             )
             .unverified,
@@ -3120,8 +3653,7 @@ mod tests {
             unverified_absences(
                 &schema,
                 &joined_via_link,
-                "anchors",
-                Some("via"),
+                &AbsenceBindings::schema_wide("anchors", Some("via")),
                 &[(&sibling_schema, std::slice::from_ref(&sibling))],
             )
             .unverified
@@ -3137,8 +3669,7 @@ mod tests {
             unverified_absences(
                 &schema,
                 &narrowed_elsewhere,
-                "anchors",
-                Some("via"),
+                &AbsenceBindings::schema_wide("anchors", Some("via")),
                 &[(&sibling_schema, std::slice::from_ref(&sibling))],
             )
             .unverified,
@@ -3154,8 +3685,7 @@ mod tests {
             unverified_absences(
                 &schema,
                 &named_via,
-                "anchors",
-                Some("via"),
+                &AbsenceBindings::schema_wide("anchors", Some("via")),
                 &[(&sibling_schema, std::slice::from_ref(&sibling))],
             )
             .unverified
@@ -3184,8 +3714,7 @@ mod tests {
         let holds = unverified_absences(
             &schema,
             &set,
-            "unconnected",
-            None,
+            &AbsenceBindings::schema_wide("unconnected", None),
             &[(
                 &sibling_schema,
                 std::slice::from_ref(&uncovered_pair_joined),
@@ -3206,8 +3735,7 @@ mod tests {
         let contradicted = unverified_absences(
             &schema,
             &set,
-            "unconnected",
-            None,
+            &AbsenceBindings::schema_wide("unconnected", None),
             &[(&sibling_schema, std::slice::from_ref(&claimed_pair_joined))],
         );
         assert_eq!(
@@ -3232,8 +3760,7 @@ mod tests {
         let found = unverified_absences(
             &schema,
             &set,
-            "anchors",
-            Some("via"),
+            &AbsenceBindings::schema_wide("anchors", Some("via")),
             &[(&sibling_schema, std::slice::from_ref(&sibling))],
         );
         assert_eq!(
@@ -3256,8 +3783,7 @@ mod tests {
         let found = unverified_absences(
             &schema,
             &set,
-            "anchors",
-            Some("via"),
+            &AbsenceBindings::schema_wide("anchors", Some("via")),
             &[(&renamed_sibling, std::slice::from_ref(&sibling))],
         );
         assert_eq!(
@@ -3283,8 +3809,7 @@ mod tests {
         let found = unverified_absences(
             &schema,
             &set,
-            "anchors",
-            Some("via"),
+            &AbsenceBindings::schema_wide("anchors", Some("via")),
             &[(&sibling_schema, std::slice::from_ref(&sibling))],
         );
         assert_eq!(found.claims, 0);
@@ -3307,8 +3832,7 @@ mod tests {
         let found = unverified_absences(
             &schema,
             &set,
-            "anchors",
-            Some("via"),
+            &AbsenceBindings::schema_wide("anchors", Some("via")),
             &[(&sibling_schema, std::slice::from_ref(&sibling))],
         );
         assert_eq!(found.claims, 0);
@@ -3327,8 +3851,7 @@ mod tests {
         let found = unverified_absences(
             &schema,
             &bad_via,
-            "anchors",
-            Some("via"),
+            &AbsenceBindings::schema_wide("anchors", Some("via")),
             &[(&sibling_schema, std::slice::from_ref(&sibling))],
         );
         assert_eq!(found.claims, 0);
@@ -3362,8 +3885,7 @@ mod tests {
         let found = unverified_absences(
             &schema,
             &set,
-            "anchors",
-            None,
+            &AbsenceBindings::schema_wide("anchors", None),
             &[(&sibling_schema, std::slice::from_ref(&sibling))],
         );
         assert_eq!(found.unverified, vec![], "no false contradiction");
@@ -3383,8 +3905,7 @@ mod tests {
         let found = unverified_absences(
             &schema,
             &set,
-            "anchors",
-            None,
+            &AbsenceBindings::schema_wide("anchors", None),
             &[(&sibling_schema, std::slice::from_ref(&sibling))],
         );
         assert_eq!(found.claims, 0);
@@ -3402,8 +3923,7 @@ mod tests {
         let found = unverified_absences(
             &schema,
             &set,
-            "anchors",
-            None,
+            &AbsenceBindings::schema_wide("anchors", None),
             &[(&sibling_schema, std::slice::from_ref(&sibling))],
         );
         assert_eq!(found.claims, 0);
@@ -3424,8 +3944,7 @@ mod tests {
         let found = unverified_absences(
             &schema,
             &set,
-            "anchors",
-            None,
+            &AbsenceBindings::schema_wide("anchors", None),
             &[(&sibling_schema, std::slice::from_ref(&sibling))],
         );
         assert_eq!(found.claims, 0);
@@ -3448,8 +3967,7 @@ mod tests {
         let found = unverified_absences(
             &schema,
             &bad_anchor,
-            "anchors",
-            None,
+            &AbsenceBindings::schema_wide("anchors", None),
             &[(&sibling_schema, std::slice::from_ref(&sibling))],
         );
         assert_eq!(found.claims, 0);
@@ -3478,8 +3996,7 @@ mod tests {
         let found = unverified_absences(
             &schema,
             &set,
-            "unconnected_iris",
-            None,
+            &AbsenceBindings::schema_wide("unconnected_iris", None),
             &[(&sibling_schema, std::slice::from_ref(&sibling))],
         );
         assert_eq!(found.claims, 1);
@@ -3511,8 +4028,7 @@ mod tests {
         let found = unverified_absences(
             &schema,
             &set,
-            "anchors",
-            None,
+            &AbsenceBindings::schema_wide("anchors", None),
             &[(&sibling_schema, std::slice::from_ref(&sibling))],
         );
         assert_eq!(
@@ -3535,8 +4051,7 @@ mod tests {
         let found = unverified_absences(
             &schema,
             &set,
-            "anchors",
-            None,
+            &AbsenceBindings::schema_wide("anchors", None),
             &[
                 (&sibling_schema, std::slice::from_ref(&first)),
                 (&sibling_schema, std::slice::from_ref(&second)),
@@ -3557,8 +4072,7 @@ mod tests {
         let found = unverified_absences(
             &schema,
             &contradicted,
-            "anchors",
-            None,
+            &AbsenceBindings::schema_wide("anchors", None),
             &[(&sibling_schema, std::slice::from_ref(&sibling))],
         );
         assert_eq!(found.claims, 1, "one anchor is a checkable claim");
@@ -3577,8 +4091,7 @@ mod tests {
         let found = unverified_absences(
             &schema,
             &holds,
-            "anchors",
-            None,
+            &AbsenceBindings::schema_wide("anchors", None),
             &[(&sibling_schema, std::slice::from_ref(&sibling))],
         );
         assert_eq!(found.claims, 1);
@@ -3595,8 +4108,7 @@ mod tests {
         let found = unverified_absences(
             &schema,
             &set,
-            "anchors",
-            Some("via"),
+            &AbsenceBindings::schema_wide("anchors", Some("via")),
             &[(&sibling_schema, std::slice::from_ref(&sibling))],
         );
         assert_eq!(found.claims, 1);
@@ -3653,8 +4165,7 @@ mod tests {
         let found = unverified_absences(
             &schema,
             &held_only,
-            "anchors",
-            None,
+            &AbsenceBindings::schema_wide("anchors", None),
             &[(&sibling_schema, std::slice::from_ref(&sibling))],
         );
         assert_eq!(found.claims, 1);
@@ -3668,8 +4179,7 @@ mod tests {
         let found = unverified_absences(
             &schema,
             &referenced,
-            "anchors",
-            None,
+            &AbsenceBindings::schema_wide("anchors", None),
             &[(&sibling_schema, std::slice::from_ref(&sibling))],
         );
         assert_eq!(
@@ -3687,8 +4197,7 @@ mod tests {
         let found = unverified_absences(
             &schema,
             &set,
-            "anchors",
-            None,
+            &AbsenceBindings::schema_wide("anchors", None),
             &[(&sibling_schema, std::slice::from_ref(&sibling))],
         );
         assert_eq!(
@@ -3718,8 +4227,7 @@ mod tests {
         let found = unverified_absences(
             &schema,
             &set,
-            "anchors",
-            None,
+            &AbsenceBindings::schema_wide("anchors", None),
             &[(&sibling_schema, std::slice::from_ref(&sibling))],
         );
         assert_eq!(

@@ -90,6 +90,13 @@ impl Annotations {
         self.set_parsed(tag.into(), serde_norway::Value::String(value.into()), false);
     }
 
+    /// Record an annotation holding `value` as-is — the programmatic
+    /// equivalent of authoring the annotation in YAML (a structured
+    /// value arrives already unwrapped, as the parser would leave it).
+    pub fn insert_raw(&mut self, tag: impl Into<String>, value: serde_norway::Value) {
+        self.set_parsed(tag.into(), value, false);
+    }
+
     /// Take the annotation under `tag` out of the map, whatever its
     /// shape — a caller owning a tag clears it unconditionally and then
     /// judges the value, so no stray shape can keep the tag occupied.

@@ -359,15 +359,17 @@ fn resolved_deps(
 /// sibling owns (a shared vocabulary, a graph published outside this
 /// manifest) stay in the cross-graph summary, unchecked — unless
 /// `require_namespace_coverage` is set, which flags them so a typo'd
-/// namespace cannot pass as an outside vocabulary. With `verify_absences`
-/// bound, each record's stated absence claim is additionally verified
-/// against the sibling graphs. Findings warn as they stream; the
-/// returned problem summaries are what a caller's `--strict` promotes,
-/// so one entry's findings never hide another's. A sibling naming no
-/// `[schemas]` entry, the entry itself, or a binding naming a slot no
-/// class carries is a configuration error; a sibling with no datasets
-/// yet resolves nothing, so references into its namespace warn like any
-/// other unresolved ones.
+/// namespace cannot pass as an outside vocabulary. When the schema
+/// declares absence claims (`asserts_absence` slot annotations), each
+/// record's stated claim is additionally verified against the sibling
+/// graphs; declaration defects are load warnings, and a schema that
+/// declares claims nothing verifies gets a note here. Findings warn as
+/// they stream; the returned problem summaries are what a caller's
+/// `--strict` promotes, so one entry's findings never hide another's. A
+/// sibling naming no `[schemas]` entry, or the entry itself, is a
+/// configuration error; a sibling with no datasets yet resolves
+/// nothing, so references into its namespace warn like any other
+/// unresolved ones.
 fn check_resolve_against(
     name: &str,
     manifest: &panschema::manifest::Manifest,
@@ -376,47 +378,40 @@ fn check_resolve_against(
     schema: &panschema::linkml::SchemaDefinition,
     registry: &FormatRegistry,
 ) -> anyhow::Result<Vec<String>> {
+    // The schema itself declares which slots carry absence claims
+    // (`asserts_absence` annotations); the manifest contributes only
+    // enablement — which sibling entries to verify against. Declaration
+    // defects are load warnings from the shared diagnostics; declared
+    // claims nothing verifies are noted below, so a consumer cannot
+    // silently weaken the contract to nothing by omitting one line.
+    // (The bindings walk runs before the early returns because those
+    // notes are exactly about the early-return cases.)
+    let bindings = panschema::diagnostics::absence_bindings(schema);
+    let unverified_note = || {
+        eprintln!(
+            "note: schema `{name}` declares {} absence-claim slot(s) (`asserts_absence`), \
+             but [check.{name}] names no resolve_against siblings, so the claims are not \
+             verified",
+            bindings.len()
+        );
+    };
     let Some(check_cfg) = manifest.check.get(name) else {
+        if !bindings.is_empty() {
+            unverified_note();
+        }
         return Ok(Vec::new());
     };
     if check_cfg.resolve_against.is_empty() {
-        if check_cfg.verify_absences.is_some() {
-            anyhow::bail!(
-                "verify_absences needs resolve_against — the claims are verified against \
-                 the sibling datasets it names"
-            );
-        }
         if check_cfg.require_namespace_coverage {
             anyhow::bail!(
                 "require_namespace_coverage needs resolve_against — coverage means the \
                  namespaces the listed siblings own"
             );
         }
+        if !bindings.is_empty() {
+            unverified_note();
+        }
         return Ok(Vec::new());
-    }
-
-    // Binding errors are pure configuration problems: report them before
-    // any sibling data is read, and against the resolved class view — a
-    // slot no class carries would silently match no record.
-    if let Some(binding) = &check_cfg.verify_absences {
-        let carried = |slot: &str| {
-            schema.classes.values().any(|class| {
-                panschema::linkml_resolve::resolve_effective_slots(class, schema).contains_key(slot)
-            })
-        };
-        if !carried(&binding.slot) {
-            anyhow::bail!(
-                "verify_absences.slot `{}` is not a slot of any class in schema `{name}`",
-                binding.slot
-            );
-        }
-        if let Some(via) = &binding.via
-            && !carried(via)
-        {
-            anyhow::bail!(
-                "verify_absences.via `{via}` is not a slot of any class in schema `{name}`"
-            );
-        }
     }
 
     let mut owned_namespaces: Vec<String> = Vec::new();
@@ -480,14 +475,14 @@ fn check_resolve_against(
                 &sibling_schema,
                 std::slice::from_ref(&set),
             ));
-            if check_cfg.verify_absences.is_some() {
+            if !bindings.is_empty() {
                 sibling_sets.push(set);
             }
         }
         owned_namespaces.push(panschema::rdf_serializers::instance_namespace(
             &sibling_schema,
         ));
-        if check_cfg.verify_absences.is_some() {
+        if !bindings.is_empty() {
             sibling_graphs.push((sibling_schema, sibling_sets));
         }
     }
@@ -528,14 +523,9 @@ fn check_resolve_against(
             }
             uncovered += resolution.uncovered.len();
         }
-        if let Some(binding) = &check_cfg.verify_absences {
-            let verification = panschema::diagnostics::unverified_absences(
-                schema,
-                &set,
-                &binding.slot,
-                binding.via.as_deref(),
-                &siblings,
-            );
+        if !bindings.is_empty() {
+            let verification =
+                panschema::diagnostics::unverified_absences(schema, &set, &bindings, &siblings);
             for u in &verification.uncheckable {
                 eprintln!("warning: {}: {}", path.display(), u.message());
             }
@@ -555,7 +545,7 @@ fn check_resolve_against(
          `{sibling_names}` namespace(s) resolve",
         total.checked
     );
-    if check_cfg.verify_absences.is_some() {
+    if !bindings.is_empty() {
         let mut summary = format!(
             "note: schema `{name}`: {} of {} stated absence claim(s) hold against \
              `{sibling_names}`",
@@ -741,30 +731,35 @@ fn generate(
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     // The unmodeled-construct, unresolved-unique-key, dangling-reference,
-    // untyped-slot, and impossible-rule-value warnings are emitted by the
-    // shared load path above (so `serve`/`publish` surface them too).
-    // Under `--strict`, an unmodeled construct, a dangling reference, a
-    // colliding slot definition, an untyped slot, or a rule constant
-    // outside its enum's values is additionally a hard error here.
+    // untyped-slot, impossible-rule-value, and absence-declaration
+    // warnings are emitted by the shared load path above (so
+    // `serve`/`publish` surface them too). Under `--strict`, each is
+    // additionally a hard error here.
     if strict {
         let unmodeled = panschema::diagnostics::unmodeled_class_constructs(&schema);
         let dangling = panschema::diagnostics::dangling_references(&schema);
         let colliding = panschema::diagnostics::colliding_slot_definitions(&schema);
         let untyped = panschema::diagnostics::untyped_slots(&schema);
         let impossible = panschema::diagnostics::impossible_rule_values(&schema);
-        let blocking =
-            unmodeled.len() + dangling.len() + colliding.len() + untyped.len() + impossible.len();
+        let absence = panschema::diagnostics::absence_declaration_issues(&schema);
+        let blocking = unmodeled.len()
+            + dangling.len()
+            + colliding.len()
+            + untyped.len()
+            + impossible.len()
+            + absence.len();
         if panschema::diagnostics::should_fail_strict(strict, blocking) {
             anyhow::bail!(
                 "{} unmodeled LinkML construct(s), {} dangling reference(s), \
-                 {} colliding slot definition(s), {} untyped slot(s), and {} rule \
-                 constant(s) outside their enum's values present; failing because \
-                 --strict is set",
+                 {} colliding slot definition(s), {} untyped slot(s), {} rule \
+                 constant(s) outside their enum's values, and {} absence-declaration \
+                 issue(s) present; failing because --strict is set",
                 unmodeled.len(),
                 dangling.len(),
                 colliding.len(),
                 untyped.len(),
-                impossible.len()
+                impossible.len(),
+                absence.len()
             );
         }
     }
@@ -1143,7 +1138,10 @@ fn generate_from_manifest(
             .collect();
         // Cross-graph resolution runs once per entry, before any writer:
         // it reads both graphs and writes nothing, so `--check` runs it too.
-        if manifest.check.contains_key(name) {
+        // Called even without a [check.<name>] table — the check fn owns
+        // the early return, and it is where a schema that declares
+        // absence claims nothing verifies gets its note.
+        {
             let check_schema =
                 panschema::import_resolve::load_schema_with_deps(schema_path, &registry, &deps)
                     .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -1866,7 +1864,8 @@ fn validate_manifest(strict: bool) -> anyhow::Result<()> {
             + panschema::diagnostics::dangling_references(&schema).len()
             + panschema::diagnostics::colliding_slot_definitions(&schema).len()
             + panschema::diagnostics::untyped_slots(&schema).len()
-            + panschema::diagnostics::impossible_rule_values(&schema).len();
+            + panschema::diagnostics::impossible_rule_values(&schema).len()
+            + panschema::diagnostics::absence_declaration_issues(&schema).len();
         let instances: Vec<PathBuf> = manifest
             .declared_instances(name)
             .iter()
