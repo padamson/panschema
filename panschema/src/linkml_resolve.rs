@@ -314,7 +314,10 @@ const DEFERRED_DEFAULT_KEY: &str = "panschema:deferred_default_range";
 /// genuinely rangeless.
 pub fn materialize_deferred_default_range(schema: &mut SchemaDefinition) {
     for_each_slot_definition(schema, |slot| {
-        if let Some(default) = slot.annotations.remove(DEFERRED_DEFAULT_KEY)
+        // `remove` unconditionally, so the transient marker is cleared
+        // whatever shape user YAML managed to smuggle under its key.
+        let deferred = slot.annotations.remove(DEFERRED_DEFAULT_KEY);
+        if let Some(serde_norway::Value::String(default)) = deferred
             && default_range_would_fill(slot)
         {
             slot.range = Some(default);

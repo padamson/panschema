@@ -60,7 +60,7 @@ slot, enum, type, and permissible-value alike. panschema models only a few:
 | Metaslot | IR | HTML | Graph | RDF | Rust | Postgres | Notes |
 |---|:--:|:--:|:--:|:--:|:--:|:--:|---|
 | `description` | ● | ● | ● | ● | ● | ✗ | markdown + `[[xref]]` in HTML; tooltip in graph; `rdfs:comment`; doc-comment; not emitted as `COMMENT ON` |
-| `annotations` | ● | ◐ | ◐ | ◐ | ○ | ✗ | generic map; only `panschema:*` keys consumed (label, individuals, owl_property_type) |
+| `annotations` | ● | ◐ | ◐ | ◐ | ○ | ✗ | tag→value map, values of any shape (LinkML 1.6+); compact, expanded-map, and list spellings all load, validated as the reference implementation reads them (structured values under `value:`; foreign body keys and contradicting tags refused); bare scalars read lexically as strings; only `panschema:*` keys consumed (label, individuals, owl_property_type), all string-valued; a value panschema does not read is preserved but projected nowhere; nested annotations on an annotation warn and drop |
 | `title` | ◐ | ● | ◐ | ● | ✗ | ✗ | modeled on schema only; `rdfs:label` on the ontology |
 | `exact_mappings` `close_mappings` `related_mappings` `narrow_mappings` `broad_mappings` | ● | ● | ○ | ● | ○ | ✗ | modeled on class + slot; HTML "Mappings" row; RDF `skos:*Match` (round-trips: OWL reader reads them back); graph/Rust/postgres ignore |
 | `deprecated` | ● | ● | — | ● | — | ✗ | modeled on schema/class/slot/enum/type; HTML "Deprecated" badge + note; `owl:deprecated true` on class/slot IRI (round-trips as a boolean — OWL reader reads it back into the flag; the note text is RDF-lossy); graph/Rust/postgres ignore |

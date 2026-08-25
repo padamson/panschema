@@ -892,11 +892,7 @@ impl GraphWriter {
         let mut external_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         for (name, class_def) in &schema.classes {
             // Get label from annotation or use name
-            let label = class_def
-                .annotations
-                .get("panschema:label")
-                .cloned()
-                .unwrap_or_else(|| name.clone());
+            let label = class_def.annotations.label_or(name);
 
             // Get color, adjusting alpha for abstract classes
             let mut color = NodeType::Class.color();
@@ -1045,11 +1041,7 @@ impl GraphWriter {
     /// Add slot nodes and domain/range/inverse edges
     fn add_slots(&self, schema: &SchemaDefinition, graph: &mut GraphData) {
         for (name, slot_def) in &schema.slots {
-            let label = slot_def
-                .annotations
-                .get("panschema:label")
-                .cloned()
-                .unwrap_or_else(|| name.clone());
+            let label = slot_def.annotations.label_or(name);
 
             let cardinality = crate::linkml_resolve::effective_cardinality(slot_def);
             let kind_metadata = Some(KindMetadata::Slot {

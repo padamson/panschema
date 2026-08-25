@@ -902,11 +902,7 @@ impl HtmlWriter {
                 .filter_map(|type_id| {
                     schema.classes.get(type_id).map(|c| EntityRef {
                         id: type_id.clone(),
-                        label: c
-                            .annotations
-                            .get("panschema:label")
-                            .cloned()
-                            .unwrap_or_else(|| type_id.clone()),
+                        label: c.annotations.label_or(type_id),
                     })
                 })
                 .collect();
@@ -914,11 +910,7 @@ impl HtmlWriter {
             let slot_ref = |property: &str| {
                 schema.slots.get(property).map(|slot| EntityRef {
                     id: property.to_string(),
-                    label: slot
-                        .annotations
-                        .get("panschema:label")
-                        .cloned()
-                        .unwrap_or_else(|| property.to_string()),
+                    label: slot.annotations.label_or(property),
                 })
             };
 
@@ -1020,8 +1012,8 @@ impl HtmlWriter {
         // Sort classes by name for consistent ordering
         let mut sorted_classes: Vec<_> = schema.classes.iter().collect();
         sorted_classes.sort_by(|a, b| {
-            let label_a = a.1.annotations.get("panschema:label").unwrap_or(a.0);
-            let label_b = b.1.annotations.get("panschema:label").unwrap_or(b.0);
+            let label_a = a.1.annotations.label_or_ref(a.0);
+            let label_b = b.1.annotations.label_or_ref(b.0);
             label_a.cmp(label_b)
         });
 
@@ -1040,11 +1032,7 @@ impl HtmlWriter {
         > = std::collections::BTreeMap::new();
 
         for (class_id, class_def) in &sorted_classes {
-            let label = class_def
-                .annotations
-                .get("panschema:label")
-                .cloned()
-                .unwrap_or_else(|| (*class_id).clone());
+            let label = class_def.annotations.label_or(class_id);
 
             // One inheritance walk per class serves the rule blocks, the
             // enum-value pointers, and the slot-card rows below.
@@ -1087,11 +1075,7 @@ impl HtmlWriter {
             // Find superclass
             let superclass = class_def.is_a.as_ref().and_then(|parent_id| {
                 schema.classes.get(parent_id).map(|parent| {
-                    let parent_label = parent
-                        .annotations
-                        .get("panschema:label")
-                        .cloned()
-                        .unwrap_or_else(|| parent_id.clone());
+                    let parent_label = parent.annotations.label_or(parent_id);
                     EntityRef {
                         id: parent_id.clone(),
                         label: parent_label,
@@ -1105,11 +1089,7 @@ impl HtmlWriter {
                 .iter()
                 .filter(|(_, c)| c.is_a.as_ref() == Some(class_id))
                 .map(|(sub_id, sub_def)| {
-                    let sub_label = sub_def
-                        .annotations
-                        .get("panschema:label")
-                        .cloned()
-                        .unwrap_or_else(|| sub_id.clone());
+                    let sub_label = sub_def.annotations.label_or(sub_id);
                     EntityRef {
                         id: sub_id.clone(),
                         label: sub_label,
@@ -1124,11 +1104,7 @@ impl HtmlWriter {
                 .iter()
                 .filter_map(|mixin_id| {
                     schema.classes.get(mixin_id).map(|mixin_def| {
-                        let mixin_label = mixin_def
-                            .annotations
-                            .get("panschema:label")
-                            .cloned()
-                            .unwrap_or_else(|| mixin_id.clone());
+                        let mixin_label = mixin_def.annotations.label_or(mixin_id);
                         EntityRef {
                             id: mixin_id.clone(),
                             label: mixin_label,
@@ -1259,17 +1235,13 @@ impl HtmlWriter {
         // Sort slots by label for consistent ordering
         let mut sorted_slots: Vec<_> = schema.slots.iter().collect();
         sorted_slots.sort_by(|a, b| {
-            let label_a = a.1.annotations.get("panschema:label").unwrap_or(a.0);
-            let label_b = b.1.annotations.get("panschema:label").unwrap_or(b.0);
+            let label_a = a.1.annotations.label_or_ref(a.0);
+            let label_b = b.1.annotations.label_or_ref(b.0);
             label_a.cmp(label_b)
         });
 
         for (slot_id, slot_def) in &sorted_slots {
-            let label = slot_def
-                .annotations
-                .get("panschema:label")
-                .cloned()
-                .unwrap_or_else(|| (*slot_id).clone());
+            let label = slot_def.annotations.label_or(slot_id);
 
             slot_refs.push(EntityRef {
                 id: (*slot_id).clone(),
@@ -1290,11 +1262,7 @@ impl HtmlWriter {
                     .into_iter()
                     .filter_map(|domain_id| {
                         schema.classes.get(&domain_id).map(|c| {
-                            let domain_label = c
-                                .annotations
-                                .get("panschema:label")
-                                .cloned()
-                                .unwrap_or_else(|| domain_id.clone());
+                            let domain_label = c.annotations.label_or(&domain_id);
                             EntityRef {
                                 id: domain_id.clone(),
                                 label: domain_label,
@@ -1306,11 +1274,7 @@ impl HtmlWriter {
             // Resolve range
             let range = slot_def.range.as_ref().map(|range_id| {
                 let class_ref = schema.classes.get(range_id).map(|c| {
-                    let range_label = c
-                        .annotations
-                        .get("panschema:label")
-                        .cloned()
-                        .unwrap_or_else(|| range_id.clone());
+                    let range_label = c.annotations.label_or(range_id);
                     EntityRef {
                         id: range_id.clone(),
                         label: range_label,
@@ -1819,11 +1783,7 @@ impl Writer for HtmlWriter {
 /// (an `inverse` or a slot-level `is_a` parent) shows the same label
 /// that slot's own card does.
 fn slot_display_label(schema: &SchemaDefinition, name: &str) -> String {
-    schema
-        .find_slot(name)
-        .and_then(|def| def.annotations.get("panschema:label"))
-        .cloned()
-        .unwrap_or_else(|| name.to_string())
+    schema.slot_display_label(name)
 }
 
 /// Render a LinkML `description:` value to HTML. Runs CommonMark
@@ -1950,11 +1910,7 @@ fn build_namespaces(schema: &SchemaDefinition, schema_iri: &str) -> Vec<Namespac
 /// from imported schemas).
 fn range_ref_for(range: &str, schema: &SchemaDefinition) -> RangeRef {
     if let Some(class_def) = schema.classes.get(range) {
-        let label = class_def
-            .annotations
-            .get("panschema:label")
-            .cloned()
-            .unwrap_or_else(|| range.to_string());
+        let label = class_def.annotations.label_or(range);
         RangeRef {
             class_ref: Some(EntityRef {
                 id: range.to_string(),

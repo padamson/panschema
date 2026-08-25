@@ -245,7 +245,7 @@ impl InstanceSet {
     pub fn from_owl_annotations(schema: &SchemaDefinition) -> Self {
         use std::collections::HashMap;
 
-        let Some(ids_csv) = schema.annotations.get("panschema:individuals") else {
+        let Some(ids_csv) = schema.annotations.get_str("panschema:individuals") else {
             return Self::default();
         };
         let ids: Vec<&str> = ids_csv
@@ -260,9 +260,9 @@ impl InstanceSet {
         for id in &ids {
             if let Some(iri) = schema
                 .annotations
-                .get(&format!("panschema:individual:{id}:_iri"))
+                .get_str(&format!("panschema:individual:{id}:_iri"))
             {
-                iri_to_id.insert(iri.as_str(), id);
+                iri_to_id.insert(iri, id);
             }
         }
 
@@ -270,13 +270,13 @@ impl InstanceSet {
         for id in &ids {
             let label = schema
                 .annotations
-                .get(&format!("panschema:individual:{id}:_label"))
-                .cloned()
+                .get_str(&format!("panschema:individual:{id}:_label"))
+                .map(String::from)
                 .unwrap_or_else(|| capitalize_first(id));
 
             let types: Vec<String> = schema
                 .annotations
-                .get(&format!("panschema:individual:{id}"))
+                .get_str(&format!("panschema:individual:{id}"))
                 .map(|csv| {
                     csv.split(',')
                         .map(str::trim)
@@ -300,19 +300,18 @@ impl InstanceSet {
                 if prop.starts_with('_') || prop.ends_with(":_label") {
                     continue;
                 }
+                // Every `panschema:individual:*` value the OWL reader writes
+                // is a string; a structured value under one of these tags is
+                // not an assertion this sub-language can read.
+                let Some(value) = value.as_str() else {
+                    continue;
+                };
                 let prop_label = schema
                     .annotations
-                    .get(&format!("{key}:_label"))
-                    .cloned()
-                    .or_else(|| {
-                        schema
-                            .slots
-                            .get(prop)
-                            .and_then(|s| s.annotations.get("panschema:label").cloned())
-                    })
-                    .unwrap_or_else(|| prop.to_string());
-
-                if let Some(target) = iri_to_id.get(value.as_str()) {
+                    .get_str(&format!("{key}:_label"))
+                    .map(String::from)
+                    .unwrap_or_else(|| schema.slot_display_label(prop));
+                if let Some(target) = iri_to_id.get(value) {
                     references.push(Reference {
                         property: prop_label,
                         target: target.to_string(),
@@ -320,7 +319,7 @@ impl InstanceSet {
                         external: false,
                     });
                 } else {
-                    literals.push((prop_label, value.clone()));
+                    literals.push((prop_label, value.to_string()));
                 }
             }
             literals.sort();
@@ -328,14 +327,13 @@ impl InstanceSet {
 
             let description = schema
                 .annotations
-                .get(&format!("panschema:individual:{id}:_comment"))
-                .cloned();
+                .get_str(&format!("panschema:individual:{id}:_comment"))
+                .map(String::from);
             let (iri, uri_unresolved) = crate::graph_writer::resolve_node_uri(
                 schema,
                 schema
                     .annotations
-                    .get(&format!("panschema:individual:{id}:_iri"))
-                    .map(String::as_str),
+                    .get_str(&format!("panschema:individual:{id}:_iri")),
             );
 
             instances.push(Instance {
@@ -1471,7 +1469,7 @@ impl LinkmlLoader<'_> {
                 induced
             };
             let property = slot
-                .and_then(|s| s.annotations.get("panschema:label").cloned())
+                .map(|s| s.annotations.label_or(field))
                 .unwrap_or_else(|| field.to_string());
             // The identifier, label, and description slots are recorded in the
             // typed `slot_values` (the validation view needs their presence) but

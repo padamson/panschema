@@ -450,11 +450,7 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
         }
 
         // rdfs:label
-        let label = class_def
-            .annotations
-            .get("panschema:label")
-            .cloned()
-            .unwrap_or_else(|| name.to_string());
+        let label = class_def.annotations.label_or(name);
         triple(&mut graph, &class_iri, rdfs::label, label.as_str())?;
 
         // rdfs:comment from description
@@ -641,7 +637,7 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
         // Determine property type
         let is_object_property = slot_def
             .annotations
-            .get("panschema:owl_property_type")
+            .get_str("panschema:owl_property_type")
             .map(|s| s == "ObjectProperty")
             .unwrap_or_else(|| {
                 slot_def
@@ -680,11 +676,7 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
         }
 
         // rdfs:label
-        let label = slot_def
-            .annotations
-            .get("panschema:label")
-            .cloned()
-            .unwrap_or_else(|| name.to_string());
+        let label = slot_def.annotations.label_or(name);
         triple(&mut graph, &prop_iri, rdfs::label, label.as_str())?;
 
         // rdfs:comment from description
@@ -777,7 +769,7 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
     }
 
     // Individuals
-    if let Some(individuals_str) = schema.annotations.get("panschema:individuals") {
+    if let Some(individuals_str) = schema.annotations.get_str("panschema:individuals") {
         let owl_named_individual = owl
             .get("NamedIndividual")
             .map_err(|e| IoError::Parse(e.to_string()))?;
@@ -792,8 +784,8 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
             let iri_key = format!("panschema:individual:{}:_iri", ind_id);
             let ind_iri_str = schema
                 .annotations
-                .get(&iri_key)
-                .cloned()
+                .get_str(&iri_key)
+                .map(String::from)
                 .unwrap_or_else(|| {
                     // Same rule as instance ids: default_prefix expansion,
                     // fragment only when the schema gives nothing to expand
@@ -808,7 +800,7 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
 
             // Additional types
             let types_key = format!("panschema:individual:{}", ind_id);
-            if let Some(types_str) = schema.annotations.get(&types_key) {
+            if let Some(types_str) = schema.annotations.get_str(&types_key) {
                 for type_iri_str in types_str.split(',') {
                     let type_iri_str = type_iri_str.trim();
                     if !type_iri_str.is_empty() {
@@ -820,8 +812,8 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
 
             // rdfs:label
             let label_key = format!("panschema:individual:{}:_label", ind_id);
-            if let Some(label) = schema.annotations.get(&label_key) {
-                triple(&mut graph, &ind_iri, rdfs::label, label.as_str())?;
+            if let Some(label) = schema.annotations.get_str(&label_key) {
+                triple(&mut graph, &ind_iri, rdfs::label, label)?;
             }
         }
     }

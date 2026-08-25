@@ -245,6 +245,126 @@ pub fn colliding_slot_definitions(schema: &SchemaDefinition) -> Vec<CollidingSlo
         .collect()
 }
 
+/// An annotation whose authored body carried nested `annotations` or
+/// `extensions`. panschema keeps the annotation's value and does not
+/// model the nesting, so the drop is reported rather than silent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnmodeledAnnotationNesting {
+    /// Where the annotation sits: `` schema `X` ``, `` class `X` ``,
+    /// `` slot `X` ``, `` enum `X` ``, or `` type `X` ``.
+    pub site: String,
+    pub tag: String,
+}
+
+impl UnmodeledAnnotationNesting {
+    pub fn message(&self) -> String {
+        format!(
+            "annotation `{}` ({}) carries nested annotations or extensions, which \
+             panschema does not model; the annotation's value is kept, the nesting \
+             is dropped",
+            self.tag, self.site
+        )
+    }
+}
+
+/// Walk every annotation-bearing site in the schema — the schema
+/// itself, classes, class attributes, class `slot_usage` entries,
+/// top-level slots, enums, and types — handing each visitor the
+/// annotations plus a site formatter it calls only when it has a
+/// finding, so the common no-findings walk allocates nothing.
+fn each_annotation_site<F>(schema: &SchemaDefinition, mut visit: F)
+where
+    F: FnMut(&crate::linkml::Annotations, &dyn Fn() -> String),
+{
+    visit(&schema.annotations, &|| format!("schema `{}`", schema.name));
+    for (name, class) in &schema.classes {
+        visit(&class.annotations, &|| format!("class `{name}`"));
+        for (attr_name, attr) in &class.attributes {
+            visit(&attr.annotations, &|| {
+                format!("slot `{attr_name}` (class `{name}`)")
+            });
+        }
+        for (slot_name, usage) in &class.slot_usage {
+            visit(&usage.annotations, &|| {
+                format!("slot `{slot_name}` (slot_usage in class `{name}`)")
+            });
+        }
+    }
+    for (name, slot) in &schema.slots {
+        visit(&slot.annotations, &|| format!("slot `{name}`"));
+    }
+    for (name, enum_def) in &schema.enums {
+        visit(&enum_def.annotations, &|| format!("enum `{name}`"));
+    }
+    for (name, type_def) in &schema.types {
+        visit(&type_def.annotations, &|| format!("type `{name}`"));
+    }
+}
+
+/// Every annotation whose body carried nesting panschema dropped at
+/// load, across every annotation-bearing site, in site order.
+pub fn unmodeled_annotation_nesting(schema: &SchemaDefinition) -> Vec<UnmodeledAnnotationNesting> {
+    let mut out = Vec::new();
+    each_annotation_site(schema, |annotations, site| {
+        let mut tags = annotations.tags_with_unmodeled_nesting().peekable();
+        if tags.peek().is_none() {
+            return;
+        }
+        let site = site();
+        out.extend(tags.map(|tag| UnmodeledAnnotationNesting {
+            site: site.clone(),
+            tag: tag.to_string(),
+        }));
+    });
+    out
+}
+
+/// A `panschema:`-namespace annotation carrying a non-string value.
+/// The tool reads its own tags as strings (bare scalars included, read
+/// lexically), so a structured or null value under one is ignored —
+/// reported here so the fallback (a raw name for a label, an inferred
+/// property type, a missing individual assertion) is never silent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpaquePanschemaAnnotation {
+    /// Where the annotation sits, phrased as in
+    /// [`UnmodeledAnnotationNesting::site`].
+    pub site: String,
+    pub tag: String,
+}
+
+impl OpaquePanschemaAnnotation {
+    pub fn message(&self) -> String {
+        format!(
+            "annotation `{}` ({}) is in the `panschema:` namespace but does not \
+             carry a string value, so panschema ignores it and falls back as if \
+             it were absent",
+            self.tag, self.site
+        )
+    }
+}
+
+/// Every `panschema:*` annotation whose value is not a string, across
+/// every annotation-bearing site, in site order.
+pub fn opaque_panschema_annotations(schema: &SchemaDefinition) -> Vec<OpaquePanschemaAnnotation> {
+    let mut out = Vec::new();
+    each_annotation_site(schema, |annotations, site| {
+        let mut opaque = annotations
+            .into_iter()
+            .filter(|(tag, _)| tag.starts_with("panschema:"))
+            .filter(|(tag, _)| annotations.get_str(tag).is_none())
+            .peekable();
+        if opaque.peek().is_none() {
+            return;
+        }
+        let site = site();
+        out.extend(opaque.map(|(tag, _)| OpaquePanschemaAnnotation {
+            site: site.clone(),
+            tag: tag.clone(),
+        }));
+    });
+    out
+}
+
 /// A slot left untyped after load: it states no `range:`, carries no
 /// `any_of` union, is not voided by `maximum_cardinality: 0`, and no
 /// `default_range` applied to it when its schema file loaded.
@@ -337,6 +457,16 @@ pub fn schema_load_diagnostics(schema: &SchemaDefinition) -> Vec<String> {
             .map(|c| c.message()),
     );
     out.extend(untyped_slots(schema).iter().map(|u| u.message()));
+    out.extend(
+        unmodeled_annotation_nesting(schema)
+            .iter()
+            .map(|u| u.message()),
+    );
+    out.extend(
+        opaque_panschema_annotations(schema)
+            .iter()
+            .map(|o| o.message()),
+    );
     out.extend(impossible_rule_values(schema).iter().map(|i| i.message()));
     // The metamodel recommends at most one `tree_root` per schema. Several
     // are supported here — each dataset is read against the root it conforms
@@ -2070,6 +2200,72 @@ mod tests {
         assert!(!should_fail_strict(true, 0));
         // Strict + any blocking finding ⇒ fail.
         assert!(should_fail_strict(true, 1), "strict + one finding ⇒ fail");
+    }
+
+    /// An annotation whose body carried nested annotations is reported
+    /// at load with its site and tag, through the same diagnostics feed
+    /// the other silent-drop warnings use; a class attribute's site
+    /// names both the slot and its class, and a `slot_usage` entry's
+    /// names the slot and the class narrowing it.
+    #[test]
+    fn nested_annotation_machinery_is_reported_at_load_with_its_site() {
+        let schema = parse(
+            "id: https://example.org/t\nname: t\nslots:\n  s1:\n    annotations:\n      \
+             note:\n        value: hello\n        annotations:\n          provenance: curated\n\
+             classes:\n  C:\n    attributes:\n      a1:\n        annotations:\n          \
+             marked:\n            value: x\n            extensions:\n              e: 1\n    \
+             slot_usage:\n      s1:\n        annotations:\n          narrowed:\n            \
+             value: y\n            annotations:\n              p: c\n",
+        );
+        let findings = unmodeled_annotation_nesting(&schema);
+        assert_eq!(
+            findings
+                .iter()
+                .map(|f| (f.site.as_str(), f.tag.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("slot `a1` (class `C`)", "marked"),
+                ("slot `s1` (slot_usage in class `C`)", "narrowed"),
+                ("slot `s1`", "note"),
+            ],
+            "each nested-annotation site is reported once, slot_usage included"
+        );
+        let messages = schema_load_diagnostics(&schema);
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("`note`") && m.contains("slot `s1`") && m.contains("dropped")),
+            "the load diagnostics carry the warning; got: {messages:?}"
+        );
+    }
+
+    /// A `panschema:*` tag carrying a non-string value is reported at
+    /// load: the tool ignores it and falls back, and the fallback — a
+    /// raw name for a label, a vanished individual assertion — must
+    /// never be silent.
+    #[test]
+    fn an_opaque_panschema_tag_is_reported_at_load() {
+        let schema = parse(
+            "id: https://example.org/t\nname: t\nclasses:\n  C:\n    annotations:\n      \
+             panschema:label:\n        value:\n          en: Human\n      \
+             other:tool:\n        value:\n          a: b\n",
+        );
+        let findings = opaque_panschema_annotations(&schema);
+        assert_eq!(
+            findings
+                .iter()
+                .map(|f| (f.site.as_str(), f.tag.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("class `C`", "panschema:label")],
+            "only the tool's own namespace is policed; other tools' structured values are theirs"
+        );
+        let messages = schema_load_diagnostics(&schema);
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("`panschema:label`") && m.contains("ignores")),
+            "the load diagnostics carry the warning; got: {messages:?}"
+        );
     }
 
     /// A slot with no `range:` that no `default_range` covered means each

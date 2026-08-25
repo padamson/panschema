@@ -1360,8 +1360,8 @@ ex:morgon a owl:NamedIndividual, ex:Wine ; rdfs:label "Morgon" .
         assert!(schema.enums.contains_key("Color"));
         let individuals = schema
             .annotations
-            .get("panschema:individuals")
-            .cloned()
+            .get_str("panschema:individuals")
+            .map(String::from)
             .unwrap_or_default();
         assert!(
             individuals.contains("morgon"),
@@ -1767,8 +1767,8 @@ ex:morgon a owl:NamedIndividual, ex:Wine ; rdfs:label "Morgon" .
         let schema = reader.read(&reference_ontology_path()).unwrap();
 
         assert_eq!(
-            schema.annotations.get("panschema:source_format"),
-            Some(&"owl".to_string())
+            schema.annotations.get_str("panschema:source_format"),
+            Some("owl")
         );
     }
 
@@ -1821,8 +1821,8 @@ ex:morgon a owl:NamedIndividual, ex:Wine ; rdfs:label "Morgon" .
         assert!(has_owner.domain.is_some());
         assert!(has_owner.range.is_some());
         assert_eq!(
-            has_owner.annotations.get("panschema:owl_property_type"),
-            Some(&"ObjectProperty".to_string())
+            has_owner.annotations.get_str("panschema:owl_property_type"),
+            Some("ObjectProperty")
         );
     }
 
@@ -1834,8 +1834,8 @@ ex:morgon a owl:NamedIndividual, ex:Wine ; rdfs:label "Morgon" .
         let has_age = schema.slots.get("hasAge").unwrap();
         assert_eq!(has_age.range, Some("integer".to_string()));
         assert_eq!(
-            has_age.annotations.get("panschema:owl_property_type"),
-            Some(&"DatatypeProperty".to_string())
+            has_age.annotations.get_str("panschema:owl_property_type"),
+            Some("DatatypeProperty")
         );
     }
 
@@ -1911,7 +1911,7 @@ ex:morgon a owl:NamedIndividual, ex:Wine ; rdfs:label "Morgon" .
         let schema = reader.read(&reference_ontology_path()).unwrap();
 
         // Reference ontology has: fido
-        let individuals = schema.annotations.get("panschema:individuals");
+        let individuals = schema.annotations.get_str("panschema:individuals");
         assert!(individuals.is_some());
         assert!(individuals.unwrap().contains("fido"));
     }

@@ -13,6 +13,301 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// LinkML annotations on an element: a tag→value map.
+///
+/// Values were `string` before LinkML 1.6 and any object from 1.6 on.
+/// panschema itself reads only its own `panschema:*` tags, all
+/// string-valued (see [`Annotations::get_str`]); a value it does not
+/// interpret loads whole and is preserved for whoever does.
+///
+/// The reading follows the LinkML reference implementation, so a schema
+/// means the same thing here and in the Python toolchain. The metamodel
+/// spells one annotation three ways, and all three denote the same map:
+///
+/// ```yaml
+/// annotations:
+///   note: hello                         # compact: the value directly
+///   note: { tag: note, value: hello }   # expanded, keyed by tag
+/// annotations:
+///   - tag: note                         # expanded, as a list
+///     value: hello
+/// ```
+///
+/// A mapping under a tag is always the expanded form's `Annotation`
+/// body, never a bare value: a structured value rides under `value:`
+/// (`review_status: {value: {stage: draft}}`), a body key outside the
+/// metamodel is a parse error pointing at that spelling, and a body
+/// `tag` contradicting the key it is filed under is a parse error too —
+/// each exactly where the reference implementation also refuses. A
+/// body without `value:` reads as null, as it does there.
+///
+/// One deliberate divergence, for the tool's own string-valued tags: a
+/// *scalar* value is read as a string rendering of the parsed scalar
+/// (`panschema:label: 2024` means the label "2024"; quote a value to
+/// control its exact spelling), where the reference implementation
+/// keeps the number. Values inside a structure keep their types.
+#[derive(Debug, Clone, Default)]
+pub struct Annotations {
+    values: BTreeMap<String, serde_norway::Value>,
+    /// Tags whose authored body carried nested `annotations` or
+    /// `extensions`, which panschema does not model. Recorded so load
+    /// diagnostics can say the nesting was dropped instead of the drop
+    /// being silent; the annotation's own value is kept regardless.
+    unmodeled_nesting: std::collections::BTreeSet<String>,
+}
+
+/// Equality is over the tag→value content only. The unmodeled-nesting
+/// record is a load-time observation, not model content: including it
+/// would make two identically-modeled definitions unequal — failing the
+/// imports merge's collision check and serialize-reload equality — just
+/// because one spelled its annotation with nesting panschema drops.
+impl PartialEq for Annotations {
+    fn eq(&self, other: &Self) -> bool {
+        self.values == other.values
+    }
+}
+
+impl Annotations {
+    /// The value carried under `tag`, whatever its shape — the public
+    /// read path for a preserved structured value.
+    pub fn get(&self, tag: &str) -> Option<&serde_norway::Value> {
+        self.values.get(tag)
+    }
+
+    /// The value under `tag` when it is a string. Every `panschema:*` tag
+    /// is string-valued (scalars read lexically, so a bare number or
+    /// boolean qualifies); a tag carrying a structured value is not a
+    /// string and reads as absent here rather than as some rendering of
+    /// the structure.
+    pub fn get_str(&self, tag: &str) -> Option<&str> {
+        self.values.get(tag).and_then(|v| v.as_str())
+    }
+
+    /// Record a string-valued annotation, replacing any value under
+    /// `tag` — and any nesting record with it, so the diagnostic can
+    /// never name a value that has been written over.
+    pub fn insert(&mut self, tag: impl Into<String>, value: impl Into<String>) {
+        self.set_parsed(tag.into(), serde_norway::Value::String(value.into()), false);
+    }
+
+    /// Take the annotation under `tag` out of the map, whatever its
+    /// shape — a caller owning a tag clears it unconditionally and then
+    /// judges the value, so no stray shape can keep the tag occupied.
+    /// The nesting record goes with it: a diagnostic must not name an
+    /// annotation the schema no longer carries.
+    pub fn remove(&mut self, tag: &str) -> Option<serde_norway::Value> {
+        self.unmodeled_nesting.remove(tag);
+        self.values.remove(tag)
+    }
+
+    /// The one write path: stores the value and keeps the nesting
+    /// record in step — set on a nested body, cleared on any overwrite —
+    /// so the record is always about the value actually held.
+    fn set_parsed(&mut self, tag: String, value: serde_norway::Value, nested: bool) {
+        if nested {
+            self.unmodeled_nesting.insert(tag.clone());
+        } else {
+            self.unmodeled_nesting.remove(&tag);
+        }
+        self.values.insert(tag, value);
+    }
+
+    /// Whether the element carries no annotations, which is how an empty
+    /// map stays out of serialized output rather than appearing as `{}`.
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    /// The tags whose authored bodies carried nested annotations or
+    /// extensions panschema dropped, in tag order — the load
+    /// diagnostics' feed.
+    pub fn tags_with_unmodeled_nesting(&self) -> impl Iterator<Item = &str> {
+        self.unmodeled_nesting.iter().map(String::as_str)
+    }
+
+    /// The element's display label: its `panschema:label` annotation or
+    /// `fallback` (its name) — the one definition of label resolution,
+    /// so HTML, graph, RDF, and instance output cannot drift.
+    pub fn label_or(&self, fallback: &str) -> String {
+        self.label_or_ref(fallback).to_string()
+    }
+
+    /// Borrowed form of [`Annotations::label_or`], for sort keys and
+    /// other sites that never need to own the label.
+    pub fn label_or_ref<'a>(&'a self, fallback: &'a str) -> &'a str {
+        self.get_str("panschema:label").unwrap_or(fallback)
+    }
+}
+
+impl<'a> IntoIterator for &'a Annotations {
+    type Item = (&'a String, &'a serde_norway::Value);
+    type IntoIter = std::collections::btree_map::Iter<'a, String, serde_norway::Value>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.values.iter()
+    }
+}
+
+impl Serialize for Annotations {
+    /// Emits the compact spelling, except that a structured value is
+    /// wrapped back under `value:` — the one form that re-reads
+    /// identically here (a bare mapping would be taken for an
+    /// `Annotation` body) and loads in the Python toolchain.
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(self.values.len()))?;
+        for (tag, value) in &self.values {
+            if value.is_mapping() {
+                let mut body = serde_norway::Mapping::new();
+                body.insert("value".into(), value.clone());
+                map.serialize_entry(tag, &serde_norway::Value::Mapping(body))?;
+            } else {
+                map.serialize_entry(tag, value)?;
+            }
+        }
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for Annotations {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct AnnotationsVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for AnnotationsVisitor {
+            type Value = Annotations;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("annotations as a tag-keyed map or a list of tag/value objects")
+            }
+
+            // `#[mutants::skip]`: the body is exactly `Default::default()`,
+            // so the replacement mutant is the same code — unkillable by
+            // construction, not untested (the empty-annotations test pins
+            // the behavior).
+            #[mutants::skip]
+            fn visit_unit<E: serde::de::Error>(self) -> Result<Annotations, E> {
+                // A bare `annotations:` key — every entry commented out —
+                // is no annotations, as the reference implementation also
+                // reads it.
+                Ok(Annotations::default())
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Annotations, A::Error> {
+                use serde::de::Error;
+                let mut out = Annotations::default();
+                while let Some((tag, raw)) = map.next_entry::<String, serde_norway::Value>()? {
+                    let (value, nested) = match raw {
+                        serde_norway::Value::Mapping(body) => {
+                            annotation_body_value(&tag, body).map_err(A::Error::custom)?
+                        }
+                        serde_norway::Value::Tagged(_) => {
+                            return Err(A::Error::custom(format!(
+                                "annotation `{tag}` carries a YAML-tagged value, which the \
+                                 LinkML reference implementation refuses"
+                            )));
+                        }
+                        other => (scalar_lexical(other), false),
+                    };
+                    out.set_parsed(tag, value, nested);
+                }
+                Ok(out)
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Annotations, A::Error> {
+                use serde::de::Error;
+                let mut out = Annotations::default();
+                while let Some(item) = seq.next_element::<serde_norway::Value>()? {
+                    let serde_norway::Value::Mapping(body) = item else {
+                        return Err(A::Error::custom(
+                            "an annotation in list form is a mapping with `tag` and `value`",
+                        ));
+                    };
+                    let tag = body
+                        .get("tag")
+                        .and_then(|t| t.as_str())
+                        .ok_or_else(|| {
+                            A::Error::custom("an annotation in list form needs a `tag`")
+                        })?
+                        .to_string();
+                    let (value, nested) =
+                        annotation_body_value(&tag, body).map_err(A::Error::custom)?;
+                    out.set_parsed(tag, value, nested);
+                }
+                Ok(out)
+            }
+        }
+
+        // `deserialize_any` rather than `deserialize_map`: the shape is not
+        // known until it is seen, and the classes carrying annotations are
+        // read through serde's `flatten` buffer, which answers only this.
+        deserializer.deserialize_any(AnnotationsVisitor)
+    }
+}
+
+/// Read a mapping under `tag` as the metamodel's `Annotation` body:
+/// its keys are the model's own (`tag`, `value`, `annotations`,
+/// `extensions`) and nothing else; a `tag` inside must agree with the
+/// key the body is filed under; the value is whatever rides under
+/// `value:` (null when absent). Returns the value plus whether the body
+/// carried nesting panschema does not model. Both refusals mirror the
+/// LinkML reference implementation, so a schema that loads here loads
+/// there.
+fn annotation_body_value(
+    tag: &str,
+    mut body: serde_norway::Mapping,
+) -> Result<(serde_norway::Value, bool), String> {
+    for key in body.keys() {
+        let known = key
+            .as_str()
+            .is_some_and(|k| matches!(k, "tag" | "value" | "annotations" | "extensions"));
+        if !known {
+            return Err(format!(
+                "annotation `{tag}` carries `{}`, which is not part of the LinkML \
+                 Annotation model; a structured value belongs under `value:` — \
+                 `{tag}: {{value: {{...}}}}`",
+                key.as_str().unwrap_or("a non-string key")
+            ));
+        }
+    }
+    if let Some(inner) = body.get("tag")
+        && inner.as_str() != Some(tag)
+    {
+        return Err(format!(
+            "annotation filed under `{tag}` declares a different tag ({})",
+            inner.as_str().unwrap_or("not a string")
+        ));
+    }
+    let nested = body.contains_key("annotations") || body.contains_key("extensions");
+    let value = body.remove("value").unwrap_or(serde_norway::Value::Null);
+    if matches!(value, serde_norway::Value::Tagged(_)) {
+        return Err(format!(
+            "annotation `{tag}` carries a YAML-tagged value, which the LinkML \
+             reference implementation refuses"
+        ));
+    }
+    Ok((scalar_lexical(value), nested))
+}
+
+/// A scalar annotation value reads as a string rendering of the parsed
+/// scalar — the shape every `panschema:*` consumer expects, and what an
+/// unquoted `panschema:label: 2024` plainly means. The rendering is the
+/// parsed value's canonical form (`1e3` becomes "1000.0"); quote the
+/// value to control its exact spelling. Structures and nulls pass
+/// through; values inside a structure are never touched.
+fn scalar_lexical(value: serde_norway::Value) -> serde_norway::Value {
+    match value {
+        serde_norway::Value::Bool(b) => serde_norway::Value::String(b.to_string()),
+        serde_norway::Value::Number(n) => serde_norway::Value::String(n.to_string()),
+        other => other,
+    }
+}
+
 /// A prefix mapping for CURIE expansion
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Prefix {
@@ -153,8 +448,8 @@ pub struct SchemaDefinition {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub types: BTreeMap<String, TypeDefinition>,
     /// Format-specific annotations (e.g., OWL-specific metadata)
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub annotations: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Annotations::is_empty")]
+    pub annotations: Annotations,
 }
 
 impl SchemaDefinition {
@@ -169,6 +464,17 @@ impl SchemaDefinition {
                 .values()
                 .find_map(|class| class.attributes.get(name))
         })
+    }
+
+    /// The display label for the slot named `name`: its `panschema:label`
+    /// annotation — resolved through [`SchemaDefinition::find_slot`], so
+    /// attribute-declared slots are covered — or the name itself. Shared
+    /// by the HTML slot cards and the instance pages, so the same slot
+    /// cannot show two different names.
+    pub fn slot_display_label(&self, name: &str) -> String {
+        self.find_slot(name)
+            .map(|def| def.annotations.label_or(name))
+            .unwrap_or_else(|| name.to_string())
     }
 
     /// Create a new schema with the given name
@@ -195,7 +501,7 @@ impl SchemaDefinition {
             slots: BTreeMap::new(),
             enums: BTreeMap::new(),
             types: BTreeMap::new(),
-            annotations: BTreeMap::new(),
+            annotations: Annotations::default(),
         }
     }
 
@@ -388,8 +694,8 @@ pub struct ClassDefinition {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub broad_mappings: Vec<String>,
     /// Format-specific annotations
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub annotations: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Annotations::is_empty")]
+    pub annotations: Annotations,
     /// Conditional constraints (LinkML `rules`): each fires its
     /// postconditions when its preconditions hold. Rendered as a "Rules"
     /// section on the class card.
@@ -434,15 +740,16 @@ impl ClassDefinition {
             related_mappings: Vec::new(),
             narrow_mappings: Vec::new(),
             broad_mappings: Vec::new(),
-            annotations: BTreeMap::new(),
+            annotations: Annotations::default(),
             rules: Vec::new(),
             unique_keys: BTreeMap::new(),
         }
     }
 
-    /// Returns the display label (name is always available in LinkML)
+    /// The class's display label: its `panschema:label` annotation, or
+    /// its name.
     pub fn display_label(&self) -> &str {
-        &self.name
+        self.annotations.label_or_ref(&self.name)
     }
 }
 
@@ -580,8 +887,8 @@ pub struct SlotDefinition {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub broad_mappings: Vec<String>,
     /// Format-specific annotations
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub annotations: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Annotations::is_empty")]
+    pub annotations: Annotations,
 }
 
 impl SlotDefinition {
@@ -623,13 +930,14 @@ impl SlotDefinition {
             related_mappings: Vec::new(),
             narrow_mappings: Vec::new(),
             broad_mappings: Vec::new(),
-            annotations: BTreeMap::new(),
+            annotations: Annotations::default(),
         }
     }
 
-    /// Returns the display label (name is always available in LinkML)
+    /// The slot's display label: its `panschema:label` annotation, or
+    /// its name.
     pub fn display_label(&self) -> &str {
-        &self.name
+        self.annotations.label_or_ref(&self.name)
     }
 }
 
@@ -662,8 +970,8 @@ pub struct EnumDefinition {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub permissible_values: BTreeMap<String, PermissibleValue>,
     /// Format-specific annotations
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub annotations: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Annotations::is_empty")]
+    pub annotations: Annotations,
 }
 
 impl EnumDefinition {
@@ -677,7 +985,7 @@ impl EnumDefinition {
             see_also: Vec::new(),
             examples: Vec::new(),
             permissible_values: BTreeMap::new(),
-            annotations: BTreeMap::new(),
+            annotations: Annotations::default(),
         }
     }
 }
@@ -746,8 +1054,8 @@ pub struct TypeDefinition {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pattern: Option<String>,
     /// Format-specific annotations
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub annotations: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Annotations::is_empty")]
+    pub annotations: Annotations,
 }
 
 impl TypeDefinition {
@@ -763,7 +1071,7 @@ impl TypeDefinition {
             typeof_: None,
             uri: None,
             pattern: None,
-            annotations: BTreeMap::new(),
+            annotations: Annotations::default(),
         }
     }
 }
@@ -1561,8 +1869,8 @@ ifabsent: ItemStatus(planned)
             .insert("panschema:source_format".to_string(), "owl".to_string());
 
         assert_eq!(
-            schema.annotations.get("panschema:source_format"),
-            Some(&"owl".to_string())
+            schema.annotations.get_str("panschema:source_format"),
+            Some("owl")
         );
     }
 
@@ -1576,6 +1884,306 @@ ifabsent: ItemStatus(planned)
 
         let yaml = serde_norway::to_string(&class).unwrap();
         assert!(yaml.contains("panschema:owl_class_iri"));
+    }
+
+    /// Loads a schema whose fixture slot `s1` carries the given
+    /// `annotations:` block, returning that slot's annotations — the
+    /// shared scaffold for the annotation contract tests.
+    fn slot_annotations(body: &str) -> Annotations {
+        let schema: SchemaDefinition = serde_norway::from_str(&format!(
+            "id: https://example.org/t\nname: t\nslots:\n  s1:\n    annotations:\n{body}"
+        ))
+        .unwrap_or_else(|e| panic!("annotations must load: {e}\n{body}"));
+        schema.slots["s1"].annotations.clone()
+    }
+
+    /// The parse error for a schema whose fixture slot's `annotations:`
+    /// block is refused — the contract tests' other half.
+    fn slot_annotations_err(body: &str) -> String {
+        serde_norway::from_str::<SchemaDefinition>(&format!(
+            "id: https://example.org/t\nname: t\nslots:\n  s1:\n    annotations:\n{body}"
+        ))
+        .expect_err("the annotations block is invalid")
+        .to_string()
+    }
+
+    /// LinkML 1.6 widened an annotation's value from `string` to any
+    /// object: a structured value rides under `value:` (the spelling the
+    /// reference implementation reads) and is preserved whole, typed
+    /// leaves and all, so a schema declaring semantics panschema does not
+    /// itself interpret is still readable by whoever does.
+    #[test]
+    fn a_structured_annotation_value_loads_and_is_preserved() {
+        let annotations = slot_annotations(
+            "      review_status:\n        value:\n          stage: draft\n          priority: 2\n",
+        );
+        let value = annotations
+            .get("review_status")
+            .expect("the annotation is kept under its tag");
+        assert_eq!(
+            value.get("stage").and_then(|v| v.as_str()),
+            Some("draft"),
+            "the structured value's fields survive the load; got: {value:?}"
+        );
+        assert_eq!(
+            value.get("priority").and_then(|v| v.as_i64()),
+            Some(2),
+            "a non-string leaf inside a structure keeps its type; got: {value:?}"
+        );
+    }
+
+    /// The metamodel's three spellings of the same annotation — the
+    /// compact `tag: value` sugar, the expanded map keyed by tag, and the
+    /// expanded list of `tag`/`value` objects — all denote one tag→value
+    /// map, so all three load to the same annotations.
+    #[test]
+    fn the_expanded_annotation_forms_load_as_the_compact_form_does() {
+        let compact = slot_annotations("      note: hello\n");
+        assert_eq!(
+            compact.get_str("note"),
+            Some("hello"),
+            "the compact form reads as a string"
+        );
+        assert_eq!(
+            slot_annotations("      note:\n        tag: note\n        value: hello\n"),
+            compact,
+            "the expanded map form denotes the same annotation"
+        );
+        assert_eq!(
+            slot_annotations("      - tag: note\n        value: hello\n"),
+            compact,
+            "the expanded list form denotes the same annotation"
+        );
+    }
+
+    /// The `panschema:*` tags the tool itself reads are string-valued,
+    /// and `get_str` is how every reader asks for one. A bare scalar
+    /// reads as its lexical string — an unquoted `panschema:label: 2024`
+    /// means the label "2024" — while a structured value is not a string
+    /// and must not masquerade as one.
+    #[test]
+    fn get_str_reads_scalars_lexically_and_structures_as_absent() {
+        let annotations = slot_annotations(
+            "      panschema:label: Human\n      year: 2024\n      flag: true\n      ratio: 3.5\n      structured:\n        value:\n          a: b\n",
+        );
+        assert_eq!(annotations.get_str("panschema:label"), Some("Human"));
+        assert_eq!(
+            annotations.get_str("year"),
+            Some("2024"),
+            "an unquoted number reads as its lexical string"
+        );
+        assert_eq!(annotations.get_str("flag"), Some("true"));
+        assert_eq!(annotations.get_str("ratio"), Some("3.5"));
+        assert_eq!(
+            annotations.get_str("structured"),
+            None,
+            "a structured value is not a string"
+        );
+    }
+
+    /// A mapping under a tag is always the metamodel's `Annotation`
+    /// body, exactly as the reference implementation reads it — so a
+    /// schema panschema loads means the same thing to the Python
+    /// toolchain. A body key outside the model is refused with the
+    /// `value:`-wrapped spelling shown, and a body `tag` disagreeing
+    /// with the key it is filed under is refused too.
+    #[test]
+    fn an_annotation_body_is_validated_as_the_reference_implementation_reads_it() {
+        let foreign_key =
+            slot_annotations_err("      note:\n        value: something\n        extra: true\n");
+        assert!(
+            foreign_key.contains("`extra`") && foreign_key.contains("{value: {...}}"),
+            "a foreign body key is refused, pointing at the wrapped spelling; got: {foreign_key}"
+        );
+
+        let contradicting_tag =
+            slot_annotations_err("      note:\n        tag: elsewhere\n        value: hello\n");
+        assert!(
+            contradicting_tag.contains("`note`") && contradicting_tag.contains("elsewhere"),
+            "a contradicting body tag is refused, naming both; got: {contradicting_tag}"
+        );
+    }
+
+    /// A body without `value:` reads as null — the reference
+    /// implementation's reading — in both expanded spellings.
+    #[test]
+    fn an_annotation_body_without_a_value_reads_as_null() {
+        for body in ["      note:\n        tag: note\n", "      - tag: note\n"] {
+            let annotations = slot_annotations(body);
+            assert_eq!(
+                annotations.get("note"),
+                Some(&serde_norway::Value::Null),
+                "the tag is present with a null value; body:\n{body}"
+            );
+            assert_eq!(annotations.get_str("note"), None);
+        }
+    }
+
+    /// Nested `annotations`/`extensions` on an annotation are not
+    /// modeled: the annotation's own value is kept, and the dropped
+    /// nesting is recorded so load diagnostics can report it instead of
+    /// the drop being silent.
+    #[test]
+    fn nested_annotations_are_dropped_loudly_not_silently() {
+        let annotations = slot_annotations(
+            "      note:\n        value: hello\n        annotations:\n          provenance: curated\n",
+        );
+        assert_eq!(
+            annotations.get_str("note"),
+            Some("hello"),
+            "the annotation's own value is kept"
+        );
+        assert_eq!(
+            annotations
+                .tags_with_unmodeled_nesting()
+                .collect::<Vec<_>>(),
+            vec!["note"],
+            "the dropped nesting is recorded for diagnostics"
+        );
+        let plain = slot_annotations("      note: hello\n");
+        assert_eq!(
+            plain.tags_with_unmodeled_nesting().count(),
+            0,
+            "an annotation without nesting records nothing"
+        );
+    }
+
+    /// Annotations survive a serialization round trip — a structured
+    /// value re-emits under `value:`, the one spelling that re-reads
+    /// identically here and loads in the Python toolchain — and an
+    /// element carrying none serializes without the key rather than with
+    /// an empty map.
+    #[test]
+    fn annotations_round_trip_and_an_element_without_them_omits_the_key() {
+        let schema: SchemaDefinition = serde_norway::from_str(
+            "id: https://example.org/t\nname: t\nclasses:\n  Plain:\n    description: none here\n  \
+             Marked:\n    annotations:\n      panschema:label: Human\n      review_status:\n        \
+             value:\n          stage: draft\n      threshold:\n        value:\n          value: 5\n      \
+             nested:\n        value: hello\n        annotations:\n          p: c\n",
+        )
+        .expect("parse");
+        let yaml = serde_norway::to_string(&schema).expect("serialize");
+        assert!(
+            !yaml.contains("annotations: {}"),
+            "an element with no annotations omits the key; got:\n{yaml}"
+        );
+        let restored: SchemaDefinition = serde_norway::from_str(&yaml).expect("re-read");
+        assert_eq!(
+            restored, schema,
+            "string and structured annotations survive the round trip, including a \
+             value that itself looks like an expanded body"
+        );
+    }
+
+    /// An `annotations:` key with nothing under it — every entry
+    /// commented out, or an explicit null — is no annotations, as the
+    /// reference implementation also reads it.
+    #[test]
+    fn an_empty_annotations_key_loads_as_no_annotations() {
+        let schema: SchemaDefinition = serde_norway::from_str(
+            "id: https://example.org/t\nname: t\nslots:\n  s1:\n    annotations:\nclasses:\n  \
+             C:\n    annotations: null\n",
+        )
+        .expect("a bare annotations key is valid");
+        assert!(schema.slots["s1"].annotations.is_empty());
+        assert!(schema.classes["C"].annotations.is_empty());
+    }
+
+    /// A YAML-tagged value is refused wherever it stands for an
+    /// annotation's value — bare or under `value:` — because the
+    /// reference implementation refuses the unknown tag, and a schema
+    /// that loads here must load there.
+    #[test]
+    fn a_yaml_tagged_annotation_value_is_refused() {
+        for body in [
+            "      note: !custom {stage: draft}\n",
+            "      note:\n        value: !custom {stage: draft}\n",
+        ] {
+            let err = slot_annotations_err(body);
+            assert!(
+                err.contains("YAML-tagged"),
+                "a tagged value is refused, naming why; body:\n{body}got: {err}"
+            );
+        }
+    }
+
+    /// Equality is over tag→value content only: the unmodeled-nesting
+    /// record is load bookkeeping, so two definitions panschema models
+    /// identically compare equal — the imports merge must not report a
+    /// collision because one spelling carried nesting the model drops.
+    #[test]
+    fn nesting_bookkeeping_does_not_make_equal_annotations_unequal() {
+        let with_nesting = slot_annotations(
+            "      note:\n        value: hello\n        annotations:\n          p: c\n",
+        );
+        let without = slot_annotations("      note: hello\n");
+        assert!(
+            with_nesting.tags_with_unmodeled_nesting().count() > 0,
+            "the fixture actually records nesting"
+        );
+        assert_eq!(
+            with_nesting, without,
+            "identically-modeled annotations are equal whatever their spelling carried"
+        );
+        assert_ne!(
+            without,
+            slot_annotations("      note: goodbye\n"),
+            "differing values still compare unequal"
+        );
+    }
+
+    /// The nesting record always describes the value actually held:
+    /// overwriting a tag — a later duplicate in list form, or a plain
+    /// insert — and removing a tag both clear it, so a diagnostic can
+    /// never name an annotation the map no longer carries in that shape.
+    #[test]
+    fn the_nesting_record_follows_the_value_it_describes() {
+        let overwritten = slot_annotations(
+            "      - tag: note\n        value: x\n        annotations:\n          p: c\n      \
+             - tag: note\n        value: y\n",
+        );
+        assert_eq!(overwritten.get_str("note"), Some("y"));
+        assert_eq!(
+            overwritten.tags_with_unmodeled_nesting().count(),
+            0,
+            "the surviving duplicate carried no nesting, so none is recorded"
+        );
+
+        let mut annotations = slot_annotations(
+            "      note:\n        value: hello\n        annotations:\n          p: c\n",
+        );
+        annotations.remove("note");
+        assert_eq!(
+            annotations.tags_with_unmodeled_nesting().count(),
+            0,
+            "removing the annotation removes its nesting record"
+        );
+
+        let mut annotations = slot_annotations(
+            "      note:\n        value: hello\n        annotations:\n          p: c\n",
+        );
+        annotations.insert("note", "rewritten");
+        assert_eq!(
+            annotations.tags_with_unmodeled_nesting().count(),
+            0,
+            "overwriting the annotation clears its nesting record"
+        );
+    }
+
+    /// Annotations are a map or a list of tag/value objects; a scalar
+    /// where they belong fails the load saying so, rather than being
+    /// quietly read as nothing.
+    #[test]
+    fn a_scalar_where_annotations_belong_fails_the_load_naming_the_shapes() {
+        let err = serde_norway::from_str::<SchemaDefinition>(
+            "id: https://example.org/t\nname: t\nslots:\n  s1:\n    annotations: 42\n",
+        )
+        .expect_err("a scalar is not annotations");
+        let message = err.to_string();
+        assert!(
+            message.contains("tag-keyed map") && message.contains("list"),
+            "the error names the shapes annotations may take; got: {message}"
+        );
     }
 
     // ========== Round-trip Tests ==========
