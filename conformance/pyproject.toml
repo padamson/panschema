@@ -1,0 +1,6 @@
+[project]
+name = "panschema-conformance"
+version = "0.1.0"
+description = "Oracle for checking panschema's LinkML semantics against the reference implementation"
+requires-python = ">=3.10"
+dependencies = ["linkml-runtime>=1.11,<2"]
