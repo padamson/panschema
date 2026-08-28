@@ -736,30 +736,19 @@ fn generate(
     // `serve`/`publish` surface them too). Under `--strict`, each is
     // additionally a hard error here.
     if strict {
-        let unmodeled = panschema::diagnostics::unmodeled_class_constructs(&schema);
-        let dangling = panschema::diagnostics::dangling_references(&schema);
-        let colliding = panschema::diagnostics::colliding_slot_definitions(&schema);
-        let untyped = panschema::diagnostics::untyped_slots(&schema);
-        let impossible = panschema::diagnostics::impossible_rule_values(&schema);
-        let absence = panschema::diagnostics::absence_declaration_issues(&schema);
-        let blocking = unmodeled.len()
-            + dangling.len()
-            + colliding.len()
-            + untyped.len()
-            + impossible.len()
-            + absence.len();
-        if panschema::diagnostics::should_fail_strict(strict, blocking) {
+        let blocking = panschema::diagnostics::strict_blocking(&schema);
+        if panschema::diagnostics::should_fail_strict(strict, blocking.total()) {
             anyhow::bail!(
                 "{} unmodeled LinkML construct(s), {} dangling reference(s), \
                  {} colliding slot definition(s), {} untyped slot(s), {} rule \
-                 constant(s) outside their enum's values, and {} absence-declaration \
-                 issue(s) present; failing because --strict is set",
-                unmodeled.len(),
-                dangling.len(),
-                colliding.len(),
-                untyped.len(),
-                impossible.len(),
-                absence.len()
+                 constant(s) outside their enum's values, and {} slot-semantics \
+                 declaration issue(s) present; failing because --strict is set",
+                blocking.unmodeled,
+                blocking.dangling,
+                blocking.colliding,
+                blocking.untyped,
+                blocking.impossible,
+                blocking.slot_semantics
             );
         }
     }
@@ -1860,12 +1849,7 @@ fn validate_manifest(strict: bool) -> anyhow::Result<()> {
         // count toward the strict gate exactly as `generate --strict`
         // refuses them, so the check verb covers what the build verb
         // would reject.
-        findings += panschema::diagnostics::unmodeled_class_constructs(&schema).len()
-            + panschema::diagnostics::dangling_references(&schema).len()
-            + panschema::diagnostics::colliding_slot_definitions(&schema).len()
-            + panschema::diagnostics::untyped_slots(&schema).len()
-            + panschema::diagnostics::impossible_rule_values(&schema).len()
-            + panschema::diagnostics::absence_declaration_issues(&schema).len();
+        findings += panschema::diagnostics::strict_blocking(&schema).total();
         let instances: Vec<PathBuf> = manifest
             .declared_instances(name)
             .iter()

@@ -125,21 +125,23 @@ RDF must carry them (see Open Questions for the vocabulary).
       `resolve_against` siblings (or has no check table) gets a note
       that nothing verifies them.
 
-### Slice 2: anchor-IRI expansion
+### Slice 2: anchor-IRI expansion — Complete
 
 **Acceptance criteria:**
 
-- [ ] A scheme-less value at a slot annotated `expand_against: <slot>`
+- [x] A scheme-less value at a slot annotated `expand_against: <slot>`
       reads, everywhere panschema reads it (cross-graph resolution,
       absence claims, emitted RDF, rendered pages), as the value of the
       named slot on the same record concatenated with the bare value.
-- [ ] Absolute IRIs and CURIEs against declared prefixes at the same
+- [x] Absolute IRIs and CURIEs against declared prefixes at the same
       slot are unchanged.
-- [ ] A record with no value at the named base slot leaves its bare
+- [x] A record with no value at the named base slot leaves its bare
       values unexpanded and warns.
-- [ ] On a slot whose range class is inlinable somewhere in the schema,
-      the annotation is a load warning and values are read as before.
-- [ ] The wine-shaped benchmark authored with bare anchors resolves and
+- [x] On a class-ranged slot — whose bare values are in-dataset
+      references — the annotation is a load warning and values are read
+      as before, as it is for an uncarried base slot or a non-string
+      value; defects fail `--strict` like the absence declarations'.
+- [x] The wine-shaped benchmark authored with bare anchors resolves and
       verifies identically to the same benchmark authored with absolute
       IRIs.
 
@@ -209,6 +211,20 @@ RDF must carry them (see Open Questions for the vocabulary).
   resolved slot view deliberately drops `slot_usage` annotations, so
   inheritance here would drift from it. Revisit alongside resolution
   support.
+- Expansion on class-ranged slots is deferred outright (never binds,
+  warns) rather than gated on the issue's not-inlinable-anywhere rule:
+  the contract shape is scalar-ranged anchors, and the narrower rule
+  has no ambiguity to litigate. Class-rangedness is judged from the
+  resolved induced view, so `slot_usage` inheritance and `any_of`
+  replacement are seen.
+- "Scheme-less" is spelled `contains(':')`: any colon-bearing value —
+  an undeclared-prefix CURIE included — stays as authored, and a typo'd
+  prefix surfaces through the resolution checks rather than expanding
+  into a wrong IRI.
+- A vessel root (no authored identifier) shows its metadata expanded
+  when the base is usable, but reports no gap — dataset description,
+  not record data; the identified root's record replay owns gap
+  reporting.
 
 - The annotation spellings are the value-wrapped form #127 requires for
   structured values; `expand_against` is a plain string annotation.

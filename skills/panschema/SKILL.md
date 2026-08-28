@@ -47,7 +47,8 @@ worth more than skimming everything else.
 4. **`--strict` is narrower than it sounds.** It fails on unmodeled
    constructs, dangling references, colliding slot definitions, untyped
    slots, rule constants outside their enum's values, defective
-   `asserts_absence` declarations, and instance-data violations. It does *not* fail on unprojected-construct, Postgres-skip,
+   `asserts_absence`/`expand_against` declarations, and instance-data
+   violations. It does *not* fail on unprojected-construct, Postgres-skip,
    or SHACL-skip warnings — those stay warnings.
 
 ## Instance data (A-boxes)

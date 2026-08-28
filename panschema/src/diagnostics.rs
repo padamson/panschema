@@ -472,6 +472,11 @@ pub fn schema_load_diagnostics(schema: &SchemaDefinition) -> Vec<String> {
             .iter()
             .map(|i| i.message()),
     );
+    out.extend(
+        expansion_declaration_issues(schema)
+            .iter()
+            .map(|i| i.message()),
+    );
     out.extend(impossible_rule_values(schema).iter().map(|i| i.message()));
     // The metamodel recommends at most one `tree_root` per schema. Several
     // are supported here — each dataset is read against the root it conforms
@@ -948,43 +953,62 @@ pub enum AbsenceVia {
     Malformed,
 }
 
-/// One slot's `asserts_absence` declarations across scopes: the
-/// top-level `slots:` declaration binds every class carrying the slot;
-/// a class's own declaration (attribute, or `slot_usage` — which
-/// overrides the attribute, as `slot_usage` does for every slot
-/// property) binds that class's records and wins over the schema-wide
-/// one. Class-scoped declarations do not yet propagate to subclasses:
-/// the resolved slot view deliberately drops `slot_usage` annotations,
-/// so inheritance here would drift from it.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SlotAbsenceDeclarations {
-    pub schema_wide: Option<AbsenceVia>,
-    pub by_class: std::collections::BTreeMap<String, AbsenceVia>,
+/// One slot's declarations across scopes: the top-level `slots:`
+/// declaration binds every class carrying the slot; a class's own
+/// declaration (attribute, or `slot_usage` — which overrides the
+/// attribute, as `slot_usage` does for every slot property) binds that
+/// class's records and wins over the schema-wide one. Class-scoped
+/// declarations do not yet propagate to subclasses: the resolved slot
+/// view deliberately drops `slot_usage` annotations, so inheritance
+/// here would drift from it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Scoped<T> {
+    pub schema_wide: Option<T>,
+    pub by_class: std::collections::BTreeMap<String, T>,
 }
 
-/// Every `asserts_absence` declaration in the schema, keyed by the
-/// declaring slot. Built by [`absence_declarations`] — the one parse
-/// both the check and the load diagnostics consume, so what is
-/// enforced and what is reported can never drift apart.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AbsenceBindings {
-    pub by_slot: std::collections::BTreeMap<String, SlotAbsenceDeclarations>,
+// Hand-written rather than derived: derive would demand `T: Default`,
+// a bound the always-constructible empty scope does not need.
+impl<T> Default for Scoped<T> {
+    fn default() -> Self {
+        Scoped {
+            schema_wide: None,
+            by_class: std::collections::BTreeMap::new(),
+        }
+    }
 }
 
-impl AbsenceBindings {
+/// Schema-declared slot semantics, keyed by the declaring slot — the
+/// shape both `asserts_absence` and `expand_against` bindings share.
+/// Built by a single parse per family, so what is enforced and what is
+/// reported can never drift apart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopedBindings<T> {
+    pub by_slot: std::collections::BTreeMap<String, Scoped<T>>,
+}
+
+impl<T> Default for ScopedBindings<T> {
+    fn default() -> Self {
+        ScopedBindings {
+            by_slot: std::collections::BTreeMap::new(),
+        }
+    }
+}
+
+impl<T> ScopedBindings<T> {
     pub fn is_empty(&self) -> bool {
         self.by_slot.is_empty()
     }
 
-    /// How many slots declare claims — the enablement note's count.
+    /// How many slots declare — the enablement note's count.
     pub fn len(&self) -> usize {
         self.by_slot.len()
     }
 
-    /// The narrowing governing `slot` for a record of `types`: the
+    /// The declaration governing `slot` for a record of `types`: the
     /// record's own class declaration wins over the schema-wide one;
     /// `None` when no declaration applies to this record at all.
-    pub fn governing(&self, types: &[String], slot: &str) -> Option<&AbsenceVia> {
+    pub fn governing(&self, types: &[String], slot: &str) -> Option<&T> {
         let declarations = self.by_slot.get(slot)?;
         types
             .iter()
@@ -992,21 +1016,43 @@ impl AbsenceBindings {
             .or(declarations.schema_wide.as_ref())
     }
 
+    fn insert_schema_wide(&mut self, slot: &str, value: T) {
+        self.by_slot
+            .entry(slot.to_string())
+            .or_default()
+            .schema_wide = Some(value);
+    }
+
+    fn insert_class(&mut self, class: &str, slot: &str, value: T) {
+        self.by_slot
+            .entry(slot.to_string())
+            .or_default()
+            .by_class
+            .insert(class.to_string(), value);
+    }
+}
+
+/// Every `asserts_absence` declaration in the schema.
+pub type AbsenceBindings = ScopedBindings<AbsenceVia>;
+
+/// One slot's absence declarations across scopes — the name this type
+/// carried before the scoping generalized; kept so a consumer naming
+/// it keeps compiling.
+pub type SlotAbsenceDeclarations = Scoped<AbsenceVia>;
+
+impl AbsenceBindings {
     /// A single schema-wide binding — the shape a caller that already
     /// knows its one slot (and every direct test) exercises.
     pub fn schema_wide(slot: &str, via: Option<&str>) -> Self {
-        let mut by_slot = std::collections::BTreeMap::new();
-        by_slot.insert(
-            slot.to_string(),
-            SlotAbsenceDeclarations {
-                schema_wide: Some(match via {
-                    Some(v) => AbsenceVia::Slot(v.to_string()),
-                    None => AbsenceVia::Unnarrowed,
-                }),
-                by_class: std::collections::BTreeMap::new(),
+        let mut bindings = AbsenceBindings::default();
+        bindings.insert_schema_wide(
+            slot,
+            match via {
+                Some(v) => AbsenceVia::Slot(v.to_string()),
+                None => AbsenceVia::Unnarrowed,
             },
         );
-        AbsenceBindings { by_slot }
+        bindings
     }
 }
 
@@ -1106,11 +1152,7 @@ pub fn absence_declarations(
         if let Some(value) = slot.annotations.get("asserts_absence") {
             let via = parse_absence_declaration(name, value, &mut issues);
             declared_vias.push((name.clone(), via.clone()));
-            bindings
-                .by_slot
-                .entry(name.clone())
-                .or_default()
-                .schema_wide = Some(via);
+            bindings.insert_schema_wide(name, via);
         }
     }
     for (class_name, class) in &schema.classes {
@@ -1121,12 +1163,7 @@ pub fn absence_declarations(
             if let Some(value) = slot.annotations.get("asserts_absence") {
                 let via = parse_absence_declaration(name, value, &mut issues);
                 declared_vias.push((name.clone(), via.clone()));
-                bindings
-                    .by_slot
-                    .entry(name.clone())
-                    .or_default()
-                    .by_class
-                    .insert(class_name.clone(), via);
+                bindings.insert_class(class_name, name, via);
             }
         }
     }
@@ -1166,6 +1203,223 @@ pub fn absence_bindings(schema: &SchemaDefinition) -> AbsenceBindings {
 /// [`absence_declarations`].
 pub fn absence_declaration_issues(schema: &SchemaDefinition) -> Vec<AbsenceDeclarationIssue> {
     absence_declarations(schema).1
+}
+
+/// Every `expand_against` declaration in the schema: the annotated
+/// slot's scheme-less values expand against the named base slot's
+/// value on the same record.
+pub type ExpansionBindings = ScopedBindings<String>;
+
+/// A defect in an `expand_against` declaration. Unlike an absence
+/// defect, the safe reading here is *no expansion* — values stay as
+/// authored — so a defective declaration does not bind, and the issue
+/// says so.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpansionDeclarationIssue {
+    pub slot: String,
+    pub detail: String,
+}
+
+impl ExpansionDeclarationIssue {
+    pub fn message(&self) -> String {
+        format!(
+            "`expand_against` on slot `{}`: {}; values are read as authored",
+            self.slot, self.detail
+        )
+    }
+}
+
+/// Every `expand_against` declaration and every defect in one, from a
+/// single walk with the same scoping as [`absence_declarations`]. A
+/// defective scope never binds — no expansion is the safe reading — and
+/// only the defective scope is dropped, so one class's bad declaration
+/// cannot disable another's. Class-rangedness is judged from the
+/// resolved per-class slot view (a `slot_usage` restates only what it
+/// overrides, so the definition in hand may not carry the range; and
+/// LinkML's induced semantics have `any_of` replace a scalar `range:`,
+/// which a read of the raw definition would get wrong).
+pub fn expansion_declarations(
+    schema: &SchemaDefinition,
+) -> (ExpansionBindings, Vec<ExpansionDeclarationIssue>) {
+    let mut bindings = ExpansionBindings::default();
+    let mut issues = Vec::new();
+
+    let mut read = |site_class: Option<&str>, name: &str, slot: &crate::linkml::SlotDefinition| {
+        let value = slot.annotations.get("expand_against")?;
+        let Some(base) = value.as_str() else {
+            issues.push(ExpansionDeclarationIssue {
+                slot: name.to_string(),
+                detail: "the value must be a string naming a slot on the same record".to_string(),
+            });
+            return None;
+        };
+        if base == name {
+            issues.push(ExpansionDeclarationIssue {
+                slot: name.to_string(),
+                detail: "the declaration names the slot itself — a value cannot be its own base"
+                    .to_string(),
+            });
+            return None;
+        }
+        Some((
+            site_class.map(String::from),
+            name.to_string(),
+            base.to_string(),
+        ))
+    };
+
+    let mut declared: Vec<(Option<String>, String, String)> = Vec::new();
+    for (name, slot) in &schema.slots {
+        declared.extend(read(None, name, slot));
+    }
+    for (class_name, class) in &schema.classes {
+        for (name, slot) in class.attributes.iter().chain(class.slot_usage.iter()) {
+            declared.extend(read(Some(class_name), name, slot));
+        }
+    }
+    if declared.is_empty() {
+        // The common schema declares nothing; skip the whole-schema
+        // resolution pass entirely.
+        return (bindings, issues);
+    }
+
+    // One resolution pass answers every remaining question: which slots
+    // any class carries, which (class, slot) pairs exist, and which of
+    // them resolve class-ranged (by the induced view the loader reads).
+    let mut carried: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    let mut carried_pairs: std::collections::BTreeSet<(String, String)> =
+        std::collections::BTreeSet::new();
+    let mut class_ranged_pairs: std::collections::BTreeSet<(String, String)> =
+        std::collections::BTreeSet::new();
+    let mut class_ranged_any: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
+    let mut carried_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for (class_name, class) in &schema.classes {
+        for (slot_name, rs) in
+            crate::linkml_resolve::resolve_effective_slots_with_provenance(class, schema)
+        {
+            carried_names.insert(slot_name.clone());
+            let ranges: Vec<&String> = if rs.induced.ranges.is_empty() {
+                rs.definition.range.iter().collect()
+            } else {
+                rs.induced.ranges.iter().collect()
+            };
+            if ranges.iter().any(|r| schema.classes.contains_key(*r)) {
+                class_ranged_pairs.insert((class_name.clone(), slot_name.clone()));
+                class_ranged_any.insert(slot_name.clone());
+            }
+            carried_pairs.insert((class_name.clone(), slot_name));
+        }
+    }
+    carried.extend(carried_names.iter().map(String::as_str));
+
+    for (scope, slot, base) in declared {
+        let (slot_ok, base_ok, ranged) = match &scope {
+            Some(class) => (
+                carried_pairs.contains(&(class.clone(), slot.clone())),
+                carried_pairs.contains(&(class.clone(), base.clone())),
+                class_ranged_pairs.contains(&(class.clone(), slot.clone())),
+            ),
+            None => (
+                carried.contains(slot.as_str()),
+                carried.contains(base.as_str()),
+                class_ranged_any.contains(&slot),
+            ),
+        };
+        if !slot_ok {
+            issues.push(ExpansionDeclarationIssue {
+                slot: slot.clone(),
+                detail: match &scope {
+                    Some(class) => format!(
+                        "class `{class}` does not carry this slot, so the declaration can \
+                         never govern a record"
+                    ),
+                    None => "no class carries this slot, so the declaration can never govern \
+                             a record"
+                        .to_string(),
+                },
+            });
+            continue;
+        }
+        if ranged {
+            issues.push(ExpansionDeclarationIssue {
+                slot: slot.clone(),
+                detail: "the slot resolves class-ranged, and a class-ranged slot's bare \
+                         values are in-dataset references — expansion would collide with them"
+                    .to_string(),
+            });
+            continue;
+        }
+        if !base_ok {
+            issues.push(ExpansionDeclarationIssue {
+                slot: slot.clone(),
+                detail: match &scope {
+                    Some(class) => format!(
+                        "`{base}` is not a slot class `{class}` carries, so its records \
+                         cannot supply it"
+                    ),
+                    None => {
+                        format!("`{base}` is not a slot of any class, so no record can supply it")
+                    }
+                },
+            });
+            continue;
+        }
+        match &scope {
+            Some(class) => bindings.insert_class(class, &slot, base),
+            None => bindings.insert_schema_wide(&slot, base),
+        }
+    }
+    (bindings, issues)
+}
+
+/// Every schema finding `--strict` refuses, counted in one place — the
+/// list both the generate gate and the validate gate consume, so the
+/// two verbs can never drift on what blocks a strict run.
+pub struct StrictBlocking {
+    pub unmodeled: usize,
+    pub dangling: usize,
+    pub colliding: usize,
+    pub untyped: usize,
+    pub impossible: usize,
+    /// Defective `asserts_absence` / `expand_against` declarations.
+    pub slot_semantics: usize,
+}
+
+impl StrictBlocking {
+    pub fn total(&self) -> usize {
+        self.unmodeled
+            + self.dangling
+            + self.colliding
+            + self.untyped
+            + self.impossible
+            + self.slot_semantics
+    }
+}
+
+/// Count every strict-blocking schema finding.
+pub fn strict_blocking(schema: &SchemaDefinition) -> StrictBlocking {
+    StrictBlocking {
+        unmodeled: unmodeled_class_constructs(schema).len(),
+        dangling: dangling_references(schema).len(),
+        colliding: colliding_slot_definitions(schema).len(),
+        untyped: untyped_slots(schema).len(),
+        impossible: impossible_rule_values(schema).len(),
+        slot_semantics: absence_declaration_issues(schema).len()
+            + expansion_declaration_issues(schema).len(),
+    }
+}
+
+/// The declarations alone — the loader's half of
+/// [`expansion_declarations`].
+pub fn expansion_bindings(schema: &SchemaDefinition) -> ExpansionBindings {
+    expansion_declarations(schema).0
+}
+
+/// The defects alone — the load diagnostics' half of
+/// [`expansion_declarations`].
+pub fn expansion_declaration_issues(schema: &SchemaDefinition) -> Vec<ExpansionDeclarationIssue> {
+    expansion_declarations(schema).1
 }
 
 /// Verify each record's stated absence claim against sibling datasets.
@@ -3394,6 +3648,190 @@ mod tests {
             absence_bindings(&schema).by_slot.keys().collect::<Vec<_>>(),
             vec!["orphan", "unconnected"],
             "defective declarations still bind; the defect is the warning's job"
+        );
+    }
+
+    /// A slot annotated `expand_against: <slot>` declares that its
+    /// scheme-less values expand against the named slot's value on the
+    /// same record. Scope follows the absence declarations: top-level
+    /// binds schema-wide, a class's own declaration binds that class,
+    /// `slot_usage` overrides.
+    #[test]
+    fn expansion_declarations_read_every_annotated_slot() {
+        let schema = parse(
+            "id: https://example.org/t\nname: t\nslots:\n  expected_anchors:\n    range: uri\n    \
+             multivalued: true\n    annotations:\n      expand_against: target_schema\n  \
+             target_schema:\n    range: uri\n  other_base:\n    range: uri\nclasses:\n  \
+             Question:\n    slots: [expected_anchors, target_schema, other_base]\n    \
+             slot_usage:\n      expected_anchors:\n        annotations:\n          \
+             expand_against: other_base\n  Other:\n    slots: [expected_anchors, \
+             target_schema]\n",
+        );
+        let (bindings, issues) = expansion_declarations(&schema);
+        assert_eq!(
+            bindings.governing(&["Other".to_string()], "expected_anchors"),
+            Some(&"target_schema".to_string()),
+            "the top-level declaration governs a class without its own"
+        );
+        assert_eq!(
+            bindings.governing(&["Question".to_string()], "expected_anchors"),
+            Some(&"other_base".to_string()),
+            "slot_usage overrides the top-level declaration for its class"
+        );
+        assert!(
+            issues.iter().all(|i| !i.detail.contains("expand")),
+            "well-formed declarations raise no issue; got: {issues:?}"
+        );
+    }
+
+    /// The strict gate's arithmetic is exact: every family contributes
+    /// its own count to the total, and the slot-semantics count is the
+    /// sum of both declaration families.
+    #[test]
+    fn strict_blocking_sums_every_family_exactly() {
+        let blocking = StrictBlocking {
+            unmodeled: 1,
+            dangling: 2,
+            colliding: 4,
+            untyped: 8,
+            impossible: 16,
+            slot_semantics: 32,
+        };
+        assert_eq!(blocking.total(), 63, "each family counts once, added");
+
+        // One absence defect (uncarried annotated slot) and one expansion
+        // defect (self-reference): the shared category counts both.
+        let schema = parse(
+            "id: https://example.org/t\nname: t\nclasses:\n  Bench:\n    slots: [anchor]\nslots:\n  \
+             anchor:\n    range: uri\n    annotations:\n      expand_against: anchor\n  \
+             orphan:\n    range: uri\n    annotations:\n      asserts_absence:\n        value: \
+             null\n",
+        );
+        assert_eq!(
+            strict_blocking(&schema).slot_semantics,
+            2,
+            "one defect from each declaration family, summed"
+        );
+    }
+
+    /// The class-ranged guard judges the *resolved* slot, so a
+    /// `slot_usage` that carries only the annotation — its range
+    /// inherited from the top-level declaration, the normal LinkML
+    /// spelling — is still refused, and an `any_of` union replacing a
+    /// scalar range is judged by the induced view the loader reads.
+    #[test]
+    fn the_class_ranged_guard_reads_the_resolved_slot() {
+        let schema = parse(
+            "id: https://example.org/t\nname: t\nclasses:\n  Bench:\n    slots: [refs]\n    \
+             slot_usage:\n      refs:\n        annotations:\n          expand_against: base\n  \
+             Item: {}\nslots:\n  refs:\n    range: Item\n    multivalued: true\n  base:\n    \
+             range: uri\n",
+        );
+        let (bindings, issues) = expansion_declarations(&schema);
+        assert!(
+            bindings.governing(&["Bench".to_string()], "refs").is_none(),
+            "the inherited class range is seen through the resolved view"
+        );
+        assert!(
+            issues.iter().any(|i| i.detail.contains("class-ranged")),
+            "the refusal names the range defect; got: {issues:?}"
+        );
+    }
+
+    /// One defective scope drops only itself: a class's bad declaration
+    /// cannot disable the schema-wide one governing every other class.
+    #[test]
+    fn a_defective_scope_drops_only_itself() {
+        let schema = parse(
+            "id: https://example.org/t\nname: t\nclasses:\n  Q:\n    slots: [expected_anchors, \
+             target_schema]\n    slot_usage:\n      expected_anchors:\n        annotations:\n          \
+             expand_against: ghost\n  R:\n    slots: [expected_anchors, target_schema]\nslots:\n  \
+             expected_anchors:\n    range: uri\n    multivalued: true\n    annotations:\n      \
+             expand_against: target_schema\n  target_schema:\n    range: uri\n",
+        );
+        let (bindings, issues) = expansion_declarations(&schema);
+        assert_eq!(
+            bindings.governing(&["R".to_string()], "expected_anchors"),
+            Some(&"target_schema".to_string()),
+            "the healthy schema-wide declaration still governs other classes"
+        );
+        assert!(
+            issues.iter().any(|i| i.detail.contains("ghost")),
+            "the defective scope is reported; got: {issues:?}"
+        );
+    }
+
+    /// A self-referential declaration and one on a slot no class
+    /// carries are both refused: neither can ever expand anything.
+    #[test]
+    fn self_referential_and_uncarried_declarations_are_refused() {
+        let schema = parse(
+            "id: https://example.org/t\nname: t\nclasses:\n  Bench:\n    slots: [anchor]\nslots:\n  \
+             anchor:\n    range: uri\n    annotations:\n      expand_against: anchor\n  \
+             orphan:\n    range: uri\n    annotations:\n      expand_against: anchor\n",
+        );
+        let (bindings, issues) = expansion_declarations(&schema);
+        assert!(bindings.is_empty(), "neither declaration binds");
+        assert!(
+            issues.iter().any(|i| i.detail.contains("itself")),
+            "self-reference is named; got: {issues:?}"
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.slot == "orphan" && i.detail.contains("no class carries")),
+            "the uncarried slot is named; got: {issues:?}"
+        );
+    }
+
+    /// A defective `expand_against` declaration warns and does not
+    /// expand: a class-ranged slot's bare values are in-dataset
+    /// references, a base slot no class carries can never supply a
+    /// base, and a non-string annotation value names no slot.
+    #[test]
+    fn expansion_declaration_defects_warn_and_do_not_bind() {
+        let schema = parse(
+            "id: https://example.org/t\nname: t\nclasses:\n  Bench:\n    slots: [refs, anchors, \
+             loose]\n  Item: {}\nslots:\n  refs:\n    range: Item\n    multivalued: true\n    \
+             annotations:\n      expand_against: base\n  anchors:\n    range: uri\n    \
+             annotations:\n      expand_against: ghost\n  loose:\n    range: uri\n    \
+             annotations:\n      expand_against:\n        value:\n          x: y\n  base:\n    \
+             range: uri\n",
+        );
+        let (bindings, issues) = expansion_declarations(&schema);
+        assert!(
+            bindings.governing(&["Bench".to_string()], "refs").is_none(),
+            "a class-ranged slot does not bind"
+        );
+        assert!(
+            bindings
+                .governing(&["Bench".to_string()], "anchors")
+                .is_none(),
+            "an uncarried base slot does not bind"
+        );
+        assert!(
+            bindings
+                .governing(&["Bench".to_string()], "loose")
+                .is_none(),
+            "a non-string value does not bind"
+        );
+        let details: Vec<&str> = issues.iter().map(|i| i.detail.as_str()).collect();
+        assert!(
+            details.iter().any(|d| d.contains("in-dataset references")),
+            "the class-ranged defect is named; got: {details:?}"
+        );
+        assert!(
+            details.iter().any(|d| d.contains("ghost")),
+            "the uncarried base slot is named; got: {details:?}"
+        );
+        assert!(
+            details.iter().any(|d| d.contains("string")),
+            "the non-string value is named; got: {details:?}"
+        );
+        let messages = schema_load_diagnostics(&schema);
+        assert!(
+            messages.iter().any(|m| m.contains("expand_against")),
+            "the load diagnostics carry the warnings; got: {messages:?}"
         );
     }
 

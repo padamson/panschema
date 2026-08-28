@@ -2895,6 +2895,86 @@ instances = ["bench-data.yaml"]
     let _ = fs::remove_dir_all(&tmp);
 }
 
+/// A benchmark authored with bare anchors expanding against its own
+/// declared base verifies exactly like the same benchmark authored with
+/// absolute IRIs: the claims hold rather than reporting unresolvable
+/// anchors, which is only possible if expansion produced the sibling's
+/// minted IRIs.
+#[test]
+fn bare_anchors_expand_and_verify_like_absolute_iris() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    write_pkg(
+        &consumer.join("catalog-pkg"),
+        "catalog",
+        "1.0.0",
+        "catalog.yaml",
+        "id: https://example.org/catalog\nname: catalog\ndefault_prefix: cat\nprefixes:\n  cat: https://example.org/catalog/\nclasses:\n  Estate:\n    tree_root: true\n    slots: [id, providers]\n  Provider:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  providers: {range: Provider, multivalued: true}\n",
+    );
+    write_pkg(
+        &consumer.join("bench-pkg"),
+        "bench",
+        "1.0.0",
+        "bench.yaml",
+        "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, target_schema, unconnected]\nslots:\n  id: {identifier: true}\n  target_schema: {range: uri}\n  unconnected:\n    range: uri\n    multivalued: true\n    annotations:\n      asserts_absence:\n        value: null\n      expand_against: target_schema\n",
+    );
+    fs::write(
+        consumer.join("catalog-data.yaml"),
+        "id: est1\nproviders:\n  - {id: aws}\n  - {id: gcp}\n",
+    )
+    .unwrap();
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+catalog = { path = "./catalog-pkg" }
+bench = { path = "./bench-pkg" }
+
+[generate.catalog]
+instances = ["catalog-data.yaml"]
+
+[check.bench]
+instances = ["bench-data.yaml"]
+resolve_against = ["catalog"]
+"#,
+    )
+    .unwrap();
+
+    let run = || {
+        Command::new(env!("CARGO_BIN_EXE_panschema"))
+            .arg("validate")
+            .current_dir(consumer)
+            .output()
+            .expect("run panschema")
+    };
+    let note = "1 of 1 stated absence claim(s) hold against `catalog`";
+
+    fs::write(
+        consumer.join("bench-data.yaml"),
+        "id: b1\ntarget_schema: https://example.org/catalog/\nunconnected:\n  - aws\n  - gcp\n",
+    )
+    .unwrap();
+    let bare = run();
+    assert!(
+        String::from_utf8_lossy(&bare.stderr).contains(note),
+        "bare anchors expand to the sibling's IRIs and the claim verifies; got:\n{}",
+        String::from_utf8_lossy(&bare.stderr)
+    );
+
+    fs::write(
+        consumer.join("bench-data.yaml"),
+        "id: b1\ntarget_schema: https://example.org/catalog/\nunconnected:\n  - https://example.org/catalog/aws\n  - https://example.org/catalog/gcp\n",
+    )
+    .unwrap();
+    let absolute = run();
+    assert!(
+        String::from_utf8_lossy(&absolute.stderr).contains(note),
+        "the absolute spelling verifies identically; got:\n{}",
+        String::from_utf8_lossy(&absolute.stderr)
+    );
+    let _ = fs::remove_dir_all(&tmp);
+}
+
 /// A defective `asserts_absence` declaration — here a `via_slot` no
 /// class carries — warns at load and fails `--strict`, on the generate
 /// path and the bare-validate path alike.

@@ -433,6 +433,20 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
         });
     }
 
+    // A record that could not expand its bare values: the base slot the
+    // schema's `expand_against` declaration names supplied nothing
+    // usable, so the values were read as authored.
+    for g in &set.expansion_gaps {
+        out.push(Violation {
+            record: g.record.clone(),
+            detail: format!(
+                "slot `{}` expands against `{}`, but this record supplies {} there; its \
+                 bare values were read as authored",
+                g.slot, g.base_slot, g.reason
+            ),
+        });
+    }
+
     // Identifier uniqueness: an id claimed by more than one record.
     for id in &set.duplicate_ids {
         out.push(Violation {
