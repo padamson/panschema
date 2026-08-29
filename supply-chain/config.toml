@@ -251,7 +251,7 @@ version = "0.4.1"
 criteria = "safe-to-run"
 
 [[exemptions.fraction]]
-version = "0.15.4"
+version = "0.16.0"
 criteria = "safe-to-run"
 
 [[exemptions.fs2]]
@@ -439,7 +439,7 @@ version = "0.4.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.js-sys]]
-version = "0.3.98"
+version = "0.3.104"
 criteria = "safe-to-deploy"
 
 [[exemptions.json-event-parser]]
@@ -479,15 +479,15 @@ version = "0.9.6"
 criteria = "safe-to-deploy"
 
 [[exemptions.jsonschema]]
-version = "0.49.9"
+version = "0.50.0"
 criteria = "safe-to-run"
 
 [[exemptions.jsonschema-regex]]
-version = "0.49.9"
+version = "0.50.1"
 criteria = "safe-to-run"
 
 [[exemptions.jsonschema-value]]
-version = "0.49.9"
+version = "0.50.1"
 criteria = "safe-to-run"
 
 [[exemptions.khronos-egl]]
@@ -931,7 +931,7 @@ version = "1.0.25"
 criteria = "safe-to-run"
 
 [[exemptions.referencing]]
-version = "0.49.9"
+version = "0.50.1"
 criteria = "safe-to-run"
 
 [[exemptions.renderdoc-sys]]
@@ -1327,23 +1327,23 @@ version = "1.0.2"
 criteria = "safe-to-run"
 
 [[exemptions.wasm-bindgen]]
-version = "0.2.121"
+version = "0.2.127"
 criteria = "safe-to-deploy"
 
 [[exemptions.wasm-bindgen-futures]]
-version = "0.4.71"
+version = "0.4.77"
 criteria = "safe-to-deploy"
 
 [[exemptions.wasm-bindgen-macro]]
-version = "0.2.121"
+version = "0.2.127"
 criteria = "safe-to-deploy"
 
 [[exemptions.wasm-bindgen-macro-support]]
-version = "0.2.121"
+version = "0.2.127"
 criteria = "safe-to-deploy"
 
 [[exemptions.wasm-bindgen-shared]]
-version = "0.2.121"
+version = "0.2.127"
 criteria = "safe-to-deploy"
 
 [[exemptions.wayland-sys]]
@@ -1351,7 +1351,7 @@ version = "0.31.11"
 criteria = "safe-to-deploy"
 
 [[exemptions.web-sys]]
-version = "0.3.98"
+version = "0.3.104"
 criteria = "safe-to-deploy"
 
 [[exemptions.web-time]]
@@ -1371,7 +1371,7 @@ version = "1.0.7"
 criteria = "safe-to-deploy"
 
 [[exemptions.wgpu]]
-version = "30.0.0"
+version = "30.0.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.wgpu-core-deps-emscripten]]
