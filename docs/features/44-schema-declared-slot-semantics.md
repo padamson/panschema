@@ -137,10 +137,16 @@ RDF must carry them (see Open Questions for the vocabulary).
       slot are unchanged.
 - [x] A record with no value at the named base slot leaves its bare
       values unexpanded and warns.
-- [x] On a class-ranged slot — whose bare values are in-dataset
-      references — the annotation is a load warning and values are read
-      as before, as it is for an uncarried base slot or a non-string
-      value; defects fail `--strict` like the absence declarations'.
+- [x] A class-ranged slot's declaration binds exactly when no local
+      record of its range class can exist — every site ranging the class
+      is itself declared external; while any is not (a `tree_root`
+      collection, or another slot without the annotation), the
+      declaration is a load warning naming that site, and values are
+      read as before. An uncarried base slot or a non-string value warns
+      likewise; defects fail `--strict` like the absence declarations'.
+- [x] At a bound class-ranged slot, a bare scheme-less value reads as an
+      external reference into the declared base's namespace; an inline
+      record authored there is a validation finding, not silence.
 - [x] The wine-shaped benchmark authored with bare anchors resolves and
       verifies identically to the same benchmark authored with absolute
       IRIs.
@@ -211,20 +217,32 @@ RDF must carry them (see Open Questions for the vocabulary).
   resolved slot view deliberately drops `slot_usage` annotations, so
   inheritance here would drift from it. Revisit alongside resolution
   support.
-- Expansion on class-ranged slots is deferred outright (never binds,
-  warns) rather than gated on the issue's not-inlinable-anywhere rule:
-  the contract shape is scalar-ranged anchors, and the narrower rule
-  has no ambiguity to litigate. Class-rangedness is judged from the
-  resolved induced view, so `slot_usage` inheritance and `any_of`
-  replacement are seen.
+- Class-ranged expansion implements the issue's not-inlinable rule as
+  *local declarability*: refused while any site could still hold a local
+  record of the range class or its `is_a`/mixin family — an unannotated
+  ranging site (ancestors count: a designator can type a record into the
+  class there; so do descendants, whose records are instances of it), or
+  the class's family holding a `tree_root` (its records are document
+  roots). Only declarations that themselves bind vouch for their sites,
+  iterated to a fixpoint, so a refused declaration cannot prop up a
+  sibling. Judged from the resolved induced view, so `slot_usage`
+  inheritance and `any_of` replacement are seen.
+- A base that does not form an absolute IRI gaps a class-ranged
+  expansion rather than minting a phantom in-dataset name; inline
+  records at a bound slot are one validation finding per claiming
+  record and slot, whatever the authoring spelling.
+- A parent-declared class-scoped annotation is blocked by its
+  subclasses' sites (governance does not propagate to subclasses yet) —
+  conservative by intent: it fails closed.
 - "Scheme-less" is spelled `contains(':')`: any colon-bearing value —
   an undeclared-prefix CURIE included — stays as authored, and a typo'd
   prefix surfaces through the resolution checks rather than expanding
   into a wrong IRI.
 - A vessel root (no authored identifier) shows its metadata expanded
-  when the base is usable, but reports no gap — dataset description,
-  not record data; the identified root's record replay owns gap
-  reporting.
+  when the base is usable, but its scalar metadata reports no gap —
+  dataset description, not record data. Class-ranged root slots expand
+  with full parity (references, gaps, inline findings) whether or not
+  the root is identified.
 
 - The annotation spellings are the value-wrapped form #127 requires for
   structured values; `expand_against` is a plain string annotation.

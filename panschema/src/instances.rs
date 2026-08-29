@@ -59,16 +59,28 @@ pub enum InstanceValue {
     Unexpected(&'static str),
 }
 
-/// One record that could not expand a slot's bare values — its
-/// `expand_against` base slot supplied nothing usable, so the values
-/// were read as authored and the gap is reported rather than silent.
+/// One record whose authoring fell short of a slot's `expand_against`
+/// declaration; each kind carries its own story, and validation words
+/// each in its own sentence.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ExpansionGapKind {
+    /// The record supplied no usable base: what it held instead. Its
+    /// bare values were read as authored.
+    UnusableBase(&'static str),
+    /// The record authored one or more inline records at a slot whose
+    /// declaration expects external references — one finding per
+    /// claiming record and slot, whatever the authoring spelling.
+    InlineRecord,
+}
+
+/// One record whose authoring fell short of a slot's `expand_against`
+/// declaration — reported rather than silent.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ExpansionGap {
     pub record: String,
     pub slot: String,
     pub base_slot: String,
-    /// What the record supplied instead of a single string value.
-    pub reason: &'static str,
+    pub kind: ExpansionGapKind,
 }
 
 /// The base an `expand_against` slot's bare values concatenate onto,
@@ -77,12 +89,10 @@ pub struct ExpansionGap {
 /// only when a bare value actually meets `Missing` — a record whose
 /// values are all fully spelled owes no base.
 #[derive(Clone, Copy)]
-enum ExpandBase<'a> {
-    Base(&'a str),
-    Missing {
-        base_slot: &'a str,
-        reason: &'static str,
-    },
+struct ExpandBase<'a> {
+    base_slot: &'a str,
+    /// The base value, or why the record cannot supply one.
+    resolved: Result<&'a str, &'static str>,
 }
 
 /// The record's base value for expansion: the base slot's value in its
@@ -96,27 +106,19 @@ fn base_from_mapping<'a>(
     dict_key: Option<&'a str>,
     id_slot: Option<&str>,
 ) -> ExpandBase<'a> {
-    match map.get(base_slot) {
-        Some(serde_norway::Value::String(base)) if !base.is_empty() => ExpandBase::Base(base),
-        Some(serde_norway::Value::String(_)) => ExpandBase::Missing {
-            base_slot,
-            reason: "an empty value",
-        },
+    let resolved = match map.get(base_slot) {
+        Some(serde_norway::Value::String(base)) if !base.is_empty() => Ok(base.as_str()),
+        Some(serde_norway::Value::String(_)) => Err("an empty value"),
         None | Some(serde_norway::Value::Null) => match dict_key {
-            Some(key) if id_slot == Some(base_slot) => ExpandBase::Base(key),
-            _ => ExpandBase::Missing {
-                base_slot,
-                reason: "no value",
-            },
+            Some(key) if id_slot == Some(base_slot) => Ok(key),
+            _ => Err("no value"),
         },
-        Some(serde_norway::Value::Sequence(_)) => ExpandBase::Missing {
-            base_slot,
-            reason: "a list where a single value is needed",
-        },
-        Some(_) => ExpandBase::Missing {
-            base_slot,
-            reason: "a non-string value",
-        },
+        Some(serde_norway::Value::Sequence(_)) => Err("a list where a single value is needed"),
+        Some(_) => Err("a non-string value"),
+    };
+    ExpandBase {
+        base_slot,
+        resolved,
     }
 }
 
@@ -515,9 +517,9 @@ impl InstanceSet {
                 (Some(base_slot), ScalarValue::String(bare))
                     if !bare.is_empty() && !bare.contains(':') =>
                 {
-                    match base_from_mapping(container, base_slot, None, None) {
-                        ExpandBase::Base(base) => ScalarValue::String(format!("{base}{bare}")),
-                        ExpandBase::Missing { .. } => ScalarValue::String(bare),
+                    match base_from_mapping(container, base_slot, None, None).resolved {
+                        Ok(base) => ScalarValue::String(format!("{base}{bare}")),
+                        Err(_) => ScalarValue::String(bare),
                     }
                 }
                 (_, scalar) => scalar,
@@ -565,12 +567,46 @@ impl InstanceSet {
                 // member individually. A union mixing several classes with
                 // types falls through to record-level rules instead — a
                 // scalar there could legitimately be a literal.
+                let root_record = authored_root_id
+                    .clone()
+                    .unwrap_or_else(|| root_name.clone());
+                let expanded_storage;
+                let value: &serde_norway::Value = match loader.expand_root_class_value(
+                    root_name,
+                    slot_name,
+                    container,
+                    value,
+                    &root_record,
+                ) {
+                    Some(expanded) => {
+                        expanded_storage = expanded;
+                        &expanded_storage
+                    }
+                    None => value,
+                };
                 let ids = loader.collect_collection(slot_name, &class_targets, value);
                 contained.push((slot_name.to_string(), ids));
             } else if class_targets.len() == 1 {
                 // Single-valued: the collection arm above took every
                 // multivalued shape.
                 let range = class_targets[0].clone();
+                let root_record = authored_root_id
+                    .clone()
+                    .unwrap_or_else(|| root_name.clone());
+                let expanded_storage;
+                let value: &serde_norway::Value = match loader.expand_root_class_value(
+                    root_name,
+                    slot_name,
+                    container,
+                    value,
+                    &root_record,
+                ) {
+                    Some(expanded) => {
+                        expanded_storage = expanded;
+                        &expanded_storage
+                    }
+                    None => value,
+                };
                 contained.push((
                     slot_name.to_string(),
                     loader.collect_single(slot_name, &range, value),
@@ -949,6 +985,132 @@ impl LinkmlLoader<'_> {
 
     /// Report a field key that is not a string: it can name no slot, so
     /// its value is dropped — unlike a kept undeclared property.
+    /// Root-container parity for a bound class-ranged slot: bare string
+    /// entries expand (or gap) exactly as they would on a nested record,
+    /// and inline mappings get the same per-record finding, before the
+    /// collection machinery reads the value. `None` when nothing
+    /// changed, so the caller keeps the authored value.
+    fn expand_root_class_value(
+        &mut self,
+        root_class: &str,
+        slot: &str,
+        container: &serde_norway::Mapping,
+        value: &serde_norway::Value,
+        record: &str,
+    ) -> Option<serde_norway::Value> {
+        let base_slot = self
+            .expansions
+            .governing(&[root_class.to_string()], slot)?
+            .clone();
+        let expand = Some(base_from_mapping(container, &base_slot, None, None));
+        match value {
+            serde_norway::Value::String(text) => self
+                .expand_bare(expand, slot, record, text, true)
+                .map(serde_norway::Value::String),
+            serde_norway::Value::Sequence(items) => {
+                let mut out = Vec::with_capacity(items.len());
+                let mut changed = false;
+                for item in items {
+                    match item {
+                        serde_norway::Value::String(text) => {
+                            match self.expand_bare(expand, slot, record, text, true) {
+                                Some(expanded) => {
+                                    changed = true;
+                                    out.push(serde_norway::Value::String(expanded));
+                                }
+                                None => out.push(item.clone()),
+                            }
+                        }
+                        serde_norway::Value::Mapping(_) => {
+                            self.note_expansion_gap(
+                                record,
+                                slot,
+                                &base_slot,
+                                ExpansionGapKind::InlineRecord,
+                            );
+                            out.push(item.clone());
+                        }
+                        other => out.push(other.clone()),
+                    }
+                }
+                changed.then_some(serde_norway::Value::Sequence(out))
+            }
+            serde_norway::Value::Mapping(entries) => {
+                if !entries.is_empty() {
+                    self.note_expansion_gap(
+                        record,
+                        slot,
+                        &base_slot,
+                        ExpansionGapKind::InlineRecord,
+                    );
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    fn note_expansion_gap(
+        &mut self,
+        record: &str,
+        slot: &str,
+        base_slot: &str,
+        kind: ExpansionGapKind,
+    ) {
+        self.expansion_gaps.push(ExpansionGap {
+            record: record.to_string(),
+            slot: slot.to_string(),
+            base_slot: base_slot.to_string(),
+            kind,
+        });
+    }
+
+    /// Expand one bare value against the record's base, or record why it
+    /// could not be — the one definition of "bare" (non-empty, carrying
+    /// no `:`; an undeclared-prefix CURIE stays as authored and surfaces
+    /// through the resolution checks) and of the gap. `require_external`
+    /// is the class-ranged contract: an expansion that does not read as
+    /// an external IRI would hand the dangling check a name the author
+    /// never wrote, so it gaps and the value stays as authored.
+    fn expand_bare(
+        &mut self,
+        expand: Option<ExpandBase>,
+        slot: &str,
+        record: &str,
+        text: &str,
+        require_external: bool,
+    ) -> Option<String> {
+        let expand = expand?;
+        if text.is_empty() || text.contains(':') {
+            return None;
+        }
+        match expand.resolved {
+            Err(reason) => {
+                self.note_expansion_gap(
+                    record,
+                    slot,
+                    expand.base_slot,
+                    ExpansionGapKind::UnusableBase(reason),
+                );
+                None
+            }
+            Ok(base) => {
+                let expanded = format!("{base}{text}");
+                if require_external && !points_outside_dataset(self.schema, &expanded) {
+                    self.note_expansion_gap(
+                        record,
+                        slot,
+                        expand.base_slot,
+                        ExpansionGapKind::UnusableBase("a base that does not form an absolute IRI"),
+                    );
+                    None
+                } else {
+                    Some(expanded)
+                }
+            }
+        }
+    }
+
     fn note_non_string_key(&mut self, record: String, class: &str, key: &serde_norway::Value) {
         let (field, kind) = match key {
             serde_norway::Value::Number(n) => (n.to_string(), KeyKind::Quotable),
@@ -1771,6 +1933,20 @@ impl LinkmlLoader<'_> {
                 if is_record_collection(multivalued, &class_targets, all_classes) =>
             {
                 let entries = self.collect_dict_entries(slot, &class_targets, map);
+                // Each entry authored an inline record at a slot whose
+                // declaration expects external references — a finding,
+                // once per record, whatever the spelling.
+                if let Some(expand_base) = expand
+                    && !entries.is_empty()
+                {
+                    let record = self.current_holder.clone().unwrap_or_default();
+                    self.note_expansion_gap(
+                        &record,
+                        slot,
+                        expand_base.base_slot,
+                        ExpansionGapKind::InlineRecord,
+                    );
+                }
                 if entries.is_empty() && !map.is_empty() {
                     // Every entry was unusable: leave the authored value
                     // visible on the record, so a required-slot check or
@@ -1794,6 +1970,15 @@ impl LinkmlLoader<'_> {
                     ClassChoice::One(class) => {
                         if let Some((target, materialized)) = self.build_record(&class, None, value)
                         {
+                            if let Some(expand_base) = expand {
+                                let record = self.current_holder.clone().unwrap_or_default();
+                                self.note_expansion_gap(
+                                    &record,
+                                    slot,
+                                    expand_base.base_slot,
+                                    ExpansionGapKind::InlineRecord,
+                                );
+                            }
                             reference_to(target, materialized, references, slot_values);
                         }
                     }
@@ -1815,9 +2000,17 @@ impl LinkmlLoader<'_> {
                     }
                 }
             }
-            // A string at an all-class range references a record by id.
+            // A string at an all-class range references a record by id —
+            // unless the slot declares expansion, in which case a bare
+            // scheme-less value is an anchor into the declared base's
+            // namespace (the declaration only binds when no local record
+            // of the range class can exist, so nothing is shadowed).
             serde_norway::Value::String(text) if all_classes => {
-                reference_to(text.clone(), false, references, slot_values);
+                let record = self.current_holder.clone().unwrap_or_default();
+                let target = self
+                    .expand_bare(expand, slot, &record, text, true)
+                    .unwrap_or_else(|| text.clone());
+                reference_to(target, false, references, slot_values);
             }
             // A number or boolean can never be a reference — record the
             // mismatch rather than dropping it, keeping the display
@@ -1831,32 +2024,15 @@ impl LinkmlLoader<'_> {
             // the value as authored and let validation judge the branches.
             other => {
                 if let Some(scalar) = scalar_value(other) {
-                    // A scheme-less string at an `expand_against` slot means
-                    // base + value; anything carrying a `:` — an absolute
-                    // IRI, a CURIE, even one against an undeclared prefix —
-                    // is already fully spelled and stays as authored (an
-                    // undeclared-prefix typo surfaces through the
-                    // resolution checks, not here). A bare value meeting an
-                    // unusable base is the gap, recorded where it happens.
-                    let scalar = match (expand, scalar) {
-                        (Some(ExpandBase::Base(base)), ScalarValue::String(bare))
-                            if !bare.is_empty() && !bare.contains(':') =>
-                        {
-                            ScalarValue::String(format!("{base}{bare}"))
+                    let scalar = match scalar {
+                        ScalarValue::String(bare) => {
+                            let record = self.current_holder.clone().unwrap_or_default();
+                            match self.expand_bare(expand, slot, &record, &bare, false) {
+                                Some(expanded) => ScalarValue::String(expanded),
+                                None => ScalarValue::String(bare),
+                            }
                         }
-                        (
-                            Some(ExpandBase::Missing { base_slot, reason }),
-                            ScalarValue::String(bare),
-                        ) if !bare.is_empty() && !bare.contains(':') => {
-                            self.expansion_gaps.push(ExpansionGap {
-                                record: self.current_holder.clone().unwrap_or_default(),
-                                slot: slot.to_string(),
-                                base_slot: base_slot.to_string(),
-                                reason,
-                            });
-                            ScalarValue::String(bare)
-                        }
-                        (_, scalar) => scalar,
+                        scalar => scalar,
                     };
                     if display {
                         literals.push((property.to_string(), scalar_to_display(&scalar)));
@@ -2083,14 +2259,17 @@ mod tests {
         )
         .expect("data");
         let set = InstanceSet::from_linkml_data(&schema, &data);
-        let reasons: Vec<(&str, &str)> = set
+        let reasons: Vec<(&str, ExpansionGapKind)> = set
             .expansion_gaps
             .iter()
-            .map(|g| (g.record.as_str(), g.reason))
+            .map(|g| (g.record.as_str(), g.kind.clone()))
             .collect();
         assert_eq!(
             reasons,
-            vec![("q_empty", "an empty value"), ("q_null", "no value")],
+            vec![
+                ("q_empty", ExpansionGapKind::UnusableBase("an empty value")),
+                ("q_null", ExpansionGapKind::UnusableBase("no value")),
+            ],
             "an empty base is unusable and a null base is absent"
         );
     }
@@ -2157,9 +2336,9 @@ mod tests {
         assert_eq!(
             set.expansion_gaps
                 .iter()
-                .map(|g| g.reason)
+                .map(|g| g.kind.clone())
                 .collect::<Vec<_>>(),
-            vec!["no value"],
+            vec![ExpansionGapKind::UnusableBase("no value")],
             "the absent non-identifier base gaps; the dict key does not stand in"
         );
     }
@@ -2199,6 +2378,264 @@ mod tests {
             set.expansion_gaps.is_empty(),
             "got: {:?}",
             set.expansion_gaps
+        );
+    }
+
+    /// At an expansion-declared class-ranged slot, a bare scheme-less
+    /// value expands into the record's declared base and reads as an
+    /// external reference into that namespace — never as an in-dataset
+    /// reference — while CURIEs and absolute IRIs stay as authored.
+    #[test]
+    fn bare_values_at_a_class_ranged_anchor_slot_expand_to_external_references() {
+        let schema: SchemaDefinition = serde_norway::from_str(
+            "id: https://example.org/cqa\nname: cqa\ndefault_range: string\nprefixes:\n  cat: \
+             https://example.org/catalog/\nclasses:\n  Benchmark:\n    tree_root: true\n    \
+             slots: [id, questions]\n  CompetencyQuestionAnswer:\n    slots: [id, target_schema, \
+             expected_anchors]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: \
+             true}\n  target_schema: {range: uri}\n  questions: {range: CompetencyQuestionAnswer, \
+             multivalued: true}\n  expected_anchors:\n    range: DomainRecord\n    multivalued: \
+             true\n    annotations:\n      expand_against: target_schema\n",
+        )
+        .expect("schema");
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: b1\nquestions:\n  - id: q1\n    target_schema: https://ns.example/wine/\n    \
+             expected_anchors:\n      - cabernet\n      - cat:aws\n      - https://abs.example/x\n",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        let q1 = set.instances.iter().find(|i| i.id == "q1").expect("q1");
+        let external: Vec<&str> = q1
+            .references
+            .iter()
+            .filter(|r| r.external)
+            .map(|r| r.target.as_str())
+            .collect();
+        assert!(
+            external.contains(&"https://ns.example/wine/cabernet"),
+            "the bare anchor expands into the declared namespace; got: {external:?}"
+        );
+        assert!(
+            external.contains(&"cat:aws") && external.contains(&"https://abs.example/x"),
+            "spelled anchors stay as authored; got: {external:?}"
+        );
+        assert!(
+            set.expansion_gaps.is_empty(),
+            "got: {:?}",
+            set.expansion_gaps
+        );
+    }
+
+    /// At a class-ranged anchor slot with no usable base, only a bare
+    /// scheme-less value is a gap: fully spelled anchors are the
+    /// supported out-of-namespace authoring and owe nothing.
+    #[test]
+    fn class_ranged_anchors_gap_only_on_bare_values() {
+        let schema: SchemaDefinition = serde_norway::from_str(
+            "id: https://example.org/cqa\nname: cqa\ndefault_range: string\nprefixes:\n  cat: \
+             https://example.org/catalog/\nclasses:\n  Benchmark:\n    tree_root: true\n    \
+             slots: [id, questions]\n  CompetencyQuestionAnswer:\n    slots: [id, target_schema, \
+             expected_anchors]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: \
+             true}\n  target_schema: {range: uri}\n  questions: {range: CompetencyQuestionAnswer, \
+             multivalued: true}\n  expected_anchors:\n    range: DomainRecord\n    multivalued: \
+             true\n    annotations:\n      expand_against: target_schema\n",
+        )
+        .expect("schema");
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: b1\nquestions:\n  - id: q_spelled\n    expected_anchors: [cat:aws, \
+             https://abs.example/x]\n  - id: q_bare\n    expected_anchors: [cabernet]\n",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert_eq!(
+            set.expansion_gaps
+                .iter()
+                .map(|g| g.record.as_str())
+                .collect::<Vec<_>>(),
+            vec!["q_bare"],
+            "the bare anchor gaps; the spelled ones owe no base"
+        );
+    }
+
+    /// A base that does not form an absolute IRI cannot make a
+    /// class-ranged anchor external, so the value stays as authored and
+    /// the gap says why — never a fabricated in-dataset reference.
+    #[test]
+    fn a_relative_base_gaps_instead_of_minting_an_internal_reference() {
+        let schema: SchemaDefinition = serde_norway::from_str(
+            "id: https://example.org/cqa\nname: cqa\ndefault_range: string\nclasses:\n  \
+             Benchmark:\n    tree_root: true\n    slots: [id, questions]\n  \
+             CompetencyQuestionAnswer:\n    slots: [id, target_schema, expected_anchors]\n  \
+             DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  target_schema: \
+             {range: uri}\n  questions: {range: CompetencyQuestionAnswer, multivalued: true}\n  \
+             expected_anchors:\n    range: DomainRecord\n    multivalued: true\n    \
+             annotations:\n      expand_against: target_schema\n",
+        )
+        .expect("schema");
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: b1\nquestions:\n  - id: q1\n    target_schema: wine/\n    expected_anchors: \
+             [cabernet]\n",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert_eq!(
+            set.expansion_gaps
+                .iter()
+                .map(|g| g.kind.clone())
+                .collect::<Vec<_>>(),
+            vec![ExpansionGapKind::UnusableBase(
+                "a base that does not form an absolute IRI"
+            )],
+            "the relative base is the reported defect"
+        );
+        let q1 = set.instances.iter().find(|i| i.id == "q1").expect("q1");
+        assert!(
+            q1.slot_values
+                .iter()
+                .filter(|sv| sv.slot == "expected_anchors")
+                .flat_map(|sv| &sv.values)
+                .any(
+                    |v| matches!(v, InstanceValue::Reference { target, .. } if target == "cabernet")
+                ),
+            "the value stays as authored, not concatenated into a phantom name"
+        );
+    }
+
+    /// An inline record at a bound class-ranged slot is one finding per
+    /// record, whatever the authoring spelling; a mapping at a bound
+    /// scalar slot is a kind mismatch, not an inline record, and gets no
+    /// expansion finding at all.
+    #[test]
+    fn inline_records_at_bound_slots_are_counted_per_record() {
+        let schema: SchemaDefinition = serde_norway::from_str(
+            "id: https://example.org/cqa\nname: cqa\ndefault_range: string\nclasses:\n  \
+             Benchmark:\n    tree_root: true\n    slots: [id, questions]\n  \
+             CompetencyQuestionAnswer:\n    slots: [id, target_schema, expected_anchors, \
+             note]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  \
+             target_schema: {range: uri}\n  questions: {range: CompetencyQuestionAnswer, \
+             multivalued: true}\n  note:\n    range: uri\n    annotations:\n      \
+             expand_against: target_schema\n  expected_anchors:\n    range: DomainRecord\n    \
+             multivalued: true\n    annotations:\n      expand_against: target_schema\n",
+        )
+        .expect("schema");
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: b1\nquestions:\n  - id: q_list\n    target_schema: https://ns.example/\n    \
+             expected_anchors:\n      - {id: a}\n      - {id: b}\n  - id: q_scalar\n    \
+             target_schema: https://ns.example/\n    note: {oops: 1}\n",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        let inline: Vec<&str> = set
+            .expansion_gaps
+            .iter()
+            .filter(|g| g.kind == ExpansionGapKind::InlineRecord)
+            .map(|g| g.record.as_str())
+            .collect();
+        assert_eq!(
+            inline,
+            vec!["q_list"],
+            "one finding per claiming record and slot, whatever the spelling; got: {:?}",
+            set.expansion_gaps
+        );
+        assert!(
+            !set.expansion_gaps.iter().any(|g| g.record == "q_scalar"),
+            "a mapping at a scalar slot is a kind mismatch, not an expansion finding; got: {:?}",
+            set.expansion_gaps
+        );
+
+        let dict: serde_norway::Value = serde_norway::from_str(
+            "id: b1\nquestions:\n  - id: q_dict\n    target_schema: https://ns.example/\n    \
+             expected_anchors:\n      a: {}\n      b: {}\n",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &dict);
+        assert_eq!(
+            set.expansion_gaps
+                .iter()
+                .map(|g| (g.record.as_str(), g.kind.clone()))
+                .collect::<Vec<_>>(),
+            vec![("q_dict", ExpansionGapKind::InlineRecord)],
+            "the dict spelling is the same one finding; got: {:?}",
+            set.expansion_gaps
+        );
+    }
+
+    /// A bound class-ranged slot carried by the `tree_root` itself reads
+    /// exactly as it would on a nested record: bare values expand into
+    /// external references, and an unusable base gaps against the root
+    /// record.
+    #[test]
+    fn root_carried_anchor_slots_expand_like_nested_ones() {
+        let schema: SchemaDefinition = serde_norway::from_str(
+            "id: https://example.org/cqa\nname: cqa\ndefault_range: string\nclasses:\n  \
+             Benchmark:\n    tree_root: true\n    slots: [id, target_schema, expected_anchors]\n  \
+             DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  target_schema: \
+             {range: uri}\n  expected_anchors:\n    range: DomainRecord\n    multivalued: true\n    \
+             annotations:\n      expand_against: target_schema\n",
+        )
+        .expect("schema");
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: b1\ntarget_schema: https://ns.example/\nexpected_anchors: [cabernet]\n",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        let root = set.instances.iter().find(|i| i.id == "b1").expect("root");
+        assert!(
+            root.references
+                .iter()
+                .any(|r| r.target == "https://ns.example/cabernet" && r.external),
+            "the root's bare anchor expands to an external reference; got: {:?}",
+            root.references
+        );
+
+        let missing: serde_norway::Value =
+            serde_norway::from_str("id: b1\nexpected_anchors: [cabernet]\n").expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &missing);
+        assert_eq!(
+            set.expansion_gaps
+                .iter()
+                .map(|g| (g.record.as_str(), g.kind.clone()))
+                .collect::<Vec<_>>(),
+            vec![("b1", ExpansionGapKind::UnusableBase("no value"))],
+            "the root record owns its gap"
+        );
+    }
+
+    /// The root parity covers every value shape: a single-valued bound
+    /// slot expands its bare string, and the dict spelling of inline
+    /// records is one finding, exactly as on a nested record.
+    #[test]
+    fn root_parity_covers_single_values_and_dict_spellings() {
+        let schema: SchemaDefinition = serde_norway::from_str(
+            "id: https://example.org/cqa\nname: cqa\ndefault_range: string\nclasses:\n  \
+             Benchmark:\n    tree_root: true\n    slots: [id, target_schema, primary_anchor, \
+             expected_anchors]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: \
+             true}\n  target_schema: {range: uri}\n  primary_anchor:\n    range: DomainRecord\n    \
+             annotations:\n      expand_against: target_schema\n  expected_anchors:\n    range: \
+             DomainRecord\n    multivalued: true\n    annotations:\n      expand_against: \
+             target_schema\n",
+        )
+        .expect("schema");
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: b1\ntarget_schema: https://ns.example/\nprimary_anchor: cabernet\n\
+             expected_anchors:\n  merlot: {}\n",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        let root = set.instances.iter().find(|i| i.id == "b1").expect("root");
+        assert!(
+            root.references
+                .iter()
+                .any(|r| r.target == "https://ns.example/cabernet"),
+            "the single-valued bare anchor expands; got: {:?}",
+            root.references
+        );
+        assert_eq!(
+            set.expansion_gaps
+                .iter()
+                .map(|g| (g.slot.as_str(), g.kind.clone()))
+                .collect::<Vec<_>>(),
+            vec![("expected_anchors", ExpansionGapKind::InlineRecord)],
+            "the dict-spelled inline record is one finding"
         );
     }
 

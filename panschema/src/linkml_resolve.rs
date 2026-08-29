@@ -106,6 +106,20 @@ pub struct ResolvedSlot {
     pub induced: InducedRange,
 }
 
+impl ResolvedSlot {
+    /// The ranges a value at this slot is read under: the induced set
+    /// when the schema supplies one (an `any_of` union replaces a
+    /// scalar `range:`), else the declared scalar range — the one
+    /// definition the loader and the declaration checks share.
+    pub fn effective_ranges(&self) -> Vec<&String> {
+        if self.induced.ranges.is_empty() {
+            self.definition.range.iter().collect()
+        } else {
+            self.induced.ranges.iter().collect()
+        }
+    }
+}
+
 /// Walk a class's `is_a` chain and `mixins`, then apply the class's own
 /// `attributes`, global `slots:` refs, and `slot_usage` overrides to
 /// produce the effective set of slots that show up as fields on the

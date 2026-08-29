@@ -1233,11 +1233,17 @@ impl ExpansionDeclarationIssue {
 /// single walk with the same scoping as [`absence_declarations`]. A
 /// defective scope never binds — no expansion is the safe reading — and
 /// only the defective scope is dropped, so one class's bad declaration
-/// cannot disable another's. Class-rangedness is judged from the
-/// resolved per-class slot view (a `slot_usage` restates only what it
-/// overrides, so the definition in hand may not carry the range; and
-/// LinkML's induced semantics have `any_of` replace a scalar `range:`,
-/// which a read of the raw definition would get wrong).
+/// cannot disable another's.
+///
+/// A class-ranged slot may declare expansion exactly when no local
+/// record of its range class can exist for a bare value to collide
+/// with: every site ranging the class is itself declared external.
+/// While any site is not — a `tree_root` collection, or another slot
+/// without the annotation — the declaration is refused naming that
+/// site. Ranges are judged from the resolved per-class view (a
+/// `slot_usage` restates only what it overrides, and `any_of` replaces
+/// a scalar `range:` under LinkML's induced semantics, so a read of the
+/// raw definition would get both wrong).
 pub fn expansion_declarations(
     schema: &SchemaDefinition,
 ) -> (ExpansionBindings, Vec<ExpansionDeclarationIssue>) {
@@ -1283,53 +1289,94 @@ pub fn expansion_declarations(
         return (bindings, issues);
     }
 
-    // One resolution pass answers every remaining question: which slots
-    // any class carries, which (class, slot) pairs exist, and which of
-    // them resolve class-ranged (by the induced view the loader reads).
-    let mut carried: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    // One resolution pass: which slots any class carries, and which
+    // classes each (class, slot) site ranges — read from the same
+    // effective view the loader applies to values.
     let mut carried_pairs: std::collections::BTreeSet<(String, String)> =
         std::collections::BTreeSet::new();
-    let mut class_ranged_pairs: std::collections::BTreeSet<(String, String)> =
-        std::collections::BTreeSet::new();
-    let mut class_ranged_any: std::collections::BTreeSet<String> =
-        std::collections::BTreeSet::new();
+    let mut site_class_ranges: std::collections::BTreeMap<(String, String), Vec<String>> =
+        std::collections::BTreeMap::new();
     let mut carried_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for (class_name, class) in &schema.classes {
         for (slot_name, rs) in
             crate::linkml_resolve::resolve_effective_slots_with_provenance(class, schema)
         {
             carried_names.insert(slot_name.clone());
-            let ranges: Vec<&String> = if rs.induced.ranges.is_empty() {
-                rs.definition.range.iter().collect()
-            } else {
-                rs.induced.ranges.iter().collect()
-            };
-            if ranges.iter().any(|r| schema.classes.contains_key(*r)) {
-                class_ranged_pairs.insert((class_name.clone(), slot_name.clone()));
-                class_ranged_any.insert(slot_name.clone());
+            let class_ranges: Vec<String> = rs
+                .effective_ranges()
+                .into_iter()
+                .filter(|r| schema.classes.contains_key(*r))
+                .cloned()
+                .collect();
+            if !class_ranges.is_empty() {
+                site_class_ranges.insert((class_name.clone(), slot_name.clone()), class_ranges);
             }
             carried_pairs.insert((class_name.clone(), slot_name));
         }
     }
-    carried.extend(carried_names.iter().map(String::as_str));
+    let carried: std::collections::BTreeSet<&str> =
+        carried_names.iter().map(String::as_str).collect();
 
-    for (scope, slot, base) in declared {
-        let (slot_ok, base_ok, ranged) = match &scope {
+    // The `is_a`/mixin family of a class: a record of a descendant is an
+    // instance of the class, and a site ranging an ancestor can
+    // materialize one through a type designator — either way a local
+    // record of the class can exist at such a site.
+    let mut ancestors: std::collections::BTreeMap<&String, std::collections::BTreeSet<String>> =
+        std::collections::BTreeMap::new();
+    for name in schema.classes.keys() {
+        let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut stack: Vec<&String> = vec![name];
+        while let Some(current) = stack.pop() {
+            if let Some(class) = schema.classes.get(current) {
+                for parent in class.is_a.iter().chain(class.mixins.iter()) {
+                    if seen.insert(parent.clone()) {
+                        stack.push(parent);
+                    }
+                }
+            }
+        }
+        ancestors.insert(name, seen);
+    }
+    let family_of = |r: &str| -> std::collections::BTreeSet<String> {
+        let mut family: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        family.insert(r.to_string());
+        if let Some(up) = ancestors.get(&r.to_string()) {
+            family.extend(up.iter().cloned());
+        }
+        for (name, up) in &ancestors {
+            if up.contains(r) {
+                family.insert((*name).clone());
+            }
+        }
+        family
+    };
+
+    // Stage one: defects a declaration owns outright — an uncarried slot
+    // or base (reported in that order), or a range class whose family
+    // holds a `tree_root` (its records are document roots, no ranging
+    // site needed) — refuse before any site vouches for anything.
+    struct Candidate {
+        scope: Option<String>,
+        slot: String,
+        base: String,
+        target_family: std::collections::BTreeSet<String>,
+    }
+    let mut candidates: Vec<Candidate> = Vec::new();
+    for (scope, slot, base) in &declared {
+        let (slot_ok, base_ok) = match scope {
             Some(class) => (
                 carried_pairs.contains(&(class.clone(), slot.clone())),
                 carried_pairs.contains(&(class.clone(), base.clone())),
-                class_ranged_pairs.contains(&(class.clone(), slot.clone())),
             ),
             None => (
                 carried.contains(slot.as_str()),
                 carried.contains(base.as_str()),
-                class_ranged_any.contains(&slot),
             ),
         };
         if !slot_ok {
             issues.push(ExpansionDeclarationIssue {
                 slot: slot.clone(),
-                detail: match &scope {
+                detail: match scope {
                     Some(class) => format!(
                         "class `{class}` does not carry this slot, so the declaration can \
                          never govern a record"
@@ -1341,19 +1388,10 @@ pub fn expansion_declarations(
             });
             continue;
         }
-        if ranged {
-            issues.push(ExpansionDeclarationIssue {
-                slot: slot.clone(),
-                detail: "the slot resolves class-ranged, and a class-ranged slot's bare \
-                         values are in-dataset references — expansion would collide with them"
-                    .to_string(),
-            });
-            continue;
-        }
         if !base_ok {
             issues.push(ExpansionDeclarationIssue {
                 slot: slot.clone(),
-                detail: match &scope {
+                detail: match scope {
                     Some(class) => format!(
                         "`{base}` is not a slot class `{class}` carries, so its records \
                          cannot supply it"
@@ -1365,9 +1403,86 @@ pub fn expansion_declarations(
             });
             continue;
         }
-        match &scope {
-            Some(class) => bindings.insert_class(class, &slot, base),
-            None => bindings.insert_schema_wide(&slot, base),
+        let range_classes: Vec<&String> = match scope {
+            Some(class) => site_class_ranges
+                .get(&(class.clone(), slot.clone()))
+                .into_iter()
+                .flatten()
+                .collect(),
+            None => site_class_ranges
+                .iter()
+                .filter(|((_, s), _)| s == slot)
+                .flat_map(|(_, ranges)| ranges)
+                .collect(),
+        };
+        let mut target_family: std::collections::BTreeSet<String> =
+            std::collections::BTreeSet::new();
+        for r in &range_classes {
+            target_family.extend(family_of(r));
+        }
+        if let Some(root) = target_family
+            .iter()
+            .find(|c| schema.classes.get(*c).is_some_and(|class| class.tree_root))
+        {
+            issues.push(ExpansionDeclarationIssue {
+                slot: slot.clone(),
+                detail: format!(
+                    "the slot's range class family includes `{root}`, a `tree_root` — its \
+                     records are document roots, so a bare value stays ambiguous with a \
+                     local reference"
+                ),
+            });
+            continue;
+        }
+        candidates.push(Candidate {
+            scope: scope.clone(),
+            slot: slot.clone(),
+            base: base.clone(),
+            target_family,
+        });
+    }
+
+    // Stage two: only a declaration that itself binds vouches for its
+    // site, so refusals iterate to a fixpoint — a candidate blocked
+    // through one range class stops vouching for the rest, and the
+    // candidates that leaned on it are refused in turn.
+    loop {
+        let refused = candidates
+            .iter()
+            .enumerate()
+            .find_map(|(index, candidate)| {
+                let blocker = site_class_ranges.iter().find(|((c2, s2), ranges)| {
+                    ranges.iter().any(|r| candidate.target_family.contains(r))
+                        && !candidates.iter().any(|other| {
+                            other.slot == *s2
+                                && match &other.scope {
+                                    None => true,
+                                    Some(scope_class) => scope_class == c2,
+                                }
+                        })
+                });
+                blocker.map(|((c2, s2), _)| (index, c2.clone(), s2.clone()))
+            });
+        let Some((index, block_class, block_slot)) = refused else {
+            break;
+        };
+        let candidate = candidates.remove(index);
+        issues.push(ExpansionDeclarationIssue {
+            slot: candidate.slot,
+            detail: format!(
+                "the slot's range class can still be locally declared through \
+                 `{block_slot}` (class `{block_class}`), whose values are not declared \
+                 external — annotate every slot ranging the class (and its `is_a` family) \
+                 with `expand_against`, or bare values stay ambiguous with in-dataset \
+                 references"
+            ),
+        });
+    }
+
+    for candidate in candidates {
+        match &candidate.scope {
+            Some(class) => bindings.insert_class(class, &candidate.slot, candidate.base),
+            None => bindings.insert_schema_wide(&candidate.slot, candidate.base),
         }
     }
     (bindings, issues)
@@ -3684,6 +3799,217 @@ mod tests {
         );
     }
 
+    /// The contract-schema shape: a
+    /// class-ranged anchor slot whose range class exists only to type
+    /// anchors into another graph. Expansion is allowed exactly when no
+    /// site could still declare a local record of that class — every
+    /// slot ranging it is itself declared external — and refused, naming
+    /// the blocking site, while one is not.
+    #[test]
+    fn a_class_ranged_slot_expands_when_its_range_class_has_no_local_home() {
+        let base = "id: https://example.org/cqa\nname: cqa\ndefault_range: string\nclasses:\n  \
+                    Benchmark:\n    tree_root: true\n    slots: [id, target_schema, questions]\n  \
+                    CompetencyQuestionAnswer:\n    slots: [id, target_schema, expected_anchors, \
+                    unconnected_anchors]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: \
+                    {identifier: true}\n  target_schema: {range: uri}\n  questions: {range: \
+                    CompetencyQuestionAnswer, multivalued: true}\n";
+
+        // Only one of the two DomainRecord-ranged slots is declared
+        // external: a local DomainRecord is still conceivable through the
+        // other, so the declaration is refused naming it.
+        let half = parse(&format!(
+            "{base}  expected_anchors:\n    range: DomainRecord\n    multivalued: true\n    \
+             annotations:\n      expand_against: target_schema\n  unconnected_anchors:\n    \
+             range: DomainRecord\n    multivalued: true\n"
+        ));
+        let (bindings, issues) = expansion_declarations(&half);
+        assert!(
+            bindings.is_empty(),
+            "one unannotated site keeps the class locally declarable"
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.detail.contains("unconnected_anchors")),
+            "the refusal names the blocking site; got: {issues:?}"
+        );
+
+        // Every DomainRecord-ranged slot declared external: no local
+        // record can exist, so bare values are unambiguous and both bind.
+        let full = parse(&format!(
+            "{base}  expected_anchors:\n    range: DomainRecord\n    multivalued: true\n    \
+             annotations:\n      expand_against: target_schema\n  unconnected_anchors:\n    \
+             range: DomainRecord\n    multivalued: true\n    annotations:\n      \
+             expand_against: target_schema\n"
+        ));
+        let (bindings, issues) = expansion_declarations(&full);
+        assert!(
+            issues.is_empty(),
+            "no local home, no defect; got: {issues:?}"
+        );
+        assert_eq!(
+            bindings.governing(
+                &["CompetencyQuestionAnswer".to_string()],
+                "expected_anchors"
+            ),
+            Some(&"target_schema".to_string()),
+            "the class-ranged anchor slot binds"
+        );
+
+        // A tree_root collection ranging the class is a local home
+        // whatever the anchor slots declare.
+        let rooted = parse(
+            &format!(
+                "{base}  records: {{range: DomainRecord, multivalued: true}}\n  \
+             expected_anchors:\n    range: DomainRecord\n    multivalued: true\n    \
+             annotations:\n      expand_against: target_schema\n  unconnected_anchors:\n    \
+             range: DomainRecord\n    multivalued: true\n    annotations:\n      \
+             expand_against: target_schema\n"
+            )
+            .replace(
+                "slots: [id, target_schema, questions]",
+                "slots: [id, target_schema, questions, records]",
+            ),
+        );
+        let (bindings, issues) = expansion_declarations(&rooted);
+        assert!(
+            bindings.is_empty(),
+            "a collection slot ranging the class keeps it locally declarable"
+        );
+        assert!(
+            issues.iter().any(|i| i.detail.contains("records")),
+            "the refusal names the collection site; got: {issues:?}"
+        );
+    }
+
+    /// Only declarations that actually bind vouch for their sites: one
+    /// refused for its own defect leaves its slot an ordinary reference
+    /// slot, so a sibling declaration sharing the range class is refused
+    /// too rather than binding on a promise nothing keeps.
+    #[test]
+    fn a_refused_declaration_does_not_vouch_for_its_site() {
+        let schema = parse(
+            "id: https://example.org/t\nname: t\nclasses:\n  Q:\n    slots: [expected_anchors, \
+             unconnected_anchors, target_schema]\n  DomainRecord:\n    slots: [target_schema]\nslots:\n  \
+             target_schema: {range: uri}\n  expected_anchors:\n    range: DomainRecord\n    \
+             multivalued: true\n    annotations:\n      expand_against: target_schema\n  \
+             unconnected_anchors:\n    range: DomainRecord\n    multivalued: true\n    \
+             annotations:\n      expand_against: ghost\n",
+        );
+        let (bindings, issues) = expansion_declarations(&schema);
+        assert!(
+            bindings.is_empty(),
+            "the sibling of a refused declaration is refused too; got: {bindings:?}"
+        );
+        assert!(
+            issues.iter().any(|i| i.detail.contains("ghost")),
+            "the ghost base is reported; got: {issues:?}"
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.slot == "expected_anchors" && i.detail.contains("unconnected_anchors")),
+            "the sibling refusal names the no-longer-external site; got: {issues:?}"
+        );
+    }
+
+    /// Refusals cascade to a fixpoint: a declaration blocked through one
+    /// of its range classes stops vouching for the others, refusing the
+    /// declarations that leaned on it.
+    #[test]
+    fn a_blocked_declaration_stops_vouching_and_the_refusal_cascades() {
+        let schema = parse(
+            "id: https://example.org/t\nname: t\nclasses:\n  C:\n    slots: [a, b, u, base]\n  \
+             Item: {}\n  Widget: {}\nslots:\n  base: {range: uri}\n  a:\n    range: Item\n    \
+             multivalued: true\n    annotations:\n      expand_against: base\n  b:\n    \
+             multivalued: true\n    any_of:\n      - range: Item\n      - range: Widget\n    \
+             annotations:\n      expand_against: base\n  u:\n    range: Widget\n    \
+             multivalued: true\n",
+        );
+        let (bindings, issues) = expansion_declarations(&schema);
+        assert!(
+            bindings.is_empty(),
+            "b is blocked through Widget, so a is blocked through b; got: {bindings:?}"
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.slot == "b" && i.detail.contains("`u`")),
+            "b's refusal names u; got: {issues:?}"
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.slot == "a" && i.detail.contains("`b`")),
+            "a's refusal names b, whose refusal un-vouched the Item site; got: {issues:?}"
+        );
+    }
+
+    /// A class-scoped declaration vouches only for its own class's
+    /// site: the same-named slot on another class, unannotated, is a
+    /// blocker, not a beneficiary.
+    #[test]
+    fn a_class_scoped_declaration_vouches_only_for_its_own_class() {
+        let schema = parse(
+            "id: https://example.org/t\nname: t\nclasses:\n  Q:\n    slots: [anchors, base]\n    \
+             slot_usage:\n      anchors:\n        annotations:\n          expand_against: base\n  \
+             R:\n    slots: [anchors, base]\n  Item: {}\nslots:\n  base: {range: uri}\n  \
+             anchors:\n    range: Item\n    multivalued: true\n",
+        );
+        let (bindings, issues) = expansion_declarations(&schema);
+        assert!(
+            bindings.is_empty(),
+            "class R's unannotated site blocks Q's declaration; got: {bindings:?}"
+        );
+        assert!(
+            issues.iter().any(|i| i.detail.contains("`R`")),
+            "the refusal names the other class's site; got: {issues:?}"
+        );
+    }
+
+    /// A range class that is itself a `tree_root` has local records as
+    /// document roots, with no ranging slot needed — its declarations
+    /// are refused outright.
+    #[test]
+    fn a_tree_root_range_class_is_a_local_home() {
+        let schema = parse(
+            "id: https://example.org/t\nname: t\nclasses:\n  Node:\n    tree_root: true\n    \
+             slots: [id, base_ns, parent]\nslots:\n  id: {identifier: true}\n  base_ns: {range: \
+             uri}\n  parent:\n    range: Node\n    annotations:\n      expand_against: base_ns\n",
+        );
+        let (bindings, issues) = expansion_declarations(&schema);
+        assert!(bindings.is_empty(), "got: {bindings:?}");
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.slot == "parent" && i.detail.contains("root")),
+            "the refusal says the class's records are document roots; got: {issues:?}"
+        );
+    }
+
+    /// Local records of a class also exist through its `is_a` family: a
+    /// site ranging an ancestor can materialize a record of the class by
+    /// type designator, so an unannotated ancestor-ranged site blocks.
+    #[test]
+    fn an_ancestor_ranged_site_blocks_the_descendants_declaration() {
+        let schema = parse(
+            "id: https://example.org/t\nname: t\nclasses:\n  Benchmark:\n    tree_root: true\n    \
+             slots: [id, records, expected_anchors, target_schema]\n  Entity:\n    slots: [id]\n  \
+             DomainRecord:\n    is_a: Entity\nslots:\n  id: {identifier: true}\n  target_schema: \
+             {range: uri}\n  records:\n    range: Entity\n    multivalued: true\n  \
+             expected_anchors:\n    range: DomainRecord\n    multivalued: true\n    \
+             annotations:\n      expand_against: target_schema\n",
+        );
+        let (bindings, issues) = expansion_declarations(&schema);
+        assert!(bindings.is_empty(), "got: {bindings:?}");
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.slot == "expected_anchors" && i.detail.contains("records")),
+            "the ancestor-ranged site is the blocker; got: {issues:?}"
+        );
+    }
+
     /// The strict gate's arithmetic is exact: every family contributes
     /// its own count to the total, and the slot-semantics count is the
     /// sum of both declaration families.
@@ -3714,17 +4040,19 @@ mod tests {
         );
     }
 
-    /// The class-ranged guard judges the *resolved* slot, so a
+    /// The declarability guard judges the *resolved* slot, so a
     /// `slot_usage` that carries only the annotation — its range
     /// inherited from the top-level declaration, the normal LinkML
-    /// spelling — is still refused, and an `any_of` union replacing a
-    /// scalar range is judged by the induced view the loader reads.
+    /// spelling — is judged by that inherited class range: with another
+    /// site keeping the class locally declarable, the declaration is
+    /// refused naming it.
     #[test]
     fn the_class_ranged_guard_reads_the_resolved_slot() {
         let schema = parse(
-            "id: https://example.org/t\nname: t\nclasses:\n  Bench:\n    slots: [refs]\n    \
+            "id: https://example.org/t\nname: t\nclasses:\n  Bench:\n    slots: [refs, base]\n    \
              slot_usage:\n      refs:\n        annotations:\n          expand_against: base\n  \
-             Item: {}\nslots:\n  refs:\n    range: Item\n    multivalued: true\n  base:\n    \
+             Audit:\n    slots: [held_items]\n  Item: {}\nslots:\n  refs:\n    range: Item\n    \
+             multivalued: true\n  held_items:\n    range: Item\n    multivalued: true\n  base:\n    \
              range: uri\n",
         );
         let (bindings, issues) = expansion_declarations(&schema);
@@ -3733,8 +4061,10 @@ mod tests {
             "the inherited class range is seen through the resolved view"
         );
         assert!(
-            issues.iter().any(|i| i.detail.contains("class-ranged")),
-            "the refusal names the range defect; got: {issues:?}"
+            issues
+                .iter()
+                .any(|i| i.detail.contains("held_items") && i.detail.contains("locally declared")),
+            "the refusal names the site keeping the class declarable; got: {issues:?}"
         );
     }
 
@@ -3791,9 +4121,10 @@ mod tests {
     #[test]
     fn expansion_declaration_defects_warn_and_do_not_bind() {
         let schema = parse(
-            "id: https://example.org/t\nname: t\nclasses:\n  Bench:\n    slots: [refs, anchors, \
-             loose]\n  Item: {}\nslots:\n  refs:\n    range: Item\n    multivalued: true\n    \
-             annotations:\n      expand_against: base\n  anchors:\n    range: uri\n    \
+            "id: https://example.org/t\nname: t\nclasses:\n  Bench:\n    slots: [refs, \
+             held_items, anchors, loose, base]\n  Item: {}\nslots:\n  refs:\n    range: Item\n    \
+             multivalued: true\n    annotations:\n      expand_against: base\n  held_items:\n    \
+             range: Item\n    multivalued: true\n  anchors:\n    range: uri\n    \
              annotations:\n      expand_against: ghost\n  loose:\n    range: uri\n    \
              annotations:\n      expand_against:\n        value:\n          x: y\n  base:\n    \
              range: uri\n",
@@ -3817,8 +4148,10 @@ mod tests {
         );
         let details: Vec<&str> = issues.iter().map(|i| i.detail.as_str()).collect();
         assert!(
-            details.iter().any(|d| d.contains("in-dataset references")),
-            "the class-ranged defect is named; got: {details:?}"
+            details
+                .iter()
+                .any(|d| d.contains("locally declared") && d.contains("held_items")),
+            "the still-declarable range class is named; got: {details:?}"
         );
         assert!(
             details.iter().any(|d| d.contains("ghost")),

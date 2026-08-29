@@ -437,13 +437,21 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
     // schema's `expand_against` declaration names supplied nothing
     // usable, so the values were read as authored.
     for g in &set.expansion_gaps {
+        let detail = match &g.kind {
+            crate::instances::ExpansionGapKind::UnusableBase(reason) => format!(
+                "slot `{}` expands against `{}`, but this record supplies {reason} there; \
+                 its bare values were read as authored",
+                g.slot, g.base_slot
+            ),
+            crate::instances::ExpansionGapKind::InlineRecord => format!(
+                "slot `{}` declares its values expand into an external namespace (against \
+                 `{}`), but this record authors an inline record there",
+                g.slot, g.base_slot
+            ),
+        };
         out.push(Violation {
             record: g.record.clone(),
-            detail: format!(
-                "slot `{}` expands against `{}`, but this record supplies {} there; its \
-                 bare values were read as authored",
-                g.slot, g.base_slot, g.reason
-            ),
+            detail,
         });
     }
 
