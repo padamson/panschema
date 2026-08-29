@@ -147,7 +147,7 @@ markup5ever_rcdom = "0.39.0"
 # (compiles) and that instances validate as expected — the same
 # validation an LLM's structured output or a downstream consumer relies
 # on, not just this codebase's own expectations of the JSON shape.
-jsonschema = { version = "0.49", default-features = false }
+jsonschema = { version = "0.50", default-features = false }
 
 # Independent RDF oracle for the RDF/OWL writer family: loads generated
 # TTL into a real, separate triple store and runs SPARQL sanity queries,
