@@ -81,45 +81,80 @@ pub struct ExpansionGap {
     pub slot: String,
     pub base_slot: String,
     pub kind: ExpansionGapKind,
+    /// The containing record whose base was unusable, when the defect
+    /// is not the record's own.
+    pub supplied_by: Option<String>,
 }
 
 /// The base an `expand_against` slot's bare values concatenate onto,
 /// resolved once per record and field: either the base slot's single
-/// string value, or why the record cannot supply one. A gap is recorded
-/// only when a bare value actually meets `Missing` — a record whose
-/// values are all fully spelled owes no base.
+/// string value — the record's own, or the nearest containing record's
+/// — or why none could be used. A gap is recorded only when a bare
+/// value actually meets a defect — a record whose values are all fully
+/// spelled owes no base.
 #[derive(Clone, Copy)]
 struct ExpandBase<'a> {
     base_slot: &'a str,
-    /// The base value, or why the record cannot supply one.
+    /// The containing record that supplied the base (or its defect),
+    /// when the record's own mapping did not — a finding names it, so
+    /// the author is sent to the right line.
+    supplied_by: Option<&'a str>,
+    /// The base value, or why none could be used.
     resolved: Result<&'a str, &'static str>,
+}
+
+/// Classify one authored value as an expansion base: a non-empty
+/// string is the base, null is absence (the containment walk continues
+/// past it), and anything else present is unusable with its reason —
+/// the one classification the record's own lookup and the ancestor
+/// frames share, so the same value can never read differently by path.
+fn classify_base(value: &serde_norway::Value) -> Result<Option<&str>, &'static str> {
+    match value {
+        serde_norway::Value::String(base) if !base.is_empty() => Ok(Some(base)),
+        serde_norway::Value::String(_) => Err("an empty value"),
+        serde_norway::Value::Null => Ok(None),
+        serde_norway::Value::Sequence(_) => Err("a list where a single value is needed"),
+        _ => Err("a non-string value"),
+    }
+}
+
+/// A record's own answer for its expansion base — typed, so the
+/// walk-or-not decision is a variant, not a sentinel-string comparison.
+enum OwnBase<'a> {
+    Absent,
+    Unusable(&'static str),
+    Value(&'a str),
 }
 
 /// The record's base value for expansion: the base slot's value in its
 /// raw mapping, or — when the base slot is the identifier a dict-keyed
-/// collection supplies as the key — that key. Null counts as absent,
-/// as it does everywhere else in this loader; an empty string is
-/// unusable (concatenating it would "expand" a value to itself).
+/// collection supplies as the key — that key.
 fn base_from_mapping<'a>(
     map: &'a serde_norway::Mapping,
-    base_slot: &'a str,
+    base_slot: &str,
     dict_key: Option<&'a str>,
     id_slot: Option<&str>,
-) -> ExpandBase<'a> {
-    let resolved = match map.get(base_slot) {
-        Some(serde_norway::Value::String(base)) if !base.is_empty() => Ok(base.as_str()),
-        Some(serde_norway::Value::String(_)) => Err("an empty value"),
-        None | Some(serde_norway::Value::Null) => match dict_key {
-            Some(key) if id_slot == Some(base_slot) => Ok(key),
-            _ => Err("no value"),
+) -> OwnBase<'a> {
+    match map.get(base_slot).map(classify_base) {
+        Some(Ok(Some(base))) => OwnBase::Value(base),
+        Some(Err(reason)) => OwnBase::Unusable(reason),
+        Some(Ok(None)) | None => match dict_key {
+            Some(key) if id_slot == Some(base_slot) => OwnBase::Value(key),
+            _ => OwnBase::Absent,
         },
-        Some(serde_norway::Value::Sequence(_)) => Err("a list where a single value is needed"),
-        Some(_) => Err("a non-string value"),
-    };
-    ExpandBase {
-        base_slot,
-        resolved,
     }
+}
+
+/// One containing record's expansion frame: its id — so a finding can
+/// name the record that supplied a defective base — and its candidates
+/// for the declared base slots its class actually carries as scalars.
+/// A stray same-named field, a slot of some other class, or a
+/// class-ranged slot (whose values are references, not a namespace
+/// string) never enters a frame, mirroring the declared-slot guard the
+/// record's own resolution enforces.
+struct ExpandFrame {
+    record: String,
+    bases: std::collections::BTreeMap<String, Result<String, &'static str>>,
 }
 
 /// A slot's authored value(s) on an instance, keyed by slot **name** (not the
@@ -472,6 +507,13 @@ impl InstanceSet {
             crate::linkml_resolve::resolve_effective_slots_with_provenance(root, schema);
 
         let mut metadata: Vec<(String, String)> = Vec::new();
+        let expansions = crate::diagnostics::expansion_bindings(schema);
+        let expand_base_names: std::collections::BTreeSet<String> = expansions
+            .by_slot
+            .values()
+            .flat_map(|scoped| scoped.schema_wide.iter().chain(scoped.by_class.values()))
+            .cloned()
+            .collect();
         let mut loader = LinkmlLoader {
             schema,
             instances: Vec::new(),
@@ -479,8 +521,10 @@ impl InstanceSet {
             top_level_seen: std::collections::HashSet::new(),
             duplicate_ids: Vec::new(),
             undeclared_fields: Vec::new(),
-            expansions: crate::diagnostics::expansion_bindings(schema),
+            expansions,
             expansion_gaps: Vec::new(),
+            expand_base_names,
+            expand_scope: Vec::new(),
             effective_slots_by_class: std::collections::BTreeMap::new(),
             unusable_entries: Vec::new(),
             current_holder: None,
@@ -510,6 +554,14 @@ impl InstanceSet {
         // `build_record` owns gap reporting; a vessel root's bare value
         // with no usable base stays as authored here, silently — dataset
         // description, not record data.
+        let root_frame = loader.expand_frame(
+            authored_root_id.as_deref().unwrap_or(root_name),
+            container,
+            &root_resolved,
+            None,
+            None,
+        );
+        loader.expand_scope.push(root_frame);
         let root_expansions = loader.expansions.clone();
         let root_types = [root_name.to_string()];
         let expand_root = |slot_name: &str, scalar: ScalarValue| -> ScalarValue {
@@ -517,9 +569,9 @@ impl InstanceSet {
                 (Some(base_slot), ScalarValue::String(bare))
                     if !bare.is_empty() && !bare.contains(':') =>
                 {
-                    match base_from_mapping(container, base_slot, None, None).resolved {
-                        Ok(base) => ScalarValue::String(format!("{base}{bare}")),
-                        Err(_) => ScalarValue::String(bare),
+                    match base_from_mapping(container, base_slot, None, None) {
+                        OwnBase::Value(base) => ScalarValue::String(format!("{base}{bare}")),
+                        _ => ScalarValue::String(bare),
                     }
                 }
                 (_, scalar) => scalar,
@@ -900,6 +952,14 @@ struct LinkmlLoader<'a> {
     /// The schema's `expand_against` declarations, read once per dataset.
     expansions: crate::diagnostics::ExpansionBindings,
     expansion_gaps: Vec<ExpansionGap>,
+    /// The declared base-slot names, computed once — frames snapshot
+    /// only these, so a record supplying none carries an empty frame
+    /// for free.
+    expand_base_names: std::collections::BTreeSet<String>,
+    /// Expansion frames of the records containing the one being built,
+    /// outermost first — a record that supplies no base of its own
+    /// resolves it from the nearest containing record that does.
+    expand_scope: Vec<ExpandFrame>,
     /// Each class's effective slots, resolved with provenance once per
     /// dataset — record building and every per-class fact (key matching,
     /// SimpleDict admission, the type designator) project from this one
@@ -1002,7 +1062,18 @@ impl LinkmlLoader<'_> {
             .expansions
             .governing(&[root_class.to_string()], slot)?
             .clone();
-        let expand = Some(base_from_mapping(container, &base_slot, None, None));
+        // The root is the outermost record: there is no containing record
+        // left to consult, so absence is already the whole chain's answer.
+        let resolved = match base_from_mapping(container, &base_slot, None, None) {
+            OwnBase::Value(base) => Ok(base),
+            OwnBase::Unusable(reason) => Err(reason),
+            OwnBase::Absent => Err("no value (nor does any containing record)"),
+        };
+        let expand = Some(ExpandBase {
+            base_slot: base_slot.as_str(),
+            supplied_by: None,
+            resolved,
+        });
         match value {
             serde_norway::Value::String(text) => self
                 .expand_bare(expand, slot, record, text, true)
@@ -1050,6 +1121,58 @@ impl LinkmlLoader<'_> {
         }
     }
 
+    /// Build one record's expansion frame: candidates for the declared
+    /// base slots its resolved class view carries as scalars, with the
+    /// dict-key identifier standing in exactly as it does for the
+    /// record's own resolution.
+    fn expand_frame(
+        &self,
+        record: &str,
+        map: &serde_norway::Mapping,
+        resolved: &std::collections::BTreeMap<String, crate::linkml_resolve::ResolvedSlot>,
+        dict_key: Option<&str>,
+        id_slot: Option<&str>,
+    ) -> ExpandFrame {
+        let mut bases = std::collections::BTreeMap::new();
+        for name in &self.expand_base_names {
+            let Some(rs) = resolved.get(name) else {
+                continue;
+            };
+            if rs
+                .effective_ranges()
+                .iter()
+                .any(|r| self.schema.classes.contains_key(*r))
+            {
+                continue;
+            }
+            match base_from_mapping(map, name, dict_key, id_slot) {
+                OwnBase::Value(base) => {
+                    bases.insert(name.clone(), Ok(base.to_string()));
+                }
+                OwnBase::Unusable(reason) => {
+                    bases.insert(name.clone(), Err(reason));
+                }
+                OwnBase::Absent => {}
+            }
+        }
+        ExpandFrame {
+            record: record.to_string(),
+            bases,
+        }
+    }
+
+    /// The nearest containing record's candidate for `base_slot` — and
+    /// its id, so the finding can name it — skipping the record
+    /// currently being built (whose own mapping was already consulted).
+    fn containing_base(&self, base_slot: &str) -> Option<(String, Result<String, &'static str>)> {
+        self.expand_scope.iter().rev().skip(1).find_map(|frame| {
+            frame
+                .bases
+                .get(base_slot)
+                .map(|candidate| (frame.record.clone(), candidate.clone()))
+        })
+    }
+
     fn note_expansion_gap(
         &mut self,
         record: &str,
@@ -1062,6 +1185,25 @@ impl LinkmlLoader<'_> {
             slot: slot.to_string(),
             base_slot: base_slot.to_string(),
             kind,
+            supplied_by: None,
+        });
+    }
+
+    /// Record a gap whose base came through the containment walk: the
+    /// finding carries the supplying record's id.
+    fn note_supplied_gap(
+        &mut self,
+        record: &str,
+        slot: &str,
+        expand: ExpandBase,
+        kind: ExpansionGapKind,
+    ) {
+        self.expansion_gaps.push(ExpansionGap {
+            record: record.to_string(),
+            slot: slot.to_string(),
+            base_slot: expand.base_slot.to_string(),
+            kind,
+            supplied_by: expand.supplied_by.map(str::to_string),
         });
     }
 
@@ -1086,10 +1228,10 @@ impl LinkmlLoader<'_> {
         }
         match expand.resolved {
             Err(reason) => {
-                self.note_expansion_gap(
+                self.note_supplied_gap(
                     record,
                     slot,
-                    expand.base_slot,
+                    expand,
                     ExpansionGapKind::UnusableBase(reason),
                 );
                 None
@@ -1097,10 +1239,10 @@ impl LinkmlLoader<'_> {
             Ok(base) => {
                 let expanded = format!("{base}{text}");
                 if require_external && !points_outside_dataset(self.schema, &expanded) {
-                    self.note_expansion_gap(
+                    self.note_supplied_gap(
                         record,
                         slot,
-                        expand.base_slot,
+                        expand,
                         ExpansionGapKind::UnusableBase("a base that does not form an absolute IRI"),
                     );
                     None
@@ -1706,6 +1848,8 @@ impl LinkmlLoader<'_> {
         let mut references: Vec<Reference> = Vec::new();
         let mut slot_values: Vec<SlotValue> = Vec::new();
         let previous_holder = self.current_holder.replace(id.clone());
+        let frame = self.expand_frame(&id, map, &resolved, dict_key, id_slot.as_deref());
+        self.expand_scope.push(frame);
         let types_of_record = [class_name.to_string()];
         for (field_key, field_value) in map {
             let Some(field) = field_key.as_str() else {
@@ -1752,9 +1896,35 @@ impl LinkmlLoader<'_> {
             let governed_base: Option<String> = slot
                 .and(self.expansions.governing(&types_of_record, field))
                 .cloned();
-            let expand = governed_base
-                .as_deref()
-                .map(|base_slot| base_from_mapping(map, base_slot, dict_key, id_slot.as_deref()));
+            let mut container_base: Option<String> = None;
+            let mut supplier: Option<String> = None;
+            let expand = governed_base.as_deref().map(|base_slot| {
+                let (supplied_by, resolved) =
+                    match base_from_mapping(map, base_slot, dict_key, id_slot.as_deref()) {
+                        OwnBase::Value(base) => (None, Ok(base)),
+                        OwnBase::Unusable(reason) => (None, Err(reason)),
+                        // The record supplies nothing itself: the nearest
+                        // containing record that carries the base speaks
+                        // for it — a benchmark states its target once,
+                        // above its questions — and a finding names it
+                        // when what it said was unusable.
+                        OwnBase::Absent => match self.containing_base(base_slot) {
+                            Some((who, candidate)) => (
+                                Some(supplier.insert(who).as_str()),
+                                match candidate {
+                                    Ok(value) => Ok(container_base.insert(value).as_str()),
+                                    Err(reason) => Err(reason),
+                                },
+                            ),
+                            None => (None, Err("no value (nor does any containing record)")),
+                        },
+                    };
+                ExpandBase {
+                    base_slot,
+                    supplied_by,
+                    resolved,
+                }
+            });
             self.ingest_field(
                 field,
                 &ranges,
@@ -1768,6 +1938,7 @@ impl LinkmlLoader<'_> {
                 &mut slot_values,
             );
         }
+        self.expand_scope.pop();
         self.current_holder = previous_holder;
         // An identifier supplied as an identifier-keyed collection's map key is
         // an authored value too — record it so a validator sees it present.
@@ -2259,18 +2430,26 @@ mod tests {
         )
         .expect("data");
         let set = InstanceSet::from_linkml_data(&schema, &data);
-        let reasons: Vec<(&str, ExpansionGapKind)> = set
+        let reasons: Vec<(&str, ExpansionGapKind, Option<&str>)> = set
             .expansion_gaps
             .iter()
-            .map(|g| (g.record.as_str(), g.kind.clone()))
+            .map(|g| (g.record.as_str(), g.kind.clone(), g.supplied_by.as_deref()))
             .collect();
         assert_eq!(
             reasons,
             vec![
-                ("q_empty", ExpansionGapKind::UnusableBase("an empty value")),
-                ("q_null", ExpansionGapKind::UnusableBase("no value")),
+                (
+                    "q_empty",
+                    ExpansionGapKind::UnusableBase("an empty value"),
+                    None,
+                ),
+                (
+                    "q_null",
+                    ExpansionGapKind::UnusableBase("no value (nor does any containing record)"),
+                    None,
+                ),
             ],
-            "an empty base is unusable and a null base is absent"
+            "the record's own defect and an exhausted chain name no supplier"
         );
     }
 
@@ -2338,7 +2517,9 @@ mod tests {
                 .iter()
                 .map(|g| g.kind.clone())
                 .collect::<Vec<_>>(),
-            vec![ExpansionGapKind::UnusableBase("no value")],
+            vec![ExpansionGapKind::UnusableBase(
+                "no value (nor does any containing record)"
+            )],
             "the absent non-identifier base gaps; the dict key does not stand in"
         );
     }
@@ -2595,8 +2776,11 @@ mod tests {
                 .iter()
                 .map(|g| (g.record.as_str(), g.kind.clone()))
                 .collect::<Vec<_>>(),
-            vec![("b1", ExpansionGapKind::UnusableBase("no value"))],
-            "the root record owns its gap"
+            vec![(
+                "b1",
+                ExpansionGapKind::UnusableBase("no value (nor does any containing record)")
+            )],
+            "the root record owns its gap, worded as the exhausted chain it is"
         );
     }
 
@@ -2636,6 +2820,248 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![("expected_anchors", ExpansionGapKind::InlineRecord)],
             "the dict-spelled inline record is one finding"
+        );
+    }
+
+    /// A benchmark states its base once and holds many questions: a
+    /// record that supplies no base of its own resolves it from the
+    /// nearest containing record that does, so anchors on nested
+    /// records expand against the container's declared namespace.
+    #[test]
+    fn a_nested_records_base_resolves_from_its_container() {
+        let schema: SchemaDefinition = serde_norway::from_str(
+            "id: https://example.org/cqa\nname: cqa\ndefault_range: string\nclasses:\n  \
+             Benchmark:\n    tree_root: true\n    slots: [id, target_schema, questions]\n  \
+             CompetencyQuestionAnswer:\n    slots: [id, expected_anchors]\n  DomainRecord:\n    \
+             slots: [id]\nslots:\n  id: {identifier: true}\n  target_schema: {range: uri}\n  \
+             questions: {range: CompetencyQuestionAnswer, multivalued: true}\n  \
+             expected_anchors:\n    range: DomainRecord\n    multivalued: true\n    \
+             annotations:\n      expand_against: target_schema\n",
+        )
+        .expect("schema");
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: b1\ntarget_schema: https://ns.example/wine/\nquestions:\n  - id: q1\n    \
+             expected_anchors: [cabernet, cat:aws]\n",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        let q1 = set.instances.iter().find(|i| i.id == "q1").expect("q1");
+        assert!(
+            q1.references
+                .iter()
+                .any(|r| r.target == "https://ns.example/wine/cabernet" && r.external),
+            "the question's bare anchor expands against the benchmark's base; got: {:?}",
+            q1.references
+        );
+        assert!(
+            set.expansion_gaps.is_empty(),
+            "got: {:?}",
+            set.expansion_gaps
+        );
+    }
+
+    /// The record's own base wins over a container's, and a base absent
+    /// at every level is one gap saying so.
+    #[test]
+    fn the_nearest_base_wins_and_a_baseless_chain_gaps_once() {
+        let schema: SchemaDefinition = serde_norway::from_str(
+            "id: https://example.org/cqa\nname: cqa\ndefault_range: string\nclasses:\n  \
+             Benchmark:\n    tree_root: true\n    slots: [id, target_schema, questions]\n  \
+             CompetencyQuestionAnswer:\n    slots: [id, target_schema, expected_anchors]\n  \
+             DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  target_schema: \
+             {range: uri}\n  questions: {range: CompetencyQuestionAnswer, multivalued: true}\n  \
+             expected_anchors:\n    range: DomainRecord\n    multivalued: true\n    \
+             annotations:\n      expand_against: target_schema\n",
+        )
+        .expect("schema");
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: b1\ntarget_schema: https://outer.example/\nquestions:\n  - id: q_own\n    \
+             target_schema: https://inner.example/\n    expected_anchors: [cabernet]\n",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        let q = set
+            .instances
+            .iter()
+            .find(|i| i.id == "q_own")
+            .expect("q_own");
+        assert!(
+            q.references
+                .iter()
+                .any(|r| r.target == "https://inner.example/cabernet"),
+            "the record's own base wins over the container's; got: {:?}",
+            q.references
+        );
+
+        let bare: serde_norway::Value = serde_norway::from_str(
+            "id: b2\nquestions:\n  - id: q_none\n    expected_anchors: [merlot]\n",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &bare);
+        assert_eq!(
+            set.expansion_gaps
+                .iter()
+                .map(|g| (g.record.as_str(), g.kind.clone()))
+                .collect::<Vec<_>>(),
+            vec![(
+                "q_none",
+                ExpansionGapKind::UnusableBase("no value (nor does any containing record)")
+            )],
+            "a chain with no base anywhere is one gap naming the whole chain"
+        );
+    }
+
+    /// The containment walk reads each ancestor's base candidate for
+    /// what it is: a null is absent and the walk continues past it, a
+    /// list or an empty string is present-but-unusable and stops the
+    /// walk with its own reason.
+    #[test]
+    fn the_containment_walk_classifies_each_ancestors_base() {
+        let schema: SchemaDefinition = serde_norway::from_str(
+            "id: https://example.org/cqa\nname: cqa\ndefault_range: string\nclasses:\n  \
+             Benchmark:\n    tree_root: true\n    slots: [id, target_schema, sections]\n  \
+             Section:\n    slots: [id, target_schema, questions]\n  \
+             CompetencyQuestionAnswer:\n    slots: [id, expected_anchors]\n  DomainRecord:\n    \
+             slots: [id]\nslots:\n  id: {identifier: true}\n  target_schema: {range: uri}\n  \
+             sections: {range: Section, multivalued: true}\n  questions: {range: \
+             CompetencyQuestionAnswer, multivalued: true}\n  expected_anchors:\n    range: \
+             DomainRecord\n    multivalued: true\n    annotations:\n      expand_against: \
+             target_schema\n",
+        )
+        .expect("schema");
+        let load = |data: &str| {
+            let data: serde_norway::Value = serde_norway::from_str(data).expect("data");
+            InstanceSet::from_linkml_data(&schema, &data)
+        };
+
+        // A null mid-chain is absence: the walk continues to the root's base.
+        let set = load(
+            "id: b1\ntarget_schema: https://outer.example/\nsections:\n  - id: s1\n    \
+             target_schema: null\n    questions:\n      - id: q1\n        expected_anchors: [cabernet]\n",
+        );
+        let q1 = set.instances.iter().find(|i| i.id == "q1").expect("q1");
+        assert!(
+            q1.references
+                .iter()
+                .any(|r| r.target == "https://outer.example/cabernet"),
+            "a null base mid-chain is absence, not a stop; got: {:?}",
+            q1.references
+        );
+        assert!(
+            set.expansion_gaps.is_empty(),
+            "got: {:?}",
+            set.expansion_gaps
+        );
+
+        // A list where the base should be stops the walk with its reason.
+        let set = load(
+            "id: b1\ntarget_schema: [https://a.example/, https://b.example/]\nsections:\n  - id: \
+             s1\n    questions:\n      - id: q1\n        expected_anchors: [cabernet]\n",
+        );
+        assert_eq!(
+            set.expansion_gaps
+                .iter()
+                .map(|g| (g.kind.clone(), g.supplied_by.as_deref()))
+                .collect::<Vec<_>>(),
+            vec![(
+                ExpansionGapKind::UnusableBase("a list where a single value is needed"),
+                Some("b1")
+            )],
+            "a present-but-list ancestor base is the reported defect, naming its supplier"
+        );
+
+        // An empty string cannot expand anything, silently least of all.
+        let set = load(
+            "id: b1\ntarget_schema: \"\"\nsections:\n  - id: s1\n    questions:\n      - id: \
+             q1\n        expected_anchors: [cabernet]\n",
+        );
+        assert_eq!(
+            set.expansion_gaps
+                .iter()
+                .map(|g| (g.kind.clone(), g.supplied_by.as_deref()))
+                .collect::<Vec<_>>(),
+            vec![(ExpansionGapKind::UnusableBase("an empty value"), Some("b1"))],
+            "a present-but-empty ancestor base is the reported defect, naming its supplier"
+        );
+    }
+
+    /// A containing record supplied as a dict-keyed collection entry
+    /// authors its identifier as the key: the walk reads that key as
+    /// the record's base exactly as the record's own resolution would,
+    /// so descendants expand against it.
+    #[test]
+    fn a_containing_dict_keys_identifier_supplies_the_base() {
+        let schema: SchemaDefinition = serde_norway::from_str(
+            "id: https://example.org/cqa\nname: cqa\ndefault_range: string\nclasses:\n  \
+             Bench:\n    tree_root: true\n    attributes:\n      id: {identifier: true}\n      \
+             sections: {range: Section, multivalued: true, inlined: true}\n  Section:\n    \
+             attributes:\n      target_schema: {identifier: true, range: uri}\n      questions: \
+             {range: Question, multivalued: true, inlined: true}\n  Question:\n    \
+             attributes:\n      id: {identifier: true}\n      expected_anchors:\n        range: \
+             DomainRecord\n        multivalued: true\n        annotations:\n          \
+             expand_against: target_schema\n  DomainRecord:\n    attributes:\n      id: \
+             {identifier: true}\n",
+        )
+        .expect("schema");
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: b1\nsections:\n  https://ns.example/wine/:\n    questions:\n      - id: \
+             q1\n        expected_anchors: [cabernet]\n",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            set.expansion_gaps.is_empty(),
+            "got: {:?}",
+            set.expansion_gaps
+        );
+        let q1 = set.instances.iter().find(|i| i.id == "q1").expect("q1");
+        assert!(
+            q1.references
+                .iter()
+                .any(|r| r.target == "https://ns.example/wine/cabernet"),
+            "the dict key is the section's identifier base; got: {:?}",
+            q1.references
+        );
+    }
+
+    /// Only a slot a containing record's class carries can supply a
+    /// base through the walk: a stray same-named field on an ancestor
+    /// is undeclared data, and the chain reads as exhausted.
+    #[test]
+    fn a_containing_records_stray_field_is_no_base() {
+        let schema: SchemaDefinition = serde_norway::from_str(
+            "id: https://example.org/cqa\nname: cqa\ndefault_range: string\nclasses:\n  \
+             Bench:\n    tree_root: true\n    slots: [id, questions]\n  Question:\n    slots: \
+             [id, target_schema, expected_anchors]\n  DomainRecord:\n    slots: [id]\nslots:\n  \
+             id: {identifier: true}\n  questions: {range: Question, multivalued: true}\n  \
+             target_schema: {range: uri}\n  expected_anchors:\n    range: DomainRecord\n    \
+             multivalued: true\n    annotations:\n      expand_against: target_schema\n",
+        )
+        .expect("schema");
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: b1\ntarget_schema: https://ns.example/wine/\nquestions:\n  - id: q1\n    \
+             expected_anchors: [cabernet]\n",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert_eq!(
+            set.expansion_gaps
+                .iter()
+                .map(|g| (g.record.as_str(), g.kind.clone()))
+                .collect::<Vec<_>>(),
+            vec![(
+                "q1",
+                ExpansionGapKind::UnusableBase("no value (nor does any containing record)")
+            )],
+            "the root's undeclared field does not feed the walk"
+        );
+        let q1 = set.instances.iter().find(|i| i.id == "q1").expect("q1");
+        assert!(
+            !q1.references
+                .iter()
+                .any(|r| r.target == "https://ns.example/wine/cabernet"),
+            "no expansion happened; got: {:?}",
+            q1.references
         );
     }
 

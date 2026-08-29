@@ -1351,6 +1351,36 @@ pub fn expansion_declarations(
         family
     };
 
+    // Which classes' records can contain a record of each class: every
+    // class-ranged site makes the ranged family's members containable
+    // by the site's class. The loader walks the authored containment
+    // chain, so the static question for a base is whether some class on
+    // a containment path to the governed class carries it as a scalar.
+    let mut containers_of: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
+        std::collections::BTreeMap::new();
+    for ((site_class, _), ranges) in &site_class_ranges {
+        for r in ranges {
+            for member in family_of(r) {
+                containers_of
+                    .entry(member)
+                    .or_default()
+                    .insert(site_class.clone());
+            }
+        }
+    }
+    let reach_of = |class: &str| -> std::collections::BTreeSet<String> {
+        let mut reach: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut stack = vec![class.to_string()];
+        while let Some(current) = stack.pop() {
+            if reach.insert(current.clone())
+                && let Some(ups) = containers_of.get(&current)
+            {
+                stack.extend(ups.iter().cloned());
+            }
+        }
+        reach
+    };
+
     // Stage one: defects a declaration owns outright — an uncarried slot
     // or base (reported in that order), or a range class whose family
     // holds a `tree_root` (its records are document roots, no ranging
@@ -1363,15 +1393,9 @@ pub fn expansion_declarations(
     }
     let mut candidates: Vec<Candidate> = Vec::new();
     for (scope, slot, base) in &declared {
-        let (slot_ok, base_ok) = match scope {
-            Some(class) => (
-                carried_pairs.contains(&(class.clone(), slot.clone())),
-                carried_pairs.contains(&(class.clone(), base.clone())),
-            ),
-            None => (
-                carried.contains(slot.as_str()),
-                carried.contains(base.as_str()),
-            ),
+        let slot_ok = match scope {
+            Some(class) => carried_pairs.contains(&(class.clone(), slot.clone())),
+            None => carried.contains(slot.as_str()),
         };
         if !slot_ok {
             issues.push(ExpansionDeclarationIssue {
@@ -1388,17 +1412,55 @@ pub fn expansion_declarations(
             });
             continue;
         }
-        if !base_ok {
+        if declared.iter().any(|(_, s, _)| s == base) {
             issues.push(ExpansionDeclarationIssue {
                 slot: slot.clone(),
-                detail: match scope {
-                    Some(class) => format!(
-                        "`{base}` is not a slot class `{class}` carries, so its records \
-                         cannot supply it"
-                    ),
-                    None => {
-                        format!("`{base}` is not a slot of any class, so no record can supply it")
+                detail: format!(
+                    "`{base}` itself declares `expand_against` — a base is read as \
+                     authored, so expansions cannot chain through it"
+                ),
+            });
+            continue;
+        }
+        // The base must be resolvable at load: carried as a scalar by
+        // the governed class or by some class whose records can contain
+        // one, since those are exactly the mappings the containment walk
+        // consults. A class-ranged carrier holds references, not a
+        // namespace string, so it cannot satisfy this.
+        let governed_classes: Vec<&String> = match scope {
+            Some(class) => vec![class],
+            None => carried_pairs
+                .iter()
+                .filter(|(_, s)| s == slot)
+                .map(|(c, _)| c)
+                .collect(),
+        };
+        let mut reachable_carrier = false;
+        let mut scalar_reachable = false;
+        for class in &governed_classes {
+            for within in reach_of(class) {
+                if carried_pairs.contains(&(within.clone(), base.clone())) {
+                    reachable_carrier = true;
+                    if !site_class_ranges.contains_key(&(within.clone(), base.clone())) {
+                        scalar_reachable = true;
                     }
+                }
+            }
+        }
+        if !scalar_reachable {
+            issues.push(ExpansionDeclarationIssue {
+                slot: slot.clone(),
+                detail: if reachable_carrier {
+                    format!(
+                        "`{base}` resolves class-ranged everywhere a record could supply \
+                         it — its values are references, not a namespace string"
+                    )
+                } else {
+                    format!(
+                        "`{base}` is not a slot of the governed class nor of any class \
+                         whose records can contain one, so no containment walk can \
+                         supply it"
+                    )
                 },
             });
             continue;
@@ -4111,6 +4173,92 @@ mod tests {
                 .iter()
                 .any(|i| i.slot == "orphan" && i.detail.contains("no class carries")),
             "the uncarried slot is named; got: {issues:?}"
+        );
+    }
+
+    /// The static base check follows containment: a base carried only
+    /// by a class no containment path from the governed class reaches
+    /// can never be supplied, while the same base on a containing
+    /// class binds.
+    #[test]
+    fn an_unreachable_base_is_refused_at_load() {
+        let unreachable = parse(
+            "id: https://example.org/t\nname: t\nclasses:\n  Bench:\n    tree_root: true\n    \
+             slots: [id, questions]\n  Question:\n    slots: [id, expected_anchors]\n  \
+             Elsewhere:\n    slots: [far_base]\n  DomainRecord:\n    slots: [id]\nslots:\n  \
+             id: {identifier: true}\n  questions: {range: Question, multivalued: true}\n  \
+             far_base: {range: uri}\n  expected_anchors:\n    range: DomainRecord\n    \
+             multivalued: true\n    annotations:\n      expand_against: far_base\n",
+        );
+        let (bindings, issues) = expansion_declarations(&unreachable);
+        assert!(bindings.is_empty(), "an unreachable base does not bind");
+        assert!(
+            issues.iter().any(|i| i.slot == "expected_anchors"
+                && i.detail.contains("no containment walk can supply it")),
+            "the unreachable base is refused; got: {issues:?}"
+        );
+
+        let reachable = parse(
+            "id: https://example.org/t\nname: t\nclasses:\n  Bench:\n    tree_root: true\n    \
+             slots: [id, far_base, questions]\n  Question:\n    slots: [id, expected_anchors]\n  \
+             DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  questions: \
+             {range: Question, multivalued: true}\n  far_base: {range: uri}\n  \
+             expected_anchors:\n    range: DomainRecord\n    multivalued: true\n    \
+             annotations:\n      expand_against: far_base\n",
+        );
+        let (bindings, issues) = expansion_declarations(&reachable);
+        assert!(
+            bindings
+                .governing(&["Question".to_string()], "expected_anchors")
+                .is_some(),
+            "a base on the containing class binds; got: {issues:?}"
+        );
+    }
+
+    /// A base that itself declares `expand_against` is refused: a base
+    /// is read as authored, so expansions cannot chain through it.
+    #[test]
+    fn a_base_that_itself_expands_is_refused() {
+        let schema = parse(
+            "id: https://example.org/t\nname: t\nclasses:\n  Bench:\n    slots: [id, \
+             target_schema, other_base, expected_anchors]\nslots:\n  id: {identifier: true}\n  \
+             other_base: {range: uri}\n  target_schema:\n    range: uri\n    annotations:\n      \
+             expand_against: other_base\n  expected_anchors:\n    range: uri\n    multivalued: \
+             true\n    annotations:\n      expand_against: target_schema\n",
+        );
+        let (bindings, issues) = expansion_declarations(&schema);
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.slot == "expected_anchors" && i.detail.contains("cannot chain")),
+            "the chained declaration is refused; got: {issues:?}"
+        );
+        assert!(
+            bindings
+                .governing(&["Bench".to_string()], "target_schema")
+                .is_some(),
+            "the base's own declaration, whose base is plain, still binds"
+        );
+    }
+
+    /// A base that resolves class-ranged everywhere it could be
+    /// supplied is refused: its values are references, not a namespace
+    /// string.
+    #[test]
+    fn a_class_ranged_base_is_refused() {
+        let schema = parse(
+            "id: https://example.org/t\nname: t\nclasses:\n  Bench:\n    slots: [id, primary, \
+             expected_anchors]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: \
+             true}\n  primary: {range: DomainRecord}\n  expected_anchors:\n    range: uri\n    \
+             multivalued: true\n    annotations:\n      expand_against: primary\n",
+        );
+        let (bindings, issues) = expansion_declarations(&schema);
+        assert!(bindings.is_empty(), "a class-ranged base does not bind");
+        assert!(
+            issues.iter().any(|i| i.slot == "expected_anchors"
+                && i.detail.contains("class-ranged")
+                && i.detail.contains("references")),
+            "the class-ranged base is refused with its reason; got: {issues:?}"
         );
     }
 

@@ -135,8 +135,20 @@ RDF must carry them (see Open Questions for the vocabulary).
       named slot on the same record concatenated with the bare value.
 - [x] Absolute IRIs and CURIEs against declared prefixes at the same
       slot are unchanged.
-- [x] A record with no value at the named base slot leaves its bare
-      values unexpanded and warns.
+- [x] A record with no base of its own resolves it from the nearest
+      containing record that carries one — a benchmark states its
+      target once, above its questions — with the record's own value
+      winning when both exist. Only slots the containing record's class
+      carries as scalars can supply a base (a stray same-named field
+      cannot), and a dict-keyed record's identifier key counts as its
+      authored value here as everywhere.
+- [x] A record whose nearest carried base is unusable warns naming the
+      containing record that supplied it; a chain that supplies no
+      usable base at all leaves the bare values unexpanded and warns
+      that no containing record carries one. A base the containment
+      structure can never supply — uncarried along any containment path
+      to the governed class, only class-ranged there, or itself
+      declared `expand_against` — is refused at load instead.
 - [x] A class-ranged slot's declaration binds exactly when no local
       record of its range class can exist — every site ranging the class
       is itself declared external; while any is not (a `tree_root`
@@ -231,6 +243,12 @@ RDF must carry them (see Open Questions for the vocabulary).
   expansion rather than minting a phantom in-dataset name; inline
   records at a bound slot are one validation finding per claiming
   record and slot, whatever the authoring spelling.
+- The static base check mirrors the runtime walk: the containment
+  graph is read from the same resolved class-ranged sites (with `is_a`
+  family widening) the loader uses, so a base the walk could never
+  reach refuses at load rather than gapping record by record. Chained
+  bases refuse because frames carry raw authored values — a governed
+  base's own expansion would otherwise read differently by path.
 - A parent-declared class-scoped annotation is blocked by its
   subclasses' sites (governance does not propagate to subclasses yet) —
   conservative by intent: it fails closed.

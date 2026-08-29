@@ -438,11 +438,18 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
     // usable, so the values were read as authored.
     for g in &set.expansion_gaps {
         let detail = match &g.kind {
-            crate::instances::ExpansionGapKind::UnusableBase(reason) => format!(
-                "slot `{}` expands against `{}`, but this record supplies {reason} there; \
-                 its bare values were read as authored",
-                g.slot, g.base_slot
-            ),
+            crate::instances::ExpansionGapKind::UnusableBase(reason) => match &g.supplied_by {
+                Some(who) => format!(
+                    "slot `{}` expands against `{}`, but the containing record `{who}` \
+                     supplies {reason} there; the bare values were read as authored",
+                    g.slot, g.base_slot
+                ),
+                None => format!(
+                    "slot `{}` expands against `{}`, but this record supplies {reason} there; \
+                     its bare values were read as authored",
+                    g.slot, g.base_slot
+                ),
+            },
             crate::instances::ExpansionGapKind::InlineRecord => format!(
                 "slot `{}` declares its values expand into an external namespace (against \
                  `{}`), but this record authors an inline record there",
@@ -2507,6 +2514,34 @@ classes:
         assert!(
             v.iter().all(|x| x.detail.contains("rule `#1`")),
             "an untitled rule falls back to its 1-based position; got: {v:?}"
+        );
+    }
+
+    /// A gap whose defective base came from a containing record names
+    /// that record, sending the author to the line that must change.
+    #[test]
+    fn an_expansion_gap_names_the_containing_record_that_supplied_the_base() {
+        let schema: crate::linkml::SchemaDefinition = serde_norway::from_str(
+            "id: https://example.org/cqa\nname: cqa\ndefault_range: string\nclasses:\n  \
+             Bench:\n    tree_root: true\n    slots: [id, target_schema, questions]\n  \
+             Question:\n    slots: [id, expected_anchors]\n  DomainRecord:\n    slots: \
+             [id]\nslots:\n  id: {identifier: true}\n  target_schema: {range: uri}\n  \
+             questions: {range: Question, multivalued: true}\n  expected_anchors:\n    range: \
+             DomainRecord\n    multivalued: true\n    annotations:\n      expand_against: \
+             target_schema\n",
+        )
+        .expect("schema");
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: b1\ntarget_schema: [https://a.example/, https://b.example/]\nquestions:\n  - \
+             id: q1\n    expected_anchors: [cabernet]\n",
+        )
+        .expect("data");
+        let v = validate_instance_data(&schema, &data);
+        assert!(
+            v.iter().any(|x| x.record == "q1"
+                && x.detail
+                    .contains("the containing record `b1` supplies a list")),
+            "the finding names the supplying record; got: {v:?}"
         );
     }
 
