@@ -155,7 +155,9 @@ impl SampleData {
 #[derive(Template)]
 #[template(path = "components/header.html")]
 pub struct HeaderComponent<'a> {
-    pub title: &'a str,
+    /// The brand link's text. The styleguide has no site above it, so
+    /// the brand carries the page title.
+    pub site_title: &'a str,
     /// Matches the field on the main `IndexTemplate`. The styleguide
     /// renders without a version cohort, so this is always `None` here.
     pub version_context: Option<&'a panschema::html_writer::VersionContext>,
@@ -401,6 +403,8 @@ pub struct SampleIndividual<'a> {
 #[template(path = "styleguide.html")]
 pub struct StyleGuideTemplate<'a> {
     pub title: &'a str,
+    /// Matches IndexTemplate. The styleguide brands with its own title.
+    pub site_title: &'a str,
     pub iri: &'a str,
     pub version: Option<&'a str>,
     pub comment: Option<&'a str>,
@@ -446,7 +450,7 @@ impl ComponentRenderer {
     /// Render the header component.
     pub fn header(title: &str) -> anyhow::Result<String> {
         let template = HeaderComponent {
-            title,
+            site_title: title,
             version_context: None,
             page_links: &[],
             site_root_href: "./",
@@ -874,6 +878,7 @@ impl ComponentRenderer {
 
         let template = StyleGuideTemplate {
             title: &data.title,
+            site_title: &data.title,
             iri: &data.iri,
             version: data.version.as_deref(),
             comment: data.comment.as_deref(),

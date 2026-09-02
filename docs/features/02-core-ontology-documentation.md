@@ -231,7 +231,7 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 
 **Acceptance Criteria:**
 - [x] `panschema generate` (single-version) emits `<a href="./" class="site-title">` — page lives at the output root, `./` is the deploy root.
-- [x] `panschema publish` (versioned) emits the brand link from a manifest field `[publishing].site_root_url`. Default `"../current/"`; the value is forwarded verbatim into each per-version page.
+- [x] `panschema publish` (versioned) emits the brand link from a manifest field `[publishing].site_root_url`. Default `"../current/"`; the main page receives the value as authored, and a dependency page re-bases a relative override by its extra directory depth.
 - [x] Audit `panschema/templates/**` for any other `href="/..."` or `src="/..."` absolute-URL emissions. Each finding is either (a) routed through a configurable / depth-aware mechanism or (b) explicitly justified in a comment.
 - [x] Unit tests assert: (i) the default `site_root_url` (`../current/`) renders on each per-version page; (ii) a user-supplied override (`../../`) survives verbatim to the rendered HTML; (iii) a single-version page emits `./`.
 

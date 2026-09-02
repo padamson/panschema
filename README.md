@@ -219,14 +219,31 @@ skips the page at that ref with the mismatch named. (`path:` dependencies
 carry no pin and always resolve from the working tree.) Naming a
 dependency the manifest doesn't declare fails the publish.
 
-One sizing note: dependency pages sit one directory deeper than the main
-page, so the parent-relative defaults for `url_pattern` and
-`site_root_url` resolve correctly on every page, but an absolute
-`url_pattern` (like `/docs/{version}/`) or a depth-sensitive
-`site_root_url` override (like `../../`) targets the main page's depth
-only, and the header's cross-page nav likewise assumes the
-parent-relative layout. Keep the defaults when publishing dependency
-pages; per-page overrides can follow if a site needs them.
+One sizing note: dependency pages sit one directory deeper than the
+main page. The parent-relative defaults for `url_pattern` and
+`site_root_url` resolve correctly on every page, and a relative
+`site_root_url` override (like `../../`, escaping into a containing
+book) is re-based per page — a dependency page adds the extra `../`
+its depth needs — while root-relative and scheme-carrying values pass
+through unchanged. A relative override must climb (begin with `../`);
+anything else resolves somewhere different on every page and is
+refused at parse. An overridden `url_pattern`, by contrast, still
+targets the main page's depth only — a dependency page's version
+dropdown navigates that page's own version tree — so keep the
+`url_pattern` default when publishing dependency pages; per-page URL
+overrides can follow if a site needs them.
+
+When a parent site fronts the pages, `site_title` names it: the header
+brand link on every page — the main page and each dependency page —
+carries that one site identity instead of each page's schema title,
+while each page's heading and browser title keep the schema. Pair it
+with a `site_root_url` override so the brand's text and target agree:
+
+```toml
+[publishing]
+site_title = "Building wine"     # default: each page's schema title
+site_root_url = "../../"         # the containing site's root
+```
 
 Once a site publishes more than one page, every page's header gains a
 small nav listing the site's pages by schema name, with the page you

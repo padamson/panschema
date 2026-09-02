@@ -167,10 +167,15 @@ without knowing the URL scheme.
   unparseable manifest at the ref) is distinguished from one not yet
   declared: its note carries the resolver's message, including the
   `panschema fetch` remedy for a cold cache.
-- `url_pattern` and `site_root_url` are site-level; their
-  parent-relative defaults are depth-correct on every page, but
-  absolute or depth-sensitive overrides target the own page's depth.
-  Per-page URL overrides wait for a consumer who needs them.
+- `url_pattern` and `site_root_url` are site-level with depth-correct
+  parent-relative defaults. A relative `site_root_url` override is
+  re-based per page (a dependency page prepends the `../` its extra
+  depth needs; a relative override must climb, or it is refused at
+  parse), and absolute values pass through. An overridden
+  `url_pattern` still targets the own page's depth — a dependency
+  page's version dropdown navigates its own version tree, so a
+  re-base would point it at the wrong page's versions. Per-page URL
+  overrides wait for a consumer who needs them.
 - Publish resolves the dependency by the version the ref's manifest
   declares, and checks the cached content against the ref's committed
   lockfile checksum. Whether a pin exists to honor is decided by the

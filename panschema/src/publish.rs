@@ -347,6 +347,13 @@ pub struct PublishingConfig {
     /// containing book) or when an absolute URL is genuinely needed.
     #[serde(default = "default_site_root_url")]
     pub site_root_url: String,
+    /// The site identity the header brand link carries, on every page
+    /// of the publish output — the own page and each dependency page
+    /// alike. Unset, each page's brand falls back to its schema's
+    /// title, which reads as one site per schema; set it when a parent
+    /// site (a book) fronts the pages and the brand should name it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site_title: Option<String>,
     /// Where per-version subdirs land, relative to repo root.
     #[serde(default = "default_output_dir")]
     pub output_dir: PathBuf,
@@ -426,6 +433,21 @@ impl PublishingConfig {
     /// Validate cross-field invariants that pure serde can't express.
     /// Currently: `current` must appear in `versions` or equal `edge`.
     fn validate(&self) -> Result<(), PublishError> {
+        // A relative `site_root_url` is authored against a version
+        // directory and re-based per page by prepending `../` — sound
+        // only for a value that climbs. Anything else resolves
+        // somewhere different on every page, so it is refused here
+        // rather than published broken.
+        if !is_absolute_site_root(&self.site_root_url) && !self.site_root_url.starts_with("../") {
+            return Err(PublishError::InvalidSegment {
+                what: "`[publishing] site_root_url`".to_string(),
+                value: self.site_root_url.clone(),
+                problem: "a relative value must climb out of the version directory (begin \
+                          with `../`) or be absolute, so every page's brand link can reach \
+                          the same site root"
+                    .to_string(),
+            });
+        }
         let in_versions = self.versions.iter().any(|v| v == &self.current);
         let matches_edge = self.edge.as_deref() == Some(self.current.as_str());
         if !in_versions && !matches_edge {
@@ -1047,8 +1069,7 @@ fn links_for(
         return Vec::new();
     }
     let dir_of = |page: &PageSpec<'_>| page.dep.as_ref().map(|d| publishing.page_dir(d));
-    let depth_of = |dir: &Option<String>| 1 + dir.as_ref().map_or(0, |d| d.split('/').count());
-    let up = "../".repeat(depth_of(&dir_of(planned[me].page)));
+    let up = "../".repeat(1 + page_dir_segments(publishing, planned[me].page));
     planned
         .iter()
         .enumerate()
@@ -1386,6 +1407,9 @@ struct CohortContext {
     edge: Option<String>,
     url_pattern: String,
     site_root_href: String,
+    /// The site identity for the brand link, from `[publishing]
+    /// site_title`; `None` falls back to each page's schema title.
+    site_title: Option<String>,
     label_sources: std::collections::BTreeMap<String, String>,
     /// Page composition, from `[publishing]`: instance section first?
     instances_first: bool,
@@ -1412,11 +1436,23 @@ fn cohort_for(
     page_links: Vec<crate::html_writer::PageLink>,
 ) -> CohortContext {
     let current = page_current(publishing, present);
-    let site_root_href = if !current.aliased && publishing.site_root_url == default_site_root_url()
-    {
-        format!("../{}/", current.version)
+    let site_root_href = if publishing.site_root_url == default_site_root_url() {
+        // The default resolves inside each page's own version tree, so
+        // it means the same thing at any depth.
+        if current.aliased {
+            publishing.site_root_url.clone()
+        } else {
+            format!("../{}/", current.version)
+        }
     } else {
-        publishing.site_root_url.clone()
+        // A configured value names a site-level destination authored
+        // against the own page's version directory; a dependency page's
+        // version directory sits deeper by its page directory, so the
+        // same destination needs one `../` per extra segment.
+        depth_adjusted_site_root(
+            &publishing.site_root_url,
+            page_dir_segments(publishing, page),
+        )
     };
     CohortContext {
         all_versions: present.to_vec(),
@@ -1424,11 +1460,57 @@ fn cohort_for(
         edge: publishing.edge.clone(),
         url_pattern: publishing.url_pattern.clone(),
         site_root_href,
+        site_title: publishing.site_title.clone(),
         label_sources: publish_cfg.label_sources.clone(),
         instances_first: page.instances_first,
         schema_sections: page.schema_sections,
         page_links,
     }
+}
+
+/// Directory segments between the output root and a page's version
+/// directories: 0 for the own page, one per segment of a dependency
+/// page's directory — validated to a single fresh segment today, and
+/// derived here for every consumer, so the cross-page nav and the
+/// brand link can never disagree about a page's depth.
+fn page_dir_segments(publishing: &PublishingConfig, page: &PageSpec<'_>) -> usize {
+    page.dep
+        .as_ref()
+        .map_or(0, |dep| publishing.page_dir(dep).split('/').count())
+}
+
+/// Whether a configured URL means the same destination at any page
+/// depth: root-relative, or carrying an RFC 3986 scheme at the front —
+/// anchored, so a URL buried in a query or fragment never makes a
+/// relative value read as absolute.
+fn is_absolute_site_root(value: &str) -> bool {
+    if value.starts_with('/') {
+        return true;
+    }
+    let mut chars = value.chars();
+    if !chars.next().is_some_and(|c| c.is_ascii_alphabetic()) {
+        return false;
+    }
+    for c in chars {
+        match c {
+            ':' => return true,
+            c if c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.') => {}
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// A relative site-root URL, re-based for a page whose version
+/// directory sits `extra_segments` deeper than the own page's — the
+/// depth the URL was authored against. Absolute URLs pass through
+/// unchanged. Sound only for climbing values, which validation
+/// guarantees a configured relative override to be.
+fn depth_adjusted_site_root(site_root_url: &str, extra_segments: usize) -> String {
+    if extra_segments == 0 || is_absolute_site_root(site_root_url) {
+        return site_root_url.to_string();
+    }
+    format!("{}{}", "../".repeat(extra_segments), site_root_url)
 }
 
 /// One page's current-version decision, made in one place so the nav
@@ -1507,6 +1589,9 @@ fn generate_html_for_version(
         .with_instances_first(cohort.instances_first)
         .with_schema_sections(cohort.schema_sections)
         .with_page_links(cohort.page_links.clone());
+    if let Some(site_title) = &cohort.site_title {
+        writer = writer.with_site_title(site_title.clone());
+    }
     // The file is read from the first path (a per-ref extraction lands in a
     // tempfile) while provenance shows the declared name.
     let mut loaded: Vec<(String, crate::instances::InstanceSet, &InstanceEntry)> = Vec::new();
@@ -2605,6 +2690,7 @@ versions = ["v0.1.0"]
                 current: current.into(),
                 url_pattern: default_url_pattern(),
                 site_root_url: default_site_root_url(),
+                site_title: None,
                 output_dir: PathBuf::from("site/schema"),
                 format: default_format(),
                 layout: crate::html_writer::PageLayout::default(),
@@ -3371,6 +3457,141 @@ exemplur = true
         }
     }
 
+    /// `[publishing] site_title` names the site every page belongs to:
+    /// the brand link carries it on the own page and every dependency
+    /// page alike, one site identity in one place. Absent, each page's
+    /// brand falls back to its own schema title, as before.
+    #[test]
+    fn site_title_brands_every_page_with_the_site_identity() {
+        let repo = make_repo_with_dependency_data();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], None, "v0.2.0");
+        cfg.instances.push(dep_entry());
+        cfg.publishing.as_mut().unwrap().site_title = Some("Building Wine".into());
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
+
+        for page in ["v0.2.0/index.html", "cqa/v0.2.0/index.html"] {
+            let html = std::fs::read_to_string(out.path().join(page)).unwrap();
+            assert!(
+                html.contains(r#"class="site-title">Building Wine</a>"#),
+                "page {page} must brand with the site title"
+            );
+        }
+    }
+
+    /// A relative `site_root_url` override is authored against the own
+    /// page's version directory. A dependency page's version directory
+    /// sits one segment deeper, so its brand link gains one `../` and
+    /// both pages' links land on the same site root; an absolute value
+    /// — root-relative or carrying a scheme — means the same
+    /// destination at any depth and passes through unchanged, and a
+    /// URL buried in a query never makes a relative value absolute.
+    #[test]
+    fn a_dependency_pages_brand_link_escapes_its_extra_depth() {
+        let repo = make_repo_with_dependency_data();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], None, "v0.2.0");
+        cfg.instances.push(dep_entry());
+        for (configured, own_expected, dep_expected) in [
+            ("../../", "../../", "../../../"),
+            (
+                "../../?return=https://example.org/",
+                "../../?return=https://example.org/",
+                "../../../?return=https://example.org/",
+            ),
+            ("/book/", "/book/", "/book/"),
+            (
+                "https://example.org/book/",
+                "https://example.org/book/",
+                "https://example.org/book/",
+            ),
+        ] {
+            cfg.publishing.as_mut().unwrap().site_root_url = configured.into();
+            let out = tempfile::tempdir().unwrap();
+            publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
+            let own = std::fs::read_to_string(out.path().join("v0.2.0/index.html")).unwrap();
+            assert!(
+                own.contains(&format!(r#"<a href="{own_expected}" class="site-title""#)),
+                "own page for `{configured}` must emit `{own_expected}`"
+            );
+            let dep = std::fs::read_to_string(out.path().join("cqa/v0.2.0/index.html")).unwrap();
+            assert!(
+                dep.contains(&format!(r#"<a href="{dep_expected}" class="site-title""#)),
+                "dependency page for `{configured}` must emit `{dep_expected}`"
+            );
+        }
+    }
+
+    /// A relative `site_root_url` override must climb out of the
+    /// version directory: a value that does not begin with `../`
+    /// resolves somewhere different on every page, so it is refused at
+    /// parse rather than published broken. Root-relative and
+    /// scheme-carrying values are absolute and pass.
+    #[test]
+    fn a_non_climbing_relative_site_root_url_is_refused() {
+        let base = r#"[schema]
+name = "s"
+version = "0.1.0"
+linkml = "1.7.0"
+
+[files]
+main = "schema.yaml"
+
+[publishing]
+versions = ["v0.1.0"]
+current = "v0.1.0"
+site_root_url = "VALUE"
+"#;
+        for bad in [
+            "",
+            "./",
+            "docs/",
+            "index.html",
+            "#top",
+            "?v=2",
+            "docs/v1:latest",
+        ] {
+            let toml = base.replace("VALUE", bad);
+            let err = toml.parse::<PublishConfig>().unwrap_err().to_string();
+            assert!(
+                err.contains("site_root_url"),
+                "`{bad}` must be refused naming the key; got: {err}"
+            );
+        }
+        for good in [
+            "../../",
+            "../current/",
+            "/site/",
+            "https://example.org/book/",
+            "mailto:owner@example.org",
+        ] {
+            let toml = base.replace("VALUE", good);
+            assert!(
+                toml.parse::<PublishConfig>().is_ok(),
+                "`{good}` is climbing or absolute and must parse"
+            );
+        }
+    }
+
+    /// A blank `site_title` is no override: the brand falls back to
+    /// the schema title rather than rendering a nameless link.
+    #[test]
+    fn a_blank_site_title_falls_back_to_the_schema_title() {
+        let repo = make_repo_with_dependency_data();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], None, "v0.2.0");
+        cfg.instances.push(dep_entry());
+        cfg.publishing.as_mut().unwrap().site_title = Some("   ".into());
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
+        let own = std::fs::read_to_string(out.path().join("v0.2.0/index.html")).unwrap();
+        let brand_at = own.find(r#"class="site-title">"#).expect("brand anchor");
+        let text = &own[brand_at + r#"class="site-title">"#.len()..];
+        let text = &text[..text.find("</a>").expect("anchor closes")];
+        assert!(
+            !text.trim().is_empty(),
+            "a blank override must not produce a nameless brand link; got {text:?}"
+        );
+    }
+
     #[test]
     fn publish_versioned_renders_stale_banner_on_non_current_page() {
         // A page rendered for a version other than `current` must
@@ -4067,6 +4288,7 @@ current = "v0.1.0"
             edge: None,
             url_pattern: "../{version}/".to_string(),
             site_root_href: "../current/".to_string(),
+            site_title: None,
             label_sources: std::collections::BTreeMap::new(),
             instances_first: false,
             schema_sections: true,

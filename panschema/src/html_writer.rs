@@ -498,6 +498,9 @@ struct InstanceDatasetView<'a> {
 #[template(path = "index.html")]
 struct IndexTemplate<'a> {
     title: &'a str,
+    /// The brand link's text: the site's identity, not the page's —
+    /// identical across every page of one published site.
+    site_title: &'a str,
     iri: &'a str,
     version: Option<&'a str>,
     comment: Option<&'a str>,
@@ -675,6 +678,11 @@ pub struct HtmlWriter {
     /// the deploy root) — `panschema publish` always sets this explicitly
     /// from the manifest's `site_root_url`.
     pub site_root_href: Option<String>,
+    /// Override for the header brand link text. `None` falls back to
+    /// the schema's title — `panschema publish` sets it from the
+    /// manifest's `site_title` so every page of one site carries the
+    /// same identity.
+    pub site_title: Option<String>,
     /// Upstream label cache. `None` renders external references as
     /// CURIEs (the historical behavior); the CLI generate path wires
     /// a populated store so they render as upstream labels.
@@ -779,6 +787,7 @@ impl HtmlWriter {
             version_context: None,
             page_links: Vec::new(),
             site_root_href: None,
+            site_title: None,
             label_store: None,
             instance_datasets: Vec::new(),
         }
@@ -788,15 +797,7 @@ impl HtmlWriter {
     pub fn with_options(include_graph: bool) -> Self {
         Self {
             include_graph,
-            graph_aspect: (16, 8),
-            graph_default_layout: "auto".to_string(),
-            instances_first: false,
-            schema_sections: true,
-            version_context: None,
-            page_links: Vec::new(),
-            site_root_href: None,
-            label_store: None,
-            instance_datasets: Vec::new(),
+            ..Self::new()
         }
     }
 
@@ -856,6 +857,15 @@ impl HtmlWriter {
     #[must_use]
     pub fn with_site_root_href(mut self, href: impl Into<String>) -> Self {
         self.site_root_href = Some(href.into());
+        self
+    }
+
+    /// Override the header brand-link text. Consumed by
+    /// `panschema publish` to carry the manifest's `site_title` onto
+    /// every page of the site.
+    #[must_use]
+    pub fn with_site_title(mut self, title: impl Into<String>) -> Self {
+        self.site_title = Some(title.into());
         self
     }
 
@@ -1743,6 +1753,11 @@ impl Writer for HtmlWriter {
             // `./` always resolves to the deploy root. `panschema publish`
             // sets this explicitly from the manifest's `site_root_url`.
             site_root_href: self.site_root_href.as_deref().unwrap_or("./"),
+            site_title: self
+                .site_title
+                .as_deref()
+                .filter(|t| !t.trim().is_empty())
+                .unwrap_or(&data.title),
             instances_first: self.instances_first,
             show_schema_sections: self.schema_sections,
         };
