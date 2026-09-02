@@ -6,13 +6,15 @@
 <div class="instance-graph-block">
     <h3 class="instance-graph-title">Graph</h3>
     <p class="instance-graph-caption">
-        The individuals above as a connected A-box: nodes are individuals
-        (teal hexagons), edges are their object-property assertions.
+        The individuals above as a connected A-box: nodes wear the same
+        symbols their classes and enumerations have in the schema graph,
+        and edges are the object-property assertions between them.
     </p>
     <div class="instance-graph-toolbar">
-        <button type="button" id="instance-graph-reset" class="instance-graph-btn" title="Reset view">⟳</button>
+        <button type="button" id="instance-graph-reset" class="instance-graph-btn" title="Reset view"><span>↺</span> Reset</button>
         <button type="button" id="instance-graph-zoom-in" class="instance-graph-btn" title="Zoom in">+</button>
         <button type="button" id="instance-graph-zoom-out" class="instance-graph-btn" title="Zoom out">−</button>
+        <span class="instance-graph-controls-separator"></span>
         <button type="button" id="instance-graph-labels-all" class="instance-graph-btn instance-graph-toggle active" aria-pressed="true" title="Toggle all labels">Labels</button>
         <button type="button" id="instance-graph-labels-nodes" class="instance-graph-btn instance-graph-toggle active" aria-pressed="true" title="Toggle node labels">Nodes</button>
         <button type="button" id="instance-graph-labels-edges" class="instance-graph-btn instance-graph-toggle active" aria-pressed="true" title="Toggle edge labels">Edges</button>
@@ -23,12 +25,13 @@
                 title="Show the notation key for this instance graph">Legend</button>
         <label for="instance-graph-layout-select" class="instance-graph-layout-label">Layout</label>
         <select id="instance-graph-layout-select" class="instance-graph-layout-select">
-            <option value="sgd">SGD (default · fast quality)</option>
-            <option value="stress">Stress majorization (cluster separation)</option>
-            <option value="hierarchical">Hierarchical</option>
-            <option value="force-directed">Force-directed (interactive)</option>
-            <option value="kamada-kawai">Kamada-Kawai (slower init)</option>
+            <option value="sgd" title="Stochastic Gradient Descent on the stress objective (Euclidean distance ≈ graph distance). The default for most datasets: best quality-per-time and clean cluster separation. Converges in O(N · iters) vs stress's O(N² · iters) at comparable visible quality.">SGD (default · fast quality)</option>
+            <option value="stress" title="Stress majorization: minimizes the squared difference between Euclidean and graph-theoretic distances. Cleanest cluster separation, at moderate init cost.">Stress majorization (cluster separation)</option>
+            <option value="hierarchical" title="Sugiyama layered layout over the assertion structure — reads best when the data forms containment-like chains.">Hierarchical</option>
+            <option value="force-directed" title="Iterative physics simulation: connected nodes attract, all nodes repel, continuously animated. The interactive layout — drag a node and watch the rest relax. Doesn't separate clusters as cleanly as SGD/Stress.">Force-directed (interactive)</option>
+            <option value="kamada-kawai" title="Kamada-Kawai: the classic stress-minimization layout. Same objective as SGD/Stress (so it separates clusters) but a slower per-node optimizer.">Kamada-Kawai (slower init)</option>
         </select>
+        <span class="instance-graph-help">Drag to pan • Scroll to zoom</span>
     </div>
     <div class="instance-graph-container">
         <canvas id="instance-graph-canvas"></canvas>
@@ -57,8 +60,25 @@
         color: var(--color-text-muted, #9ca3af);
         font-size: var(--font-size-sm, 13px);
     }
+    .instance-graph-help {
+        font-size: var(--font-size-xs, 11px);
+        color: var(--color-text-muted, #9ca3af);
+        margin-left: var(--space-2, 8px);
+    }
+    .instance-graph-controls-separator {
+        width: 1px;
+        height: 20px;
+        background: var(--color-border, #374151);
+        margin: 0 var(--space-1, 4px);
+    }
+    @media (max-width: 768px) {
+        .instance-graph-help {
+            display: none;
+        }
+    }
     .instance-graph-toolbar {
         display: flex;
+        flex-wrap: wrap;
         align-items: center;
         gap: var(--space-2, 8px);
         margin-bottom: var(--space-2, 8px);

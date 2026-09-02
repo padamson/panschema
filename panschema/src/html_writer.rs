@@ -5106,6 +5106,100 @@ mod tests {
         );
     }
 
+    /// The instance graph is the schema graph's vocabulary realized,
+    /// and its chrome says so: the caption names the shared symbols
+    /// (no invented ones), and the toolbar's shared pieces — the reset
+    /// label, the pan/zoom hint, and the tooltips of the layout options
+    /// whose wording is graph-agnostic — are read from BOTH toolbars on
+    /// one rendered page and compared, so drift on either side fails.
+    /// Intentional divergences stay one-sided: the sgd tooltip says
+    /// "datasets" where the schema's says "schemas", Hierarchical
+    /// carries no class-hierarchy qualifier (an A-box has none), and
+    /// force-directed drops the schema-only 3D clause.
+    #[test]
+    fn instance_graph_chrome_matches_the_schema_graphs() {
+        let schema = bottle_rack_schema();
+        let set = instance_set_from_yaml(&schema, "bottles:\n  - id: b1\n    name: Morgon\n");
+        let writer = HtmlWriter::new().with_instance_dataset(InstanceDataset::new("only", set));
+        let out = tempfile::tempdir().unwrap();
+        writer.write(&schema, out.path()).expect("write");
+        let html = fs::read_to_string(out.path().join("index.html")).expect("read");
+
+        // Slice `hay` between `from` and `to`, failing loudly when a
+        // marker is missing rather than collapsing to an empty match.
+        fn between<'a>(hay: &'a str, from: &str, to: &str) -> &'a str {
+            let (_, rest) = hay.split_once(from).unwrap_or_else(|| {
+                panic!("marker {from:?} not found");
+            });
+            rest.split_once(to).map(|(a, _)| a).unwrap_or_else(|| {
+                panic!("no {to:?} after {from:?}");
+            })
+        }
+
+        let caption = between(&html, r#"class="instance-graph-caption""#, "</p>")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            !caption.contains("teal hexagons"),
+            "the caption must not describe symbols the canvas does not draw"
+        );
+        // A prose pin: re-pick the phrase if the caption is reworded.
+        assert!(
+            caption.contains("same symbols") && caption.contains("schema graph"),
+            "the caption names the shared vocabulary; got: {caption}"
+        );
+
+        let schema_toolbar = between(&html, r#"class="graph-controls""#, "</div>");
+        let instance_toolbar = between(&html, r#"class="instance-graph-toolbar""#, "</div>");
+        // The visible label after the tag closes — the `title` attribute
+        // also contains "Reset", so only post-`>` text proves a label.
+        let visible_reset = |toolbar: &str, id: &str| {
+            let button = between(toolbar, id, "</button>");
+            let (_, text) = button.split_once('>').expect("button tag closes");
+            text.split_whitespace().collect::<Vec<_>>().join(" ")
+        };
+        let schema_reset = visible_reset(schema_toolbar, r#"id="graph-reset""#);
+        let instance_reset = visible_reset(instance_toolbar, r#"id="instance-graph-reset""#);
+        assert_eq!(
+            instance_reset, schema_reset,
+            "both toolbars label their reset control identically"
+        );
+        assert!(
+            instance_reset.contains("Reset"),
+            "the reset control shows a visible label, not just an icon; got: {instance_reset}"
+        );
+
+        let hint_of = |toolbar: &str, class: &str| between(toolbar, class, "</span>").to_string();
+        assert_eq!(
+            hint_of(instance_toolbar, r#"class="instance-graph-help">"#),
+            hint_of(schema_toolbar, r#"class="graph-help" id="graph-help-2d">"#),
+            "both toolbars carry the same pan/zoom hint"
+        );
+
+        // The graph-agnostic layout tooltips are shared verbatim. The
+        // schema graph's select sits outside its controls strip, so
+        // each side is sliced by its own select element.
+        let schema_select = between(&html, r#"id="graph-layout-select""#, "</select>");
+        let instance_select = between(&html, r#"id="instance-graph-layout-select""#, "</select>");
+        let title_of = |select: &str, value: &str| {
+            between(select, &format!(r#"<option value="{value}" title=""#), "\"").to_string()
+        };
+        for shared in ["stress", "kamada-kawai"] {
+            assert_eq!(
+                title_of(instance_select, shared),
+                title_of(schema_select, shared),
+                "the `{shared}` layout explains itself identically on both toolbars"
+            );
+        }
+        for own in ["sgd", "hierarchical", "force-directed"] {
+            assert!(
+                !title_of(instance_select, own).is_empty(),
+                "the `{own}` layout explains itself on the instance toolbar"
+            );
+        }
+    }
+
     #[test]
     fn the_section_reads_graph_first_with_dataset_metadata() {
         // The section holds the dataset(s); within each, the graph precedes

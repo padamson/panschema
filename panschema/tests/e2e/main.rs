@@ -2474,7 +2474,8 @@ fn e2e_external_node_hover_shows_iri_and_definition_and_legend_documents_it() {
 /// A schema with OWL individuals renders a separate instance (A-box) graph
 /// beneath the Individuals cards. Asserts the exporter emitted the right
 /// A-box (2 individuals, 1 assertion edge), that it embedded into the page,
-/// and that its own canvas actually paints the teal individual nodes — a
+/// and that its own canvas actually paints the individual nodes (probed
+/// as the class-blue pixel band) — a
 /// distinct viz from the schema graph.
 #[test]
 fn e2e_instance_graph_renders_individuals_beneath_the_cards() {
@@ -2527,9 +2528,10 @@ fn e2e_instance_graph_renders_individuals_beneath_the_cards() {
             "instance graph viz never became ready"
         );
 
-        // The viz initialized and its canvas painted the teal individual
-        // nodes (RGB ~ 41,184,179) — proof the A-box graph actually renders,
-        // not just that the data embedded.
+        // The viz initialized and its canvas painted the individual
+        // nodes — class-colored per the shared vocabulary, probed as the
+        // class-blue band around #4A90D9 — proof the A-box graph actually
+        // renders, not just that the data embedded.
         let result = page
             .evaluate_value(
                 r#"(async function(){
@@ -2542,7 +2544,7 @@ fn e2e_instance_graph_renders_individuals_beneath_the_cards() {
                     var d = ctx.getImageData(0, 0, c.width, c.height).data;
                     var teal = 0;
                     for (var i = 0; i < d.length; i += 4) {
-                        if (d[i] < 100 && d[i+1] > 150 && d[i+1] < 215 && d[i+2] > 150 && d[i+2] < 215) teal++;
+                        if (d[i] < 110 && d[i+1] > 110 && d[i+1] < 180 && d[i+2] > 190) teal++;
                     }
                     return 'ok:' + teal;
                 })()"#,
@@ -2557,7 +2559,7 @@ fn e2e_instance_graph_renders_individuals_beneath_the_cards() {
         let teal: i64 = result.trim_start_matches("ok:").parse().unwrap_or(0);
         assert!(
             teal > 0,
-            "the instance graph should paint teal individual nodes; teal pixels={teal}"
+            "the instance graph should paint individual nodes; class-blue pixels={teal}"
         );
 
         let _ = shutdown_tx.send(());
@@ -2805,7 +2807,7 @@ fn e2e_instance_dataset_selector_switches_cards_and_graph() {
                     var d = ctx.getImageData(0, 0, c.width, c.height).data;
                     var teal = 0;
                     for (var i = 0; i < d.length; i += 4) {
-                        if (d[i] < 100 && d[i+1] > 150 && d[i+1] < 215 && d[i+2] > 150 && d[i+2] < 215) teal++;
+                        if (d[i] < 110 && d[i+1] > 110 && d[i+1] < 180 && d[i+2] > 190) teal++;
                     }
                     return 'ok:' + teal;
                 })()"#,
@@ -3754,7 +3756,8 @@ fn e2e_instance_graph_is_explorable_like_the_schema_graph() {
 
 /// The `generate --instances` path renders a LinkML instance-data file as the
 /// instance graph — the schema declares no OWL individuals, so the A-box comes
-/// entirely from the data file — and its own canvas paints the teal nodes.
+/// entirely from the data file — and its own canvas paints the
+/// class-colored individual nodes.
 #[test]
 fn e2e_instance_graph_renders_from_linkml_data() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
@@ -3830,7 +3833,10 @@ fn e2e_instance_graph_renders_from_linkml_data() {
         // individuals: typed, with the reference linking to the referenced
         // individual's card.
         assert_eq!(
-            page.locator("#ind-chateauMorgon").count().await.expect("count"),
+            page.locator("#ind-chateauMorgon")
+                .count()
+                .await
+                .expect("count"),
             1,
             "a LinkML-data instance should render an individual card"
         );
@@ -3877,7 +3883,7 @@ fn e2e_instance_graph_renders_from_linkml_data() {
                     var d = ctx.getImageData(0, 0, c.width, c.height).data;
                     var teal = 0;
                     for (var i = 0; i < d.length; i += 4) {
-                        if (d[i] < 100 && d[i+1] > 150 && d[i+1] < 215 && d[i+2] > 150 && d[i+2] < 215) teal++;
+                        if (d[i] < 110 && d[i+1] > 110 && d[i+1] < 180 && d[i+2] > 190) teal++;
                     }
                     return 'ok:' + teal;
                 })()"#,
@@ -3892,7 +3898,7 @@ fn e2e_instance_graph_renders_from_linkml_data() {
         let teal: i64 = result.trim_start_matches("ok:").parse().unwrap_or(0);
         assert!(
             teal > 0,
-            "the LinkML instance graph should paint teal individual nodes; teal pixels={teal}"
+            "the LinkML instance graph should paint individual nodes; class-blue pixels={teal}"
         );
 
         let _ = shutdown_tx.send(());
