@@ -1049,13 +1049,9 @@
 
     async function init() {
         try {
-            // Cache-bust the wasm explicitly: wasm-bindgen's generated init
-            // resolves `panschema_viz_bg.wasm` relative to `import.meta.url`
-            // with no query string, so the JS cache-bust alone leaves a stale
-            // binary loaded.
-            const cacheBuster = Date.now();
-            wasmModule = await import(`./panschema_viz.js?v=${cacheBuster}`);
-            await wasmModule.default({ module_or_path: `./panschema_viz_bg.wasm?v=${cacheBuster}` });
+            // The shared shell loads (and cache-busts) the module once
+            // for every canvas on the page.
+            wasmModule = await shell.loadViz();
 
             // Show canvas first so we can measure its dimensions
             loading.style.display = 'none';

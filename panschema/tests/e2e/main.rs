@@ -2772,6 +2772,23 @@ fn e2e_instance_graph_has_hover_card_and_toolbar_parity() {
             wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
             "instance graph viz never became ready"
         );
+        assert!(
+            wait_for_graph_viz_ready(&page).await,
+            "schema graph viz never became ready"
+        );
+
+        let wasm_fetches = page
+            .evaluate_value(
+                "String(performance.getEntriesByType('resource')\
+                 .filter(r => r.name.includes('panschema_viz_bg.wasm')).length)",
+            )
+            .await
+            .unwrap_or_default();
+        assert_eq!(
+            wasm_fetches.trim().trim_matches('"'),
+            "1",
+            "a page with both graphs must fetch the wasm exactly once"
+        );
 
         // The toolbar is present with the schema graph's controls.
         for id in [

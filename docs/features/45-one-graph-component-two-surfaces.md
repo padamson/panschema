@@ -95,7 +95,7 @@ feature lands on both graphs at once.
 
 ### Slice 2: One chrome fragment, two inclusions
 
-**Status:** In Progress
+**Status:** Complete (22654d8, pushed)
 
 **Decided 2026-09-04 (rendered-page review):** the schema graph's look
 is canonical — active toggles are a **solid fill**, and the toolbar is
@@ -166,26 +166,41 @@ confirmed, both from the duplicated CSS/markup this slice collapses:
 
 ### Slice 3: One WASM load
 
-**Status:** Not Started
+**Status:** Complete
 
 **Decided 2026-09-04:** the 2D/3D question is settled by removal — the
 3D renderer is gone (see
 [ADR-005's amendment](../adr/005-graph-visualization-conventions.md#amendment-2026-09-04-the-3d-renderer-is-removed)),
-so there is no mode to unify and no mode-dependent layout wording left
-to consolidate: the `LAYOUT_LABELS_2D/3D` and `LAYOUT_TITLES_2D/3D`
-maps collapsed to one set with the removal, and the layout picker has
-a single mode. What remains of this slice is the double WASM load.
+so there is no mode to unify: the mode-dependent layout wording and
+picker filtering left with it. What remained of this slice was the
+double module load.
 
-**User Value:** The page loads the viz module once for both canvases
-instead of twice, so a page carrying both graphs is smaller and starts
-faster.
+**User Value:** A page carrying both graphs fetches the visualization
+module once instead of twice, and repeat visits serve it from the
+browser cache — it re-downloads only when the binary that published
+the page changed.
 
 **Acceptance Criteria:**
-- [ ] Both graph sections initialize from a single WASM module
-      instance; page weight drops accordingly and both canvases still
-      paint (pixel-probed in e2e).
-- [ ] Neither graph's startup depends on the other's presence: a
-      schema-only page and a data-only page each still render.
+- [x] A page carrying both graphs fetches the wasm module exactly
+      once (browser-asserted from the page's own resource timeline),
+      and both canvases still paint.
+- [x] A schema-only page and a data-only page each still render.
+- [x] The asset URLs are stable across page views and change exactly
+      when the published bundle's content does (a writer test pins the
+      content stamp and the absence of per-view timestamps), so HTTP
+      caching applies across visits.
+
+**Notes:**
+- Mechanism: one memoized loader in the graph shell; asset URLs carry
+  a content stamp of the embedded bundle rather than a per-view
+  timestamp, and the wasm fetch starts before the JS import so the
+  two downloads overlap.
+- Accepted trade: both graphs now share one wasm instance, so a
+  panic that poisons it (a steady-state panic, not a caught
+  constructor failure) can take down both canvases where separate
+  instances confined it to one. The viz crate holds no mutable
+  statics, so cross-talk short of a panic is not expected; revisit if
+  malformed-dataset panics ever surface in the field.
 
 ---
 
@@ -230,10 +245,10 @@ find-and-verify migration, not a mechanical swap.
 
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
-| Slice 1 | Must Have | None | Complete (unpushed) |
-| Slice 2 | Must Have | Slice 1 | Not Started |
+| Slice 1 | Must Have | None | Complete (pushed) |
+| Slice 2 | Must Have | Slice 1 | Complete (pushed) |
 | Slice 4 | Should Have | Slice 2 | Not Started |
-| Slice 3 | Nice to Have | Slice 2 | Not Started |
+| Slice 3 | Nice to Have | Slice 2 | Complete |
 
 Measured duplication surface (2026-09-04, post-slice-1): the schema
 template is 2,238 lines to the instance template's 521. Ten CSS class

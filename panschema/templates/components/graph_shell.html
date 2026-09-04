@@ -482,6 +482,34 @@
             };
         }
 
+        // One viz module for every canvas on the page: the first
+        // caller starts the load, later callers share the promise. The
+        // wasm fetch is kicked off before the JS import so the two
+        // downloads overlap. `?v=` is a build-content stamp: wasm-bindgen
+        // resolves the .wasm with no query of its own, and a stamp that
+        // changes only with the bundle keeps repeat views on the HTTP
+        // cache while still busting it whenever the binary shipping the
+        // page changes. A failed load clears the memo — today's canvases
+        // join the first promise synchronously, so this defends future
+        // callers, not the current page.
+        let vizModulePromise = null;
+        function loadViz() {
+            if (!vizModulePromise) {
+                const v = '{{ viz_asset_stamp }}';
+                const wasmFetch = fetch(`./panschema_viz_bg.wasm?v=${v}`);
+                vizModulePromise = import(`./panschema_viz.js?v=${v}`)
+                    .then(async (mod) => {
+                        await mod.default({ module_or_path: wasmFetch });
+                        return mod;
+                    })
+                    .catch((e) => {
+                        vizModulePromise = null;
+                        throw e;
+                    });
+            }
+            return vizModulePromise;
+        }
+
         // The label/reset keyboard shortcuts every graph shares: L/N/E
         // click the label toggles (so styling + persistence stay in
         // sync with a click), R clicks reset. Graph-specific keys
@@ -521,6 +549,7 @@
         return {
             DRAG_SLOP_PX,
             FOCUS_HOP_DEPTH,
+            loadViz,
             wireLabelKeys,
             makeDragGate,
             wireDeselectKey,

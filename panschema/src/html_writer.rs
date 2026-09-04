@@ -498,6 +498,8 @@ struct InstanceDatasetView<'a> {
 #[template(path = "index.html")]
 struct IndexTemplate<'a> {
     title: &'a str,
+    /// Cache stamp for the viz asset URLs (see `wasm_files::viz_stamp`).
+    viz_asset_stamp: &'a str,
     /// The brand link's text: the site's identity, not the page's —
     /// identical across every page of one published site.
     site_title: &'a str,
@@ -771,6 +773,30 @@ mod wasm_files {
 
     /// Compiled WASM binary
     pub const VIZ_WASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/panschema_viz_bg.wasm"));
+
+    /// Content stamp for the viz asset URLs: an FNV-1a hash of the
+    /// embedded bundle, so a page's `?v=` changes exactly when the
+    /// binary shipping it does. Stable across page views — the browser
+    /// caches the multi-MB wasm between visits — while a rebuilt
+    /// bundle (a dev iteration included) busts the cache, which a
+    /// crate-version stamp would miss.
+    /// FNV-1a (64-bit) of `bytes`, as 16 lowercase hex digits. The
+    /// XOR-then-multiply order is what makes it FNV-1a rather than
+    /// FNV-1; a known-vector test pins that.
+    pub fn fnv1a_hex(bytes: &[u8]) -> String {
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for &b in bytes {
+            hash ^= b as u64;
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        format!("{hash:016x}")
+    }
+
+    pub fn viz_stamp() -> &'static str {
+        use std::sync::OnceLock;
+        static STAMP: OnceLock<String> = OnceLock::new();
+        STAMP.get_or_init(|| fnv1a_hex(VIZ_WASM))
+    }
 }
 
 impl HtmlWriter {
@@ -1722,6 +1748,7 @@ impl Writer for HtmlWriter {
 
         let template = IndexTemplate {
             title: &data.title,
+            viz_asset_stamp: wasm_files::viz_stamp(),
             iri: &data.iri,
             version: data.version.as_deref(),
             comment: data.comment.as_deref(),
@@ -2238,6 +2265,19 @@ mod tests {
     use crate::io::Reader;
     use crate::owl_reader::OwlReader;
     use std::path::PathBuf;
+
+    /// FNV-1a-64 known vectors: the empty input is the offset basis,
+    /// and "a" is the canonical published value. Pins the XOR-then-
+    /// multiply order — FNV-1 (multiply-then-XOR) or a swapped operator
+    /// would give a different digest for these.
+    #[test]
+    fn viz_stamp_hash_is_fnv1a() {
+        assert_eq!(wasm_files::fnv1a_hex(b""), "cbf29ce484222325");
+        assert_eq!(wasm_files::fnv1a_hex(b"a"), "af63dc4c8601ec8c");
+        assert_eq!(wasm_files::fnv1a_hex(b"foobar"), "85944171f73967e8");
+        // Different content, different stamp.
+        assert_ne!(wasm_files::fnv1a_hex(b"a"), wasm_files::fnv1a_hex(b"b"));
+    }
 
     #[test]
     fn format_ifabsent_default_normalizes_booleans_and_quotes_strings() {
@@ -5237,6 +5277,21 @@ mod tests {
             )
             .contains("assertion edges"),
             "the instance Arrows tooltip describes A-box assertion edges"
+        );
+
+        // Viz asset URLs carry the build-content stamp, so repeat views
+        // cache the module while a rebuilt bundle busts it. A per-view
+        // timestamp here would refetch the multi-MB wasm every visit.
+        let stamp = wasm_files::viz_stamp();
+        assert_eq!(stamp.len(), 16, "stamp is a fixed-width hash");
+        assert!(
+            html.contains(&format!("const v = '{stamp}'"))
+                && html.contains("./panschema_viz_bg.wasm?v=${v}"),
+            "the page requests the wasm with the content stamp"
+        );
+        assert!(
+            !html.contains("Date.now"),
+            "no per-view timestamp anywhere on the page busts the viz assets"
         );
 
         // Groundings is the one schema-only flag on the macro.

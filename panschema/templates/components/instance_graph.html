@@ -169,13 +169,16 @@
         const canvas = document.getElementById('instance-graph-canvas');
         if (!graphs.some((g) => g && g.data) || !canvas) return;
 
-        // Load the panschema-viz wasm module. Imported independently of the
-        // schema graph's module (a separate instance); sharing one module
-        // across both viz is a future optimization.
+        // The shared shell loads the wasm module once for every canvas
+        // on the page; this graph builds its own Visualization over it.
+        const shell = window.PanschemaGraphShell;
+        if (!shell) {
+            console.warn('instance graph: graph shell missing from the page');
+            return;
+        }
         let mod;
         try {
-            mod = await import('./panschema_viz.js');
-            await mod.default({ module_or_path: './panschema_viz_bg.wasm' });
+            mod = await shell.loadViz();
         } catch (e) {
             console.warn('instance graph: wasm load failed', e?.message ?? e);
             return;
@@ -191,7 +194,6 @@
 
         // The same layout family the schema graph offers; persisted under
         // its own key since a good A-box layout can differ from the T-box's.
-        const shell = window.PanschemaGraphShell;
         const layoutSelect = document.getElementById('instance-graph-layout-select');
         const layout = shell.layoutPref('panschema-instance-graph-layout', layoutSelect, 'sgd');
         layout.restore();
