@@ -1,3 +1,4 @@
+{% import "components/graph_toolbar.html" as toolbar %}
 {# Graph Visualization Component
 
    Renders an interactive force-directed graph visualization.
@@ -33,42 +34,9 @@
         {# Label overlay for 3D mode (HTML labels positioned over canvas) #}
         <div id="graph-labels-overlay" class="graph-labels-overlay" style="display: none;"></div>
 
-        {# Controls overlay #}
-        <div class="graph-controls">
-            <button id="graph-reset" class="graph-btn" title="Reset view">
-                <span>↺</span> Reset
-            </button>
-            <button id="graph-zoom-in" class="graph-btn" title="Zoom in">+</button>
-            <button id="graph-zoom-out" class="graph-btn" title="Zoom out">−</button>
-            <span class="graph-controls-separator"></span>
-            <button id="graph-labels-all" class="graph-btn graph-toggle active" aria-pressed="true" title="Toggle all labels (L)">
-                Labels
-            </button>
-            <button id="graph-labels-nodes" class="graph-btn graph-toggle active" aria-pressed="true" title="Toggle node labels (N)">
-                Nodes
-            </button>
-            <button id="graph-labels-edges" class="graph-btn graph-toggle active" aria-pressed="true" title="Toggle edge labels (E)">
-                Edges
-            </button>
-            <button id="graph-focus-on-hover" class="graph-btn graph-toggle active" aria-pressed="true" title="Hover a node to highlight it plus its 1-hop and 2-hop neighbors; the rest of the graph dims. Click to toggle.">
-                Focus on hover
-            </button>
-            <button id="graph-arrows" class="graph-btn graph-toggle active" aria-pressed="true" title="Show directed arrowheads on edges (hollow triangle = is_a, filled = domain/range). Turn off when edge density makes them noisy. Click to toggle.">
-                Arrows
-            </button>
-            <button id="graph-legend-toggle" class="graph-btn graph-toggle" title="Show the notation key: what each node shape, edge style, and crow's-foot terminator means. Click to toggle." aria-pressed="false">
-                Legend
-            </button>
-            {# Only revealed by JS when the graph actually carries external
-               grounding nodes (a class's `subclass_of` into an upstream
-               ontology). Lets a reader hide those muted anchors to focus on
-               the schema's own classes. #}
-            <button id="graph-toggle-external" class="graph-btn graph-toggle active" aria-pressed="true" style="display: none;" title="Show or hide external grounding nodes — the upstream ontology categories a class grounds into via subclass_of. Click to toggle.">
-                Groundings
-            </button>
-            <span class="graph-help" id="graph-help-2d">Drag to pan • Scroll to zoom</span>
-            <span class="graph-help" id="graph-help-3d" style="display: none;">Drag to orbit • Shift+drag to pan • Scroll to zoom</span>
-        </div>
+        {# Control overlay — the shared toolbar macro; Groundings and
+           the 3D pan hint are schema-only (flags true). #}
+        {% call toolbar::controls("graph", "Show directed arrowheads on edges (hollow triangle = is_a, filled = domain/range). Turn off when edge density makes them noisy. Click to toggle.", "Show the notation key: what each node shape, edge style, and crow's-foot terminator means. Click to toggle.", true, true) %}{% endcall %}
 
         {# Mode toggle (2D/3D) #}
         <div class="graph-mode-toggle" id="graph-mode-toggle">
@@ -123,14 +91,14 @@
 
 <style>
 .graph-section {
-    margin: var(--spacing-lg, 24px) 0;
+    margin: var(--space-4, 24px) 0;
 }
 
 .graph-section .section-header {
     display: flex;
     align-items: center;
-    gap: var(--spacing-md, 12px);
-    margin-bottom: var(--spacing-md, 12px);
+    gap: var(--space-3, 12px);
+    margin-bottom: var(--space-3, 12px);
 }
 
 .graph-badge {
@@ -171,7 +139,7 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: var(--spacing-sm, 8px);
+    gap: var(--space-2, 8px);
     color: var(--color-text-muted, #9ca3af);
 }
 
@@ -197,81 +165,25 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: var(--spacing-sm, 8px);
+    gap: var(--space-2, 8px);
     color: var(--color-error, #e74c3c);
     text-align: center;
-    padding: var(--spacing-lg, 24px);
+    padding: var(--space-4, 24px);
 }
 
 .error-icon {
     font-size: 2rem;
 }
 
-/* Controls */
-.graph-controls {
-    position: absolute;
-    bottom: var(--spacing-md, 12px);
-    left: var(--spacing-md, 12px);
-    display: flex;
-    align-items: center;
-    gap: var(--spacing-sm, 8px);
-    z-index: 10;
-}
-
-.graph-btn {
-    background: var(--color-bg-secondary, #2d2d44);
-    border: 1px solid var(--color-border, #374151);
-    border-radius: var(--radius-sm, 4px);
-    padding: 4px 10px;
-    color: var(--color-text, #e5e7eb);
-    cursor: pointer;
-    font-size: var(--font-size-sm, 13px);
-    transition: background 0.2s, border-color 0.2s;
-}
-
-.graph-btn:hover {
-    background: var(--color-bg-tertiary, #1a1a2e);
-    border-color: var(--color-primary, #3b82f6);
-}
-
-/* Toggle button states */
-.graph-toggle {
-    font-size: var(--font-size-xs, 11px);
-    padding: 4px 8px;
-}
-
-.graph-toggle.active {
-    background: var(--color-primary, #3b82f6);
-    border-color: var(--color-primary, #3b82f6);
-    color: white;
-}
-
-.graph-toggle:not(.active) {
-    opacity: 0.6;
-}
-
-.graph-controls-separator {
-    width: 1px;
-    height: 20px;
-    background: var(--color-border, #374151);
-    margin: 0 var(--spacing-xs, 4px);
-}
-
-.graph-help {
-    font-size: var(--font-size-xs, 11px);
-    color: var(--color-text-muted, #9ca3af);
-    margin-left: var(--spacing-sm, 8px);
-}
-
 /* Info overlay */
 .graph-info {
     position: absolute;
-    top: var(--spacing-md, 12px);
-    right: var(--spacing-md, 12px);
+    top: var(--space-3, 12px);
+    right: var(--space-3, 12px);
     background: var(--color-bg-secondary, #2d2d44);
     border: 1px solid var(--color-border, #374151);
     border-radius: var(--radius-sm, 4px);
-    padding: var(--spacing-xs, 4px) var(--spacing-sm, 8px);
+    padding: var(--space-1, 4px) var(--space-2, 8px);
     font-size: var(--font-size-sm, 13px);
     color: var(--color-text, #e5e7eb);
     z-index: 10;
@@ -280,8 +192,8 @@
 /* Mode toggle (2D/3D) */
 .graph-mode-toggle {
     position: absolute;
-    top: var(--spacing-md, 12px);
-    left: var(--spacing-md, 12px);
+    top: var(--space-3, 12px);
+    left: var(--space-3, 12px);
     display: flex;
     align-items: center;
     gap: 0;
@@ -329,76 +241,11 @@
 
 /* Layout picker — placed to the right of the 2D/3D toggle and
    sized to match its height so the controls baseline-align. */
-.graph-layout-picker {
-    position: absolute;
-    top: var(--spacing-md, 12px);
-    /* 88px = approximate toggle width (~64) + small gap. */
-    left: calc(var(--spacing-md, 12px) + 88px);
-    display: flex;
-    align-items: center;
-    gap: var(--spacing-xs, 4px);
-    height: 24px;
-    z-index: 10;
-}
-
-.graph-layout-label {
-    height: 24px;
-    line-height: 24px;
-    font-size: var(--font-size-xs, 11px);
-    font-weight: 600;
-    color: var(--color-text-muted, #9ca3af);
-}
-
-.graph-layout-select {
-    background: var(--color-bg-secondary, #2d2d44);
-    border: 1px solid var(--color-border, #374151);
-    border-radius: var(--radius-sm, 4px);
-    padding: 0 8px;
-    height: 24px;
-    box-sizing: border-box;
-    font-size: var(--font-size-xs, 11px);
-    font-weight: 600;
-    color: var(--color-text, #e5e7eb);
-    cursor: pointer;
-    /* Strip native UA chrome so the height/padding above are
-       authoritative; a custom caret keeps the dropdown affordance. */
-    appearance: none;
-    -webkit-appearance: none;
-    -moz-appearance: none;
-    background-image: linear-gradient(45deg, transparent 50%, var(--color-text-muted, #9ca3af) 50%),
-                      linear-gradient(135deg, var(--color-text-muted, #9ca3af) 50%, transparent 50%);
-    background-position: calc(100% - 14px) 50%, calc(100% - 10px) 50%;
-    background-size: 4px 4px, 4px 4px;
-    background-repeat: no-repeat;
-    padding-right: 22px;
-}
-
-.graph-layout-select:hover {
-    border-color: var(--color-primary, #3b82f6);
-}
-
-.graph-layout-select option:disabled {
-    color: var(--color-text-muted, #9ca3af);
-}
-
-/* Notation key. Pinned bottom-right, out of the way of the top-left
-   controls; scrolls if the graph is shorter than the key. */
-.graph-legend {
-    position: absolute;
-    bottom: var(--spacing-md, 12px);
-    right: var(--spacing-md, 12px);
-    z-index: 10;
-    background: var(--color-bg-secondary, #2d2d44);
-    border: 1px solid var(--color-border, #374151);
-    border-radius: var(--radius-sm, 4px);
-    padding: 4px;
-    max-height: calc(100% - 24px);
-    overflow-y: auto;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
-}
-
-.graph-legend canvas {
-    display: block;
+/* The schema graph's picker sits right of its 2D/3D toggle; the
+   shared base position (top-left) is in the shell. 88px = toggle
+   width (~64) + gap. */
+.graph-container .graph-layout-picker {
+    left: calc(var(--space-3, 12px) + 88px);
 }
 
 /* 3D Labels overlay */
@@ -849,7 +696,6 @@
         return escapeForText(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
-
     // Short, author-readable gloss for each LinkML edge kind. Looked
     // up by the stable `kind` tag the Rust side emits (independent of
     // the displayed label, which authors may override per-edge).
@@ -1055,7 +901,6 @@
         hoverCard.classList.remove('graph-hover-pinned');
         hideHoverCard();
     }
-
 
     // Deselect the current node: clear the pin, the selection, and the
     // canvas focus/highlight.
@@ -2170,13 +2015,6 @@
                 return;
             }
 
-            // R to reset view — through the wired button, so the key
-            // and the click share the shell's fit padding.
-            if (e.key === 'r' || e.key === 'R') {
-                if (resetBtn) resetBtn.click();
-                return;
-            }
-
             // F to focus on selected node (dims unconnected nodes)
             if (e.key === 'f' || e.key === 'F') {
                 if (viz && selectedNodeIndex >= 0 && typeof viz.focus_node === 'function') {
@@ -2204,16 +2042,16 @@
                 return;
             }
 
-            // Label toggles — routed through the buttons so the persisted
-            // state and the pressed styling stay in sync with a click.
-            if (e.key === 'l' || e.key === 'L') {
-                if (labelsAllBtn) labelsAllBtn.click();
-            } else if (e.key === 'n' || e.key === 'N') {
-                if (labelsNodesBtn) labelsNodesBtn.click();
-            } else if (e.key === 'e' || e.key === 'E') {
-                if (labelsEdgesBtn) labelsEdgesBtn.click();
-            }
         });
+
+        // The shared label/reset keyboard shortcuts (L/N/E/R); the
+        // graph-specific keys above (Escape/F/Delete) stay inline.
+        shell.wireLabelKeys({
+            labelsAll: labelsAllBtn,
+            labelsNodes: labelsNodesBtn,
+            labelsEdges: labelsEdgesBtn,
+            reset: resetBtn,
+        }, canvas.closest('.graph-container'));
 
         // Handle resize through the shared shell (viz.resize + re-fit).
         window.addEventListener('resize', () => {

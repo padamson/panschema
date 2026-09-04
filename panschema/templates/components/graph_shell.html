@@ -1,3 +1,134 @@
+{# Shared chrome for every graph canvas: the control overlay, buttons,
+   toggles, layout picker, and legend. One definition, so the schema and
+   instance toolbars can never drift in look — an active toggle is a
+   solid fill on both, the controls overlay the canvas on both. Class
+   names are prefix-free (`graph-*`); element IDs stay per-graph for
+   per-page uniqueness. Rides in the shell, which every page carrying a
+   graph already includes. #}
+<style>
+    /* Control overlay, pinned bottom-left over the canvas. */
+    .graph-controls {
+        position: absolute;
+        bottom: var(--space-3, 12px);
+        left: var(--space-3, 12px);
+        display: flex;
+        align-items: center;
+        gap: var(--space-2, 8px);
+        z-index: 10;
+    }
+    .graph-btn {
+        background: var(--color-bg-secondary, #2d2d44);
+        border: 1px solid var(--color-border, #374151);
+        border-radius: var(--radius-sm, 4px);
+        padding: 4px 10px;
+        color: var(--color-text, #e5e7eb);
+        cursor: pointer;
+        font-size: var(--font-size-sm, 13px);
+        transition: background 0.2s, border-color 0.2s;
+    }
+    .graph-btn:hover {
+        background: var(--color-bg-tertiary, #1a1a2e);
+        border-color: var(--color-primary, #3b82f6);
+    }
+    .graph-toggle {
+        font-size: var(--font-size-xs, 11px);
+        padding: 4px 8px;
+    }
+    /* Active = solid fill (the canonical on-state for both graphs). */
+    .graph-toggle.active {
+        background: var(--color-primary, #3b82f6);
+        border-color: var(--color-primary, #3b82f6);
+        color: white;
+    }
+    .graph-toggle:not(.active) {
+        opacity: 0.6;
+    }
+    .graph-controls-separator {
+        width: 1px;
+        height: 20px;
+        background: var(--color-border, #374151);
+        margin: 0 var(--space-1, 4px);
+    }
+    .graph-help {
+        font-size: var(--font-size-xs, 11px);
+        color: var(--color-text-muted, #9ca3af);
+        margin-left: var(--space-2, 8px);
+    }
+    /* The overlay row doesn't wrap; drop the hint on narrow viewports
+       so the buttons don't overflow the canvas edge — on both graphs. */
+    @media (max-width: 768px) {
+        .graph-help {
+            display: none;
+        }
+    }
+    .graph-layout-label {
+        height: 24px;
+        line-height: 24px;
+        font-size: var(--font-size-xs, 11px);
+        font-weight: 600;
+        color: var(--color-text-muted, #9ca3af);
+    }
+    .graph-layout-select {
+        background: var(--color-bg-secondary, #2d2d44);
+        border: 1px solid var(--color-border, #374151);
+        border-radius: var(--radius-sm, 4px);
+        padding: 0 8px;
+        height: 24px;
+        box-sizing: border-box;
+        font-size: var(--font-size-xs, 11px);
+        font-weight: 600;
+        color: var(--color-text, #e5e7eb);
+        cursor: pointer;
+        /* Strip native UA chrome so the height/padding above are
+           authoritative; a custom caret keeps the dropdown affordance. */
+        appearance: none;
+        -webkit-appearance: none;
+        -moz-appearance: none;
+        background-image: linear-gradient(45deg, transparent 50%, var(--color-text-muted, #9ca3af) 50%),
+                          linear-gradient(135deg, var(--color-text-muted, #9ca3af) 50%, transparent 50%);
+        background-position: calc(100% - 14px) 50%, calc(100% - 10px) 50%;
+        background-size: 4px 4px, 4px 4px;
+        background-repeat: no-repeat;
+        padding-right: 22px;
+    }
+    .graph-layout-select:hover {
+        border-color: var(--color-primary, #3b82f6);
+    }
+    .graph-layout-select option:disabled {
+        color: var(--color-text-muted, #9ca3af);
+    }
+    /* Layout picker overlay, top-left. A graph with a mode toggle
+       beside it (the schema graph) shifts this right — scoped to that
+       graph's container below. */
+    .graph-layout-picker {
+        position: absolute;
+        top: var(--space-3, 12px);
+        left: var(--space-3, 12px);
+        display: flex;
+        align-items: center;
+        gap: var(--space-1, 4px);
+        height: 24px;
+        z-index: 10;
+    }
+    /* Notation key, pinned bottom-right clear of the controls. */
+    .graph-legend {
+        position: absolute;
+        bottom: var(--space-3, 12px);
+        right: var(--space-3, 12px);
+        z-index: 10;
+        background: var(--color-bg-secondary, #2d2d44);
+        border: 1px solid var(--color-border, #374151);
+        border-radius: var(--radius-sm, 4px);
+        padding: 4px;
+        max-height: calc(100% - 24px);
+        overflow-y: auto;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+    }
+    .graph-legend canvas {
+        display: block;
+    }
+</style>
+
 {# Shared behaviours for every graph canvas on the page. The wasm
    Visualization is the one renderer; this module is the one place the
    page-side wiring around it lives — badge formatting, the settle-and-refit
@@ -351,6 +482,35 @@
             };
         }
 
+        // The label/reset keyboard shortcuts every graph shares: L/N/E
+        // click the label toggles (so styling + persistence stay in
+        // sync with a click), R clicks reset. Graph-specific keys
+        // (focus, deselect, unfix) stay with each graph. Ignored while
+        // typing, and scoped to `container` so only the hovered graph
+        // responds. One definition, so a second graph never
+        // re-implements it. `btns` = { labelsAll, labelsNodes,
+        // labelsEdges, reset }.
+        function wireLabelKeys(btns, container) {
+            // Scoped to the graph under the pointer: on a page carrying
+            // both graphs a keypress drives only the one the reader is
+            // looking at, never both. A document-wide listener would
+            // fire every graph's shortcuts at once.
+            let hovered = false;
+            if (container) {
+                container.addEventListener('mouseenter', () => { hovered = true; });
+                container.addEventListener('mouseleave', () => { hovered = false; });
+            }
+            document.addEventListener('keydown', (e) => {
+                if (!hovered) return;
+                if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+                const click = (b) => { if (b) b.click(); };
+                if (e.key === 'l' || e.key === 'L') click(btns.labelsAll);
+                else if (e.key === 'n' || e.key === 'N') click(btns.labelsNodes);
+                else if (e.key === 'e' || e.key === 'E') click(btns.labelsEdges);
+                else if (e.key === 'r' || e.key === 'R') click(btns.reset);
+            });
+        }
+
         // Escape clears the current selection, on whichever canvas has one.
         function wireDeselectKey(deselect) {
             document.addEventListener('keydown', (e) => {
@@ -361,6 +521,7 @@
         return {
             DRAG_SLOP_PX,
             FOCUS_HOP_DEPTH,
+            wireLabelKeys,
             makeDragGate,
             wireDeselectKey,
             setBadge,

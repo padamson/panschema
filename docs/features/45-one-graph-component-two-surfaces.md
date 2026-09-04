@@ -56,7 +56,7 @@ schema/instance sections of `docs/features/04` and `docs/features/33`
 
 ### Slice 1: The schema graph moves onto the shared shell
 
-**Status:** In Progress
+**Status:** Complete (39b882f, pushed)
 
 **User Value:** No visible change — the schema graph's controls behave
 exactly as before — but every behavior the two graphs share (view
@@ -65,7 +65,7 @@ toggle) now runs through `PanschemaGraphShell`, so a behavior fix or
 feature lands on both graphs at once.
 
 **Acceptance Criteria:**
-- [ ] The schema graph's reset/zoom, label toggles, hover-focus,
+- [x] The schema graph's reset/zoom, label toggles, hover-focus,
       arrows, groundings, and legend are wired through the same shell
       functions the instance graph uses; the inline duplicates in the
       schema template are deleted. Layout *persistence* stays local:
@@ -74,14 +74,14 @@ feature lands on both graphs at once.
       the stored choice) that the shell's `layoutPref` deliberately
       lacks — it is mode logic, not duplication, and moves with the
       mode question in slice 3.
-- [ ] Persisted preferences survive the migration: every localStorage
+- [x] Persisted preferences survive the migration: every localStorage
       key is unchanged, and the label prefs' one legacy JSON key seeds
       the per-toggle keys once.
-- [ ] Every existing schema-graph browser test passes unchanged —
+- [x] Every existing schema-graph browser test passes unchanged —
       hover focus, toggles, layout switching, legend, groundings.
-- [ ] Schema-only controls (2D/3D mode, Groundings) keep working,
+- [x] Schema-only controls (2D/3D mode, Groundings) keep working,
       composed beside the shell rather than forked from it.
-- [ ] The schema template shrinks by at least the lines the shell
+- [x] The schema template shrinks by at least the lines the shell
       already implements (measured in the commit, not estimated).
 
 **Notes:**
@@ -95,26 +95,72 @@ feature lands on both graphs at once.
 
 ### Slice 2: One chrome fragment, two inclusions
 
-**Status:** Not Started
+**Status:** In Progress
+
+**Decided 2026-09-04 (rendered-page review):** the schema graph's look
+is canonical — active toggles are a **solid fill**, and the toolbar is
+an **overlay on the canvas**. The instance graph adopts both. The
+shared CSS rides in `graph_shell.html` (already included wherever any
+graph renders), using `graph-*` class names; IDs stay per-graph
+(`graph-*` / `instance-graph-*`) for per-page uniqueness.
 
 **User Value:** The toolbar, hint, separator, and layout picker exist
 once, included by both sections with an id/class prefix and a
 graph-kind flag from context; the parity test's job collapses from
 "compare two copies" to "the fragment rendered twice".
 
+Two concrete divergences a review of the rendered pages (2026-09-04)
+confirmed, both from the duplicated CSS/markup this slice collapses:
+
+- **Active-toggle styling differs.** The schema graph's
+  `.graph-toggle.active` is a solid fill (`background:
+  --color-primary`, white text); the instance graph's
+  `.instance-graph-toggle.active` is only a border tint
+  (`border-color: --color-accent`, no fill). Same "on" state, two
+  visual languages — an active button reads as a filled chip on one
+  graph and an outlined one on the other.
+- **Toolbar arrangement differs.** The schema graph splits its
+  controls into two strips (2D/3D + Layout above the canvas, view
+  buttons + toggles below it); the instance graph puts everything in
+  one strip above the canvas.
+
 **Acceptance Criteria:**
-- [ ] A shared toolbar/picker fragment (the `rule_block_styles.html`
-      include precedent) renders both graphs' chrome; the per-graph
-      differences (schema-only buttons, the sgd noun, Hierarchical's
-      qualifier, the 3D clause) are parameterized or branched in one
-      place, stated in the fragment.
-- [ ] Layout-option wording has one source shared by both `<option>`
-      lists; the schema template's JS title maps read from or are
-      generated with it, so the three copies become one.
-- [ ] The two-sided parity test still passes and now also covers the
-      controls that were one-sided (separator, hint visibility rule).
-- [ ] The undefined `--spacing-sm` token cluster in the schema
-      template is replaced with the live `--space-*` scale.
+- [x] A shared toolbar *markup* fragment: one Askama macro
+      (`graph_toolbar.html`) renders both graphs' button strip. The
+      per-graph differences are macro arguments — the Arrows and Legend
+      tooltips (the schema's name T-box edge types the A-box lacks) —
+      plus two flags for the schema-only Groundings control and 3D pan
+      hint. The keyboard-shortcut gap is closed the same way: L/N/E/R
+      wiring is one shell function (`wireLabelKeys`) both graphs call,
+      so the `(L/N/E)` hints are honest on each without a second
+      implementation. The layout `<option>` list stays per-template
+      (its wording diverges more; see the deferred JS-map item).
+- [x] One shared stylesheet fragment defines the toolbar, button, and
+      toggle styles for both graphs, so the active-toggle look is
+      identical (one `.active` rule, not `.graph-toggle.active` vs
+      `.instance-graph-toggle.active`) and a style change lands on
+      both. The `graph-*` / `instance-graph-*` CSS blocks that mirror
+      each other collapse to one prefix-agnostic rule set.
+- [x] The two toolbars share one arrangement: the same controls sit
+      in the same place on both graphs (a reader moving between the
+      sections finds the reset, the toggles, and the layout picker
+      where they were), with the schema-only 2D/3D + Groundings
+      controls slotted into that shared arrangement rather than
+      forcing a different strip layout.
+- [x] The graph-agnostic layout-option tooltips are shared verbatim
+      between the two `<option>` lists (the parity test asserts it).
+      Folding the schema template's *dynamic* JS title maps
+      (`LAYOUT_TITLES_2D/3D`, `LAYOUT_LABELS_2D/3D`) into that one
+      source is deferred to slice 3: those maps exist for 2D/3D
+      mode-switching (the 3D variants have no `<option>` equivalent),
+      so they settle with the 2D/3D question, not before it.
+- [x] The parity test still passes and now asserts the shared
+      active-toggle style renders identically (one `.graph-toggle.active`
+      rule, the per-template `.instance-graph-toggle.active` gone) and
+      that both graphs render the shared control overlay.
+- [x] The undefined `--spacing-sm` token cluster in the schema
+      template is replaced with the live `--space-*` scale (all of
+      `--spacing-xs/sm/md/lg` converted).
 
 ---
 
@@ -142,13 +188,60 @@ instance graph or its absence is a stated decision rather than drift.
 
 ---
 
+### Slice 4: One hover card
+
+**Status:** Not Started
+
+**User Value:** Hovering a node shows the same card, built by the same
+code, on both graphs — so the card's layout, pinning, and dragging
+behave identically and a fix lands once.
+
+The instance graph already uses `PanschemaGraphShell.makeHoverCard`;
+the schema graph carries a **separate, richer** hover implementation
+(`buildCompactNodeHover`, `updateHoverCard`, `nodeCardMarkup`,
+`updateHoverState`, plus the pin/drag handlers) — the bulk of the ~15
+schema-only `.graph-hover-*` CSS classes and a large share of the
+template's 33 inline JS functions. It shows things the instance card
+does not: edge-type rows, full RDF triples, unresolved-reference and
+property-value detail, a pinned-and-draggable mode. This is a
+find-and-verify migration, not a mechanical swap.
+
+**Acceptance Criteria:**
+- [ ] The schema graph's hover card renders through the shared shell
+      helper, extended (in the shell, once) to carry the richer rows
+      the schema card needs — not by the schema template's own hover
+      functions, which are deleted.
+- [ ] Every schema hover behavior a browser test covers still passes:
+      the compact card, the pinned/draggable full card, edge-type and
+      triple detail.
+- [ ] The `.graph-hover-*` CSS collapses into the shared card style
+      the instance graph uses, with the schema-only rows added there.
+
+**Notes:**
+- Sequenced after slice 2 because the shared CSS/markup fragment is
+  the surface the shell's extended card styles hang off. Carries the
+  most risk in the feature (behavior-rich, browser-only), so it is
+  its own slice with the e2e suite as the gate.
+
+---
+
 ## Slice Priority and Dependencies
 
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
-| Slice 1 | Must Have | None | In Progress |
+| Slice 1 | Must Have | None | Complete (unpushed) |
 | Slice 2 | Must Have | Slice 1 | Not Started |
+| Slice 4 | Should Have | Slice 2 | Not Started |
 | Slice 3 | Nice to Have | Slice 2 | Not Started |
+
+Measured duplication surface (2026-09-04, post-slice-1): the schema
+template is 2,238 lines to the instance template's 521. Ten CSS class
+stems are defined in both under mirrored `graph-*` / `instance-graph-*`
+prefixes (btn, container, controls-separator, help, hover-card,
+layout-label, layout-select, legend, toggle) — slice 2's target. The
+schema-only `.graph-hover-*` family (~15 classes) and the inline hover
+functions are slice 4's. Slices 2 and 4 together account for most of
+the remaining gap; slice 3 is small by comparison.
 
 ## Things to watch
 

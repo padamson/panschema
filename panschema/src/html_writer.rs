@@ -5106,16 +5106,15 @@ mod tests {
         );
     }
 
-    /// The instance graph is the schema graph's vocabulary realized,
-    /// and its chrome says so: the caption names the shared symbols
-    /// (no invented ones), and the toolbar's shared pieces — the reset
-    /// label, the pan/zoom hint, and the tooltips of the layout options
-    /// whose wording is graph-agnostic — are read from BOTH toolbars on
-    /// one rendered page and compared, so drift on either side fails.
-    /// Intentional divergences stay one-sided: the sgd tooltip says
-    /// "datasets" where the schema's says "schemas", Hierarchical
-    /// carries no class-hierarchy qualifier (an A-box has none), and
-    /// force-directed drops the schema-only 3D clause.
+    /// Both toolbars render from one shared macro (`graph_toolbar.html`),
+    /// so their common controls cannot drift — the test proves the macro
+    /// rendered each graph's prefix with the shared parts identical (the
+    /// reset label, the pan/zoom hint, the keyboard hints) and the
+    /// per-graph arguments applied where they should: the schema's Arrows
+    /// tooltip names T-box edge types the A-box lacks, Groundings and the
+    /// 3D pan hint are schema-only, and the caption names the shared node
+    /// vocabulary. The layout `<option>` tooltips (still per-template)
+    /// stay graph-agnostic where the wording allows.
     #[test]
     fn instance_graph_chrome_matches_the_schema_graphs() {
         let schema = bottle_rack_schema();
@@ -5150,17 +5149,45 @@ mod tests {
             "the caption names the shared vocabulary; got: {caption}"
         );
 
-        let schema_toolbar = between(&html, r#"class="graph-controls""#, "</div>");
-        let instance_toolbar = between(&html, r#"class="instance-graph-toolbar""#, "</div>");
+        // Both toolbars now render the shared `graph-*` classes; the
+        // page is split at the instance block so each side's uniquely
+        // IDed controls are read from its own region.
+        let (schema_region, instance_region) = html
+            .split_once(r#"class="instance-graph-block""#)
+            .expect("instance graph block present");
+
+        // Both toolbars are the shared control overlay, not two shapes.
+        assert!(
+            schema_region.contains(r#"class="graph-controls""#)
+                && instance_region.contains(r#"class="graph-controls""#),
+            "both graphs render the shared control overlay"
+        );
+        assert!(
+            instance_region.contains(r#"class="graph-btn graph-toggle active""#),
+            "the instance toolbar uses the shared button + toggle classes"
+        );
+
+        // The active-toggle look is defined once, in the shell — not
+        // per template. The old instance-only rule must be gone, so an
+        // active toggle can never read differently between the graphs.
+        assert!(
+            html.contains(".graph-toggle.active {"),
+            "the shared active-toggle style is defined"
+        );
+        assert!(
+            !html.contains(".instance-graph-toggle.active"),
+            "the per-template active-toggle style is gone (shared now)"
+        );
+
         // The visible label after the tag closes — the `title` attribute
         // also contains "Reset", so only post-`>` text proves a label.
-        let visible_reset = |toolbar: &str, id: &str| {
-            let button = between(toolbar, id, "</button>");
+        let visible_reset = |region: &str, id: &str| {
+            let button = between(region, id, "</button>");
             let (_, text) = button.split_once('>').expect("button tag closes");
             text.split_whitespace().collect::<Vec<_>>().join(" ")
         };
-        let schema_reset = visible_reset(schema_toolbar, r#"id="graph-reset""#);
-        let instance_reset = visible_reset(instance_toolbar, r#"id="instance-graph-reset""#);
+        let schema_reset = visible_reset(schema_region, r#"id="graph-reset""#);
+        let instance_reset = visible_reset(instance_region, r#"id="instance-graph-reset""#);
         assert_eq!(
             instance_reset, schema_reset,
             "both toolbars label their reset control identically"
@@ -5170,11 +5197,57 @@ mod tests {
             "the reset control shows a visible label, not just an icon; got: {instance_reset}"
         );
 
-        let hint_of = |toolbar: &str, class: &str| between(toolbar, class, "</span>").to_string();
         assert_eq!(
-            hint_of(instance_toolbar, r#"class="instance-graph-help">"#),
-            hint_of(schema_toolbar, r#"class="graph-help" id="graph-help-2d">"#),
+            between(
+                instance_region,
+                r#"class="graph-help" id="instance-graph-help-2d">"#,
+                "</span>"
+            ),
+            between(
+                schema_region,
+                r#"class="graph-help" id="graph-help-2d">"#,
+                "</span>"
+            ),
             "both toolbars carry the same pan/zoom hint"
+        );
+
+        // The keyboard-hint gap is closed: both graphs wire L/N/E, so the
+        // shared macro's hints are honest on each.
+        assert!(
+            between(
+                instance_region,
+                r#"id="instance-graph-labels-all""#,
+                "</button>"
+            )
+            .contains("(L)"),
+            "the instance Labels toggle carries the shared (L) key hint"
+        );
+
+        // The two per-graph arguments landed on the right graph: the
+        // schema's Arrows names T-box edge types the A-box has none of.
+        assert!(
+            between(schema_region, r#"id="graph-arrows""#, "</button>").contains("is_a"),
+            "the schema Arrows tooltip describes T-box edge types"
+        );
+        assert!(
+            between(
+                instance_region,
+                r#"id="instance-graph-arrows""#,
+                "</button>"
+            )
+            .contains("assertion edges"),
+            "the instance Arrows tooltip describes A-box assertion edges"
+        );
+
+        // Groundings and the 3D pan hint are schema-only flags on the macro.
+        assert!(
+            schema_region.contains(r#"id="graph-toggle-external""#)
+                && !instance_region.contains("toggle-external"),
+            "Groundings renders on the schema graph only"
+        );
+        assert!(
+            schema_region.contains(r#"id="graph-help-3d""#) && !instance_region.contains("help-3d"),
+            "the 3D pan hint renders on the schema graph only"
         );
 
         // The graph-agnostic layout tooltips are shared verbatim. The

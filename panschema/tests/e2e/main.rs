@@ -2922,6 +2922,35 @@ fn e2e_instance_graph_has_hover_card_and_toolbar_parity() {
             "label and arrow toggles should flip viz state; got: {toggled}"
         );
 
+        // The keyboard gap is closed: pressing L flips label state on the
+        // instance canvas exactly as the schema graph's L key does. The
+        // toggles above left node labels off; L (all labels) drives the
+        // viz, proving the shared toolbar's (L) hint is honest here.
+        let keyed = page
+            .evaluate_value(
+                r#"(function(){
+                    var viz = window.__panschema_instance_viz;
+                    var container = document.querySelector('.instance-graph-container');
+                    // Scoped to the hovered graph: L fires while the pointer
+                    // is over the graph, and is inert once it leaves — so on
+                    // a two-graph page a keypress never drives both.
+                    container.dispatchEvent(new MouseEvent('mouseenter'));
+                    var before = viz.labels_enabled();
+                    document.dispatchEvent(new KeyboardEvent('keydown', {key: 'l'}));
+                    var whileHovered = viz.labels_enabled();
+                    container.dispatchEvent(new MouseEvent('mouseleave'));
+                    document.dispatchEvent(new KeyboardEvent('keydown', {key: 'l'}));
+                    var afterLeave = viz.labels_enabled();
+                    return before + ' -> ' + whileHovered + ' -> ' + afterLeave;
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert!(
+            keyed.contains("true -> false -> false"),
+            "L toggles labels while hovering the graph and is inert once the              pointer leaves (so a two-graph page never drives both); got: {keyed}"
+        );
+
         // Focus-on-hover honours its toggle: off means hovering focuses
         // nothing; back on, hovering focuses the node's neighborhood.
         let focus = page

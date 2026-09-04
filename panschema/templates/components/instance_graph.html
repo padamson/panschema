@@ -1,3 +1,4 @@
+{% import "components/graph_toolbar.html" as toolbar %}
 {# Instance (A-box) graph — the ontology's worked-example individuals as a
    connected force graph, rendered by panschema-viz on its own canvas,
    distinct from the schema (T-box) graph. Every declared dataset's payload
@@ -10,37 +11,29 @@
         symbols their classes and enumerations have in the schema graph,
         and edges are the object-property assertions between them.
     </p>
-    <div class="instance-graph-toolbar">
-        <button type="button" id="instance-graph-reset" class="instance-graph-btn" title="Reset view"><span>↺</span> Reset</button>
-        <button type="button" id="instance-graph-zoom-in" class="instance-graph-btn" title="Zoom in">+</button>
-        <button type="button" id="instance-graph-zoom-out" class="instance-graph-btn" title="Zoom out">−</button>
-        <span class="instance-graph-controls-separator"></span>
-        <button type="button" id="instance-graph-labels-all" class="instance-graph-btn instance-graph-toggle active" aria-pressed="true" title="Toggle all labels">Labels</button>
-        <button type="button" id="instance-graph-labels-nodes" class="instance-graph-btn instance-graph-toggle active" aria-pressed="true" title="Toggle node labels">Nodes</button>
-        <button type="button" id="instance-graph-labels-edges" class="instance-graph-btn instance-graph-toggle active" aria-pressed="true" title="Toggle edge labels">Edges</button>
-        <button type="button" id="instance-graph-focus-on-hover" class="instance-graph-btn instance-graph-toggle active" aria-pressed="true" title="Hover a node to highlight it plus its neighbors; the rest dims. Click to toggle.">Focus on hover</button>
-        <button type="button" id="instance-graph-arrows" class="instance-graph-btn instance-graph-toggle active" aria-pressed="true" title="Show directed arrowheads on assertion edges. Click to toggle.">Arrows</button>
-        <button type="button" id="instance-graph-legend-toggle" class="instance-graph-btn instance-graph-toggle"
-                aria-pressed="false"
-                title="Show the notation key for this instance graph">Legend</button>
-        <label for="instance-graph-layout-select" class="instance-graph-layout-label">Layout</label>
-        <select id="instance-graph-layout-select" class="instance-graph-layout-select">
-            <option value="sgd" title="Stochastic Gradient Descent on the stress objective (Euclidean distance ≈ graph distance). The default for most datasets: best quality-per-time and clean cluster separation. Converges in O(N · iters) vs stress's O(N² · iters) at comparable visible quality.">SGD (default · fast quality)</option>
-            <option value="stress" title="Stress majorization: minimizes the squared difference between Euclidean and graph-theoretic distances. Cleanest cluster separation, at moderate init cost.">Stress majorization (cluster separation)</option>
-            <option value="hierarchical" title="Sugiyama layered layout over the assertion structure — reads best when the data forms containment-like chains.">Hierarchical</option>
-            <option value="force-directed" title="Iterative physics simulation: connected nodes attract, all nodes repel, continuously animated. The interactive layout — drag a node and watch the rest relax. Doesn't separate clusters as cleanly as SGD/Stress.">Force-directed (interactive)</option>
-            <option value="kamada-kawai" title="Kamada-Kawai: the classic stress-minimization layout. Same objective as SGD/Stress (so it separates clusters) but a slower per-node optimizer.">Kamada-Kawai (slower init)</option>
-        </select>
-        <span class="instance-graph-help">Drag to pan • Scroll to zoom</span>
-    </div>
     <div class="instance-graph-container">
         <canvas id="instance-graph-canvas"></canvas>
+        {# Layout picker, top-left overlay. No 2D/3D toggle here (an A-box
+           is 2D-only), so it sits at the far left the shared base gives. #}
+        <div class="graph-layout-picker">
+            <label for="instance-graph-layout-select" class="graph-layout-label">Layout</label>
+            <select id="instance-graph-layout-select" class="graph-layout-select">
+                <option value="sgd" title="Stochastic Gradient Descent on the stress objective (Euclidean distance ≈ graph distance). The default for most datasets: best quality-per-time and clean cluster separation. Converges in O(N · iters) vs stress's O(N² · iters) at comparable visible quality.">SGD (default · fast quality)</option>
+                <option value="stress" title="Stress majorization: minimizes the squared difference between Euclidean and graph-theoretic distances. Cleanest cluster separation, at moderate init cost.">Stress majorization (cluster separation)</option>
+                <option value="hierarchical" title="Sugiyama layered layout over the assertion structure — reads best when the data forms containment-like chains.">Hierarchical</option>
+                <option value="force-directed" title="Iterative physics simulation: connected nodes attract, all nodes repel, continuously animated. The interactive layout — drag a node and watch the rest relax. Doesn't separate clusters as cleanly as SGD/Stress.">Force-directed (interactive)</option>
+                <option value="kamada-kawai" title="Kamada-Kawai: the classic stress-minimization layout. Same objective as SGD/Stress (so it separates clusters) but a slower per-node optimizer.">Kamada-Kawai (slower init)</option>
+            </select>
+        </div>
+        {# Control overlay — the shared toolbar macro; no Groundings
+           or 3D hint on an A-box (flags false). #}
+        {% call toolbar::controls("instance-graph", "Show directed arrowheads on assertion edges. Click to toggle.", "Show the notation key for this instance graph.", false, false) %}{% endcall %}
         {# Compact hover card: an individual's types/literals/IRI, or a
            shared value's enum and usage count (its only surface). #}
         <div class="instance-graph-hover-card" id="instance-graph-hover-card" style="display: none;"></div>
         {# Adaptive notation key: the viz draws only the rows this A-box
            uses, via the shared shell. Hidden until toggled. #}
-        <div class="instance-graph-legend" id="instance-graph-legend" style="display: none;"
+        <div class="graph-legend" id="instance-graph-legend" style="display: none;"
              role="img" aria-label="Instance graph notation key">
             <canvas id="instance-graph-legend-canvas"></canvas>
         </div>
@@ -59,46 +52,6 @@
         margin: 0 0 var(--space-2, 8px);
         color: var(--color-text-muted, #9ca3af);
         font-size: var(--font-size-sm, 13px);
-    }
-    .instance-graph-help {
-        font-size: var(--font-size-xs, 11px);
-        color: var(--color-text-muted, #9ca3af);
-        margin-left: var(--space-2, 8px);
-    }
-    .instance-graph-controls-separator {
-        width: 1px;
-        height: 20px;
-        background: var(--color-border, #374151);
-        margin: 0 var(--space-1, 4px);
-    }
-    @media (max-width: 768px) {
-        .instance-graph-help {
-            display: none;
-        }
-    }
-    .instance-graph-toolbar {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: var(--space-2, 8px);
-        margin-bottom: var(--space-2, 8px);
-    }
-    .instance-graph-layout-label {
-        font-size: var(--font-size-sm, 13px);
-        color: var(--color-text-muted, #9ca3af);
-    }
-    .instance-graph-btn {
-        font-size: var(--font-size-sm, 13px);
-        color: var(--color-text-muted, #9ca3af);
-        background: var(--color-bg-secondary, #2d2d44);
-        border: 1px solid var(--color-border, #374151);
-        border-radius: var(--radius-sm, 4px);
-        padding: 2px 8px;
-        cursor: pointer;
-    }
-    .instance-graph-toggle.active {
-        color: var(--color-text, #e5e7eb);
-        border-color: var(--color-accent, #4b9fd5);
     }
     .instance-graph-hover-card {
         position: absolute;
@@ -137,28 +90,6 @@
     }
     .instance-graph-hover-card .graph-hover-val {
         overflow-wrap: anywhere;
-    }
-    .instance-graph-legend {
-        position: absolute;
-        top: 8px;
-        right: 8px;
-        background: #1a1a2e;
-        border: 1px solid var(--color-border, #374151);
-        border-radius: var(--radius-md, 6px);
-        overflow: hidden;
-    }
-    /* The canvas carries its own extent-derived style size; the panel
-       wraps it, so the box is exactly as tall as the key's rows. */
-    .instance-graph-legend canvas {
-        display: block;
-    }
-    .instance-graph-layout-select {
-        font-size: var(--font-size-sm, 13px);
-        color: var(--color-text, #e5e7eb);
-        background: var(--color-bg-secondary, #2d2d44);
-        border: 1px solid var(--color-border, #374151);
-        border-radius: var(--radius-sm, 4px);
-        padding: 2px 6px;
     }
     .instance-graph-container {
         position: relative;
@@ -319,6 +250,16 @@
             labelsEdges.reapply();
             arrows.reapply();
         }
+
+        // The shared label/reset keyboard shortcuts — the same wiring
+        // the schema graph uses, so the toolbar's (L/N/E) hints are
+        // honest here without a second implementation.
+        shell.wireLabelKeys({
+            labelsAll: document.getElementById('instance-graph-labels-all'),
+            labelsNodes: document.getElementById('instance-graph-labels-nodes'),
+            labelsEdges: document.getElementById('instance-graph-labels-edges'),
+            reset: document.getElementById('instance-graph-reset'),
+        }, canvas.closest('.instance-graph-container'));
 
         // The hover card reads the shown dataset's wire nodes; simulation
         // indices match the document's node order.
