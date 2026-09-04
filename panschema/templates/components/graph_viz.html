@@ -41,19 +41,19 @@
             <button id="graph-zoom-in" class="graph-btn" title="Zoom in">+</button>
             <button id="graph-zoom-out" class="graph-btn" title="Zoom out">−</button>
             <span class="graph-controls-separator"></span>
-            <button id="graph-labels-all" class="graph-btn graph-toggle active" title="Toggle all labels (L)">
+            <button id="graph-labels-all" class="graph-btn graph-toggle active" aria-pressed="true" title="Toggle all labels (L)">
                 Labels
             </button>
-            <button id="graph-labels-nodes" class="graph-btn graph-toggle active" title="Toggle node labels (N)">
+            <button id="graph-labels-nodes" class="graph-btn graph-toggle active" aria-pressed="true" title="Toggle node labels (N)">
                 Nodes
             </button>
-            <button id="graph-labels-edges" class="graph-btn graph-toggle active" title="Toggle edge labels (E)">
+            <button id="graph-labels-edges" class="graph-btn graph-toggle active" aria-pressed="true" title="Toggle edge labels (E)">
                 Edges
             </button>
-            <button id="graph-focus-on-hover" class="graph-btn graph-toggle active" title="Hover a node to highlight it plus its 1-hop and 2-hop neighbors; the rest of the graph dims. Click to toggle.">
+            <button id="graph-focus-on-hover" class="graph-btn graph-toggle active" aria-pressed="true" title="Hover a node to highlight it plus its 1-hop and 2-hop neighbors; the rest of the graph dims. Click to toggle.">
                 Focus on hover
             </button>
-            <button id="graph-arrows" class="graph-btn graph-toggle active" title="Show directed arrowheads on edges (hollow triangle = is_a, filled = domain/range). Turn off when edge density makes them noisy. Click to toggle.">
+            <button id="graph-arrows" class="graph-btn graph-toggle active" aria-pressed="true" title="Show directed arrowheads on edges (hollow triangle = is_a, filled = domain/range). Turn off when edge density makes them noisy. Click to toggle.">
                 Arrows
             </button>
             <button id="graph-legend-toggle" class="graph-btn graph-toggle" title="Show the notation key: what each node shape, edge style, and crow's-foot terminator means. Click to toggle." aria-pressed="false">
@@ -63,7 +63,7 @@
                grounding nodes (a class's `subclass_of` into an upstream
                ontology). Lets a reader hide those muted anchors to focus on
                the schema's own classes. #}
-            <button id="graph-toggle-external" class="graph-btn graph-toggle active" style="display: none;" title="Show or hide external grounding nodes — the upstream ontology categories a class grounds into via subclass_of. Click to toggle.">
+            <button id="graph-toggle-external" class="graph-btn graph-toggle active" aria-pressed="true" style="display: none;" title="Show or hide external grounding nodes — the upstream ontology categories a class grounds into via subclass_of. Click to toggle.">
                 Groundings
             </button>
             <span class="graph-help" id="graph-help-2d">Drag to pan • Scroll to zoom</span>
@@ -642,6 +642,7 @@
 </style>
 
 <script type="module">
+    const shell = window.PanschemaGraphShell;
 // Graph visualization initialization
 (function() {
     const graphData = window.__PANSCHEMA_GRAPH_DATA__;
@@ -657,7 +658,7 @@
     // Badge formatting lives in the shared shell so every graph count on
     // the page reads identically.
     function setGraphBadge(el, nodes, edges) {
-        window.PanschemaGraphShell.setBadge(el, nodes, edges);
+        shell.setBadge(el, nodes, edges);
     }
     const resetBtn = document.getElementById('graph-reset');
     const zoomInBtn = document.getElementById('graph-zoom-in');
@@ -669,7 +670,11 @@
     let lastX = 0, lastY = 0;
     // Settle-and-refit lives in the shared shell; both canvases fit on the
     // same checkpoints.
-    const refitter = window.PanschemaGraphShell.makeRefitter();
+    const refitter = shell.makeRefitter();
+    const getViz = () => viz;
+    // The hover->focus mapping (hop depth, clear-on-leave) is the shared
+    // shell's; declared before the toggles below, whose handlers reset it.
+    const hoverFocus = shell.makeHoverFocus();
     let is3D = false;
     let wasmModule = null;
     let hasWebGPU = false;
@@ -679,111 +684,106 @@
     const labelsNodesBtn = document.getElementById('graph-labels-nodes');
     const labelsEdgesBtn = document.getElementById('graph-labels-edges');
 
-    // Focus-on-hover toggle (slice 10). Tracks whether moving the
-    // cursor over a node should bring that node + its 1-hop +
-    // 2-hop neighbors to full opacity (dimming the rest). State
-    // persists across reloads via localStorage so a user's
-    // preference survives navigation.
+    // Focus-on-hover toggle: whether hovering a node brings it plus its
+    // 1-hop and 2-hop neighbors to full opacity, dimming the rest.
     const focusOnHoverBtn = document.getElementById('graph-focus-on-hover');
-    const FOCUS_HOVER_PREF_KEY = 'panschema-focus-on-hover';
-    // Hop depth for click-driven focus, matching the shell's hover focus
-    // so the two affordances dim identically.
-    const FOCUS_HOP_DEPTH = 2;
-    let focusOnHoverEnabled = true;
-    try {
-        const stored = localStorage.getItem(FOCUS_HOVER_PREF_KEY);
-        if (stored !== null) focusOnHoverEnabled = stored === '1';
-    } catch (e) { /* localStorage may be unavailable */ }
-    if (focusOnHoverBtn) {
-        focusOnHoverBtn.classList.toggle('active', focusOnHoverEnabled);
-        focusOnHoverBtn.addEventListener('click', () => {
-            focusOnHoverEnabled = !focusOnHoverEnabled;
-            focusOnHoverBtn.classList.toggle('active', focusOnHoverEnabled);
-            try { localStorage.setItem(FOCUS_HOVER_PREF_KEY, focusOnHoverEnabled ? '1' : '0'); }
-            catch (e) { /* ignore */ }
-            // Clear any active focus when the user turns the feature
-            // off, otherwise the dimming sticks.
-            if (!focusOnHoverEnabled && viz && typeof viz.clear_focus === 'function') {
-                viz.clear_focus();
+    const focusToggle = shell.wireToggle(
+        focusOnHoverBtn,
+        getViz,
+        'panschema-focus-on-hover',
+        (v, on) => {
+            // Clear any active focus when the feature turns off,
+            // otherwise the dimming sticks.
+            if (!on && typeof v.clear_focus === 'function') {
+                v.clear_focus();
                 hoverFocus.reset();
             }
-        });
-    }
+        }
+    );
 
     // Directed-edge arrowheads (ADR-005): the toggle hides all heads
     // for dense graphs; line style + color still distinguish kinds.
-    // State lives in the WASM viz (defaults on); the pref is pushed to
-    // it on init via applyArrowsPref().
-    const arrowsBtn = document.getElementById('graph-arrows');
-    const ARROWS_PREF_KEY = 'panschema-arrows';
-    let arrowsEnabled = true;
-    try {
-        const stored = localStorage.getItem(ARROWS_PREF_KEY);
-        if (stored !== null) arrowsEnabled = stored === '1';
-    } catch (e) { /* localStorage may be unavailable */ }
-    if (arrowsBtn) {
-        arrowsBtn.classList.toggle('active', arrowsEnabled);
-        arrowsBtn.addEventListener('click', () => {
-            arrowsEnabled = !arrowsEnabled;
-            arrowsBtn.classList.toggle('active', arrowsEnabled);
-            try { localStorage.setItem(ARROWS_PREF_KEY, arrowsEnabled ? '1' : '0'); }
-            catch (e) { /* ignore */ }
-            if (viz && typeof viz.set_arrows === 'function') {
-                viz.set_arrows(arrowsEnabled);
-            }
-        });
-    }
-    // Push the persisted arrows pref into a freshly-created viz.
-    function applyArrowsPref() {
-        if (viz && typeof viz.set_arrows === 'function') {
-            viz.set_arrows(arrowsEnabled);
-        }
-    }
+    const arrowsToggle = shell.wireToggle(
+        document.getElementById('graph-arrows'),
+        getViz,
+        'panschema-arrows',
+        (v, on) => v.set_arrows(on)
+    );
 
     // External-grounding visibility toggle. The button is only meaningful
     // when the graph actually carries external nodes (a class's subclass_of
     // into an upstream ontology), so it stays hidden otherwise.
     const externalBtn = document.getElementById('graph-toggle-external');
-    const EXTERNAL_PREF_KEY = 'panschema-show-groundings';
     const hasExternalNodes = !!(graphData && graphData.nodes
         && graphData.nodes.some(n => n.node_type === 'external'));
-    let externalVisible = true;
-    try {
-        const stored = localStorage.getItem(EXTERNAL_PREF_KEY);
-        if (stored !== null) externalVisible = stored === '1';
-    } catch (e) { /* localStorage may be unavailable */ }
+    let externalToggle = null;
     if (externalBtn && hasExternalNodes) {
         externalBtn.style.display = '';
-        externalBtn.classList.toggle('active', externalVisible);
-        externalBtn.addEventListener('click', () => {
-            externalVisible = !externalVisible;
-            externalBtn.classList.toggle('active', externalVisible);
-            try { localStorage.setItem(EXTERNAL_PREF_KEY, externalVisible ? '1' : '0'); }
-            catch (e) { /* ignore */ }
-            applyExternalPref();
-            if (viz && typeof viz.render === 'function') viz.render();
-        });
-    }
-    // Reconcile a freshly-created viz (which starts with every type visible)
-    // to the persisted preference — flip the filter only when it disagrees.
-    function applyExternalPref() {
-        if (!viz || typeof viz.toggle_type_filter !== 'function'
-            || typeof viz.is_type_visible !== 'function') return;
-        if (viz.is_type_visible('External') !== externalVisible) {
-            viz.toggle_type_filter('External');
-        }
+        externalToggle = shell.wireToggle(
+            externalBtn,
+            getViz,
+            'panschema-show-groundings',
+            (v, on) => {
+                // Reconcile: a fresh viz starts with every type visible,
+                // so flip the filter only when it disagrees.
+                if (typeof v.toggle_type_filter !== 'function'
+                    || typeof v.is_type_visible !== 'function') return;
+                if (v.is_type_visible('External') !== on) {
+                    v.toggle_type_filter('External');
+                    if (typeof v.render === 'function') v.render();
+                }
+            }
+        );
     }
 
-    // Apply focus state given the currently-hovered node. Skips
-    // redundant WASM calls when the hover target hasn't changed
-    // since the last frame. The 2D path uses viz.hovered_node_index;
-    // the 3D path uses a separate JS hover system (see
-    // updateHoverState below) and isn't currently wired.
-    // The hover→focus mapping (hop depth, clear-on-leave) is the shared
-    // shell's; this wrapper only adds the schema page's enable toggle.
-    const hoverFocus = window.PanschemaGraphShell.makeHoverFocus();
+    // Label toggles, one persisted key each, wired through the shell. A
+    // pre-shell page stored all three under one JSON key; seed the
+    // per-toggle keys from it once so an existing preference survives.
+    try {
+        const LEGACY_LABEL_PREFS_KEY = 'panschema-label-prefs';
+        const legacy = localStorage.getItem(LEGACY_LABEL_PREFS_KEY);
+        if (legacy !== null) {
+            let prefs = null;
+            try { prefs = JSON.parse(legacy); } catch (_) { /* corrupt: nothing to keep */ }
+            if (prefs && typeof prefs === 'object') {
+                const seed = (key, value) => {
+                    if (localStorage.getItem(key) === null && typeof value === 'boolean') {
+                        localStorage.setItem(key, value ? '1' : '0');
+                    }
+                };
+                seed('panschema-labels-all', prefs.all);
+                seed('panschema-labels-nodes', prefs.nodes);
+                seed('panschema-labels-edges', prefs.edges);
+            }
+            // One-shot either way: an unreadable blob has nothing to
+            // preserve, and leaving it would re-run this forever.
+            localStorage.removeItem(LEGACY_LABEL_PREFS_KEY);
+        }
+    } catch (e) { /* localStorage may be unavailable */ }
+    const labelsAll = shell.wireToggle(
+        labelsAllBtn, getViz, 'panschema-labels-all', (v, on) => v.set_labels(on));
+    const labelsNodes = shell.wireToggle(
+        labelsNodesBtn, getViz, 'panschema-labels-nodes', (v, on) => v.set_node_labels(on));
+    const labelsEdges = shell.wireToggle(
+        labelsEdgesBtn, getViz, 'panschema-labels-edges', (v, on) => v.set_edge_labels(on));
+    // Push every persisted toggle into a freshly-created viz (mode and
+    // layout switches re-create it).
+    function reapplyToggles() {
+        labelsAll.reapply();
+        labelsNodes.reapply();
+        labelsEdges.reapply();
+        arrowsToggle.reapply();
+        if (externalToggle) externalToggle.reapply();
+    }
+
+    // Apply focus state given the currently-hovered node — the shared
+    // shell's mapping plus this page's enable toggle. Skips redundant
+    // WASM calls when the hover target hasn't changed since the last
+    // frame. The 2D path uses viz.hovered_node_index; the 3D path uses
+    // a separate JS hover system (see updateHoverState below) and
+    // isn't currently wired.
     function applyFocusOnHover(hoveredNodeIdx) {
-        if (!viz || !focusOnHoverEnabled) return;
+        if (!viz || !focusToggle.enabled()) return;
         hoverFocus.apply(viz, hoveredNodeIdx);
     }
 
@@ -803,12 +803,12 @@
     let selectedNodeIndex = -1;
     // Click-vs-drag discrimination, shared with the instance canvas so the
     // two cannot drift apart on what counts as a click.
-    const dragGate = window.PanschemaGraphShell.makeDragGate();
+    const dragGate = shell.makeDragGate();
 
     // Node dragging state
     let draggingNodeIndex = -1;
 
-    // Ephemeral hover card (slice 9): tracks the cursor and surfaces
+    // Ephemeral hover card: tracks the cursor and surfaces
     // node/edge details without committing to a click. State is just
     // the most-recent card content so we skip DOM updates when the
     // hover target is unchanged across frames.
@@ -1056,8 +1056,6 @@
         hideHoverCard();
     }
 
-    // LocalStorage key for label preferences
-    const LABEL_PREFS_KEY = 'panschema-label-prefs';
 
     // Deselect the current node: clear the pin, the selection, and the
     // canvas focus/highlight.
@@ -1076,79 +1074,6 @@
         hideHoverCard();
     }
 
-    // Save label preferences to localStorage
-    function saveLabelPrefs() {
-        if (!viz) return;
-        try {
-            const prefs = {
-                all: viz.labels_enabled(),
-                nodes: viz.node_labels_enabled(),
-                edges: viz.edge_labels_enabled()
-            };
-            localStorage.setItem(LABEL_PREFS_KEY, JSON.stringify(prefs));
-        } catch (e) {
-            // localStorage may not be available
-        }
-    }
-
-    // Load label preferences from localStorage
-    function loadLabelPrefs() {
-        try {
-            const stored = localStorage.getItem(LABEL_PREFS_KEY);
-            if (stored) {
-                return JSON.parse(stored);
-            }
-        } catch (e) {
-            // localStorage may not be available
-        }
-        return null;
-    }
-
-    // Apply saved label preferences to visualization
-    function applyLabelPrefs() {
-        if (!viz) return;
-        const prefs = loadLabelPrefs();
-        if (prefs) {
-            try {
-                viz.set_labels(prefs.all);
-                viz.set_node_labels(prefs.nodes);
-                viz.set_edge_labels(prefs.edges);
-            } catch (e) {
-                // Methods may not be available
-            }
-        }
-    }
-
-    function updateLabelButtonStates() {
-        if (!viz || !labelsAllBtn) return;
-
-        // Try to call the label methods - if they exist and work, enable the buttons
-        try {
-            // Both 2D and 3D visualizations should have these methods
-            const labelsOn = viz.labels_enabled();
-            const nodesOn = viz.node_labels_enabled();
-            const edgesOn = viz.edge_labels_enabled();
-
-            labelsAllBtn.classList.toggle('active', labelsOn);
-            labelsNodesBtn.classList.toggle('active', nodesOn);
-            labelsEdgesBtn.classList.toggle('active', edgesOn);
-            // Enable buttons
-            labelsAllBtn.disabled = false;
-            labelsNodesBtn.disabled = false;
-            labelsEdgesBtn.disabled = false;
-        } catch (e) {
-            // Methods not available - disable buttons
-            console.warn('Label methods not available:', e);
-            labelsAllBtn.classList.remove('active');
-            labelsNodesBtn.classList.remove('active');
-            labelsEdgesBtn.classList.remove('active');
-            labelsAllBtn.disabled = true;
-            labelsNodesBtn.disabled = true;
-            labelsEdgesBtn.disabled = true;
-        }
-    }
-
-    // Create label elements for 3D mode
     function create3DLabels() {
         // Clear existing labels
         nodeLabelElements = [];
@@ -1714,8 +1639,10 @@
             animationId = null;
         }
 
-        // Reset state
+        // Reset state; the hover memo too, so the first hover on the
+        // fresh canvas focuses instead of matching the old canvas's last.
         refitter.reset();
+        hoverFocus.reset();
 
         // When switching modes, we need a fresh canvas because:
         // - 2D context can't be reused for WebGPU
@@ -1770,17 +1697,8 @@
             setGraphBadge(nodeCount, viz.node_count(), viz.edge_count());
         }
 
-        // Apply saved label preferences
-        applyLabelPrefs();
-
-        // Apply saved arrowheads preference
-        applyArrowsPref();
-
-        // Apply saved external-grounding visibility preference
-        applyExternalPref();
-
-        // Update label button states
-        updateLabelButtonStates();
+        // Push the persisted toggle preferences into the fresh viz.
+        reapplyToggles();
 
         // Set up labels overlay for 3D mode
         updateLabelsOverlay();
@@ -1881,7 +1799,7 @@
         // Adaptive key when the viz offers it — only the rows this graph
         // uses, in a panel sized to those rows via the shared shell. The
         // standalone full key in a fixed box is the older-bundle fallback.
-        if (!window.PanschemaGraphShell.renderLegend(viz, lc)) {
+        if (!shell.renderLegend(viz, lc)) {
             const LW = 240, LH = 545;
             const dpr = window.devicePixelRatio || 1;
             lc.width = LW * dpr;
@@ -2040,7 +1958,7 @@
                         applyFocusOnHover(nodeIdx);
                     }
                 }
-                // Ephemeral hover card (slice 9): show details for the
+                // Ephemeral hover card: show details for the
                 // hovered node or edge anchored near the cursor. Uses
                 // viewport coords so positioning is independent of the
                 // canvas's own scroll/transform.
@@ -2194,43 +2112,8 @@
             isDragging = false;
         });
 
-        // Button controls
-        resetBtn.addEventListener('click', () => {
-            if (viz) viz.fit_to_bounds(40);
-        });
-
-        zoomInBtn.addEventListener('click', () => {
-            if (viz) viz.zoom(1.2);
-        });
-
-        zoomOutBtn.addEventListener('click', () => {
-            if (viz) viz.zoom(0.8);
-        });
-
-        // Label toggle button event listeners
-        labelsAllBtn.addEventListener('click', () => {
-            if (viz) {
-                viz.toggle_labels();
-                updateLabelButtonStates();
-                saveLabelPrefs();
-            }
-        });
-
-        labelsNodesBtn.addEventListener('click', () => {
-            if (viz) {
-                viz.toggle_node_labels();
-                updateLabelButtonStates();
-                saveLabelPrefs();
-            }
-        });
-
-        labelsEdgesBtn.addEventListener('click', () => {
-            if (viz) {
-                viz.toggle_edge_labels();
-                updateLabelButtonStates();
-                saveLabelPrefs();
-            }
-        });
+        // View buttons: reset re-fits, zoom steps match every canvas.
+        shell.wireViewButtons(getViz, resetBtn, zoomInBtn, zoomOutBtn);
 
         // Pinned-card close button: unpin but keep the node selected.
         hoverClose.addEventListener('click', () => {
@@ -2287,11 +2170,10 @@
                 return;
             }
 
-            // R to reset view
+            // R to reset view — through the wired button, so the key
+            // and the click share the shell's fit padding.
             if (e.key === 'r' || e.key === 'R') {
-                if (viz) {
-                    viz.fit_to_bounds(40);
-                }
+                if (resetBtn) resetBtn.click();
                 return;
             }
 
@@ -2308,7 +2190,7 @@
                         // as the hover-driven focus so the two
                         // affordances produce visually-consistent
                         // dimming.
-                        viz.focus_node(selectedNodeIndex, FOCUS_HOP_DEPTH);
+                        viz.focus_node(selectedNodeIndex, shell.FOCUS_HOP_DEPTH);
                     }
                 }
                 return;
@@ -2322,25 +2204,14 @@
                 return;
             }
 
-            // Label toggles
+            // Label toggles — routed through the buttons so the persisted
+            // state and the pressed styling stay in sync with a click.
             if (e.key === 'l' || e.key === 'L') {
-                if (viz) {
-                    viz.toggle_labels();
-                    updateLabelButtonStates();
-                    saveLabelPrefs();
-                }
+                if (labelsAllBtn) labelsAllBtn.click();
             } else if (e.key === 'n' || e.key === 'N') {
-                if (viz) {
-                    viz.toggle_node_labels();
-                    updateLabelButtonStates();
-                    saveLabelPrefs();
-                }
+                if (labelsNodesBtn) labelsNodesBtn.click();
             } else if (e.key === 'e' || e.key === 'E') {
-                if (viz) {
-                    viz.toggle_edge_labels();
-                    updateLabelButtonStates();
-                    saveLabelPrefs();
-                }
+                if (labelsEdgesBtn) labelsEdgesBtn.click();
             }
         });
 
@@ -2349,7 +2220,7 @@
             if (viz && canvas) {
                 canvas.width = canvas.offsetWidth * window.devicePixelRatio;
                 canvas.height = canvas.offsetHeight * window.devicePixelRatio;
-                window.PanschemaGraphShell.forwardResize(viz, canvas);
+                shell.forwardResize(viz, canvas);
             }
         });
 

@@ -1064,6 +1064,30 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         .await
         .expect("restore arrows toggle");
 
+    // Toggles drive the wasm viz, not just their own styling — the
+    // same contract the instance canvas asserts, on the schema canvas.
+    let toggled = page
+        .evaluate_value(
+            r#"(function(){
+                var viz = window.__panschema_viz;
+                var before = viz.node_labels_enabled() + ':' + viz.show_arrows();
+                document.getElementById('graph-labels-nodes').click();
+                document.getElementById('graph-arrows').click();
+                var after = viz.node_labels_enabled() + ':' + viz.show_arrows();
+                document.getElementById('graph-labels-nodes').click();
+                document.getElementById('graph-arrows').click();
+                return before + ' -> ' + after;
+            })()"#,
+        )
+        .await
+        .unwrap_or_default();
+    assert!(
+        toggled.contains("true:true -> false:false"),
+        "[{}] schema label and arrow toggles should flip viz state; got: {}",
+        browser_name,
+        toggled
+    );
+
     // 9b. Notation legend: the Legend control renders the key onto a
     // standalone canvas (proving the wasm `render_legend` export ran —
     // a non-zero backing-store width means it sized and drew), defaults

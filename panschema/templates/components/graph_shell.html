@@ -44,7 +44,8 @@
         }
 
         // Hovering a node focuses its neighborhood; leaving clears it. The
-        // hop depth matches on every canvas so focus means one thing.
+        // hop depth is exported so click-driven focus on any canvas dims
+        // exactly as hover-driven focus does.
         const FOCUS_HOP_DEPTH = 2;
         function makeHoverFocus() {
             let last = -1;
@@ -168,7 +169,12 @@
 
         // A persisted on/off toggle button: applies on wire-up, flips on
         // click, and re-applies to a fresh viz (dataset/layout switches
-        // re-create it). `apply(viz, on)` does the viz-side effect.
+        // re-create it). `apply(viz, on)` does the viz-side effect. A
+        // click commits — styling and storage — only when the viz
+        // accepted the state (or none exists yet to disagree): a
+        // throwing apply (a viz without the method) reverts the flip
+        // and warns, so a dead control can never persist a state the
+        // canvas never showed.
         function wireToggle(btn, getViz, storageKey, apply) {
             let on = true;
             try {
@@ -177,29 +183,44 @@
             } catch (_) {
                 /* storage unavailable */
             }
-            function sync() {
+            function style() {
                 if (btn) {
                     btn.classList.toggle('active', on);
                     btn.setAttribute('aria-pressed', String(on));
                 }
+            }
+            function push() {
                 const viz = getViz();
-                if (viz) {
-                    try {
-                        apply(viz, on);
-                    } catch (_) {
-                        /* older bundle without the method */
-                    }
+                if (!viz) return true;
+                try {
+                    apply(viz, on);
+                    return true;
+                } catch (e) {
+                    console.warn(
+                        'graph toggle failed',
+                        storageKey,
+                        e?.message ?? e
+                    );
+                    return false;
                 }
+            }
+            function sync() {
+                style();
+                push();
             }
             if (btn) {
                 btn.addEventListener('click', () => {
                     on = !on;
+                    if (!push()) {
+                        on = !on;
+                        return;
+                    }
                     try {
                         window.localStorage.setItem(storageKey, on ? '1' : '0');
                     } catch (_) {
                         /* storage unavailable */
                     }
-                    sync();
+                    style();
                 });
             }
             sync();
@@ -339,6 +360,7 @@
 
         return {
             DRAG_SLOP_PX,
+            FOCUS_HOP_DEPTH,
             makeDragGate,
             wireDeselectKey,
             setBadge,
