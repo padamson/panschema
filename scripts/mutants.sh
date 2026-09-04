@@ -69,7 +69,7 @@ echo "mutating changes in ${BASE}..HEAD ($(wc -l < "$DIFF") diff lines)"
 # never depends on config discovery (the config was silently ignored
 # for months when it lived at the repo root instead of `.cargo/`).
 # Keep this list in sync with `.cargo/mutants.toml`:
-# - `panschema-viz/src/{lib,canvas2d,webgpu,simulation3d,camera,camera3d,interaction,labels,graph_types}.rs`:
+# - `panschema-viz/src/{lib,canvas2d,camera,interaction,labels,graph_types}.rs`:
 #   wasm-only or otherwise need a browser context to test; mutation
 #   testing on the native target can't catch their mutants.
 # - `panschema-viz/src/{simulation,sim_common}.rs` are intentionally
@@ -83,26 +83,17 @@ echo "mutating changes in ${BASE}..HEAD ($(wc -l < "$DIFF") diff lines)"
 #   entry layers (arg parsing + dispatch); their behavior is covered by
 #   the integration suite, which `--lib` mutant runs don't execute, so
 #   every mutant there would trivially survive.
-# - `panschema/src/gpu/**`: gated behind the optional `gpu` feature, which
-#   no CI job builds or tests (needs a real/software GPU adapter the
-#   runners don't provision). Left in scope, its mutants build with the
-#   feature off — `mod gpu;` isn't even compiled in — so every mutant
-#   trivially "passes" regardless of the module's own (locally-run) tests.
 #
 # `--jobs 4` parallelises mutant runs; on a 10-core laptop the per-push
 # diff job goes from minutes-serial to single-digit wall time. Users can
 # override by passing `--jobs N` as a trailing arg (later wins).
 exec cargo mutants --in-diff "$DIFF" --jobs 4 \
   --exclude 'panschema/src/components.rs' \
-  --exclude 'panschema/src/gpu/**' \
   --exclude 'panschema/src/bin/mdbook_panschema.rs' \
   --exclude 'panschema/src/main.rs' \
   --exclude 'panschema-viz/src/lib.rs' \
   --exclude 'panschema-viz/src/canvas2d.rs' \
-  --exclude 'panschema-viz/src/webgpu.rs' \
-  --exclude 'panschema-viz/src/simulation3d.rs' \
   --exclude 'panschema-viz/src/camera.rs' \
-  --exclude 'panschema-viz/src/camera3d.rs' \
   --exclude 'panschema-viz/src/interaction.rs' \
   --exclude 'panschema-viz/src/labels.rs' \
   --exclude 'panschema-viz/src/graph_types.rs' \

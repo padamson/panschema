@@ -12,7 +12,7 @@ const MAX_SCALE: f32 = 40.0;
 
 /// Fraction of the canvas height kept clear (split between top and
 /// bottom) when fitting the graph, so the control bars overlaid on the
-/// canvas — the 2D/3D + Layout selector along the top and the
+/// canvas — the Layout selector along the top and the
 /// Reset / zoom / toggle strip along the bottom — don't sit on top of
 /// nodes and labels.
 const CONTROL_BAR_RESERVE_FRAC: f32 = 0.14;

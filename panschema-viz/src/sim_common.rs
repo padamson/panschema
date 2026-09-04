@@ -1,4 +1,4 @@
-//! Helpers shared between the 2D (`simulation`) and 3D (`simulation3d`)
+//! Helpers shared by the force simulation (`simulation`)
 //! force simulations. Anything in here must be dimension-agnostic — it
 //! works on indices and edge endpoints, not positions.
 

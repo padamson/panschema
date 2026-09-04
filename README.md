@@ -22,7 +22,6 @@ Think of it as **pandoc for data modeling** — a single tool that speaks all sc
 - **Fast**: Generate complete documentation in milliseconds
 - **CI-native**: Single binary, no JVM or complex dependencies
 - **Hot reload**: Development server with live preview
-- **GPU visualization** (optional `gpu` feature): 3D force-directed graph for schema exploration
 - **mdbook integration**: `mdbook-panschema install` adds a maintained toolbar link from an mdbook book to its schema docs
 - **Loud about gaps**: warns on LinkML constructs it parses but doesn't model (so nothing is silently dropped); `generate --strict` fails the build instead
 - **Postgres DDL**: `generate --format postgres` emits `CREATE TABLE`/`CREATE TYPE` DDL from the same LinkML schema your Rust structs come from — no hand-written SQL to keep in sync
@@ -300,18 +299,6 @@ Individual IRIs mint identically across the docs, the RDF, and the graph
 JSON, so a SPARQL query and a graph-JSON traversal agree on which node is
 which.
 
-### GPU Visualization (Native - Optional)
-
-For native GPU-accelerated visualization during development:
-
-```bash
-# Build with GPU feature
-cargo build --features gpu
-
-# Run tests
-cargo test --features gpu --lib
-```
-
 See [examples/university/](examples/university/) for a sample schema and [docs/features/04-schema-force-graph-visualization.md](docs/features/04-schema-force-graph-visualization.md) for the full feature plan.
 
 ## Linking an mdbook book to the schema docs
@@ -412,7 +399,7 @@ On a fresh checkout, `cargo build` invokes wasm-pack via `panschema/build.rs` to
 The WASM bundle in `panschema-viz/pkg/` is cached across builds. If you edit `panschema-viz/src/`, rebuild it explicitly:
 
 ```bash
-wasm-pack build panschema-viz --target web --dev --features webgpu
+wasm-pack build panschema-viz --target web --dev
 ```
 
 (Use `--release` instead of `--dev` for size-optimized bundles in CI / publish.) Schema authors who don't touch `panschema-viz/` can ignore this — `cargo build` keeps using the previously-built bundle.

@@ -206,3 +206,33 @@ each is independently shippable and dogfoodable:
 5. **3D reduced form**: per-kind edge color + cone heads.
 
 Slices 2–5 are new feature-04 slices added when this ADR is accepted.
+
+## Amendment 2026-09-04: the 3D renderer is removed
+
+The WebGPU 3D path this ADR treats as the graph's second renderer no
+longer exists. It is removed entirely — `simulation3d.rs`,
+`webgpu.rs`, `camera3d.rs`, the `webgpu` cargo feature, the schema
+page's 2D/3D toggle, and the separate native GPU force-simulation
+that sat behind panschema's `gpu` feature.
+
+**Why.** The 3D path was never load-bearing: it required WebGPU (so
+the toggle was disabled for many readers), supported only the
+force-directed layout while the static layouts that read best for
+schemas were 2D-only, and rendered a deliberately reduced notation —
+the "3D reduced form" this ADR describes, which never gained the
+per-kind node shapes the 2D canvas has. No CI job built the native
+`gpu` feature, and its module was unreferenced by any other code. In
+practice the 2D canvas answered every question the graph is asked.
+
+**What this changes in the conventions above.** The 2D canvas is now
+the only renderer, so the "reference renderer" framing and the
+2D/3D notation gap (points 5 in *Implementation staging*, the *3D
+(reduced form)* section, and the consequence noting the gap) describe
+code that is gone. The 2D conventions themselves — per-kind node
+shapes, edge line style and color, crow's-foot cardinality, the
+legend — are unchanged and remain in force.
+
+**Resurrection.** The implementation is in git history at the commit
+that removed it; a future 3D renderer should start from the 2D
+notation as the contract to match, rather than reviving the reduced
+form.

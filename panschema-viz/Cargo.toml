@@ -3,7 +3,7 @@ name = "panschema-viz"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
-description = "WebGPU visualization for panschema schema graphs"
+description = "Interactive canvas visualization for panschema schema graphs"
 license = "Apache-2.0"
 repository = "https://github.com/padamson/panschema"
 
@@ -12,8 +12,6 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = []
-# Enable WebGPU acceleration (requires wgpu)
-webgpu = ["dep:wgpu", "dep:bytemuck"]
 
 [dependencies]
 # WASM-specific
@@ -57,9 +55,5 @@ mutants = "0.0.4"
 # (post-fork), so we no longer carry both petgraph 0.6 and 0.8 in the
 # lock file.
 rust-sugiyama = "0.4"
-
-# WebGPU (optional, only with webgpu feature)
-wgpu = { version = "30", features = ["webgpu"], optional = true }
-bytemuck = { version = "1", features = ["derive"], optional = true }
 
 # Profile settings are in workspace root Cargo.toml

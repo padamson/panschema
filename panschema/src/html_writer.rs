@@ -5239,15 +5239,16 @@ mod tests {
             "the instance Arrows tooltip describes A-box assertion edges"
         );
 
-        // Groundings and the 3D pan hint are schema-only flags on the macro.
+        // Groundings is the one schema-only flag on the macro.
         assert!(
             schema_region.contains(r#"id="graph-toggle-external""#)
                 && !instance_region.contains("toggle-external"),
             "Groundings renders on the schema graph only"
         );
+        // The graph renders in 2D only; no mode toggle or orbit hint.
         assert!(
-            schema_region.contains(r#"id="graph-help-3d""#) && !instance_region.contains("help-3d"),
-            "the 3D pan hint renders on the schema graph only"
+            !html.contains("help-3d") && !html.contains("graph-mode-3d"),
+            "no page carries a 3D mode control or orbit hint"
         );
 
         // The graph-agnostic layout tooltips are shared verbatim. The

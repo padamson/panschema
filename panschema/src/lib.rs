@@ -34,6 +34,3 @@ pub mod shacl_writer;
 pub mod source;
 pub mod validate;
 pub mod yaml_reader;
-
-#[cfg(feature = "gpu")]
-pub mod gpu;

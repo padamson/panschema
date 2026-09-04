@@ -88,16 +88,10 @@ tempfile = "3.24.0"
 # brittle line-number exclude in scripts/mutants.sh.
 mutants = "0.0.4"
 
-# GPU force simulation (optional)
-wgpu = { version = "30", optional = true }
-bytemuck = { version = "1", features = ["derive"], optional = true }
-pollster = { version = "1.0", optional = true }
 
 [features]
 # Enable development tools (styleguide command, component preview)
 dev = []
-# GPU-accelerated force simulation for graph visualization
-gpu = ["dep:wgpu", "dep:bytemuck", "dep:pollster"]
 # Expose schema-manager test fixtures (e.g. tarball builder) to integration tests.
 # Not a runtime feature — kept off by default; integration tests opt in.
 test-fixtures = []

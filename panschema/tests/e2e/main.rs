@@ -1400,60 +1400,6 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
         canvas_height
     );
 
-    // 24. Verify 2D/3D mode toggle elements exist
-    // The mode toggle has 2D and 3D buttons; 3D may be disabled if WebGPU unavailable
-    let mode_toggle = page.locator("#graph-mode-toggle");
-    let mode_toggle_count = mode_toggle
-        .count()
-        .await
-        .expect("Failed to count mode toggle");
-    assert!(
-        mode_toggle_count > 0,
-        "[{}] Mode toggle element should exist",
-        browser_name
-    );
-
-    let mode_2d_btn = page.locator("#graph-mode-2d");
-    let mode_2d_count = mode_2d_btn
-        .count()
-        .await
-        .expect("Failed to count 2D mode button");
-    assert!(
-        mode_2d_count > 0,
-        "[{}] 2D mode button should exist",
-        browser_name
-    );
-
-    let mode_3d_btn = page.locator("#graph-mode-3d");
-    let mode_3d_count = mode_3d_btn
-        .count()
-        .await
-        .expect("Failed to count 3D mode button");
-    assert!(
-        mode_3d_count > 0,
-        "[{}] 3D mode button should exist",
-        browser_name
-    );
-
-    // Check 2D button is active (default mode)
-    let mode_2d_classes = mode_2d_btn
-        .get_attribute("class")
-        .await
-        .expect("Failed to get 2D button class")
-        .unwrap_or_default();
-    println!("[{}] 2D button classes: {}", browser_name, mode_2d_classes);
-
-    // Check if 3D button is disabled (WebGPU typically not available in headless)
-    let mode_3d_disabled = mode_3d_btn
-        .get_attribute("disabled")
-        .await
-        .expect("Failed to check 3D button disabled state");
-    if mode_3d_disabled.is_some() {
-        println!("[{}] 3D mode disabled (WebGPU not available)", browser_name);
-    } else {
-        println!("[{}] 3D mode available", browser_name);
-    }
-
     // 24b. Layout picker: the chrome is present, the implemented
     // variant is selectable, and the rest are disabled.
     let layout_select = page.locator("#graph-layout-select");
@@ -1530,64 +1476,6 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_u
             unimplemented
         );
     }
-
-    // Force the picker into 3D mode through the exposed helper
-    // (toggling 3D via the UI requires WebGPU support, which isn't
-    // available in every e2e runner). In 3D only force-directed
-    // is implemented, so every other option must be disabled with
-    // a "(not implemented)" label suffix.
-    page.evaluate::<(), ()>("window.__panschema_apply_layout_picker_mode(true)", None)
-        .await
-        .expect("Failed to force picker into 3D mode");
-    let fd_3d = page.locator("#graph-layout-select option[value=\"force-directed\"]");
-    let fd_disabled = fd_3d
-        .get_attribute("disabled")
-        .await
-        .expect("Failed to read force-directed disabled attr in 3D mode");
-    assert!(
-        fd_disabled.is_none(),
-        "[{}] force-directed must stay selectable in 3D mode",
-        browser_name
-    );
-    for layout in &[
-        "kamada-kawai",
-        "hierarchical",
-        "stress",
-        "sgd",
-        "circular",
-        "radial-tree",
-    ] {
-        // In 3D mode every non-force-directed layout (including the
-        // 2D-only implemented ones, KK and Hierarchical) is greyed.
-        let opt = page.locator(format!("#graph-layout-select option[value=\"{layout}\"]"));
-        let disabled = opt
-            .get_attribute("disabled")
-            .await
-            .expect("Failed to read disabled attr in 3D mode");
-        assert!(
-            disabled.is_some(),
-            "[{}] Option `{}` must be disabled in 3D mode",
-            browser_name,
-            layout
-        );
-        let label = opt
-            .text_content()
-            .await
-            .expect("Failed to read option label in 3D mode")
-            .unwrap_or_default();
-        assert!(
-            label.contains("(not implemented)"),
-            "[{}] Option `{}` should carry `(not implemented)` label in 3D mode; got `{}`",
-            browser_name,
-            layout,
-            label
-        );
-    }
-    // Restore the 2D state so subsequent assertions in this test
-    // don't see the 3D-mode label/disabled flags.
-    page.evaluate::<(), ()>("window.__panschema_apply_layout_picker_mode(false)", None)
-        .await
-        .expect("Failed to restore picker to 2D mode");
 
     // 25. Test sidebar navigation to Schema Graph section
     graph_sidebar_link

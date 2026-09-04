@@ -53,7 +53,7 @@ fn main() {
     if !wasm_pack_available() {
         eprintln!();
         eprintln!("error: `wasm-pack` is not on PATH. The HTML writer");
-        eprintln!("       embeds the WebGPU visualization bundle at");
+        eprintln!("       embeds the graph visualization bundle at");
         eprintln!("       compile time, so wasm-pack must be installed.");
         eprintln!();
         eprintln!("Fix: `cargo install wasm-pack`");
@@ -71,14 +71,7 @@ fn main() {
     // Use panschema-viz/target/ so wasm-pack's recursive cargo
     // doesn't fight the outer cargo for the workspace target lock.
     let status = Command::new("wasm-pack")
-        .args([
-            "build",
-            "--target",
-            "web",
-            profile_flag,
-            "--features",
-            "webgpu",
-        ])
+        .args(["build", "--target", "web", profile_flag])
         .current_dir("../panschema-viz")
         .env("CARGO_TARGET_DIR", "target")
         .stdout(Stdio::inherit())

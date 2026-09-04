@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **The 3D graph renderer and the GPU force-simulation are gone; the schema graph is 2D.** The schema page's 2D/3D toggle, the WebGPU render path behind it, and the separate native GPU force-simulation (the optional `gpu` and `webgpu` cargo features, and their `wgpu`/`bytemuck`/`pollster` dependencies) are removed, and with them the `generate --viz-mode` flag — it only ever printed which renderer the page *might* use (the page decided on its own), and there is now exactly one. The 3D path required WebGPU — so the toggle was disabled for many readers — ran only the force-directed layout while the static layouts that read best for schemas were 2D-only, and drew a deliberately reduced notation that never gained the per-kind node shapes the 2D canvas has; the native GPU module was reachable from no other code and built by no CI job. Everything the graph does otherwise is unchanged: the same layouts, notation, legend, hover, focus, and controls. One simplification follows for readers: the layout picker no longer greys options out by mode — every implemented layout is selectable, and unimplemented ones stay disabled as before.
+
 ### Fixed
 
 - **The instance graph's caption and controls now match the schema graph's.** The caption described nodes as teal hexagons — a vocabulary the canvas stopped drawing when instance nodes took their classes' symbols — and now names the shared encoding. The toolbar closes its drift from the schema graph's: a labeled reset control, the pan/zoom hint (hidden on narrow viewports, as there), a separator between the view and toggle groups, and layout options that explain themselves in tooltips.

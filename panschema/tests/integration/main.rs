@@ -1201,56 +1201,6 @@ fn dangling_instance_reference_warns_and_fails_under_strict() {
     let _ = fs::remove_dir_all(dir);
 }
 
-#[test]
-fn viz_mode_flag_is_recognized() {
-    let output_dir = std::env::temp_dir().join("panschema_viz_mode_test");
-    let _ = fs::remove_dir_all(&output_dir);
-
-    // Test --viz-mode 2d
-    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .args([
-            "generate",
-            "--schema",
-            "tests/fixtures/reference.ttl",
-            "--output",
-            output_dir.to_str().unwrap(),
-            "--viz-mode",
-            "2d",
-        ])
-        .status()
-        .expect("Failed to execute panschema");
-
-    assert!(
-        status.success(),
-        "panschema with --viz-mode 2d exited with error"
-    );
-
-    // Cleanup
-    let _ = fs::remove_dir_all(&output_dir);
-
-    // Test --viz-mode 3d
-    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .args([
-            "generate",
-            "--schema",
-            "tests/fixtures/reference.ttl",
-            "--output",
-            output_dir.to_str().unwrap(),
-            "--viz-mode",
-            "3d",
-        ])
-        .status()
-        .expect("Failed to execute panschema");
-
-    assert!(
-        status.success(),
-        "panschema with --viz-mode 3d exited with error"
-    );
-
-    // Cleanup
-    let _ = fs::remove_dir_all(output_dir);
-}
-
 // ========== RDF Format Integration Tests ==========
 
 #[test]
@@ -3097,59 +3047,6 @@ sample_schema = { path = "./sample-pkg" }
         stderr.contains("No outputs generated"),
         "stderr should suggest adding a generate block; got:\n{stderr}"
     );
-}
-
-/// `panschema generate --schema X --format html` (without `--no-graph`)
-/// prints a "Graph visualization:" line to stderr describing the viz
-/// mode. Catches the `format == "html" && !no_graph` predicate from
-/// being inverted or flipped to `||`.
-#[test]
-fn cli_generate_html_prints_graph_visualization_mode() {
-    let output_dir = std::env::temp_dir().join("panschema_viz_mode_test");
-    let _ = fs::remove_dir_all(&output_dir);
-    fs::create_dir_all(&output_dir).expect("mkdir");
-
-    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .args([
-            "generate",
-            "--schema",
-            "tests/fixtures/reference.ttl",
-            "--output",
-            output_dir.to_str().unwrap(),
-        ])
-        .output()
-        .expect("panschema");
-    assert!(output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("Graph visualization:"),
-        "html format without --no-graph should announce the viz mode; got:\n{stderr}"
-    );
-
-    // Inverse: with `--no-graph`, the announcement is suppressed.
-    let output_dir2 = std::env::temp_dir().join("panschema_viz_mode_test_2");
-    let _ = fs::remove_dir_all(&output_dir2);
-    fs::create_dir_all(&output_dir2).expect("mkdir");
-    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .args([
-            "generate",
-            "--schema",
-            "tests/fixtures/reference.ttl",
-            "--output",
-            output_dir2.to_str().unwrap(),
-            "--no-graph",
-        ])
-        .output()
-        .expect("panschema");
-    assert!(output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        !stderr.contains("Graph visualization:"),
-        "--no-graph should suppress the viz mode announcement; got:\n{stderr}"
-    );
-
-    let _ = fs::remove_dir_all(&output_dir);
-    let _ = fs::remove_dir_all(&output_dir2);
 }
 
 /// `panschema generate --format ttl` (or `rust`, or any format that

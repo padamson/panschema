@@ -133,6 +133,13 @@ either pixel comparisons (out of scope) or "did the simulation
 converge" (noisy under mutation). Defer until a concrete need
 surfaces.
 
+**Note (2026-09-04):** the 3D renderer and the native GPU module were
+removed, so `panschema/src/gpu/*`, `panschema-viz/src/webgpu.rs`,
+`simulation3d.rs`, and `camera3d.rs` no longer exist — roughly 1,100
+of the missed mutants counted in the snapshots below went with them.
+The tables are left as recorded: they are dated measurements of the
+tree as it stood, not a live inventory.
+
 ## Snapshot — 2026-06-07 (workflow_dispatch on commit `f89360f`)
 
 The first full run since the initial snapshot, after substantial

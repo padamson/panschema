@@ -1,12 +1,23 @@
 # Feature: Graph Layout Selection
 
-**Feature:** User-selectable 2D and 3D graph layout algorithms
+**Feature:** User-selectable graph layout algorithms
 
 **User Story:** As a documentation reader, I want to switch the schema graph between different layout algorithms (force-directed, hierarchical, circular, …) so that I can see the structure that best fits how I'm thinking about the schema right now — a class hierarchy as a tree, a property graph as a force layout, a small enum or cycle as a circle.
 
 **Related ADR:** None yet (will need one once the algorithm set is fixed — likely "ADR: Graph layout algorithm set & default choice")
 
 **Approach:** Vertical Slicing with Outside-In TDD. Each slice ships one additional layout algorithm end-to-end (Rust implementation + wasm binding + UI button), so the picker grows in usable form rather than landing as a single megacommit.
+
+> **Amended 2026-09-04: the 3D renderer is removed.** Everything below
+> about 3D mode — the 2D/3D toggle the picker sits beside, the
+> `(not implemented)` labels shown in 3D, `LAYOUT_MODES`, and the
+> deferred 3D layout variants — describes a renderer that no longer
+> exists (see
+> [ADR-005's amendment](../adr/005-graph-visualization-conventions.md#amendment-2026-09-04-the-3d-renderer-is-removed)).
+> The picker now has a single mode: every implemented layout is
+> selectable, and unimplemented ones stay disabled. The completed
+> slices are kept as the record of what was built; their 3D-mode
+> acceptance criteria no longer apply.
 
 ---
 

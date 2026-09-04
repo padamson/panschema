@@ -1,8 +1,7 @@
 {% import "components/graph_toolbar.html" as toolbar %}
 {# Graph Visualization Component
 
-   Renders an interactive force-directed graph visualization.
-   Uses WebGPU when available, falls back to 2D Canvas.
+   Renders an interactive force-directed graph on a 2D canvas.
 
    Context Variables:
    - graph_json: JSON string containing graph data (nodes, edges)
@@ -31,18 +30,9 @@
         {# Canvas for rendering #}
         <canvas id="graph-canvas" style="display: none;"></canvas>
 
-        {# Label overlay for 3D mode (HTML labels positioned over canvas) #}
-        <div id="graph-labels-overlay" class="graph-labels-overlay" style="display: none;"></div>
-
         {# Control overlay — the shared toolbar macro; Groundings and
-           the 3D pan hint are schema-only (flags true). #}
-        {% call toolbar::controls("graph", "Show directed arrowheads on edges (hollow triangle = is_a, filled = domain/range). Turn off when edge density makes them noisy. Click to toggle.", "Show the notation key: what each node shape, edge style, and crow's-foot terminator means. Click to toggle.", true, true) %}{% endcall %}
-
-        {# Mode toggle (2D/3D) #}
-        <div class="graph-mode-toggle" id="graph-mode-toggle">
-            <button id="graph-mode-2d" class="graph-mode-btn active" title="Render the graph in 2D on an HTML Canvas. All layout algorithms (Force-directed, Kamada-Kawai, Hierarchical, Stress, SGD) are available in this mode.">2D</button>
-            <button id="graph-mode-3d" class="graph-mode-btn" title="Render the graph in 3D using WebGPU. Only Force-directed is available — the static layouts are 2D-only. Drag to orbit, scroll to zoom. Requires a browser with WebGPU support; disabled otherwise." disabled>3D</button>
-        </div>
+           Groundings is schema-only. #}
+        {% call toolbar::controls("graph", "Show directed arrowheads on edges (hollow triangle = is_a, filled = domain/range). Turn off when edge density makes them noisy. Click to toggle.", "Show the notation key: what each node shape, edge style, and crow's-foot terminator means. Click to toggle.", true) %}{% endcall %}
 
         {# Layout picker. Disabled options reserve their wire-format
            identifier so the manifest, CSS custom property, and JS
@@ -58,7 +48,7 @@
                 <option value="sgd" title="Stochastic Gradient Descent on the stress objective (Euclidean distance ≈ graph distance). The default for most schemas: best quality-per-time and clean cluster separation. Converges in O(N · iters) vs stress's O(N² · iters) at comparable visible quality.">SGD (default · fast quality)</option>
                 <option value="stress" title="Stress majorization: minimizes the squared difference between Euclidean and graph-theoretic distances. Cleanest cluster separation, at moderate init cost.">Stress majorization (cluster separation)</option>
                 <option value="hierarchical" title="Sugiyama layered layout over the is_a / mixin sub-DAG; best for class hierarchies. Auto-selected as the default for is_a-heavy schemas.">Hierarchical (best for class hierarchies)</option>
-                <option value="force-directed" title="Iterative physics simulation: connected nodes attract, all nodes repel, continuously animated. The interactive layout — drag a node and watch the rest relax. Doesn't separate clusters as cleanly as SGD/Stress; in 3D mode it's the only available algorithm.">Force-directed (interactive)</option>
+                <option value="force-directed" title="Iterative physics simulation: connected nodes attract, all nodes repel, continuously animated. The interactive layout — drag a node and watch the rest relax. Doesn't separate clusters as cleanly as SGD/Stress.">Force-directed (interactive)</option>
                 <option value="kamada-kawai" title="Kamada-Kawai: the classic stress-minimization layout. Same objective as SGD/Stress (so it separates clusters) but a slower per-node optimizer.">Kamada-Kawai (slower init)</option>
                 <option value="circular" disabled title="Not yet implemented">Circular (coming soon)</option>
                 <option value="radial-tree" disabled title="Not yet implemented">Radial tree (coming soon)</option>
@@ -186,114 +176,6 @@
     padding: var(--space-1, 4px) var(--space-2, 8px);
     font-size: var(--font-size-sm, 13px);
     color: var(--color-text, #e5e7eb);
-    z-index: 10;
-}
-
-/* Mode toggle (2D/3D) */
-.graph-mode-toggle {
-    position: absolute;
-    top: var(--space-3, 12px);
-    left: var(--space-3, 12px);
-    display: flex;
-    align-items: center;
-    gap: 0;
-    height: 24px;
-    z-index: 10;
-}
-
-.graph-mode-btn {
-    background: var(--color-bg-secondary, #2d2d44);
-    border: 1px solid var(--color-border, #374151);
-    padding: 0 10px;
-    height: 24px;
-    box-sizing: border-box;
-    font-size: var(--font-size-xs, 11px);
-    font-weight: 600;
-    color: var(--color-text-muted, #9ca3af);
-    cursor: pointer;
-    transition: all 0.2s;
-}
-
-.graph-mode-btn:first-child {
-    border-radius: var(--radius-sm, 4px) 0 0 var(--radius-sm, 4px);
-    border-right: none;
-}
-
-.graph-mode-btn:last-child {
-    border-radius: 0 var(--radius-sm, 4px) var(--radius-sm, 4px) 0;
-}
-
-.graph-mode-btn.active {
-    background: var(--color-primary, #3b82f6);
-    border-color: var(--color-primary, #3b82f6);
-    color: white;
-}
-
-.graph-mode-btn:not(.active):not(:disabled):hover {
-    background: var(--color-bg-tertiary, #1a1a2e);
-    border-color: var(--color-primary, #3b82f6);
-}
-
-.graph-mode-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-}
-
-/* Layout picker — placed to the right of the 2D/3D toggle and
-   sized to match its height so the controls baseline-align. */
-/* The schema graph's picker sits right of its 2D/3D toggle; the
-   shared base position (top-left) is in the shell. 88px = toggle
-   width (~64) + gap. */
-.graph-container .graph-layout-picker {
-    left: calc(var(--space-3, 12px) + 88px);
-}
-
-/* 3D Labels overlay */
-.graph-labels-overlay {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    pointer-events: none;
-    overflow: hidden;
-    z-index: 5;
-}
-
-.graph-label-3d {
-    position: absolute;
-    font-size: 11px;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    white-space: nowrap;
-    pointer-events: none;
-    transform: translate(-50%, -100%);
-    padding: 2px 6px;
-    border-radius: 3px;
-    transition: opacity 0.15s ease;
-}
-
-.graph-label-3d.node-label {
-    color: rgba(255, 255, 255, 0.95);
-    background: rgba(26, 26, 46, 0.85);
-    margin-top: -8px;
-}
-
-.graph-label-3d.edge-label {
-    color: rgba(180, 180, 200, 0.9);
-    background: rgba(26, 26, 46, 0.75);
-    font-size: 10px;
-    transform: translate(-50%, -50%);
-}
-
-.graph-label-3d.hidden {
-    opacity: 0;
-}
-
-/* Hovered label overrides hidden state */
-.graph-label-3d.hovered {
-    opacity: 1 !important;
-    background: rgba(59, 130, 246, 0.9);
-    color: white;
     z-index: 10;
 }
 
@@ -522,9 +404,7 @@
     // The hover->focus mapping (hop depth, clear-on-leave) is the shared
     // shell's; declared before the toggles below, whose handlers reset it.
     const hoverFocus = shell.makeHoverFocus();
-    let is3D = false;
     let wasmModule = null;
-    let hasWebGPU = false;
 
     // Label button elements (initialize immediately)
     const labelsAllBtn = document.getElementById('graph-labels-all');
@@ -626,25 +506,17 @@
     // Apply focus state given the currently-hovered node — the shared
     // shell's mapping plus this page's enable toggle. Skips redundant
     // WASM calls when the hover target hasn't changed since the last
-    // frame. The 2D path uses viz.hovered_node_index; the 3D path uses
-    // a separate JS hover system (see updateHoverState below) and
-    // isn't currently wired.
+    // frame, via viz.hovered_node_index.
     function applyFocusOnHover(hoveredNodeIdx) {
         if (!viz || !focusToggle.enabled()) return;
         hoverFocus.apply(viz, hoveredNodeIdx);
     }
 
-    // 3D label overlay management
-    const labelsOverlay = document.getElementById('graph-labels-overlay');
     let nodeLabelElements = [];
     let edgeLabelElements = [];
 
     // Hover tracking
     let hoveredNodeIndex = -1;
-    let hoveredEdgeIndex = -1;
-    let lastProjectedNodes = [];
-    let lastProjectedEdges = [];
-    const HOVER_RADIUS = 30; // pixels threshold for hover detection
 
     // Selection tracking
     let selectedNodeIndex = -1;
@@ -765,11 +637,11 @@
         // A pinned card wins: ignore ephemeral hover while one is open so a
         // stray mouse move can't replace or dismiss the pinned view.
         if (pinnedNodeIndex >= 0) return;
-        // Only the 2D path has WASM-side edge hit-test today; 3D mode
-        // populates the hover card from node hover only.
+        // Node and edge hit-testing are WASM-side; the hover card is
+        // populated from node hover only.
         const nodeIdx = (typeof viz.hovered_node_index === 'function')
             ? viz.hovered_node_index() : -1;
-        const edgeIdx = (!is3D && typeof viz.hovered_edge_index === 'function')
+        const edgeIdx = (typeof viz.hovered_edge_index === 'function')
             ? viz.hovered_edge_index() : -1;
 
         let kind = null, idx = -1;
@@ -919,146 +791,6 @@
         hideHoverCard();
     }
 
-    function create3DLabels() {
-        // Clear existing labels
-        nodeLabelElements = [];
-        edgeLabelElements = [];
-        labelsOverlay.innerHTML = '';
-
-        if (!viz || !is3D) return;
-
-        // Create node labels
-        const nodeCount = viz.node_count();
-        for (let i = 0; i < nodeCount; i++) {
-            const label = document.createElement('div');
-            label.className = 'graph-label-3d node-label';
-            labelsOverlay.appendChild(label);
-            nodeLabelElements.push(label);
-        }
-
-        // Create edge labels
-        const edgeCount = viz.edge_count();
-        for (let i = 0; i < edgeCount; i++) {
-            const label = document.createElement('div');
-            label.className = 'graph-label-3d edge-label';
-            labelsOverlay.appendChild(label);
-            edgeLabelElements.push(label);
-        }
-    }
-
-    // Update 3D label positions and visibility
-    function update3DLabels() {
-        if (!viz || !is3D) return;
-
-        // Get label visibility state
-        let showNodes = true;
-        let showEdges = true;
-        try {
-            showNodes = viz.show_node_labels();
-            showEdges = viz.show_edge_labels();
-        } catch (e) {
-            // Use defaults if methods unavailable
-        }
-
-        // Canvas uses pixel dimensions (scaled by devicePixelRatio)
-        // but HTML overlay uses CSS pixels, so we need to convert
-        const dpr = window.devicePixelRatio || 1;
-
-        // Update node labels
-        try {
-            const nodesJson = viz.get_projected_nodes();
-            const nodes = JSON.parse(nodesJson);
-            // Store for hover detection
-            lastProjectedNodes = nodes.map(n => ({ x: n.x / dpr, y: n.y / dpr, visible: n.visible }));
-
-            nodes.forEach((node, i) => {
-                if (i < nodeLabelElements.length) {
-                    const el = nodeLabelElements[i];
-                    el.textContent = node.label;
-                    el.style.left = `${node.x / dpr}px`;
-                    el.style.top = `${node.y / dpr}px`;
-                    const isHovered = (i === hoveredNodeIndex);
-                    el.classList.toggle('hidden', !showNodes && !isHovered || !node.visible);
-                    el.classList.toggle('hovered', isHovered);
-                }
-            });
-        } catch (e) {
-            console.warn('Failed to update node labels:', e);
-        }
-
-        // Update edge labels
-        try {
-            const edgesJson = viz.get_projected_edges();
-            const edges = JSON.parse(edgesJson);
-            // Store for hover detection
-            lastProjectedEdges = edges.map(e => ({ x: e.x / dpr, y: e.y / dpr, visible: e.visible }));
-
-            edges.forEach((edge, i) => {
-                if (i < edgeLabelElements.length) {
-                    const el = edgeLabelElements[i];
-                    el.textContent = edge.label;
-                    el.style.left = `${edge.x / dpr}px`;
-                    el.style.top = `${edge.y / dpr}px`;
-                    const isHovered = (i === hoveredEdgeIndex);
-                    el.classList.toggle('hidden', !showEdges && !isHovered || !edge.visible);
-                    el.classList.toggle('hovered', isHovered);
-                }
-            });
-        } catch (e) {
-            console.warn('Failed to update edge labels:', e);
-        }
-    }
-
-    // Show/hide the labels overlay based on mode
-    function updateLabelsOverlay() {
-        if (is3D) {
-            labelsOverlay.style.display = 'block';
-            create3DLabels();
-        } else {
-            labelsOverlay.style.display = 'none';
-            labelsOverlay.innerHTML = '';
-            nodeLabelElements = [];
-            edgeLabelElements = [];
-        }
-    }
-
-    // Find closest node/edge to mouse position for hover detection
-    function updateHoverState(mouseX, mouseY) {
-        let closestNodeDist = Infinity;
-        let closestNodeIdx = -1;
-        let closestEdgeDist = Infinity;
-        let closestEdgeIdx = -1;
-
-        // Check nodes
-        lastProjectedNodes.forEach((node, i) => {
-            if (!node.visible) return;
-            const dx = node.x - mouseX;
-            const dy = node.y - mouseY;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            if (dist < closestNodeDist && dist < HOVER_RADIUS) {
-                closestNodeDist = dist;
-                closestNodeIdx = i;
-            }
-        });
-
-        // Check edges (only if no node is close enough)
-        if (closestNodeIdx === -1) {
-            lastProjectedEdges.forEach((edge, i) => {
-                if (!edge.visible) return;
-                const dx = edge.x - mouseX;
-                const dy = edge.y - mouseY;
-                const dist = Math.sqrt(dx * dx + dy * dy);
-                if (dist < closestEdgeDist && dist < HOVER_RADIUS) {
-                    closestEdgeDist = dist;
-                    closestEdgeIdx = i;
-                }
-            });
-        }
-
-        hoveredNodeIndex = closestNodeIdx;
-        hoveredEdgeIndex = closestEdgeIdx;
-    }
-
     // Read the graph container's `--graph-aspect` CSS custom property
     // (set inline by html_writer as e.g. `16 / 8`) and split into the
     // two integer components. Falls back to 16:8 if absent or malformed.
@@ -1087,105 +819,27 @@
     // Layouts that resolve to a real implementation on the wasm side.
     const IMPLEMENTED_LAYOUTS = new Set(['force-directed', 'kamada-kawai', 'hierarchical', 'stress', 'sgd']);
 
-    // Which modes each algorithm supports today. Mirrors what
-    // `Visualization::new` / `create_visualization_3d` actually do on
-    // the wasm side: force-directed runs in both 2D (CpuSimulation)
-    // and 3D (WebGPU); KK and Hierarchical are 2D-only via egraph-rs
-    // and rust-sugiyama respectively; the rest aren't implemented in
-    // either mode yet. The picker UI uses this to grey out
-    // unsupported options per-mode with a clear label suffix.
-    const LAYOUT_MODES = {
-        'force-directed': { '2d': true, '3d': true },
-        'kamada-kawai':   { '2d': true, '3d': false },
-        'hierarchical':   { '2d': true, '3d': false },
-        'stress':         { '2d': true, '3d': false },
-        'sgd':            { '2d': true, '3d': false },
-        'circular':       { '2d': false, '3d': false },
-        'radial-tree':    { '2d': false, '3d': false },
-    };
-
-    // Per-mode display labels. "(best for class hierarchies)" and
-    // "(slower init)" signal real algorithmic trade-offs; "(coming
-    // soon)" reserves an unimplemented identifier for a future slice;
-    // "(not implemented)" distinguishes "exists but not in this mode"
-    // from "doesn't exist anywhere yet." Keep these in sync with the
-    // corresponding labels baked into the `<option>` elements above.
-    const LAYOUT_LABELS_2D = {
-        'force-directed': 'Force-directed',
-        'kamada-kawai':   'Kamada-Kawai (slower init)',
-        'hierarchical':   'Hierarchical (best for class hierarchies)',
-        'stress':         'Stress majorization (cluster separation)',
-        'sgd':            'SGD (fast quality)',
-        'circular':       'Circular (coming soon)',
-        'radial-tree':    'Radial tree (coming soon)',
-    };
-    const LAYOUT_LABELS_3D = {
-        'force-directed': 'Force-directed',
-        'kamada-kawai':   'Kamada-Kawai (not implemented)',
-        'hierarchical':   'Hierarchical (not implemented)',
-        'stress':         'Stress majorization (not implemented)',
-        'sgd':            'SGD (not implemented)',
-        'circular':       'Circular (not implemented)',
-        'radial-tree':    'Radial tree (not implemented)',
-    };
-
-    // Per-mode hover tooltips. Force-directed renders on a different
-    // backend per mode (2D Canvas physics vs 3D WebGPU physics), so its
-    // tooltip swaps to match what the user is actually about to see.
-    // The other algorithms are 2D-only; their 3D tooltip explains why.
-    const LAYOUT_TITLES_2D = {
-        'force-directed': 'Iterative 2D physics on a Canvas: connected nodes attract, all nodes repel. Continuously animated — drag a node and watch the rest of the graph adjust. The all-purpose default.',
-        'kamada-kawai':   'Energy-minimization layout; slower init than force-directed, often produces nicer node spacing for medium graphs.',
-        'hierarchical':   'Sugiyama layered layout over the is_a / mixin sub-DAG; best for class hierarchies.',
-        'stress':         'Stress majorization; converges on a layout that minimizes the squared difference between Euclidean and graph-theoretic distances. Produces cleaner cluster separation than force-directed at moderate init cost.',
-        'sgd':            'Stochastic Gradient Descent variant of stress majorization; typically the best quality-per-time for medium-to-large graphs. Converges in O(N · iters) vs stress\'s O(N² · iters) at comparable visible quality.',
-        'circular':       'Not yet implemented.',
-        'radial-tree':    'Not yet implemented.',
-    };
-    const LAYOUT_TITLES_3D = {
-        'force-directed': 'Iterative 3D physics via WebGPU: nodes pushed apart on x, y, z. Drag with the mouse to orbit, scroll to zoom. The only 3D algorithm — KK, Hierarchical, Stress, and SGD are 2D-only.',
-        'kamada-kawai':   'Not available in 3D — switch to 2D mode to use this layout.',
-        'hierarchical':   'Not available in 3D — switch to 2D mode to use this layout.',
-        'stress':         'Not available in 3D — switch to 2D mode to use this layout.',
-        'sgd':            'Not available in 3D — switch to 2D mode to use this layout.',
-        'circular':       'Not yet implemented.',
-        'radial-tree':    'Not yet implemented.',
-    };
-
-    function layoutSupportsMode(layout, is3D) {
-        const mode = is3D ? '3d' : '2d';
-        return LAYOUT_MODES[layout]?.[mode] === true;
-    }
-
-    function readGraphLayout(is3D = false) {
-        // Mode-aware: a stored 2D-only preference (e.g. KK) falls back
-        // to force-directed in 3D without overwriting localStorage, so
-        // toggling 3D → 2D restores the user's KK choice.
+    function readGraphLayout() {
         try {
             const stored = localStorage.getItem(LAYOUT_PREF_KEY);
-            if (stored && IMPLEMENTED_LAYOUTS.has(stored) && layoutSupportsMode(stored, is3D)) {
+            if (stored && IMPLEMENTED_LAYOUTS.has(stored)) {
                 return stored;
             }
         } catch (e) { /* localStorage may be unavailable */ }
         const container = document.querySelector('.graph-container');
         const fromAttr = container?.dataset.defaultLayout;
-        if (fromAttr && KNOWN_LAYOUTS.has(fromAttr)
-            && IMPLEMENTED_LAYOUTS.has(fromAttr) && layoutSupportsMode(fromAttr, is3D)) {
+        if (fromAttr && KNOWN_LAYOUTS.has(fromAttr) && IMPLEMENTED_LAYOUTS.has(fromAttr)) {
             return fromAttr;
         }
         // Not pinned (manifest emits `auto`) and no persisted choice:
         // auto-detect from the graph's inheritance density. The viz
         // recommends Hierarchical for `is_a`-heavy schemas, SGD
-        // otherwise. 3D is force-directed only (static layouts are
-        // 2D-only). Falls back to SGD if the recommendation is
+        // otherwise. Falls back to SGD if the recommendation is
         // unavailable (wasm not ready / parse error).
-        if (is3D) {
-            return 'force-directed';
-        }
         if (wasmModule && typeof wasmModule.recommend_default_layout === 'function' && graphData) {
             try {
                 const rec = wasmModule.recommend_default_layout(JSON.stringify(graphData));
-                if (IMPLEMENTED_LAYOUTS.has(rec) && layoutSupportsMode(rec, is3D)) {
+                if (IMPLEMENTED_LAYOUTS.has(rec)) {
                     return rec;
                 }
             } catch (e) { /* fall through to sgd */ }
@@ -1193,34 +847,24 @@
         return 'sgd';
     }
 
-    function applyLayoutPickerMode(is3D) {
+    // Unimplemented layouts stay disabled and keep their reserved
+    // identifiers; the labels and tooltips are the markup's.
+    function applyLayoutPickerState() {
         const select = document.getElementById('graph-layout-select');
         if (!select) return;
-        const labels = is3D ? LAYOUT_LABELS_3D : LAYOUT_LABELS_2D;
-        const titles = is3D ? LAYOUT_TITLES_3D : LAYOUT_TITLES_2D;
         for (const opt of Array.from(select.options)) {
-            const supported = layoutSupportsMode(opt.value, is3D);
-            opt.disabled = !supported;
-            if (labels[opt.value]) {
-                opt.textContent = labels[opt.value];
-            }
-            if (titles[opt.value]) {
-                opt.title = titles[opt.value];
-            }
+            opt.disabled = !IMPLEMENTED_LAYOUTS.has(opt.value);
         }
-        // Drop a no-longer-supported selection back to force-directed
-        // so the visible state matches what the active mode can do.
-        if (!layoutSupportsMode(select.value, is3D)) {
-            select.value = 'force-directed';
+        if (!IMPLEMENTED_LAYOUTS.has(select.value)) {
+            select.value = 'sgd';
         }
     }
 
     // Expose the picker mode helper unconditionally — it operates on
     // the DOM only, with no wasm dependency, so it should be reachable
     // from e2e tests as soon as this script runs (i.e. before
-    // `createVisualization` resolves). Lets tests assert the 3D
+    // `createVisualization` resolves). Lets tests assert the
     // disabled/label state without needing WebGPU on the test runner.
-    window.__panschema_apply_layout_picker_mode = applyLayoutPickerMode;
 
     function saveGraphLayout(name) {
         try { localStorage.setItem(LAYOUT_PREF_KEY, name); }
@@ -1413,23 +1057,6 @@
             wasmModule = await import(`./panschema_viz.js?v=${cacheBuster}`);
             await wasmModule.default({ module_or_path: `./panschema_viz_bg.wasm?v=${cacheBuster}` });
 
-            // Check WebGPU support
-            if (typeof wasmModule.check_webgpu_support === 'function') {
-                hasWebGPU = await wasmModule.check_webgpu_support();
-            }
-
-            // Enable 3D button if WebGPU is available and create_visualization_3d exists
-            const mode3dBtn = document.getElementById('graph-mode-3d');
-            const can3D = hasWebGPU && typeof wasmModule.create_visualization_3d === 'function';
-            if (can3D) {
-                mode3dBtn.disabled = false;
-                mode3dBtn.title = 'Render the graph in 3D using WebGPU. Only Force-directed is available — the static layouts (KK, Hierarchical, Stress, SGD) are 2D-only. Drag to orbit, scroll to zoom.';
-            } else {
-                mode3dBtn.title = hasWebGPU
-                    ? 'This build of panschema-viz wasn\'t compiled with WebGPU support, so 3D is unavailable. Stay in 2D mode.'
-                    : 'This browser doesn\'t support WebGPU, so the 3D render path is unavailable. Try Chrome 113+, Firefox 121+, or Safari 18+.';
-            }
-
             // Show canvas first so we can measure its dimensions
             loading.style.display = 'none';
             canvas.style.display = 'block';
@@ -1442,23 +1069,14 @@
             canvas.width = rect.width * window.devicePixelRatio;
             canvas.height = rect.height * window.devicePixelRatio;
 
-            // Default to 2D regardless of WebGPU availability — the 2D
-            // layout algorithms (Kamada-Kawai, Hierarchical, Stress) all
-            // produce visibly better results than the WebGPU 3D
-            // force-directed path for typical schema graphs, and 2D is
-            // the mode the picker UX is tuned for. The 3D button stays
-            // selectable when WebGPU is supported, so users who prefer
-            // 3D can switch with one click.
-            await createVisualization(false);
+            await createVisualization();
 
             // Update UI
             setGraphBadge(nodeCount, viz.node_count(), viz.edge_count());
-            updateModeUI();
 
             // Start render loop
             startRenderLoop();
             setupInteraction();
-            setupModeToggle();
             setupLayoutPicker();
             setupLegend();
         } catch (e) {
@@ -1477,7 +1095,7 @@
         }
     }
 
-    async function createVisualization(use3D) {
+    async function createVisualization() {
         // Stop current animation if running
         if (animationId) {
             cancelAnimationFrame(animationId);
@@ -1489,8 +1107,8 @@
         refitter.reset();
         hoverFocus.reset();
 
-        // When switching modes, we need a fresh canvas because:
-        // - 2D context can't be reused for WebGPU
+        // A fresh canvas per re-creation keeps the context and
+        // listener state unambiguous when the layout changes:
         // - WebGPU surface can't be reused for 2D context
         const container = canvas.parentElement;
         const oldCanvas = canvas;
@@ -1512,23 +1130,8 @@
         // Defaults to 16:8 (the html_writer default) if absent.
         const { aspectW, aspectH } = readGraphAspect();
         const graphJson = JSON.stringify(graphData);
-        const layout = readGraphLayout(use3D);
-
-        if (use3D && hasWebGPU && typeof wasmModule.create_visualization_3d === 'function') {
-            try {
-                viz = await wasmModule.create_visualization_3d(canvas, graphJson);
-                is3D = true;
-            } catch (e3d) {
-                // e3d may be a JsValue string, not an Error object
-                const errMsg = typeof e3d === 'string' ? e3d : (e3d.message || e3d.toString());
-                console.warn('WebGPU 3D failed, falling back to 2D:', errMsg);
-                viz = new wasmModule.Visualization(canvas, graphJson, aspectW, aspectH, layout);
-                is3D = false;
-            }
-        } else {
-            viz = new wasmModule.Visualization(canvas, graphJson, aspectW, aspectH, layout);
-            is3D = false;
-        }
+        const layout = readGraphLayout();
+        viz = new wasmModule.Visualization(canvas, graphJson, aspectW, aspectH, layout);
 
         // Expose the viz handle so post-render test introspection
         // (e.g., the screenshot harness scoring `viz.edge_crossings()`)
@@ -1545,9 +1148,6 @@
         // Push the persisted toggle preferences into the fresh viz.
         reapplyToggles();
 
-        // Set up labels overlay for 3D mode
-        updateLabelsOverlay();
-
         // Re-attach canvas event listeners
         setupCanvasInteraction();
 
@@ -1557,72 +1157,26 @@
         }
     }
 
-    function updateModeUI() {
-        const help2d = document.getElementById('graph-help-2d');
-        const help3d = document.getElementById('graph-help-3d');
-        const mode2dBtn = document.getElementById('graph-mode-2d');
-        const mode3dBtn = document.getElementById('graph-mode-3d');
-
-        if (is3D) {
-            help2d.style.display = 'none';
-            help3d.style.display = 'inline';
-            mode2dBtn.classList.remove('active');
-            mode3dBtn.classList.add('active');
-        } else {
-            help2d.style.display = 'inline';
-            help3d.style.display = 'none';
-            mode2dBtn.classList.add('active');
-            mode3dBtn.classList.remove('active');
-        }
-        // Greying-out + label suffixes are mode-dependent: a 2D-only
-        // layout must reset to force-directed on the 3D toggle, and
-        // recover its "(slower init)" label on the way back.
-        applyLayoutPickerMode(is3D);
-        const select = document.getElementById('graph-layout-select');
-        if (select) {
-            select.value = readGraphLayout(is3D);
-        }
-    }
-
-    function setupModeToggle() {
-        const mode2dBtn = document.getElementById('graph-mode-2d');
-        const mode3dBtn = document.getElementById('graph-mode-3d');
-
-        mode2dBtn.addEventListener('click', async () => {
-            if (!is3D) return; // Already in 2D mode
-            await createVisualization(false);
-            updateModeUI();
-        });
-
-        mode3dBtn.addEventListener('click', async () => {
-            if (is3D || mode3dBtn.disabled) return; // Already in 3D or not available
-            await createVisualization(true);
-            updateModeUI();
-        });
-    }
-
     function setupLayoutPicker() {
         const select = document.getElementById('graph-layout-select');
         if (!select) return;
-        applyLayoutPickerMode(is3D);
-        select.value = readGraphLayout(is3D);
+        applyLayoutPickerState();
+        select.value = readGraphLayout();
         select.addEventListener('change', async (event) => {
             const chosen = event.target.value;
-            if (!IMPLEMENTED_LAYOUTS.has(chosen) || !layoutSupportsMode(chosen, is3D)) {
+            if (!IMPLEMENTED_LAYOUTS.has(chosen)) {
                 // Hard guard: the option's `disabled` should already
                 // prevent this, but if a future picker variant breaks
                 // that, fall back to a clear refusal rather than a
                 // panicking wasm constructor.
-                console.warn('Layout not supported in current mode:', chosen);
-                event.target.value = readGraphLayout(is3D);
+                console.warn('Layout not implemented:', chosen);
+                event.target.value = readGraphLayout();
                 return;
             }
             saveGraphLayout(chosen);
-            // Re-create the visualization in the same 2D/3D mode so
-            // the new layout takes effect immediately. createVisualization
-            // already reads the layout via readGraphLayout() at construction.
-            await createVisualization(is3D);
-            updateModeUI();
+            // Re-create so the new layout takes effect immediately;
+            // createVisualization reads it via readGraphLayout().
+            await createVisualization();
         });
     }
 
@@ -1688,23 +1242,17 @@
                 refitter.onTick(viz);
                 viz.render();
 
-                // Update 3D labels overlay (positions track camera movement)
-                if (is3D) {
-                    update3DLabels();
-                }
             }
             animationId = requestAnimationFrame(frame);
         }
         frame();
     }
 
-    // Track shift key state (shared across canvas instances)
-    let isShiftDown = false;
     let lastTouchDist = 0;
 
     // Canvas-specific event listeners (need to be re-attached when canvas is replaced)
     function setupCanvasInteraction() {
-        // Mouse drag for panning (2D) or orbit (3D), or node dragging
+        // Mouse drag for panning, or node dragging
         canvas.addEventListener('mousedown', (e) => {
             isDragging = true;
             dragGate.press(e);
@@ -1718,13 +1266,7 @@
 
             // Check if we're clicking on a node
             if (viz && typeof viz.start_drag_at === 'function') {
-                if (is3D) {
-                    // 3D mode uses screen coords with width/height
-                    draggingNodeIndex = viz.start_drag_at(mouseX * dpr, mouseY * dpr, canvas.width, canvas.height);
-                } else {
-                    // 2D mode uses canvas coords
-                    draggingNodeIndex = viz.start_drag_at(mouseX * dpr, mouseY * dpr);
-                }
+                draggingNodeIndex = viz.start_drag_at(mouseX * dpr, mouseY * dpr);
                 if (draggingNodeIndex >= 0) {
                     canvas.style.cursor = 'grabbing';
                 }
@@ -1740,16 +1282,8 @@
             const mouseY = e.clientY - rect.top;
             const dpr = window.devicePixelRatio || 1;
 
-            if (!is3D && typeof viz.select_at === 'function') {
+            if (typeof viz.select_at === 'function') {
                 selectedNodeIndex = viz.select_at(mouseX * dpr, mouseY * dpr);
-                if (selectedNodeIndex >= 0) {
-                    pinNode(selectedNodeIndex, e.clientX, e.clientY);
-                } else {
-                    deselectNode();
-                }
-            } else if (is3D && typeof viz.select_at === 'function') {
-                // 3D selection uses screen coordinates
-                selectedNodeIndex = viz.select_at(mouseX * dpr, mouseY * dpr, canvas.width, canvas.height);
                 if (selectedNodeIndex >= 0) {
                     pinNode(selectedNodeIndex, e.clientX, e.clientY);
                 } else {
@@ -1784,11 +1318,8 @@
                 const mouseX = e.clientX - rect.left;
                 const mouseY = e.clientY - rect.top;
 
-                if (is3D) {
-                    // 3D mode: use JavaScript hover detection
-                    updateHoverState(mouseX, mouseY);
-                } else {
-                    // 2D mode: use WASM hover detection (needs scaled coordinates)
+                {
+                    // WASM hover detection (needs scaled coordinates)
                     const dpr = window.devicePixelRatio || 1;
                     if (typeof viz.update_hover === 'function') {
                         viz.update_hover(mouseX * dpr, mouseY * dpr);
@@ -1813,9 +1344,7 @@
 
         // Clear hover when mouse leaves canvas
         canvas.addEventListener('mouseleave', () => {
-            hoveredNodeIndex = -1;
-            hoveredEdgeIndex = -1;
-            if (viz && !is3D && typeof viz.clear_hover === 'function') {
+            hoveredNodeIndex = -1;            if (viz && typeof viz.clear_hover === 'function') {
                 viz.clear_hover();
             }
             hideHoverCard();
@@ -1855,14 +1384,7 @@
                     const dx = e.touches[0].clientX - lastX;
                     const dy = e.touches[0].clientY - lastY;
 
-                    if (is3D) {
-                        // 3D mode: single finger orbits
-                        viz.orbit_horizontal(dx * 0.01);
-                        viz.orbit_vertical(dy * 0.01);
-                    } else {
-                        // 2D mode: single finger pans
-                        viz.pan(dx, dy);
-                    }
+                    viz.pan(dx, dy);
 
                     lastX = e.touches[0].clientX;
                     lastY = e.touches[0].clientY;
@@ -1888,13 +1410,6 @@
 
     // One-time setup for window events and button handlers
     function setupInteraction() {
-        // Track shift key state
-        window.addEventListener('keydown', (e) => {
-            if (e.key === 'Shift') isShiftDown = true;
-        });
-        window.addEventListener('keyup', (e) => {
-            if (e.key === 'Shift') isShiftDown = false;
-        });
 
         // Mouse move/up handlers on window (so drag works outside canvas)
         window.addEventListener('mousemove', (e) => {
@@ -1913,23 +1428,9 @@
                     const mouseX = e.clientX - rect.left;
                     const mouseY = e.clientY - rect.top;
                     const dpr = window.devicePixelRatio || 1;
-                    if (is3D) {
-                        // 3D drag uses screen coords with width/height
-                        viz.drag_to(mouseX * dpr, mouseY * dpr, canvas.width, canvas.height);
-                    } else {
-                        // 2D drag uses canvas coords
-                        viz.drag_to(mouseX * dpr, mouseY * dpr);
-                    }
-                } else if (is3D) {
-                    // 3D mode: shift+drag to pan, drag to orbit
-                    if (isShiftDown) {
-                        viz.pan(-dx, dy);
-                    } else {
-                        viz.orbit_horizontal(dx * 0.01);
-                        viz.orbit_vertical(dy * 0.01);
-                    }
+                    viz.drag_to(mouseX * dpr, mouseY * dpr);
                 } else {
-                    // 2D mode: drag to pan (only if not dragging a node)
+                    // Drag to pan (only if not dragging a node)
                     viz.pan(dx, dy);
                 }
 

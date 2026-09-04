@@ -2,13 +2,12 @@
    instance graph. Element IDs are prefixed per graph (`graph-*` /
    `instance-graph-*`) so both can live on one page; the two tooltips that
    describe graph-specific content (Arrows, Legend) come in as arguments,
-   and the schema-only Groundings control and 3D pan hint are gated by
-   flags. Everything else is identical by construction — the drift the
+   and the schema-only Groundings control is gated by a flag. Everything else is identical by construction — the drift the
    old two-copy toolbars invited cannot happen when there is one copy.
 
    Keyboard hints `(L/N/E)` are shown on both: both graphs wire those
    keys (see each template's script), so the hint is honest on each. #}
-{% macro controls(prefix, arrows_title, legend_title, show_groundings, mode_help) %}
+{% macro controls(prefix, arrows_title, legend_title, show_groundings) %}
 <div class="graph-controls">
     <button type="button" id="{{ prefix }}-reset" class="graph-btn" title="Reset view"><span>↺</span> Reset</button>
     <button type="button" id="{{ prefix }}-zoom-in" class="graph-btn" title="Zoom in">+</button>
@@ -26,8 +25,5 @@
     <button type="button" id="{{ prefix }}-toggle-external" class="graph-btn graph-toggle active" aria-pressed="true" style="display: none;" title="Show or hide external grounding nodes — the upstream ontology categories a class grounds into via subclass_of. Click to toggle.">Groundings</button>
     {% endif %}
     <span class="graph-help" id="{{ prefix }}-help-2d">Drag to pan • Scroll to zoom</span>
-    {% if mode_help %}
-    <span class="graph-help" id="{{ prefix }}-help-3d" style="display: none;">Drag to orbit • Shift+drag to pan • Scroll to zoom</span>
-    {% endif %}
 </div>
 {% endmacro %}

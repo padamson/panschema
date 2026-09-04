@@ -30,7 +30,7 @@ else
 fi
 
 echo "==> Rebuilding panschema-viz bundle ($bundle_profile)"
-wasm-pack build panschema-viz --target web "$bundle_profile" --features webgpu
+wasm-pack build panschema-viz --target web "$bundle_profile"
 
 echo "==> Installing panschema"
 cargo install --path panschema --force "${install_flags[@]}"

@@ -30,7 +30,7 @@ additional_cargo_args = ["--lib"]
 # native unit tests that `cargo test --lib` runs on the host — this
 # allow-list is the gate, so host-testable viz logic must be BOTH
 # added here and kept out of the excluded drawing/wasm files.
-# wasm-only modules (canvas2d, webgpu, simulation3d, the
+# wasm-only modules (canvas2d, the
 # wasm_bindgen-wrapped `Visualization` API in lib.rs) stay excluded —
 # their tests need a browser context.
 #
@@ -50,14 +50,6 @@ examine_globs = [
 ]
 exclude_globs = [
     "panschema/src/components.rs",
-    # `gpu/**` is gated behind the optional `gpu` feature, which no CI
-    # job builds or tests (it needs a real or software GPU adapter that
-    # the runners don't provision). Left in scope, its mutants build
-    # with the feature off — `mod gpu;` isn't even compiled in — so
-    # every mutant here trivially "passes" regardless of the module's
-    # own (locally-run) test coverage. Same class of problem as the
-    # browser-only wasm modules below.
-    "panschema/src/gpu/**",
     # Thin clap entry point: parses args and delegates to the tested
     # `panschema::mdbook::run`. Under `--lib` no test runs `main`, so a
     # `main -> Ok(())` mutant can't be killed; the real logic lives in
@@ -74,10 +66,7 @@ exclude_globs = [
     # sit in legend.rs precisely so they stay mutation-covered.
     "panschema-viz/src/lib.rs",
     "panschema-viz/src/canvas2d.rs",
-    "panschema-viz/src/webgpu.rs",
-    "panschema-viz/src/simulation3d.rs",
     "panschema-viz/src/camera.rs",
-    "panschema-viz/src/camera3d.rs",
     "panschema-viz/src/interaction.rs",
     "panschema-viz/src/labels.rs",
     "panschema-viz/src/graph_types.rs",

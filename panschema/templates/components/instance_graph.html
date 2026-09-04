@@ -27,7 +27,7 @@
         </div>
         {# Control overlay — the shared toolbar macro; no Groundings
            or 3D hint on an A-box (flags false). #}
-        {% call toolbar::controls("instance-graph", "Show directed arrowheads on assertion edges. Click to toggle.", "Show the notation key for this instance graph.", false, false) %}{% endcall %}
+        {% call toolbar::controls("instance-graph", "Show directed arrowheads on assertion edges. Click to toggle.", "Show the notation key for this instance graph.", false) %}{% endcall %}
         {# Compact hover card: an individual's types/literals/IRI, or a
            shared value's enum and usage count (its only surface). #}
         <div class="instance-graph-hover-card" id="instance-graph-hover-card" style="display: none;"></div>

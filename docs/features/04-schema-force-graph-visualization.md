@@ -8,6 +8,17 @@
 
 **Approach:** Vertical Slicing with Outside-In TDD
 
+> **Amended 2026-09-04: the 3D renderer is removed.** This document's
+> user story and its early slices describe a GPU-accelerated *3D*
+> graph. That renderer — the WebGPU path, the 2D/3D toggle, and the
+> separate native GPU force simulation — has been removed; see
+> [ADR-005's amendment](../adr/005-graph-visualization-conventions.md#amendment-2026-09-04-the-3d-renderer-is-removed)
+> for the reasoning. The graph is 2D-only. The completed-slice records
+> below are kept as the historical account of what was built; the
+> capability they describe no longer ships. Read the feature's current
+> scope as: an interactive 2D force-directed graph with the ADR-005
+> notation.
+
 ---
 
 ## Strategic Differentiation
@@ -44,13 +55,13 @@ in `src/gpu/`; the browser code was since split into the
 
 | Component | Complexity | Status |
 |-----------|------------|--------|
-| GPU Force Simulation | High | ✅ Complete (brute-force O(n²)) |
-| 3D Graph Renderer | Medium | ✅ Complete |
+| GPU Force Simulation | High | ⛔ Removed (2026-09-04) — native `gpu` feature deleted |
+| 3D Graph Renderer | Medium | ⛔ Removed (2026-09-04) |
 | GraphWriter (JSON output) | Low | ✅ Complete |
-| WebGPU Browser Target | Medium | ✅ Complete |
+| WebGPU Browser Target | Medium | ⛔ Removed (2026-09-04) |
 | Text/Label Rendering | Medium | ✅ Complete (slice 5) |
 | Node Selection & Dragging | Medium | 🚧 In progress (slice 6); hover details / focus mode shipped (slices 9–10) |
-| Visual notation — node shapes, per-kind edge glyphs, cardinality | Medium | 🚧 [ADR-005](../adr/005-graph-visualization-conventions.md): edges, cardinality, node shapes, legibility shipped (slices 15, 16.5, 17, 20); legend shipped (slice 18); 3D reduced-form open (slice 19) |
+| Visual notation — node shapes, per-kind edge glyphs, cardinality | Medium | 🚧 [ADR-005](../adr/005-graph-visualization-conventions.md): edges, cardinality, node shapes, legibility shipped (slices 15, 16.5, 17, 20); legend shipped (slice 18); slice 19 (3D reduced form) retired with the 3D renderer |
 
 ---
 
@@ -638,7 +649,10 @@ These are the questions whose answers currently require a click-to-pin, then scr
 
 ---
 
-### Slice 19: 3D reduced-form edges (ADR-005)
+### Slice 19: 3D reduced-form edges (ADR-005) — RETIRED 2026-09-04
+
+**Retired with the 3D renderer's removal; nothing to build.** Kept for
+the record of what was planned.
 
 **Status:** Not Started
 
@@ -759,7 +773,7 @@ These are the questions whose answers currently require a click-to-pin, then scr
 | Slice 16.5: Edge cardinality — crow's-foot on `range` edges (ADR-005) | Should Have | Slice 15, feature 12 slice 12.3 | ✅ Complete |
 | Slice 17: Node shapes by kind in 2D (ADR-005) | Should Have | ADR-005 | ✅ Complete |
 | Slice 18: Graph legend (ADR-005) | Should Have | Slices 15–17 | ✅ Complete |
-| Slice 19: 3D reduced-form edges (ADR-005) | Nice to Have | Slice 15, Slices 1–2 | Not Started |
+| Slice 19: 3D reduced-form edges (ADR-005) | — | — | ⛔ Retired (3D removed) |
 | Slice 20: Graph legibility — zoom range, proportional glyphs/labels, curved parallel edges | Should Have | Slices 15, 16.5 | ✅ Complete |
 | Slice 21: Hover reuses HTML card + `any_of` range edges + correct slot-node label | Should Have | Slices 9, 13, feature 02 slice 17 | ✅ Complete |
 | Slice 22: Graph edges from induced per-class slot ranges | Should Have | Slice 21, feature 12 slice 12.5 | ✅ Complete |

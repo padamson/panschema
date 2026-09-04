@@ -55,7 +55,7 @@ jobs:
       uses: taiki-e/install-action@wasm-pack
 
     - name: Build WASM package
-      run: wasm-pack build panschema-viz --target web --features webgpu
+      run: wasm-pack build panschema-viz --target web
 
     - name: Cache Cargo
       uses: actions/cache@v6
@@ -166,7 +166,7 @@ jobs:
     # needs neither the workspace nor wasm-pack.
     - name: Build and stage viz bundle
       run: |
-        wasm-pack build panschema-viz --target web --features webgpu
+        wasm-pack build panschema-viz --target web
         mkdir -p panschema/viz-bundle
         cp panschema-viz/pkg/panschema_viz.js panschema-viz/pkg/panschema_viz_bg.wasm panschema/viz-bundle/
 

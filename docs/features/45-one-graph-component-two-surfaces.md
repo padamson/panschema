@@ -164,27 +164,28 @@ confirmed, both from the duplicated CSS/markup this slice collapses:
 
 ---
 
-### Slice 3: One WASM load, and the 2D/3D question
+### Slice 3: One WASM load
 
 **Status:** Not Started
 
+**Decided 2026-09-04:** the 2D/3D question is settled by removal — the
+3D renderer is gone (see
+[ADR-005's amendment](../adr/005-graph-visualization-conventions.md#amendment-2026-09-04-the-3d-renderer-is-removed)),
+so there is no mode to unify and no mode-dependent layout wording left
+to consolidate: the `LAYOUT_LABELS_2D/3D` and `LAYOUT_TITLES_2D/3D`
+maps collapsed to one set with the removal, and the layout picker has
+a single mode. What remains of this slice is the double WASM load.
+
 **User Value:** The page loads the viz module once for both canvases
-(smaller, faster pages), and the 2D/3D toggle either arrives on the
-instance graph or its absence is a stated decision rather than drift.
+instead of twice, so a page carrying both graphs is smaller and starts
+faster.
 
 **Acceptance Criteria:**
 - [ ] Both graph sections initialize from a single WASM module
       instance; page weight drops accordingly and both canvases still
       paint (pixel-probed in e2e).
-- [ ] The instance graph either gains the 2D/3D toggle (if the 3D
-      path accepts an instance dataset without new engine work) or
-      the feature doc records why it stays 2D-only, and the toolbar
-      fragment expresses that as a parameter, not a fork.
-
-**Notes:**
-- 3D currently requires WebGPU and only the force-directed layout;
-  whether an A-box in 3D is worth the wiring is a judgment call to
-  make when the cost is visible — decide inside the slice, not here.
+- [ ] Neither graph's startup depends on the other's presence: a
+      schema-only page and a data-only page each still render.
 
 ---
 

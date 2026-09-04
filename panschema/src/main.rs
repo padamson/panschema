@@ -27,20 +27,6 @@ impl From<ReleaseLevel> for panschema::publish::BumpLevel {
     }
 }
 
-/// Visualization mode for HTML output
-#[derive(Debug, Clone, Copy, Default, ValueEnum)]
-pub enum VizMode {
-    /// Auto-detect: try WebGPU, fall back to 2D Canvas
-    #[default]
-    Auto,
-    /// Force 2D Canvas rendering (CPU simulation)
-    #[value(name = "2d")]
-    Canvas2D,
-    /// Force 3D WebGPU rendering (GPU simulation)
-    #[value(name = "3d")]
-    WebGPU3D,
-}
-
 /// A universal CLI for schema conversion, documentation, validation, and comparison.
 ///
 /// One canonical spelling per action: every invocation goes through a
@@ -100,10 +86,6 @@ enum Commands {
         /// flip a jiff module back to chrono.
         #[arg(long = "rust-time")]
         rust_time: Option<String>,
-
-        /// Visualization mode: auto, 2d, 3d (requires --graph)
-        #[arg(long, value_enum, default_value = "auto")]
-        viz_mode: VizMode,
 
         /// Skip fetching upstream ontology labels (cached labels
         /// still render; uncached external references show CURIEs).
@@ -2148,20 +2130,11 @@ async fn main() -> anyhow::Result<()> {
             no_graph,
             check,
             rust_time,
-            viz_mode,
             offline,
             refresh_labels,
             strict,
         } => match schema {
             Some(schema_path) => {
-                if format.to_lowercase() == "html" && !no_graph {
-                    let mode_str = match viz_mode {
-                        VizMode::Auto => "auto (2D fallback, 3D when available)",
-                        VizMode::Canvas2D => "2D Canvas (CPU)",
-                        VizMode::WebGPU3D => "3D WebGPU (GPU)",
-                    };
-                    eprintln!("Graph visualization: {}", mode_str);
-                }
                 if !instances.is_empty()
                     && !matches!(
                         format.to_lowercase().as_str(),
@@ -2174,24 +2147,15 @@ async fn main() -> anyhow::Result<()> {
                         format
                     );
                 }
-                // The graph-rendering flags shape the HTML artifact only;
-                // like --instances above, deviating from their defaults for
+                // The graph-rendering flag shapes the HTML artifact only;
+                // like --instances above, deviating from its default for
                 // another format is ignored loudly, not silently.
-                if format.to_lowercase() != "html" {
-                    if no_graph {
-                        eprintln!(
-                            "warning: --no-graph only affects HTML output; \
-                             ignored for format `{}`",
-                            format
-                        );
-                    }
-                    if !matches!(viz_mode, VizMode::Auto) {
-                        eprintln!(
-                            "warning: --viz-mode only affects HTML output; \
-                             ignored for format `{}`",
-                            format
-                        );
-                    }
+                if format.to_lowercase() != "html" && no_graph {
+                    eprintln!(
+                        "warning: --no-graph only affects HTML output; \
+                         ignored for format `{}`",
+                        format
+                    );
                 }
                 let no_overrides = std::collections::BTreeMap::new();
                 let labels = LabelOptions {
@@ -2370,7 +2334,6 @@ mod tests {
                 no_graph,
                 check,
                 rust_time,
-                viz_mode,
                 offline,
                 refresh_labels,
                 strict,
@@ -2382,7 +2345,6 @@ mod tests {
                 assert_eq!(output, PathBuf::from("docs"));
                 assert_eq!(format, "html");
                 assert!(!no_graph); // default false (graph enabled)
-                assert!(matches!(viz_mode, VizMode::Auto)); // default auto
                 assert!(!offline); // default false (labels fetched)
                 assert!(!refresh_labels); // default false (cache reused)
                 assert!(!strict); // default false (warn, don't fail)
@@ -2414,41 +2376,6 @@ mod tests {
                 assert_eq!(schema, Some(PathBuf::from("test.ttl")));
                 assert_eq!(output, PathBuf::from("output.jsonld"));
                 assert_eq!(format, "jsonld");
-            }
-            _ => panic!("Expected Generate command"),
-        }
-    }
-
-    #[test]
-    fn cli_parses_generate_with_viz_mode() {
-        let cli = Cli::try_parse_from([
-            "panschema",
-            "generate",
-            "--schema",
-            "test.ttl",
-            "--viz-mode",
-            "2d",
-        ])
-        .unwrap();
-        match cli.command {
-            Commands::Generate { viz_mode, .. } => {
-                assert!(matches!(viz_mode, VizMode::Canvas2D));
-            }
-            _ => panic!("Expected Generate command"),
-        }
-
-        let cli = Cli::try_parse_from([
-            "panschema",
-            "generate",
-            "--schema",
-            "test.ttl",
-            "--viz-mode",
-            "3d",
-        ])
-        .unwrap();
-        match cli.command {
-            Commands::Generate { viz_mode, .. } => {
-                assert!(matches!(viz_mode, VizMode::WebGPU3D));
             }
             _ => panic!("Expected Generate command"),
         }

@@ -112,8 +112,8 @@ The visualization shows:
 | HTML Documentation | ✅ Available | - |
 | OWL/Turtle Output | ✅ Available | - |
 | Graph JSON Output | ✅ Available | 3 |
-| GPU Force Simulation | ✅ Complete | 1 |
-| 3D Renderer | ✅ Complete | 2 |
+| GPU Force Simulation | ⛔ Removed 2026-09-04 | 1 |
+| 3D Renderer | ⛔ Removed 2026-09-04 | 2 |
 | 2D Canvas WASM | ✅ Complete | 4 |
-| WebGPU 3D WASM | 🔲 Not Started | 4 |
+| WebGPU 3D WASM | ⛔ Retired (3D removed) | 4 |
 | Interactive Controls | ✅ Complete | 4 |

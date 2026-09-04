@@ -1,7 +1,7 @@
 //! 2D Canvas rendering for graph visualization
 //!
 //! Renders the force simulation to a 2D HTML canvas.
-//! This is the fallback renderer for browsers without WebGPU.
+//! The graph's renderer: 2D canvas, present on every machine.
 
 use wasm_bindgen::JsCast;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};

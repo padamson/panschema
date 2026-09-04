@@ -140,7 +140,7 @@ jobs:
 
     - name: Build WASM package
       if: steps.wasm-cache.outputs.cache-hit != 'true'
-      run: wasm-pack build panschema-viz --target web --features webgpu
+      run: wasm-pack build panschema-viz --target web
 
     - name: Install cargo-nextest
       uses: taiki-e/install-action@nextest
