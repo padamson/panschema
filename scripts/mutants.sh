@@ -52,7 +52,10 @@ if [[ $# -gt 0 && "$1" == "--" ]]; then
   shift
 fi
 
-DIFF="$(mktemp -t panschema-mutants.XXXXXX.diff)"
+# An explicit directory, not `mktemp -t`: on macOS `-t` hardcodes the
+# per-user /var/folders temp dir and ignores $TMPDIR, which a sandboxed
+# environment may deny while pointing $TMPDIR somewhere writable.
+DIFF="$(mktemp "${TMPDIR:-/tmp}/panschema-mutants.diff.XXXXXX")"
 trap 'rm -f "$DIFF"' EXIT
 
 git diff "${BASE}..HEAD" > "$DIFF"

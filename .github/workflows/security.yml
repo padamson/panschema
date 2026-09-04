@@ -27,7 +27,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo-audit
-        run: cargo install cargo-audit
+        run: cargo install cargo-audit --locked
 
       - name: Run cargo audit
         # Keep this ignore list in sync with deny.toml's `[advisories].ignore`
@@ -52,7 +52,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo-deny
-        run: cargo install cargo-deny
+        run: cargo install cargo-deny --locked
 
       - name: Run cargo deny
         run: cargo deny check
@@ -67,7 +67,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo-vet
-        run: cargo install cargo-vet
+        run: cargo install cargo-vet --locked
 
       - name: Run cargo vet
         run: |
@@ -88,7 +88,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo-semver-checks
-        run: cargo install cargo-semver-checks
+        run: cargo install cargo-semver-checks --locked
 
       - name: Check semver compatibility
         run: cargo semver-checks check-release
