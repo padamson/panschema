@@ -5,10 +5,12 @@ name: Dependabot auto-merge
 # Applies to all update types (major, minor, patch); the status checks are
 # the gate, so a bump that breaks the build simply won't merge.
 #
-# The gate is only as wide as main's ruleset. That ruleset currently
-# requires the three Test jobs and NOT Supply Chain Review, so a bump that
-# brings in unvetted crates merges with cargo-vet red — add the job to the
-# ruleset's required checks to close that, not a step here.
+# The gate is only as wide as main's ruleset, and it is the whole gate:
+# merges made with GITHUB_TOKEN do not trigger workflows, so the push run
+# on main never fires for these merge commits. Every job that should block
+# a bump must be in the ruleset's required checks (all of them are, as of
+# 2026-09-05), and the ruleset keeps "require up to date" off so green PRs
+# merge without rebasing onto each sibling that merged first.
 
 on: pull_request
 
