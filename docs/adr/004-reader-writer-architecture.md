@@ -1,7 +1,7 @@
 # ADR-004: Reader/Writer Architecture
 
 ## Status
-Accepted
+Accepted. Amended by [ADR-011](011-panschema-model-crate-boundary.md) (2026-09-05): the `Reader` trait and a reader lookup live in `panschema-model`; `Writer`, the registry, and its default constructor stay in `panschema`.
 
 ## Context
 

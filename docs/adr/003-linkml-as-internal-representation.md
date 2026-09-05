@@ -1,7 +1,7 @@
 # ADR-003: LinkML as Internal Representation
 
 ## Status
-Accepted
+Accepted. Amended by [ADR-011](011-panschema-model-crate-boundary.md) (2026-09-05): the IR and the reader trait now live in the `panschema-model` crate, re-exported from `panschema`.
 
 ## Context
 

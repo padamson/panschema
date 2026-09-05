@@ -2,6 +2,12 @@
 
 **Feature:** Generate `panschema/src/linkml/*.rs` from the LinkML metaschema YAML, replacing the hand-rolled IR.
 
+> **Home moved (2026-09-05):** the IR lives in the `panschema-model` crate once
+> [feature 46](46-panschema-model-crate.md) lands, so every `panschema/src/linkml/`
+> path below reads as `panschema-model/src/linkml/` when this starts. The
+> writer-driven regeneration check stays in `panschema`, since the model crate's
+> dependency tree must not carry the format libraries ([ADR-011](../adr/011-panschema-model-crate-boundary.md)).
+
 **User Story:** As a panschema maintainer, I want the LinkML internal representation to be generated from the LinkML metaschema itself (using panschema's own `RustWriter`), so that every LinkML field — present and future — is faithfully represented by construction, and adding spec coverage stops being hand-edit-by-hand work.
 
 **Related ADR (if applicable):** Extends [ADR-003: LinkML as Internal Representation](../adr/003-linkml-as-internal-representation.md) and [ADR-004: Reader/Writer Architecture](../adr/004-reader-writer-architecture.md).
