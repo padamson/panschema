@@ -13,11 +13,77 @@ criteria = "safe-to-deploy"
 delta = "0.4.2 -> 0.4.3"
 notes = 'Patch release. WASI p2/p3 backend swaps the wasip2/wasip3 crate deps for a manual `unsafe extern "C"` binding to the `get-random-u64` host import (declared `safe fn`, forwarding to the platform RNG exactly as the dropped crates did). The wasm cfgs widen from target_arch = "wasm32" to target_family = "wasm" to add wasm64 support. Remainder is CHANGELOG/README docs and import reordering. No randomness logic changes and no new ambient capabilities.'
 
+[[audits.oxigraph]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.5.9 -> 0.5.10"
+notes = "Delta audit of the oxigraph 2026-09 patch bumps: dependency pins, clippy lint lists, edition-2024 attribute migration, and small parser/optimizer correctness fixes. No new dependencies, build scripts, unsafe, network, or filesystem code."
+
+[[audits.oxjsonld]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.5 -> 0.2.6"
+notes = "Delta audit of the oxigraph 2026-09 patch bumps: dependency pins, clippy lint lists, edition-2024 attribute migration, and small parser/optimizer correctness fixes. No new dependencies, build scripts, unsafe, network, or filesystem code."
+
+[[audits.oxrdf]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.3 -> 0.3.4"
+notes = "Delta audit of the oxigraph 2026-09 patch bumps: dependency pins, clippy lint lists, edition-2024 attribute migration, and small parser/optimizer correctness fixes. No new dependencies, build scripts, unsafe, network, or filesystem code."
+
+[[audits.oxrdfio]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.5 -> 0.2.6"
+notes = "Delta audit of the oxigraph 2026-09 patch bumps: dependency pins, clippy lint lists, edition-2024 attribute migration, and small parser/optimizer correctness fixes. No new dependencies, build scripts, unsafe, network, or filesystem code."
+
+[[audits.oxrdfxml]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.3 -> 0.2.4"
+notes = "Delta audit of the oxigraph 2026-09 patch bumps: dependency pins, clippy lint lists, edition-2024 attribute migration, and small parser/optimizer correctness fixes. No new dependencies, build scripts, unsafe, network, or filesystem code."
+
+[[audits.oxsdatatypes]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.2 -> 0.2.3"
+notes = "Delta audit of the oxigraph 2026-09 patch bumps: dependency pins, clippy lint lists, edition-2024 attribute migration, and small parser/optimizer correctness fixes. No new dependencies, build scripts, unsafe, network, or filesystem code."
+
+[[audits.oxttl]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.3 -> 0.2.4"
+notes = "Delta audit of the oxigraph 2026-09 patch bumps: dependency pins, clippy lint lists, edition-2024 attribute migration, and small parser/optimizer correctness fixes. No new dependencies, build scripts, unsafe, network, or filesystem code."
+
 [[audits.rand_core]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "0.10.0 -> 0.10.1"
 notes = "Doc-only patch release: CHANGELOG addition + version bump + two doc comments updated to reference the renamed rand::RngExt trait. Zero code changes; no unsafe; no new ambient capabilities."
+
+[[audits.sparesults]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.3 -> 0.3.4"
+notes = "Delta audit of the oxigraph 2026-09 patch bumps: dependency pins, clippy lint lists, edition-2024 attribute migration, and small parser/optimizer correctness fixes. No new dependencies, build scripts, unsafe, network, or filesystem code."
+
+[[audits.spareval]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.6 -> 0.2.7"
+notes = "Delta audit of the oxigraph 2026-09 patch bumps: dependency pins, clippy lint lists, edition-2024 attribute migration, and small parser/optimizer correctness fixes. No new dependencies, build scripts, unsafe, network, or filesystem code."
+
+[[audits.spargebra]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.4.6 -> 0.4.7"
+notes = "Delta audit of the oxigraph 2026-09 patch bumps: dependency pins, clippy lint lists, edition-2024 attribute migration, and small parser/optimizer correctness fixes. No new dependencies, build scripts, unsafe, network, or filesystem code."
+
+[[audits.sparopt]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.6 -> 0.3.7"
+notes = "Delta audit of the oxigraph 2026-09 patch bumps: dependency pins, clippy lint lists, edition-2024 attribute migration, and small parser/optimizer correctness fixes. No new dependencies, build scripts, unsafe, network, or filesystem code."
 
 [[trusted.aho-corasick]]
 criteria = "safe-to-deploy"
@@ -162,6 +228,12 @@ criteria = "safe-to-deploy"
 user-id = 1 # Alex Crichton (alexcrichton)
 start = "2019-03-14"
 end = "2027-05-10"
+
+[[trusted.flate2]]
+criteria = "safe-to-deploy"
+user-id = 980 # Sebastian Thiel (Byron)
+start = "2023-08-15"
+end = "2027-09-05"
 
 [[trusted.hashbrown]]
 criteria = "safe-to-deploy"
