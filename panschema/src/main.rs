@@ -335,14 +335,23 @@ struct LabelOptions<'a> {
 fn resolved_deps(
     manifest: &panschema::manifest::Manifest,
     manifest_dir: &Path,
-) -> anyhow::Result<std::collections::BTreeMap<String, PathBuf>> {
+) -> anyhow::Result<std::collections::BTreeMap<String, panschema::source::Resolved>> {
     let mut deps = std::collections::BTreeMap::new();
     for (name, dep) in &manifest.schemas {
-        let panschema::source::Resolved { schema_path, .. } =
-            resolve_source(name, dep, manifest_dir)?;
-        deps.insert(name.clone(), schema_path);
+        deps.insert(name.clone(), resolve_source(name, dep, manifest_dir)?);
     }
     Ok(deps)
+}
+
+/// The main-file path of every resolved dependency — the map the loader
+/// resolves cross-package `imports:` against.
+fn dep_paths(
+    resolved: &std::collections::BTreeMap<String, panschema::source::Resolved>,
+) -> std::collections::BTreeMap<String, PathBuf> {
+    resolved
+        .iter()
+        .map(|(name, r)| (name.clone(), r.schema_path.clone()))
+        .collect()
 }
 
 /// The `[check.<name>]` cross-graph pass: every external reference in this
@@ -357,7 +366,10 @@ fn resolved_deps(
 /// declares absence claims (`asserts_absence` slot annotations), each
 /// record's stated claim is additionally verified against the sibling
 /// graphs; declaration defects are load warnings, and a schema that
-/// declares claims nothing verifies gets a note here. Findings warn as
+/// declares claims nothing verifies gets a note here. Version pins
+/// (`records_version_of` slot annotations) are checked the same way
+/// against the version each sibling resolved to, which resolution
+/// already recorded, so no sibling is resolved twice. Findings warn as
 /// they stream; the returned problem summaries are what a caller's
 /// `--strict` promotes, so one entry's findings never hide another's. A
 /// sibling naming no `[schemas]` entry, or the entry itself, is a
@@ -368,10 +380,11 @@ fn check_resolve_against(
     name: &str,
     manifest: &panschema::manifest::Manifest,
     manifest_dir: &Path,
-    deps: &std::collections::BTreeMap<String, PathBuf>,
+    resolved: &std::collections::BTreeMap<String, panschema::source::Resolved>,
     schema: &panschema::linkml::SchemaDefinition,
     registry: &FormatRegistry,
 ) -> anyhow::Result<Vec<String>> {
+    let deps = &dep_paths(resolved);
     // The schema itself declares which slots carry absence claims
     // (`asserts_absence` annotations); the manifest contributes only
     // enablement — which sibling entries to verify against. Declaration
@@ -381,18 +394,24 @@ fn check_resolve_against(
     // (The bindings walk runs before the early returns because those
     // notes are exactly about the early-return cases.)
     let bindings = panschema::diagnostics::absence_bindings(schema);
+    let pins = panschema::diagnostics::version_bindings(schema);
     let unverified_note = || {
-        eprintln!(
-            "note: schema `{name}` declares {} absence-claim slot(s) (`asserts_absence`), \
-             but [check.{name}] names no resolve_against siblings, so the claims are not \
-             verified",
-            bindings.len()
-        );
+        for family in panschema::diagnostics::SLOT_SEMANTICS_FAMILIES {
+            let Some(declared) = family.declared else {
+                continue;
+            };
+            let count = declared(schema);
+            if count > 0 {
+                eprintln!(
+                    "note: schema `{name}` declares {count} {} slot(s) (`{}`), but [check.{name}] \
+                     names no resolve_against siblings, so they are not checked",
+                    family.noun, family.annotation
+                );
+            }
+        }
     };
     let Some(check_cfg) = manifest.check.get(name) else {
-        if !bindings.is_empty() {
-            unverified_note();
-        }
+        unverified_note();
         return Ok(Vec::new());
     };
     if check_cfg.resolve_against.is_empty() {
@@ -402,9 +421,7 @@ fn check_resolve_against(
                  namespaces the listed siblings own"
             );
         }
-        if !bindings.is_empty() {
-            unverified_note();
-        }
+        unverified_note();
         return Ok(Vec::new());
     }
 
@@ -415,6 +432,8 @@ fn check_resolve_against(
         panschema::linkml::SchemaDefinition,
         Vec<panschema::instances::InstanceSet>,
     )> = Vec::new();
+    // What each sibling resolved to — read only when a pin can name it.
+    let mut sibling_versions: Vec<panschema::diagnostics::SiblingVersion> = Vec::new();
     for sibling in &check_cfg.resolve_against {
         if sibling == name {
             anyhow::bail!(
@@ -431,6 +450,17 @@ fn check_resolve_against(
         let sibling_schema =
             panschema::import_resolve::load_schema_with_deps(sibling_path, registry, deps)
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
+        if !pins.is_empty()
+            && let Some(r) = resolved.get(sibling)
+        {
+            sibling_versions.push(panschema::diagnostics::SiblingVersion {
+                entry: sibling.clone(),
+                published: r.published_name.clone(),
+                schema_id: sibling_schema.id.clone().filter(|id| !id.is_empty()),
+                datasets: r.dataset_names.clone(),
+                version: r.version.clone(),
+            });
+        }
         let mut sibling_sets: Vec<panschema::instances::InstanceSet> = Vec::new();
         let declared = manifest.declared_instances(sibling);
         if declared.is_empty() {
@@ -491,6 +521,7 @@ fn check_resolve_against(
     let sibling_names = check_cfg.resolve_against.join("`, `");
     let mut total = panschema::diagnostics::SiblingResolution::default();
     let mut absences = panschema::diagnostics::AbsenceVerification::default();
+    let mut versions = panschema::diagnostics::VersionVerification::default();
     let mut uncovered = 0usize;
     // One streamed pass per referring file: each file's warnings flush
     // before the next file is even opened, and nothing is retained.
@@ -531,6 +562,18 @@ fn check_resolve_against(
             absences.uncheckable.extend(verification.uncheckable);
             absences.unverified.extend(verification.unverified);
         }
+        if !pins.is_empty() {
+            let checked = panschema::diagnostics::version_pins(&set, &pins, &sibling_versions);
+            for u in &checked.uncheckable {
+                eprintln!("warning: {}: {}", path.display(), u.message());
+            }
+            for m in &checked.mismatched {
+                eprintln!("warning: {}: {}", path.display(), m.message());
+            }
+            versions.pins += checked.pins;
+            versions.mismatched.extend(checked.mismatched);
+            versions.uncheckable.extend(checked.uncheckable);
+        }
     }
 
     let resolved = total.checked - total.unresolved.len();
@@ -539,20 +582,37 @@ fn check_resolve_against(
          `{sibling_names}` namespace(s) resolve",
         total.checked
     );
+    // "K of N <what> <verb> <sibling names>; U <unit> could not be checked"
+    let family_summary =
+        |what: &str, unit: &str, verb: &str, total: usize, failed: usize, uncheckable: usize| {
+            let mut summary = format!(
+                "note: schema `{name}`: {} of {total} {what} {verb} `{sibling_names}`",
+                total - failed
+            );
+            if uncheckable > 0 {
+                summary.push_str(&format!("; {uncheckable} {unit} could not be checked"));
+            }
+            eprintln!("{summary}");
+        };
     if !bindings.is_empty() {
-        let mut summary = format!(
-            "note: schema `{name}`: {} of {} stated absence claim(s) hold against \
-             `{sibling_names}`",
-            absences.claims - absences.contradicted_claims,
-            absences.claims
+        family_summary(
+            "stated absence claim(s)",
+            "claim(s)",
+            "hold against",
+            absences.claims,
+            absences.contradicted_claims,
+            absences.uncheckable.len(),
         );
-        if !absences.uncheckable.is_empty() {
-            summary.push_str(&format!(
-                "; {} claim(s) could not be checked",
-                absences.uncheckable.len()
-            ));
-        }
-        eprintln!("{summary}");
+    }
+    if !pins.is_empty() {
+        family_summary(
+            "version pin(s)",
+            "pin(s)",
+            "agree with",
+            versions.pins,
+            versions.mismatched.len(),
+            versions.uncheckable.len(),
+        );
     }
 
     let mut problems = Vec::new();
@@ -573,6 +633,18 @@ fn check_resolve_against(
         problems.push(format!(
             "{} stated absence claim(s) could not be checked",
             absences.uncheckable.len()
+        ));
+    }
+    if !versions.mismatched.is_empty() {
+        problems.push(format!(
+            "{} version pin(s) disagree with the sibling they name",
+            versions.mismatched.len()
+        ));
+    }
+    if !versions.uncheckable.is_empty() {
+        problems.push(format!(
+            "{} version pin(s) could not be checked",
+            versions.uncheckable.len()
         ));
     }
     if uncovered > 0 {
@@ -1043,7 +1115,8 @@ fn migrate_from_manifest() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let deps = resolved_deps(&manifest, &manifest_dir)?;
+    let resolved = resolved_deps(&manifest, &manifest_dir)?;
+    let deps = dep_paths(&resolved);
 
     let mut emitted_anything = false;
     for name in manifest.schemas.keys() {
@@ -1096,7 +1169,8 @@ fn generate_from_manifest(
             orphans.join("], [check.")
         );
     }
-    let deps = resolved_deps(&manifest, &manifest_dir)?;
+    let resolved = resolved_deps(&manifest, &manifest_dir)?;
+    let deps = dep_paths(&resolved);
     let registry = FormatRegistry::with_defaults();
 
     let mut produced_anything = false;
@@ -1132,7 +1206,7 @@ fn generate_from_manifest(
                 name,
                 &manifest,
                 &manifest_dir,
-                &deps,
+                &resolved,
                 &check_schema,
                 &registry,
             )
@@ -1841,7 +1915,8 @@ fn verify_manifest(strict: bool) -> anyhow::Result<()> {
             orphans.join("], [check.")
         );
     }
-    let deps = resolved_deps(&manifest, &manifest_dir)?;
+    let resolved = resolved_deps(&manifest, &manifest_dir)?;
+    let deps = dep_paths(&resolved);
     let registry = FormatRegistry::with_defaults();
     let mut findings = 0usize;
     let mut problems: Vec<String> = Vec::new();
@@ -1864,8 +1939,15 @@ fn verify_manifest(strict: bool) -> anyhow::Result<()> {
             findings += count;
         }
         problems.extend(
-            check_resolve_against(name, &manifest, &manifest_dir, &deps, &schema, &registry)
-                .with_context(|| format!("schema `{name}`, check"))?,
+            check_resolve_against(
+                name,
+                &manifest,
+                &manifest_dir,
+                &resolved,
+                &schema,
+                &registry,
+            )
+            .with_context(|| format!("schema `{name}`, check"))?,
         );
     }
     if strict && (findings > 0 || !problems.is_empty()) {

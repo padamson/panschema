@@ -467,16 +467,9 @@ pub fn schema_load_diagnostics(schema: &SchemaDefinition) -> Vec<String> {
             .iter()
             .map(|o| o.message()),
     );
-    out.extend(
-        absence_declaration_issues(schema)
-            .iter()
-            .map(|i| i.message()),
-    );
-    out.extend(
-        expansion_declaration_issues(schema)
-            .iter()
-            .map(|i| i.message()),
-    );
+    for family in SLOT_SEMANTICS_FAMILIES {
+        out.extend((family.issues)(schema));
+    }
     out.extend(impossible_rule_values(schema).iter().map(|i| i.message()));
     // The metamodel recommends at most one `tree_root` per schema. Several
     // are supported here — each dataset is read against the root it conforms
@@ -1144,28 +1137,15 @@ fn parse_absence_declaration(
 pub fn absence_declarations(
     schema: &SchemaDefinition,
 ) -> (AbsenceBindings, Vec<AbsenceDeclarationIssue>) {
-    let mut bindings = AbsenceBindings::default();
     let mut issues = Vec::new();
     let mut declared_vias: Vec<(String, AbsenceVia)> = Vec::new();
-
-    for (name, slot) in &schema.slots {
-        if let Some(value) = slot.annotations.get("asserts_absence") {
-            let via = parse_absence_declaration(name, value, &mut issues);
-            declared_vias.push((name.clone(), via.clone()));
-            bindings.insert_schema_wide(name, via);
-        }
-    }
-    for (class_name, class) in &schema.classes {
-        // Attributes first, slot_usage second: a plain map insert makes
-        // the `slot_usage` declaration override the attribute's, the
-        // direction `slot_usage` overrides everywhere else in LinkML.
-        for (name, slot) in class.attributes.iter().chain(class.slot_usage.iter()) {
-            if let Some(value) = slot.annotations.get("asserts_absence") {
-                let via = parse_absence_declaration(name, value, &mut issues);
-                declared_vias.push((name.clone(), via.clone()));
-                bindings.insert_class(class_name, name, via);
-            }
-        }
+    let bindings = scoped_declarations(schema, "asserts_absence", |name, value| {
+        let via = parse_absence_declaration(name, value, &mut issues);
+        declared_vias.push((name.to_string(), via.clone()));
+        via
+    });
+    if bindings.is_empty() {
+        return (bindings, issues);
     }
 
     let carried = carried_slot_names(schema);
@@ -1203,6 +1183,406 @@ pub fn absence_bindings(schema: &SchemaDefinition) -> AbsenceBindings {
 /// [`absence_declarations`].
 pub fn absence_declaration_issues(schema: &SchemaDefinition) -> Vec<AbsenceDeclarationIssue> {
     absence_declarations(schema).1
+}
+
+/// A `records_version_of` declaration: the annotated slot holds the
+/// package version a record was written against, and `sibling_slot`
+/// names the slot on the same record whose value says which sibling.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VersionPin {
+    Of {
+        sibling_slot: String,
+    },
+    /// A defective declaration still binds: its pins are reported
+    /// uncheckable, never as agreeing.
+    Malformed,
+}
+
+pub type VersionBindings = ScopedBindings<VersionPin>;
+
+/// A defect in a `records_version_of` declaration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VersionDeclarationIssue {
+    pub slot: String,
+    pub detail: String,
+}
+
+impl VersionDeclarationIssue {
+    pub fn message(&self) -> String {
+        format!(
+            "`records_version_of` on slot `{}`: {}; its pins are uncheckable until it is fixed",
+            self.slot, self.detail
+        )
+    }
+}
+
+/// The one parse of a `records_version_of` annotation value: a mapping
+/// with a string `sibling_slot` (not the slot itself) and nothing else.
+fn parse_version_declaration(
+    slot: &str,
+    value: &serde_norway::Value,
+    issues: &mut Vec<VersionDeclarationIssue>,
+) -> VersionPin {
+    let mut issue = |detail: String| {
+        issues.push(VersionDeclarationIssue {
+            slot: slot.to_string(),
+            detail,
+        })
+    };
+    let serde_norway::Value::Mapping(m) = value else {
+        issue(
+            "the value must be a mapping under `value:` with `sibling_slot` naming the slot \
+             that says which sibling"
+                .to_string(),
+        );
+        return VersionPin::Malformed;
+    };
+    for key in m.keys().filter(|k| k.as_str() != Some("sibling_slot")) {
+        issue(format!(
+            "unrecognized field `{}` — the declaration takes only `sibling_slot`",
+            key.as_str().unwrap_or("<non-string key>")
+        ));
+    }
+    match m.get("sibling_slot").map(|v| v.as_str()) {
+        None => {
+            issue("the declaration needs `sibling_slot`".to_string());
+            VersionPin::Malformed
+        }
+        Some(None) => {
+            issue("`sibling_slot` must be a string naming a slot on the same record".to_string());
+            VersionPin::Malformed
+        }
+        Some(Some(named)) if named == slot => {
+            issue(
+                "`sibling_slot` names the slot itself — a version cannot name its own sibling"
+                    .to_string(),
+            );
+            VersionPin::Malformed
+        }
+        Some(Some(named)) => VersionPin::Of {
+            sibling_slot: named.to_string(),
+        },
+    }
+}
+
+/// The one walk every schema-declared slot semantic shares: top-level
+/// `slots:` bind schema-wide; a class's `attributes:` bind that class;
+/// its `slot_usage:` overrides both for that class (attributes first,
+/// `slot_usage` second, so a plain map insert makes `slot_usage` win —
+/// the direction it overrides everywhere else in LinkML). `parse` sees
+/// every site carrying `annotation` and decides what it binds.
+fn scoped_declarations<T: Clone>(
+    schema: &SchemaDefinition,
+    annotation: &str,
+    mut parse: impl FnMut(&str, &serde_norway::Value) -> T,
+) -> ScopedBindings<T> {
+    let mut bindings = ScopedBindings::default();
+    for (name, slot) in &schema.slots {
+        if let Some(value) = slot.annotations.get(annotation) {
+            bindings.insert_schema_wide(name, parse(name, value));
+        }
+    }
+    for (class_name, class) in &schema.classes {
+        for (name, slot) in class.attributes.iter().chain(class.slot_usage.iter()) {
+            if let Some(value) = slot.annotations.get(annotation) {
+                bindings.insert_class(class_name, name, parse(name, value));
+            }
+        }
+    }
+    bindings
+}
+
+/// Every `records_version_of` declaration and every defect in one, from
+/// the shared walk. Defects are reported once per slot, however many
+/// scopes restate them.
+pub fn version_declarations(
+    schema: &SchemaDefinition,
+) -> (VersionBindings, Vec<VersionDeclarationIssue>) {
+    let mut issues = Vec::new();
+    let bindings = scoped_declarations(schema, "records_version_of", |name, value| {
+        parse_version_declaration(name, value, &mut issues)
+    });
+    if bindings.is_empty() {
+        return (bindings, issues);
+    }
+    let carried = carried_slot_names(schema);
+    let mut post: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new();
+    for (slot, scoped) in &bindings.by_slot {
+        if !carried.contains(slot) {
+            post.insert((
+                slot.clone(),
+                "no class carries this slot, so no record can state a pin".to_string(),
+            ));
+        }
+        for pin in scoped.schema_wide.iter().chain(scoped.by_class.values()) {
+            if let VersionPin::Of { sibling_slot } = pin
+                && !carried.contains(sibling_slot)
+            {
+                post.insert((
+                    slot.clone(),
+                    format!("`sibling_slot` names `{sibling_slot}`, which no class carries"),
+                ));
+            }
+        }
+    }
+    issues.extend(
+        post.into_iter()
+            .map(|(slot, detail)| VersionDeclarationIssue { slot, detail }),
+    );
+    (bindings, issues)
+}
+
+/// One schema-declared slot-semantics family: what it is called, the
+/// annotation that declares it, its load-time defects as messages, and
+/// how many slots declare it. Load diagnostics, the strict gate, and the
+/// check's enablement notes all read this table, so adding a family is
+/// one row.
+pub struct SlotSemanticsFamily {
+    pub noun: &'static str,
+    pub annotation: &'static str,
+    pub issues: fn(&SchemaDefinition) -> Vec<String>,
+    /// Slots declaring the family — `None` for a family the manifest's
+    /// `resolve_against` does not gate.
+    pub declared: Option<fn(&SchemaDefinition) -> usize>,
+}
+
+pub const SLOT_SEMANTICS_FAMILIES: &[SlotSemanticsFamily] = &[
+    SlotSemanticsFamily {
+        noun: "absence-claim",
+        annotation: "asserts_absence",
+        issues: |schema| {
+            absence_declaration_issues(schema)
+                .iter()
+                .map(|i| i.message())
+                .collect()
+        },
+        declared: Some(|schema| absence_bindings(schema).len()),
+    },
+    SlotSemanticsFamily {
+        noun: "anchor-expansion",
+        annotation: "expand_against",
+        issues: |schema| {
+            expansion_declaration_issues(schema)
+                .iter()
+                .map(|i| i.message())
+                .collect()
+        },
+        declared: None,
+    },
+    SlotSemanticsFamily {
+        noun: "version-pin",
+        annotation: "records_version_of",
+        issues: |schema| {
+            version_declaration_issues(schema)
+                .iter()
+                .map(|i| i.message())
+                .collect()
+        },
+        declared: Some(|schema| version_bindings(schema).len()),
+    },
+];
+
+/// The declarations alone — the checker's half of [`version_declarations`].
+pub fn version_bindings(schema: &SchemaDefinition) -> VersionBindings {
+    version_declarations(schema).0
+}
+
+/// The defects alone — the load diagnostics' half of [`version_declarations`].
+pub fn version_declaration_issues(schema: &SchemaDefinition) -> Vec<VersionDeclarationIssue> {
+    version_declarations(schema).1
+}
+
+/// What a `resolve_against` sibling resolved to, as a pin can name it:
+/// by its `[schemas]` entry key, the name its publish manifest declares,
+/// or a dataset name that manifest lists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SiblingVersion {
+    pub entry: String,
+    pub published: String,
+    /// The sibling schema's `id` IRI, when it declares one.
+    pub schema_id: Option<String>,
+    pub datasets: Vec<String>,
+    pub version: String,
+}
+
+impl SiblingVersion {
+    /// Whether `value` is one of this sibling's names other than its
+    /// entry key: the published name, the schema IRI, or a dataset.
+    fn has_alias(&self, value: &str) -> bool {
+        value == self.published
+            || self.schema_id.as_deref() == Some(value)
+            || self.datasets.iter().any(|d| d == value)
+    }
+
+    /// The one sibling `value` names: an exact entry key wins outright;
+    /// otherwise the published name, the schema IRI, or a listed
+    /// dataset, provided exactly one sibling answers to it. None, or several, is an error
+    /// naming the reason.
+    pub fn resolve<'a>(
+        siblings: &'a [SiblingVersion],
+        value: &str,
+    ) -> Result<&'a SiblingVersion, String> {
+        if let Some(exact) = siblings.iter().find(|s| s.entry == value) {
+            return Ok(exact);
+        }
+        let by_alias: Vec<&SiblingVersion> =
+            siblings.iter().filter(|s| s.has_alias(value)).collect();
+        match by_alias.as_slice() {
+            [one] => Ok(one),
+            [] => Err(format!(
+                "`{value}` names no resolve_against sibling (by entry, published name, schema IRI, or dataset)"
+            )),
+            many => Err(format!(
+                "`{value}` names {} resolve_against siblings ({}); name one by its entry key",
+                many.len(),
+                many.iter()
+                    .map(|s| format!("`{}`", s.entry))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        }
+    }
+}
+
+/// Whether two version strings name the same release: both parse as
+/// semver (a leading `v` allowed), and compare equal by precedence, so
+/// build metadata does not separate them but a pre-release does. An
+/// unparsable side is an error naming it.
+fn same_release(declared: &str, actual: &str) -> Result<bool, String> {
+    let parse = |v: &str| semver::Version::parse(v.trim_start_matches('v'));
+    let d = parse(declared).map_err(|_| format!("`{declared}` is not a semver version"))?;
+    let a = parse(actual)
+        .map_err(|_| format!("the sibling's own version `{actual}` is not a semver version"))?;
+    Ok(d.cmp_precedence(&a) == std::cmp::Ordering::Equal)
+}
+
+/// A record's declared version disagrees with the sibling it names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VersionMismatch {
+    pub record: String,
+    pub slot: String,
+    pub declared: String,
+    pub sibling: String,
+    pub actual: String,
+}
+
+impl VersionMismatch {
+    pub fn message(&self) -> String {
+        format!(
+            "record `{}`: `{}` records version {} of `{}`, which is at {}",
+            self.record, self.slot, self.declared, self.sibling, self.actual
+        )
+    }
+}
+
+/// A pin that could not be evaluated, with the reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UncheckableVersion {
+    pub record: String,
+    pub slot: String,
+    pub detail: String,
+}
+
+impl UncheckableVersion {
+    pub fn message(&self) -> String {
+        format!(
+            "record `{}`: the `{}` version pin could not be checked: {}",
+            self.record, self.slot, self.detail
+        )
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VersionVerification {
+    /// Pins that could be evaluated; `mismatched` counts among them.
+    pub pins: usize,
+    pub mismatched: Vec<VersionMismatch>,
+    pub uncheckable: Vec<UncheckableVersion>,
+}
+
+/// Every version pin a dataset's records state, evaluated against the
+/// siblings' resolved versions. A record carrying no value at the pinned
+/// slot states no pin. A pin that cannot be evaluated — no single string
+/// version, no single string at `sibling_slot`, a name matching no
+/// sibling or several, an unparsable version, a defective declaration —
+/// is reported uncheckable, never as agreeing.
+pub fn version_pins(
+    set: &crate::instances::InstanceSet,
+    declarations: &VersionBindings,
+    siblings: &[SiblingVersion],
+) -> VersionVerification {
+    use crate::instances::{InstanceValue, ScalarValue};
+
+    fn single_string<'a>(
+        inst: &'a crate::instances::Instance,
+        slot: &str,
+    ) -> Result<Option<&'a str>, String> {
+        let Some(sv) = inst.slot_values.iter().find(|sv| sv.slot == slot) else {
+            return Ok(None);
+        };
+        match sv.values.as_slice() {
+            [] => Ok(None),
+            [InstanceValue::Scalar(ScalarValue::String(v))] => Ok(Some(v.as_str())),
+            [InstanceValue::Scalar(ScalarValue::Integer(_) | ScalarValue::Float(_))] => Err(
+                format!("`{slot}` is a number, not a string — quote it in the data"),
+            ),
+            [_] => Err(format!("`{slot}` is not a string")),
+            _ => Err(format!("`{slot}` has several values where one is expected")),
+        }
+    }
+
+    fn evaluate(
+        inst: &crate::instances::Instance,
+        slot: &str,
+        declared: &str,
+        pin: &VersionPin,
+        siblings: &[SiblingVersion],
+    ) -> Result<Option<VersionMismatch>, String> {
+        let VersionPin::Of { sibling_slot } = pin else {
+            return Err(
+                "the declaration is defective (see the schema's load warnings)".to_string(),
+            );
+        };
+        let named = single_string(inst, sibling_slot)?.ok_or_else(|| {
+            format!("the record has no `{sibling_slot}` value naming the sibling")
+        })?;
+        let sibling = SiblingVersion::resolve(siblings, named)?;
+        Ok(
+            (!same_release(declared, &sibling.version)?).then(|| VersionMismatch {
+                record: inst.id.clone(),
+                slot: slot.to_string(),
+                declared: declared.to_string(),
+                sibling: sibling.entry.clone(),
+                actual: sibling.version.clone(),
+            }),
+        )
+    }
+
+    let mut out = VersionVerification::default();
+    for inst in &set.instances {
+        for slot_name in declarations.by_slot.keys() {
+            let Some(pin) = declarations.governing(&inst.types, slot_name) else {
+                continue;
+            };
+            let outcome = match single_string(inst, slot_name) {
+                Ok(None) => continue,
+                Ok(Some(declared)) => evaluate(inst, slot_name, declared, pin, siblings),
+                Err(detail) => Err(detail),
+            };
+            match outcome {
+                Err(detail) => out.uncheckable.push(UncheckableVersion {
+                    record: inst.id.clone(),
+                    slot: slot_name.clone(),
+                    detail,
+                }),
+                Ok(mismatch) => {
+                    out.pins += 1;
+                    out.mismatched.extend(mismatch);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Every `expand_against` declaration in the schema: the annotated
@@ -1559,7 +1939,7 @@ pub struct StrictBlocking {
     pub colliding: usize,
     pub untyped: usize,
     pub impossible: usize,
-    /// Defective `asserts_absence` / `expand_against` declarations.
+    /// Defective schema-declared slot-semantics declarations, every family.
     pub slot_semantics: usize,
 }
 
@@ -1582,8 +1962,10 @@ pub fn strict_blocking(schema: &SchemaDefinition) -> StrictBlocking {
         colliding: colliding_slot_definitions(schema).len(),
         untyped: untyped_slots(schema).len(),
         impossible: impossible_rule_values(schema).len(),
-        slot_semantics: absence_declaration_issues(schema).len()
-            + expansion_declaration_issues(schema).len(),
+        slot_semantics: SLOT_SEMANTICS_FAMILIES
+            .iter()
+            .map(|family| (family.issues)(schema).len())
+            .sum(),
     }
 }
 
@@ -3784,6 +4166,193 @@ mod tests {
         );
     }
 
+    #[test]
+    fn version_declaration_defects_are_load_warnings() {
+        let schema = parse(
+            "id: https://example.org/t\nname: t\nslots:\n  pinned:\n    range: string\n    \
+             annotations:\n      records_version_of:\n        value:\n          sibling_slot: ghost\n          \
+             extra: 1\n  selfish:\n    range: string\n    annotations:\n      records_version_of:\n        \
+             value:\n          sibling_slot: selfish\n  bare:\n    range: string\n    annotations:\n      \
+             records_version_of:\n        value: null\n  orphan:\n    range: string\n    annotations:\n      \
+             records_version_of:\n        value:\n          sibling_slot: pinned\nclasses:\n  Bench:\n    \
+             slots: [pinned, selfish, bare]\n",
+        );
+        let issues = version_declaration_issues(&schema);
+        let details: Vec<String> = issues.iter().map(|i| i.message()).collect();
+        let has = |needle: &str| details.iter().any(|d| d.contains(needle));
+        assert!(
+            has("unrecognized field `extra`"),
+            "unknown field is named: {details:?}"
+        );
+        assert!(
+            has("names `ghost`, which no class carries"),
+            "unknown sibling_slot is named: {details:?}"
+        );
+        assert!(
+            has("names the slot itself"),
+            "self-naming is refused: {details:?}"
+        );
+        assert!(
+            has("must be a mapping"),
+            "a null value is a defect: {details:?}"
+        );
+        assert!(
+            has("`orphan`") && has("no class carries this slot"),
+            "an uncarried slot is named: {details:?}"
+        );
+        let bindings = version_bindings(&schema);
+        assert!(
+            matches!(
+                bindings.governing(&["Bench".to_string()], "bare"),
+                Some(VersionPin::Malformed)
+            ),
+            "a defective declaration still binds, as uncheckable"
+        );
+        assert!(version_bindings(&SchemaDefinition::new("bare")).is_empty());
+    }
+
+    #[test]
+    fn version_pins_bind_the_sibling_three_ways_and_report_what_they_cannot_check() {
+        let schema = parse(
+            "id: https://example.org/t\nname: t\nprefixes:\n  t: https://example.org/t/\ndefault_prefix: t\n\
+             slots:\n  id: {identifier: true}\n  target: {range: string}\n  pinned:\n    range: string\n    \
+             annotations:\n      records_version_of:\n        value:\n          sibling_slot: target\n\
+             classes:\n  Bench:\n    tree_root: true\n    slots: [id, target, pinned]\n",
+        );
+        // `archive` comes first and calls itself `catalog` in its publish
+        // manifest; the entry keyed `catalog` must still win by exact key.
+        let siblings = vec![
+            SiblingVersion {
+                entry: "archive".to_string(),
+                published: "catalog".to_string(),
+                schema_id: None,
+                datasets: vec!["shared".to_string()],
+                version: "0.9.0".to_string(),
+            },
+            SiblingVersion {
+                entry: "catalog".to_string(),
+                published: "wine".to_string(),
+                schema_id: Some("https://example.org/catalog".to_string()),
+                datasets: vec!["worked-example".to_string(), "shared".to_string()],
+                version: "1.1.0".to_string(),
+            },
+        ];
+        let check = |data: &str| {
+            let value: serde_norway::Value = serde_norway::from_str(data).expect("yaml");
+            let set = crate::instances::InstanceSet::from_linkml_data(&schema, &value);
+            version_pins(&set, &version_bindings(&schema), &siblings)
+        };
+        for name in [
+            "catalog",
+            "wine",
+            "https://example.org/catalog",
+            "worked-example",
+        ] {
+            let agree = check(&format!("id: b\ntarget: {name}\npinned: 1.1.0\n"));
+            assert_eq!(
+                (agree.pins, agree.mismatched.len(), agree.uncheckable.len()),
+                (1, 0, 0),
+                "{name} binds and agrees"
+            );
+        }
+        let stale = check("id: b\ntarget: catalog\npinned: 1.0.0\n");
+        assert_eq!(stale.pins, 1);
+        assert_eq!(
+            stale.mismatched[0].message(),
+            "record `b`: `pinned` records version 1.0.0 of `catalog`, which is at 1.1.0"
+        );
+        let unnamed = check("id: b\npinned: 1.1.0\n");
+        assert!(
+            unnamed.uncheckable[0]
+                .message()
+                .contains("no `target` value"),
+            "{:?}",
+            unnamed.uncheckable
+        );
+        let stranger = check("id: b\ntarget: elsewhere\npinned: 1.1.0\n");
+        assert!(
+            stranger.uncheckable[0]
+                .message()
+                .contains("names no resolve_against sibling"),
+            "{:?}",
+            stranger.uncheckable
+        );
+        let unpinned = check("id: b\ntarget: catalog\n");
+        assert_eq!(
+            unpinned,
+            VersionVerification::default(),
+            "no value at the pinned slot states no pin"
+        );
+
+        let tagged = check("id: b\ntarget: catalog\npinned: v1.1.0\n");
+        assert_eq!(
+            (tagged.pins, tagged.mismatched.len()),
+            (1, 0),
+            "a tag spelling names the same release"
+        );
+        let build = check("id: b\ntarget: catalog\npinned: 1.1.0+sha.abc\n");
+        assert_eq!(
+            (build.pins, build.mismatched.len()),
+            (1, 0),
+            "build metadata does not change the release"
+        );
+        let float = check("id: b\ntarget: catalog\npinned: 1.0\n");
+        assert!(
+            float.uncheckable[0].message().contains("is a number")
+                && float.uncheckable[0].message().contains("quote it"),
+            "a bare YAML number gets the quoting hint: {:?}",
+            float.uncheckable
+        );
+        // A slot present with no values states no pin — as absent as a
+        // missing slot, not "several values".
+        let empty_value: serde_norway::Value =
+            serde_norway::from_str("id: b\ntarget: catalog\n").expect("yaml");
+        let mut set = crate::instances::InstanceSet::from_linkml_data(&schema, &empty_value);
+        set.instances[0]
+            .slot_values
+            .push(crate::instances::SlotValue {
+                slot: "pinned".to_string(),
+                values: Vec::new(),
+            });
+        assert_eq!(
+            version_pins(&set, &version_bindings(&schema), &siblings),
+            VersionVerification::default(),
+            "an empty value list at the pinned slot states no pin"
+        );
+        let prerelease = check("id: b\ntarget: catalog\npinned: 1.1.0-rc.1\n");
+        assert_eq!(
+            (prerelease.pins, prerelease.mismatched.len()),
+            (1, 1),
+            "a pre-release is a different release from the final"
+        );
+        let garbage = check("id: b\ntarget: catalog\npinned: latest\n");
+        assert!(
+            garbage.uncheckable[0]
+                .message()
+                .contains("not a semver version"),
+            "{:?}",
+            garbage.uncheckable
+        );
+        let boolean = check("id: b\ntarget: catalog\npinned: true\n");
+        assert!(
+            boolean.uncheckable[0].message().contains("not a string"),
+            "{:?}",
+            boolean.uncheckable
+        );
+        assert!(
+            !boolean.uncheckable[0].message().contains("is a number"),
+            "a boolean is not called a number"
+        );
+        let ambiguous = check("id: b\ntarget: shared\npinned: 1.1.0\n");
+        assert!(
+            ambiguous.uncheckable[0]
+                .message()
+                .contains("names 2 resolve_against siblings"),
+            "a name matching two siblings is uncheckable, not first-match: {:?}",
+            ambiguous.uncheckable
+        );
+    }
+
     /// A malformed absence declaration warns instead of silently
     /// narrowing or widening the check: an unknown field is named, a
     /// `via_slot` no class carries is named (and the binding stays,
@@ -4074,7 +4643,7 @@ mod tests {
 
     /// The strict gate's arithmetic is exact: every family contributes
     /// its own count to the total, and the slot-semantics count is the
-    /// sum of both declaration families.
+    /// sum of every declaration family.
     #[test]
     fn strict_blocking_sums_every_family_exactly() {
         let blocking = StrictBlocking {
@@ -4090,16 +4659,25 @@ mod tests {
         // One absence defect (uncarried annotated slot) and one expansion
         // defect (self-reference): the shared category counts both.
         let schema = parse(
-            "id: https://example.org/t\nname: t\nclasses:\n  Bench:\n    slots: [anchor]\nslots:\n  \
+            "id: https://example.org/t\nname: t\nclasses:\n  Bench:\n    slots: [anchor, pinned]\nslots:\n  \
              anchor:\n    range: uri\n    annotations:\n      expand_against: anchor\n  \
+             pinned:\n    range: string\n    annotations:\n      records_version_of:\n        value:\n          \
+             sibling_slot: pinned\n  \
              orphan:\n    range: uri\n    annotations:\n      asserts_absence:\n        value: \
              null\n",
         );
         assert_eq!(
             strict_blocking(&schema).slot_semantics,
-            2,
+            3,
             "one defect from each declaration family, summed"
         );
+        let load = schema_load_diagnostics(&schema);
+        for family in ["asserts_absence", "expand_against", "records_version_of"] {
+            assert!(
+                load.iter().any(|m| m.contains(family)),
+                "a defective `{family}` declaration is a load warning; got: {load:?}"
+            );
+        }
     }
 
     /// The declarability guard judges the *resolved* slot, so a

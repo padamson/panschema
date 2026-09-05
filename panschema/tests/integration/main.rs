@@ -2721,7 +2721,7 @@ fn schema_declared_absence_claims_are_checked() {
         "bench",
         "1.0.0",
         "bench.yaml",
-        "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, questions]\n  Question:\n    slots: [id, unconnected, unreferenced]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  questions: {range: Question, multivalued: true}\n  unconnected:\n    range: DomainRecord\n    multivalued: true\n    annotations:\n      asserts_absence:\n        value: null\n  unreferenced:\n    range: uri\n    multivalued: true\n    annotations:\n      asserts_absence:\n        value: null\n",
+        "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, target, target_version, questions]\n  Question:\n    slots: [id, unconnected, unreferenced]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  target: {range: string}\n  target_version:\n    range: string\n    annotations:\n      records_version_of:\n        value:\n          sibling_slot: target\n  questions: {range: Question, multivalued: true}\n  unconnected:\n    range: DomainRecord\n    multivalued: true\n    annotations:\n      asserts_absence:\n        value: null\n  unreferenced:\n    range: uri\n    multivalued: true\n    annotations:\n      asserts_absence:\n        value: null\n",
     );
 
     fs::write(
@@ -2731,7 +2731,7 @@ fn schema_declared_absence_claims_are_checked() {
     .unwrap();
     fs::write(
         consumer.join("bench-data.yaml"),
-        "id: b1\nquestions:\n  - {id: q1, unconnected: [cat:aws, cat:gcp], unreferenced: [cat:silent]}\n",
+        "id: b1\ntarget: catalog\ntarget_version: 1.0.0\nquestions:\n  - {id: q1, unconnected: [cat:aws, cat:gcp], unreferenced: [cat:silent]}\n",
     )
     .unwrap();
     fs::write(
@@ -2777,6 +2777,42 @@ resolve_against = ["catalog"]
         "every annotated slot's claim is counted; got:\n{}",
         String::from_utf8_lossy(&holds.stderr)
     );
+    assert!(
+        String::from_utf8_lossy(&holds.stderr)
+            .contains("1 of 1 version pin(s) agree with `catalog`"),
+        "the container's version pin is checked and counted; got:\n{}",
+        String::from_utf8_lossy(&holds.stderr)
+    );
+
+    // The catalog moves on without the benchmark: its pin no longer
+    // agrees, which warns, and fails under --strict.
+    let publish_path = catalog_pkg.join("panschema-publish.toml");
+    let pinned = fs::read_to_string(&publish_path).unwrap();
+    assert!(pinned.contains("version = \"1.0.0\""));
+    fs::write(
+        &publish_path,
+        pinned.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
+    )
+    .unwrap();
+    let moved = run(&[]);
+    let stderr = String::from_utf8_lossy(&moved.stderr);
+    assert!(
+        moved.status.success()
+            && stderr.contains("`b1`")
+            && stderr.contains("target_version")
+            && stderr.contains("1.0.0")
+            && stderr.contains("1.1.0")
+            && stderr.contains("`catalog`"),
+        "a stale pin warns naming the record, slot, both versions, and the sibling; got:\n{stderr}"
+    );
+    let strict = run(&["--strict"]);
+    assert!(
+        !strict.status.success()
+            && String::from_utf8_lossy(&strict.stderr).contains("version pin(s) disagree"),
+        "a stale pin fails --strict; got:\n{}",
+        String::from_utf8_lossy(&strict.stderr)
+    );
+    fs::write(&publish_path, pinned).unwrap();
 
     // A pairing joining the two anchors contradicts the claim.
     fs::write(
@@ -2872,6 +2908,24 @@ instances = ["bench-data.yaml"]
         String::from_utf8_lossy(&unverified.stderr)
     );
 
+    // A defective pin declaration is a load warning the strict gate refuses.
+    let bench_schema_path = bench_pkg.join("bench.yaml");
+    let bench_schema = fs::read_to_string(&bench_schema_path).unwrap();
+    assert!(bench_schema.contains("sibling_slot: target"));
+    fs::write(
+        &bench_schema_path,
+        bench_schema.replace("sibling_slot: target", "sibling_slot: ghost"),
+    )
+    .unwrap();
+    let defective = run(&["--strict"]);
+    let stderr = String::from_utf8_lossy(&defective.stderr);
+    assert!(
+        !defective.status.success()
+            && stderr.contains("`records_version_of`")
+            && stderr.contains("ghost"),
+        "a defective declaration fails --strict naming the slot it points at; got:\n{stderr}"
+    );
+    fs::write(&bench_schema_path, bench_schema).unwrap();
     let _ = fs::remove_dir_all(&tmp);
 }
 

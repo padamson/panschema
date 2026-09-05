@@ -4110,6 +4110,8 @@ current = "v0.1.0"
         };
         let resolved = crate::source::Resolved {
             pkg_dir: schema.path().parent().unwrap().to_path_buf(),
+            published_name: String::from("pkg"),
+            dataset_names: Vec::new(),
             schema_path: schema.path().to_path_buf(),
             version: "0.1.0".into(),
             revision: None,

@@ -181,6 +181,10 @@ pub struct Resolved {
     /// Version declared in `panschema-publish.toml`. Always populated —
     /// both source types are now "packages" with a publish file.
     pub version: String,
+    /// The package name its publish manifest declares.
+    pub published_name: String,
+    /// The dataset names its publish manifest lists (`[[instances]]`).
+    pub dataset_names: Vec<String>,
     /// Reserved for future commit-identifier provenance. Currently
     /// always `None`: `path:` sources have no commit; `github:` sources
     /// use a tag URL that doesn't expose a commit SHA without an extra
@@ -349,6 +353,8 @@ pub fn resolve_github(
         pkg_dir: canon_pkg,
         schema_path: main_path,
         version: publish.schema.version,
+        published_name: publish.schema.name,
+        dataset_names: publish.instances.iter().map(|i| i.name.clone()).collect(),
         revision: None,
     })
 }
@@ -371,6 +377,8 @@ pub fn resolve_path(
         pkg_dir: canon_pkg,
         schema_path: main_path,
         version: publish.schema.version,
+        published_name: publish.schema.name,
+        dataset_names: publish.instances.iter().map(|i| i.name.clone()).collect(),
         revision: None,
     })
 }

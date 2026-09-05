@@ -1,8 +1,9 @@
 # Feature 44: Schema-Declared Slot Semantics
 
-**Feature:** Read two slot-level meanings from the schema that declares
-the slot — absence claims (`asserts_absence`) and anchor-IRI expansion
-(`expand_against`) — instead of from each consumer's manifest, and bind
+**Feature:** Read three slot-level meanings from the schema that declares
+the slot — absence claims (`asserts_absence`), anchor-IRI expansion
+(`expand_against`), and version pins (`records_version_of`) — instead of
+from each consumer's manifest, and bind
 cross-graph checks to the dataset a record itself names.
 
 **User Story:** As the author of a contract schema whose slots carry
@@ -24,7 +25,7 @@ opening any consumer's configuration.
 Both semantics ride on LinkML slot annotations, which since panschema
 supports LinkML 1.6+ structured values (#127) can carry a structured
 value under `value:`. The tool already interprets schema-declared
-meaning for `identifier`, `key`, `tree_root`, and `rules`; these two
+meaning for `identifier`, `key`, `tree_root`, and `rules`; these three
 join that family.
 
 **Absence claims.** A slot annotated
@@ -74,6 +75,35 @@ outside the target namespace remain expressible. Expansion applies only
 where the slot's range class is not inlinable anywhere in the schema, so
 a bare value can never be confused with an in-dataset reference;
 elsewhere the annotation is a load warning and no expansion happens.
+
+**Version pinning.** A slot annotated
+
+```yaml
+target_dataset_version:
+  annotations:
+    records_version_of:
+      value:
+        sibling_slot: target_dataset
+```
+
+declares: the record's value at this slot is the package version the
+record was written against, and `sibling_slot` names the slot on the
+same record whose value says which sibling. That value binds to a
+`resolve_against` sibling by its `[schemas]` entry key, by the name its
+publish manifest declares, by its schema's `id` IRI, or by a dataset
+name that manifest lists — so a benchmark naming a target *schema* by
+IRI or a target *dataset* by name pins the package that publishes it. At check time the declared version is compared with the
+version the sibling actually resolved to; a mismatch warns per record
+and fails under `--strict`. A pin that cannot be evaluated — no value
+or several, a non-string version, a `sibling_slot` value naming no
+sibling — is reported uncheckable, never as agreeing. Two versions name the same
+release when both parse as semver (a leading `v` allowed) and compare
+equal by precedence: build metadata does not separate them, a
+pre-release does, and an unparsable side is uncheckable. Without the
+pin, a benchmark written against one release of its target reads green
+when checked against any later one, so nothing distinguishes a
+benchmark checked against the release it was written for from one
+checked against whatever happens to be installed.
 
 **Dataset binding.** Where the referring record itself names which
 target dataset its claims are about, checks bind to that dataset rather
@@ -196,6 +226,47 @@ RDF must carry them (see Open Questions for the vocabulary).
       reading only the published graph sees the declaration.
 - [ ] Round trip: the OWL reader reads the projection back into the
       same annotations.
+
+### Slice 6: version pins are checked against the sibling — Complete
+
+**Acceptance criteria:**
+
+- [x] A record whose annotated version slot matches the version the
+      named sibling resolved to counts as an agreeing pin, and the
+      check's summary says how many pins agree.
+- [x] A record whose declared version differs from the sibling's warns
+      naming the record, the slot, both versions, and the sibling; the
+      manifest-wide check fails under `--strict`.
+- [x] A pin that cannot be evaluated is reported uncheckable with the
+      reason, and counts against `--strict` like an uncheckable
+      absence claim.
+- [x] The sibling binds by entry key, published name, schema IRI, or a
+      declared dataset name; a value matching none — or, through the
+      aliases, more than one — is uncheckable, not silently compared
+      against the first sibling.
+- [x] Declaration defects (a value that is not a mapping with a string
+      `sibling_slot`, an unknown field, a slot or `sibling_slot` no
+      class carries, a slot naming itself) are load warnings that
+      `--strict` refuses, like the other two families.
+- [x] The shipped skill documents the annotation's value shape and
+      the verdicts a pin can receive (a test holds the skill to it).
+
+**Notes:**
+- Same `ScopedBindings` walk and the same manifest enablement
+  (`resolve_against`) as the other two families; the only new input is
+  the sibling's resolved version, which the check reads from the
+  sibling's publish manifest through the same resolution `fetch` uses.
+- A version authored as a bare YAML float (`1.0`) loads as a number, not
+  a string, and is reported uncheckable with a quoting hint rather than
+  compared through a lossy conversion.
+- The skill documents it in the manifest reference beside the other
+  two families; the three families share one declaration walk and one
+  registration table, so load diagnostics, the strict gate, and the
+  check's enablement notes cannot disagree about which families exist.
+- A record naming a sibling binds by exact entry key first; the
+  published name, the schema IRI, and dataset names are aliases, and a
+  name that matches two siblings through aliases is uncheckable rather
+  than first-match.
 
 ---
 

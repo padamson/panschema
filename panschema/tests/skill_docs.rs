@@ -144,6 +144,13 @@ fn every_generate_manifest_key_is_documented() {
              from the manifest reference"
         );
     }
+    for annotation in ["asserts_absence", "expand_against", "records_version_of"] {
+        assert!(
+            doc.contains(annotation),
+            "schema-declared semantic `{annotation}` is read by the loader but absent \
+             from the manifest reference"
+        );
+    }
 }
 
 /// The CLI reference and the binary agree on the subcommand roster in both
