@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **The LinkML model is its own crate, `panschema-model`.** The schema model, its inheritance and slot-usage resolution, the LinkML YAML reader, and the `Reader` trait now ship as a library that depends on no RDF, template, CLI, or async library, for tools that reason over schemas without running the CLI; a dependency gate keeps those libraries out of it. `panschema` re-exports every moved module at its previous path, so existing library callers and both binaries are unchanged, and the two crates version together.
+
 ### Removed
 
 - **The 3D graph renderer and the GPU force-simulation are gone; the schema graph is 2D.** The schema page's 2D/3D toggle, the WebGPU render path behind it, and the separate native GPU force-simulation (the optional `gpu` and `webgpu` cargo features, and their `wgpu`/`bytemuck`/`pollster` dependencies) are removed, and with them the `generate --viz-mode` flag — it only ever printed which renderer the page *might* use (the page decided on its own), and there is now exactly one. The 3D path required WebGPU — so the toggle was disabled for many readers — ran only the force-directed layout while the static layouts that read best for schemas were 2D-only, and drew a deliberately reduced notation that never gained the per-kind node shapes the 2D canvas has; the native GPU module was reachable from no other code and built by no CI job. Everything the graph does otherwise is unchanged: the same layouts, notation, legend, hover, focus, and controls. One simplification follows for readers: the layout picker no longer greys options out by mode — every implemented layout is selectable, and unimplemented ones stay disabled as before.

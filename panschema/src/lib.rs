@@ -11,10 +11,10 @@ pub mod html_writer;
 pub mod import_resolve;
 pub mod instances;
 pub mod io;
+// The model crate owns these; re-exported at the paths they have always had.
+pub use panschema_model::{linkml, linkml_resolve, yaml_reader};
 pub mod json_schema_writer;
 pub mod labels;
-pub mod linkml;
-pub mod linkml_resolve;
 pub mod lockfile;
 pub mod manifest;
 /// Backs the `mdbook-panschema` binary; not part of the conversion API.
@@ -33,4 +33,3 @@ pub mod rust_writer;
 pub mod shacl_writer;
 pub mod source;
 pub mod validate;
-pub mod yaml_reader;

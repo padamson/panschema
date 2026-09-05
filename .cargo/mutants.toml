@@ -24,7 +24,8 @@ test_tool = "nextest"
 # rejects.)
 additional_cargo_args = ["--lib"]
 
-# Examine `panschema` + the host-testable parts of `panschema-viz`.
+# Examine `panschema`, `panschema-model`, and the host-testable parts of
+# `panschema-viz`.
 # `panschema-viz` is a wasm-targeted crate, but `simulation.rs`,
 # `sim_common.rs`, and `legend.rs` are pure-Rust helpers with real
 # native unit tests that `cargo test --lib` runs on the host — this
@@ -44,6 +45,7 @@ additional_cargo_args = ["--lib"]
 # scripts/mutants.sh as `--exclude` CLI flags.
 examine_globs = [
     "panschema/src/**/*.rs",
+    "panschema-model/src/**/*.rs",
     "panschema-viz/src/simulation.rs",
     "panschema-viz/src/sim_common.rs",
     "panschema-viz/src/legend.rs",

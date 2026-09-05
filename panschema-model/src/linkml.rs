@@ -320,7 +320,7 @@ fn scalar_lexical(value: serde_norway::Value) -> serde_norway::Value {
 pub struct Prefix {
     /// The prefix name (e.g., "schema", "rdfs")
     pub prefix_prefix: String,
-    /// The IRI expansion (e.g., "http://schema.org/")
+    /// The IRI expansion (e.g., `http://schema.org/`)
     pub prefix_reference: String,
 }
 
@@ -331,7 +331,7 @@ pub struct Prefix {
 pub struct Contributor {
     /// The contributor's name
     pub name: String,
-    /// ORCID identifier URL (e.g., "https://orcid.org/0000-0002-1825-0097")
+    /// ORCID identifier URL (e.g., `https://orcid.org/0000-0002-1825-0097`)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub orcid: Option<String>,
     /// Role in the project (e.g., "author", "editor", "contributor")
@@ -715,7 +715,7 @@ pub struct ClassDefinition {
     pub unique_keys: BTreeMap<String, UniqueKey>,
     /// LinkML keys present on this class in the source but not modeled
     /// by panschema. Captured (rather than silently dropped by serde)
-    /// so [`crate::diagnostics`] can warn when a producer writes a
+    /// so the load diagnostics can warn when a producer writes a
     /// construct — e.g. `unique_keys` — that won't render or emit.
     /// Populated only by the YAML reader; empty otherwise.
     #[serde(flatten, default)]

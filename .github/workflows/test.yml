@@ -35,7 +35,7 @@ jobs:
           touch panschema-viz/pkg/panschema_viz.js panschema-viz/pkg/panschema_viz_bg.wasm
 
       - name: Check compilation on MSRV
-        run: cargo check -p panschema
+        run: cargo check -p panschema -p panschema-model
 
   lint:
     name: Lint and Docs
@@ -79,10 +79,10 @@ jobs:
         run: cargo check --manifest-path fuzz/Cargo.toml
 
       - name: Clippy (release)
-        run: cargo clippy -p panschema --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Clippy (with dev feature)
-        run: cargo clippy -p panschema --all-targets --features dev -- -D warnings
+        run: cargo clippy --workspace --all-targets --features panschema/dev -- -D warnings
 
       # Cheap canary; the full wasm-pack build runs in the test job.
       - name: Check panschema-viz on wasm32-unknown-unknown
@@ -95,7 +95,7 @@ jobs:
         run: cargo test --doc --workspace --features panschema/dev
 
       - name: Generate documentation
-        run: cargo doc --no-deps -p panschema
+        run: cargo doc --no-deps -p panschema -p panschema-model
 
   test:
     name: Test on ${{ matrix.os }}
@@ -181,12 +181,12 @@ jobs:
         fi
 
     - name: Run tests (release)
-      run: cargo nextest run -p panschema
+      run: cargo nextest run --workspace
       env:
         BROWSER: all
 
     - name: Run tests (with dev feature)
-      run: cargo nextest run -p panschema --features dev
+      run: cargo nextest run --workspace --features panschema/dev -E 'package(panschema)'
       env:
         BROWSER: all
 

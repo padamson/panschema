@@ -1,0 +1,36 @@
+# The model crate's dependency policy: it reaches no format, template,
+# CLI, or async library. Run as
+#   cargo deny check --config deny-model.toml bans
+# The default deny.toml cannot express this: `wrappers` whitelists
+# direct dependents of a banned crate, and in the whole-workspace graph
+# tokio alone has nine of them. This config instead removes the tool
+# crate from the graph, so anything under `panschema-model` that reaches
+# a banned crate fails the check.
+[graph]
+all-features = true
+exclude = ["panschema"]
+exclude-unpublished = true
+
+[bans]
+multiple-versions = "allow"
+wildcards = "allow"
+deny = [
+    # RDF: the sophia umbrella and the sub-crates the lockfile carries
+    # separately, plus the oxigraph family.
+    { crate = "sophia" },
+    { crate = "sophia_api" },
+    { crate = "sophia_iri" },
+    { crate = "sophia_term" },
+    { crate = "sophia_turtle" },
+    { crate = "sophia_inmem" },
+    { crate = "sophia_jsonld" },
+    { crate = "sophia_xml" },
+    { crate = "oxigraph" },
+    { crate = "oxrdf" },
+    { crate = "oxttl" },
+    { crate = "oxrdfio" },
+    # Templates, CLI, async runtime.
+    { crate = "askama" },
+    { crate = "clap" },
+    { crate = "tokio" },
+]

@@ -28,6 +28,9 @@ url = "https://raw.githubusercontent.com/zcash/rust-ecosystem/main/supply-chain/
 [policy.panschema]
 audit-as-crates-io = true
 
+[policy.panschema-model]
+audit-as-crates-io = false
+
 [policy.playwright-rs]
 audit-as-crates-io = false
 

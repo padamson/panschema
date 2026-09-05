@@ -1,0 +1,21 @@
+[package]
+name = "panschema-model"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The LinkML schema model panschema reads and writes, with its inheritance resolution and YAML reader"
+keywords = ["linkml", "schema", "data-model"]
+categories = ["data-structures", "parser-implementations"]
+readme = "README.md"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_norway = "0.9"
+thiserror = "2"
+mutants = "0.0.4"
+
+[dev-dependencies]
+tempfile = "3"

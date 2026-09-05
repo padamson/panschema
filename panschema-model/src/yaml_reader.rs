@@ -277,8 +277,7 @@ mod tests {
 
     #[test]
     fn yaml_reader_returns_error_for_invalid_yaml() {
-        let reader = YamlReader::new();
-        let result = reader.read(Path::new("tests/fixtures/reference.ttl"));
+        let result = parse_yaml("@prefix ex: <https://example.org/> .\nex:a a ex:Thing .\n");
 
         assert!(result.is_err());
         match result {

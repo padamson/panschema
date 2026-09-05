@@ -1,7 +1,8 @@
-//! Reader/Writer traits and format dispatch
+//! Writer trait and format dispatch
 //!
-//! This module defines the core traits for reading schemas from various formats
-//! and writing schemas to various output formats.
+//! The `Reader` trait, the shared error type, and the reader lookup live in
+//! `panschema-model` and are re-exported here; this module keeps the writers
+//! and the registry that names every format, which is a tool-side fact.
 //!
 //! Reference: [ADR-004: Reader/Writer Architecture](../docs/adr/004-reader-writer-architecture.md)
 
@@ -11,8 +12,6 @@
 #![allow(dead_code)]
 
 use std::path::Path;
-
-use thiserror::Error;
 
 use crate::graph_writer::GraphWriter;
 use crate::html_writer::HtmlWriter;
@@ -26,33 +25,7 @@ use crate::rdf_serializers::{JsonLdWriter, NTriplesWriter, RdfXmlWriter};
 use crate::rust_writer::RustWriter;
 use crate::shacl_writer::ShaclWriter;
 use crate::yaml_reader::YamlReader;
-
-/// Errors that can occur during reading or writing
-#[derive(Error, Debug)]
-pub enum IoError {
-    /// The file format is not supported
-    #[error("unsupported format: {0}")]
-    UnsupportedFormat(String),
-
-    /// The file extension could not be determined
-    #[error("could not determine file format from path: {0}")]
-    UnknownExtension(String),
-
-    /// An I/O error occurred
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
-
-    /// A parsing error occurred
-    #[error("parse error: {0}")]
-    Parse(String),
-
-    /// A rendering/writing error occurred
-    #[error("write error: {0}")]
-    Write(String),
-}
-
-/// Result type for reader/writer operations
-pub type IoResult<T> = Result<T, IoError>;
+pub use panschema_model::io::{IoError, IoResult, Reader, ReaderLookup};
 
 /// Ensure the parent directory of a writer's `output` file exists, creating it
 /// (and any missing ancestors) if needed. A no-op when the path has no parent
@@ -66,39 +39,6 @@ pub fn ensure_output_parent(output: &Path) -> IoResult<()> {
         std::fs::create_dir_all(parent).map_err(IoError::Io)?;
     }
     Ok(())
-}
-
-/// A reader parses an input format into the LinkML IR
-///
-/// Readers are responsible for:
-/// - Parsing the input file format
-/// - Mapping format-specific constructs to LinkML IR
-/// - Preserving format-specific metadata in annotations
-pub trait Reader {
-    /// Parse the input file into a SchemaDefinition
-    fn read(&self, input: &Path) -> IoResult<SchemaDefinition>;
-
-    /// Like [`Reader::read`], additionally returning human-readable
-    /// warnings about constructs the reader dropped — projections the IR
-    /// cannot hold, such as an external `rdfs:subPropertyOf` parent or
-    /// surplus axioms on a single-valued field. The schema is identical to
-    /// what `read` returns; the warnings only add visibility, and the load
-    /// path prints them alongside the schema-load diagnostics. The default
-    /// wraps `read` with no warnings; a reader that projects lossily
-    /// overrides this and implements `read` in terms of it.
-    fn read_with_warnings(&self, input: &Path) -> IoResult<(SchemaDefinition, Vec<String>)> {
-        self.read(input).map(|schema| (schema, Vec::new()))
-    }
-
-    /// File extensions this reader can handle (e.g., ["ttl", "turtle"])
-    fn supported_extensions(&self) -> &[&str];
-
-    /// Check if this reader can handle the given file extension
-    fn supports_extension(&self, ext: &str) -> bool {
-        self.supported_extensions()
-            .iter()
-            .any(|e| e.eq_ignore_ascii_case(ext))
-    }
 }
 
 /// A writer outputs the LinkML IR to a specific format
@@ -142,6 +82,12 @@ pub struct FormatRegistry {
 impl Default for FormatRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl ReaderLookup for FormatRegistry {
+    fn reader_for_path(&self, path: &Path) -> IoResult<&dyn Reader> {
+        FormatRegistry::reader_for_path(self, path)
     }
 }
 
@@ -307,17 +253,6 @@ mod tests {
     }
 
     #[test]
-    fn reader_supports_extension_case_insensitive() {
-        let reader = MockReader {
-            extensions: vec!["ttl", "turtle"],
-        };
-        assert!(reader.supports_extension("ttl"));
-        assert!(reader.supports_extension("TTL"));
-        assert!(reader.supports_extension("turtle"));
-        assert!(!reader.supports_extension("owl"));
-    }
-
-    #[test]
     fn registry_finds_reader_by_extension() {
         let mut registry = FormatRegistry::new();
         registry.register_reader(Box::new(MockReader {
@@ -369,25 +304,6 @@ mod tests {
             FormatRegistry::extension_from_path(Path::new("noextension")),
             None
         );
-    }
-
-    #[test]
-    fn io_error_display() {
-        let err = IoError::UnsupportedFormat("xyz".to_string());
-        assert_eq!(err.to_string(), "unsupported format: xyz");
-
-        let err = IoError::Parse("invalid syntax".to_string());
-        assert_eq!(err.to_string(), "parse error: invalid syntax");
-    }
-
-    #[test]
-    fn mock_reader_returns_schema() {
-        let reader = MockReader {
-            extensions: vec!["ttl"],
-        };
-        let result = reader.read(Path::new("test.ttl"));
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().name, "mock_schema");
     }
 
     #[test]

@@ -1,11 +1,14 @@
 [package]
 name = "panschema-viz"
 version = "0.1.0"
-edition = "2024"
-rust-version = "1.88"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
 description = "Interactive canvas visualization for panschema schema graphs"
-license = "Apache-2.0"
-repository = "https://github.com/padamson/panschema"
+license.workspace = true
+repository.workspace = true
+# Embedded into panschema at build time; never published on its own.
+publish = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]

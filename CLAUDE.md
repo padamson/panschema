@@ -22,7 +22,7 @@ cargo clippy --all-targets --all-features -- -D warnings  # Lint
 
 ## Project Structure
 
-This is a Cargo workspace with two members (`panschema`, `panschema-viz`);
+This is a Cargo workspace with three members (`panschema`, `panschema-model`, `panschema-viz`);
 the `mdbook-panschema` binary ships from the `panschema` crate. The layout
 below groups modules by role rather than
 listing every file — see `panschema/src/` for the full set.
@@ -34,11 +34,8 @@ panschema/                        # workspace root
 │   ├── src/
 │   │   ├── main.rs               # CLI entry (generate, init, add, release, fetch, verify, migrate, publish, serve, completions, styleguide)
 │   │   ├── bin/mdbook_panschema.rs  # second binary: mdbook-panschema (mdbook.rs + mdbook_assets/)
-│   │   ├── io.rs                 # Reader/Writer traits + FormatRegistry
-│   │   ├── linkml.rs             # LinkML IR (SchemaDefinition, ClassDefinition, ...)
-│   │   ├── linkml_resolve.rs     # is_a / mixin / slot_usage resolution + effective cardinality
+│   │   ├── io.rs                 # Writer trait + FormatRegistry (re-exports the model crate's Reader)
 │   │   ├── owl_reader.rs         # OWL/Turtle → IR (owl_model.rs: reader types)
-│   │   ├── yaml_reader.rs        # LinkML YAML → IR
 │   │   ├── html_writer.rs        # IR → HTML documentation
 │   │   ├── rdf_serializers.rs    # IR → OWL/TTL/JSON-LD/RDF-XML/N-Triples + SHACL graph (owl_writer.rs, shacl_writer.rs)
 │   │   ├── graph_writer.rs       # IR → graph JSON (consumed by panschema-viz)
@@ -55,6 +52,13 @@ panschema/                        # workspace root
 │       ├── integration/          # CLI integration tests
 │       ├── properties.rs         # generated-schema property tests
 │       └── skill_docs.rs         # keeps the shipped agent skill true to the code
+├── panschema-model/              # the LinkML model as its own published crate; no format, template, CLI, or async library
+│   ├── src/
+│   │   ├── io.rs                 # Reader trait, IoError, ReaderLookup
+│   │   ├── linkml.rs             # LinkML IR (SchemaDefinition, ClassDefinition, ...)
+│   │   ├── linkml_resolve.rs     # is_a / mixin / slot_usage resolution + effective cardinality
+│   │   └── yaml_reader.rs        # LinkML YAML → IR
+│   └── tests/fixtures/sample_schema.yaml  # the sample LinkML schema both crates' tests read
 ├── panschema-viz/                # WASM force-graph visualization (embedded in HTML output)
 ├── docs/                         # adr/, features/, templates/, ROADMAP.md, linkml-coverage.md
 ├── scripts/                      # mutants.sh, dev-install.sh, ...
@@ -71,6 +75,8 @@ panschema uses a Reader/Writer architecture with LinkML as the internal represen
 Input File → Reader → LinkML IR → Writer → Output
 ```
 
+The LinkML IR, its resolver, the YAML reader, and the `Reader` trait live in
+`panschema-model`; `panschema` re-exports them at their old paths.
 `FormatRegistry` (io.rs) holds every reader and writer. Readers cover
 OWL/Turtle and LinkML YAML; writers cover HTML, the RDF/OWL family (Turtle,
 JSON-LD, RDF/XML, N-Triples), graph JSON, Rust, Postgres DDL, and SHACL. One

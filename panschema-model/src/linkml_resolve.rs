@@ -15,7 +15,7 @@
 //! `rust_writer::resolve_slots`, which was the most complete walker
 //! among the three (covered `slot_usage` merge-overlay; the others
 //! ignored it). Behaviour is preserved exactly — the 16 unit tests
-//! in [`crate::rust_writer`] continue to validate the same code via
+//! in the Rust writer continue to validate the same code via
 //! the new path.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -822,7 +822,7 @@ mod tests {
     /// A schema exercising `is_a`, mixins, and `slot_usage` overlay all
     /// at once. Pins the public surface of [`resolve_effective_slots`] —
     /// detailed coverage of each individual rule lives in
-    /// [`crate::rust_writer`]'s tests, which exercise the same code path
+    /// the Rust writer's tests, which exercise the same code path
     /// via the writer that originally housed it. This test guards
     /// against an accidental signature change or an interaction bug
     /// between the rules that the single-rule tests would miss.

@@ -22,9 +22,15 @@
 #    tempdir; the real pkg/ outputs don't follow. Empty placeholders
 #    satisfy the includes (mutation testing doesn't exercise the wasm
 #    bytes at runtime).
-# 2. The .cargo/mutants.toml `examine_globs` covers the whole panschema
-#    crate (~4800 mutants). `--in-diff` narrows that to just the
-#    lines you touched in your active diff.
+# 2. The .cargo/mutants.toml `examine_globs` covers the `panschema` and
+#    `panschema-model` crates (~4800 mutants). `--in-diff` narrows that
+#    to just the lines you touched in your active diff.
+# 3. A model-crate mutant is killed by panschema's writer and integration
+#    tests as often as by the model crate's own, so a diff that touches
+#    `panschema-model/` runs the whole workspace's tests against every
+#    mutant. Other diffs keep cargo-mutants' per-package default: a viz
+#    mutant gains nothing from panschema's suite, and the baseline skips
+#    viz's host test build.
 #
 # Prerequisites: `cargo install cargo-mutants` (once per machine).
 #
@@ -90,7 +96,12 @@ echo "mutating changes in ${BASE}..HEAD ($(wc -l < "$DIFF") diff lines)"
 # `--jobs 4` parallelises mutant runs; on a 10-core laptop the per-push
 # diff job goes from minutes-serial to single-digit wall time. Users can
 # override by passing `--jobs N` as a trailing arg (later wins).
-exec cargo mutants --in-diff "$DIFF" --jobs 4 \
+TEST_SCOPE=""
+if grep -q '^diff --git a/panschema-model/' "$DIFF"; then
+  TEST_SCOPE="--test-workspace=true"
+fi
+
+exec cargo mutants --in-diff "$DIFF" --jobs 4 $TEST_SCOPE \
   --exclude 'panschema/src/components.rs' \
   --exclude 'panschema/src/bin/mdbook_panschema.rs' \
   --exclude 'panschema/src/main.rs' \

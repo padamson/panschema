@@ -4,7 +4,7 @@
 //! Those entries deserialize today but nothing follows them, so a
 //! vocabulary split across files renders only the root file's elements.
 //! This module closes that gap: before any writer runs, it loads each
-//! imported local file via the [`FormatRegistry`], merges its elements
+//! imported local file via a [`ReaderLookup`], merges its elements
 //! into the root, and hands every writer a schema shaped exactly like a
 //! single-file one.
 //!
@@ -48,7 +48,7 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
-use crate::io::{FormatRegistry, IoError, IoResult};
+use crate::io::{IoError, IoResult, ReaderLookup};
 use crate::linkml::SchemaDefinition;
 
 /// The single load path — read the input, then fold in any local `imports:` —
@@ -61,7 +61,7 @@ use crate::linkml::SchemaDefinition;
 /// between two imports (no principled winner) fails with an [`IoError::Parse`].
 /// Import-resolution failures — a missing file, a cycle, a path escaping the
 /// schema directory — also surface as an [`IoError::Parse`].
-pub fn load_schema(input: &Path, registry: &FormatRegistry) -> IoResult<SchemaDefinition> {
+pub fn load_schema(input: &Path, registry: &dyn ReaderLookup) -> IoResult<SchemaDefinition> {
     load_schema_with_deps(input, registry, &BTreeMap::new())
 }
 
@@ -75,7 +75,7 @@ pub fn load_schema(input: &Path, registry: &FormatRegistry) -> IoResult<SchemaDe
 /// behaves exactly like [`load_schema`]).
 pub fn load_schema_with_deps(
     input: &Path,
-    registry: &FormatRegistry,
+    registry: &dyn ReaderLookup,
     deps: &BTreeMap<String, PathBuf>,
 ) -> IoResult<SchemaDefinition> {
     let reader = registry.reader_for_path(input)?;
@@ -245,7 +245,7 @@ pub struct ImportReport {
 pub fn resolve_imports(
     root: &mut SchemaDefinition,
     root_path: &Path,
-    registry: &FormatRegistry,
+    registry: &dyn ReaderLookup,
     deps: &BTreeMap<String, PathBuf>,
 ) -> Result<ImportReport, ImportError> {
     let mut report = ImportReport::default();
@@ -301,7 +301,7 @@ fn resolve_into(
     root: &mut SchemaDefinition,
     base_dir: &Path,
     root_dir: &Path,
-    registry: &FormatRegistry,
+    registry: &dyn ReaderLookup,
     deps: &BTreeMap<String, PathBuf>,
     report: &mut ImportReport,
     visiting: &mut Vec<PathBuf>,
@@ -564,6 +564,7 @@ fn merge_schema(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::io::FormatRegistry;
 
     fn fixtures_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/imports")

@@ -48,7 +48,8 @@ fn write_sample_pkg(parent: &Path, dirname: &str) -> std::path::PathBuf {
         "sample_schema",
         "1.0.0",
         "sample_schema.yaml",
-        &fs::read_to_string("tests/fixtures/sample_schema.yaml").expect("read sample schema"),
+        &fs::read_to_string("../panschema-model/tests/fixtures/sample_schema.yaml")
+            .expect("read sample schema"),
     );
     pkg
 }
@@ -446,7 +447,7 @@ fn generates_documentation_from_linkml_yaml() {
         .args([
             "generate",
             "--schema",
-            "tests/fixtures/sample_schema.yaml",
+            "../panschema-model/tests/fixtures/sample_schema.yaml",
             "--output",
             output_dir.to_str().unwrap(),
         ])

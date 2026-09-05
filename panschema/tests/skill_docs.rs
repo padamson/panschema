@@ -276,16 +276,67 @@ fn the_plugin_manifest_version_tracks_the_crate_version() {
         .map(|v| v.trim().trim_matches(|c| c == '"' || c == ',').to_string())
         .expect("plugin.json declares a version");
 
-    let cargo = fs::read_to_string(repo_root().join("panschema/Cargo.toml")).expect("read Cargo");
-    let crate_version = cargo
-        .lines()
-        .find_map(|l| l.strip_prefix("version = "))
-        .map(|v| v.trim().trim_matches('"').to_string())
-        .expect("Cargo.toml declares a version");
+    // The crate inherits the workspace version; the compiled value is the
+    // one consumers see, whichever manifest states it.
+    let crate_version = env!("CARGO_PKG_VERSION").to_string();
 
     assert_eq!(
         plugin_version, crate_version,
         "the plugin version must track the crate version — bump both together"
+    );
+}
+
+/// The two published crates carry one version, the tool crate's dependency
+/// on the model crate names that same version (so `cargo publish` resolves
+/// the release built beside it, not an older one), and the viz crate is
+/// never published. Read from `cargo metadata`, so any spelling of the
+/// manifests that cargo accepts passes.
+#[test]
+fn published_crates_share_the_workspace_version_and_viz_is_not_published() {
+    let output = Command::new(env!("CARGO"))
+        .args(["metadata", "--no-deps", "--format-version", "1"])
+        .current_dir(repo_root())
+        .output()
+        .expect("run cargo metadata");
+    assert!(
+        output.status.success(),
+        "cargo metadata failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("cargo metadata is JSON");
+    let packages = metadata["packages"].as_array().expect("packages");
+    let package = |name: &str| {
+        packages
+            .iter()
+            .find(|p| p["name"] == name)
+            .unwrap_or_else(|| panic!("{name} is a workspace member"))
+    };
+    let tool = package("panschema");
+    let model = package("panschema-model");
+    let viz = package("panschema-viz");
+
+    assert_eq!(
+        tool["version"], model["version"],
+        "the published crates version in lockstep"
+    );
+    let requirement = tool["dependencies"]
+        .as_array()
+        .expect("dependencies")
+        .iter()
+        .find(|d| d["name"] == "panschema-model")
+        .expect("panschema depends on panschema-model")["req"]
+        .as_str()
+        .expect("a version requirement");
+    assert_eq!(
+        requirement.trim_start_matches('^'),
+        model["version"].as_str().expect("version"),
+        "the dependency requirement is the workspace version"
+    );
+    assert_eq!(
+        viz["publish"],
+        serde_json::json!([]),
+        "panschema-viz is never published"
     );
 }
 

@@ -120,8 +120,17 @@ needs the model as a library — and does not claim the build-time benefit
 - Build time moves in one direction. A tool-side edit no longer
   recompiles the model; a model-side edit still rebuilds everything above
   it, so the in-workspace loop for model work does not shrink. The
-  external consumer's build does. The feature records `--timings` before
-  and after so this section can state numbers.
+  external consumer's build does. Measured after slice 1 (wall-clock
+  `cargo build -p panschema --bins` on one laptop, one edit per run):
+  before the split, a model-side edit rebuilt in 56s and a tool-side edit
+  in 32s; after it, three samples of the model-side edit took 63s, 44s,
+  and 92s, and three of the tool-side edit 52s, 69s, and 33s. The spread
+  between samples is larger than any difference between before and after,
+  so the in-workspace numbers show no change either way. That matches the
+  shape of the code: the `panschema` crate is still the bulk of the
+  compile, and the three moved modules were a small part of it. The
+  measurable win remains the external consumer's build, which now
+  compiles none of the format, template, or CLI libraries.
 - The boundary becomes a public API. About seven items widen to `pub`
   now; every later addition to the model crate is public by construction
   and reviewed as such.

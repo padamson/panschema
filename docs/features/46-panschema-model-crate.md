@@ -52,41 +52,46 @@ constructor that names every writer never moves.
 
 ### Slice 1: The leaves
 
-**Status:** Not Started
+**Status:** Complete
 
 **User Value:** A consumer can depend on `panschema-model` alone, parse a
 LinkML YAML schema, and resolve a class's effective slots, without
 compiling any RDF, template, CLI, or async library.
 
 **Acceptance Criteria:**
-- [ ] A crate depending only on `panschema-model` parses the reference
+- [x] A crate depending only on `panschema-model` parses the reference
       LinkML YAML schema into `SchemaDefinition` and resolves a class's
       effective slots with the same result `panschema` gives.
-- [ ] `cargo deny check bans` fails if `sophia`, `askama`, `clap`, or
-      `tokio` appears anywhere under `panschema-model`.
-- [ ] Every `panschema::` type, module, and function path that resolved
+- [x] A dependency gate that runs in CI and before every commit fails if
+      an RDF, template, CLI, or async library appears anywhere under
+      `panschema-model`.
+- [x] Every `panschema::` type, module, and function path that resolved
       before the slice resolves to the same item after it, including
       `panschema::io::FormatRegistry::with_defaults()`.
-- [ ] Every unit test that moves still runs, and CI, clippy, rustdoc, and
+- [x] Every unit test that moves still runs, and CI, clippy, rustdoc, and
       mutation testing run against the new crate on every push.
-- [ ] `panschema-viz` declares that it is never published.
+- [x] `panschema-viz` declares that it is never published.
 
 **Notes:**
 - Modules: `linkml`, `linkml_resolve`, `yaml_reader`, and from `io` the
   `Reader` trait, `IoError`/`IoResult`, and a new `ReaderLookup` trait
-  (one method: the reader for a path) that the import resolver will take
-  in slice 2. `Writer` and `FormatRegistry` stay in `panschema`:
+  (one method: the reader for a path) that the import resolver takes
+  from this slice on. `Writer` and `FormatRegistry` stay in `panschema`:
   `Writer`'s default method consults per-format projection policy, and
   the registry is the tool-side dispatch table. `FormatRegistry`
   implements `ReaderLookup`.
-- Fixtures the moved tests read (`sample_schema.yaml`, the `imports/`
-  set, and a non-YAML file for the invalid-input case) move to
-  `panschema-model/tests/fixtures`; `YamlReader` gains a from-string
-  entry so doctests need no filesystem.
-- Files that must change for the coverage AC: `.github/workflows/test.yml`
-  (every `-p panschema` step), `.cargo/mutants.toml` (`examine_globs`
-  and `test_workspace = true`, since cargo-mutants runs only the
-  mutated package's tests by default), `scripts/mutants.sh`, and
+- `sample_schema.yaml` moves to `panschema-model/tests/fixtures` and is
+  the single copy; `panschema`'s integration tests read it there. The
+  `imports/` set crosses with `import_resolve` in slice 2. A from-string reader entry arrives with slice 3's worked
+  example, the first doctest that would need it.
+- Files that changed for the coverage AC: `.github/workflows/test.yml`
+  (every `-p panschema` step), `.github/workflows/security.yml` and
+  `.pre-commit-config.yaml` (the `deny-model.toml` bans check; the
+  workspace members it excludes are named in the config, not the
+  callers), `.cargo/mutants.toml` (`examine_globs`), `scripts/mutants.sh`
+  (a diff that touches the model crate runs the whole workspace's tests
+  against every mutant, since cargo-mutants runs only the mutated
+  package's tests by default; other diffs keep that default), and
   `CLAUDE.md` (the workspace now has three members).
 - Versioning per ADR-011 decision 5.
 
@@ -165,7 +170,14 @@ model crate before the CLI without anyone remembering the order.
 - Release: `cargo publish --workspace --exclude panschema-viz` orders the
   crates itself; the model crate's first publish is a one-time manual
   token publish, because trusted publishing cannot mint a crate's first
-  release.
+  release. The workflow already publishes the workspace in dependency
+  order; this slice adds the dry run and the crates.io side.
+- The semver check on tag pushes now selects the model crate, which has
+  no published baseline until its first release; decide whether that run
+  skips or errors before the first tag.
+- After the first publish, set the model crate's supply-chain policy to
+  `audit-as-crates-io = true`; it is `false` until a registry release
+  exists for cargo vet to compare against.
 - Deliberately not pulled, with the reason: `validate` qualifies under the
   rule (it is conformance of instance data against the IR) and crosses
   when a consumer wants conformance through the crate; `casing` (only the
@@ -181,7 +193,7 @@ model crate before the CLI without anyone remembering the order.
 
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
-| Slice 1 | Must Have | None | Not Started |
+| Slice 1 | Must Have | None | Complete |
 | Slice 2 | Must Have | Slice 1 | Not Started |
 | Slice 3 | Must Have | Slice 2 | Not Started |
 
@@ -193,8 +205,8 @@ model crate before the CLI without anyone remembering the order.
 - Build time moves in one direction only: a tool-side edit stops
   recompiling the model; a model-side edit still rebuilds everything
   above it. The measurable win is the external consumer's build. The
-  Definition of Done records `--timings` before and after so the ADR
-  states what actually happened.
+  Definition of Done records the rebuild times before and after so the
+  ADR states what actually happened.
 - Feature 08 (bootstrap the IR from the metaschema) now targets this
   crate; its writer-driven regeneration check stays in `panschema`, or a
   dev-dependency cycle pulls the format libraries back into the model
@@ -207,6 +219,6 @@ model crate before the CLI without anyone remembering the order.
 - [ ] All tests passing: `cargo nextest run --workspace`
 - [ ] Library documentation builds with examples: `cargo doc`
 - [ ] Code formatted and clippy clean
-- [ ] `cargo build --timings` before and after, one model-side and one
+- [x] Wall-clock rebuild before and after, one model-side and one
       tool-side edit, recorded in ADR-011
 - [ ] README.md and CHANGELOG.md updated

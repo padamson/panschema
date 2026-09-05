@@ -2598,6 +2598,7 @@ dependencies = [
  "mutants",
  "notify",
  "oxigraph",
+ "panschema-model",
  "pg_query",
  "playwright-rs",
  "postgres",
@@ -2623,6 +2624,17 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ureq 2.12.1",
+]
+
+[[package]]
+name = "panschema-model"
+version = "0.3.1"
+dependencies = [
+ "mutants",
+ "serde",
+ "serde_norway",
+ "tempfile",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
