@@ -166,7 +166,7 @@ confirmed, both from the duplicated CSS/markup this slice collapses:
 
 ### Slice 3: One WASM load
 
-**Status:** Complete
+**Status:** Complete (4220ed5, pushed)
 
 **Decided 2026-09-04:** the 2D/3D question is settled by removal — the
 3D renderer is gone (see
@@ -206,38 +206,68 @@ the page changed.
 
 ### Slice 4: One hover card
 
-**Status:** Not Started
+**Status:** Complete
 
 **User Value:** Hovering a node shows the same card, built by the same
 code, on both graphs — so the card's layout, pinning, and dragging
 behave identically and a fix lands once.
 
-The instance graph already uses `PanschemaGraphShell.makeHoverCard`;
-the schema graph carries a **separate, richer** hover implementation
-(`buildCompactNodeHover`, `updateHoverCard`, `nodeCardMarkup`,
-`updateHoverState`, plus the pin/drag handlers) — the bulk of the ~15
-schema-only `.graph-hover-*` CSS classes and a large share of the
-template's 33 inline JS functions. It shows things the instance card
-does not: edge-type rows, full RDF triples, unresolved-reference and
-property-value detail, a pinned-and-draggable mode. This is a
-find-and-verify migration, not a mechanical swap.
+The instance graph already used `PanschemaGraphShell.makeHoverCard`;
+the schema graph carried a separate, richer hover implementation. Its
+richness turned out to be mostly one trick — reusing the entity's
+already-rendered doc card — plus edge hover, a pinned mode with a close
+button and drag handle, and viewport-relative placement. The shell's
+card grew those, and the schema template's own hover functions and
+card styles went.
 
 **Acceptance Criteria:**
-- [ ] The schema graph's hover card renders through the shared shell
+- [x] The schema graph's hover card renders through the shared shell
       helper, extended (in the shell, once) to carry the richer rows
-      the schema card needs — not by the schema template's own hover
-      functions, which are deleted.
-- [ ] Every schema hover behavior a browser test covers still passes:
+      the schema card needs. The schema template's own hover
+      *behavior* — placement, pin, close, drag, node-over-edge
+      dispatch, and the selected node's hover suppression — is
+      deleted; what stays per-graph is *content*, passed in as
+      callbacks (the doc-card reuse and compact rows, the edge
+      triple).
+- [x] Every schema hover behavior a browser test covers still passes:
       the compact card, the pinned/draggable full card, edge-type and
-      triple detail.
-- [ ] The `.graph-hover-*` CSS collapses into the shared card style
+      triple detail. (Edge hover and the full-card mode had no browser
+      test before this slice; both gained one first, green against the
+      old implementation, so the migration was measured against them.)
+- [x] The `.graph-hover-*` CSS collapses into the shared card style
       the instance graph uses, with the schema-only rows added there.
 
 **Notes:**
-- Sequenced after slice 2 because the shared CSS/markup fragment is
-  the surface the shell's extended card styles hang off. Carries the
-  most risk in the feature (behavior-rich, browser-only), so it is
-  its own slice with the e2e suite as the gate.
+- The card's *content* stays per-graph, passed in as callbacks
+  (`renderNode`, `renderEdge`); the card's *behavior* — placement,
+  pin, close, drag, the full-mode widening — is the shell's. The
+  markup is one Askama macro rendered under each graph's id prefix,
+  the same shape as the toolbar.
+- Placement unified on the schema graph's model: `position: fixed`
+  with viewport-edge flipping. The instance card was canvas-relative
+  and clamped inside the canvas, which clips on a small graph.
+- The instance graph's pinned card gained the close button and drag
+  handle for free; before, its pinned card could only be dismissed by
+  clicking empty canvas or pressing Escape. It also takes the shared
+  card's type size and spacing (a point smaller than its old card,
+  with the key column still aligned).
+- "A pinned card ignores hover" was implemented in each template; it
+  is the shell's now (`update`, `unpin`), and a browser test on each
+  graph pins it. Closing the card locks nothing: the node stays
+  selected and hovers like any other (the schema graph used to
+  suppress the selected node's hover card — dogfooding read that as
+  a bug, and it went). `unpin()` closes whatever is up, pinned or
+  not, so a dataset swap resets the card outright and a card left up
+  across a keyboard switch cannot show the old dataset's node under
+  the new one's index.
+- Touch: coarse pointers have no hover, so only the card a tap pins
+  shows, on both graphs. The schema graph previously hid its card on
+  touch outright — tap-to-select worked but nothing appeared — and
+  the instance graph showed its card only on pages without the schema
+  graph, whose rule reached across once the class was shared.
+- Measured: the schema template is 1,201 lines (2,238 at the start
+  of the feature), the instance template 457; the shell holds the
+  25 card rules both graphs share.
 
 ---
 
@@ -247,8 +277,8 @@ find-and-verify migration, not a mechanical swap.
 |-------|----------|------------|--------|
 | Slice 1 | Must Have | None | Complete (pushed) |
 | Slice 2 | Must Have | Slice 1 | Complete (pushed) |
-| Slice 4 | Should Have | Slice 2 | Not Started |
-| Slice 3 | Nice to Have | Slice 2 | Complete |
+| Slice 4 | Should Have | Slice 2 | Complete |
+| Slice 3 | Nice to Have | Slice 2 | Complete (pushed) |
 
 Measured duplication surface (2026-09-04, post-slice-1): the schema
 template is 2,238 lines to the instance template's 521. Ten CSS class

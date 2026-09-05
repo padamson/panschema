@@ -181,6 +181,15 @@ async fn wait_until_ready(page: &playwright_rs::Page, ready_expr: &str) -> bool 
     false
 }
 
+/// A canvas click the drag gate accepts: press on the canvas, release on
+/// the window, then the click. Spliced into page scripts as `clickAt`.
+const CLICK_AT_JS: &str = r#"function clickAt(sx, sy) {
+                        var opts = {clientX: sx, clientY: sy, bubbles: true};
+                        canvas.dispatchEvent(new MouseEvent('mousedown', opts));
+                        window.dispatchEvent(new MouseEvent('mouseup', opts));
+                        canvas.dispatchEvent(new MouseEvent('click', opts));
+                    }"#;
+
 /// The schema graph's wasm viz is ready when `__panschema_viz` exists and
 /// node 0 has a canvas position.
 async fn wait_for_graph_viz_ready(page: &playwright_rs::Page) -> bool {
@@ -1722,6 +1731,147 @@ fn e2e_click_pins_node_card_keeping_selection() {
     });
 }
 
+/// Hovering an edge shows the triple it stands for — source label, edge
+/// type, target label — plus a one-line LinkML gloss for the edge kind.
+/// Walks the edges until one whose midpoint is clear of any node is under
+/// the cursor, so the assertion reads a genuine edge hover.
+#[test]
+fn e2e_edge_hover_shows_the_triple_and_its_kind_blurb() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let output_dir = generate_docs();
+        let (listener, port) = bind_ephemeral();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("goto");
+        assert!(
+            wait_for_graph_viz_ready(&page).await,
+            "schema graph viz never became ready"
+        );
+
+        let states = page
+            .evaluate_value(
+                r#"(function(){
+                    var viz = window.__panschema_viz;
+                    var canvas = document.getElementById('graph-canvas');
+                    var card = document.getElementById('graph-hover-card');
+                    var rect = canvas.getBoundingClientRect();
+                    var dpr = window.devicePixelRatio || 1;
+                    var idOf = {};
+                    for (var i = 0; i < viz.node_count(); i++) {
+                        idOf[JSON.parse(viz.get_node_details(i)).id] = i;
+                    }
+                    for (var e = 0; e < viz.edge_count(); e++) {
+                        var d = JSON.parse(viz.get_edge_details(e));
+                        var s = idOf[d.source.id], t = idOf[d.target.id];
+                        if (s === undefined || t === undefined) continue;
+                        var ps = viz.node_canvas_pos(s), pt = viz.node_canvas_pos(t);
+                        canvas.dispatchEvent(new MouseEvent('mousemove', {
+                            clientX: rect.left + (ps[0] + pt[0]) / 2 / dpr,
+                            clientY: rect.top + (ps[1] + pt[1]) / 2 / dpr,
+                            bubbles: true}));
+                        if (viz.hovered_edge_index() !== e || viz.hovered_node_index() >= 0) continue;
+                        var text = card.textContent || '';
+                        return ['edge:' + e,
+                                'visible:' + (card.style.display === 'block'),
+                                'src:' + (text.indexOf(d.source.label) >= 0),
+                                'type:' + (text.indexOf(d.type) >= 0),
+                                'tgt:' + (text.indexOf(d.target.label) >= 0),
+                                'blurb:' + !!card.querySelector('.graph-hover-description')].join(' ');
+                    }
+                    return 'no-edge-hovered';
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert!(
+            states.contains("visible:true")
+                && states.contains("src:true")
+                && states.contains("type:true")
+                && states.contains("tgt:true")
+                && states.contains("blurb:true"),
+            "an edge hover shows source, type, target, and the kind blurb; got: {states}"
+        );
+
+        browser.close().await.ok();
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
+#[test]
+fn e2e_node_hover_reuses_the_doc_card_in_full_mode() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let output_dir = generate_docs();
+        let (listener, port) = bind_ephemeral();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("goto");
+        assert!(
+            wait_for_graph_viz_ready(&page).await,
+            "schema graph viz never became ready"
+        );
+
+        let states = page
+            .evaluate_value(
+                r#"(function(){
+                    var viz = window.__panschema_viz;
+                    var canvas = document.getElementById('graph-canvas');
+                    var card = document.getElementById('graph-hover-card');
+                    var content = document.getElementById('graph-hover-content');
+                    var rect = canvas.getBoundingClientRect();
+                    var dpr = window.devicePixelRatio || 1;
+                    var pos = viz.node_canvas_pos(0);
+                    canvas.dispatchEvent(new MouseEvent('mousemove', {
+                        clientX: rect.left + pos[0] / dpr,
+                        clientY: rect.top + pos[1] / dpr,
+                        bubbles: true}));
+                    var d = JSON.parse(viz.get_node_details(0));
+                    var colon = d.id.indexOf(':');
+                    var doc = document.getElementById(d.id.slice(0, colon) + '-' + d.id.slice(colon + 1));
+                    return ['hovered:' + viz.hovered_node_index(),
+                            'visible:' + (card.style.display === 'block'),
+                            'full:' + card.classList.contains('graph-hover-full'),
+                            'docCard:' + !!doc,
+                            'same:' + (!!doc && content.innerHTML === doc.innerHTML)].join(' ');
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert!(
+            states.contains("hovered:0")
+                && states.contains("visible:true")
+                && states.contains("full:true")
+                && states.contains("docCard:true")
+                && states.contains("same:true"),
+            "a node hover shows its doc card in full mode; got: {states}"
+        );
+
+        browser.close().await.ok();
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
 /// A pinned card can be dragged by its handle to a new position, so it can
 /// be moved off nodes the reader wants to inspect. Pins node 0, drags the
 /// `#graph-hover-drag` grip, and asserts the card's top-left moved to the
@@ -2634,6 +2784,49 @@ fn e2e_instance_dataset_selector_switches_cards_and_graph() {
             "on load the heading describes the default dataset"
         );
 
+        // A swap while a card is up: the card resets with the dataset, and
+        // the next hover shows the new dataset's node, not the old one's
+        // cached under the same index. Activating the tab from script keeps
+        // the pointer on the canvas, as a keyboard switch does.
+        assert!(
+            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
+            "instance graph viz never became ready"
+        );
+        let swap = page
+            .evaluate_value(
+                r#"(function(){
+                    var viz = window.__panschema_instance_viz;
+                    var canvas = document.getElementById('instance-graph-canvas');
+                    var card = document.getElementById('instance-graph-hover-card');
+                    var rect = canvas.getBoundingClientRect();
+                    var dpr = window.devicePixelRatio || 1;
+                    function hoverNode0() {
+                        var pos = window.__panschema_instance_viz.node_canvas_pos(0);
+                        canvas.dispatchEvent(new MouseEvent('mousemove',
+                            {clientX: rect.left + pos[0] / dpr, clientY: rect.top + pos[1] / dpr, bubbles: true}));
+                    }
+                    hoverNode0();
+                    var out = ['before:' + (card.style.display === 'block')];
+                    document.querySelector(".instance-dataset-tab[data-instance-dataset='1']").click();
+                    out.push('afterSwap:' + (card.style.display === 'block'));
+                    hoverNode0();
+                    out.push('hoverAfter:' + (card.style.display === 'block'));
+                    out.push('stale:' + ((card.textContent || '').indexOf('previewWine') >= 0));
+                    document.querySelector(".instance-dataset-tab[data-instance-dataset='0']").click();
+                    return out.join(' ');
+                })()"#,
+            )
+            .await
+            .unwrap_or_default();
+        assert!(
+            swap.contains("before:true") && swap.contains("afterSwap:false"),
+            "switching datasets clears the hover card; got: {swap}"
+        );
+        assert!(
+            swap.contains("hoverAfter:true") && swap.contains("stale:false"),
+            "the next hover renders the new dataset's node; got: {swap}"
+        );
+
         // Switching: click the second tab. Cards, provenance, and the graph
         // all follow to the worked example. The tabs are wired independently
         // of the wasm viz, so this works without waiting for it.
@@ -3062,7 +3255,7 @@ fn e2e_instance_graph_click_pins_the_card_and_empty_space_deselects() {
 
         let states = page
             .evaluate_value(
-                r#"(function(){
+                &r#"(function(){
                     var viz = window.__panschema_instance_viz;
                     var canvas = document.getElementById('instance-graph-canvas');
                     var card = document.getElementById('instance-graph-hover-card');
@@ -3071,12 +3264,7 @@ fn e2e_instance_graph_click_pins_the_card_and_empty_space_deselects() {
                     function cardVisible() {
                         return card && card.style.display !== 'none' && card.style.display !== '';
                     }
-                    function clickAt(sx, sy) {
-                        var opts = {clientX: sx, clientY: sy, bubbles: true};
-                        canvas.dispatchEvent(new MouseEvent('mousedown', opts));
-                        window.dispatchEvent(new MouseEvent('mouseup', opts));
-                        canvas.dispatchEvent(new MouseEvent('click', opts));
-                    }
+                    __CLICK_AT__
                     var pos = viz.node_canvas_pos(0);
                     clickAt(rect.left + pos[0] / dpr, rect.top + pos[1] / dpr);
                     var out = ['sel:' + viz.selected_node_index(), 'card:' + cardVisible()];
@@ -3087,7 +3275,8 @@ fn e2e_instance_graph_click_pins_the_card_and_empty_space_deselects() {
                     out.push('selAfterEmptyClick:' + viz.selected_node_index());
                     out.push('cardAfterEmptyClick:' + cardVisible());
                     return out.join(' ');
-                })()"#,
+                })()"#
+                    .replace("__CLICK_AT__", CLICK_AT_JS),
             )
             .await
             .unwrap_or_default();
@@ -3103,6 +3292,83 @@ fn e2e_instance_graph_click_pins_the_card_and_empty_space_deselects() {
             states.contains("selAfterEmptyClick:-1")
                 && states.contains("cardAfterEmptyClick:false"),
             "clicking empty space should deselect and close the card; got: {states}"
+        );
+
+        browser.close().await.ok();
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        let _ = fs::remove_dir_all(output_dir);
+    });
+}
+
+#[test]
+fn e2e_instance_pinned_card_closes_by_its_button_keeping_selection() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let output_dir = generate_docs_with_instances(
+            "tests/fixtures/typed_wine.yaml",
+            "tests/fixtures/typed_wine_instances.yaml",
+        );
+        let (listener, port) = bind_ephemeral();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+        let page = browser.new_page().await.expect("page");
+        page.goto(&format!("{}/index.html", base_url), None)
+            .await
+            .expect("goto");
+        assert!(
+            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
+            "instance graph viz never became ready"
+        );
+
+        let states = page
+            .evaluate_value(
+                &r#"(function(){
+                    var viz = window.__panschema_instance_viz;
+                    var canvas = document.getElementById('instance-graph-canvas');
+                    var card = document.getElementById('instance-graph-hover-card');
+                    var close = document.getElementById('instance-graph-hover-close');
+                    var rect = canvas.getBoundingClientRect();
+                    var dpr = window.devicePixelRatio || 1;
+                    __CLICK_AT__
+                    var pos = viz.node_canvas_pos(0);
+                    clickAt(rect.left + pos[0] / dpr, rect.top + pos[1] / dpr);
+                    var out = ['sel:' + viz.selected_node_index(),
+                               'pinned:' + card.classList.contains('graph-hover-pinned'),
+                               'close:' + !!(close && getComputedStyle(close).display !== 'none')];
+                    if (close) close.click();
+                    out.push('cardAfterClose:' + (card.style.display === 'block'));
+                    out.push('selAfterClose:' + viz.selected_node_index());
+                    var onNode = {clientX: rect.left + pos[0] / dpr, clientY: rect.top + pos[1] / dpr, bubbles: true};
+                    canvas.dispatchEvent(new MouseEvent('mousemove', onNode));
+                    out.push('hoverAfterClose:' + (card.style.display === 'block'));
+                    clickAt(rect.left + 3, rect.top + 3);
+                    canvas.dispatchEvent(new MouseEvent('mousemove', onNode));
+                    out.push('hoverAfterDeselect:' + (card.style.display === 'block'));
+                    return out.join(' ');
+                })()"#
+                .replace("__CLICK_AT__", CLICK_AT_JS),
+            )
+            .await
+            .unwrap_or_default();
+        assert!(
+            states.contains("sel:0")
+                && states.contains("pinned:true")
+                && states.contains("close:true"),
+            "clicking a node pins its card with a visible close button; got: {states}"
+        );
+        assert!(
+            states.contains("cardAfterClose:false") && states.contains("selAfterClose:0"),
+            "the close button hides the card and keeps the node selected; got: {states}"
+        );
+        assert!(
+            states.contains("hoverAfterClose:true") && states.contains("hoverAfterDeselect:true"),
+            "closing the card locks nothing: the still-selected node hovers normally, before and after deselect; got: {states}"
         );
 
         browser.close().await.ok();

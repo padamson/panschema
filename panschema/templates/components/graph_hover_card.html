@@ -1,0 +1,14 @@
+{# The hover card, rendered once for both the schema and the instance
+   graph. Element ids are prefixed per graph (`graph-*` /
+   `instance-graph-*`) so both cards can live on one page; the class and
+   the inner structure — drag handle, close button, content well — are
+   identical by construction, and `PanschemaGraphShell.makeHoverCard`
+   finds the parts by class. Fixed-positioned, so it escapes a small
+   canvas and flips at the viewport edges. #}
+{% macro card(prefix) %}
+<div class="graph-hover-card" id="{{ prefix }}-hover-card" style="display: none;" role="tooltip" aria-hidden="true">
+    <div class="graph-hover-drag" id="{{ prefix }}-hover-drag" title="Drag to reposition" aria-hidden="true"><span class="graph-hover-grip">⠿</span> drag</div>
+    <button class="graph-hover-close" id="{{ prefix }}-hover-close" type="button" title="Close (keeps the node selected)" aria-label="Close">×</button>
+    <div class="graph-hover-content" id="{{ prefix }}-hover-content"></div>
+</div>
+{% endmacro %}

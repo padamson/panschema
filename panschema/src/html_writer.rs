@@ -5327,6 +5327,29 @@ mod tests {
                 "the `{own}` layout explains itself on the instance toolbar"
             );
         }
+
+        for (region, prefix) in [
+            (schema_region, "graph"),
+            (instance_region, "instance-graph"),
+        ] {
+            assert!(
+                region.contains(&format!(
+                    r#"class="graph-hover-card" id="{prefix}-hover-card""#
+                )),
+                "the {prefix} hover card is the shared card"
+            );
+            for part in ["hover-drag", "hover-close", "hover-content"] {
+                assert!(
+                    region.contains(&format!(r#"id="{prefix}-{part}""#)),
+                    "the {prefix} hover card carries the shared {part}"
+                );
+            }
+        }
+        assert!(
+            !html.contains(r#"class="instance-graph-hover-card""#)
+                && !html.contains(".instance-graph-hover-card"),
+            "no per-graph hover-card class or rule survives"
+        );
     }
 
     #[test]

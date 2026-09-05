@@ -1,4 +1,5 @@
 {% import "components/graph_toolbar.html" as toolbar %}
+{% import "components/graph_hover_card.html" as card %}
 {# Instance (A-box) graph — the ontology's worked-example individuals as a
    connected force graph, rendered by panschema-viz on its own canvas,
    distinct from the schema (T-box) graph. Every declared dataset's payload
@@ -30,7 +31,7 @@
         {% call toolbar::controls("instance-graph", "Show directed arrowheads on assertion edges. Click to toggle.", "Show the notation key for this instance graph.", false) %}{% endcall %}
         {# Compact hover card: an individual's types/literals/IRI, or a
            shared value's enum and usage count (its only surface). #}
-        <div class="instance-graph-hover-card" id="instance-graph-hover-card" style="display: none;"></div>
+        {% call card::card("instance-graph") %}{% endcall %}
         {# Adaptive notation key: the viz draws only the rows this A-box
            uses, via the shared shell. Hidden until toggled. #}
         <div class="graph-legend" id="instance-graph-legend" style="display: none;"
@@ -52,44 +53,6 @@
         margin: 0 0 var(--space-2, 8px);
         color: var(--color-text-muted, #9ca3af);
         font-size: var(--font-size-sm, 13px);
-    }
-    .instance-graph-hover-card {
-        position: absolute;
-        z-index: 20;
-        max-width: 300px;
-        padding: 10px 12px;
-        background: var(--color-bg-secondary, #2d2d44);
-        border: 1px solid var(--color-border, #374151);
-        border-radius: var(--radius-md, 6px);
-        font-size: var(--font-size-sm, 13px);
-        color: var(--color-text, #e5e7eb);
-        pointer-events: none;
-    }
-    .instance-graph-hover-card .graph-hover-head {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        margin-bottom: 6px;
-    }
-    .instance-graph-hover-card .graph-hover-kind {
-        font-size: var(--font-size-xs, 10px);
-        letter-spacing: 0.05em;
-        color: var(--color-text-muted, #9ca3af);
-        background: var(--color-bg-primary, #1a1a2e);
-        border-radius: var(--radius-sm, 4px);
-        padding: 1px 6px;
-    }
-    .instance-graph-hover-card .graph-hover-row {
-        display: flex;
-        gap: 8px;
-        margin-top: 2px;
-    }
-    .instance-graph-hover-card .graph-hover-key {
-        color: var(--color-text-muted, #9ca3af);
-        min-width: 64px;
-    }
-    .instance-graph-hover-card .graph-hover-val {
-        overflow-wrap: anywhere;
     }
     .instance-graph-container {
         position: relative;
@@ -263,16 +226,47 @@
             reset: document.getElementById('instance-graph-reset'),
         }, canvas.closest('.instance-graph-container'));
 
+        // An individual's (or used enum value's) card rows, from the wire
+        // node's kind metadata.
+        function individualCardHtml(node) {
+            const kind = node.kind_metadata || {};
+            const rows = [];
+            if (kind.kind === 'enum_value') {
+                const n = kind.usageCount ?? 0;
+                rows.push(['Enum', kind.enumName || '—']);
+                rows.push(['Used by', `${n} individual${n === 1 ? '' : 's'}`]);
+            } else {
+                if (Array.isArray(kind.types) && kind.types.length) {
+                    rows.push(['Type', kind.types.join(', ')]);
+                }
+                for (const lit of kind.literals || []) {
+                    rows.push([lit.property, lit.value]);
+                }
+                if (node.uri) rows.push(['IRI', node.uri]);
+            }
+            const kindTag = kind.kind === 'enum_value' ? 'ENUM VALUE' : 'INDIVIDUAL';
+            const body = rows
+                .map(
+                    ([k, v]) =>
+                        `<div class="graph-hover-row"><span class="graph-hover-key">${shell.escapeText(k)}</span>` +
+                        `<span class="graph-hover-value">${shell.escapeText(v)}</span></div>`
+                )
+                .join('');
+            return (
+                `<div class="graph-hover-head"><span class="graph-hover-kind">${kindTag}</span>` +
+                `<strong>${shell.escapeText(node.label)}</strong></div>${body}`
+            );
+        }
+
         // The hover card reads the shown dataset's wire nodes; simulation
         // indices match the document's node order.
-        const hoverCard = shell.makeHoverCard(
-            document.getElementById('instance-graph-hover-card'),
-            canvas,
-            (idx) => {
+        const hoverCard = shell.makeHoverCard(document.getElementById('instance-graph-hover-card'), {
+            renderNode: (idx) => {
                 const entry = graphs[shownIndex];
-                return entry && entry.data ? entry.data.nodes[idx] : null;
-            }
-        );
+                const node = entry && entry.data ? entry.data.nodes[idx] : null;
+                return node ? { html: individualCardHtml(node), isFull: false } : null;
+            },
+        });
 
         // The adaptive notation key for the shown dataset, toggleable.
         const legendToggle = document.getElementById('instance-graph-legend-toggle');
@@ -431,18 +425,17 @@
         // Focus-on-hover through the shared shell, so the hop depth and the
         // clear-on-leave rule match the schema graph by construction.
         canvas.addEventListener('mousemove', (e) => {
-            // A pinned card wins: ignore ephemeral hover while one is open.
-            if (dragging || draggingNode >= 0 || hoverCard.pinned() >= 0 || !viz) return;
+            if (dragging || draggingNode >= 0 || !viz) return;
             const rect = canvas.getBoundingClientRect();
             const x = (e.clientX - rect.left) * dpr;
             const y = (e.clientY - rect.top) * dpr;
             if (typeof viz.update_hover === 'function') viz.update_hover(x, y);
             const idx = typeof viz.hovered_node_index === 'function' ? viz.hovered_node_index() : -1;
             if (focusToggle.enabled()) hoverFocus.apply(viz, idx);
-            hoverCard.show(idx, e.clientX, e.clientY);
+            hoverCard.update(idx, -1, e.clientX, e.clientY);
         });
         canvas.addEventListener('mouseleave', () => {
-            if (!viz || hoverCard.pinned() >= 0) return;
+            if (!viz) return;
             if (typeof viz.clear_hover === 'function') viz.clear_hover();
             hoverFocus.apply(viz, -1);
             hoverCard.hide();
