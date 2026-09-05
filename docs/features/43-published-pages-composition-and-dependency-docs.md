@@ -186,7 +186,7 @@ without knowing the URL scheme.
   unparseable refuses the page rather than failing open. Refs without
   a lockfile entry publish ungated, and `path:` dependencies are never
   gated. The checksum covers the schema's main file — the content
-  `fetch` locks and `verify` checks, through the same shared
+  `fetch` locks and `fetch --check` checks, through the same shared
   comparison — so imported sibling files in the cached package are
   outside the gate until the lockfile format records a package-level
   digest (tracked as a follow-up).

@@ -1364,8 +1364,8 @@ fn lockfile_drift(
         Err(e) => Some(format!("the cached schema could not be checksummed: {e}")),
         Ok(Some(observed)) => Some(format!(
             "the cached content fails the ref's lockfile checksum (locked {}, cached \
-             {observed}) — a re-published tag or an edited cache; `panschema verify` \
-             inspects, `panschema fetch` refreshes",
+             {observed}) — a re-published tag or an edited cache; `panschema fetch \
+             --check` inspects, `panschema fetch` refreshes",
             entry.checksum
         )),
         Ok(None) => None,

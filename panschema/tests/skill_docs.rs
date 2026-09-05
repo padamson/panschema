@@ -20,6 +20,10 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
+fn skill_md() -> String {
+    fs::read_to_string(repo_root().join("skills/panschema/SKILL.md")).expect("SKILL.md")
+}
+
 fn skill_ref(name: &str) -> String {
     let path = repo_root().join("skills/panschema/references").join(name);
     fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
@@ -142,36 +146,101 @@ fn every_generate_manifest_key_is_documented() {
     }
 }
 
+/// The CLI reference and the binary agree on the subcommand roster in both
+/// directions. `styleguide` is compiled only under the `dev` feature, so it
+/// may be documented without being in this build's `--help`.
 #[test]
 fn every_subcommand_is_documented() {
+    let help = Command::new(panschema_bin())
+        .arg("--help")
+        .output()
+        .expect("run panschema --help");
+    let help = String::from_utf8_lossy(&help.stdout);
+    let commands = help
+        .split("Commands:")
+        .nth(1)
+        .expect("a Commands: block")
+        .lines()
+        .skip(1)
+        .take_while(|l| !l.trim().is_empty())
+        .filter_map(|l| l.split_whitespace().next())
+        .filter(|name| *name != "help")
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert!(
+        commands.contains(&"verify".to_string()),
+        "help lists verify: {help}"
+    );
+
     let doc = skill_ref("cli.md");
-    for sub in [
-        "generate",
-        "validate",
-        "migrate",
-        "publish",
-        "serve",
-        "init",
-        "add",
-        "fetch",
-        "verify",
-        "release",
-        "completions",
-        "styleguide",
-    ] {
+    for sub in &commands {
         assert!(
-            doc.contains(sub),
-            "subcommand `{sub}` is absent from the CLI reference"
+            doc.contains(&format!("| `{sub}`")) || doc.contains(&format!("| `{sub} ")),
+            "subcommand `{sub}` is absent from the CLI reference's table"
         );
     }
+    let documented = doc
+        .lines()
+        .filter_map(|l| l.strip_prefix("| `"))
+        .filter_map(|l| l.split('`').next())
+        .map(|name| name.split_whitespace().next().unwrap_or(name).to_string())
+        .collect::<Vec<_>>();
+    for name in &documented {
+        assert!(
+            commands.contains(name) || name == "styleguide",
+            "the CLI reference documents `{name}`, which this binary does not have"
+        );
+    }
+    assert!(
+        doc.contains("| `fetch --check` |"),
+        "the lockfile check is `fetch --check`; the CLI reference must carry its row"
+    );
+    assert!(
+        doc.contains("| `verify` |"),
+        "`verify` is the conformance command; the CLI reference must carry its row"
+    );
+
+    // A retired name anywhere in the shipped docs would send an agent to a
+    // command the binary rejects. Release history keeps its own words.
+    let root = repo_root();
+    let mut stale = Vec::new();
+    let mut stack = vec![root.join("docs"), root.join("skills")];
+    let mut files: Vec<PathBuf> = ["README.md", "WHY.md", "CLAUDE.md"]
+        .iter()
+        .map(|f| root.join(f))
+        .collect();
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).expect("read dir") {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e == "md") {
+                files.push(path);
+            }
+        }
+    }
+    for path in files {
+        let text = fs::read_to_string(&path).expect("read doc");
+        if text.contains("panschema validate") {
+            stale.push(
+                path.strip_prefix(&root)
+                    .unwrap_or(&path)
+                    .display()
+                    .to_string(),
+            );
+        }
+    }
+    assert!(
+        stale.is_empty(),
+        "these docs still name the retired `panschema validate`: {stale:?}"
+    );
 }
 
 /// The skill's own entry point must point at each reference, or the depth is
 /// unreachable in a session that only loads SKILL.md.
 #[test]
 fn the_skill_links_every_reference() {
-    let skill =
-        fs::read_to_string(repo_root().join("skills/panschema/SKILL.md")).expect("SKILL.md");
+    let skill = skill_md();
     for name in ["cli.md", "manifest.md", "formats.md"] {
         assert!(skill.contains(name), "SKILL.md must link references/{name}");
     }

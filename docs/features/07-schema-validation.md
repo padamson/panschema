@@ -1,8 +1,8 @@
 # Schema Validation - Implementation Plan
 
-**Feature:** `panschema validate` subcommand for LinkML metaschema validation
+**Feature:** `panschema verify --schema` (no `--data`) for LinkML metaschema checks
 
-**User Story:** As a schema author, I want `panschema validate schema.yaml` to check my LinkML schema against the LinkML metaschema and surface actionable diagnostics, so I catch structural mistakes before downstream consumers encounter them.
+**User Story:** As a schema author, I want `panschema verify --schema schema.yaml` to check my LinkML schema against the LinkML metaschema and surface actionable diagnostics, so I catch structural mistakes before downstream consumers encounter them.
 
 **Related ADR (if applicable):** None — extends the CLI surface defined in [feature 05](05-schema-manager.md) and the reader pipeline defined in [feature 03](03-reader-writer-architecture.md).
 
@@ -12,7 +12,7 @@
 
 ## Why Now
 
-The CLI's tagline ("a universal CLI for schema conversion, documentation, validation, and comparison") promises validation, but no `validate` subcommand exists. The closest existing surface is `panschema verify`, which only checks lockfile checksum drift — it doesn't read the schema's content.
+The CLI's tagline ("a universal CLI for schema conversion, documentation, verification, and comparison") promises verification, but no `verify` subcommand exists. The closest existing surface is `panschema verify`, which only checks lockfile checksum drift — it doesn't read the schema's content.
 
 Surfaced by the scimantic-schema v0.2.0 dogfood: a schema author working in YAML benefits from a single command that says "this is a well-formed LinkML schema" or "this slot has a range that isn't a declared class / type / enum."
 
@@ -30,11 +30,11 @@ For v0.4.0 we don't need to be a full LinkML metaschema implementation. The valu
 
 ## Vertical Slices
 
-### Slice 1: `panschema validate` CLI surface + unresolved-reference checks
+### Slice 1: `panschema verify --schema` CLI surface + unresolved-reference checks
 
 **Status:** Not Started
 
-**User Value:** Running `panschema validate schema.yaml` exits 0 on a well-formed schema and exits non-zero with a precise diagnostic when a reference doesn't resolve.
+**User Value:** Running `panschema verify --schema schema.yaml` exits 0 on a well-formed schema and exits non-zero with a precise diagnostic when a reference doesn't resolve.
 
 **Acceptance Criteria:**
 - [ ] New `Validate { input: PathBuf }` variant on `Commands` (clap). Same input semantics as `generate --schema`: a single LinkML YAML or TTL file.
@@ -50,7 +50,8 @@ For v0.4.0 we don't need to be a full LinkML metaschema implementation. The valu
 - [ ] Integration test against a fixture with each diagnostic kind.
 
 **Notes:**
-- The existing `rust_writer` slice 6.6 already does some of these checks inline in the generator (`// WARNING:` comments for unresolved global slot refs). `validate` is the explicit, fail-loud version of the same checks, applied at schema-load time rather than codegen time. Sharing helpers is in scope; introducing a new `Diagnostic` type from scratch is too.
+- The existing `rust_writer` slice 6.6 already does some of these checks inline in the generator (`// WARNING:` comments for unresolved global slot refs). `verify` is the explicit, fail-loud version of the same checks, applied at schema-load time rather than codegen time. Sharing helpers is in scope; introducing a new `Diagnostic` type from scratch is too.
+- Design constraint: `verify --schema` requires `--data` today, and that stays. A schema-only check must be its own explicit form (a flag such as `--metaschema`, or a `--data`-less mode that names itself), so a forgotten `--data` can never turn the instance-conformance gate into a silent schema-only pass.
 - Don't try to be the LinkML metaschema validator in this slice. The metaschema covers ~60 classes and many constraints panschema doesn't yet emit anyway; chasing full conformance is its own feature.
 
 ---
@@ -59,7 +60,7 @@ For v0.4.0 we don't need to be a full LinkML metaschema implementation. The valu
 
 **Status:** Not Started
 
-**User Value:** `panschema validate` also catches structural mistakes the basic ref-check can't see (e.g. `permissible_values:` declared on a class instead of an enum, `range:` declared on a class definition, mistyped LinkML metaschema fields).
+**User Value:** `panschema verify --schema` also catches structural mistakes the basic ref-check can't see (e.g. `permissible_values:` declared on a class instead of an enum, `range:` declared on a class definition, mistyped LinkML metaschema fields).
 
 **Acceptance Criteria:**
 - [ ] Vendor or pin the LinkML metaschema (or a subset) in `panschema/src/` and use it as the source of truth for "what fields are allowed where."
@@ -71,14 +72,14 @@ For v0.4.0 we don't need to be a full LinkML metaschema implementation. The valu
 
 ---
 
-### Slice 3 (optional): `panschema verify --strict` includes validation pass
+### Slice 3 (optional): `fetch --check` also gates on schema verification
 
 **Status:** Not Started
 
-**User Value:** A consumer's CI step that runs `panschema verify` (checksum drift) can also gate on schema validity in one call.
+**User Value:** A consumer's CI step that runs `panschema fetch --check` (checksum drift) can also gate on schema validity in one call.
 
 **Acceptance Criteria:**
-- [ ] `verify --strict` runs validation against every manifested schema after checksum verification. Exit non-zero on either drift or diagnostic.
+- [ ] A flag on `fetch --check` also runs the schema check against every manifested schema after the lockfile comparison. Exit non-zero on either drift or diagnostic.
 
 **Notes:**
 - Avoid by default — drift and validity are separate concerns. Flag-gated additive behavior is the minimum-friction integration.
@@ -91,7 +92,7 @@ For v0.4.0 we don't need to be a full LinkML metaschema implementation. The valu
 |-------|----------|------------|--------|
 | Slice 1: CLI + ref-resolution checks | Must Have | Feature 03 | Not Started |
 | Slice 2: Metaschema-driven checks | Should Have | Slice 1 | Not Started |
-| Slice 3: `verify --strict` integration | Could Have | Slice 1 + Feature 05 | Not Started |
+| Slice 3: `fetch --check` integration | Could Have | Slice 1 + Feature 05 | Not Started |
 
 ---
 
@@ -103,6 +104,6 @@ The feature is complete when ALL of the following are true:
 - [ ] All tests passing: `cargo nextest run`
 - [ ] Library documentation complete: `cargo doc`
 - [ ] Code formatted + clippy clean: `cargo fmt --check` + `cargo clippy -- -D warnings`
-- [ ] README.md updated with `panschema validate` example
+- [ ] README.md updated with `panschema verify --schema` example
 - [ ] CHANGELOG.md updated
 - [ ] scimantic-schema's v0.2.0 (and any subsequent schema with non-trivial mixins / external CURIEs) validates clean

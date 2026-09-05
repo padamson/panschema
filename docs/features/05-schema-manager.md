@@ -65,7 +65,7 @@ Three artifacts define the workflow:
 
 **Source protocols (v0.3 minimum):** `path:` (local file/directory), `github:owner/repo@version` (tagged commit). Other protocols (`gitlab:`, `zenodo:`, `https:`, `pypi:`) deferred.
 
-**Commands:** `init`, `add`, `fetch`, `generate`, `verify`, `release`. Existing `panschema generate --schema <file>` continues to work as a no-manifest shorthand. `init` and `release` are producer-side; `add`, `fetch`, `verify`, `generate` are consumer-side.
+**Commands:** `init`, `add`, `fetch` (and `fetch --check`), `generate`, `release`. Existing `panschema generate --schema <file>` continues to work as a no-manifest shorthand. `init` and `release` are producer-side; `add`, `fetch`, `verify`, `generate` are consumer-side.
 
 **Cache:** `~/.cache/panschema/<source-hash>/<version>/` — XDG-compliant, shared across projects (cargo-style), no auto-eviction in v0.3.
 
@@ -106,22 +106,22 @@ Each slice delivers end-to-end user value: a complete `manifest → fetch → ge
 
 **Status:** ✅ Completed
 
-**User Value:** Builds become reproducible. `panschema fetch` records exact revisions and checksums in `panschema.lock`; `panschema verify` errors on drift; CI can guarantee the schemas it built against haven't changed.
+**User Value:** Builds become reproducible. `panschema fetch` records exact revisions and checksums in `panschema.lock`; `panschema fetch --check` errors on drift; CI can guarantee the schemas it built against haven't changed.
 
 **Acceptance Criteria:**
 
 - [x] `panschema fetch` resolves all manifested schemas, computes SHA-256 of each schema's main file, writes `panschema.lock` with one entry per schema
-- [x] `panschema verify` reads the lockfile and re-checksums each schema; errors with a clear diff when checksums disagree
+- [x] `panschema fetch --check` reads the lockfile and re-checksums each schema; errors with a clear diff when checksums disagree
 - [x] `panschema generate` runs independently against the manifest (resolves fresh); doesn't require a lockfile
 - [x] Lockfile format includes: name, version (from publish.toml — populated for both source types), source spec, revision (reserved for future commit-identifier provenance — currently `None` for both `path:` and `github:` sources), checksum
 - [x] Local-path schemas are checksummed too — detects "schema edited but generate not re-run"
-- [x] Integration test: edit a fixture schema's content after `fetch`, expect `verify` to fail
+- [x] Integration test: edit a fixture schema's content after `fetch`, expect `fetch --check` to fail
 
 **Notes:**
 - Reproducibility ratchet: once this slice ships, every consumer can pin and verify.
 - File-locking on the cache deferred (no cache yet — slice 3 adds caching and concurrency concerns together).
 - `panschema generate` does not read the lockfile (see AC #3) — the lockfile is verification metadata, not a source of inputs. Avoids double-resolution.
-- Drift detection covers both checksum (main file content) and version (publish.toml's `[schema].version`) — a maintainer who bumps the version without re-fetching will get a clear `verify` error.
+- Drift detection covers both checksum (main file content) and version (publish.toml's `[schema].version`) — a maintainer who bumps the version without re-fetching will get a clear `fetch --check` error.
 
 ### Slice 3: `github:` source + cache
 
@@ -248,13 +248,13 @@ This slice deliberately splits into three phases following the project's release
 **Phase A — Pre-tag docs (lands on `main`, no README touch):**
 
 - [ ] `docs/guide-producer.md` — schema-author workflow: authoring `panschema-publish.toml`, using `panschema init`, cutting releases with `panschema release`.
-- [ ] `docs/guide-consumer.md` — consumer workflow: writing `panschema.toml`, `panschema add`, `panschema fetch`/`verify`/`generate`, lockfile semantics.
+- [ ] `docs/guide-consumer.md` — consumer workflow: writing `panschema.toml`, `panschema add`, `panschema fetch`/`fetch --check`/`generate`, lockfile semantics.
 - [ ] CHANGELOG keeps accumulating under `[Unreleased]` (no rollup yet).
 
 **Phase B — Downstream dogfood (blocking on Phase A):**
 
 - [ ] **scimantic-schema** adopts `panschema-publish.toml` (via `panschema init --from`) and cuts a tagged release using `panschema release --level patch --git --push`.
-- [ ] **t2t** declares a `panschema.toml` with `source = "github:padamson/scimantic-schema"` + the tagged version. Runs `fetch`/`verify`/`generate` end-to-end against the real github source.
+- [ ] **t2t** declares a `panschema.toml` with `source = "github:padamson/scimantic-schema"` + the tagged version. Runs `fetch`/`fetch --check`/`generate` end-to-end against the real github source.
 - [ ] Any friction (error messages, performance, ergonomic surprises, missing safety checks) flows back to panschema as issues or fixes on `main`. Loop until both downstreams are happy.
 
 **Phase C — Tag v0.3.0 (after Phase B clears):**
@@ -363,7 +363,7 @@ each will be handed off to another repo:
 **Completed:**
 - `lockfile` module — `Lockfile`/`LockEntry` types serializing as TOML with `[[schema]]` array entries, `checksum_file` helper computing `sha256:<hex>`, `path_source_spec` for stable lockfile source strings, `Lockfile::entry` lookup
 - `panschema fetch` resolves every manifested schema, computes SHA-256, writes `panschema.lock` next to the manifest
-- `panschema verify` re-checksums against the lockfile and errors with a per-schema diff on drift (also surfaces stale lockfile-only entries and manifest-only entries that haven't been fetched)
+- `panschema fetch --check` re-checksums against the lockfile and errors with a per-schema diff on drift (also surfaces stale lockfile-only entries and manifest-only entries that haven't been fetched)
 - Integration tests: happy path (fetch → verify succeeds), drift detection (edit schema after fetch, verify fails), and missing-lockfile error
 
 **Design decisions:**
@@ -440,7 +440,7 @@ it lives.
   - Path-source input is canonicalized then re-relativized to the
     manifest's directory before storing — robust against the user
     typing the path from a different CWD than the manifest.
-- **Drift detection upgrade:** `verify` now catches publish.toml
+- **Drift detection upgrade:** `fetch --check` now catches publish.toml
   version drift in addition to checksum drift (because version is
   always recorded in the lockfile).
 - **Fixtures + tests:**
@@ -455,7 +455,7 @@ it lives.
     nine pre-existing path-source tests rewritten to the new
     package shape.
   - Manual smoke: `panschema add ./local-pkg` → manifest entry +
-    lockfile, `verify` succeeds, mutate schema file → `verify`
+    lockfile, `fetch --check` succeeds, mutate schema file → `fetch --check`
     fails with a clean drift error.
 
 **Design decisions:**

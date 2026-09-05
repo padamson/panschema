@@ -20,7 +20,7 @@ Postgres ([feature 24](24-postgres-ddl-writer.md)), and Rust
 ([feature 06](06-rust-codegen.md)) writers — another projection of the same IR.
 
 **Why now:** it's the first pillar of the **LinkML+JSON instance program**
-(JSON-Schema writer → LinkML instance reader → `panschema validate --data`)
+(JSON-Schema writer → LinkML instance reader → `panschema verify --data`)
 that keeps the graphRAG demo entirely in LinkML and JSON — no OWL/TTL or
 Rust-struct detour. The JSON Schema is what an LLM's structured output is
 enforced against; the JSON it returns *is* a LinkML instance. It also unblocks

@@ -164,7 +164,7 @@ both define `api-gateway` are reported instead of quietly becoming one
 individual.
 
 **Acceptance Criteria:**
-- [x] `validate` accepts repeated `--data` and reports every id that mints
+- [x] `verify` accepts repeated `--data` and reports every id that mints
   to the same IRI across the given files, naming the id and each file.
 - [x] A single `--data` behaves exactly as it does now.
 - [x] `publish` performs the same check across its declared `[[instances]]`
@@ -300,7 +300,7 @@ shape that does not distort the model.
   order and read on, so a catalogue file read against an estate root
   produced a plausible, wrong, near-empty dataset. Erroring loudly is most
   of this slice's value.
-- **A vacuous pass is the residual hazard**, which is why `validate` reports
+- **A vacuous pass is the residual hazard**, which is why `verify` reports
   the record count alongside the chosen root: a dataset read against the
   wrong root has no violations *and* no records, and "conforms" alone cannot
   be told apart from a real pass.
@@ -339,7 +339,7 @@ find. Four consumers endorsed this guard; two called it load-bearing.
 - [x] It is a report, not an error. Splitting is legitimate; only the
   author knows which.
 - [x] It runs wherever the collision check runs — repeated `--data` on
-  `validate`, and `publish` across its declared `[[instances]]`.
+  `verify`, and `publish` across its declared `[[instances]]`.
 
 **Notes:**
 - **This deliberately refines what the consumers asked for.** They specified

@@ -39,7 +39,7 @@ main = "schema.yaml"
 should be unique, stable, and follow whatever naming convention
 your ecosystem uses (kebab-case is the LinkML convention).
 
-`[schema].version` is semver — `panschema verify` on the consumer
+`[schema].version` is semver — `panschema fetch --check` on the consumer
 side enforces that the version in the publish file matches what's
 declared in the consumer's manifest.
 

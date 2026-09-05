@@ -921,11 +921,11 @@ fn instances_flag_warns_only_for_formats_that_ignore_it() {
 }
 
 #[test]
-fn validate_command_exit_code_reflects_conformance() {
-    // Conforming data validates clean and exits zero.
+fn verify_command_exit_code_reflects_conformance() {
+    // Conforming data verifies clean and exits zero.
     let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
-            "validate",
+            "verify",
             "--schema",
             "tests/fixtures/wine_catalog.yaml",
             "--data",
@@ -940,13 +940,13 @@ fn validate_command_exit_code_reflects_conformance() {
     );
     assert!(
         String::from_utf8_lossy(&out.stdout).contains("conforms to"),
-        "clean validation should report conformance"
+        "a clean verification should report conformance"
     );
 
     // A dangling reference is a violation: non-zero exit, named on stderr.
     let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
-            "validate",
+            "verify",
             "--schema",
             "tests/fixtures/wine_catalog.yaml",
             "--data",
@@ -962,13 +962,30 @@ fn validate_command_exit_code_reflects_conformance() {
         String::from_utf8_lossy(&out.stderr).contains("ghostWinery"),
         "the violation should name the dangling reference"
     );
-}
 
-#[test]
-fn validate_reports_ids_that_mint_one_iri_across_two_data_files() {
+    // The retired name is a hard break that still points the way.
     let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "validate",
+            "--schema",
+            "tests/fixtures/wine_catalog.yaml",
+            "--data",
+            "tests/fixtures/wine_instances.yaml",
+        ])
+        .output()
+        .expect("run panschema");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success() && stderr.contains("renamed to `panschema verify`"),
+        "`validate` fails and names its replacement; got: {stderr}"
+    );
+}
+
+#[test]
+fn verify_reports_ids_that_mint_one_iri_across_two_data_files() {
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "verify",
             "--schema",
             "tests/fixtures/wine_catalog.yaml",
             "--data",
@@ -994,13 +1011,13 @@ fn validate_reports_ids_that_mint_one_iri_across_two_data_files() {
 }
 
 #[test]
-fn validate_reports_an_entity_two_scoped_datasets_each_defined() {
+fn verify_reports_an_entity_two_scoped_datasets_each_defined() {
     // Scoping's inverse hazard: `aws` should have been one shared record, so
     // the two estates now hold two distinct providers. The collision check
     // cannot see this — after scoping there is no collision left to find.
     let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
-            "validate",
+            "verify",
             "--schema",
             "tests/fixtures/scoped_estate.yaml",
             "--data",
@@ -1067,7 +1084,7 @@ fn rendered_docs_carry_scoped_and_shared_iris_side_by_side() {
 }
 
 #[test]
-fn validate_names_the_root_each_dataset_was_read_against() {
+fn verify_names_the_root_each_dataset_was_read_against() {
     // Both roots declare `id` and `name`, so only the collections decide. A
     // wrong-root read would conform vacuously with zero records, which is why
     // the reading and the count are on the success line.
@@ -1081,7 +1098,7 @@ fn validate_names_the_root_each_dataset_was_read_against() {
     ] {
         let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
             .args([
-                "validate",
+                "verify",
                 "--schema",
                 "tests/fixtures/two_root_estate.yaml",
                 "--data",
@@ -1106,7 +1123,7 @@ fn validate_names_the_root_each_dataset_was_read_against() {
 fn a_single_data_file_reports_no_collisions() {
     let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
-            "validate",
+            "verify",
             "--schema",
             "tests/fixtures/wine_catalog.yaml",
             "--data",
@@ -1127,10 +1144,10 @@ fn a_single_data_file_reports_no_collisions() {
 }
 
 #[test]
-fn cross_graph_reference_validates_clean_and_is_summarized() {
+fn cross_graph_reference_verifies_clean_and_is_summarized() {
     let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
-            "validate",
+            "verify",
             "--schema",
             "tests/fixtures/wine_catalog.yaml",
             "--data",
@@ -1986,6 +2003,19 @@ const UNION_CATALOG_SCHEMA: &str = "id: https://example.org/catalog\nname: catal
 
 const UNION_BENCH_SCHEMA: &str = "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, anchors]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  anchors: {range: DomainRecord, multivalued: true}\n";
 
+fn copy_dir(from: &Path, to: &Path) {
+    fs::create_dir_all(to).expect("create dir");
+    for entry in fs::read_dir(from).expect("read dir") {
+        let entry = entry.expect("dir entry");
+        let target = to.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), target).expect("copy file");
+        }
+    }
+}
+
 fn run_in(consumer: &Path, args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args(args)
@@ -2051,7 +2081,7 @@ resolve_against = ["catalog"]
 "#,
     )
     .unwrap();
-    let out = run_in(consumer, &["validate"]);
+    let out = run_in(consumer, &["verify"]);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains("weight") && stderr.contains("expects an integer"),
@@ -2147,13 +2177,13 @@ fn a_dataset_that_ingests_nothing_is_not_vacuously_clean() {
         "[schemas]\ncatalog = { path = \"./catalog-pkg\" }\n\n[generate.catalog]\ninstances = [\"catalog-data.yaml\"]\n",
     )
     .unwrap();
-    let warned = run_in(consumer, &["validate"]);
+    let warned = run_in(consumer, &["verify"]);
     assert!(
         String::from_utf8_lossy(&warned.stderr).contains("mapping"),
         "the non-mapping dataset is reported; got:\n{}",
         String::from_utf8_lossy(&warned.stderr)
     );
-    let strict = run_in(consumer, &["validate", "--strict"]);
+    let strict = run_in(consumer, &["verify", "--strict"]);
     assert!(!strict.status.success(), "--strict fails on it");
 }
 
@@ -2205,7 +2235,7 @@ resolve_against = ["catalog"]
 "#,
     )
     .unwrap();
-    let strict = run_in(consumer, &["validate", "--strict"]);
+    let strict = run_in(consumer, &["verify", "--strict"]);
     let stderr = String::from_utf8_lossy(&strict.stderr);
     assert!(!strict.status.success());
     assert!(
@@ -2249,7 +2279,7 @@ resolve_against = ["catalog"]
 "#,
     )
     .unwrap();
-    for args in [["validate"].as_slice(), ["generate"].as_slice()] {
+    for args in [["verify"].as_slice(), ["generate"].as_slice()] {
         let out = run_in(consumer, args);
         assert!(
             !out.status.success(),
@@ -2313,16 +2343,16 @@ resolve_against = ["catalog"]
     let out = run_in(consumer, &["generate"]);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("[check.bench]") && stderr.contains("validate"),
+        stderr.contains("[check.bench]") && stderr.contains("verify"),
         "the skip note points at the check policy's home; got:\n{stderr}"
     );
 }
 
-/// Bare `validate --strict` promotes the schema-level findings `generate
+/// Bare `verify --strict` promotes the schema-level findings `generate
 /// --strict` refuses — the check verb covers what the build verb would
 /// reject.
 #[test]
-fn bare_validate_strict_promotes_schema_level_findings() {
+fn bare_verify_strict_promotes_schema_level_findings() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let consumer = tmp.path();
     write_pkg(
@@ -2337,13 +2367,13 @@ fn bare_validate_strict_promotes_schema_level_findings() {
         "[schemas]\ng = { path = \"./pkg\" }\n",
     )
     .unwrap();
-    let warned = run_in(consumer, &["validate"]);
+    let warned = run_in(consumer, &["verify"]);
     assert!(
         warned.status.success(),
         "schema findings warn without --strict: {}",
         String::from_utf8_lossy(&warned.stderr)
     );
-    let strict = run_in(consumer, &["validate", "--strict"]);
+    let strict = run_in(consumer, &["verify", "--strict"]);
     assert!(
         !strict.status.success(),
         "the dangling schema reference fails --strict; got:\n{}",
@@ -2351,10 +2381,10 @@ fn bare_validate_strict_promotes_schema_level_findings() {
     );
 }
 
-/// Bare `validate` runs the cross-dataset overlap checks flag mode runs:
+/// Bare `verify` runs the cross-dataset overlap checks flag mode runs:
 /// the same IRI minted by two declared datasets is reported.
 #[test]
-fn bare_validate_reports_cross_dataset_overlap() {
+fn bare_verify_reports_cross_dataset_overlap() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let consumer = tmp.path();
     write_pkg(
@@ -2379,7 +2409,7 @@ fn bare_validate_reports_cross_dataset_overlap() {
         "[schemas]\ncatalog = { path = \"./catalog-pkg\" }\n\n[generate.catalog]\ninstances = [\"a.yaml\", \"b.yaml\"]\n",
     )
     .unwrap();
-    let out = run_in(consumer, &["validate"]);
+    let out = run_in(consumer, &["verify"]);
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("minted by more than one dataset"),
         "the overlap note flag mode prints appears in manifest mode too; got:\n{}",
@@ -2387,11 +2417,11 @@ fn bare_validate_reports_cross_dataset_overlap() {
     );
 }
 
-/// Bare `validate` reads the manifest and checks everything declared —
+/// Bare `verify` reads the manifest and checks everything declared —
 /// conformance, cross-graph resolution, stated absences — writing
 /// nothing; `--strict` promotes the warnings.
 #[test]
-fn bare_validate_checks_the_whole_manifest() {
+fn bare_verify_checks_the_whole_manifest() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let consumer = tmp.path();
 
@@ -2445,7 +2475,7 @@ resolve_against = ["catalog"]
     .unwrap();
 
     let run = |extra: &[&str]| {
-        let mut args = vec!["validate"];
+        let mut args = vec!["verify"];
         args.extend_from_slice(extra);
         Command::new(env!("CARGO_BIN_EXE_panschema"))
             .args(&args)
@@ -2470,7 +2500,7 @@ resolve_against = ["catalog"]
     );
     assert!(
         !consumer.join("catalog.ttl").exists() && !consumer.join("bench.ttl").exists(),
-        "validate writes nothing"
+        "verify writes nothing"
     );
 
     let strict = run(&["--strict"]);
@@ -2533,7 +2563,7 @@ require_namespace_coverage = true
     .unwrap();
 
     let run = |extra: &[&str]| {
-        let mut args = vec!["validate"];
+        let mut args = vec!["verify"];
         args.extend_from_slice(extra);
         Command::new(env!("CARGO_BIN_EXE_panschema"))
             .args(&args)
@@ -2892,7 +2922,7 @@ resolve_against = ["catalog"]
 
     let run = || {
         Command::new(env!("CARGO_BIN_EXE_panschema"))
-            .arg("validate")
+            .arg("verify")
             .current_dir(consumer)
             .output()
             .expect("run panschema")
@@ -2927,7 +2957,7 @@ resolve_against = ["catalog"]
 
 /// A defective `asserts_absence` declaration — here a `via_slot` no
 /// class carries — warns at load and fails `--strict`, on the generate
-/// path and the bare-validate path alike.
+/// path and the bare-verify path alike.
 #[test]
 fn a_defective_absence_declaration_fails_strict() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -2969,7 +2999,7 @@ ttl = "bench.ttl"
         "the warning names the declaration; got:\n{}",
         String::from_utf8_lossy(&warned.stderr)
     );
-    for args in [&["generate", "--strict"][..], &["validate", "--strict"][..]] {
+    for args in [&["generate", "--strict"][..], &["verify", "--strict"][..]] {
         let strict = run(args);
         assert!(
             !strict.status.success(),
@@ -3229,10 +3259,9 @@ slots:
 /// rejects a wrong-kinded value at it exactly as it would under a declared
 /// default.
 #[test]
-fn cli_validate_kind_checks_a_rangeless_slot_via_the_implicit_string_default() {
-    let tmp = std::env::temp_dir().join("panschema_implicit_default_range_test");
-    let _ = fs::remove_dir_all(&tmp);
-    fs::create_dir_all(&tmp).unwrap();
+fn cli_verify_kind_checks_a_rangeless_slot_via_the_implicit_string_default() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let tmp = dir.path().to_path_buf();
     let schema_path = tmp.join("schema.yaml");
     fs::write(
         &schema_path,
@@ -3244,7 +3273,7 @@ fn cli_validate_kind_checks_a_rangeless_slot_via_the_implicit_string_default() {
 
     let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
-            "validate",
+            "verify",
             "--schema",
             schema_path.to_str().unwrap(),
             "--data",
@@ -3254,15 +3283,13 @@ fn cli_validate_kind_checks_a_rangeless_slot_via_the_implicit_string_default() {
         .expect("panschema");
     assert!(
         !out.status.success(),
-        "an integer at an implicitly string-typed slot must not validate clean"
+        "an integer at an implicitly string-typed slot must not verify clean"
     );
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(
         err.contains("expects a string"),
         "the report names the implicit expectation; got:\n{err}"
     );
-
-    let _ = fs::remove_dir_all(&tmp);
 }
 
 /// A rangeless Turtle property keeps its untyped-slot warning and its
@@ -4045,9 +4072,9 @@ rust = "sample.rs"
 }
 
 /// `panschema fetch` writes a lockfile with one entry per manifested schema;
-/// `panschema verify` then succeeds against the unchanged on-disk content.
+/// `panschema fetch --check` then succeeds against the unchanged on-disk content.
 #[test]
-fn fetch_writes_lockfile_and_verify_succeeds() {
+fn fetch_writes_lockfile_and_fetch_check_succeeds() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let consumer = tmp.path();
 
@@ -4085,22 +4112,18 @@ sample_schema = { path = "./sample-pkg" }
         "lockfile missing checksum prefix: {lockfile_text}"
     );
 
-    // verify: should succeed because nothing changed.
-    let verify = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .arg("verify")
-        .current_dir(consumer)
-        .status()
-        .expect("run panschema verify");
+    // fetch --check: should succeed because nothing changed.
+    let check = run_in(consumer, &["fetch", "--check"]);
     assert!(
-        verify.success(),
-        "panschema verify failed against the just-written lockfile"
+        check.status.success(),
+        "panschema fetch --check failed against the just-written lockfile"
     );
 }
 
-/// `panschema verify` errors with a diff when the schema content changes
+/// `panschema fetch --check` errors with a diff when the schema content changes
 /// after `panschema fetch`.
 #[test]
-fn verify_detects_schema_drift_after_fetch() {
+fn fetch_check_detects_schema_drift() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let consumer = tmp.path();
 
@@ -4122,28 +4145,89 @@ sample_schema = { path = "./sample-pkg" }
         .expect("run fetch");
     assert!(fetch.success());
 
+    let lock_path = consumer.join("panschema.lock");
+    let locked = fs::read_to_string(&lock_path).expect("lockfile");
+
+    // A version bump without a re-fetch is drift too: the lock records the
+    // package version, not only the main file's bytes.
+    let publish_toml = fs::read_dir(&pkg)
+        .expect("pkg dir")
+        .map(|e| e.expect("entry").path())
+        .find(|p| {
+            fs::read_to_string(p)
+                .map(|t| t.contains("version = \"1.0.0\""))
+                .unwrap_or(false)
+        })
+        .expect("the sample package declares version 1.0.0");
+    let pinned = fs::read_to_string(&publish_toml).expect("publish toml");
+    fs::write(
+        &publish_toml,
+        pinned.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
+    )
+    .expect("bump");
+    let check = run_in(consumer, &["fetch", "--check"]);
+    let stderr = String::from_utf8_lossy(&check.stderr);
+    assert!(
+        !check.status.success() && stderr.contains("version"),
+        "a bumped package version is lockfile drift; got: {stderr}"
+    );
+    fs::write(&publish_toml, pinned).expect("restore version");
+
+    // A repointed source is drift too, even when the bytes it points at are
+    // identical: the lock records where the schema came from.
+    let manifest_path = consumer.join("panschema.toml");
+    let manifest = fs::read_to_string(&manifest_path).expect("manifest");
+    copy_dir(&pkg, &consumer.join("sample-pkg-moved"));
+    fs::write(
+        &manifest_path,
+        manifest.replace("./sample-pkg", "./sample-pkg-moved"),
+    )
+    .expect("repoint");
+    let check = run_in(consumer, &["fetch", "--check"]);
+    let stderr = String::from_utf8_lossy(&check.stderr);
+    assert!(
+        !check.status.success() && stderr.contains("source"),
+        "a repointed source is lockfile drift; got: {stderr}"
+    );
+    fs::write(&manifest_path, manifest).expect("restore manifest");
+
     // Mutate the schema after fetch.
     let mut content = fs::read_to_string(&schema_file).expect("read schema");
     content.push_str("\n# drift\n");
     fs::write(&schema_file, content).expect("rewrite schema");
 
-    let verify = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .arg("verify")
-        .current_dir(consumer)
-        .output()
-        .expect("run verify");
+    let check = run_in(consumer, &["fetch", "--check"]);
     assert!(
-        !verify.status.success(),
-        "verify should have failed on drifted content"
+        !check.status.success(),
+        "fetch --check should have failed on drifted content"
     );
-    let stderr = String::from_utf8_lossy(&verify.stderr);
+    let stderr = String::from_utf8_lossy(&check.stderr);
     assert!(
         stderr.contains("drift") || stderr.contains("sample_schema"),
         "stderr should explain the drift; got: {stderr}"
     );
+
+    assert_eq!(
+        fs::read_to_string(&lock_path).expect("lockfile"),
+        locked,
+        "`fetch --check` never rewrites the lockfile, even on drift"
+    );
+
+    // Bare `verify` is conformance, not the lockfile: the drifted tree
+    // leaves it green and silent about the lock.
+    let verify = run_in(consumer, &["verify"]);
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&verify.stdout),
+        String::from_utf8_lossy(&verify.stderr)
+    );
+    assert!(
+        verify.status.success() && !combined.contains("lockfile") && !combined.contains("drift"),
+        "bare `verify` runs conformance and ignores the lockfile; got: {combined}"
+    );
 }
 
-/// The manager flow (fetch/verify/generate) dispatches input files by
+/// The manager flow (fetch/fetch --check/generate) dispatches input files by
 /// extension to the same readers as `--input`. This proves a `.ttl`
 /// schema flows end-to-end through the manager, not just YAML.
 #[test]
@@ -4173,7 +4257,7 @@ html = "docs/"
     )
     .expect("write manifest");
 
-    // fetch + verify should succeed against a TTL source.
+    // fetch + fetch --check should succeed against a TTL source.
     assert!(
         Command::new(env!("CARGO_BIN_EXE_panschema"))
             .arg("fetch")
@@ -4184,12 +4268,7 @@ html = "docs/"
         "fetch failed for TTL source"
     );
     assert!(
-        Command::new(env!("CARGO_BIN_EXE_panschema"))
-            .arg("verify")
-            .current_dir(consumer)
-            .status()
-            .expect("verify")
-            .success(),
+        run_in(consumer, &["fetch", "--check"]).status.success(),
         "verify failed for TTL source"
     );
 
@@ -4213,9 +4292,9 @@ html = "docs/"
 }
 
 /// `panschema fetch` writes one lockfile entry per manifest schema, and
-/// `panschema verify` validates all of them in one pass.
+/// `panschema fetch --check` checks all of them in one pass.
 #[test]
-fn fetch_and_verify_handle_multiple_schemas() {
+fn fetch_and_fetch_check_handle_multiple_schemas() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let consumer = tmp.path();
 
@@ -4261,18 +4340,17 @@ b = { path = "./b-pkg" }
         "missing entry b: {lockfile_text}"
     );
 
-    let verify = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .arg("verify")
-        .current_dir(consumer)
-        .status()
-        .expect("run verify");
-    assert!(verify.success(), "verify failed against fresh lockfile");
+    let check = run_in(consumer, &["fetch", "--check"]);
+    assert!(
+        check.status.success(),
+        "fetch --check failed against fresh lockfile"
+    );
 }
 
 /// Adding a schema to the manifest after `fetch` (without re-fetching) must
-/// be detected by `verify`.
+/// be detected by `fetch --check`.
 #[test]
-fn verify_detects_manifest_schema_missing_from_lockfile() {
+fn fetch_check_detects_manifest_schema_missing_from_lockfile() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let consumer = tmp.path();
     write_pkg(
@@ -4317,16 +4395,12 @@ b = { path = "./b-pkg" }
     )
     .expect("rewrite manifest v2");
 
-    let verify = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .arg("verify")
-        .current_dir(consumer)
-        .output()
-        .expect("verify");
+    let check = run_in(consumer, &["fetch", "--check"]);
     assert!(
-        !verify.status.success(),
-        "verify should fail when manifest has schema not in lockfile"
+        !check.status.success(),
+        "fetch --check should fail when manifest has schema not in lockfile"
     );
-    let stderr = String::from_utf8_lossy(&verify.stderr);
+    let stderr = String::from_utf8_lossy(&check.stderr);
     assert!(
         stderr.contains("`b`") && (stderr.contains("not in lockfile") || stderr.contains("fetch")),
         "stderr should call out the missing schema and suggest fetch; got: {stderr}"
@@ -4334,9 +4408,9 @@ b = { path = "./b-pkg" }
 }
 
 /// Removing a schema from the manifest after `fetch` (without re-fetching)
-/// leaves a stale lockfile entry; `verify` should call it out.
+/// leaves a stale lockfile entry; `fetch --check` should call it out.
 #[test]
-fn verify_detects_stale_lockfile_entries() {
+fn fetch_check_detects_stale_lockfile_entries() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let consumer = tmp.path();
     write_pkg(
@@ -4381,25 +4455,21 @@ a = { path = "./a-pkg" }
     )
     .expect("rewrite manifest v2");
 
-    let verify = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .arg("verify")
-        .current_dir(consumer)
-        .output()
-        .expect("verify");
+    let check = run_in(consumer, &["fetch", "--check"]);
     assert!(
-        !verify.status.success(),
-        "verify should fail with stale lockfile entry"
+        !check.status.success(),
+        "fetch --check should fail with stale lockfile entry"
     );
-    let stderr = String::from_utf8_lossy(&verify.stderr);
+    let stderr = String::from_utf8_lossy(&check.stderr);
     assert!(
         stderr.contains("`b`") && stderr.contains("stale"),
         "stderr should call out the stale schema; got: {stderr}"
     );
 }
 
-/// `panschema verify` errors when no lockfile exists.
+/// `panschema fetch --check` errors when no lockfile exists.
 #[test]
-fn verify_errors_when_no_lockfile() {
+fn fetch_check_errors_when_no_lockfile() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let consumer = tmp.path();
 
@@ -4411,16 +4481,12 @@ fn verify_errors_when_no_lockfile() {
     )
     .expect("write manifest");
 
-    let verify = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .arg("verify")
-        .current_dir(consumer)
-        .output()
-        .expect("run verify");
+    let check = run_in(consumer, &["fetch", "--check"]);
     assert!(
-        !verify.status.success(),
-        "verify should fail without lockfile"
+        !check.status.success(),
+        "fetch --check should fail without lockfile"
     );
-    let stderr = String::from_utf8_lossy(&verify.stderr);
+    let stderr = String::from_utf8_lossy(&check.stderr);
     assert!(
         stderr.contains("panschema.lock") || stderr.contains("fetch"),
         "stderr should suggest fetch; got: {stderr}"

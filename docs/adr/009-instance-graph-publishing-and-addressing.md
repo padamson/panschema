@@ -6,7 +6,7 @@ Proposed
 ## Context
 
 ADR-008 gave instance data (the A-box) one internal model: any input format
-becomes an `InstanceSet`, and consumers — the HTML instance graph, `validate`
+becomes an `InstanceSet`, and consumers — the HTML instance graph, `verify`
 — operate on that model. What it did not decide is how instance graphs are
 **documented, addressed, published, and exported**, and that gap now blocks
 real consumers: the docs render an instance graph but give it no navigation
@@ -24,7 +24,7 @@ Two distinctions drive everything:
   graph nodes are classes. An *instance graph* is a set of **individuals**
   (each an instance of a class) plus the edges asserted between them via the
   schema's slots. It **conforms to** a `(schema, version)` pair —
-  `validate` takes two arguments precisely because the instance graph varies
+  `verify` takes two arguments precisely because the instance graph varies
   while the schema is fixed. There are many instance graphs per schema.
 - **Exemplar vs arbitrary.** An *exemplar* instance graph is one small,
   curated A-box published to *illustrate* a schema — a teaching artifact
@@ -112,7 +112,7 @@ later, the extraction path) is the intended tool.
 
 ### 4. Exports: one `InstanceSet`, every writer; T-box and A-box stay distinct documents
 
-The same `InstanceSet` that feeds the HTML viz and `validate` flows through
+The same `InstanceSet` that feeds the HTML viz and `verify` flows through
 the shared serialization layer:
 
 - **RDF family** (`ttl`, `jsonld`, `rdfxml`, `ntriples`): each instance
@@ -172,7 +172,7 @@ remote schemas, not through a parallel system:
   schema's docs *featuring the local A-box* — sidebar entry, cards,
   exports, all of it — with provenance showing the data file and the
   pinned schema version it conforms to.
-- `validate` needs nothing new: it already takes the fetched schema's path
+- `verify` needs nothing new: it already takes the fetched schema's path
   and the local data.
 
 Publishing such a repository's docs versioned by **its own tags** — dataset

@@ -507,7 +507,7 @@ fn render_header<W: Write>(
     )?;
     out.write_str("// Do not hand-edit; re-run `panschema generate` to refresh.\n")?;
     // Skip the consumer's fmt and clippy from inside the file, so neither
-    // rewrites generated code and `panschema verify` stays byte-stable.
+    // rewrites generated code and `panschema generate --check` stays byte-stable.
     out.write_str("\n#![cfg_attr(rustfmt, rustfmt_skip)]\n")?;
     out.write_str("#![allow(non_camel_case_types, non_snake_case, dead_code, clippy::all)]\n\n")
 }

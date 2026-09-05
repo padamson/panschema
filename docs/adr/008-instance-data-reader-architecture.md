@@ -19,9 +19,9 @@ sources feeding one model, `InstanceSet` (feature 33):
   container of records).
 
 And a growing set of instance *consumers*: the HTML instance graph, the
-`validate` command (feature 34), and later an RDF A-box emitter for retrieval.
+`verify` command (feature 34), and later an RDF A-box emitter for retrieval.
 
-The first cut of `validate` walked the raw LinkML-YAML tree directly. That
+The first cut of `verify` walked the raw LinkML-YAML tree directly. That
 couples the validator to one on-disk format: an A-box in any other format
 panschema understands (OWL individuals today; JSON later) could not be
 validated through the same path. This is the A-box analog of the problem
@@ -102,4 +102,4 @@ The validator has two layers:
 - [ADR-003: LinkML as Internal Representation](003-linkml-as-internal-representation.md)
 - [ADR-004: Reader/Writer Architecture](004-reader-writer-architecture.md) (the T-box counterpart)
 - [Feature 33: LinkML instance reader](../features/33-linkml-instance-reader.md)
-- [Feature 34: `validate --data`](../features/34-validate-instance-data.md)
+- [Feature 34: `verify --data`](../features/34-validate-instance-data.md)

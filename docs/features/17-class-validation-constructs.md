@@ -83,7 +83,7 @@ listing each key's slot tuple.
 
 **Notes:**
 - This is documentation plus a structural check; enforcement against instance data is out of scope (the consuming application's job).
-- Feature 07's `validate` surface (the AC's intended home for the structural check) isn't built yet, so the unresolved-key-slot check routes through the existing `generate`-time `eprintln!("warning: …")` path — the same stopgap [feature 23](23-cross-writer-construct-coverage-diagnostics.md)'s writer-projection warning uses. When feature 07 lands, it should call `unresolved_unique_key_slots` from the shared check path (and can gate it under `verify --strict`).
+- Feature 07's schema-only form of `verify` (the AC's intended home for the structural check) isn't built yet, so the unresolved-key-slot check routes through the existing `generate`-time `eprintln!("warning: …")` path — the same stopgap [feature 23](23-cross-writer-construct-coverage-diagnostics.md)'s writer-projection warning uses. When feature 07 lands, it should call `unresolved_unique_key_slots` from the shared check path (and can gate it under `verify --strict`).
 - Like `rules`, no graph-writer change is needed for the graph hover to show the Unique keys row: the class-node hover reuses the rendered HTML card. The graph draws no dedicated node/edge for `unique_keys`.
 
 ---

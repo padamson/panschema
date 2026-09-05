@@ -1,11 +1,11 @@
 ---
 name: panschema
-description: Use when working with LinkML or OWL schemas — generating schema documentation or a schema graph, converting a schema to RDF/Turtle, JSON Schema, OpenAPI, SHACL shapes, Rust types or Postgres DDL, validating instance data against a schema, wiring a `panschema.toml` manifest, or publishing versioned schema docs. Also use when a repo contains `panschema.toml`, `panschema-publish.toml`, or `panschema.lock`.
+description: Use when working with LinkML or OWL schemas — generating schema documentation or a schema graph, converting a schema to RDF/Turtle, JSON Schema, OpenAPI, SHACL shapes, Rust types or Postgres DDL, verifying instance data against a schema, wiring a `panschema.toml` manifest, or publishing versioned schema docs. Also use when a repo contains `panschema.toml`, `panschema-publish.toml`, or `panschema.lock`.
 ---
 
 # panschema
 
-A universal CLI for schema conversion, documentation, and validation —
+A universal CLI for schema conversion, documentation, and verification —
 pandoc for data modeling. One schema in, many artifacts out.
 
     Input file → Reader → LinkML IR → Writer → Output
@@ -22,7 +22,7 @@ OpenAPI. Any reader pairs with any writer.
 - **Generate a repo's declared artifacts** — `panschema generate` with no
   `--schema`, driven by `panschema.toml`:
   [references/manifest.md](references/manifest.md).
-- **Check instance data** — `panschema validate --schema <s> --data <d>`.
+- **Check instance data** — `panschema verify --schema <s> --data <d>`.
 - **Full CLI surface and recipes** — [references/cli.md](references/cli.md).
 
 ## Four things that reliably go wrong
@@ -53,11 +53,11 @@ worth more than skimming everything else.
 
 ## Instance data (A-boxes)
 
-To render or validate instance data, the schema needs a class marked
+To render or verify instance data, the schema needs a class marked
 `tree_root: true` whose class-ranged slots hold the records; records need an
 `identifier: true` slot. Then `--instances <file>` (repeatable for `html`)
 draws an instance graph beneath the docs, folds individuals into the RDF
-output, and runs the same conformance check `validate` runs — so nothing
+output, and runs the same conformance check `verify` runs — so nothing
 ships violations.
 
 **Identity follows LinkML's two uniqueness forms.** Mark a class's id slot
@@ -75,7 +75,7 @@ namespace — and reference it from the others.
 **A schema may declare several `tree_root` classes** — typically a scoped
 root plus a shared reference root. Each data file is read against the root
 whose slots its own top-level keys name, so the roots need distinct
-collections; a file matching none of them, or two equally, is a validation
+collections; a file matching none of them, or two equally, is a verification
 error naming the candidates rather than a silently empty dataset.
 
 **Whether the root itself becomes an individual is your decision, made by

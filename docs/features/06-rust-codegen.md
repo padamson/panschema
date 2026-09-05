@@ -23,7 +23,7 @@ This is also the first deliverable that exercises the multi-writer dispatch shap
 The Phase 3 chapter arc has the reader:
 
 1. `panschema add github:padamson/scimantic-schema@0.1.0` — schema-manager slice 4 (shipped).
-2. `panschema verify` — schema-manager slice 2 (shipped).
+2. `panschema fetch --check` — schema-manager slice 2 (shipped).
 3. Add `rust = "..."` to `[generate.scimantic]`, `panschema generate` — this feature.
 4. **Author a local schema** (e.g. `app/schema/scimantic-server.yaml` with a `User` class).
 5. **Scaffold a `panschema-publish.toml` next to it** — `panschema init --from app/schema/scimantic-server.yaml`. The v0.3 package model requires every `path:` entry to be a package (directory containing `panschema-publish.toml` + the main file it references). The `init --from` command pre-fills name + version from the LinkML file's metadata. Producer-side scaffolding shipped in schema-manager slice 4.5.

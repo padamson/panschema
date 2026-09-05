@@ -134,7 +134,7 @@ their assertions.
 **Depends on:** Slices 1–2.
 
 **Note:** Deferred in favour of the LinkML+JSON instance program (JSON-Schema
-writer → LinkML instance reader → `panschema validate --data`). The instance
+writer → LinkML instance reader → `panschema verify --data`). The instance
 graph currently renders (Slice 2) with pan/zoom but no hover-card reuse; hover
 reuse and type anchoring are picked up when the instance viz is pointed at the
 LinkML instance source, so both land together rather than being built twice.

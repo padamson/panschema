@@ -380,7 +380,7 @@ impl UntypedSlot {
         format!(
             "slot `{}` ({}) resolves with no `range`, and no `default_range` applied to it \
              at load — the outputs disagree on what that means: JSON Schema types it as \
-             `string` while RDF, SHACL, Postgres, HTML, and `validate` leave it \
+             `string` while RDF, SHACL, Postgres, HTML, and `verify` leave it \
              unconstrained; declare a range (`range:` or `slot_usage` in YAML, `rdfs:range` \
              in OWL/Turtle)",
             self.name, self.site

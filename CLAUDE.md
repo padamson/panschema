@@ -4,9 +4,9 @@ This file provides guidance for Claude Code when working on the panschema projec
 
 ## Project Overview
 
-**panschema** is a universal CLI for schema conversion, documentation, validation, and comparison. Think of it as pandoc for data modeling — supporting OWL, LinkML, JSON Schema, and more.
+**panschema** is a universal CLI for schema conversion, documentation, verification, and comparison. Think of it as pandoc for data modeling — supporting OWL, LinkML, JSON Schema, and more.
 
-**Current Status:** v0.3.0 — schema package manager (`fetch`/`verify`/`publish`, `path:` and `github:` sources), Rust codegen with selectable time crate, `generate --check` drift gate, native instance-data validation (scalar kinds, slot-level `is_a` containment, rules), slot-level `is_a` across every projection, and `default_range` materialization — on the v0.2.0 Reader/Writer architecture (OWL/Turtle + LinkML-YAML in; HTML, RDF/OWL family, graph JSON, Rust, Postgres DDL, SHACL, JSON Schema, OpenAPI out).
+**Current Status:** v0.3.0 — schema package manager (`fetch`/`fetch --check`/`publish`, `path:` and `github:` sources), Rust codegen with selectable time crate, `generate --check` drift gate, native instance-data verification via `verify` (scalar kinds, slot-level `is_a` containment, rules), slot-level `is_a` across every projection, and `default_range` materialization — on the v0.2.0 Reader/Writer architecture (OWL/Turtle + LinkML-YAML in; HTML, RDF/OWL family, graph JSON, Rust, Postgres DDL, SHACL, JSON Schema, OpenAPI out).
 
 ## Build Commands
 
@@ -32,7 +32,7 @@ panschema/                        # workspace root
 ├── .github/workflows/            # CI (test.yml) and release (release.yml)
 ├── panschema/                    # main crate — CLI + readers + writers
 │   ├── src/
-│   │   ├── main.rs               # CLI entry (generate, init, add, release, fetch, verify, validate, migrate, publish, serve, completions, styleguide)
+│   │   ├── main.rs               # CLI entry (generate, init, add, release, fetch, verify, migrate, publish, serve, completions, styleguide)
 │   │   ├── bin/mdbook_panschema.rs  # second binary: mdbook-panschema (mdbook.rs + mdbook_assets/)
 │   │   ├── io.rs                 # Reader/Writer traits + FormatRegistry
 │   │   ├── linkml.rs             # LinkML IR (SchemaDefinition, ClassDefinition, ...)

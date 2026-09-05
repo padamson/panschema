@@ -96,7 +96,7 @@ RDF must carry them (see Open Questions for the vocabulary).
 
 - [x] A schema slot annotated `asserts_absence` (value-wrapped mapping,
       optional `via_slot`) has its records' claims verified during bare
-      `validate` and `generate --strict` whenever the entry's
+      `verify` and `generate --strict` whenever the entry's
       `[check.<name>]` names `resolve_against` siblings — with the same
       verdicts, warnings, and summary counts the manifest binding
       produced.

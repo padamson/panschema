@@ -6,7 +6,7 @@ records with typed references — and render it as the instance graph, the same
 way OWL individuals do today. `generate --schema schema.yaml --instances
 data.yaml` ingests a `tree_root`-container LinkML data file; the `InstanceSet`
 becomes the hub every instance consumer (the instance graph, RDF, and later
-`validate --data`) goes through.
+`verify --data`) goes through.
 
 **User Story:** As someone building a graphRAG application over a LinkML
 ontology, I want to author (or have an LLM agent construct) a worked-example
@@ -16,7 +16,7 @@ validate it — staying entirely in LinkML + JSON, with no OWL/TTL detour.
 **Related ADR:** [003 (LinkML as internal representation)](../adr/003-linkml-as-internal-representation.md).
 Builds on the instance-graph exporter ([feature 18](18-exemplar-individuals-in-graph.md))
 and the JSON-Schema writer ([feature 32](32-json-schema-writer.md)); pairs with
-`panschema validate --data` (the next stream).
+`panschema verify --data` (the next stream).
 
 **Approach:** Vertical Slicing with Outside-In TDD.
 
@@ -53,7 +53,7 @@ and the orchestration knows the class because it asked for it. The flat
   beaujolais` with no `beaujolais` Region is a *dangling instance reference*
   (the A-box analog of the loader's dangling-schema-ref check), the feedback
   signal an agent loop uses to fix itself;
-- is validated **per record** against its class (`validate --data`);
+- is validated **per record** against its class (`verify --data`);
 - serializes to many outputs from one model: the **instance graph** (viz),
   **RDF** (into oxigraph for retrieval), and a **`tree_root` container**
   (idiomatic persistence / round-trip).
@@ -147,7 +147,7 @@ agent-self-correction signal), not silently dropped.
 
 ## Definition of Done
 
-- [x] Slices 1–3 met (slice 4 recommended); `validate --data` builds on the `InstanceSet` in its own stream.
+- [x] Slices 1–3 met (slice 4 recommended); `verify --data` builds on the `InstanceSet` in its own stream.
 - [x] `cargo nextest run` green; `cargo fmt --check`; `cargo clippy --all-targets --all-features -- -D warnings`; `cargo doc`.
 - [x] Rendered instance graph e2e-verified from a LinkML data file (not just OWL).
 - [x] README.md + CHANGELOG.md updated; [linkml-coverage.md](../linkml-coverage.md) notes `tree_root` + LinkML instance ingestion.

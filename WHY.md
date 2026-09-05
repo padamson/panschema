@@ -74,7 +74,7 @@ panschema doc ontology.ttl
 panschema convert input.ttl --to linkml
 
 # Validate a schema
-panschema validate schema.yaml
+panschema verify --schema schema.yaml
 
 # Compare two versions
 panschema diff v1.ttl v2.ttl

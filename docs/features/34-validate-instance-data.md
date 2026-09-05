@@ -1,11 +1,18 @@
-# Feature 34: `panschema validate --data` — native instance-data validator
+# Feature 34: `panschema verify --data` — native instance-data verifier
 
-**Feature:** A `validate` subcommand that checks a LinkML **instance-data**
+**Feature:** A `verify` subcommand that checks a LinkML **instance-data**
 file (an A-box) against its schema's constraints and reports every violation,
-exiting non-zero when the data doesn't conform. `panschema validate --schema
+exiting non-zero when the data doesn't conform. `panschema verify --schema
 schema.yaml --data data.yaml` walks each record against its class's effective
 slots — required/cardinality, range type, enum membership, `pattern`, numeric
 bounds — plus cross-record reference integrity.
+
+**Renamed 2026-09-05:** the subcommand shipped as `validate` and is now
+`verify`, a hard break with no alias. panschema's own verb is verification
+in the strict V&V sense — artifacts at rest checked against their specs —
+and `validate` is reserved ecosystem-wide for the strict sense — the
+litmus verdict on whether the ontology answers its competency questions. The lockfile check that used to answer to a bare `verify` is
+`fetch --check`. Text below reads `verify` throughout.
 
 **User Story:** As someone building a graphRAG application (or an LLM agent
 constructing an instance graph), I want to validate a LinkML data file against
@@ -71,12 +78,12 @@ it.
 
 ### Exit-code semantics
 
-A validator that only warns isn't a validator. `validate` reports **every**
+A verifier that only warns isn't a verifier. `verify` reports **every**
 violation it finds (not just the first), then exits **non-zero** if the data
 has any violation and **zero** when it conforms — so CI and an agent loop can
 branch on the exit code. There is no `--strict`: validation is inherently
 strict. (`generate --instances --strict` keeps its warn-or-fail behavior for
-the *rendering* path; `validate` is the dedicated conformance gate.)
+the *rendering* path; `verify` is the dedicated conformance gate.)
 
 ---
 
@@ -88,12 +95,12 @@ the *rendering* path; `validate` is the dedicated conformance gate.)
 
 **Priority:** Must Have
 
-**User Value:** `panschema validate --schema schema.yaml --data data.yaml`
+**User Value:** `panschema verify --schema schema.yaml --data data.yaml`
 reports missing required slots and dangling references per record and exits
 non-zero when the data doesn't conform, zero when it does.
 
 **Acceptance Criteria:**
-- [x] A `validate` subcommand takes `--schema <schema>` and `--data <instance-file>`, reads both, and walks each record in the `tree_root` container against its class's effective slots.
+- [x] A `verify` subcommand takes `--schema <schema>` and `--data <instance-file>`, reads both, and walks each record in the `tree_root` container against its class's effective slots.
 - [x] A required slot absent from a record is reported as a violation naming the record, its class, and the missing slot; a reference whose target names no record in the data is reported naming the record, the property, and the missing id (reusing `diagnostics::dangling_instance_references`).
 - [x] Every violation is printed; the command exits non-zero if there is at least one and zero when the data fully conforms. A data file that isn't a mapping yields a single structural violation rather than panicking.
 - [x] Tests: a conforming data file validates clean (exit zero); a missing-required-slot and a dangling-reference case each fail (unit tests + a CLI exit-code integration test). An identifier supplied as an identifier-keyed collection's map key satisfies its required identifier slot.
@@ -305,7 +312,7 @@ while the slot actually meant stayed absent.
 
 **User Value:** A conditional requirement written as a LinkML `rule` is
 machine-checked by the same command that checks everything else. Before this,
-a rule rendered in the docs and projected to SHACL but `validate` skipped it,
+a rule rendered in the docs and projected to SHACL but `verify` skipped it,
 so the only way to check one was to run an external SHACL engine over
 generated shapes — real, but not a single-tool check.
 
@@ -358,7 +365,7 @@ generated shapes — real, but not a single-tool check.
 
 ## Definition of Done
 
-- [ ] Slices 1–3 met (slice 4 recommended); `validate` enforces the constraint set the JSON-Schema writer and the class/slot cards describe.
+- [ ] Slices 1–3 met (slice 4 recommended); `verify` enforces the constraint set the JSON-Schema writer and the class/slot cards describe.
 - [ ] `cargo nextest run` green; `cargo fmt --check`; `cargo clippy --all-targets --all-features -- -D warnings`; `cargo doc`.
 - [ ] A conforming and a non-conforming checked-in fixture prove the exit-code contract end-to-end.
 - [ ] README.md + CHANGELOG.md updated; [linkml-coverage.md](../linkml-coverage.md) notes instance-data validation.

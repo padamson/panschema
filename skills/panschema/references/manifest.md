@@ -45,8 +45,8 @@ Exactly one of two forms. **`path` and `source` are different fields.**
   `panschema-publish.toml` sits at the repo root. This is the normal way to
   emit non-HTML artifacts for your own schema.
 - Caveat for that self-reference: `fetch` checksums the main file into
-  `panschema.lock`, so `verify` reports drift after every edit to a live
-  schema. Keep `fetch`/`verify` for real dependencies; `generate` never
+  `panschema.lock`, so `fetch --check` reports drift after every edit to a live
+  schema. Keep `fetch`/`fetch --check` for real dependencies; `generate` never
   consults the lockfile.
 
 ## `[generate.<name>]` — what to emit
@@ -86,15 +86,15 @@ migration directory is append-only — a runner checksums each file it has
 applied and aborts when the bytes change — so `generate` never writes there.
 Run `panschema migrate` to add to it.
 
-## `[check.<name>]` — what gets validated
+## `[check.<name>]` — what gets verified
 
-Validation policy, deliberately separate from `[generate.<name>]`: checking
+Verification policy, deliberately separate from `[generate.<name>]`: checking
 never requires declaring an output, and the policy survives deleting a
-generate block. **Bare `panschema validate`** (no flags) reads the manifest
+generate block. **Bare `panschema verify`** (no flags) reads the manifest
 and runs everything here plus instance conformance for every declared
 dataset, writing nothing — findings warn, `--strict` fails on them.
 `generate --strict` also refuses to ship what these checks reject for the
-entries it generates, and bare `validate --strict` additionally promotes
+entries it generates, and bare `verify --strict` additionally promotes
 the schema-level diagnostics `generate --strict` refuses (untyped slots,
 dangling schema references), so the check verb covers what the build verb
 would reject. A `[check.<name>]` naming no `[schemas]` entry is a
@@ -105,7 +105,7 @@ configuration error in every manifest-driven command, not a silent no-op.
 | `instances` | Datasets to check, **unioned** with the `[generate.<name>]` entry's list — this can add datasets but never hide the ones `generate` ships |
 | `resolve_against` | An **array** of sibling entries whose datasets this entry's external references must resolve into (e.g. `resolve_against = ["catalog"]`). Only references landing in a namespace a listed sibling owns are checked — outside vocabularies stay unchecked, so one schema.org IRI can't fail the run. Each checked reference must equal an IRI the sibling's datasets mint under the sibling's own rules — a `key`-scoped record mints beneath its dataset root, so `namespace + bare id` guesses miss. Unresolved references warn; `--strict` fails on them. Naming the entry itself, or a name with no `[schemas]` entry, is an error |
 | *(absence claims)* | There is no manifest key: the **schema** marks the claiming slot with an `asserts_absence` annotation (`annotations: {asserts_absence: {value: {via_slot: connecting_class}}}`, or `value: null` for a bare assertion), and claims are verified whenever `resolve_against` is set. A record listing anchors under a marked slot (references or IRI scalars) claims no single sibling record references them all — a single anchor claims no record references it at all ("references" = authored object-reference edges, not scalar IRI citations); `via_slot` (optional) names a slot whose value — a class IRI, CURIE or absolute — narrows the claim to joining records of that class. Holding is not joining at any depth: a container's collection slots and inlined children are containment, not citation (restating an already-declared record inline is a citation). A claim the check can't evaluate — a null or malformed anchor or via value, several via values, anchors collapsing to fewer distinct IRIs than authored, an anchor no sibling mints, a via naming no sibling class — is reported uncheckable, never as holding. Contradicted and uncheckable claims warn; `--strict` fails. Declaration scope follows LinkML: a top-level slot declaration binds every carrying class; an attribute's binds its class; `slot_usage` overrides. Declaration defects (unknown fields, a non-string or uncarried `via_slot`, an annotated slot no class carries) are load warnings that `--strict` refuses, and a schema declaring claims with no `resolve_against` gets a note that nothing verifies them. LinkML-YAML schemas only: a Turtle-authored schema cannot express the annotation until the RDF projection round-trips it |
-| *(anchor expansion)* | Also schema-declared, no manifest key: a slot annotated `expand_against: <slot>` reads its scheme-less values as the named slot's value on the same record concatenated with the bare value (`target_schema: https://ns/` + `cabernet` → `https://ns/cabernet`); the base resolves on the record itself or, when absent there, on the nearest containing record — a benchmark states its target once above its questions. Values carrying a `:` — absolute IRIs, CURIEs — stay as authored, so out-of-namespace anchors remain expressible. Scope and overrides follow the absence declarations. A record supplying no single string base keeps its bare values and gets a validation finding. A class-ranged slot's declaration binds when no local record of its range class (or its `is_a` family) can exist: every ranging site is itself declared external and the family holds no `tree_root`; bare values then read as external references, and the base must form an absolute IRI (a relative base is a per-record finding). Otherwise — and for a self-referential base, an uncarried base, or a non-string value — the declaration is a load warning and does not expand |
+| *(anchor expansion)* | Also schema-declared, no manifest key: a slot annotated `expand_against: <slot>` reads its scheme-less values as the named slot's value on the same record concatenated with the bare value (`target_schema: https://ns/` + `cabernet` → `https://ns/cabernet`); the base resolves on the record itself or, when absent there, on the nearest containing record — a benchmark states its target once above its questions. Values carrying a `:` — absolute IRIs, CURIEs — stay as authored, so out-of-namespace anchors remain expressible. Scope and overrides follow the absence declarations. A record supplying no single string base keeps its bare values and gets a verification finding. A class-ranged slot's declaration binds when no local record of its range class (or its `is_a` family) can exist: every ranging site is itself declared external and the family holds no `tree_root`; bare values then read as external references, and the base must form an absolute IRI (a relative base is a per-record finding). Otherwise — and for a self-referential base, an uncarried base, or a non-string value — the declaration is a load warning and does not expand |
 | `require_namespace_coverage` | Opt-in: every external reference must land in a namespace some `resolve_against` sibling owns. Off, outside vocabularies stay unchecked by design; on, a typo'd namespace — which otherwise reads as an outside vocabulary and escapes every check — warns, and `--strict` fails on it |
 
 ## `[label_sources]`
@@ -115,6 +115,6 @@ overriding the built-in map. Used to resolve labels for external groundings.
 
 ## `panschema.lock`
 
-Written by `fetch`, checked by `verify`. Records each dependency's resolved
+Written by `fetch`, checked by `fetch --check`. Records each dependency's resolved
 source and a `sha256:` checksum of its main file. `generate` does not read
 it.

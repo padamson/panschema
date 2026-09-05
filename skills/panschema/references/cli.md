@@ -6,14 +6,14 @@ bare no-subcommand form.
 | Subcommand | What it does |
 |---|---|
 | `generate` | Render a schema to an output format. With no `--schema`, discovers `panschema.toml` and generates every manifested schema |
-| `validate` | With `--schema`/`--data`: check a LinkML **instance-data** file against a schema, exiting non-zero listing every violation. With **no flags**: read `panschema.toml` and check everything it declares — conformance, cross-graph resolution, stated absences — writing nothing; findings warn, `--strict` fails on them. *Not* schema-vs-metaschema validation |
+| `verify` | With `--schema`/`--data`: check a LinkML **instance-data** file against a schema, exiting non-zero listing every violation. With **no flags**: read `panschema.toml` and check everything it declares — conformance, cross-graph resolution, stated absences — writing nothing; findings warn, `--strict` fails on them. *Not* schema-vs-metaschema verification |
 | `migrate` | Write the schema's Postgres DDL as a versioned migration file. Writes files only — it never connects to a database |
 | `publish` | Build versioned HTML docs per git ref, per `[publishing]` in `panschema-publish.toml` |
 | `serve` | Hot-reload dev server for HTML output |
 | `init` | Scaffold a `panschema-publish.toml` |
 | `add` | Add a schema dependency to `panschema.toml` and fetch it |
 | `fetch` | Resolve every dependency, checksum it, write `panschema.lock` |
-| `verify` | Re-checksum and fail on drift from the lockfile |
+| `fetch --check` | Re-checksum against the lockfile and fail on drift; writes nothing |
 | `release` | Bump the schema version in `panschema-publish.toml`, optionally commit/tag/push |
 | `completions` | Emit a shell completion script |
 | `styleguide` | Component preview page (requires the `dev` feature) |
@@ -22,7 +22,7 @@ bare no-subcommand form.
 
 - `--instances <PATH>` — repeatable. Several are only meaningful for `html`;
   the single-A-box formats reject more than one.
-- `--data <PATH>` (`validate`) — also repeatable. Each file is validated on
+- `--data <PATH>` (`verify`) — also repeatable. Each file is verified on
   its own, then the set is checked for ids that mint to the same IRI across
   files. That overlap is **reported, not an error** — a preview that is a
   subset of a worked example shares records on purpose.
@@ -66,7 +66,7 @@ bare no-subcommand form.
     panschema generate
 
     # is this instance data conformant?
-    panschema validate --schema schema/my.yaml --data data/full.yaml
+    panschema verify --schema schema/my.yaml --data data/full.yaml
 
     # first migration for a database that has never seen this schema
     panschema migrate --schema schema/my.yaml --migrations db/migrations/

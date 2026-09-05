@@ -27,10 +27,10 @@ impl From<ReleaseLevel> for panschema::publish::BumpLevel {
     }
 }
 
-/// A universal CLI for schema conversion, documentation, validation, and comparison.
+/// A universal CLI for schema conversion, documentation, verification, and comparison.
 ///
 /// One canonical spelling per action: every invocation goes through a
-/// subcommand (`generate`, `serve`, `validate`, …) — there is no bare
+/// subcommand (`generate`, `serve`, `verify`, …) — there is no bare
 /// no-subcommand form, so flags belong to exactly one command and each
 /// command's `--help` shows only its own surface.
 #[derive(Parser)]
@@ -193,23 +193,35 @@ enum Commands {
     },
     /// Resolve every schema in the manifest, compute checksums, and write
     /// `panschema.lock`. Run this when you add or update a schema dependency.
-    Fetch,
-    /// Verify that on-disk schemas match the checksums recorded in
-    /// `panschema.lock`. Errors on drift.
-    Verify,
-    /// Validate instance data, reporting every constraint violation.
+    ///
+    /// With `--check`, resolve the same way but write no lockfile: compare
+    /// what `fetch` would record against `panschema.lock` — checksum, version,
+    /// source, revision — and exit non-zero on any drift. Run that form in CI.
+    /// (Resolving a `github:` source can still populate the local cache.)
+    Fetch {
+        /// Compare against `panschema.lock` instead of writing it.
+        #[arg(long)]
+        check: bool,
+    },
+    /// Retired name for `verify`; fails, pointing at the replacement.
+    #[command(hide = true)]
+    Validate {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        rest: Vec<String>,
+    },
+    /// Verify instance data against its schema, reporting every violation.
     ///
     /// With `--schema`/`--data`, checks the given file(s) and exits non-zero
     /// on any violation. With no flags, reads `panschema.toml` instead and
     /// checks everything it declares — instance conformance for every
     /// dataset, cross-graph resolution, stated absences — writing nothing;
     /// findings warn, and `--strict` fails on them.
-    Validate {
+    Verify {
         /// Schema file (.yaml, .yml, .ttl) the data must conform to.
         #[arg(short, long, requires = "data")]
         schema: Option<PathBuf>,
         /// LinkML instance-data file (a `tree_root` container A-box).
-        /// Repeatable: several datasets are each validated, and ids that mint
+        /// Repeatable: several datasets are each verified, and ids that mint
         /// to the same IRI across them are reported.
         #[arg(short, long, requires = "schema")]
         data: Vec<PathBuf>,
@@ -573,7 +585,7 @@ fn check_resolve_against(
 
 /// Read and parse a LinkML instance-data file into the instance model —
 /// the one prologue every loading path shares, so the resolve-against
-/// check, the writers, and `validate` cannot read the same file
+/// check, the writers, and `verify` cannot read the same file
 /// differently.
 fn read_instance_set(
     schema: &panschema::linkml::SchemaDefinition,
@@ -611,7 +623,7 @@ fn load_instance_set(
             set.instances.len()
         );
     }
-    // The same conformance check `validate --data` runs, so embedding an A-box
+    // The same conformance check `verify --data` runs, so embedding an A-box
     // into an output can't ship violations the standalone command would have
     // caught. Supersedes the reference-integrity diagnostic, which it includes.
     let violations = panschema::validate::validate_instances(schema, &set);
@@ -1094,7 +1106,7 @@ fn generate_from_manifest(
             if manifest.check.contains_key(name) {
                 eprintln!(
                     "schema `{name}`: no [generate.{name}] block; skipping — its \
-                     [check.{name}] policy runs under `panschema validate`"
+                     [check.{name}] policy runs under `panschema verify`"
                 );
             } else {
                 eprintln!("schema `{name}`: no [generate.{name}] block; skipping");
@@ -1760,13 +1772,15 @@ fn relative_path(base: &Path, target: &Path) -> PathBuf {
     rel
 }
 
-/// `panschema fetch`: resolve every manifested schema, compute its checksum,
-/// and write `panschema.lock`.
-fn fetch_from_manifest() -> anyhow::Result<()> {
-    use panschema::lockfile::{LOCKFILE_FILENAME, LockEntry, Lockfile, checksum_file};
+/// What `panschema fetch` would record: every manifested schema resolved,
+/// checksummed, and described. Shared by the write and `--check` paths so
+/// they cannot disagree.
+fn resolve_lockfile(
+    manifest: &panschema::manifest::Manifest,
+    manifest_dir: &Path,
+) -> anyhow::Result<panschema::lockfile::Lockfile> {
+    use panschema::lockfile::{LockEntry, Lockfile, checksum_file};
     use panschema::source::SchemaSource;
-
-    let (manifest, manifest_dir) = load_manifest()?;
 
     let mut entries = Vec::with_capacity(manifest.schemas.len());
     for (name, dep) in &manifest.schemas {
@@ -1775,7 +1789,7 @@ fn fetch_from_manifest() -> anyhow::Result<()> {
             version,
             revision,
             ..
-        } = resolve_source(name, dep, &manifest_dir)?;
+        } = resolve_source(name, dep, manifest_dir)?;
         let source = SchemaSource::from_dep(name, dep)?;
         entries.push(LockEntry {
             name: name.clone(),
@@ -1786,8 +1800,16 @@ fn fetch_from_manifest() -> anyhow::Result<()> {
             checksum: checksum_file(&schema_path)?,
         });
     }
+    Ok(Lockfile { entries })
+}
 
-    let lockfile = Lockfile { entries };
+/// `panschema fetch`: resolve every manifested schema, compute its checksum,
+/// and write `panschema.lock`.
+fn fetch_from_manifest() -> anyhow::Result<()> {
+    use panschema::lockfile::LOCKFILE_FILENAME;
+
+    let (manifest, manifest_dir) = load_manifest()?;
+    let lockfile = resolve_lockfile(&manifest, &manifest_dir)?;
     let lock_path = manifest_dir.join(LOCKFILE_FILENAME);
     lockfile.write_to_path(&lock_path)?;
     println!(
@@ -1798,13 +1820,13 @@ fn fetch_from_manifest() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Bare `validate`: read the manifest and check everything it declares,
+/// Bare `verify`: read the manifest and check everything it declares,
 /// writing nothing — each schema's own diagnostics (the same ones
 /// `generate --strict` refuses), every declared dataset's conformance
 /// with the cross-dataset overlap notes, and the `[check.<name>]`
 /// policy. Findings warn as they stream; `--strict` fails once at the
 /// end, after every entry has reported.
-fn validate_manifest(strict: bool) -> anyhow::Result<()> {
+fn verify_manifest(strict: bool) -> anyhow::Result<()> {
     use anyhow::Context as _;
     let (manifest, manifest_dir) = load_manifest()?;
     if manifest.schemas.is_empty() {
@@ -1838,7 +1860,7 @@ fn validate_manifest(strict: bool) -> anyhow::Result<()> {
             .map(|p| manifest_dir.join(p))
             .collect();
         if !instances.is_empty() {
-            let (count, _) = validate_datasets(&schema, &instances, true, "warning: ")?;
+            let (count, _) = verify_datasets(&schema, &instances, true, "warning: ")?;
             findings += count;
         }
         problems.extend(
@@ -1856,12 +1878,12 @@ fn validate_manifest(strict: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Validate labeled datasets against a loaded schema — per-file
+/// Verify labeled datasets against a loaded schema — per-file
 /// conformance (a file that cannot be read as instance data is itself a
 /// violation, never a vacuous pass) plus the cross-dataset overlap
 /// notes — printing each violation with `prefix` and returning the
 /// count alongside the loaded sets.
-fn validate_datasets(
+fn verify_datasets(
     schema: &panschema::linkml::SchemaDefinition,
     data_paths: &[PathBuf],
     label_lines: bool,
@@ -1915,11 +1937,11 @@ fn validate_datasets(
     Ok((violation_count, sets))
 }
 
-/// Validate LinkML instance-data files against their schema, printing every
+/// Verify LinkML instance-data files against their schema, printing every
 /// violation and exiting non-zero when the data does not conform. Given more
-/// than one file, each is validated on its own and the set is then checked for
+/// than one file, each is verified on its own and the set is then checked for
 /// ids that mint to the same IRI across files.
-fn validate_data(schema_path: &Path, data_paths: &[PathBuf]) -> anyhow::Result<()> {
+fn verify_data(schema_path: &Path, data_paths: &[PathBuf]) -> anyhow::Result<()> {
     let registry = FormatRegistry::with_defaults();
     // Load through the shared path so `imports:` merge and `is_a`/mixin slots
     // resolve, matching what every other command reads.
@@ -1930,7 +1952,7 @@ fn validate_data(schema_path: &Path, data_paths: &[PathBuf]) -> anyhow::Result<(
     // One file's violations read as its own list; several need labelling, or a
     // reader cannot tell which dataset each line came from.
     let label_lines = data_paths.len() > 1;
-    let (violation_count, sets) = validate_datasets(&schema, data_paths, label_lines, "")?;
+    let (violation_count, sets) = verify_datasets(&schema, data_paths, label_lines, "")?;
 
     if violation_count == 0 {
         // With several roots in play, "conforms" alone is ambiguous: a file
@@ -1962,21 +1984,21 @@ fn validate_data(schema_path: &Path, data_paths: &[PathBuf]) -> anyhow::Result<(
         }
         Ok(())
     } else if let [only] = data_paths {
-        anyhow::bail!(
-            "{violation_count} validation error(s) in {}",
-            only.display()
-        );
+        anyhow::bail!("{violation_count} violation(s) in {}", only.display());
     } else {
         anyhow::bail!(
-            "{violation_count} validation error(s) across {} data files",
+            "{violation_count} violation(s) across {} data files",
             data_paths.len()
         );
     }
 }
 
-/// `panschema verify`: re-checksum every manifested schema and compare with
-/// the lockfile. Errors with a clear diff on mismatch.
-fn verify_from_manifest() -> anyhow::Result<()> {
+/// `panschema fetch --check`: compare what `fetch` would record with the
+/// committed lockfile and write nothing. Membership is checked first, from
+/// the two files alone, so a dependency missing from the lock is reported
+/// without resolving it; only then is every locked entry resolved and
+/// compared field by field.
+fn check_lockfile() -> anyhow::Result<()> {
     use panschema::lockfile::{LOCKFILE_FILENAME, Lockfile};
 
     let (manifest, manifest_dir) = load_manifest()?;
@@ -1987,51 +2009,71 @@ fn verify_from_manifest() -> anyhow::Result<()> {
             LOCKFILE_FILENAME
         );
     }
-    let lockfile = Lockfile::from_path(&lock_path)?;
+    let locked = Lockfile::from_path(&lock_path)?;
 
-    let mut drift = Vec::new();
-    let mut missing_in_lock = Vec::new();
-    for (name, dep) in &manifest.schemas {
-        let panschema::source::Resolved { schema_path, .. } =
-            resolve_source(name, dep, &manifest_dir)?;
-        match lockfile.entry(name) {
-            Some(entry) => {
-                if let Some(observed) = entry.checksum_drift(&schema_path)? {
-                    drift.push((name.clone(), entry.checksum.clone(), observed));
-                }
-            }
-            None => missing_in_lock.push(name.clone()),
+    let mut findings = Vec::new();
+    for name in manifest.schemas.keys() {
+        if locked.entry(name).is_none() {
+            findings.push(format!(
+                "  - `{name}`: in manifest but not in lockfile (run `panschema fetch`)"
+            ));
         }
     }
-    let lockfile_only: Vec<_> = lockfile
-        .entries
-        .iter()
-        .filter(|e| !manifest.schemas.contains_key(&e.name))
-        .map(|e| e.name.clone())
-        .collect();
-
-    if drift.is_empty() && missing_in_lock.is_empty() && lockfile_only.is_empty() {
-        println!("Verified {} schema(s).", manifest.schemas.len());
+    for entry in &locked.entries {
+        if !manifest.schemas.contains_key(&entry.name) {
+            findings.push(format!(
+                "  - `{}`: in lockfile but not in manifest (stale; run `panschema fetch` to refresh)",
+                entry.name
+            ));
+        }
+    }
+    if findings.is_empty() {
+        let fresh = resolve_lockfile(&manifest, &manifest_dir)?;
+        for want in &fresh.entries {
+            let Some(have) = locked.entry(&want.name) else {
+                continue;
+            };
+            let name = &want.name;
+            if have.checksum != want.checksum {
+                findings.push(format!(
+                    "  - `{name}`: lockfile has {}, on-disk is {}",
+                    have.checksum, want.checksum
+                ));
+            }
+            if have.version != want.version {
+                findings.push(format!(
+                    "  - `{name}`: lockfile records version {}, the package now says {}",
+                    have.version.as_deref().unwrap_or("none"),
+                    want.version.as_deref().unwrap_or("none")
+                ));
+            }
+            if have.source != want.source {
+                findings.push(format!(
+                    "  - `{name}`: lockfile records source `{}`, the manifest declares `{}`",
+                    have.source, want.source
+                ));
+            }
+            if have.revision != want.revision {
+                findings.push(format!(
+                    "  - `{name}`: lockfile records revision {}, the source resolves to {}",
+                    have.revision.as_deref().unwrap_or("none"),
+                    want.revision.as_deref().unwrap_or("none")
+                ));
+            }
+        }
+    }
+    if findings.is_empty() {
+        println!(
+            "Checked {} schema(s) against {}.",
+            manifest.schemas.len(),
+            LOCKFILE_FILENAME
+        );
         return Ok(());
     }
-
-    let mut msg = String::from("schema dependencies drifted from the lockfile:\n");
-    for (name, locked, observed) in &drift {
-        msg.push_str(&format!(
-            "  - `{name}`: lockfile has {locked}, on-disk is {observed}\n"
-        ));
-    }
-    for name in &missing_in_lock {
-        msg.push_str(&format!(
-            "  - `{name}`: in manifest but not in lockfile (run `panschema fetch`)\n"
-        ));
-    }
-    for name in &lockfile_only {
-        msg.push_str(&format!(
-            "  - `{name}`: in lockfile but not in manifest (stale; run `panschema fetch` to refresh)\n"
-        ));
-    }
-    anyhow::bail!("{msg}");
+    anyhow::bail!(
+        "schema dependencies drifted from the lockfile:\n{}",
+        findings.join("\n")
+    );
 }
 
 /// `panschema publish`: build versioned HTML docs from a
@@ -2216,15 +2258,23 @@ async fn main() -> anyhow::Result<()> {
             push,
             dry_run,
         } => release_schema(level, version.as_deref(), git, push, dry_run)?,
-        Commands::Fetch => fetch_from_manifest()?,
-        Commands::Verify => verify_from_manifest()?,
-        Commands::Validate {
+        Commands::Fetch { check } => {
+            if check {
+                check_lockfile()?
+            } else {
+                fetch_from_manifest()?
+            }
+        }
+        Commands::Validate { .. } => anyhow::bail!(
+            "`panschema validate` was renamed to `panschema verify`; the flags are unchanged"
+        ),
+        Commands::Verify {
             schema,
             data,
             strict,
         } => match schema {
-            Some(schema) => validate_data(&schema, &data)?,
-            None => validate_manifest(strict)?,
+            Some(schema) => verify_data(&schema, &data)?,
+            None => verify_manifest(strict)?,
         },
         Commands::Migrate { schema, migrations } => match (schema, migrations) {
             (Some(schema_path), Some(dir)) => {

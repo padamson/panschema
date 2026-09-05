@@ -131,10 +131,10 @@ on Linux (XDG cache dir), `~/Library/Caches/...` on macOS,
 `~/AppData/Local/...` on Windows. Shared across all projects on
 your machine (cargo-style).
 
-### `panschema verify`
+### `panschema fetch --check`
 
 ```bash
-panschema verify
+panschema fetch --check
 ```
 
 Re-checksums every schema and compares against the lockfile. Fails
@@ -151,7 +151,7 @@ loudly if:
   (run `fetch` to refresh the lockfile, or restore the manifest
   entry).
 
-Run `panschema verify` in CI to guarantee reproducibility.
+Run `panschema fetch --check` in CI to guarantee reproducibility.
 
 ### `panschema generate`
 
@@ -200,7 +200,7 @@ or `panschema add` / hand-authoring (for consumer-side).
 Standard CI shape:
 
 ```yaml
-- run: panschema verify
+- run: panschema fetch --check
 ```
 
 Run before any codegen step. If the lockfile drifted from what's
@@ -243,5 +243,5 @@ Updating to a new schema version:
 
 In CI (or anywhere reproducibility matters):
 
-1. `panschema verify` first.
+1. `panschema fetch --check` first.
 2. Then `panschema generate`.
