@@ -95,7 +95,7 @@ repos:
       - id: cargo-deny-model
         name: cargo deny (model crate)
         description: The model crate reaches no format, template, CLI, or async library
-        entry: cargo deny check --config deny-model.toml bans
+        entry: cargo deny --config deny-model.toml check bans
         language: system
         pass_filenames: false
         files: (Cargo\.toml|Cargo\.lock|deny-model\.toml)$

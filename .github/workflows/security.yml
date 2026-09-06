@@ -57,7 +57,7 @@ jobs:
       - name: Run cargo deny
         run: cargo deny check
       - name: The model crate reaches no format, template, CLI, or async library
-        run: cargo deny check --config deny-model.toml bans
+        run: cargo deny --config deny-model.toml check bans
 
   supply-chain:
     name: Supply Chain Review

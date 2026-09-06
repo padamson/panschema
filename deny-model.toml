@@ -1,6 +1,6 @@
 # The model crate's dependency policy: it reaches no format, template,
 # CLI, or async library. Run as
-#   cargo deny check --config deny-model.toml bans
+#   cargo deny --config deny-model.toml check bans
 # The default deny.toml cannot express this: `wrappers` whitelists
 # direct dependents of a banned crate, and in the whole-workspace graph
 # tokio alone has nine of them. This config instead removes the tool
