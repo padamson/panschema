@@ -21,7 +21,7 @@
 set -euo pipefail
 
 manifest=.claude-plugin/plugin.json
-skill=skills/panschema/SKILL.md
+skill=skills/panschema-development/SKILL.md
 
 # Initial commit: nothing to compare against.
 git rev-parse -q --verify HEAD >/dev/null 2>&1 || exit 0

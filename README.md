@@ -1,5 +1,7 @@
 # panschema
 
+[![skills.sh](https://skills.sh/b/padamson/panschema)](https://skills.sh/padamson/panschema)
+
 > A universal CLI for schema conversion, documentation, verification, and comparison.
 
 **Status:** Active Development
@@ -46,9 +48,19 @@ cargo install --git https://github.com/padamson/panschema --tag v0.3.0 panschema
 
 ### Working with an AI coding agent
 
-panschema ships a Claude Code skill that teaches an agent the CLI, the
-manifest format, and the traps that have actually bitten consumers. Install
-it as a plugin so it updates with the tool instead of rotting as a copy:
+panschema ships an [Agent Skill](https://agentskills.io) that teaches an
+agent the CLI, the manifest format, and the traps that have actually bitten
+consumers, so it works from what the tool does rather than from a guess:
+
+```bash
+npx skills add padamson/panschema
+```
+
+Works with [Claude Code](https://claude.ai/code),
+[Codex](https://openai.com/codex/), [Cursor](https://cursor.com), and any
+other [compatible agent](https://agentskills.io/clients).
+
+Claude Code can also install it as a plugin, which tracks this repo:
 
 ```
 /plugin marketplace add padamson/panschema
@@ -58,7 +70,8 @@ it as a plugin so it updates with the tool instead of rotting as a copy:
 `/plugin update panschema` picks up new versions of the skill. The skill
 carries its own version, bumped whenever its content changes and enforced by
 a hook, so an update reaches you rather than reporting that you are already
-current.
+current. Installing through `npx skills add` copies the skill instead, so
+re-run it (or `npx skills update`) to take a newer one.
 
 ## Quick Start
 

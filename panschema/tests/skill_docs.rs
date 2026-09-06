@@ -21,11 +21,29 @@ fn repo_root() -> PathBuf {
 }
 
 fn skill_md() -> String {
-    fs::read_to_string(repo_root().join("skills/panschema/SKILL.md")).expect("SKILL.md")
+    fs::read_to_string(repo_root().join("skills/panschema-development/SKILL.md")).expect("SKILL.md")
+}
+
+/// The skill directory's name. The frontmatter must repeat it, so the two
+/// are compared rather than both hard-coded.
+const SKILL_DIR: &str = "panschema-development";
+
+/// SKILL.md's YAML frontmatter, parsed. Any spelling the skill format
+/// accepts — a flow mapping, a quoted or bare value — has to pass.
+fn skill_frontmatter() -> serde_norway::Value {
+    let skill = skill_md();
+    let frontmatter = skill
+        .strip_prefix("---\n")
+        .and_then(|rest| rest.split_once("\n---\n"))
+        .map(|(front, _)| front.to_string())
+        .expect("SKILL.md opens with frontmatter");
+    serde_norway::from_str(&frontmatter).expect("SKILL.md frontmatter is YAML")
 }
 
 fn skill_ref(name: &str) -> String {
-    let path = repo_root().join("skills/panschema/references").join(name);
+    let path = repo_root()
+        .join("skills/panschema-development/references")
+        .join(name);
     fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
 }
 
@@ -251,7 +269,7 @@ fn the_skill_links_every_reference() {
     for name in ["cli.md", "manifest.md", "formats.md"] {
         assert!(skill.contains(name), "SKILL.md must link references/{name}");
     }
-    let refs = repo_root().join("skills/panschema/references");
+    let refs = repo_root().join("skills/panschema-development/references");
     for entry in fs::read_dir(&refs).expect("references dir") {
         let file = entry.expect("dir entry").file_name();
         let name = file.to_string_lossy();
@@ -283,16 +301,7 @@ fn the_skill_and_plugin_declare_one_version() {
         .map(|v| v.trim().trim_matches(|c| c == '"' || c == ',').to_string())
         .expect("plugin.json declares a version");
 
-    // Parsed as YAML, not scanned line by line: any spelling the skill
-    // format accepts — a flow mapping, a quoted or bare value — has to pass.
-    let skill = skill_md();
-    let frontmatter = skill
-        .strip_prefix("---\n")
-        .and_then(|rest| rest.split_once("\n---\n"))
-        .map(|(front, _)| front.to_string())
-        .expect("SKILL.md opens with frontmatter");
-    let front: serde_norway::Value =
-        serde_norway::from_str(&frontmatter).expect("SKILL.md frontmatter is YAML");
+    let front = skill_frontmatter();
     let skill_version = front
         .get("metadata")
         .and_then(|m| m.get("version"))
@@ -364,17 +373,29 @@ fn published_crates_share_the_workspace_version_and_viz_is_not_published() {
     );
 }
 
-/// The skill has to live where the plugin ships it from. A copy left under
-/// `.claude/skills/` would be project-local (visible only when working *in*
-/// panschema) and would drift from the distributed one.
+/// The skill has to live where the plugin ships it from, under a directory
+/// its own frontmatter names. A copy left under `.claude/skills/` would be
+/// project-local (visible only when working *in* panschema) and would drift
+/// from the distributed one — including a copy under the pre-rename name,
+/// which would shadow-load while documenting a CLI that no longer exists.
 #[test]
 fn the_skill_ships_from_the_plugin_directory_only() {
     assert!(
-        repo_root().join("skills/panschema/SKILL.md").is_file(),
+        repo_root()
+            .join(format!("skills/{SKILL_DIR}/SKILL.md"))
+            .is_file(),
         "the plugin's skill directory holds the skill"
     );
-    assert!(
-        !repo_root().join(".claude/skills/panschema").exists(),
-        "and no project-local duplicate shadows it"
+    assert_eq!(
+        skill_frontmatter().get("name").and_then(|n| n.as_str()),
+        Some(SKILL_DIR),
+        "the frontmatter must name the directory it sits in — both install \
+         channels key on the pair agreeing"
     );
+    for name in [SKILL_DIR, "panschema"] {
+        assert!(
+            !repo_root().join(".claude/skills").join(name).exists(),
+            "no project-local `{name}` shadows the shipped skill"
+        );
+    }
 }

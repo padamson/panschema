@@ -1,9 +1,9 @@
 ---
-name: panschema
+name: panschema-development
 description: Use when working with LinkML or OWL schemas — generating schema documentation or a schema graph, converting a schema to RDF/Turtle, JSON Schema, OpenAPI, SHACL shapes, Rust types or Postgres DDL, verifying instance data against a schema, wiring a `panschema.toml` manifest, or publishing versioned schema docs. Also use when a repo contains `panschema.toml`, `panschema-publish.toml`, or `panschema.lock`.
 license: Apache-2.0
 metadata:
-  version: "0.4.0"
+  version: "0.5.0"
 ---
 
 # panschema
@@ -109,8 +109,14 @@ undocumented, fails CI.
 
 ## Installing and updating
 
-This skill ships as a Claude Code plugin from panschema's own marketplace,
-so it is installed and updated with the tool rather than copied:
+This skill installs from either channel. The Agent Skills CLI works with
+any compatible agent and copies the skill, so re-run it (or `npx skills
+update`) to take a newer one:
+
+    npx skills add padamson/panschema
+
+Claude Code can instead install it as a plugin from panschema's own
+marketplace, which tracks this repo:
 
     /plugin marketplace add padamson/panschema
     /plugin install panschema@panschema
