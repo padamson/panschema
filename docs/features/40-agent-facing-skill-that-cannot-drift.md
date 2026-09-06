@@ -115,8 +115,11 @@ mentions everything the code offers.
   would make the skill visible only when working *inside* panschema, which
   is backwards for a skill written for consuming repos. A test asserts the
   duplicate does not come back.
-- **Two tests hold the packaging true**: the plugin version must equal the
-  crate version, and the skill must live only in the plugin directory.
+- **Two tests hold the packaging true**: the skill's `metadata.version` must
+  equal the plugin manifest's version, and the skill must live only in the
+  plugin directory. (The plugin version tracked the crate version until the
+  skill was given its own cadence; the default branch's crate version is the
+  last release, while its skill describes the next one.)
 
 **User Value:** Consuming repos can install the skill in one step and get
 updates with the tool, rather than copying a snapshot that rots.

@@ -1,6 +1,9 @@
 ---
 name: panschema
 description: Use when working with LinkML or OWL schemas — generating schema documentation or a schema graph, converting a schema to RDF/Turtle, JSON Schema, OpenAPI, SHACL shapes, Rust types or Postgres DDL, verifying instance data against a schema, wiring a `panschema.toml` manifest, or publishing versioned schema docs. Also use when a repo contains `panschema.toml`, `panschema-publish.toml`, or `panschema.lock`.
+license: Apache-2.0
+metadata:
+  version: "0.4.0"
 ---
 
 # panschema
@@ -112,9 +115,11 @@ so it is installed and updated with the tool rather than copied:
     /plugin marketplace add padamson/panschema
     /plugin install panschema@panschema
 
-Then `/plugin update panschema` picks up new releases. The plugin's version
-tracks the crate's — a test fails the build if they drift — so the skill you
-have describes the panschema you have.
+Then `/plugin update panschema` picks up new versions of this skill. It
+carries its own version, bumped whenever its content changes, so an update
+reaches you instead of reporting that you are already current. That version
+is not the tool's: the skill describes the panschema on the default branch,
+which is ahead of the last release.
 
 The binary is separate: install it with `cargo install --git
 https://github.com/padamson/panschema panschema` (or from a local checkout

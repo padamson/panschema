@@ -64,6 +64,33 @@ repos:
         types: [rust]
         pass_filenames: false
 
+      # The nextest hook above is `types: [rust]`, which does not match the
+      # skill, the plugin manifest, `Cargo.toml`, or the prose files — so a
+      # commit touching only those would skip the suite that checks them.
+      # `Cargo.toml` is the version the other two are compared against, and
+      # the docs below are scanned for the retired `panschema validate`
+      # name. Feature flag matches the nextest hook above so both share one
+      # build variant.
+      - id: skill-docs
+        name: skill docs
+        description: The shipped skill must stay true to the code it documents
+        entry: cargo nextest run -p panschema --test skill_docs --features panschema/dev
+        language: system
+        pass_filenames: false
+        files: ^(skills/|docs/|\.claude-plugin/|Cargo\.toml$|README\.md$|WHY\.md$|CLAUDE\.md$)
+
+      # plugin.json's version is the `/plugin update` gate: until it moves,
+      # an update reports "already at the latest version" and a skill edit
+      # reaches nobody. Pure bookkeeping, so easy to forget; the hook makes
+      # forgetting impossible, and keeps the frontmatter's version with it.
+      - id: skill-version-bumped
+        name: skill version bumped
+        description: Skill or plugin edits must bump the version consumers update against
+        entry: ./scripts/check-skill-version-bumped.sh
+        language: system
+        pass_filenames: false
+        files: ^(skills/|\.claude-plugin/)
+
       # Doctests deliberately run in CI only (test.yml): they are a third
       # full compilation mode for a test class that changes rarely, and
       # the commit gate already runs clippy + the full nextest suite.

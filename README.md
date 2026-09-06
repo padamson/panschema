@@ -55,9 +55,10 @@ it as a plugin so it updates with the tool instead of rotting as a copy:
 /plugin install panschema@panschema
 ```
 
-`/plugin update panschema` picks up later releases. The plugin's version
-tracks the crate's, enforced by a test, so the skill an agent reads
-describes the panschema you have installed.
+`/plugin update panschema` picks up new versions of the skill. The skill
+carries its own version, bumped whenever its content changes and enforced by
+a hook, so an update reaches you rather than reporting that you are already
+current.
 
 ## Quick Start
 

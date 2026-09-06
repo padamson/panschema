@@ -263,11 +263,18 @@ fn the_skill_links_every_reference() {
     let _ = Path::new("");
 }
 
-/// The plugin is how consumers install and update the skill, so its declared
-/// version is what they pin against. Drift from the crate version would ship
-/// a plugin claiming to be a release it isn't.
+/// The skill reaches consumers through two channels that version
+/// differently: `/plugin` gates updates on plugin.json's version, while the
+/// Agent Skills CLI has no version concept and re-pulls, so the frontmatter's
+/// `metadata.version` is the only version that channel's reader can compare.
+/// They must agree, or the two channels disagree about what is installed.
+///
+/// The skill versions on its own cadence rather than the crate's: the crate
+/// version on the default branch is the last release, while the skill there
+/// describes the next one, so pinning them made the skill claim a release
+/// whose binary it did not match.
 #[test]
-fn the_plugin_manifest_version_tracks_the_crate_version() {
+fn the_skill_and_plugin_declare_one_version() {
     let manifest = fs::read_to_string(repo_root().join(".claude-plugin/plugin.json"))
         .expect("read plugin.json");
     let plugin_version = manifest
@@ -276,13 +283,30 @@ fn the_plugin_manifest_version_tracks_the_crate_version() {
         .map(|v| v.trim().trim_matches(|c| c == '"' || c == ',').to_string())
         .expect("plugin.json declares a version");
 
-    // The crate inherits the workspace version; the compiled value is the
-    // one consumers see, whichever manifest states it.
-    let crate_version = env!("CARGO_PKG_VERSION").to_string();
+    // Parsed as YAML, not scanned line by line: any spelling the skill
+    // format accepts — a flow mapping, a quoted or bare value — has to pass.
+    let skill = skill_md();
+    let frontmatter = skill
+        .strip_prefix("---\n")
+        .and_then(|rest| rest.split_once("\n---\n"))
+        .map(|(front, _)| front.to_string())
+        .expect("SKILL.md opens with frontmatter");
+    let front: serde_norway::Value =
+        serde_norway::from_str(&frontmatter).expect("SKILL.md frontmatter is YAML");
+    let skill_version = front
+        .get("metadata")
+        .and_then(|m| m.get("version"))
+        .and_then(|v| {
+            v.as_str()
+                .map(str::to_string)
+                .or_else(|| Some(v.as_f64()?.to_string()))
+        })
+        .expect("SKILL.md declares metadata.version");
 
     assert_eq!(
-        plugin_version, crate_version,
-        "the plugin version must track the crate version — bump both together"
+        skill_version, plugin_version,
+        "the skill's metadata.version and the plugin's version must agree — \
+         bump them together"
     );
 }
 
