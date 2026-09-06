@@ -6111,7 +6111,7 @@ fn generate_merges_single_import() {
         .args([
             "generate",
             "--schema",
-            "tests/fixtures/imports/app.yaml",
+            "../panschema-model/tests/fixtures/imports/app.yaml",
             "--format",
             "html",
             "--no-graph",

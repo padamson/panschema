@@ -13,8 +13,14 @@ use sophia::api::serializer::{QuadSerializer, TripleSerializer};
 use sophia::inmem::graph::FastGraph;
 use sophia::iri::Iri;
 
+use crate::instances::{instance_iri_string, instance_iris_by_id};
 use crate::io::{IoError, IoResult, Writer};
-use crate::linkml::{ClassDefinition, SchemaDefinition, SlotDefinition};
+use crate::linkml::{SchemaDefinition, SlotDefinition};
+use crate::linkml_resolve::{
+    class_iri_by_name, class_iri_string, enum_iri_string, enum_value_iri, expand_curie_or_verbatim,
+    ontology_iri_string, permissible_value_iri, resolve_reference_iri, slot_iri_by_name,
+    slot_iri_string,
+};
 
 // Namespace constants
 pub(crate) const OWL_NS: &str = "http://www.w3.org/2002/07/owl#";
@@ -61,211 +67,6 @@ pub(crate) fn build_turtle_prefix_map(
         .collect()
 }
 
-/// The ontology's base IRI — the schema `id`, or the shared fallback.
-fn ontology_iri_string(schema: &SchemaDefinition) -> &str {
-    schema
-        .id
-        .as_deref()
-        .unwrap_or("http://example.org/ontology")
-}
-
-/// Absolute IRI for a class: its `class_uri` (CURIE-expanded) or
-/// `{ontology}#{name}`. The single source of class-IRI derivation, shared
-/// by the OWL graph and the SHACL shapes graph so a shape targets exactly
-/// the IRI the OWL output declares.
-fn class_iri_string(name: &str, class_def: &ClassDefinition, schema: &SchemaDefinition) -> String {
-    class_def
-        .class_uri
-        .as_deref()
-        .map(|c| expand_curie(c, schema))
-        .unwrap_or_else(|| fallback_element_iri(name, schema))
-}
-
-/// How an authored class designation matches a candidate set.
-pub(crate) enum ClassMatch<'a> {
-    One(&'a str),
-    Several,
-    None,
-}
-
-/// The candidate `authored` names — by exact class name, or by IRI/CURIE
-/// equality with the class's minted IRI ([`class_iri_by_name`]); the name
-/// arm is load-bearing for a class whose declared `class_uri` differs
-/// from its default-prefix mint. Several matches (duplicate `class_uri`
-/// declarations) are no match: a designation must name one thing. Type
-/// designators and the absence check's `via` narrowing both resolve
-/// through here, so the two rules cannot drift apart.
-pub(crate) fn class_named_by<'a>(
-    schema: &crate::linkml::SchemaDefinition,
-    candidates: &[&'a String],
-    authored: &str,
-) -> ClassMatch<'a> {
-    class_named_by_expanded(schema, schema, candidates, authored)
-}
-
-/// Every spelling [`class_named_by`] resolves to `class`: its name, its
-/// minted IRI, each CURIE the schema's prefixes can form for that IRI,
-/// and the bare local name the default prefix expands to it. This is
-/// the enumeration inverse of the matcher — the Rust writer compiles it
-/// into generated dispatch tables — and the equivalence test in this
-/// module keeps the two from drifting apart.
-pub(crate) fn class_spellings(
-    schema: &crate::linkml::SchemaDefinition,
-    class: &str,
-) -> Vec<String> {
-    let iri = class_iri_by_name(class, schema);
-    let mut spellings = vec![class.to_string()];
-    for (prefix, base) in &schema.prefixes {
-        if let Some(rest) = iri.strip_prefix(base.as_str()) {
-            spellings.push(format!("{prefix}:{rest}"));
-            // A bare word expands through the default prefix, so the
-            // IRI's local name under it is a spelling of its own.
-            if schema.default_prefix.as_deref() == Some(prefix) && rest != class {
-                spellings.push(rest.to_string());
-            }
-        }
-    }
-    spellings.push(iri);
-    spellings
-}
-
-/// [`class_named_by`] with the two schema roles split: an IRI or CURIE
-/// spelling of `authored` expands against `expansion_schema` — the
-/// schema whose document authored the value — while the candidates'
-/// IRIs mint from their own `schema`. A type designator's record and
-/// classes share one schema; an absence claim's `via` is authored in
-/// the claiming schema and names a sibling's class.
-pub(crate) fn class_named_by_expanded<'a>(
-    expansion_schema: &crate::linkml::SchemaDefinition,
-    schema: &crate::linkml::SchemaDefinition,
-    candidates: &[&'a String],
-    authored: &str,
-) -> ClassMatch<'a> {
-    let mut hit: Option<&'a str> = None;
-    let note = |name: &'a str, hit: &mut Option<&'a str>| -> bool {
-        if hit.is_some_and(|h| h != name) {
-            return true;
-        }
-        *hit = Some(name);
-        false
-    };
-    for candidate in candidates {
-        if candidate.as_str() == authored && note(candidate, &mut hit) {
-            return ClassMatch::Several;
-        }
-    }
-    if hit.is_none() {
-        // The IRI derivation only runs when no bare name matched — the
-        // dominant authoring style never pays for it.
-        let authored_iri = resolve_reference_iri(expansion_schema, authored);
-        for candidate in candidates {
-            if class_iri_by_name(candidate, schema) == authored_iri && note(candidate, &mut hit) {
-                return ClassMatch::Several;
-            }
-        }
-    }
-    match hit {
-        Some(name) => ClassMatch::One(name),
-        None => ClassMatch::None,
-    }
-}
-
-/// Absolute IRI for a class referenced by name — its declaration's
-/// `class_uri` when it has one, else the shared fallback. The one derivation
-/// for every site that holds a class *name* rather than its definition
-/// (parents, domains, ranges, union members, inverses), so none of them can
-/// drift from what the class's own declaration emits.
-pub(crate) fn class_iri_by_name(name: &str, schema: &SchemaDefinition) -> String {
-    match schema.classes.get(name) {
-        Some(class_def) => class_iri_string(name, class_def, schema),
-        None => fallback_element_iri(name, schema),
-    }
-}
-
-/// Absolute IRI for a slot referenced by *name* — its declaration's
-/// `slot_uri` when it has one, else the shared fallback. Resolved through
-/// the shared by-name lookup, so a reference to an attribute-declared
-/// slot (`inverse`, slot-level `is_a`) gets the IRI that attribute's own
-/// emission uses.
-fn slot_iri_by_name(name: &str, schema: &SchemaDefinition) -> String {
-    schema
-        .find_slot(name)
-        .map(|def| slot_iri_string(name, def, schema))
-        .unwrap_or_else(|| fallback_element_iri(name, schema))
-}
-
-/// LinkML's default URI for an element that declares none:
-/// `{default_prefix}:{name}`, expanded — the same rule linkml-runtime
-/// applies, so the two tools mint identical IRIs for the same schema. A
-/// schema without a usable `default_prefix` falls back to `{id}#{name}`,
-/// since LinkML has nothing to expand against there either.
-fn fallback_element_iri(name: &str, schema: &SchemaDefinition) -> String {
-    crate::linkml_resolve::expand_curie(schema, name)
-        .unwrap_or_else(|| format!("{}#{}", ontology_iri_string(schema), name))
-}
-
-/// The IRI of an enum's permissible value, matched against either the value
-/// key or its `text`, or `None` when the enum does not permit it. Mirrors the
-/// derivation used when the enum's individuals are emitted, so the A-box and
-/// the T-box name the same thing.
-fn enum_value_iri(
-    enum_name: &str,
-    enum_def: &crate::linkml::EnumDefinition,
-    authored: &str,
-    schema: &SchemaDefinition,
-) -> Option<String> {
-    let key = crate::rules::permitted_value_key(enum_def, authored)?;
-    let pv = &enum_def.permissible_values[key];
-    Some(
-        pv.meaning
-            .as_deref()
-            .map(|m| expand_curie(m, schema))
-            .unwrap_or_else(|| format!("{}/{}", enum_iri_string(enum_name, schema), key)),
-    )
-}
-
-/// Absolute IRI for an enum, mirroring how classes and slots without an
-/// explicit URI are addressed. The IR carries no `enum_uri`, so there is
-/// nothing to prefer over the derived form.
-fn enum_iri_string(name: &str, schema: &SchemaDefinition) -> String {
-    fallback_element_iri(name, schema)
-}
-
-/// Absolute IRI for a slot: its `slot_uri` (CURIE-expanded) or
-/// `{ontology}#{name}`. Shared by the OWL graph and the SHACL shapes graph.
-fn slot_iri_string(name: &str, slot_def: &SlotDefinition, schema: &SchemaDefinition) -> String {
-    slot_def
-        .slot_uri
-        .as_deref()
-        .map(|s| expand_curie(s, schema))
-        .unwrap_or_else(|| fallback_element_iri(name, schema))
-}
-
-/// Expand a CURIE-shaped name (`prefix:local`) against `schema.prefixes`
-/// into an absolute IRI. Inputs that are already absolute URLs
-/// (`http://…` / `https://…` / any scheme followed by `//`) pass through
-/// unchanged. Bare names (no colon) are returned as-is — callers handle
-/// the `default_prefix` / `id` fallback. CURIE prefixes that don't appear
-/// in `schema.prefixes` are passed through with a `tracing::warn!` so the
-/// caller doesn't silently emit a relative IRI.
-fn expand_curie(name: &str, schema: &SchemaDefinition) -> String {
-    // Delegate the expansion decision (known prefix, absolute IRI,
-    // `default_prefix` for bare names) to the one shared implementation the
-    // HTML writer also uses, so the two can't diverge. That core returns
-    // `None` when nothing resolves; RDF must still emit *something*, so pass
-    // the input through unchanged with a warning (an undeclared prefix, or a
-    // bare name with no `default_prefix`, that `build_rdf_graph` will fall
-    // back on).
-    crate::linkml_resolve::expand_curie(schema, name).unwrap_or_else(|| {
-        tracing::warn!(
-            curie = name,
-            "CURIE could not be expanded against `schema.prefixes`; \
-             emitting unexpanded IRI which may be invalid downstream"
-        );
-        name.to_string()
-    })
-}
-
 /// Emit one SKOS triple per mapping value for the subject IRI,
 /// CURIE-expanded against the schema's prefixes.
 #[allow(clippy::too_many_arguments)]
@@ -294,7 +95,7 @@ fn emit_mappings(
             .get(predicate_name)
             .map_err(|e| IoError::Parse(e.to_string()))?;
         for value in values {
-            let object_iri = make_iri(&expand_curie(value, schema))?;
+            let object_iri = make_iri(&expand_curie_or_verbatim(schema, value))?;
             triple(graph, subject_iri, predicate, &object_iri)?;
         }
     }
@@ -319,7 +120,7 @@ fn emit_aliases_and_see_also(
         triple(graph, subject_iri, skos_alt_label, alias.as_str())?;
     }
     for reference in see_also {
-        let object_iri = make_iri(&expand_curie(reference, schema))?;
+        let object_iri = make_iri(&expand_curie_or_verbatim(schema, reference))?;
         triple(graph, subject_iri, rdfs::seeAlso, &object_iri)?;
     }
     Ok(())
@@ -473,7 +274,7 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
         // the schema's prefix table rather than the local classes
         // map. Single-valued per the LinkML metamodel.
         if let Some(external) = class_def.subclass_of.as_deref() {
-            let target_iri = make_iri(&expand_curie(external, schema))?;
+            let target_iri = make_iri(&expand_curie_or_verbatim(schema, external))?;
             triple(&mut graph, &class_iri, rdfs_subclass_of, &target_iri)?;
         }
 
@@ -521,11 +322,7 @@ pub fn build_rdf_graph(schema: &SchemaDefinition) -> IoResult<FastGraph> {
 
         let mut value_iris = Vec::new();
         for (key, pv) in &enum_def.permissible_values {
-            let value_iri_str = pv
-                .meaning
-                .as_deref()
-                .map(|m| expand_curie(m, schema))
-                .unwrap_or_else(|| format!("{enum_iri_str}/{key}"));
+            let value_iri_str = permissible_value_iri(enum_name, key, pv, schema);
             let value_iri = make_iri(&value_iri_str)?;
             triple(&mut graph, &value_iri, rdf::type_, owl_named_individual_t)?;
             triple(&mut graph, &value_iri, rdf::type_, &enum_iri)?;
@@ -850,74 +647,6 @@ pub fn build_rdf_graph_with_instances(
         emit_instances(&mut graph, schema, set)?;
     }
     Ok(graph)
-}
-
-/// Absolute IRI for an instance — THE shared minting, so the RDF A-box, the
-/// graph exports, and the docs agree on which individual is which. An
-/// instance that already carries a resolved IRI (the OWL-sourced path) keeps
-/// it; otherwise the id mints against the schema's prefixes (default prefix
-/// for a bare id, any declared prefix for a CURIE id), falling back to
-/// `{ontology}#{id}` when no prefix resolves.
-pub fn instance_iri_string(schema: &SchemaDefinition, inst: &crate::instances::Instance) -> String {
-    if let Some(iri) = &inst.iri
-        && !inst.uri_unresolved
-    {
-        return iri.clone();
-    }
-    // A record named by CURIE or absolute IRI carries its own namespace — a
-    // shared-vocabulary record, or one belonging to another graph — so its
-    // dataset's scope does not apply to it. That asymmetry is what lets a
-    // scoped dataset and a shared one live under the same mechanism.
-    let names_its_own_namespace = inst.id.contains("://")
-        || inst.id.starts_with("urn:")
-        || inst
-            .id
-            .split_once(':')
-            .is_some_and(|(prefix, _)| schema.prefixes.contains_key(prefix));
-    if !names_its_own_namespace && let Some(scope) = &inst.scope {
-        return format!("{scope}/{}", inst.id);
-    }
-    resolve_reference_iri(schema, &inst.id)
-}
-
-/// The IRI a reference target (or bare record id) denotes: prefix or
-/// absolute-IRI expansion against the schema, falling back to the
-/// ontology-fragment mint for a target nothing expands. One derivation
-/// shared by instance minting, reference emission, and the cross-graph
-/// resolution check, so they cannot disagree on what a name points at.
-pub fn resolve_reference_iri(schema: &SchemaDefinition, target: &str) -> String {
-    crate::linkml_resolve::expand_curie(schema, target)
-        .unwrap_or_else(|| format!("{}#{}", ontology_iri_string(schema), target))
-}
-
-/// Every record's minted IRI keyed by its id, across `sets` — the map a
-/// reference target resolves through before falling back to
-/// [`resolve_reference_iri`], shared by the RDF emission and the
-/// cross-graph absence check so both prefer a record's real minted IRI
-/// (scoping included) over a fabricated expansion.
-pub(crate) fn instance_iris_by_id<'a>(
-    schema: &SchemaDefinition,
-    sets: &'a [crate::instances::InstanceSet],
-) -> std::collections::BTreeMap<&'a str, String> {
-    sets.iter()
-        .flat_map(|set| &set.instances)
-        .map(|i| (i.id.as_str(), instance_iri_string(schema, i)))
-        .collect()
-}
-
-/// The namespace a schema's instance minting expands bare ids under —
-/// the default prefix's expansion, or the ontology IRI's fragment base.
-/// Scoped records start with it too (their scope is itself minted under
-/// it), so this is the ownership test a cross-graph resolution check
-/// scopes references by. A record whose id names its own namespace (an
-/// absolute-IRI id) can mint outside it.
-pub fn instance_namespace(schema: &SchemaDefinition) -> String {
-    schema
-        .default_prefix
-        .as_deref()
-        .and_then(|p| schema.prefixes.get(p))
-        .cloned()
-        .unwrap_or_else(|| format!("{}#", ontology_iri_string(schema)))
 }
 
 /// Emit each instance as an `owl:NamedIndividual`: `rdf:type` per declared
@@ -1871,70 +1600,6 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    /// `class_spellings` is the enumeration inverse of `class_named_by`:
-    /// every spelling it emits must resolve to its class through the
-    /// matcher, and the matcher-accepted spellings — the bare local name
-    /// the default prefix expands included — must all be emitted.
-    #[test]
-    fn class_spellings_and_the_matcher_agree() {
-        let mut schema = crate::linkml::SchemaDefinition::new("s");
-        schema.default_prefix = Some("ex".to_string());
-        schema
-            .prefixes
-            .insert("ex".to_string(), "https://example.org/x/".to_string());
-        schema
-            .classes
-            .insert("Lamp".to_string(), ClassDefinition::new("Lamp"));
-        // A class whose `class_uri` local name differs from its class
-        // name answers to both.
-        let mut bar = ClassDefinition::new("Bar");
-        bar.class_uri = Some("ex:Foo".to_string());
-        schema.classes.insert("Bar".to_string(), bar);
-
-        for class in ["Lamp", "Bar"] {
-            let spellings = class_spellings(&schema, class);
-            let class_string = class.to_string();
-            let candidates = [&class_string];
-            for spelling in &spellings {
-                assert!(
-                    matches!(
-                        class_named_by(&schema, &candidates, spelling),
-                        ClassMatch::One(_)
-                    ),
-                    "every emitted spelling resolves through the matcher: `{spelling}`"
-                );
-            }
-        }
-        let bar_spellings = class_spellings(&schema, "Bar");
-        for accepted in ["Bar", "Foo", "ex:Foo", "https://example.org/x/Foo"] {
-            assert!(
-                bar_spellings.iter().any(|s| s == accepted),
-                "the matcher accepts `{accepted}`, so the enumeration must emit it; got: \
-                 {bar_spellings:?}"
-            );
-        }
-
-        // Without a default prefix there is no bare-word expansion, so
-        // the bare local name must not be emitted — the matcher would
-        // resolve it to nothing.
-        schema.default_prefix = None;
-        let mut bar = ClassDefinition::new("Bar");
-        bar.class_uri = Some("ex:Foo".to_string());
-        schema.classes.insert("Bar".to_string(), bar);
-        let spellings = class_spellings(&schema, "Bar");
-        let bar_string = "Bar".to_string();
-        for spelling in &spellings {
-            assert!(
-                matches!(
-                    class_named_by(&schema, &[&bar_string], spelling),
-                    ClassMatch::One(_)
-                ),
-                "every emitted spelling must still resolve without a default prefix: \
-                 `{spelling}`; got: {spellings:?}"
-            );
-        }
-    }
-
     // ========== A-box emission ==========
 
     /// Build the wine-shaped schema + one grounded instance pair inline:
@@ -2024,36 +1689,6 @@ mod tests {
     }
 
     #[test]
-    fn instance_iri_uses_a_resolved_iri_but_never_an_unresolved_one() {
-        let (schema, _) = abox_fixture();
-        let mut inst = crate::instances::Instance {
-            id: "b1".to_string(),
-            iri: Some("https://upstream.example/b1".to_string()),
-            uri_unresolved: false,
-            label: "b1".to_string(),
-            description: None,
-            types: vec![],
-            literals: vec![],
-            references: vec![],
-            slot_values: vec![],
-            scope: None,
-        };
-        assert_eq!(
-            instance_iri_string(&schema, &inst),
-            "https://upstream.example/b1",
-            "a resolved carried IRI wins over minting"
-        );
-        // An unresolved IRI (a curie whose prefix never expanded) must NOT
-        // be used verbatim — the id mints instead.
-        inst.uri_unresolved = true;
-        assert_eq!(
-            instance_iri_string(&schema, &inst),
-            "https://example.org/cellar/b1",
-            "an unresolved IRI falls back to minting from the id"
-        );
-    }
-
-    #[test]
     fn a_cross_graph_reference_emits_as_an_iri_object_not_a_literal() {
         // The whole point of a cross-graph edge is that another graph can
         // join on it. A literal `"catalog:aws"` joins with nothing.
@@ -2088,22 +1723,6 @@ mod tests {
             objects,
             vec!["https://example.org/catalog/vault".to_string()],
             "and the CURIE expands against the prefix the schema declares"
-        );
-    }
-
-    #[test]
-    fn instance_namespace_is_the_minting_base() {
-        // The ownership test cross-graph resolution scopes by must be the
-        // base bare-id minting expands under — the default prefix's
-        // expansion, or the ontology fragment base without one.
-        let (schema, _) = abox_fixture();
-        assert_eq!(instance_namespace(&schema), "https://example.org/cellar/");
-        let mut bare = SchemaDefinition::new("bare");
-        bare.id = Some("https://example.org/bare".to_string());
-        assert_eq!(
-            instance_namespace(&bare),
-            "https://example.org/bare#",
-            "no default prefix falls back to the ontology fragment base"
         );
     }
 
@@ -3097,65 +2716,6 @@ mod tests {
             "http://purl.obolibrary.org/obo/".to_string(),
         );
         schema
-    }
-
-    #[test]
-    fn expand_curie_expands_known_prefix_to_absolute_iri() {
-        let schema = schema_with_prefixes();
-        assert_eq!(
-            expand_curie("cco:ont00000005", &schema),
-            "https://www.commoncoreontologies.org/ont00000005"
-        );
-        assert_eq!(
-            expand_curie("obo:BFO_0000015", &schema),
-            "http://purl.obolibrary.org/obo/BFO_0000015"
-        );
-    }
-
-    #[test]
-    fn expand_curie_passes_absolute_url_through_unchanged() {
-        // A class_uri that's already a full URL must not be re-expanded
-        // (would corrupt the IRI by treating part of the URL as a prefix).
-        let schema = schema_with_prefixes();
-        let already_absolute = "http://example.org/already/absolute";
-        assert_eq!(expand_curie(already_absolute, &schema), already_absolute);
-    }
-
-    #[test]
-    fn expand_curie_passes_bare_name_through_unchanged() {
-        // Without a `default_prefix`, a bare name has no expansion, so it
-        // passes through and the caller (build_rdf_graph) applies the
-        // `{ontology}#{name}` fallback.
-        let schema = schema_with_prefixes();
-        assert_eq!(expand_curie("BareName", &schema), "BareName");
-    }
-
-    #[test]
-    fn expand_curie_uses_default_prefix_for_bare_names() {
-        // With a `default_prefix`, a bare name expands against it — the same
-        // decision the HTML writer's shared `linkml_resolve::expand_curie`
-        // makes, so the two can't disagree.
-        let mut schema = SchemaDefinition::new("s");
-        schema
-            .prefixes
-            .insert("ex".to_string(), "http://example.org/".to_string());
-        schema.default_prefix = Some("ex".to_string());
-        assert_eq!(expand_curie("Thing", &schema), "http://example.org/Thing");
-    }
-
-    #[test]
-    fn expand_curie_unknown_prefix_passes_through_with_warning() {
-        // A CURIE whose prefix isn't in `schema.prefixes` is suspicious
-        // but not necessarily wrong (e.g. user typo, or external prefix
-        // not yet declared). Pass through so build_rdf_graph can still
-        // produce output; the tracing::warn alerts the user. The
-        // observable behaviour here is the pass-through; the warn fires
-        // via tracing and is checked via integration tests if needed.
-        let schema = schema_with_prefixes();
-        assert_eq!(
-            expand_curie("undeclared:thing", &schema),
-            "undeclared:thing"
-        );
     }
 
     #[test]

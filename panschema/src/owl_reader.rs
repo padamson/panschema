@@ -992,6 +992,8 @@ impl Reader for OwlReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::instances::InstanceSet;
+    use crate::io::Reader;
     use std::path::PathBuf;
 
     fn reference_ontology_path() -> PathBuf {
@@ -1961,5 +1963,36 @@ ex:morgon a owl:NamedIndividual, ex:Wine ; rdfs:label "Morgon" .
         // Verify we got the same number of properties as the direct parser
         let original = OwlReader::parse_ontology(&reference_ontology_path()).unwrap();
         assert_eq!(schema.slots.len(), original.properties.len());
+    }
+
+    #[test]
+    fn from_owl_annotations_builds_typed_records_with_refs_and_literals() {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/instance_graph.ttl");
+        let schema = OwlReader::new().read(&fixture).expect("read fixture");
+        let set = InstanceSet::from_owl_annotations(&schema);
+
+        assert!(
+            !set.is_empty(),
+            "a schema with individuals yields a non-empty set"
+        );
+        assert_eq!(set.instances.len(), 3, "three individuals → three records");
+
+        let wine = set
+            .instances
+            .iter()
+            .find(|i| i.id == "chateauMorgon")
+            .expect("wine instance");
+        assert_eq!(wine.types, ["Wine"], "typed as its rdf:type class");
+        // The object assertion is a typed reference (an edge), by target id.
+        assert_eq!(wine.references.len(), 1);
+        assert_eq!(wine.references[0].property, "from region");
+        assert_eq!(wine.references[0].target, "beaujolais");
+        // The datatype assertion is a literal, not a reference.
+        assert_eq!(wine.literals, [("color".to_string(), "red".to_string())]);
+
+        // An individual with no rdfs:label gets the capitalize-first label.
+        let napa = set.instances.iter().find(|i| i.id == "napa").expect("napa");
+        assert_eq!(napa.label, "Napa");
     }
 }

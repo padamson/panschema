@@ -57,6 +57,11 @@ exclude_globs = [
     # `main -> Ok(())` mutant can't be killed; the real logic lives in
     # the library and is mutation-covered there.
     "panschema/src/bin/mdbook_panschema.rs",
+    # The dev server is a module of the binary, not the library (main.rs
+    # declares it), so its own tests live in the binary's test target and a
+    # `--lib` mutant run never executes them — every mutant here would
+    # survive regardless of real coverage.
+    "panschema/src/server.rs",
     # Same rationale for panschema's own CLI entry layer: main.rs is
     # arg parsing + dispatch into the mutation-covered lib, and its
     # behavior (exit codes, output) is exercised by the integration

@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use crate::io::{IoError, IoResult, Reader};
+use crate::io::{IoError, IoResult, Reader, ReaderLookup};
 use crate::linkml::{SchemaDefinition, SlotDefinition};
 
 /// Reader for native LinkML YAML schemas
@@ -22,6 +22,22 @@ impl YamlReader {
 impl Default for YamlReader {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// The lookup of a consumer that reads LinkML YAML and nothing else: a
+/// path with any other extension is unsupported, never misread as YAML.
+impl ReaderLookup for YamlReader {
+    fn reader_for_path(&self, path: &Path) -> IoResult<&dyn Reader> {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .ok_or_else(|| IoError::UnknownExtension(path.display().to_string()))?;
+        if self.supports_extension(ext) {
+            Ok(self)
+        } else {
+            Err(IoError::UnsupportedFormat(ext.to_string()))
+        }
     }
 }
 
@@ -505,5 +521,19 @@ types:
         )
         .expect("Should parse type without explicit name");
         assert_eq!(schema.types.get("age_t").unwrap().name, "age_t");
+    }
+
+    #[test]
+    fn a_yaml_only_lookup_refuses_other_extensions() {
+        let lookup = YamlReader::new();
+        assert!(lookup.reader_for_path(Path::new("schema.yaml")).is_ok());
+        assert!(matches!(
+            lookup.reader_for_path(Path::new("vocab.ttl")),
+            Err(IoError::UnsupportedFormat(ext)) if ext == "ttl"
+        ));
+        assert!(matches!(
+            lookup.reader_for_path(Path::new("noext")),
+            Err(IoError::UnknownExtension(_))
+        ));
     }
 }

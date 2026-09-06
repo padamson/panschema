@@ -1,0 +1,13 @@
+name: dangling_range
+id: https://example.org/dangling
+default_prefix: dr
+prefixes:
+  dr: https://example.org/dangling/
+
+classes:
+  Order:
+    name: Order
+    attributes:
+      customer:
+        name: customer
+        range: Customer

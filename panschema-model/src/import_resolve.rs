@@ -48,7 +48,7 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
-use crate::io::{IoError, IoResult, ReaderLookup};
+use crate::io::{IoError, ReaderLookup};
 use crate::linkml::SchemaDefinition;
 
 /// The single load path — read the input, then fold in any local `imports:` —
@@ -57,12 +57,42 @@ use crate::linkml::SchemaDefinition;
 /// rendered its imports only under `generate`; `serve` and `publish` read the
 /// root file alone.
 ///
-/// A collision the root wins is reported to stderr as a warning; a collision
-/// between two imports (no principled winner) fails with an [`IoError::Parse`].
+/// A collision the root wins is returned as a warning on the
+/// [`LoadedSchema`]; a collision between two imports (no principled winner)
+/// fails with an [`IoError::Parse`].
 /// Import-resolution failures — a missing file, a cycle, a path escaping the
 /// schema directory — also surface as an [`IoError::Parse`].
-pub fn load_schema(input: &Path, registry: &dyn ReaderLookup) -> IoResult<SchemaDefinition> {
+pub fn load_schema(input: &Path, registry: &dyn ReaderLookup) -> Result<LoadedSchema, LoadFailure> {
     load_schema_with_deps(input, registry, &BTreeMap::new())
+}
+
+/// A loaded schema and the warnings its load raised, in the order a
+/// command reports them: what the readers dropped (the root's first, then
+/// each import's, prefixed by its path), which import collisions the root
+/// won, then the schema-level load diagnostics. The library returns them;
+/// whoever called decides how to surface them.
+#[derive(Debug)]
+pub struct LoadedSchema {
+    pub schema: SchemaDefinition,
+    pub warnings: Vec<String>,
+}
+
+/// A load that failed after raising warnings. The warnings describe what
+/// was read before the failure, so a command reports them ahead of the
+/// error just as it would have on success.
+#[derive(Debug)]
+pub struct LoadFailure {
+    pub warnings: Vec<String>,
+    pub error: IoError,
+}
+
+impl From<IoError> for LoadFailure {
+    fn from(error: IoError) -> Self {
+        LoadFailure {
+            warnings: Vec::new(),
+            error,
+        }
+    }
 }
 
 /// Like [`load_schema`], but also resolves `imports:` entries that name a
@@ -77,14 +107,12 @@ pub fn load_schema_with_deps(
     input: &Path,
     registry: &dyn ReaderLookup,
     deps: &BTreeMap<String, PathBuf>,
-) -> IoResult<SchemaDefinition> {
+) -> Result<LoadedSchema, LoadFailure> {
     let reader = registry.reader_for_path(input)?;
     let (mut schema, reader_warnings) = reader.read_with_warnings(input)?;
     // Read-time drops — constructs the IR cannot hold — surface with the
     // other load warnings rather than vanishing.
-    for warning in &reader_warnings {
-        eprintln!("warning: {warning}");
-    }
+    let mut warnings: Vec<String> = reader_warnings;
     // Slot inheritance first — an inherited explicit range beats the
     // file's default — then each file's `default_range` fills its own
     // still-rangeless slots, before any merging. Same pair runs in
@@ -94,8 +122,17 @@ pub fn load_schema_with_deps(
     crate::linkml_resolve::materialize_default_range(&mut schema);
 
     if !schema.imports.is_empty() {
-        let report = resolve_imports(&mut schema, input, registry, deps)
-            .map_err(|e| IoError::Parse(e.to_string()))?;
+        let mut report = ImportReport::default();
+        if let Err(e) = resolve_imports_into(&mut schema, input, registry, deps, &mut report) {
+            // The files read before the failure already raised warnings;
+            // they go out with the error.
+            warnings.append(&mut report.warnings);
+            return Err(LoadFailure {
+                warnings,
+                error: IoError::Parse(e.to_string()),
+            });
+        }
+        warnings.append(&mut report.warnings);
         // Split collisions by who won. When the root (importing) schema wins,
         // the override is deterministic and author-controlled — warn and
         // proceed. When an *earlier import* won, the two definitions come
@@ -105,13 +142,13 @@ pub fn load_schema_with_deps(
         let mut conflicts = Vec::new();
         for collision in &report.collisions {
             match collision.kept_from.as_deref() {
-                None => eprintln!(
-                    "warning: {kind} `{name}` defined differently in `{dropped}` and the root \
+                None => warnings.push(format!(
+                    "{kind} `{name}` defined differently in `{dropped}` and the root \
                      schema; keeping the root's definition",
                     kind = collision.kind,
                     name = collision.name,
                     dropped = collision.dropped_from.display(),
-                ),
+                )),
                 Some(kept) => conflicts.push(format!(
                     "conflicting definitions of {kind} `{name}`: `{kept}` and `{dropped}` define \
                      it differently and neither is the importing schema, so there is no safe \
@@ -124,7 +161,10 @@ pub fn load_schema_with_deps(
             }
         }
         if !conflicts.is_empty() {
-            return Err(IoError::Parse(conflicts.join("\n")));
+            return Err(LoadFailure {
+                warnings,
+                error: IoError::Parse(conflicts.join("\n")),
+            });
         }
     }
 
@@ -138,13 +178,11 @@ pub fn load_schema_with_deps(
     crate::linkml_resolve::materialize_deferred_default_range(&mut schema);
 
     // Schema-level diagnostics that don't depend on the output format, so every
-    // command surfaces them — previously only `generate` did. `--strict`
-    // enforcement and format-specific warnings stay at the `generate` site.
-    for message in crate::diagnostics::schema_load_diagnostics(&schema) {
-        eprintln!("warning: {message}");
-    }
+    // command surfaces them. `--strict` enforcement and format-specific
+    // warnings stay at the `generate` site.
+    warnings.extend(crate::diagnostics::schema_load_diagnostics(&schema));
 
-    Ok(schema)
+    Ok(LoadedSchema { schema, warnings })
 }
 
 /// Extensions tried, in order, when an `imports:` entry has no
@@ -227,6 +265,9 @@ pub struct ImportReport {
     /// once here even though two importers reference it; a skipped
     /// duplicate is never re-added.
     pub loaded_files: Vec<PathBuf>,
+    /// What each imported file's reader dropped, each prefixed by the
+    /// file's path, in resolution order.
+    pub warnings: Vec<String>,
 }
 
 /// Resolve `root.imports` in place: load each imported local file and
@@ -249,6 +290,19 @@ pub fn resolve_imports(
     deps: &BTreeMap<String, PathBuf>,
 ) -> Result<ImportReport, ImportError> {
     let mut report = ImportReport::default();
+    resolve_imports_into(root, root_path, registry, deps, &mut report)?;
+    Ok(report)
+}
+
+/// [`resolve_imports`] writing into a caller's report, so what was read
+/// before a failure — and the warnings it raised — survives the error.
+fn resolve_imports_into(
+    root: &mut SchemaDefinition,
+    root_path: &Path,
+    registry: &dyn ReaderLookup,
+    deps: &BTreeMap<String, PathBuf>,
+    report: &mut ImportReport,
+) -> Result<(), ImportError> {
     let base_dir = root_path
         .parent()
         .map(Path::to_path_buf)
@@ -273,11 +327,11 @@ pub fn resolve_imports(
         &root_dir,
         registry,
         deps,
-        &mut report,
+        report,
         &mut visiting,
         &mut loaded,
     )?;
-    Ok(report)
+    Ok(())
 }
 
 /// Recursive worker. Loads and merges each entry of `schema.imports`
@@ -384,9 +438,11 @@ fn resolve_into(
                     path: resolved.clone(),
                     source,
                 })?;
-        for warning in &reader_warnings {
-            eprintln!("warning: {}: {warning}", resolved.display());
-        }
+        report.warnings.extend(
+            reader_warnings
+                .iter()
+                .map(|warning| format!("{}: {warning}", resolved.display())),
+        );
         // This file's own inheritance and `default_range` type this file's
         // own slots — applied before recursing so a transitive import
         // (normalized at its own read, then merged in below) is never
@@ -564,7 +620,112 @@ fn merge_schema(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::io::FormatRegistry;
+    use crate::io::{IoResult, Reader};
+    use crate::yaml_reader::YamlReader;
+
+    /// Most of these tests are about what loads, not what it warns; the
+    /// warnings have their own tests below.
+    fn load_schema(input: &Path, registry: &dyn ReaderLookup) -> IoResult<SchemaDefinition> {
+        super::load_schema(input, registry)
+            .map(|loaded| loaded.schema)
+            .map_err(|failure| failure.error)
+    }
+
+    /// A YAML reader that reports one dropped construct per file, the way a
+    /// format reader does for what the IR cannot hold.
+    struct DroppingYaml(YamlReader);
+
+    impl Reader for DroppingYaml {
+        fn read(&self, input: &Path) -> IoResult<SchemaDefinition> {
+            self.0.read(input)
+        }
+        fn read_with_warnings(&self, input: &Path) -> IoResult<(SchemaDefinition, Vec<String>)> {
+            Ok((self.0.read(input)?, vec!["dropped a construct".to_string()]))
+        }
+        fn supported_extensions(&self) -> &[&str] {
+            self.0.supported_extensions()
+        }
+    }
+
+    impl ReaderLookup for DroppingYaml {
+        fn reader_for_path(&self, _path: &Path) -> IoResult<&dyn Reader> {
+            Ok(self)
+        }
+    }
+
+    fn write_root_and_import(dir: &Path) -> PathBuf {
+        std::fs::write(
+            dir.join("w.yaml"),
+            "name: w\nid: https://example.org/w\nclasses:\n  Widget:\n    description: theirs\n",
+        )
+        .unwrap();
+        let root = dir.join("root.yaml");
+        std::fs::write(
+            &root,
+            "name: root\nid: https://example.org/root\nimports:\n  - w\nclasses:\n  Widget:\n    description: ours\n",
+        )
+        .unwrap();
+        root
+    }
+
+    /// A load returns, in order, what the root's reader dropped, what each
+    /// import's reader dropped prefixed by that file, and the collision the
+    /// root won — the same lines a command prints.
+    #[test]
+    fn a_load_returns_its_warnings_in_report_order() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = write_root_and_import(tmp.path());
+        let loaded = super::load_schema(&root, &DroppingYaml(YamlReader::new())).expect("load");
+        let import = tmp.path().join("w.yaml");
+        assert_eq!(
+            loaded.warnings,
+            vec![
+                "dropped a construct".to_string(),
+                format!("{}: dropped a construct", import.display()),
+                format!(
+                    "class `Widget` defined differently in `{}` and the root schema; keeping \
+                     the root's definition",
+                    import.display()
+                ),
+            ]
+        );
+    }
+
+    /// A load that fails still returns the warnings raised before the
+    /// failure, so nothing a reader dropped goes unreported.
+    #[test]
+    fn a_failed_load_carries_the_warnings_raised_before_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("w.yaml"),
+            "name: w\nid: https://example.org/w\n",
+        )
+        .unwrap();
+        let root = tmp.path().join("root.yaml");
+        std::fs::write(
+            &root,
+            "name: root\nid: https://example.org/root\nimports:\n  - w\n  - missing\n",
+        )
+        .unwrap();
+        let failure = super::load_schema(&root, &DroppingYaml(YamlReader::new()))
+            .expect_err("the missing import fails the load");
+        assert!(
+            failure.error.to_string().contains("missing"),
+            "the error names the import: {}",
+            failure.error
+        );
+        assert_eq!(
+            failure.warnings,
+            vec![
+                "dropped a construct".to_string(),
+                format!(
+                    "{}: dropped a construct",
+                    tmp.path().join("w.yaml").display()
+                ),
+            ],
+            "the root's and the read import's warnings survive the failure"
+        );
+    }
 
     fn fixtures_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/imports")
@@ -580,7 +741,7 @@ mod tests {
     /// Load a fixture as the root schema via the registry, the same way
     /// `generate` does before resolving imports.
     fn read_root(name: &str) -> (SchemaDefinition, PathBuf) {
-        let registry = FormatRegistry::with_defaults();
+        let registry = YamlReader::new();
         let path = fixtures_dir().join(name);
         let reader = registry.reader_for_path(&path).expect("reader for fixture");
         let schema = reader.read(&path).expect("read fixture");
@@ -592,7 +753,7 @@ mod tests {
         // `app.yaml` imports `common.yaml`, which defines `Address`.
         // After resolution the merged root carries `Address` even
         // though the root file never declared it.
-        let registry = FormatRegistry::with_defaults();
+        let registry = YamlReader::new();
         let (mut root, path) = read_root("app.yaml");
         assert!(
             !root.classes.contains_key("Address"),
@@ -643,7 +804,7 @@ mod tests {
         )
         .unwrap();
 
-        let registry = FormatRegistry::with_defaults();
+        let registry = YamlReader::new();
         let reader = registry.reader_for_path(&root_path).unwrap();
         let mut root = reader.read(&root_path).unwrap();
 
@@ -664,7 +825,7 @@ mod tests {
         // `cycle_a` imports `cycle_b`, which imports `cycle_a` back.
         // Resolution errors with a cycle, and crucially returns rather
         // than looping forever.
-        let registry = FormatRegistry::with_defaults();
+        let registry = YamlReader::new();
         let (mut root, path) = read_root("cycle_a.yaml");
 
         let err = resolve_imports(&mut root, &path, &registry, &no_deps())
@@ -679,7 +840,7 @@ mod tests {
     fn resolve_imports_root_wins_on_collision() {
         // A root that itself defines a name the import also defines
         // keeps its own definition and records the collision.
-        let registry = FormatRegistry::with_defaults();
+        let registry = YamlReader::new();
         let (mut root, path) = read_root("app.yaml");
         // Inject a root-side `Address` so it collides with the import's.
         let mut root_address = crate::linkml::ClassDefinition::new("Address");
@@ -714,7 +875,7 @@ mod tests {
         // `diamond_a` imports B and C; B and C both import D. D's
         // elements appear exactly once and D is processed exactly once —
         // a single recorded origin for `DThing`, not a duplicate.
-        let registry = FormatRegistry::with_defaults();
+        let registry = YamlReader::new();
         let (mut root, path) = read_root("diamond_a.yaml");
 
         let report =
@@ -754,7 +915,7 @@ mod tests {
         // `conflict_root` imports two files that each define `Widget`
         // incompatibly. The first import's definition is kept; the
         // second's is dropped. The recorded collision names both files.
-        let registry = FormatRegistry::with_defaults();
+        let registry = YamlReader::new();
         let (mut root, path) = read_root("conflict_root.yaml");
 
         let report =
@@ -787,7 +948,7 @@ mod tests {
         // `identical_root` imports two files that define `Gadget`
         // byte-identically. The two definitions agree, so they unify
         // silently: one merged element, no collision.
-        let registry = FormatRegistry::with_defaults();
+        let registry = YamlReader::new();
         let (mut root, path) = read_root("identical_root.yaml");
 
         let report =
@@ -851,7 +1012,7 @@ mod tests {
         // `tcycle_a` → `tcycle_b` → `tcycle_c` → `tcycle_a`. Cycle
         // detection holds across the full transitive graph, not just
         // direct self-imports: resolution errors rather than looping.
-        let registry = FormatRegistry::with_defaults();
+        let registry = YamlReader::new();
         let (mut root, path) = read_root("tcycle_a.yaml");
 
         let err = resolve_imports(&mut root, &path, &registry, &no_deps())
@@ -869,7 +1030,7 @@ mod tests {
         // to a remote URI. That CURIE names a well-known module, not a
         // local file, so resolution skips it as a no-op: no error, and
         // the root's own elements survive with `imports` cleared.
-        let registry = FormatRegistry::with_defaults();
+        let registry = YamlReader::new();
         let mut root = SchemaDefinition::new("builtin_importer");
         root.prefixes
             .insert("linkml".into(), "https://w3id.org/linkml/".into());
@@ -898,7 +1059,7 @@ mod tests {
         // prefix expansion: a schema that imports `linkml:types` without
         // declaring the `linkml` prefix must still skip it, never fall
         // through to local-file resolution.
-        let registry = FormatRegistry::with_defaults();
+        let registry = YamlReader::new();
         let mut root = SchemaDefinition::new("builtin_importer");
         // Deliberately no `linkml` prefix declared.
         root.imports = vec!["linkml:types".into()];
@@ -916,7 +1077,7 @@ mod tests {
         // bare `http(s)` URL, and a CURIE whose declared prefix expands
         // to a remote URI. A prefix that does *not* expand to a remote
         // URI is left for local resolution (covered elsewhere).
-        let registry = FormatRegistry::with_defaults();
+        let registry = YamlReader::new();
         let mut root = SchemaDefinition::new("remote_importer");
         root.prefixes
             .insert("ex".into(), "https://example.org/".into());
@@ -937,7 +1098,7 @@ mod tests {
         // A built-in CURIE and a local file in the same `imports:` list:
         // the CURIE is skipped, the local file still resolves and merges.
         // The fix must not over-skip genuine local imports.
-        let registry = FormatRegistry::with_defaults();
+        let registry = YamlReader::new();
         let (mut root, path) = read_root("app.yaml");
         // Prepend a standard linkml: import to the local `common` import.
         root.prefixes
@@ -960,7 +1121,7 @@ mod tests {
     fn resolve_imports_errors_on_unresolvable_entry() {
         // An import naming no local file is reported, not silently
         // dropped and not a panic.
-        let registry = FormatRegistry::with_defaults();
+        let registry = YamlReader::new();
         let mut root = SchemaDefinition::new("orphan_importer");
         root.imports = vec!["does_not_exist".into()];
         let root_path = fixtures_dir().join("orphan_importer.yaml");
@@ -983,7 +1144,7 @@ mod tests {
         // An `imports:` entry that is not a local file but names a manifest
         // dependency resolves to that dependency's schema in a *separate*
         // package tree (outside the app's own containment root) and merges.
-        let registry = FormatRegistry::with_defaults();
+        let registry = YamlReader::new();
         let tmp = tempfile::tempdir().expect("tempdir");
         let base_dir = tmp.path().join("base");
         let app_dir = tmp.path().join("app");
@@ -1021,7 +1182,7 @@ mod tests {
     fn local_import_wins_over_a_same_named_dependency() {
         // Precedence: a real local `common.yaml` is never shadowed by a
         // dependency that happens to share its name.
-        let registry = FormatRegistry::with_defaults();
+        let registry = YamlReader::new();
         let tmp = tempfile::tempdir().expect("tempdir");
         let app_dir = tmp.path().join("app");
         let other_dir = tmp.path().join("other");
@@ -1066,7 +1227,7 @@ mod tests {
         // A CURIE in the imported dependency's own namespace must expand
         // after the merge: the dependency's `prefixes` union into the root,
         // so the shared `expand_curie` resolves a cross-namespace reference.
-        let registry = FormatRegistry::with_defaults();
+        let registry = YamlReader::new();
         let tmp = tempfile::tempdir().expect("tempdir");
         let base_dir = tmp.path().join("base");
         let app_dir = tmp.path().join("app");
@@ -1108,7 +1269,7 @@ mod tests {
         // `conflict_root` imports two files that define `Widget`
         // incompatibly; neither is the root, so there is no safe winner —
         // the load must fail naming both sources, not silently pick by order.
-        let registry = FormatRegistry::with_defaults();
+        let registry = YamlReader::new();
         let path = fixtures_dir().join("conflict_root.yaml");
         let err =
             load_schema(&path, &registry).expect_err("conflicting imports must fail the load");
@@ -1128,7 +1289,7 @@ mod tests {
         // Slot-level `is_a` inheritance resolves against the merged
         // namespace: a child whose parent lives in an imported file takes
         // the parent's range once the merge lands it.
-        let registry = FormatRegistry::with_defaults();
+        let registry = YamlReader::new();
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         std::fs::write(
@@ -1158,7 +1319,7 @@ mod tests {
         // the load, both slots carry the range their own file's default
         // dictates, so no consumer of the merged schema needs to know which
         // file a slot came from.
-        let registry = FormatRegistry::with_defaults();
+        let registry = YamlReader::new();
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         std::fs::write(
@@ -1194,7 +1355,7 @@ mod tests {
         // `string` default — its own, never the root's. The root here
         // declares `integer`, and the import's rangeless slot must still
         // come out `string`: per-file scoping survives the implicit default.
-        let registry = FormatRegistry::with_defaults();
+        let registry = YamlReader::new();
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         std::fs::write(
@@ -1225,7 +1386,7 @@ mod tests {
     /// survives the slot being resolved after the merge.
     #[test]
     fn an_imported_stragglers_default_comes_from_its_own_file() {
-        let registry = FormatRegistry::with_defaults();
+        let registry = YamlReader::new();
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         std::fs::write(
@@ -1261,52 +1422,6 @@ mod tests {
         );
     }
 
-    /// A rangeless property in an imported OWL/Turtle file stays genuinely
-    /// rangeless: its file carries no default, so the deferred fill never
-    /// touches it, and the untyped-slot diagnostic still sees it — a mixed
-    /// YAML-root/Turtle-import schema reports what the Turtle file reports
-    /// standalone.
-    #[test]
-    fn an_imported_turtle_files_rangeless_property_stays_untyped() {
-        let registry = FormatRegistry::with_defaults();
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path();
-        std::fs::write(
-            dir.join("vocab.ttl"),
-            "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
-             @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
-             @prefix ex: <https://example.org/vocab#> .\n\
-             ex: a owl:Ontology .\n\
-             ex:Widget a owl:Class .\n\
-             ex:label a owl:DatatypeProperty ; rdfs:domain ex:Widget .\n",
-        )
-        .unwrap();
-        let root_path = dir.join("root.yaml");
-        std::fs::write(
-            &root_path,
-            "name: root\nid: https://example.org/root\nimports:\n  - vocab\n",
-        )
-        .unwrap();
-
-        let schema = load_schema(&root_path, &registry).expect("load");
-        let label = schema
-            .classes
-            .get("Widget")
-            .and_then(|c| c.attributes.get("label"))
-            .or_else(|| schema.slots.get("label"))
-            .expect("the imported property is in the merged schema");
-        assert_eq!(
-            label.range, None,
-            "no default reaches a property whose own file has none"
-        );
-        assert!(
-            crate::diagnostics::untyped_slots(&schema)
-                .iter()
-                .any(|u| u.name == "label"),
-            "and the untyped-slot diagnostic still reports it"
-        );
-    }
-
     /// A cross-file specializing slot inherits its parent's *effective*
     /// range — including one the parent took from its own file's
     /// `default_range` — rather than falling back to the child file's
@@ -1316,7 +1431,7 @@ mod tests {
     /// same divergence per-file scoping already accepts elsewhere.
     #[test]
     fn a_cross_file_parents_materialized_default_reaches_the_child() {
-        let registry = FormatRegistry::with_defaults();
+        let registry = YamlReader::new();
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         std::fs::write(
@@ -1347,7 +1462,7 @@ mod tests {
         // defines it differently. Root precedence is deterministic, so the
         // load succeeds keeping the root's definition — a warning, not a
         // failure (unlike a conflict between two imports).
-        let registry = FormatRegistry::with_defaults();
+        let registry = YamlReader::new();
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         std::fs::write(

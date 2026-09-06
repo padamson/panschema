@@ -5,7 +5,12 @@
 //! instance data depends on this crate and never on a projection. It
 //! carries no format library, no template engine, and no CLI.
 
+pub mod diagnostics;
+pub mod import_resolve;
+pub mod instances;
 pub mod io;
 pub mod linkml;
 pub mod linkml_resolve;
+pub mod primitives;
+pub mod rules;
 pub mod yaml_reader;

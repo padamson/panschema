@@ -15,6 +15,7 @@ readme = "README.md"
 serde = { version = "1", features = ["derive"] }
 serde_norway = "0.9"
 thiserror = "2"
+semver = "1"
 mutants = "0.0.4"
 
 [dev-dependencies]

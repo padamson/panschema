@@ -23,7 +23,7 @@
 //!
 //! [`ClassDefinition`]: crate::linkml::ClassDefinition
 
-use crate::linkml::SchemaDefinition;
+use crate::linkml::{SchemaDefinition, SlotDefinition};
 
 /// Class-level LinkML keys panschema parses but deliberately does NOT
 /// warn about — a **denylist that starts empty**.
@@ -427,10 +427,130 @@ pub fn untyped_slots(schema: &SchemaDefinition) -> Vec<UntypedSlot> {
     out
 }
 
+/// A declared URI nothing in the schema expands: a `class_uri`, `slot_uri`,
+/// permissible-value `meaning`, `subclass_of`, mapping, or `see_also` whose
+/// CURIE prefix the schema does not declare, or a bare name with no
+/// `default_prefix` to expand it. Every RDF projection emits such a value
+/// verbatim, as an IRI that is not one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnexpandableUri {
+    /// The element the value is declared on, e.g. `class \`Widget\``.
+    pub element: String,
+    /// The field that declares it.
+    pub field: &'static str,
+    pub value: String,
+}
+
+impl UnexpandableUri {
+    pub fn message(&self) -> String {
+        format!(
+            "{} declares {} `{}`, which no declared prefix expands; RDF outputs \
+             emit it verbatim, as an IRI that is not one",
+            self.element, self.field, self.value
+        )
+    }
+}
+
+/// Every declared URI in the schema that [`crate::linkml_resolve::expand_curie`]
+/// cannot expand, in schema order.
+pub fn unexpandable_declared_uris(schema: &SchemaDefinition) -> Vec<UnexpandableUri> {
+    let mut out = Vec::new();
+    let mut check = |element: &str, field: &'static str, value: &str| {
+        if crate::linkml_resolve::expand_curie(schema, value).is_none() {
+            out.push(UnexpandableUri {
+                element: element.to_string(),
+                field,
+                value: value.to_string(),
+            });
+        }
+    };
+    let mappings = |m: &mut dyn FnMut(&str, &'static str, &str),
+                    element: &str,
+                    exact: &[String],
+                    close: &[String],
+                    related: &[String],
+                    narrow: &[String],
+                    broad: &[String]| {
+        for (field, values) in [
+            ("exact_mappings", exact),
+            ("close_mappings", close),
+            ("related_mappings", related),
+            ("narrow_mappings", narrow),
+            ("broad_mappings", broad),
+        ] {
+            for value in values {
+                m(element, field, value);
+            }
+        }
+    };
+    let slot_uris =
+        |m: &mut dyn FnMut(&str, &'static str, &str), element: &str, slot: &SlotDefinition| {
+            if let Some(uri) = slot.slot_uri.as_deref() {
+                m(element, "slot_uri", uri);
+            }
+            for value in &slot.see_also {
+                m(element, "see_also", value);
+            }
+            mappings(
+                m,
+                element,
+                &slot.exact_mappings,
+                &slot.close_mappings,
+                &slot.related_mappings,
+                &slot.narrow_mappings,
+                &slot.broad_mappings,
+            );
+        };
+    for (name, class) in &schema.classes {
+        let element = format!("class `{name}`");
+        if let Some(uri) = class.class_uri.as_deref() {
+            check(&element, "class_uri", uri);
+        }
+        if let Some(parent) = class.subclass_of.as_deref() {
+            check(&element, "subclass_of", parent);
+        }
+        for value in &class.see_also {
+            check(&element, "see_also", value);
+        }
+        mappings(
+            &mut check,
+            &element,
+            &class.exact_mappings,
+            &class.close_mappings,
+            &class.related_mappings,
+            &class.narrow_mappings,
+            &class.broad_mappings,
+        );
+        for (slot_name, slot) in &class.attributes {
+            slot_uris(
+                &mut check,
+                &format!("attribute `{slot_name}` of class `{name}`"),
+                slot,
+            );
+        }
+    }
+    for (name, slot) in &schema.slots {
+        slot_uris(&mut check, &format!("slot `{name}`"), slot);
+    }
+    for (name, enum_def) in &schema.enums {
+        let element = format!("enum `{name}`");
+        for value in &enum_def.see_also {
+            check(&element, "see_also", value);
+        }
+        for (key, pv) in &enum_def.permissible_values {
+            if let Some(meaning) = pv.meaning.as_deref() {
+                check(&format!("enum `{name}` value `{key}`"), "meaning", meaning);
+            }
+        }
+    }
+    out
+}
+
 /// The format-independent schema diagnostics the shared load path
-/// ([`crate::import_resolve::load_schema`]) emits for every command —
-/// unmodeled class constructs, and `unique_keys` naming a slot the class
-/// lacks — as ready-to-print message bodies. Format-specific diagnostics
+/// ([`crate::import_resolve::load_schema`]) returns on the loaded schema
+/// for the command layer to print — unmodeled class constructs, `unique_keys`
+/// naming a slot the class lacks, dangling references, and the rest below —
+/// as ready-to-print message bodies. Format-specific diagnostics
 /// (writer projection gaps, Postgres/SHACL skips) and `--strict` enforcement
 /// stay at the `generate` call site.
 pub fn schema_load_diagnostics(schema: &SchemaDefinition) -> Vec<String> {
@@ -446,6 +566,11 @@ pub fn schema_load_diagnostics(schema: &SchemaDefinition) -> Vec<String> {
             .map(|u| u.message()),
     );
     out.extend(dangling_references(schema).iter().map(|d| d.message()));
+    out.extend(
+        unexpandable_declared_uris(schema)
+            .iter()
+            .map(|u| u.message()),
+    );
     out.extend(
         unchecked_specializations(schema)
             .iter()
@@ -772,7 +897,7 @@ pub fn minted_instance_iris(
 ) -> std::collections::BTreeSet<String> {
     sets.iter()
         .flat_map(|set| &set.instances)
-        .map(|inst| crate::rdf_serializers::instance_iri_string(schema, inst))
+        .map(|inst| crate::instances::instance_iri_string(schema, inst))
         .collect()
 }
 
@@ -820,7 +945,7 @@ pub struct SiblingResolution {
 /// Resolve `set`'s external references against sibling datasets.
 ///
 /// Targets expand against the *referring* schema through the same
-/// derivation the RDF emission uses ([`crate::rdf_serializers::resolve_reference_iri`]),
+/// derivation the RDF emission uses ([`crate::linkml_resolve::resolve_reference_iri`]),
 /// so the check and the emitted graphs agree on what each reference
 /// denotes. Only references landing in a sibling-owned namespace are
 /// required to resolve: a dataset can also reference vocabularies outside
@@ -835,7 +960,7 @@ pub fn resolve_sibling_references(
 ) -> SiblingResolution {
     let mut resolution = SiblingResolution::default();
     for r in &set.external_references {
-        let expanded = crate::rdf_serializers::resolve_reference_iri(schema, &r.target);
+        let expanded = crate::linkml_resolve::resolve_reference_iri(schema, &r.target);
         if !owned_namespaces
             .iter()
             .any(|ns| expanded.starts_with(ns.as_str()))
@@ -2028,7 +2153,7 @@ pub fn unverified_absences(
     let indexes: Vec<SiblingIndex> = siblings
         .iter()
         .map(|(sibling_schema, sibling_sets)| {
-            let by_id = crate::rdf_serializers::instance_iris_by_id(sibling_schema, sibling_sets);
+            let by_id = crate::instances::instance_iris_by_id(sibling_schema, sibling_sets);
             minted_union.extend(by_id.values().cloned());
             let mut records = Vec::new();
             for sibling_set in *sibling_sets {
@@ -2046,7 +2171,7 @@ pub fn unverified_absences(
                         })
                         .map(|t| {
                             by_id.get(t.as_str()).cloned().unwrap_or_else(|| {
-                                crate::rdf_serializers::resolve_reference_iri(sibling_schema, t)
+                                crate::linkml_resolve::resolve_reference_iri(sibling_schema, t)
                             })
                         })
                         .collect();
@@ -2128,7 +2253,7 @@ pub fn unverified_absences(
             };
             let anchor_iris: BTreeSet<String> = anchors
                 .iter()
-                .map(|t| crate::rdf_serializers::resolve_reference_iri(schema, t))
+                .map(|t| crate::linkml_resolve::resolve_reference_iri(schema, t))
                 .collect();
             if anchor_iris.len() < anchors.len() {
                 out.uncheckable.push(UncheckableAbsence {
@@ -2182,11 +2307,11 @@ pub fn unverified_absences(
             // the anchors beside it — and like a designation it must name
             // one thing: an IRI shared by several sibling classes narrows to
             // nothing checkable. Resolved once per sibling and reused below.
-            let via_matches: Vec<crate::rdf_serializers::ClassMatch> = match &via_authored {
+            let via_matches: Vec<crate::linkml_resolve::ClassMatch> = match &via_authored {
                 Some(via) => indexes
                     .iter()
                     .map(|index| {
-                        crate::rdf_serializers::class_named_by_expanded(
+                        crate::linkml_resolve::class_named_by_expanded(
                             schema,
                             index.schema,
                             &index.class_names,
@@ -2199,10 +2324,10 @@ pub fn unverified_absences(
             if let Some(via) = &via_authored {
                 let any_named = via_matches
                     .iter()
-                    .any(|m| matches!(m, crate::rdf_serializers::ClassMatch::One(_)));
+                    .any(|m| matches!(m, crate::linkml_resolve::ClassMatch::One(_)));
                 let ambiguous = via_matches
                     .iter()
-                    .any(|m| matches!(m, crate::rdf_serializers::ClassMatch::Several));
+                    .any(|m| matches!(m, crate::linkml_resolve::ClassMatch::Several));
                 if ambiguous {
                     out.uncheckable.push(UncheckableAbsence {
                         referrer: inst.id.clone(),
@@ -2226,7 +2351,7 @@ pub fn unverified_absences(
             let mut contradicted = false;
             for (position, index) in indexes.iter().enumerate() {
                 let allowed: Option<&str> = match via_matches.get(position) {
-                    Some(crate::rdf_serializers::ClassMatch::One(name)) => Some(name),
+                    Some(crate::linkml_resolve::ClassMatch::One(name)) => Some(name),
                     _ => None,
                 };
                 if via_authored.is_some() && allowed.is_none() {
@@ -2301,7 +2426,7 @@ pub fn cross_dataset_iri_collisions(
         BTreeMap::new();
     for (label, set) in datasets {
         for inst in &set.instances {
-            let iri = crate::rdf_serializers::instance_iri_string(schema, inst);
+            let iri = crate::instances::instance_iri_string(schema, inst);
             minted
                 .entry(iri)
                 .or_default()
@@ -2375,7 +2500,7 @@ pub fn cross_dataset_unintended_splits(
             let Some(class) = inst.types.first() else {
                 continue;
             };
-            let iri = crate::rdf_serializers::instance_iri_string(schema, inst);
+            let iri = crate::instances::instance_iri_string(schema, inst);
             // The authored assignments, not the display literals: a slot
             // serving as the record's label never reaches `literals`, so
             // comparing those would call every same-named record identical.
@@ -2626,9 +2751,7 @@ impl UnresolvedKeySlot {
 /// actually have, checked against its *effective* slot set (inherited +
 /// mixin + inline + `slot_usage`), in deterministic order.
 ///
-/// A structural check with no home yet: a dedicated `validate` surface
-/// isn't built, so this routes through the same `generate`-time
-/// `eprintln!` warning path as the other diagnostics until it lands.
+/// A structural check reported with the other load diagnostics.
 pub fn unresolved_unique_key_slots(schema: &SchemaDefinition) -> Vec<UnresolvedKeySlot> {
     let mut found = Vec::new();
     for (class_name, class) in &schema.classes {
@@ -5930,5 +6053,74 @@ mod tests {
             dangling_instance_references(&set).is_empty(),
             "a reference to a defined instance is not dangling"
         );
+    }
+
+    /// Every declared URI no prefix expands is one finding, named by its
+    /// element and field, and it is part of the load diagnostics; a
+    /// declared prefix or an absolute IRI is not.
+    #[test]
+    fn an_unexpandable_declared_uri_is_a_load_diagnostic() {
+        use super::{schema_load_diagnostics, unexpandable_declared_uris};
+        use crate::linkml::{
+            ClassDefinition, EnumDefinition, PermissibleValue, SchemaDefinition, SlotDefinition,
+        };
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .prefixes
+            .insert("ex".to_string(), "https://example.org/".to_string());
+        let mut widget = ClassDefinition::new("Widget");
+        widget.class_uri = Some("undeclared:Widget".to_string());
+        widget.subclass_of = Some("ex:Thing".to_string());
+        widget.exact_mappings = vec!["https://schema.org/Thing".to_string()];
+        let mut label = SlotDefinition::new("label");
+        label.slot_uri = Some("nope:label".to_string());
+        widget.attributes.insert("label".to_string(), label);
+        schema.classes.insert("Widget".to_string(), widget);
+        let mut color = EnumDefinition::new("Color");
+        let mut red = PermissibleValue::new("red");
+        red.meaning = Some("missing:red".to_string());
+        color.permissible_values.insert("red".to_string(), red);
+        schema.enums.insert("Color".to_string(), color);
+
+        let found = unexpandable_declared_uris(&schema);
+        let seen: Vec<(String, &str, String)> = found
+            .iter()
+            .map(|u| (u.element.clone(), u.field, u.value.clone()))
+            .collect();
+        assert_eq!(
+            seen,
+            vec![
+                (
+                    "class `Widget`".to_string(),
+                    "class_uri",
+                    "undeclared:Widget".to_string()
+                ),
+                (
+                    "attribute `label` of class `Widget`".to_string(),
+                    "slot_uri",
+                    "nope:label".to_string()
+                ),
+                (
+                    "enum `Color` value `red`".to_string(),
+                    "meaning",
+                    "missing:red".to_string()
+                ),
+            ],
+            "only the undeclared prefixes are findings"
+        );
+        assert_eq!(
+            found[0].message(),
+            "class `Widget` declares class_uri `undeclared:Widget`, which no declared prefix \
+             expands; RDF outputs emit it verbatim, as an IRI that is not one",
+            "the message names the element, the field, and the value"
+        );
+        let messages = schema_load_diagnostics(&schema);
+        for finding in &found {
+            assert!(
+                messages.contains(&finding.message()),
+                "the load diagnostics carry {:?}",
+                finding.message()
+            );
+        }
     }
 }

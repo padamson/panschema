@@ -874,7 +874,7 @@ fn render_kind_enum<W: Write>(
         if !crate::linkml_resolve::class_satisfies(schema, desc, name) {
             continue;
         }
-        for spelling in crate::rdf_serializers::class_spellings(schema, desc) {
+        for spelling in crate::linkml_resolve::class_spellings(schema, desc) {
             contributions.push((spelling, position));
         }
     }
@@ -985,7 +985,7 @@ fn render_any_of_enum<W: Write>(
             continue;
         };
         if roles.get(class) == Some(&ClassRole::Trait) {
-            abstract_spellings.extend(crate::rdf_serializers::class_spellings(schema, class));
+            abstract_spellings.extend(crate::linkml_resolve::class_spellings(schema, class));
             continue;
         }
         let Some(position) = variants
@@ -994,7 +994,7 @@ fn render_any_of_enum<W: Write>(
         else {
             continue;
         };
-        for spelling in crate::rdf_serializers::class_spellings(schema, class) {
+        for spelling in crate::linkml_resolve::class_spellings(schema, class) {
             contributions.push((spelling, position));
         }
     }

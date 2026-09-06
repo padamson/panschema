@@ -131,9 +131,14 @@ needs the model as a library — and does not claim the build-time benefit
   compile, and the three moved modules were a small part of it. The
   measurable win remains the external consumer's build, which now
   compiles none of the format, template, or CLI libraries.
-- The boundary becomes a public API. About seven items widen to `pub`
-  now; every later addition to the model crate is public by construction
-  and reviewed as such.
+- The boundary becomes a public API. Fifteen items widened to `pub` in
+  the core slice, against the seven estimated: the class matcher and its
+  spellings inverse, every element-IRI derivation, the by-id IRI index,
+  the node-URI resolver, and the scalar display, all of which the writers
+  call. Two were added: a verbatim CURIE expansion that returns instead of
+  logging, and the loaded-schema type that carries a load's warnings.
+  Every later addition to the model crate is public by construction and
+  reviewed as such.
 - Unit tests move with their modules; the ones that depend on tool-side
   code relocate to `panschema`'s tests. Mutation testing must run the
   workspace's tests against model mutants, or the writer and integration

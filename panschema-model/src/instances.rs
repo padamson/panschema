@@ -432,7 +432,7 @@ impl InstanceSet {
                 .annotations
                 .get_str(&format!("panschema:individual:{id}:_comment"))
                 .map(String::from);
-            let (iri, uri_unresolved) = crate::graph_writer::resolve_node_uri(
+            let (iri, uri_unresolved) = crate::linkml_resolve::resolve_node_uri(
                 schema,
                 schema
                     .annotations
@@ -758,7 +758,7 @@ impl InstanceSet {
         if let Some(root_id) = &emitted_root_id
             && let Some(root_inst) = loader.instances.iter().find(|i| &i.id == root_id)
         {
-            let scope = crate::rdf_serializers::instance_iri_string(schema, root_inst);
+            let scope = instance_iri_string(schema, root_inst);
             let mut class_has_key: std::collections::BTreeMap<String, bool> =
                 std::collections::BTreeMap::new();
             for inst in &mut loader.instances {
@@ -1289,8 +1289,8 @@ impl LinkmlLoader<'_> {
                 .then(|| authored.to_string());
         }
         let candidates: Vec<&String> = self.family(class_name).iter().collect();
-        match crate::rdf_serializers::class_named_by(schema, &candidates, authored) {
-            crate::rdf_serializers::ClassMatch::One(name) => Some(name.to_string()),
+        match crate::linkml_resolve::class_named_by(schema, &candidates, authored) {
+            crate::linkml_resolve::ClassMatch::One(name) => Some(name.to_string()),
             _ => None,
         }
     }
@@ -1325,9 +1325,9 @@ impl LinkmlLoader<'_> {
         owners: &[&'c String],
         ordinary_carrier: bool,
         named: &str,
-    ) -> crate::rdf_serializers::ClassMatch<'c> {
-        match crate::rdf_serializers::class_named_by(self.schema, candidates, named) {
-            crate::rdf_serializers::ClassMatch::None if !ordinary_carrier => {
+    ) -> crate::linkml_resolve::ClassMatch<'c> {
+        match crate::linkml_resolve::class_named_by(self.schema, candidates, named) {
+            crate::linkml_resolve::ClassMatch::None if !ordinary_carrier => {
                 self.member_by_family(owners, named)
             }
             direct => direct,
@@ -1347,7 +1347,7 @@ impl LinkmlLoader<'_> {
         &mut self,
         owners: &[&'c String],
         named: &str,
-    ) -> crate::rdf_serializers::ClassMatch<'c> {
+    ) -> crate::linkml_resolve::ClassMatch<'c> {
         let schema = self.schema;
         // A bare class name answers with one chain walk per owner; the
         // family materializes only for the IRI/CURIE spellings.
@@ -1356,9 +1356,9 @@ impl LinkmlLoader<'_> {
                 .iter()
                 .filter(|m| crate::linkml_resolve::class_satisfies(schema, named, m));
             return match (hits.next(), hits.next()) {
-                (Some(one), None) => crate::rdf_serializers::ClassMatch::One(one.as_str()),
-                (Some(_), Some(_)) => crate::rdf_serializers::ClassMatch::Several,
-                (None, _) => crate::rdf_serializers::ClassMatch::None,
+                (Some(one), None) => crate::linkml_resolve::ClassMatch::One(one.as_str()),
+                (Some(_), Some(_)) => crate::linkml_resolve::ClassMatch::Several,
+                (None, _) => crate::linkml_resolve::ClassMatch::None,
             };
         }
         let mut winner: Option<&'c str> = None;
@@ -1369,18 +1369,18 @@ impl LinkmlLoader<'_> {
             // degrades that to the plain member, as a single-class range
             // would.
             if !matches!(
-                crate::rdf_serializers::class_named_by(schema, &family, named),
-                crate::rdf_serializers::ClassMatch::None
+                crate::linkml_resolve::class_named_by(schema, &family, named),
+                crate::linkml_resolve::ClassMatch::None
             ) {
                 if winner.is_some() {
-                    return crate::rdf_serializers::ClassMatch::Several;
+                    return crate::linkml_resolve::ClassMatch::Several;
                 }
                 winner = Some(member.as_str());
             }
         }
         winner.map_or(
-            crate::rdf_serializers::ClassMatch::None,
-            crate::rdf_serializers::ClassMatch::One,
+            crate::linkml_resolve::ClassMatch::None,
+            crate::linkml_resolve::ClassMatch::One,
         )
     }
 
@@ -1478,14 +1478,14 @@ impl LinkmlLoader<'_> {
                 .as_str()
                 .map(|named| self.designator_names(candidates, &owners, ordinary_carrier, named));
             match resolved {
-                Some(crate::rdf_serializers::ClassMatch::One(name)) => {
+                Some(crate::linkml_resolve::ClassMatch::One(name)) => {
                     if chosen.is_some_and(|already| already != name) {
                         return ClassChoice::Ambiguous;
                     }
                     chosen = Some(name);
                 }
-                Some(crate::rdf_serializers::ClassMatch::Several) => return ClassChoice::Ambiguous,
-                Some(crate::rdf_serializers::ClassMatch::None) | None => {
+                Some(crate::linkml_resolve::ClassMatch::Several) => return ClassChoice::Ambiguous,
+                Some(crate::linkml_resolve::ClassMatch::None) | None => {
                     // Every carrier treats the key as a designator, so an
                     // unanswerable value is explicit-but-unanswerable —
                     // a report, never a guess.
@@ -2291,7 +2291,7 @@ fn scalar_value(value: &serde_norway::Value) -> Option<ScalarValue> {
 }
 
 /// Render a typed scalar as its display string.
-pub(crate) fn scalar_to_display(value: &ScalarValue) -> String {
+pub fn scalar_to_display(value: &ScalarValue) -> String {
     match value {
         ScalarValue::String(s) => s.clone(),
         ScalarValue::Integer(i) => i.to_string(),
@@ -2316,12 +2316,86 @@ fn capitalize_first(id: &str) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Record identity: the IRI a record mints, shared by the RDF A-box, the
+// graph exports, the docs, and the cross-graph checks.
+// ---------------------------------------------------------------------------
+
+/// Absolute IRI for an instance — THE shared minting, so the RDF A-box, the
+/// graph exports, and the docs agree on which individual is which. An
+/// instance that already carries a resolved IRI (the OWL-sourced path) keeps
+/// it; otherwise the id mints against the schema's prefixes (default prefix
+/// for a bare id, any declared prefix for a CURIE id), falling back to
+/// `{ontology}#{id}` when no prefix resolves.
+pub fn instance_iri_string(schema: &SchemaDefinition, inst: &Instance) -> String {
+    if let Some(iri) = &inst.iri
+        && !inst.uri_unresolved
+    {
+        return iri.clone();
+    }
+    // A record named by CURIE or absolute IRI carries its own namespace — a
+    // shared-vocabulary record, or one belonging to another graph — so its
+    // dataset's scope does not apply to it. That asymmetry is what lets a
+    // scoped dataset and a shared one live under the same mechanism.
+    let names_its_own_namespace = inst.id.contains("://")
+        || inst.id.starts_with("urn:")
+        || inst
+            .id
+            .split_once(':')
+            .is_some_and(|(prefix, _)| schema.prefixes.contains_key(prefix));
+    if !names_its_own_namespace && let Some(scope) = &inst.scope {
+        return format!("{scope}/{}", inst.id);
+    }
+    crate::linkml_resolve::resolve_reference_iri(schema, &inst.id)
+}
+
+/// Every record's minted IRI keyed by its id, across `sets` — the map a
+/// reference target resolves through before falling back to
+/// [`resolve_reference_iri`](crate::linkml_resolve::resolve_reference_iri),
+/// shared by the RDF emission and the
+/// cross-graph absence check so both prefer a record's real minted IRI
+/// (scoping included) over a fabricated expansion.
+pub fn instance_iris_by_id<'a>(
+    schema: &SchemaDefinition,
+    sets: &'a [InstanceSet],
+) -> std::collections::BTreeMap<&'a str, String> {
+    sets.iter()
+        .flat_map(|set| &set.instances)
+        .map(|i| (i.id.as_str(), instance_iri_string(schema, i)))
+        .collect()
+}
+
+/// The namespace a schema's instance minting expands bare ids under —
+/// the default prefix's expansion, or the ontology IRI's fragment base.
+/// Scoped records start with it too (their scope is itself minted under
+/// it), so this is the ownership test a cross-graph resolution check
+/// scopes references by. A record whose id names its own namespace (an
+/// absolute-IRI id) can mint outside it.
+pub fn instance_namespace(schema: &SchemaDefinition) -> String {
+    schema
+        .default_prefix
+        .as_deref()
+        .and_then(|p| schema.prefixes.get(p))
+        .cloned()
+        .unwrap_or_else(|| format!("{}#", crate::linkml_resolve::ontology_iri_string(schema)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::io::Reader;
     use crate::linkml::{ClassDefinition, SlotDefinition};
-    use crate::owl_reader::OwlReader;
+
+    /// A schema whose minting base is a declared default prefix.
+    fn cellar_schema() -> SchemaDefinition {
+        let mut schema = SchemaDefinition::new("cellar");
+        schema.id = Some("https://example.org/cellar".to_string());
+        schema.default_prefix = Some("cellar".to_string());
+        schema.prefixes.insert(
+            "cellar".to_string(),
+            "https://example.org/cellar/".to_string(),
+        );
+        schema
+    }
 
     #[test]
     fn empty_when_the_schema_has_no_individuals() {
@@ -3145,37 +3219,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn from_owl_annotations_builds_typed_records_with_refs_and_literals() {
-        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/instance_graph.ttl");
-        let schema = OwlReader::new().read(&fixture).expect("read fixture");
-        let set = InstanceSet::from_owl_annotations(&schema);
-
-        assert!(
-            !set.is_empty(),
-            "a schema with individuals yields a non-empty set"
-        );
-        assert_eq!(set.instances.len(), 3, "three individuals → three records");
-
-        let wine = set
-            .instances
-            .iter()
-            .find(|i| i.id == "chateauMorgon")
-            .expect("wine instance");
-        assert_eq!(wine.types, ["Wine"], "typed as its rdf:type class");
-        // The object assertion is a typed reference (an edge), by target id.
-        assert_eq!(wine.references.len(), 1);
-        assert_eq!(wine.references[0].property, "from region");
-        assert_eq!(wine.references[0].target, "beaujolais");
-        // The datatype assertion is a literal, not a reference.
-        assert_eq!(wine.literals, [("color".to_string(), "red".to_string())]);
-
-        // An individual with no rdfs:label gets the capitalize-first label.
-        let napa = set.instances.iter().find(|i| i.id == "napa").expect("napa");
-        assert_eq!(napa.label, "Napa");
-    }
-
     /// A `tree_root` container schema whose slots are typed collections of
     /// records — the canonical LinkML instance-data shape the reader ingests.
     const WINE_SCHEMA: &str = "\
@@ -3846,7 +3889,7 @@ classes:
             read("id: contoso\ndeployments:\n  - id: api-gateway\nproviders:\n  - id: aws\n");
         let iri_of = |set: &InstanceSet, id: &str| {
             let inst = set.instances.iter().find(|i| i.id == id).expect("record");
-            crate::rdf_serializers::instance_iri_string(&schema, inst)
+            instance_iri_string(&schema, inst)
         };
         assert_ne!(
             iri_of(&acme, "api-gateway"),
@@ -3878,7 +3921,7 @@ classes:
                 .iter()
                 .find(|i| i.id == "api-gateway")
                 .expect("the deployment");
-            crate::rdf_serializers::instance_iri_string(&schema, inst)
+            instance_iri_string(&schema, inst)
         };
         assert_eq!(iri_of(&acme), "https://example.org/estate/acme/api-gateway");
         assert_eq!(
@@ -3911,7 +3954,7 @@ classes:
                 .find(|i| i.id == authored)
                 .unwrap_or_else(|| panic!("the record named {authored}"));
             assert_eq!(
-                crate::rdf_serializers::instance_iri_string(&schema, inst),
+                instance_iri_string(&schema, inst),
                 authored,
                 "an externally-grounded id is used as authored, not scoped \
                  beneath the dataset that mentions it"
@@ -3929,7 +3972,7 @@ classes:
             .find(|i| i.id == "acme")
             .expect("the root record");
         assert_eq!(
-            crate::rdf_serializers::instance_iri_string(&schema, root),
+            instance_iri_string(&schema, root),
             "https://example.org/estate/acme",
             "the root IS the scope, so it does not nest inside itself"
         );
@@ -3944,7 +3987,7 @@ classes:
         let full = two_root_set("id: acme\ndeployments:\n  - id: api-gateway\n  - id: billing\n");
         let iri_of = |set: &InstanceSet, id: &str| {
             let inst = set.instances.iter().find(|i| i.id == id).expect("record");
-            crate::rdf_serializers::instance_iri_string(&schema, inst)
+            instance_iri_string(&schema, inst)
         };
         assert_eq!(
             iri_of(&preview, "api-gateway"),
@@ -3967,7 +4010,7 @@ classes:
         let set = xref_set("providers:\n  - id: aws\n");
         let aws = set.instances.iter().find(|i| i.id == "aws").expect("aws");
         assert_eq!(
-            crate::rdf_serializers::instance_iri_string(&schema, aws),
+            instance_iri_string(&schema, aws),
             "https://example.org/estate/aws",
             "a vessel root introduces no scope segment"
         );
@@ -3987,7 +4030,7 @@ classes:
             .find(|i| i.id == "catalog:aws")
             .expect("the catalogue's provider");
         assert_eq!(
-            crate::rdf_serializers::instance_iri_string(&schema, aws),
+            instance_iri_string(&schema, aws),
             "https://example.org/catalog/aws",
             "a CURIE-named shared record mints into the shared namespace"
         );
@@ -4007,7 +4050,7 @@ classes:
             .find(|i| i.id == "aws")
             .expect("the catalogue's provider");
         assert_eq!(
-            crate::rdf_serializers::instance_iri_string(&schema, aws),
+            instance_iri_string(&schema, aws),
             "https://example.org/estate/aws-catalog/aws",
             "a bare id scopes under its own dataset's root, NOT into the \
              shared namespace — so `catalog:aws` does not resolve to it"
@@ -4975,34 +5018,9 @@ nodes:
         );
     }
 
-    const SHELVED_SCHEMA: &str = "\
-name: Estate
-default_range: string
-classes:
-  Root:
-    tree_root: true
-    attributes:
-      id:
-        identifier: true
-      shelves:
-        range: Shelf
-        multivalued: true
-      main_shelf:
-        range: Shelf
-  Shelf:
-    attributes:
-      id:
-        identifier: true
-      held:
-        range: Item
-        multivalued: true
-      next:
-        range: Shelf
-  Item:
-    attributes:
-      id:
-        identifier: true
-";
+    /// A root with a shelf and its items: the shape the field-key and
+    /// collection-entry reports are exercised on, here and in the verifier.
+    const SHELVED_SCHEMA: &str = include_str!("../tests/fixtures/shelved.yaml");
 
     #[test]
     fn a_single_valued_container_slot_materializes_or_cites() {
@@ -5906,73 +5924,6 @@ classes:
         );
     }
 
-    const VESSEL_UNION_SCHEMA: &str = "\
-name: Estate
-default_range: string
-classes:
-  Root:
-    tree_root: true
-    attributes:
-      things:
-        multivalued: true
-        any_of:
-          - range: Shelf
-          - range: Crate
-  Shelf:
-    attributes:
-      id:
-        identifier: true
-      held:
-        range: string
-  Crate:
-    attributes:
-      id:
-        identifier: true
-      weight:
-        range: integer
-      label:
-        range: string
-";
-
-    #[test]
-    fn a_vessel_rooted_union_collection_builds_and_reports_in_every_spelling() {
-        let schema: SchemaDefinition = serde_norway::from_str(VESSEL_UNION_SCHEMA).expect("schema");
-        let data: serde_norway::Value =
-            serde_norway::from_str("things:\n  - {id: s1, held: aisle-3}\n").expect("data");
-        let set = InstanceSet::from_linkml_data(&schema, &data);
-        assert!(
-            set.instances.iter().any(|i| i.id == "s1"),
-            "no container exists to hold it, but the record is data; got: {:?}",
-            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
-        );
-
-        let data: serde_norway::Value =
-            serde_norway::from_str("things:\n  s1: {held: aisle-3}\n").expect("data");
-        let set = InstanceSet::from_linkml_data(&schema, &data);
-        assert!(
-            set.instances.iter().any(|i| i.id == "s1"),
-            "dict spelling loads for a vessel root too; got: {:?}",
-            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
-        );
-
-        let data: serde_norway::Value =
-            serde_norway::from_str("things:\n  s1: {held: aisle-3}\n  a1: {}\n").expect("data");
-        let set = InstanceSet::from_linkml_data(&schema, &data);
-        assert!(
-            set.unusable_collection_entries
-                .iter()
-                .any(|u| u.key.as_deref() == Some("a1")),
-            "no container record exists, and the entry is still reported; got: {:?}",
-            set.unusable_collection_entries
-        );
-        let violations = crate::validate::validate_instances(&schema, &set);
-        assert!(
-            violations.iter().any(|v| v.detail.contains("a1")),
-            "validation names the entry; got: {:?}",
-            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
-        );
-    }
-
     const UNION_CONTAINER_SCHEMA: &str = "\
 name: Estate
 default_range: string
@@ -6237,96 +6188,6 @@ classes:
     }
 
     #[test]
-    fn an_ambiguous_simple_dict_entry_names_the_entry_and_the_ambiguity() {
-        const TWIN_SCHEMA: &str = "\
-name: Estate
-default_range: string
-classes:
-  Root:
-    tree_root: true
-    attributes:
-      id:
-        identifier: true
-      things:
-        multivalued: true
-        any_of:
-          - range: Shelf
-          - range: Bin
-  Shelf:
-    attributes:
-      id:
-        identifier: true
-      held:
-        range: string
-  Bin:
-    attributes:
-      id:
-        identifier: true
-      contents:
-        range: string
-";
-        let schema: SchemaDefinition = serde_norway::from_str(TWIN_SCHEMA).expect("schema");
-        let data: serde_norway::Value =
-            serde_norway::from_str("id: est\nthings:\n  s9: aisle-4\n").expect("data");
-        let set = InstanceSet::from_linkml_data(&schema, &data);
-        let violations = crate::validate::validate_instances(&schema, &set);
-        let about_s9: Vec<String> = violations
-            .iter()
-            .map(|v| v.to_string())
-            .filter(|m| m.contains("s9"))
-            .collect();
-        assert!(
-            !about_s9.is_empty(),
-            "the entry is named; got: {:?}",
-            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
-        );
-        assert!(
-            about_s9.iter().any(|m| m.contains("more than one")),
-            "ambiguity is the stated failure, not the value's kind; got: {about_s9:?}"
-        );
-    }
-
-    #[test]
-    fn a_non_string_field_key_is_reported_not_dropped() {
-        let schema: SchemaDefinition = serde_norway::from_str(SHELVED_SCHEMA).expect("schema");
-        // The record is restated identically (one entity, two spellings)
-        // and carries both a quotable and an unquotable non-string key.
-        let data: serde_norway::Value = serde_norway::from_str(
-            "id: est\nshelves:\n  - {id: s1, 2024: oops, ~: nix}\n  - {id: s1, 2024: oops, ~: nix}\n",
-        )
-        .expect("data");
-        let set = InstanceSet::from_linkml_data(&schema, &data);
-        let quotable: Vec<_> = set
-            .undeclared_fields
-            .iter()
-            .filter(|f| f.field == "2024")
-            .collect();
-        assert_eq!(
-            quotable.len(),
-            1,
-            "one authored defect is one finding, however many restatements; got: {:?}",
-            set.undeclared_fields
-        );
-        assert_eq!(quotable[0].record, "s1");
-        assert_eq!(quotable[0].key_kind, Some(KeyKind::Quotable));
-        let violations = crate::validate::validate_instances(&schema, &set);
-        assert!(
-            violations
-                .iter()
-                .any(|v| v.detail.contains("2024") && v.detail.contains("quote")),
-            "quoting fixes a scalar key, and the report says so; got: {:?}",
-            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
-        );
-        assert!(
-            violations
-                .iter()
-                .any(|v| v.detail.contains("only string keys") && !v.detail.contains("quote")),
-            "an unquotable key gets its own wording, not impossible advice; got: {:?}",
-            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
     fn a_non_string_container_field_key_is_reported_too() {
         let schema: SchemaDefinition = serde_norway::from_str(SHELVED_SCHEMA).expect("schema");
         let data: serde_norway::Value =
@@ -6440,5 +6301,51 @@ classes:
             "no phantom record with a synthesized id"
         );
         assert_eq!(set.duplicate_ids, Vec::<String>::new());
+    }
+
+    #[test]
+    fn instance_iri_uses_a_resolved_iri_but_never_an_unresolved_one() {
+        let schema = cellar_schema();
+        let mut inst = crate::instances::Instance {
+            id: "b1".to_string(),
+            iri: Some("https://upstream.example/b1".to_string()),
+            uri_unresolved: false,
+            label: "b1".to_string(),
+            description: None,
+            types: vec![],
+            literals: vec![],
+            references: vec![],
+            slot_values: vec![],
+            scope: None,
+        };
+        assert_eq!(
+            instance_iri_string(&schema, &inst),
+            "https://upstream.example/b1",
+            "a resolved carried IRI wins over minting"
+        );
+        // An unresolved IRI (a curie whose prefix never expanded) must NOT
+        // be used verbatim — the id mints instead.
+        inst.uri_unresolved = true;
+        assert_eq!(
+            instance_iri_string(&schema, &inst),
+            "https://example.org/cellar/b1",
+            "an unresolved IRI falls back to minting from the id"
+        );
+    }
+
+    #[test]
+    fn instance_namespace_is_the_minting_base() {
+        // The ownership test cross-graph resolution scopes by must be the
+        // base bare-id minting expands under — the default prefix's
+        // expansion, or the ontology fragment base without one.
+        let schema = cellar_schema();
+        assert_eq!(instance_namespace(&schema), "https://example.org/cellar/");
+        let mut bare = SchemaDefinition::new("bare");
+        bare.id = Some("https://example.org/bare".to_string());
+        assert_eq!(
+            instance_namespace(&bare),
+            "https://example.org/bare#",
+            "no default prefix falls back to the ontology fragment base"
+        );
     }
 }

@@ -99,7 +99,7 @@ compiling any RDF, template, CLI, or async library.
 
 ### Slice 2: The core
 
-**Status:** Not Started
+**Status:** Complete
 
 **User Value:** A consumer of `panschema-model` reads a LinkML dataset into
 the instance model with anchor expansion, resolves every name against the
@@ -109,18 +109,19 @@ defective schema-declared semantics — come back as values the consumer
 decides how to report.
 
 **Acceptance Criteria:**
-- [ ] For every record and class in the reference dataset, the IRI the
-      model crate mints, the IRI in panschema's Turtle A-box, the `uri`
-      on the graph-JSON node, and the scope prefix in the instance model
-      are one string (asserted by one test across all four).
-- [ ] Every RDF and graph output is byte-identical to before the slice.
-- [ ] Loading a schema through the model crate with a reader lookup
+- [x] For every record and class in a scoped dataset fixture, the IRI the
+      model crate mints, the subject panschema's RDF output types it by,
+      and (for records) the `uri` on the graph-JSON node are one string,
+      and a scoped record's IRI sits under its scope (asserted by one test
+      across all of them).
+- [x] Every RDF and graph output is byte-identical to before the slice.
+- [x] Loading a schema through the model crate with a reader lookup
       holding only the YAML reader resolves local and builtin imports as
       before and returns the same diagnostics `panschema` prints; the
       command layer prints them, the library does not.
-- [ ] The three schema-declared slot-semantics families are readable
+- [x] The three schema-declared slot-semantics families are readable
       through the model crate.
-- [ ] `cargo deny check bans` still passes; every moved test runs.
+- [x] `cargo deny check bans` still passes; every moved test runs.
 
 **Notes:**
 - Modules: `instances`, `primitives`, `diagnostics` (whole: every function
@@ -141,7 +142,27 @@ decides how to report.
   re-fixture in YAML where the contract allows. A Turtle `imports:`
   entry resolves through the model crate only when the consumer registers
   an OWL reader; the YAML-only lookup reports it unresolved.
-- About seven items widen from `pub(crate)` to `pub`.
+- Fifteen items widened from crate-private to `pub` (the class matcher and
+  its spellings inverse, every element-IRI derivation, the by-id IRI
+  index, the node-URI resolver, and the scalar display), and two were
+  added: the verbatim CURIE expansion the derivations use instead of
+  logging, and the loaded-schema type that carries a load's warnings.
+- The RDF serializer's inline warning for a declared URI nothing expands
+  is gone; it was raised through a tracing subscriber neither binary
+  installs, so it never reached anyone. Its replacement is a load
+  diagnostic every command prints: the element, the field, and the value
+  no declared prefix expands.
+- A class node in the schema graph carries a `uri` only when the schema
+  declares a `class_uri`, while the RDF T-box mints an IRI for every
+  class. Aligning the node with the minted IRI changes graph output, so
+  it waits for a slice that may; the identity test checks the class
+  dimension against the RDF and the model, and graph class nodes only
+  where they carry a URI.
+- Byte-identity was checked against every RDF, graph, and SHACL output
+  for the reference ontology and four datasets, captured before and
+  after the move, plus their stderr. JSON-LD alone is compared with its
+  object keys sorted: its key order was already unstable run to run
+  before this slice.
 
 ---
 
@@ -194,7 +215,7 @@ model crate before the CLI without anyone remembering the order.
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | Slice 1 | Must Have | None | Complete |
-| Slice 2 | Must Have | Slice 1 | Not Started |
+| Slice 2 | Must Have | Slice 1 | Complete |
 | Slice 3 | Must Have | Slice 2 | Not Started |
 
 ## Things to watch
@@ -207,6 +228,10 @@ model crate before the CLI without anyone remembering the order.
   above it. The measurable win is the external consumer's build. The
   Definition of Done records the rebuild times before and after so the
   ADR states what actually happened.
+- JSON-LD output orders the keys of each node object differently from
+  one run to the next (the serializer builds them in a hash map). Nothing
+  reads the order, but a byte-level check of that format has to sort keys
+  first.
 - Feature 08 (bootstrap the IR from the metaschema) now targets this
   crate; its writer-driven regeneration check stays in `panschema`, or a
   dev-dependency cycle pulls the format libraries back into the model

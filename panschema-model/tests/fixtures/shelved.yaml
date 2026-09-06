@@ -1,0 +1,26 @@
+name: Estate
+default_range: string
+classes:
+  Root:
+    tree_root: true
+    attributes:
+      id:
+        identifier: true
+      shelves:
+        range: Shelf
+        multivalued: true
+      main_shelf:
+        range: Shelf
+  Shelf:
+    attributes:
+      id:
+        identifier: true
+      held:
+        range: Item
+        multivalued: true
+      next:
+        range: Shelf
+  Item:
+    attributes:
+      id:
+        identifier: true

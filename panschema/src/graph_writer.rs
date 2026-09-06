@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::io::{IoError, IoResult, Writer};
 use crate::linkml::SchemaDefinition;
+use crate::linkml_resolve::resolve_node_uri;
 
 /// Color constants for node types (RGBA, normalized 0.0-1.0)
 pub mod colors {
@@ -332,28 +333,6 @@ pub struct GraphEdge {
 /// distinguishes a class's own slots from flattened ones; each
 /// entry carries the slot's effective shape, not the global
 /// un-refined definition.
-/// Resolve a node's URI for display via [`expand_curie`], which keeps
-/// full IRIs (`http(s)://`, `urn:`) verbatim, expands a known
-/// `prefix:local` curie against the schema's prefixes, and expands a
-/// bare name against the default prefix. When it can't resolve — an
-/// unrecognised prefix, or a bare name with no default prefix — the
-/// value is surfaced verbatim and flagged so the hover marks it `?`.
-/// Returns `(display_uri, unresolved)`.
-///
-/// [`expand_curie`]: crate::linkml_resolve::expand_curie
-pub(crate) fn resolve_node_uri(
-    schema: &SchemaDefinition,
-    uri: Option<&str>,
-) -> (Option<String>, bool) {
-    match uri {
-        None => (None, false),
-        Some(v) => match crate::linkml_resolve::expand_curie(schema, v) {
-            Some(full) => (Some(full), false),
-            None => (Some(v.to_string()), true),
-        },
-    }
-}
-
 fn resolve_class_slots(
     resolved: std::collections::BTreeMap<String, crate::linkml_resolve::ResolvedSlot>,
     class_name: &str,
@@ -695,7 +674,7 @@ impl GraphWriter {
                 uri: inst
                     .iri
                     .clone()
-                    .or_else(|| Some(crate::rdf_serializers::instance_iri_string(schema, inst))),
+                    .or_else(|| Some(crate::instances::instance_iri_string(schema, inst))),
                 uri_unresolved: inst.uri_unresolved,
                 is_abstract: false,
                 kind_metadata: Some(KindMetadata::Individual {
@@ -1877,7 +1856,7 @@ mod tests {
         assert_eq!(
             wine.uri.as_deref(),
             Some(
-                crate::rdf_serializers::instance_iri_string(
+                crate::instances::instance_iri_string(
                     &schema,
                     set.instances.iter().find(|i| i.id == "w1").unwrap()
                 )

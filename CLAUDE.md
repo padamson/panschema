@@ -41,8 +41,7 @@ panschema/                        # workspace root
 │   │   ├── graph_writer.rs       # IR → graph JSON (consumed by panschema-viz)
 │   │   ├── rust_writer.rs        # IR → Rust structs/enums
 │   │   ├── postgres_writer.rs    # IR → Postgres DDL
-│   │   ├── diagnostics.rs        # silent-drop / unprojected-construct warnings
-│   │   ├── import_resolve.rs     # local `imports:` resolution + merge
+│   │   ├── load.rs               # loads a schema for the commands and prints the model's load warnings
 │   │   ├── source.rs, cache.rs, lockfile.rs, manifest.rs, publish.rs  # release + publish pipeline
 │   │   └── server.rs, components.rs, labels.rs                        # dev server + component preview
 │   ├── templates/                # Askama HTML templates + components/
@@ -56,9 +55,14 @@ panschema/                        # workspace root
 │   ├── src/
 │   │   ├── io.rs                 # Reader trait, IoError, ReaderLookup
 │   │   ├── linkml.rs             # LinkML IR (SchemaDefinition, ClassDefinition, ...)
-│   │   ├── linkml_resolve.rs     # is_a / mixin / slot_usage resolution + effective cardinality
+│   │   ├── linkml_resolve.rs     # is_a / mixin / slot_usage resolution, effective cardinality, element IRIs
+│   │   ├── instances.rs          # instance model: records from LinkML data, anchor expansion, record IRIs
+│   │   ├── primitives.rs         # scalar kinds and their parsing
+│   │   ├── rules.rs              # class rules and permissible-value matching
+│   │   ├── diagnostics.rs        # load, projection, and cross-graph diagnostics as values
+│   │   ├── import_resolve.rs     # `imports:` resolution + merge; returns its warnings
 │   │   └── yaml_reader.rs        # LinkML YAML → IR
-│   └── tests/fixtures/sample_schema.yaml  # the sample LinkML schema both crates' tests read
+│   └── tests/fixtures/       # sample, imports, and shelved schemas; both crates' tests read them
 ├── panschema-viz/                # WASM force-graph visualization (embedded in HTML output)
 ├── docs/                         # adr/, features/, templates/, ROADMAP.md, linkml-coverage.md
 ├── scripts/                      # mutants.sh, dev-install.sh, ...

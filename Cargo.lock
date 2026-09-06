@@ -2631,6 +2631,7 @@ name = "panschema-model"
 version = "0.3.1"
 dependencies = [
  "mutants",
+ "semver",
  "serde",
  "serde_norway",
  "tempfile",

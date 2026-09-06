@@ -1577,12 +1577,11 @@ fn generate_html_for_version(
     let registry = FormatRegistry::with_defaults();
     // Read + resolve local `imports:` through the shared load path, so a
     // published version renders the same merged schema as `generate`/`serve`.
-    let schema = crate::import_resolve::load_schema(input, &registry).map_err(|e| {
-        PublishError::GenerateFailed {
+    let schema =
+        crate::load::load_schema(input, &registry).map_err(|e| PublishError::GenerateFailed {
             version: version.to_string(),
             message: e.to_string(),
-        }
-    })?;
+        })?;
     let mut writer = HtmlWriter::with_options(true)
         .with_version_context(cohort.context_for(version))
         .with_site_root_href(cohort.site_root_href.clone())

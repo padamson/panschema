@@ -129,12 +129,12 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
                 for value in &sv.values {
                     match value {
                         InstanceValue::Scalar(ScalarValue::String(authored)) => {
-                            let named = crate::rdf_serializers::class_named_by(
+                            let named = crate::linkml_resolve::class_named_by(
                                 schema,
                                 &[class_name],
                                 authored,
                             );
-                            if !matches!(named, crate::rdf_serializers::ClassMatch::One(_)) {
+                            if !matches!(named, crate::linkml_resolve::ClassMatch::One(_)) {
                                 push(format!(
                                     "type designator `{slot_name}` value `{authored}` does not \
                                      name the record's class `{class_name}`"
@@ -2613,6 +2613,170 @@ classes:
         assert!(
             v.is_empty(),
             "the precondition does not match, so the rule does not apply; got: {v:?}"
+        );
+    }
+
+    /// The shelved shape the instance model's own tests build from, read from
+    /// the same file so the two crates verify one schema.
+    const SHELVED_SCHEMA: &str = include_str!("../../panschema-model/tests/fixtures/shelved.yaml");
+
+    const VESSEL_UNION_SCHEMA: &str = "\
+name: Estate
+default_range: string
+classes:
+  Root:
+    tree_root: true
+    attributes:
+      things:
+        multivalued: true
+        any_of:
+          - range: Shelf
+          - range: Crate
+  Shelf:
+    attributes:
+      id:
+        identifier: true
+      held:
+        range: string
+  Crate:
+    attributes:
+      id:
+        identifier: true
+      weight:
+        range: integer
+      label:
+        range: string
+";
+
+    #[test]
+    fn a_vessel_rooted_union_collection_builds_and_reports_in_every_spelling() {
+        let schema: SchemaDefinition = serde_norway::from_str(VESSEL_UNION_SCHEMA).expect("schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("things:\n  - {id: s1, held: aisle-3}\n").expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            set.instances.iter().any(|i| i.id == "s1"),
+            "no container exists to hold it, but the record is data; got: {:?}",
+            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+        );
+
+        let data: serde_norway::Value =
+            serde_norway::from_str("things:\n  s1: {held: aisle-3}\n").expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            set.instances.iter().any(|i| i.id == "s1"),
+            "dict spelling loads for a vessel root too; got: {:?}",
+            set.instances.iter().map(|i| &i.id).collect::<Vec<_>>()
+        );
+
+        let data: serde_norway::Value =
+            serde_norway::from_str("things:\n  s1: {held: aisle-3}\n  a1: {}\n").expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        assert!(
+            set.unusable_collection_entries
+                .iter()
+                .any(|u| u.key.as_deref() == Some("a1")),
+            "no container record exists, and the entry is still reported; got: {:?}",
+            set.unusable_collection_entries
+        );
+        let violations = validate_instances(&schema, &set);
+        assert!(
+            violations.iter().any(|v| v.detail.contains("a1")),
+            "validation names the entry; got: {:?}",
+            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn an_ambiguous_simple_dict_entry_names_the_entry_and_the_ambiguity() {
+        const TWIN_SCHEMA: &str = "\
+name: Estate
+default_range: string
+classes:
+  Root:
+    tree_root: true
+    attributes:
+      id:
+        identifier: true
+      things:
+        multivalued: true
+        any_of:
+          - range: Shelf
+          - range: Bin
+  Shelf:
+    attributes:
+      id:
+        identifier: true
+      held:
+        range: string
+  Bin:
+    attributes:
+      id:
+        identifier: true
+      contents:
+        range: string
+";
+        let schema: SchemaDefinition = serde_norway::from_str(TWIN_SCHEMA).expect("schema");
+        let data: serde_norway::Value =
+            serde_norway::from_str("id: est\nthings:\n  s9: aisle-4\n").expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        let violations = validate_instances(&schema, &set);
+        let about_s9: Vec<String> = violations
+            .iter()
+            .map(|v| v.to_string())
+            .filter(|m| m.contains("s9"))
+            .collect();
+        assert!(
+            !about_s9.is_empty(),
+            "the entry is named; got: {:?}",
+            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+        );
+        assert!(
+            about_s9.iter().any(|m| m.contains("more than one")),
+            "ambiguity is the stated failure, not the value's kind; got: {about_s9:?}"
+        );
+    }
+
+    #[test]
+    fn a_non_string_field_key_is_reported_not_dropped() {
+        let schema: SchemaDefinition = serde_norway::from_str(SHELVED_SCHEMA).expect("schema");
+        // The record is restated identically (one entity, two spellings)
+        // and carries both a quotable and an unquotable non-string key.
+        let data: serde_norway::Value = serde_norway::from_str(
+            "id: est\nshelves:\n  - {id: s1, 2024: oops, ~: nix}\n  - {id: s1, 2024: oops, ~: nix}\n",
+        )
+        .expect("data");
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+        let quotable: Vec<_> = set
+            .undeclared_fields
+            .iter()
+            .filter(|f| f.field == "2024")
+            .collect();
+        assert_eq!(
+            quotable.len(),
+            1,
+            "one authored defect is one finding, however many restatements; got: {:?}",
+            set.undeclared_fields
+        );
+        assert_eq!(quotable[0].record, "s1");
+        assert_eq!(
+            quotable[0].key_kind,
+            Some(crate::instances::KeyKind::Quotable)
+        );
+        let violations = validate_instances(&schema, &set);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.detail.contains("2024") && v.detail.contains("quote")),
+            "quoting fixes a scalar key, and the report says so; got: {:?}",
+            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.detail.contains("only string keys") && !v.detail.contains("quote")),
+            "an unquotable key gets its own wording, not impossible advice; got: {:?}",
+            violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
         );
     }
 }

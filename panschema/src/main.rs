@@ -447,9 +447,8 @@ fn check_resolve_against(
                  manifest"
             );
         };
-        let sibling_schema =
-            panschema::import_resolve::load_schema_with_deps(sibling_path, registry, deps)
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let sibling_schema = panschema::load::load_schema_with_deps(sibling_path, registry, deps)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
         if !pins.is_empty()
             && let Some(r) = resolved.get(sibling)
         {
@@ -503,9 +502,7 @@ fn check_resolve_against(
                 sibling_sets.push(set);
             }
         }
-        owned_namespaces.push(panschema::rdf_serializers::instance_namespace(
-            &sibling_schema,
-        ));
+        owned_namespaces.push(panschema::instances::instance_namespace(&sibling_schema));
         if !bindings.is_empty() {
             sibling_graphs.push((sibling_schema, sibling_sets));
         }
@@ -793,7 +790,7 @@ fn generate(
     // so `generate` renders the same merged schema as `serve`/`publish`.
     // `deps` lets an `imports:` entry naming a manifest dependency resolve
     // across the package boundary; it's empty for a single-file `--schema`.
-    let schema = panschema::import_resolve::load_schema_with_deps(input, &registry, deps)
+    let schema = panschema::load::load_schema_with_deps(input, &registry, deps)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     // The unmodeled-construct, unresolved-unique-key, dangling-reference,
@@ -1044,7 +1041,7 @@ fn emit_initial_migration(
     deps: &std::collections::BTreeMap<String, PathBuf>,
 ) -> anyhow::Result<()> {
     let registry = FormatRegistry::with_defaults();
-    let schema = panschema::import_resolve::load_schema_with_deps(schema_path, &registry, deps)
+    let schema = panschema::load::load_schema_with_deps(schema_path, &registry, deps)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     // The DDL covers the classes the Postgres writer can project; surface
@@ -1200,7 +1197,7 @@ fn generate_from_manifest(
         // absence claims nothing verifies gets its note.
         {
             let check_schema =
-                panschema::import_resolve::load_schema_with_deps(schema_path, &registry, &deps)
+                panschema::load::load_schema_with_deps(schema_path, &registry, &deps)
                     .map_err(|e| anyhow::anyhow!("{e}"))?;
             let problems = check_resolve_against(
                 name,
@@ -1921,9 +1918,8 @@ fn verify_manifest(strict: bool) -> anyhow::Result<()> {
     let mut findings = 0usize;
     let mut problems: Vec<String> = Vec::new();
     for name in manifest.schemas.keys() {
-        let schema =
-            panschema::import_resolve::load_schema_with_deps(&deps[name], &registry, &deps)
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let schema = panschema::load::load_schema_with_deps(&deps[name], &registry, &deps)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
         // The shared load path already printed these as warnings; they
         // count toward the strict gate exactly as `generate --strict`
         // refuses them, so the check verb covers what the build verb
@@ -2027,8 +2023,7 @@ fn verify_data(schema_path: &Path, data_paths: &[PathBuf]) -> anyhow::Result<()>
     let registry = FormatRegistry::with_defaults();
     // Load through the shared path so `imports:` merge and `is_a`/mixin slots
     // resolve, matching what every other command reads.
-    let no_deps = std::collections::BTreeMap::new();
-    let schema = panschema::import_resolve::load_schema_with_deps(schema_path, &registry, &no_deps)
+    let schema = panschema::load::load_schema(schema_path, &registry)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     // One file's violations read as its own list; several need labelling, or a

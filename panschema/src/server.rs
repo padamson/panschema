@@ -21,8 +21,8 @@ fn bind_address(external: bool, port: u16) -> String {
 fn regenerate(input: &Path, output: &Path) -> anyhow::Result<()> {
     let registry = FormatRegistry::with_defaults();
 
-    let schema = panschema::import_resolve::load_schema(input, &registry)
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let schema =
+        panschema::load::load_schema(input, &registry).map_err(|e| anyhow::anyhow!("{}", e))?;
 
     let writer = registry
         .writer_for_format("html")

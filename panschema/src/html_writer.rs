@@ -990,7 +990,7 @@ impl HtmlWriter {
             data.push(IndividualData {
                 id: inst.id.clone(),
                 label: inst.label.clone(),
-                iri: crate::rdf_serializers::instance_iri_string(schema, inst),
+                iri: crate::instances::instance_iri_string(schema, inst),
                 description: inst.description.clone(),
                 types,
                 property_values,

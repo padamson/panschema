@@ -5,16 +5,16 @@
 
 pub mod cache;
 pub mod casing;
-pub mod diagnostics;
 pub mod graph_writer;
 pub mod html_writer;
-pub mod import_resolve;
-pub mod instances;
 pub mod io;
 // The model crate owns these; re-exported at the paths they have always had.
-pub use panschema_model::{linkml, linkml_resolve, yaml_reader};
+pub use panschema_model::{
+    diagnostics, import_resolve, instances, linkml, linkml_resolve, primitives, rules, yaml_reader,
+};
 pub mod json_schema_writer;
 pub mod labels;
+pub mod load;
 pub mod lockfile;
 pub mod manifest;
 /// Backs the `mdbook-panschema` binary; not part of the conversion API.
@@ -25,10 +25,8 @@ pub mod owl_model;
 pub mod owl_reader;
 pub mod owl_writer;
 pub mod postgres_writer;
-pub mod primitives;
 pub mod publish;
 pub mod rdf_serializers;
-pub mod rules;
 pub mod rust_writer;
 pub mod shacl_writer;
 pub mod source;

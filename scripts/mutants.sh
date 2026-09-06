@@ -105,6 +105,7 @@ exec cargo mutants --in-diff "$DIFF" --jobs 4 $TEST_SCOPE \
   --exclude 'panschema/src/components.rs' \
   --exclude 'panschema/src/bin/mdbook_panschema.rs' \
   --exclude 'panschema/src/main.rs' \
+  --exclude 'panschema/src/server.rs' \
   --exclude 'panschema-viz/src/lib.rs' \
   --exclude 'panschema-viz/src/canvas2d.rs' \
   --exclude 'panschema-viz/src/camera.rs' \
