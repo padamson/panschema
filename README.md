@@ -114,6 +114,31 @@ This design enables:
 - Adding new output formats by implementing the `Writer` trait
 - Format-agnostic documentation and conversion
 
+### The model as a library
+
+The LinkML IR ships on its own as
+[`panschema-model`](https://crates.io/crates/panschema-model): the schema
+model, its `is_a`/mixin/`slot_usage` resolution, the LinkML YAML reader, the
+instance model with anchor expansion, and the IRI every projection mints for
+a class, slot, enum, or record. It carries no RDF, template, CLI, or async
+dependency, so a Rust tool that reasons over schemas and instance data reads
+the model directly instead of parsing a projection back out of Turtle:
+
+```toml
+[dependencies]
+panschema-model = "0.3"
+```
+
+```rust
+let loaded = panschema_model::load_dataset(&schema, &data, &YamlReader::new())?;
+for record in &loaded.instances.instances {
+    println!("{}", instance_iri_string(&loaded.schema, record));
+}
+```
+
+`panschema` re-exports every one of those modules at its own paths, so code
+written against `panschema::linkml` keeps working.
+
 ## Graph Visualization
 
 panschema includes an interactive force-directed graph visualization for exploring schema relationships directly in the browser.

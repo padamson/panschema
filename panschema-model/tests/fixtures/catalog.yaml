@@ -1,0 +1,28 @@
+name: catalog
+id: https://example.org/catalog
+description: A tiny catalog schema for the worked example.
+default_prefix: cat
+prefixes:
+  cat: https://example.org/catalog/
+default_range: string
+slots:
+  id:
+    description: The record's unique identifier.
+    identifier: true
+  name:
+    description: Display name of the record.
+classes:
+  Catalog:
+    description: The container holding the wines.
+    tree_root: true
+    attributes:
+      wines:
+        description: The wines in this catalog.
+        range: Wine
+        multivalued: true
+  Wine:
+    description: A wine in the catalog.
+    slots: [id, name]
+    attributes:
+      color:
+        description: The wine's color.

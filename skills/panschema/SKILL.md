@@ -14,6 +14,13 @@ Readers cover OWL/Turtle and LinkML YAML. Writers cover HTML docs, the
 RDF/OWL family, graph JSON, Rust, Postgres DDL, SHACL, JSON Schema and
 OpenAPI. Any reader pairs with any writer.
 
+The IR itself is a library, `panschema-model` on crates.io: the schema
+model, its inheritance resolution, the LinkML YAML reader, the instance
+model, and the IRIs every projection mints. A Rust tool that needs to
+reason over a schema or a dataset should depend on that crate rather than
+shelling out to the CLI and parsing an output — and never re-derive the
+model by reading a projection back in.
+
 ## Start here
 
 - **Generate something once** — `panschema generate --schema <file>

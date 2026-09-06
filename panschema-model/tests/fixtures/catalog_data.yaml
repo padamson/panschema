@@ -1,0 +1,7 @@
+wines:
+  - id: chateauMorgon
+    name: Château Morgon
+    color: red
+  - id: napaCabernet
+    name: Napa Cabernet
+    color: red

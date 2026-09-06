@@ -86,6 +86,17 @@ pub struct LoadFailure {
     pub error: IoError,
 }
 
+impl std::fmt::Display for LoadFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.error)
+    }
+}
+
+// No `source`: it would be the error `Display` already prints, so a
+// consumer using anyhow or eyre would see the same line twice. The error
+// itself is a public field for a caller that wants it.
+impl std::error::Error for LoadFailure {}
+
 impl From<IoError> for LoadFailure {
     fn from(error: IoError) -> Self {
         LoadFailure {

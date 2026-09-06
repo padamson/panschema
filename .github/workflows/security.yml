@@ -92,8 +92,11 @@ jobs:
       - name: Install cargo-semver-checks
         run: cargo install cargo-semver-checks --locked
 
+      # Scoped to the crates that have a published baseline to compare
+      # against. `panschema-model` joins the moment its first release is
+      # on crates.io; until then there is no previous version to check.
       - name: Check semver compatibility
-        run: cargo semver-checks check-release
+        run: cargo semver-checks check-release -p panschema
 
   mutation-testing:
     name: Mutation Testing (full)

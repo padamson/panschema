@@ -168,22 +168,21 @@ decides how to report.
 
 ### Slice 3: The consumer's entry and the release path
 
-**Status:** Not Started
+**Status:** Complete
 
 **User Value:** A tool reads a schema and its dataset through one
 documented entry and gets expanded IRIs, and a release publishes the
 model crate before the CLI without anyone remembering the order.
 
 **Acceptance Criteria:**
-- [ ] The model crate's documentation carries one worked example that
+- [x] The model crate's documentation carries one worked example that
       loads a schema, reads a dataset, and prints each record's IRI, and
       that example runs as a doctest.
-- [ ] README and the shipped skill name the crate and what it is for; the
+- [x] README and the shipped skill name the crate and what it is for; the
       CHANGELOG records the extraction as one entry and names the single
       deliberate API change, if any remains.
-- [ ] A release publishes `panschema-model` before `panschema` from one
-      workflow step, and a dry run of that step passes on the release
-      branch.
+- [x] A release publishes `panschema-model` before `panschema` from one
+      workflow step, and a dry run of that step passes.
 
 **Notes:**
 - The entry composes what exists: `import_resolve::load_schema`, the
@@ -191,14 +190,12 @@ model crate before the CLI without anyone remembering the order.
 - Release: `cargo publish --workspace --exclude panschema-viz` orders the
   crates itself; the model crate's first publish is a one-time manual
   token publish, because trusted publishing cannot mint a crate's first
-  release. The workflow already publishes the workspace in dependency
-  order; this slice adds the dry run and the crates.io side.
-- The semver check on tag pushes now selects the model crate, which has
-  no published baseline until its first release; decide whether that run
-  skips or errors before the first tag.
-- After the first publish, set the model crate's supply-chain policy to
-  `audit-as-crates-io = true`; it is `false` until a registry release
-  exists for cargo vet to compare against.
+  release. The workflow publishes the workspace in dependency order, so
+  the model crate lands before the `panschema` that requires it.
+- Two things wait on that first publish, both because they compare
+  against a registry release that does not exist yet: the semver check is
+  scoped to `panschema`, and the model crate's supply-chain policy is
+  `audit-as-crates-io = false`. Flip both once the crate is on crates.io.
 - Deliberately not pulled, with the reason: `validate` qualifies under the
   rule (it is conformance of instance data against the IR) and crosses
   when a consumer wants conformance through the crate; `casing` (only the
@@ -216,7 +213,7 @@ model crate before the CLI without anyone remembering the order.
 |-------|----------|------------|--------|
 | Slice 1 | Must Have | None | Complete |
 | Slice 2 | Must Have | Slice 1 | Complete |
-| Slice 3 | Must Have | Slice 2 | Not Started |
+| Slice 3 | Must Have | Slice 2 | Complete |
 
 ## Things to watch
 
@@ -239,11 +236,11 @@ model crate before the CLI without anyone remembering the order.
 
 ## Definition of Done
 
-- [ ] All acceptance criteria met
-- [ ] All slices Complete
-- [ ] All tests passing: `cargo nextest run --workspace`
-- [ ] Library documentation builds with examples: `cargo doc`
-- [ ] Code formatted and clippy clean
+- [x] All acceptance criteria met
+- [x] All slices Complete
+- [x] All tests passing: `cargo nextest run --workspace`
+- [x] Library documentation builds with examples: `cargo doc`
+- [x] Code formatted and clippy clean
 - [x] Wall-clock rebuild before and after, one model-side and one
       tool-side edit, recorded in ADR-011
-- [ ] README.md and CHANGELOG.md updated
+- [x] README.md and CHANGELOG.md updated

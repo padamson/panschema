@@ -173,10 +173,17 @@ jobs:
     # Trusted publishing: a short-lived OIDC-exchanged token, no
     # long-lived secret. No skip-if-missing guard — failing at auth is
     # correct; a skipped publish that reports success is the trap.
+    #
+    # Trusted publishing cannot mint a crate's *first* release, so a newly
+    # added workspace member is published once by hand with a token before
+    # its first tag; every release after that runs from here.
     - name: Authenticate with crates.io
       id: auth
       uses: rust-lang/crates-io-auth-action@v1
 
+    # `--workspace` publishes the members in dependency order, so
+    # `panschema-model` lands before the `panschema` that requires it, and
+    # `panschema-viz` (publish = false) is skipped.
     - name: Publish to crates.io
       run: cargo publish --workspace --allow-dirty
       env:
