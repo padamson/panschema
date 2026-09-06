@@ -156,3 +156,97 @@ pub fn load_dataset(
         warnings,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::yaml_reader::YamlReader;
+
+    /// A dataset file that is not there fails the load, naming the file.
+    #[test]
+    fn a_dataset_that_is_not_there_names_the_file() {
+        let failure = load_dataset(
+            Path::new("tests/fixtures/catalog.yaml"),
+            Path::new("tests/fixtures/no_such_dataset.yaml"),
+            &YamlReader::new(),
+        )
+        .expect_err("a missing dataset fails the load");
+        let message = failure.error.to_string();
+        assert!(
+            message.contains("could not read") && message.contains("no_such_dataset.yaml"),
+            "the error names the file it could not read: {message}"
+        );
+    }
+
+    /// A dataset that is not YAML fails the load naming that file — not the
+    /// schema, the other YAML path in play — and the warnings the schema's own
+    /// load raised come back with the error rather than vanishing.
+    #[test]
+    fn a_dataset_that_does_not_parse_names_it_and_keeps_the_schema_warnings() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let data = dir.path().join("catalog_data.yaml");
+        std::fs::write(
+            &data,
+            "wines:\n  - id: chateauMorgon\n   name: bad indent\n",
+        )
+        .expect("write the dataset");
+
+        let failure = load_dataset(
+            Path::new("tests/fixtures/dangling_range.yaml"),
+            &data,
+            &YamlReader::new(),
+        )
+        .expect_err("a dataset that is not YAML fails the load");
+        let message = failure.error.to_string();
+        assert!(
+            message.contains("could not parse") && message.contains("catalog_data.yaml"),
+            "the error names the dataset it could not parse: {message}"
+        );
+        assert!(
+            failure.warnings.iter().any(|w| w.contains("Customer")),
+            "the schema's own load warnings survive the failure; got {:?}",
+            failure.warnings
+        );
+    }
+
+    /// Records anchor on a `tree_root` container, so a schema without one and a
+    /// dataset shaped for another schema both read nothing. Either way the load
+    /// says which it was, rather than returning an empty set as a success.
+    #[test]
+    fn a_load_that_reads_no_records_says_why() {
+        let no_container = load_dataset(
+            Path::new("tests/fixtures/dangling_range.yaml"),
+            Path::new("tests/fixtures/catalog_data.yaml"),
+            &YamlReader::new(),
+        )
+        .expect("a schema without a container still loads");
+        assert!(no_container.instances.instances.is_empty());
+        assert!(
+            no_container
+                .warnings
+                .iter()
+                .any(|w| w.contains("declares no `tree_root` container")),
+            "the load names the missing container; got {:?}",
+            no_container.warnings
+        );
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let data = dir.path().join("grapes.yaml");
+        std::fs::write(&data, "grapes:\n  - id: zinfandel\n").expect("write the dataset");
+        let mismatched = load_dataset(
+            Path::new("tests/fixtures/catalog.yaml"),
+            &data,
+            &YamlReader::new(),
+        )
+        .expect("a mismatched dataset still loads");
+        assert!(mismatched.instances.instances.is_empty());
+        assert!(
+            mismatched
+                .warnings
+                .iter()
+                .any(|w| w.contains("no records read from") && w.contains("grapes.yaml")),
+            "the load names the dataset that matched nothing; got {:?}",
+            mismatched.warnings
+        );
+    }
+}

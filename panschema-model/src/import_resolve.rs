@@ -1497,4 +1497,16 @@ mod tests {
             "the root's definition must win, and the load must not fail"
         );
     }
+
+    /// A load failure reads as the error it carries, so a caller that
+    /// prints it says what went wrong rather than naming a wrapper.
+    #[test]
+    fn a_load_failure_reads_as_its_error() {
+        let failure = LoadFailure::from(IoError::Parse("could not parse `d.yaml`".to_string()));
+        assert_eq!(failure.to_string(), failure.error.to_string());
+        assert!(
+            failure.to_string().contains("could not parse `d.yaml`"),
+            "got {failure}"
+        );
+    }
 }
