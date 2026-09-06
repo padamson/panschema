@@ -138,7 +138,8 @@ Input → Reader → LinkML IR → [Filters] → Writer → Output
 | 41 | [Cross-Graph Instance Identity](features/41-cross-graph-instance-identity.md) | Per-class dataset scoping (scoped facts vs global vocabulary), cross-dataset collision detection, external-IRI references, `tree_root` record emission | **Specced, not started** |
 | 40 | [Agent-Facing Skill That Cannot Drift](features/40-agent-facing-skill-that-cannot-drift.md) | A shipped Claude Code skill whose examples CI executes and whose coverage the code's own enumerations assert | **In progress: slice 1 shipped** |
 | 39 | [Schema Diff + Migration Generation](features/39-schema-diff-and-migration-generation.md) | `diff` reports a semantic schema delta with a compatibility verdict; `migrate` renders it as a versioned Postgres migration file (append-only, never applied by panschema) | **Specced, not started** |
-| 46 | [panschema-model Crate](features/46-panschema-model-crate.md) | The LinkML IR, instance model, element identity, and diagnostics in their own crate; `panschema` re-exports it | **Specced, not started** |
+| 46 | [panschema-model Crate](features/46-panschema-model-crate.md) | The LinkML IR, instance model, element identity, and diagnostics in their own crate; `panschema` re-exports it | **Shipped** |
+| 47 | CLI distribution for agents ([ADR-012](adr/012-cli-distribution-for-agents.md)) | Prebuilt binaries as npm platform packages, so an agent runs `npx -y panschema` with nothing installed; needs an arm64 Linux target and the crates.io publish first | **Decided, sequenced** |
 
 ## Delivery Approach
 
