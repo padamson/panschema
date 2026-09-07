@@ -58,6 +58,7 @@ are manifest-relative.
 |---|---|
 | `html` | **A directory** — the docs site, plus the viz assets |
 | `instances` | Array of LinkML instance-data files (A-boxes). Declaration order drives the in-page selector |
+| `datasets` | Array of dataset **names** a dependency publishes — each an `[[instances]]` `name` in that package's `panschema-publish.toml`, resolved wherever the dependency resolved to. Write these instead of pathing into a dependency's checkout, which a `github:` source has no stable path into. They render after the `instances` paths. They join the entry's declared set, so `verify` and `resolve_against` see them too. A name the package doesn't publish fails listing the ones it does. A bare name resolves only against this entry's own dependency, so a dataset whose publish entry names a *different* schema is refused — supply that one's file with `instances` |
 | `html_graph_aspect` | `"W:H"`, default `16:8`. Only meaningful with `html` |
 | `html_default_layout` | Layout name; see the formats reference |
 | `html_page_layout` | `"schema-first"` (default) or `"instances-first"` — which half of the page leads |

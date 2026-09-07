@@ -456,17 +456,17 @@ fn check_resolve_against(
                 entry: sibling.clone(),
                 published: r.published_name.clone(),
                 schema_id: sibling_schema.id.clone().filter(|id| !id.is_empty()),
-                datasets: r.dataset_names.clone(),
+                datasets: r.datasets.iter().map(|d| d.name.clone()).collect(),
                 version: r.version.clone(),
             });
         }
         let mut sibling_sets: Vec<panschema::instances::InstanceSet> = Vec::new();
-        let declared = manifest.declared_instances(sibling);
+        let declared = manifest.declared_instances(sibling, resolved)?;
         if declared.is_empty() {
             eprintln!(
-                "note: resolve_against `{sibling}` declares no `instances` (in \
-                 [check.{sibling}] or [generate.{sibling}]); references into its \
-                 namespace cannot resolve"
+                "note: resolve_against `{sibling}` declares no datasets (no \
+                 `instances` or `datasets` in [check.{sibling}] or \
+                 [generate.{sibling}]); references into its namespace cannot resolve"
             );
         }
         let sibling_instances: Vec<PathBuf> =
@@ -523,7 +523,7 @@ fn check_resolve_against(
     // One streamed pass per referring file: each file's warnings flush
     // before the next file is even opened, and nothing is retained.
     for path in manifest
-        .declared_instances(name)
+        .declared_instances(name, resolved)?
         .iter()
         .map(|p| manifest_dir.join(p))
     {
@@ -1184,9 +1184,14 @@ fn generate_from_manifest(
             }
             continue;
         };
-        // Instance-data paths are manifest-relative, like every output path.
-        let instances: Vec<PathBuf> = gen_cfg
-            .instances
+        // The declared set: manifest-relative paths, then the datasets this
+        // entry names, resolved inside the dependency's own package. One
+        // list, so `generate`, `verify` and the cross-graph pass cannot
+        // disagree about what this entry declares. Joining the manifest
+        // directory leaves the named datasets' absolute paths untouched.
+        // No added context on the error: it already names its block.
+        let instances: Vec<PathBuf> = manifest
+            .declared_instances(name, &resolved)?
             .iter()
             .map(|p| manifest_dir.join(p))
             .collect();
@@ -1926,7 +1931,7 @@ fn verify_manifest(strict: bool) -> anyhow::Result<()> {
         // would reject.
         findings += panschema::diagnostics::strict_blocking(&schema).total();
         let instances: Vec<PathBuf> = manifest
-            .declared_instances(name)
+            .declared_instances(name, &resolved)?
             .iter()
             .map(|p| manifest_dir.join(p))
             .collect();

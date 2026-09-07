@@ -53,25 +53,27 @@ is where the resolution, the errors, and the tests are built.
 
 ### Slice 1: A dataset of this entry's own dependency
 
-**Status:** Not Started
+**Status:** Complete
 
 **User Value:** A consumer renders a dependency's published dataset by name,
 with no path into the dependency, and the same manifest works whether that
 dependency is a sibling checkout or a fetched release.
 
 **Acceptance Criteria:**
-- [ ] `datasets = ["<name>"]` on a `[generate.<dep>]` entry renders the
+- [x] `datasets = ["<name>"]` on a `[generate.<dep>]` entry renders the
       dataset that `<dep>`'s publish manifest lists under that name, from
       whichever location the dependency resolved to.
-- [ ] The output is byte-identical to what the equivalent `instances` path
+- [x] The output is byte-identical to what the equivalent `instances` path
       produces for the same dataset.
-- [ ] `datasets` and `instances` may both appear; datasets resolve after the
+- [x] `datasets` and `instances` may both appear; datasets resolve after the
       paths, so the rendered order is declaration order within each.
-- [ ] A name the dependency does not publish fails naming the entry, the
+- [x] A name the dependency does not publish fails naming the entry, the
       dependency, and every name it does publish.
-- [ ] A dataset whose publish entry names a different schema fails, saying
-      which `[generate.<name>]` block it belongs under, rather than
-      rendering data against a schema it does not conform to.
+- [x] Named datasets join the entry's declared set, so `verify` and the
+      cross-graph pass cover them exactly as they cover pathed ones.
+- [x] A dataset whose publish entry names a different schema is refused,
+      with a remedy that works, rather than rendered against a schema it
+      does not conform to.
 
 **Notes:**
 - The lookup reads the dependency's `panschema-publish.toml` from
@@ -113,10 +115,20 @@ but shipped with the ontology it grades — by naming both.
 
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
-| Slice 1 | Must Have | None | Not Started |
+| Slice 1 | Must Have | None | Complete |
 | Slice 2 | Must Have | Slice 1 | Not Started |
 
 ## Things to watch
+
+- A bare name resolves only against the block's own dependency, so slice 1
+  cannot reach a dataset that conforms to another package's schema — the
+  qualified form in slice 2 is what makes that reachable. Until then the
+  error points at `instances`, which does work, rather than at a block
+  where the bare name would fail differently.
+- `[check.<name>]` has no `datasets` key, so a check-only entry still
+  declares its data by path. The union reads generate's names, which is
+  what keeps `verify` honest for entries that generate; a check-only entry
+  naming a package dataset is a separate addition.
 
 - `fetch` resolves tags only, so a consumer cannot pin a package whose
   release predates the dataset it wants. That is a release-cadence problem

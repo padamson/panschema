@@ -47,12 +47,21 @@ pub struct Manifest {
 }
 
 impl Manifest {
-    /// The datasets declared for `name`: the union of the
-    /// `[generate.<name>]` and `[check.<name>]` lists, generate's first,
-    /// each path once. Both commands consume the union — conformance and
-    /// cross-graph checks cover everything declared, so a check list can
-    /// only add datasets, never hide the ones `generate` ships.
-    pub fn declared_instances(&self, name: &str) -> Vec<PathBuf> {
+    /// The datasets declared for `name`: the `[generate.<name>]` and
+    /// `[check.<name>]` path lists and the datasets `[generate.<name>]`
+    /// names, generate's first, each once. Every command consumes this
+    /// union — conformance and cross-graph checks cover everything
+    /// declared, so a check list can only add datasets, never hide the
+    /// ones `generate` ships, and a dataset named rather than pathed is
+    /// still one of them.
+    ///
+    /// Named datasets resolve to absolute paths inside the dependency's
+    /// package; the path lists stay manifest-relative, as authored.
+    pub fn declared_instances(
+        &self,
+        name: &str,
+        resolved: &BTreeMap<String, crate::source::Resolved>,
+    ) -> Result<Vec<PathBuf>, crate::source::DatasetError> {
         let mut out: Vec<PathBuf> = Vec::new();
         let lists = [
             self.generate.get(name).map(|g| &g.instances),
@@ -63,7 +72,17 @@ impl Manifest {
                 out.push(path.clone());
             }
         }
-        out
+        if let Some(gen_cfg) = self.generate.get(name)
+            && !gen_cfg.datasets.is_empty()
+            && let Some(dep) = resolved.get(name)
+        {
+            for path in crate::source::resolve_named_datasets(name, dep, &gen_cfg.datasets)? {
+                if !out.contains(&path) {
+                    out.push(path);
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// `[check.<name>]` entries naming no `[schemas]` entry — check
@@ -126,6 +145,15 @@ pub struct GenerateConfig {
     /// A-box (ADR-009 decision 6).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub instances: Vec<PathBuf>,
+    /// Datasets to render, named as the dependency publishes them —
+    /// each is an `[[instances]]` `name` in that package's
+    /// `panschema-publish.toml`, resolved from wherever the dependency
+    /// resolved to. This is what a consumer writes instead of a path
+    /// into the dependency's checkout, which it has no stable path to
+    /// once the source is a pinned release rather than a sibling. They
+    /// render after the `instances` paths, in declaration order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub datasets: Vec<String>,
     /// Override the schema graph viz aspect ratio in HTML output. Format
     /// `"W:H"` (e.g. `"16:9"`, `"4:3"`). Only meaningful when `html` is set.
     /// Default is 16:8, chosen so a laptop screen fits the graph + browser
@@ -285,6 +313,7 @@ impl GenerateConfig {
         let populated = GenerateConfig {
             html: Some(PathBuf::from("x")),
             instances: vec![PathBuf::from("x")],
+            datasets: vec!["x".to_string()],
             html_graph_aspect: Some("16:9".to_string()),
             html_default_layout: Some("sgd".to_string()),
             html_page_layout: Some(crate::html_writer::PageLayout::SchemaFirst),
@@ -688,6 +717,42 @@ html = "docs/"
             m.generate.get("my-local").unwrap().html,
             Some(PathBuf::from("docs/"))
         );
+    }
+
+    /// A dependency publishes its datasets by name; a consumer names one
+    /// rather than pathing into the dependency's checkout, which it has no
+    /// stable path to once the source is a pinned release.
+    #[test]
+    fn a_generate_entry_names_a_dependency_dataset() {
+        let toml = r#"
+[schemas]
+wine = { path = "../wine" }
+
+[generate.wine]
+ttl = "out/wine.ttl"
+datasets = ["worked-example", "preview"]
+"#;
+        let m = toml.parse::<Manifest>().expect("should parse");
+        assert_eq!(
+            m.generate.get("wine").unwrap().datasets,
+            ["worked-example", "preview"],
+            "datasets are named in declaration order"
+        );
+    }
+
+    /// A manifest that names no dataset gets an empty list, not a default
+    /// anyone has to check for.
+    #[test]
+    fn generate_datasets_defaults_to_none_named() {
+        let toml = r#"
+[schemas]
+wine = { path = "../wine" }
+
+[generate.wine]
+ttl = "out/wine.ttl"
+"#;
+        let m = toml.parse::<Manifest>().expect("should parse");
+        assert!(m.generate.get("wine").unwrap().datasets.is_empty());
     }
 
     #[test]
@@ -1360,7 +1425,9 @@ instances = ["b.yaml", "c.yaml"]
         )
         .expect("parse");
         assert_eq!(
-            manifest.declared_instances("x"),
+            manifest
+                .declared_instances("x", &BTreeMap::new())
+                .expect("resolves"),
             vec![
                 PathBuf::from("a.yaml"),
                 PathBuf::from("b.yaml"),
@@ -1369,9 +1436,48 @@ instances = ["b.yaml", "c.yaml"]
             "generate's list first, check's additions after, shared paths once"
         );
         assert_eq!(
-            manifest.declared_instances("ghost"),
+            manifest
+                .declared_instances("ghost", &BTreeMap::new())
+                .expect("resolves"),
             Vec::<PathBuf>::new(),
             "an undeclared name declares nothing"
+        );
+    }
+
+    /// A dataset named rather than pathed is still declared: `verify` and
+    /// the cross-graph pass read this union, so a named dataset that only
+    /// reached `generate` would be data the checks never saw.
+    #[test]
+    fn declared_instances_includes_a_named_dataset() {
+        let manifest: Manifest = toml::from_str(
+            "[schemas]\nwine = { path = \"../wine\" }\n\n             [generate.wine]\nttl = \"out.ttl\"\ninstances = [\"local.yaml\"]\n             datasets = [\"worked-example\"]\n",
+        )
+        .expect("parse");
+        let mut resolved = BTreeMap::new();
+        resolved.insert(
+            "wine".to_string(),
+            crate::source::Resolved {
+                pkg_dir: PathBuf::from("/pkg/wine"),
+                schema_path: PathBuf::from("/pkg/wine/wine.yaml"),
+                version: "1.0.0".to_string(),
+                published_name: "wine".to_string(),
+                datasets: vec![crate::source::PublishedDataset {
+                    name: "worked-example".to_string(),
+                    data: PathBuf::from("/pkg/wine/data/wine-instances.yaml"),
+                    schema: None,
+                }],
+                revision: None,
+            },
+        );
+        assert_eq!(
+            manifest
+                .declared_instances("wine", &resolved)
+                .expect("resolves"),
+            vec![
+                PathBuf::from("local.yaml"),
+                PathBuf::from("/pkg/wine/data/wine-instances.yaml"),
+            ],
+            "the authored path first, then the named dataset's own file"
         );
     }
 
@@ -1382,7 +1488,9 @@ instances = ["b.yaml", "c.yaml"]
         )
         .expect("parse");
         assert_eq!(
-            manifest.declared_instances("x"),
+            manifest
+                .declared_instances("x", &BTreeMap::new())
+                .expect("resolves"),
             vec![PathBuf::from("c.yaml")]
         );
     }
@@ -1450,6 +1558,7 @@ resolve_against = []
         let expected = [
             "html",
             "instances",
+            "datasets",
             "html_graph_aspect",
             "html_default_layout",
             "rust",

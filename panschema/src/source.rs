@@ -164,6 +164,34 @@ pub enum TarballFetchError {
 /// anonymous limit and works for any public repo.
 pub struct CodeloadGithubSource;
 
+/// A dataset a package publishes: the name a consumer refers to it by,
+/// where its data actually lives, and the schema it conforms to when that
+/// is a dependency rather than the package's own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishedDataset {
+    /// The `[[instances]]` entry's `name`.
+    pub name: String,
+    /// Absolute path to the data file, resolved against the package
+    /// directory the publish manifest sits in.
+    pub data: PathBuf,
+    /// The `[schemas.<dep>]` dependency this dataset conforms to, when the
+    /// publish entry names one. `None` means the package's own schema.
+    pub schema: Option<String>,
+}
+
+impl PublishedDataset {
+    fn from_entries(pkg_dir: &Path, entries: &[crate::publish::InstanceEntry]) -> Vec<Self> {
+        entries
+            .iter()
+            .map(|entry| PublishedDataset {
+                name: entry.name.clone(),
+                data: pkg_dir.join(&entry.data),
+                schema: entry.schema.clone(),
+            })
+            .collect()
+    }
+}
+
 /// Resolved schema dependency: the canonical package directory, the
 /// on-disk path to the schema's main file, the version declared in
 /// `panschema-publish.toml`, and (for remote sources) a revision to
@@ -183,13 +211,95 @@ pub struct Resolved {
     pub version: String,
     /// The package name its publish manifest declares.
     pub published_name: String,
-    /// The dataset names its publish manifest lists (`[[instances]]`).
-    pub dataset_names: Vec<String>,
+    /// The datasets its publish manifest lists (`[[instances]]`), in
+    /// declaration order. A consumer names one of these instead of
+    /// pathing into the package.
+    pub datasets: Vec<PublishedDataset>,
     /// Reserved for future commit-identifier provenance. Currently
     /// always `None`: `path:` sources have no commit; `github:` sources
     /// use a tag URL that doesn't expose a commit SHA without an extra
     /// API call we don't make.
     pub revision: Option<String>,
+}
+
+/// Errors raised while resolving a dataset a consumer named.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum DatasetError {
+    #[error(
+        "[generate.{entry}]: `{dep}` publishes no dataset named `{name}`{}",
+        if available.is_empty() {
+            String::from("; it publishes none")
+        } else {
+            format!("; it publishes {}", available.join(", "))
+        }
+    )]
+    Unknown {
+        entry: String,
+        dep: String,
+        name: String,
+        available: Vec<String>,
+    },
+    #[error(
+        "[generate.{entry}]: `{dep}`'s dataset `{name}` conforms to schema `{schema}`, \
+         not `{entry}` — this block renders only the datasets `{dep}` publishes against \
+         `{entry}`'s own schema, so supply this one's file with `instances`"
+    )]
+    WrongSchema {
+        entry: String,
+        dep: String,
+        name: String,
+        schema: String,
+    },
+}
+
+impl Resolved {
+    /// The dataset this package publishes under `name`.
+    pub fn dataset(&self, name: &str) -> Option<&PublishedDataset> {
+        self.datasets.iter().find(|d| d.name == name)
+    }
+
+    /// The names it publishes, for an error that has to say what was on
+    /// offer.
+    pub fn dataset_names(&self) -> Vec<String> {
+        self.datasets.iter().map(|d| d.name.clone()).collect()
+    }
+}
+
+/// Resolve the dataset names a `[generate.<entry>]` block declares against
+/// the dependency that block is about, to the data files they name.
+///
+/// A dataset whose publish entry names a different schema belongs under
+/// that schema's block: the package already states which schema its data
+/// conforms to, so a consumer that puts it elsewhere is asking for data to
+/// be rendered against a schema it does not conform to.
+pub fn resolve_named_datasets(
+    entry: &str,
+    dep: &Resolved,
+    names: &[String],
+) -> Result<Vec<PathBuf>, DatasetError> {
+    let mut out = Vec::with_capacity(names.len());
+    for name in names {
+        let Some(dataset) = dep.dataset(name) else {
+            return Err(DatasetError::Unknown {
+                entry: entry.to_string(),
+                dep: dep.published_name.clone(),
+                name: name.clone(),
+                available: dep.dataset_names(),
+            });
+        };
+        if let Some(schema) = &dataset.schema
+            && schema != entry
+        {
+            return Err(DatasetError::WrongSchema {
+                entry: entry.to_string(),
+                dep: dep.published_name.clone(),
+                name: name.clone(),
+                schema: schema.clone(),
+            });
+        }
+        out.push(dataset.data.clone());
+    }
+    Ok(out)
 }
 
 /// Errors raised while resolving a [`SchemaSource`].
@@ -350,11 +460,11 @@ pub fn resolve_github(
     let main_path = resolve_main_in_package(&canon_pkg, &publish)?;
 
     Ok(Resolved {
+        datasets: PublishedDataset::from_entries(&canon_pkg, &publish.instances),
         pkg_dir: canon_pkg,
         schema_path: main_path,
         version: publish.schema.version,
         published_name: publish.schema.name,
-        dataset_names: publish.instances.iter().map(|i| i.name.clone()).collect(),
         revision: None,
     })
 }
@@ -374,11 +484,11 @@ pub fn resolve_path(
     let (canon_pkg, publish) = open_package(name, &resolved)?;
     let main_path = resolve_main_in_package(&canon_pkg, &publish)?;
     Ok(Resolved {
+        datasets: PublishedDataset::from_entries(&canon_pkg, &publish.instances),
         pkg_dir: canon_pkg,
         schema_path: main_path,
         version: publish.schema.version,
         published_name: publish.schema.name,
-        dataset_names: publish.instances.iter().map(|i| i.name.clone()).collect(),
         revision: None,
     })
 }
@@ -798,5 +908,167 @@ main = "schema/example.yaml"
         assert_eq!(first_contents, second_contents);
         assert!(first.revision.is_none());
         assert!(second.revision.is_none());
+    }
+
+    /// Resolving a package carries its published datasets across: the
+    /// names a consumer refers to them by, each data file resolved against
+    /// the package directory rather than the consumer's, and the schema a
+    /// dataset conforms to when its entry names one.
+    #[test]
+    fn resolving_a_package_carries_the_datasets_it_publishes() {
+        let tmp = TempDir::new().unwrap();
+        let pkg = tmp.path().join("wine");
+        std::fs::create_dir_all(pkg.join("data")).unwrap();
+        std::fs::write(
+            pkg.join("panschema-publish.toml"),
+            r#"
+[schema]
+name = "wine"
+version = "1.0.0"
+linkml = "1.7.0"
+
+[files]
+main = "wine.yaml"
+
+[[instances]]
+name = "worked-example"
+data = "data/wine-instances.yaml"
+
+[[instances]]
+name = "benchmark"
+data = "data/wine-benchmark.yaml"
+schema = "cqa"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            pkg.join("wine.yaml"),
+            "name: wine\nid: https://example.org/wine\n",
+        )
+        .unwrap();
+
+        let resolved = resolve_path("wine", Path::new("wine"), tmp.path()).expect("resolves");
+        assert_eq!(
+            resolved.dataset_names(),
+            ["worked-example", "benchmark"],
+            "in publish order"
+        );
+        let worked = resolved.dataset("worked-example").expect("published");
+        assert_eq!(
+            worked.data,
+            resolved.pkg_dir.join("data/wine-instances.yaml"),
+            "the data file resolves inside the package, not the consumer"
+        );
+        assert_eq!(
+            worked.schema, None,
+            "it conforms to the package's own schema"
+        );
+        assert_eq!(
+            resolved.dataset("benchmark").expect("published").schema,
+            Some("cqa".to_string()),
+            "and this one names the dependency it conforms to"
+        );
+    }
+
+    /// A package with two datasets: one its own schema, one conforming to
+    /// a dependency's.
+    fn published(pkg: &str) -> Resolved {
+        Resolved {
+            pkg_dir: PathBuf::from(pkg),
+            schema_path: PathBuf::from(pkg).join("schema.yaml"),
+            version: "1.0.0".to_string(),
+            published_name: "wine".to_string(),
+            datasets: vec![
+                PublishedDataset {
+                    name: "worked-example".to_string(),
+                    data: PathBuf::from(pkg).join("data/wine-instances.yaml"),
+                    schema: None,
+                },
+                PublishedDataset {
+                    name: "benchmark".to_string(),
+                    data: PathBuf::from(pkg).join("data/wine-benchmark.yaml"),
+                    schema: Some("cqa".to_string()),
+                },
+            ],
+            revision: None,
+        }
+    }
+
+    /// A named dataset resolves to the file the package publishes, under
+    /// the package's own directory — the consumer never writes that path.
+    #[test]
+    fn a_named_dataset_resolves_to_the_packages_own_file() {
+        let dep = published("/pkg/wine");
+        let paths = resolve_named_datasets("wine", &dep, &["worked-example".to_string()])
+            .expect("resolves");
+        assert_eq!(paths, [PathBuf::from("/pkg/wine/data/wine-instances.yaml")]);
+    }
+
+    /// Names resolve in declaration order, so the rendered order is the
+    /// order the consumer wrote.
+    #[test]
+    fn named_datasets_resolve_in_declaration_order() {
+        let dep = published("/pkg/wine");
+        let paths = resolve_named_datasets(
+            "wine",
+            &dep,
+            &["worked-example".to_string(), "worked-example".to_string()],
+        )
+        .expect("resolves");
+        assert_eq!(paths.len(), 2, "a repeated name resolves twice, not once");
+    }
+
+    /// A name the package does not publish fails naming what it does, so a
+    /// typo is one message away from the fix.
+    #[test]
+    fn an_unpublished_dataset_name_lists_what_is_published() {
+        let dep = published("/pkg/wine");
+        let err = resolve_named_datasets("wine", &dep, &["exemplar".to_string()])
+            .expect_err("no such dataset");
+        let message = err.to_string();
+        assert!(
+            message.contains("`wine` publishes no dataset named `exemplar`")
+                && message.contains("worked-example")
+                && message.contains("benchmark"),
+            "got {message}"
+        );
+    }
+
+    /// The package states which schema each dataset conforms to, so a
+    /// dataset named under a block for a different schema is refused rather
+    /// than rendered against a schema it does not conform to. The message
+    /// offers the spelling that works today — a bare name resolves only
+    /// against the block's own dependency, so pointing at another block
+    /// would trade this error for an unknown-dataset one.
+    #[test]
+    fn a_dataset_conforming_to_another_schema_is_refused_with_a_usable_remedy() {
+        let dep = published("/pkg/wine");
+        let err = resolve_named_datasets("wine", &dep, &["benchmark".to_string()])
+            .expect_err("benchmark conforms to cqa, not wine");
+        let message = err.to_string();
+        assert!(
+            message.contains("conforms to schema `cqa`") && message.contains("`instances`"),
+            "got {message}"
+        );
+        assert!(
+            !message.contains("[generate.cqa]"),
+            "must not send the author to a block where the name does not resolve; got {message}"
+        );
+    }
+
+    /// A publish entry may name its own package's schema — redundant, but
+    /// legal — and that dataset resolves under the block for that package,
+    /// which is the only block a bare name is resolved against.
+    #[test]
+    fn a_dataset_naming_its_own_packages_schema_resolves() {
+        let mut dep = published("/pkg/wine");
+        dep.datasets.push(PublishedDataset {
+            name: "restated".to_string(),
+            data: PathBuf::from("/pkg/wine/data/restated.yaml"),
+            schema: Some("wine".to_string()),
+        });
+        let paths =
+            resolve_named_datasets("wine", &dep, &["restated".to_string()]).expect("resolves");
+        assert_eq!(paths, [PathBuf::from("/pkg/wine/data/restated.yaml")]);
     }
 }

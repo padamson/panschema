@@ -54,6 +54,154 @@ fn write_sample_pkg(parent: &Path, dirname: &str) -> std::path::PathBuf {
     pkg
 }
 
+/// A package that publishes two datasets: one against its own schema, one
+/// against a dependency's. Returns the absolute `pkg_dir`.
+fn write_dataset_pkg(parent: &Path) -> std::path::PathBuf {
+    let pkg = parent.join("catalog-pkg");
+    fs::create_dir_all(pkg.join("data")).expect("mkdir pkg/data");
+    fs::write(
+        pkg.join("panschema-publish.toml"),
+        "[schema]\nname = \"catalog\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n         [files]\nmain = \"catalog.yaml\"\n\n         [[instances]]\nname = \"records\"\ndata = \"data/records.yaml\"\n\n         [[instances]]\nname = \"audit\"\ndata = \"data/audit.yaml\"\nschema = \"audit\"\n",
+    )
+    .expect("write publish toml");
+    fs::write(
+        pkg.join("catalog.yaml"),
+        fs::read_to_string("../panschema-model/tests/fixtures/catalog.yaml")
+            .expect("read catalog schema"),
+    )
+    .expect("write schema");
+    fs::write(
+        pkg.join("data/records.yaml"),
+        fs::read_to_string("../panschema-model/tests/fixtures/catalog_data.yaml")
+            .expect("read catalog data"),
+    )
+    .expect("write data");
+    fs::write(pkg.join("data/audit.yaml"), "wines: []\n").expect("write audit data");
+    pkg
+}
+
+fn run_generate_in(dir: &Path) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("generate")
+        .current_dir(dir)
+        .output()
+        .expect("run panschema generate")
+}
+
+/// A consumer names a dependency's published dataset instead of pathing
+/// into it, and gets exactly what the path would have rendered — which is
+/// the point: the manifest stops depending on where the package sits.
+#[test]
+fn a_named_dataset_renders_what_its_path_would_have() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let pkg = write_dataset_pkg(tmp.path());
+
+    let by_name = tmp.path().join("by-name");
+    let by_path = tmp.path().join("by-path");
+    for (dir, line) in [
+        (&by_name, "datasets = [\"records\"]".to_string()),
+        (
+            &by_path,
+            format!(
+                "instances = [\"{}\"]",
+                pkg.join("data/records.yaml").display()
+            ),
+        ),
+    ] {
+        fs::create_dir_all(dir).expect("mkdir consumer");
+        fs::write(
+            dir.join("panschema.toml"),
+            format!(
+                "[schemas.catalog]\npath = \"{}\"\n\n[generate.catalog]\nttl = \"out.ttl\"\n{line}\n",
+                pkg.display()
+            ),
+        )
+        .expect("write manifest");
+        let out = run_generate_in(dir);
+        assert!(
+            out.status.success(),
+            "generate failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    let named = fs::read_to_string(by_name.join("out.ttl")).expect("read by-name output");
+    assert!(
+        named.contains("chateauMorgon"),
+        "the named dataset's records are in the output"
+    );
+    assert_eq!(
+        named,
+        fs::read_to_string(by_path.join("out.ttl")).expect("read by-path output"),
+        "naming a dataset renders exactly what its path renders"
+    );
+
+    // Both keys on one entry: a consumer's own data beside the package's.
+    // HTML, because the single-A-box formats accept exactly one dataset.
+    let both = tmp.path().join("both");
+    fs::create_dir_all(&both).expect("mkdir consumer");
+    fs::write(
+        both.join("local.yaml"),
+        "wines:\n  - id: localPour\n    name: Local Pour\n",
+    )
+    .expect("write local data");
+    fs::write(
+        both.join("panschema.toml"),
+        format!(
+            "[schemas.catalog]\npath = \"{}\"\n\n[generate.catalog]\nhtml = \"site\"\n             instances = [\"local.yaml\"]\ndatasets = [\"records\"]\n",
+            pkg.display()
+        ),
+    )
+    .expect("write manifest");
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args(["generate", "--no-graph", "--offline"])
+        .current_dir(&both)
+        .output()
+        .expect("run panschema generate");
+    assert!(
+        out.status.success(),
+        "generate failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let page = fs::read_to_string(both.join("site/index.html")).expect("read page");
+    assert!(
+        page.contains("localPour") && page.contains("chateauMorgon"),
+        "a path and a named dataset render together, each selectable on the page"
+    );
+}
+
+/// The package states which schema each dataset conforms to, so naming one
+/// under the wrong block fails with the block it belongs under, and a name
+/// the package does not publish fails with the ones it does.
+#[test]
+fn a_misnamed_dataset_says_what_the_package_publishes() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let pkg = write_dataset_pkg(tmp.path());
+    let consumer = tmp.path().join("consumer");
+    fs::create_dir_all(&consumer).expect("mkdir consumer");
+
+    for (named, expected) in [
+        ("nope", "publishes no dataset named `nope`"),
+        ("audit", "conforms to schema `audit`"),
+    ] {
+        fs::write(
+            consumer.join("panschema.toml"),
+            format!(
+                "[schemas.catalog]\npath = \"{}\"\n\n[generate.catalog]\nttl = \"out.ttl\"\ndatasets = [\"{named}\"]\n",
+                pkg.display()
+            ),
+        )
+        .expect("write manifest");
+        let out = run_generate_in(&consumer);
+        assert!(!out.status.success(), "`{named}` must not generate");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains(expected),
+            "`{named}`: expected {expected:?}, got {stderr}"
+        );
+    }
+}
+
 #[test]
 fn class_card_surfaces_mixins_slots_and_resolved_xrefs() {
     let output_dir = std::env::temp_dir().join("panschema_class_card_dogfood");
@@ -1940,7 +2088,7 @@ resolve_against = ["catalog"]
     );
     assert!(
         String::from_utf8_lossy(&scaffolded.stderr)
-            .contains("resolve_against `catalog` declares no `instances`"),
+            .contains("resolve_against `catalog` declares no datasets"),
         "the note names the dataset-less sibling; got:\n{}",
         String::from_utf8_lossy(&scaffolded.stderr)
     );

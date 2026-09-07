@@ -148,16 +148,20 @@ fn every_generate_manifest_key_is_documented() {
     let doc = skill_ref("manifest.md");
     // The serialized field names are the source of truth for what a manifest
     // may contain; a renamed or added key must reach the reference.
+    // Matched as a documented key — the name in backticks — not as a
+    // substring: `datasets` shipped undocumented while the word appeared in
+    // another table's prose, which a bare `contains` read as covered.
+    let documents = |key: &str| doc.contains(&format!("`{key}`"));
     for key in panschema::manifest::GenerateConfig::key_names() {
         assert!(
-            doc.contains(key.as_str()),
+            documents(&key),
             "`[generate]` key `{key}` is accepted by the parser but absent \
              from the manifest reference"
         );
     }
     for key in panschema::manifest::CheckConfig::key_names() {
         assert!(
-            doc.contains(key.as_str()),
+            documents(&key),
             "`[check]` key `{key}` is accepted by the parser but absent \
              from the manifest reference"
         );
