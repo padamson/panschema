@@ -124,10 +124,10 @@ pg_query = "6"
 # E2E browser testing. Pinned to `padamson/playwright-rust` `main` (not a
 # crates.io release) to dogfood pre-release work ongoing — the author
 # maintains playwright-rust and wants real consumer friction before each
-# release. The npm-pinned Playwright version in
-# `.github/workflows/{test,security}.yml` and `.pre-commit-config.yaml`
-# must match `playwright_rs::PLAYWRIGHT_VERSION` exactly — wire-protocol
-# mismatches silently break the harness.
+# release. Browsers install through `cargo run --example install-browsers`,
+# which asks the crate for the build its own driver expects; nothing names
+# a Playwright version, so a bump moves crate, driver, and browsers
+# together.
 playwright-rs = { git = "https://github.com/padamson/playwright-rust", branch = "main" }
 
 # Spec-conformance validation of HtmlWriter output: the same HTML5 parser

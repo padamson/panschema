@@ -145,19 +145,17 @@ jobs:
     - name: Install cargo-nextest
       uses: taiki-e/install-action@nextest
 
-    - name: Setup Node.js (for Playwright)
-      uses: actions/setup-node@v7
-      with:
-        node-version: '20'
-
-    - name: Get Playwright version
-      id: playwright-version
-      shell: bash
-      run: echo "version=1.62.1" >> $GITHUB_OUTPUT
-
+    # No Node.js step and no pinned Playwright version: the driver ships its
+    # own Node runtime, and `playwright-rs` installs the browsers matching
+    # the driver it vendors. A version named here would be a second place to
+    # bump, and a stale one fails as "Executable doesn't exist" rather than
+    # as a mismatch — which is exactly what it did.
+    #
+    # Keyed on the lockfile so a `playwright-rs` bump misses the cache;
+    # `restore-keys` still seeds it from the previous run, leaving the
+    # installer only the new build to fetch.
     - name: Cache Playwright browsers and driver
       uses: actions/cache@v6
-      id: playwright-cache
       with:
         path: |
           ~/.cache/ms-playwright
@@ -166,19 +164,12 @@ jobs:
           ~/Library/Caches/playwright-rust
           ~/AppData/Local/ms-playwright
           ~/AppData/Local/playwright-rust
-        key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+        key: playwright-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+        restore-keys: |
+          playwright-${{ runner.os }}-
 
     - name: Install Playwright browsers
-      if: steps.playwright-cache.outputs.cache-hit != 'true'
-      run: npx playwright@1.62.1 install --with-deps
-
-    - name: Install Playwright dependencies (cached)
-      if: steps.playwright-cache.outputs.cache-hit == 'true'
-      shell: bash
-      run: |
-        if [ "$RUNNER_OS" == "Linux" ]; then
-          npx playwright@1.62.1 install-deps
-        fi
+      run: cargo run --example install-browsers
 
     - name: Run tests (release)
       run: cargo nextest run --workspace
