@@ -55,8 +55,9 @@ fn write_sample_pkg(parent: &Path, dirname: &str) -> std::path::PathBuf {
 }
 
 /// A package that publishes two datasets: one against its own schema, one
-/// against a dependency's. Returns the absolute `pkg_dir`.
-fn write_dataset_pkg(parent: &Path) -> std::path::PathBuf {
+/// against a dependency's, at `<parent>/catalog-pkg` — beside the consumer
+/// directories, which reference it relatively.
+fn write_dataset_pkg(parent: &Path) {
     let pkg = parent.join("catalog-pkg");
     fs::create_dir_all(pkg.join("data")).expect("mkdir pkg/data");
     fs::write(
@@ -77,7 +78,6 @@ fn write_dataset_pkg(parent: &Path) -> std::path::PathBuf {
     )
     .expect("write data");
     fs::write(pkg.join("data/audit.yaml"), "wines: []\n").expect("write audit data");
-    pkg
 }
 
 fn run_generate_in(dir: &Path) -> std::process::Output {
@@ -94,26 +94,22 @@ fn run_generate_in(dir: &Path) -> std::process::Output {
 #[test]
 fn a_named_dataset_renders_what_its_path_would_have() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let pkg = write_dataset_pkg(tmp.path());
+    write_dataset_pkg(tmp.path());
 
     let by_name = tmp.path().join("by-name");
     let by_path = tmp.path().join("by-path");
     for (dir, line) in [
-        (&by_name, "datasets = [\"records\"]".to_string()),
+        (&by_name, "datasets = [\"records\"]"),
         (
             &by_path,
-            format!(
-                "instances = [\"{}\"]",
-                pkg.join("data/records.yaml").display()
-            ),
+            "instances = [\"../catalog-pkg/data/records.yaml\"]",
         ),
     ] {
         fs::create_dir_all(dir).expect("mkdir consumer");
         fs::write(
             dir.join("panschema.toml"),
             format!(
-                "[schemas.catalog]\npath = \"{}\"\n\n[generate.catalog]\nttl = \"out.ttl\"\n{line}\n",
-                pkg.display()
+                "[schemas.catalog]\npath = \"../catalog-pkg\"\n\n                 [generate.catalog]\nttl = \"out.ttl\"\n{line}\n"
             ),
         )
         .expect("write manifest");
@@ -147,10 +143,8 @@ fn a_named_dataset_renders_what_its_path_would_have() {
     .expect("write local data");
     fs::write(
         both.join("panschema.toml"),
-        format!(
-            "[schemas.catalog]\npath = \"{}\"\n\n[generate.catalog]\nhtml = \"site\"\n             instances = [\"local.yaml\"]\ndatasets = [\"records\"]\n",
-            pkg.display()
-        ),
+        "[schemas.catalog]\npath = \"../catalog-pkg\"\n\n[generate.catalog]\nhtml = \"site\"\n\
+         instances = [\"local.yaml\"]\ndatasets = [\"records\"]\n",
     )
     .expect("write manifest");
     let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
@@ -176,7 +170,7 @@ fn a_named_dataset_renders_what_its_path_would_have() {
 #[test]
 fn a_misnamed_dataset_says_what_the_package_publishes() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let pkg = write_dataset_pkg(tmp.path());
+    write_dataset_pkg(tmp.path());
     let consumer = tmp.path().join("consumer");
     fs::create_dir_all(&consumer).expect("mkdir consumer");
 
@@ -187,8 +181,8 @@ fn a_misnamed_dataset_says_what_the_package_publishes() {
         fs::write(
             consumer.join("panschema.toml"),
             format!(
-                "[schemas.catalog]\npath = \"{}\"\n\n[generate.catalog]\nttl = \"out.ttl\"\ndatasets = [\"{named}\"]\n",
-                pkg.display()
+                "[schemas.catalog]\npath = \"../catalog-pkg\"\n\n\
+                 [generate.catalog]\nttl = \"out.ttl\"\ndatasets = [\"{named}\"]\n"
             ),
         )
         .expect("write manifest");
