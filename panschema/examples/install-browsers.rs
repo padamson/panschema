@@ -18,6 +18,16 @@
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let browsers: Vec<String> = std::env::args().skip(1).collect();
+
+    // `--print-version` reports the driver's Playwright version and exits, so
+    // a caller that needs the npm package for the same version — CI installing
+    // Linux system libraries, say — can ask the crate rather than repeat a
+    // number that would go stale on the next bump.
+    if browsers.iter().any(|arg| arg == "--print-version") {
+        println!("{}", playwright_rs::PLAYWRIGHT_VERSION);
+        return Ok(());
+    }
+
     let selected: Vec<&str> = browsers.iter().map(String::as_str).collect();
 
     println!(

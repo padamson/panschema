@@ -171,6 +171,18 @@ jobs:
     - name: Install Playwright browsers
       run: cargo run --example install-browsers
 
+    # `install_browsers` documents that it appends `--with-deps` on Linux,
+    # but on a stock runner it downloads the browsers and then reports the
+    # system libraries as missing without installing them — WebKit needs
+    # some three dozen. The npm CLI does install them, so it runs for that
+    # alone, at the version the crate's own driver reports.
+    - name: Install Playwright system dependencies
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        version="$(cargo run -q --example install-browsers -- --print-version)"
+        npx --yes "playwright@${version}" install-deps
+
     - name: Run tests (release)
       run: cargo nextest run --workspace
       env:
