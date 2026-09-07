@@ -98,19 +98,44 @@ ahead on that number.
 
 ### Slice 2: The rest of the suite, and one deliberate listener
 
-**Status:** Not Started
+**Status:** Complete
 
 **User Value:** The suite no longer races for ports, and a future
 interception regression is distinguishable from an application failure.
 
 **Acceptance Criteria:**
-- [ ] Every e2e test but one serves through the in-process service; the
+- [x] Every e2e test but one serves through the in-process service; the
       remaining one binds a listener and says in its documentation why it
       is the control.
-- [ ] The suite passes on all three browsers, and its total wall-clock time
+- [x] The suite passes on all three browsers, and its total wall-clock time
       is recorded here beside the pre-conversion number.
-- [ ] `bind_ephemeral`, the start-up sleep, and the shutdown plumbing
+- [x] `bind_ephemeral`, the start-up sleep, and the shutdown plumbing
       survive only where the control test uses them.
+
+**Measured 2026-09-07**, whole `e2e` binary, `BROWSER=all`, one sample each:
+
+| Suite | Wall clock | Notes |
+|---|---|---|
+| Before | 11.14s | nextest reports `1 leaky` |
+| After | 11.94s | no leak reported |
+
+Twenty-four tests changed serving mode in this slice: the binary holds 28,
+of which three drive `file://` pages for the mdbook plugin and never bound
+anything, and one — the happy path — converted in slice 1.
+
+The totals are the same within the run-to-run spread slice 1 measured, so
+the conversion neither costs nor buys wall clock at this size. What it does
+buy is the `leaky` flag going away: nextest was reporting a handle
+outliving its test, which is what a spawned server task and its listener
+look like.
+
+**The control is `e2e_legends_adapt_to_what_each_graph_contains`**, the one
+test that serves two sites at once — a schema-and-instances build plus an
+attribute-only build, on two listeners. Keeping it bound serves two ends:
+it is the awkward case to express as interception, and it is the
+differential. panschema tracks playwright-rs `main`, so a `route_service`
+regression can land at any time; if the control passes while the other
+twenty-seven fail, the fault is the interception path, not the app.
 
 **Notes:**
 - Depends on slice 1's measurement. If interception proves materially
@@ -129,7 +154,7 @@ interception regression is distinguishable from an application failure.
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | Slice 1 | Must Have | None | Complete |
-| Slice 2 | Should Have | Slice 1 | Not Started |
+| Slice 2 | Should Have | Slice 1 | Complete |
 
 ## Things to watch
 
@@ -146,9 +171,9 @@ interception regression is distinguishable from an application failure.
 
 ## Definition of Done
 
-- [ ] All acceptance criteria met
-- [ ] All slices Complete
-- [ ] `cargo nextest run --workspace` passes with `BROWSER=all`
-- [ ] Code formatted and clippy clean
-- [ ] The cross-repo handoff this came from is answered with what the
+- [x] All acceptance criteria met
+- [x] All slices Complete
+- [x] `cargo nextest run --workspace` passes with `BROWSER=all`
+- [x] Code formatted and clippy clean
+- [x] The cross-repo handoff this came from is answered with what the
       conversion actually cost

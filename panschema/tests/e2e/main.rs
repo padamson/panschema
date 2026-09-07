@@ -241,10 +241,17 @@ async fn open_served_page(
 ) -> (Browser, Page) {
     let browser = launch_browser(playwright, browser_name).await;
     let page = browser.new_page().await.expect("Failed to create page");
+    serve_site(&page, site).await;
+    (browser, page)
+}
+
+/// Serve `site` at [`SITE_ORIGIN`] on a page that already exists — for the
+/// tests that need a context, a viewport, or an init script before they
+/// navigate.
+async fn serve_site(page: &Page, site: &Path) {
     page.route_service(&format!("{SITE_ORIGIN}/**"), ServeDir::new(site))
         .await
         .expect("Failed to serve the generated site in-process");
-    (browser, page)
 }
 
 /// Start a simple HTTP server serving static files.
@@ -1644,16 +1651,9 @@ fn e2e_click_pins_node_card_keeping_selection() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
         let output_dir = generate_docs();
-        let (listener, port) = bind_ephemeral();
-        let base_url = format!("http://127.0.0.1:{}", port);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
         let playwright = Playwright::launch().await.expect("playwright");
-        let browser = playwright.chromium().launch().await.expect("chromium");
-        let page = browser.new_page().await.expect("page");
-        page.goto(&format!("{}/index.html", base_url), None)
+        let (_browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
 
@@ -1739,8 +1739,6 @@ fn e2e_click_pins_node_card_keeping_selection() {
             "node should stay selected after ×; got {sel_after}"
         );
 
-        let _ = shutdown_tx.send(());
-        let _ = server_handle.await;
         let _ = fs::remove_dir_all(output_dir);
     });
 }
@@ -1754,16 +1752,9 @@ fn e2e_edge_hover_shows_the_triple_and_its_kind_blurb() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
         let output_dir = generate_docs();
-        let (listener, port) = bind_ephemeral();
-        let base_url = format!("http://127.0.0.1:{}", port);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
         let playwright = Playwright::launch().await.expect("playwright");
-        let browser = playwright.chromium().launch().await.expect("chromium");
-        let page = browser.new_page().await.expect("page");
-        page.goto(&format!("{}/index.html", base_url), None)
+        let (browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
         assert!(
@@ -1816,8 +1807,6 @@ fn e2e_edge_hover_shows_the_triple_and_its_kind_blurb() {
         );
 
         browser.close().await.ok();
-        let _ = shutdown_tx.send(());
-        let _ = server_handle.await;
         let _ = fs::remove_dir_all(output_dir);
     });
 }
@@ -1827,16 +1816,9 @@ fn e2e_node_hover_reuses_the_doc_card_in_full_mode() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
         let output_dir = generate_docs();
-        let (listener, port) = bind_ephemeral();
-        let base_url = format!("http://127.0.0.1:{}", port);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
         let playwright = Playwright::launch().await.expect("playwright");
-        let browser = playwright.chromium().launch().await.expect("chromium");
-        let page = browser.new_page().await.expect("page");
-        page.goto(&format!("{}/index.html", base_url), None)
+        let (browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
         assert!(
@@ -1880,8 +1862,6 @@ fn e2e_node_hover_reuses_the_doc_card_in_full_mode() {
         );
 
         browser.close().await.ok();
-        let _ = shutdown_tx.send(());
-        let _ = server_handle.await;
         let _ = fs::remove_dir_all(output_dir);
     });
 }
@@ -1895,16 +1875,9 @@ fn e2e_pinned_card_is_draggable_by_its_handle() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
         let output_dir = generate_docs();
-        let (listener, port) = bind_ephemeral();
-        let base_url = format!("http://127.0.0.1:{}", port);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
         let playwright = Playwright::launch().await.expect("playwright");
-        let browser = playwright.chromium().launch().await.expect("chromium");
-        let page = browser.new_page().await.expect("page");
-        page.goto(&format!("{}/index.html", base_url), None)
+        let (_browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
 
@@ -1974,8 +1947,6 @@ fn e2e_pinned_card_is_draggable_by_its_handle() {
             "the card should have visibly moved; before ({b_left},{b_top}) after ({a_left},{a_top})"
         );
 
-        let _ = shutdown_tx.send(());
-        let _ = server_handle.await;
         let _ = fs::remove_dir_all(output_dir);
     });
 }
@@ -1989,16 +1960,9 @@ fn e2e_hovering_a_rule_entry_highlights_participant_nodes() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
         let output_dir = generate_docs_for("tests/fixtures/rules_graph.yaml");
-        let (listener, port) = bind_ephemeral();
-        let base_url = format!("http://127.0.0.1:{}", port);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
         let playwright = Playwright::launch().await.expect("playwright");
-        let browser = playwright.chromium().launch().await.expect("chromium");
-        let page = browser.new_page().await.expect("page");
-        page.goto(&format!("{}/index.html", base_url), None)
+        let (_browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
 
@@ -2086,8 +2050,6 @@ fn e2e_hovering_a_rule_entry_highlights_participant_nodes() {
             "moving off the entry should clear the highlight; got {cleared}"
         );
 
-        let _ = shutdown_tx.send(());
-        let _ = server_handle.await;
         let _ = fs::remove_dir_all(output_dir);
     });
 }
@@ -2103,16 +2065,9 @@ fn e2e_rule_touched_nodes_draw_a_persistent_amber_ring() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
         let output_dir = generate_docs_for("tests/fixtures/rules_graph.yaml");
-        let (listener, port) = bind_ephemeral();
-        let base_url = format!("http://127.0.0.1:{}", port);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
         let playwright = Playwright::launch().await.expect("playwright");
-        let browser = playwright.chromium().launch().await.expect("chromium");
-        let page = browser.new_page().await.expect("page");
-        page.goto(&format!("{}/index.html", base_url), None)
+        let (_browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
 
@@ -2172,8 +2127,6 @@ fn e2e_rule_touched_nodes_draw_a_persistent_amber_ring() {
             parts[1]
         );
 
-        let _ = shutdown_tx.send(());
-        let _ = server_handle.await;
         let _ = fs::remove_dir_all(output_dir);
     });
 }
@@ -2187,16 +2140,9 @@ fn e2e_external_grounding_paints_a_muted_node() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
         let output_dir = generate_docs_for("tests/fixtures/external_grounding.yaml");
-        let (listener, port) = bind_ephemeral();
-        let base_url = format!("http://127.0.0.1:{}", port);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
         let playwright = Playwright::launch().await.expect("playwright");
-        let browser = playwright.chromium().launch().await.expect("chromium");
-        let page = browser.new_page().await.expect("page");
-        page.goto(&format!("{}/index.html", base_url), None)
+        let (_browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
 
@@ -2250,8 +2196,6 @@ fn e2e_external_grounding_paints_a_muted_node() {
             "the external grounding node's muted grey fill should paint; grey pixels={grey}"
         );
 
-        let _ = shutdown_tx.send(());
-        let _ = server_handle.await;
         let _ = fs::remove_dir_all(output_dir);
     });
 }
@@ -2265,16 +2209,9 @@ fn e2e_groundings_toggle_hides_external_nodes() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
         let output_dir = generate_docs_for("tests/fixtures/external_grounding.yaml");
-        let (listener, port) = bind_ephemeral();
-        let base_url = format!("http://127.0.0.1:{}", port);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
         let playwright = Playwright::launch().await.expect("playwright");
-        let browser = playwright.chromium().launch().await.expect("chromium");
-        let page = browser.new_page().await.expect("page");
-        page.goto(&format!("{}/index.html", base_url), None)
+        let (_browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
 
@@ -2390,8 +2327,6 @@ fn e2e_groundings_toggle_hides_external_nodes() {
             parts[2]
         );
 
-        let _ = shutdown_tx.send(());
-        let _ = server_handle.await;
         let _ = fs::remove_dir_all(output_dir);
     });
 }
@@ -2449,16 +2384,9 @@ fn e2e_external_node_hover_shows_iri_and_definition_and_legend_documents_it() {
             .expect("Failed to execute panschema");
         assert!(status.success(), "panschema failed to generate docs");
 
-        let (listener, port) = bind_ephemeral();
-        let base_url = format!("http://127.0.0.1:{}", port);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
         let playwright = Playwright::launch().await.expect("playwright");
-        let browser = playwright.chromium().launch().await.expect("chromium");
-        let page = browser.new_page().await.expect("page");
-        page.goto(&format!("{}/index.html", base_url), None)
+        let (_browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
 
@@ -2540,8 +2468,6 @@ fn e2e_external_node_hover_shows_iri_and_definition_and_legend_documents_it() {
             "the legend should paint the external grounding swatch; matching pixels={hits}"
         );
 
-        let _ = shutdown_tx.send(());
-        let _ = server_handle.await;
         let _ = fs::remove_dir_all(output_dir);
         let _ = fs::remove_dir_all(cache_root);
     });
@@ -2558,16 +2484,9 @@ fn e2e_instance_graph_renders_individuals_beneath_the_cards() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
         let output_dir = generate_docs_for("tests/fixtures/instance_graph.ttl");
-        let (listener, port) = bind_ephemeral();
-        let base_url = format!("http://127.0.0.1:{}", port);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
         let playwright = Playwright::launch().await.expect("playwright");
-        let browser = playwright.chromium().launch().await.expect("chromium");
-        let page = browser.new_page().await.expect("page");
-        page.goto(&format!("{}/index.html", base_url), None)
+        let (_browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
 
@@ -2638,8 +2557,6 @@ fn e2e_instance_graph_renders_individuals_beneath_the_cards() {
             "the instance graph should paint individual nodes; class-blue pixels={teal}"
         );
 
-        let _ = shutdown_tx.send(());
-        let _ = server_handle.await;
         let _ = fs::remove_dir_all(output_dir);
     });
 }
@@ -2684,16 +2601,9 @@ fn e2e_data_only_composition_boots_the_instance_viz() {
         assert!(status.success(), "composed generate failed");
         let output_dir = consumer.join("docs");
 
-        let (listener, port) = bind_ephemeral();
-        let base_url = format!("http://127.0.0.1:{}", port);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
         let playwright = Playwright::launch().await.expect("playwright");
-        let browser = playwright.chromium().launch().await.expect("chromium");
-        let page = browser.new_page().await.expect("page");
-        page.goto(&format!("{}/index.html", base_url), None)
+        let (_browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
 
@@ -2719,8 +2629,6 @@ fn e2e_data_only_composition_boots_the_instance_viz() {
             "instance graph viz never became ready on the data-only page"
         );
 
-        let _ = shutdown_tx.send(());
-        let _ = server_handle.await;
         let _ = fs::remove_dir_all(&consumer);
     });
 }
@@ -2741,16 +2649,9 @@ fn e2e_instance_dataset_selector_switches_cards_and_graph() {
             ],
             "selector",
         );
-        let (listener, port) = bind_ephemeral();
-        let base_url = format!("http://127.0.0.1:{}", port);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
         let playwright = Playwright::launch().await.expect("playwright");
-        let browser = playwright.chromium().launch().await.expect("chromium");
-        let page = browser.new_page().await.expect("page");
-        page.goto(&format!("{}/index.html", base_url), None)
+        let (browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
 
@@ -2946,8 +2847,6 @@ fn e2e_instance_dataset_selector_switches_cards_and_graph() {
         );
 
         browser.close().await.ok();
-        let _ = shutdown_tx.send(());
-        let _ = server_handle.await;
         let _ = fs::remove_dir_all(output_dir);
     });
 }
@@ -2963,16 +2862,9 @@ fn e2e_instance_graph_has_hover_card_and_toolbar_parity() {
             "tests/fixtures/typed_wine.yaml",
             "tests/fixtures/typed_wine_instances.yaml",
         );
-        let (listener, port) = bind_ephemeral();
-        let base_url = format!("http://127.0.0.1:{}", port);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
         let playwright = Playwright::launch().await.expect("playwright");
-        let browser = playwright.chromium().launch().await.expect("chromium");
-        let page = browser.new_page().await.expect("page");
-        page.goto(&format!("{}/index.html", base_url), None)
+        let (browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
         assert!(
@@ -3162,8 +3054,6 @@ fn e2e_instance_graph_has_hover_card_and_toolbar_parity() {
         );
 
         browser.close().await.ok();
-        let _ = shutdown_tx.send(());
-        let _ = server_handle.await;
         let _ = fs::remove_dir_all(output_dir);
     });
 }
@@ -3179,16 +3069,9 @@ fn e2e_instance_graph_nodes_are_draggable() {
             "tests/fixtures/typed_wine.yaml",
             "tests/fixtures/typed_wine_instances.yaml",
         );
-        let (listener, port) = bind_ephemeral();
-        let base_url = format!("http://127.0.0.1:{}", port);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
         let playwright = Playwright::launch().await.expect("playwright");
-        let browser = playwright.chromium().launch().await.expect("chromium");
-        let page = browser.new_page().await.expect("page");
-        page.goto(&format!("{}/index.html", base_url), None)
+        let (browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
         assert!(
@@ -3233,8 +3116,6 @@ fn e2e_instance_graph_nodes_are_draggable() {
         );
 
         browser.close().await.ok();
-        let _ = shutdown_tx.send(());
-        let _ = server_handle.await;
         let _ = fs::remove_dir_all(output_dir);
     });
 }
@@ -3250,16 +3131,9 @@ fn e2e_instance_graph_click_pins_the_card_and_empty_space_deselects() {
             "tests/fixtures/typed_wine.yaml",
             "tests/fixtures/typed_wine_instances.yaml",
         );
-        let (listener, port) = bind_ephemeral();
-        let base_url = format!("http://127.0.0.1:{}", port);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
         let playwright = Playwright::launch().await.expect("playwright");
-        let browser = playwright.chromium().launch().await.expect("chromium");
-        let page = browser.new_page().await.expect("page");
-        page.goto(&format!("{}/index.html", base_url), None)
+        let (browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
         assert!(
@@ -3309,8 +3183,6 @@ fn e2e_instance_graph_click_pins_the_card_and_empty_space_deselects() {
         );
 
         browser.close().await.ok();
-        let _ = shutdown_tx.send(());
-        let _ = server_handle.await;
         let _ = fs::remove_dir_all(output_dir);
     });
 }
@@ -3323,16 +3195,9 @@ fn e2e_instance_pinned_card_closes_by_its_button_keeping_selection() {
             "tests/fixtures/typed_wine.yaml",
             "tests/fixtures/typed_wine_instances.yaml",
         );
-        let (listener, port) = bind_ephemeral();
-        let base_url = format!("http://127.0.0.1:{}", port);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
         let playwright = Playwright::launch().await.expect("playwright");
-        let browser = playwright.chromium().launch().await.expect("chromium");
-        let page = browser.new_page().await.expect("page");
-        page.goto(&format!("{}/index.html", base_url), None)
+        let (browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
         assert!(
@@ -3386,8 +3251,6 @@ fn e2e_instance_pinned_card_closes_by_its_button_keeping_selection() {
         );
 
         browser.close().await.ok();
-        let _ = shutdown_tx.send(());
-        let _ = server_handle.await;
         let _ = fs::remove_dir_all(output_dir);
     });
 }
@@ -3404,16 +3267,9 @@ fn e2e_instance_graph_selection_survives_pointer_jitter_and_escape_deselects() {
             "tests/fixtures/typed_wine.yaml",
             "tests/fixtures/typed_wine_instances.yaml",
         );
-        let (listener, port) = bind_ephemeral();
-        let base_url = format!("http://127.0.0.1:{}", port);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
         let playwright = Playwright::launch().await.expect("playwright");
-        let browser = playwright.chromium().launch().await.expect("chromium");
-        let page = browser.new_page().await.expect("page");
-        page.goto(&format!("{}/index.html", base_url), None)
+        let (browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
         assert!(
@@ -3486,8 +3342,6 @@ fn e2e_instance_graph_selection_survives_pointer_jitter_and_escape_deselects() {
         );
 
         browser.close().await.ok();
-        let _ = shutdown_tx.send(());
-        let _ = server_handle.await;
         let _ = fs::remove_dir_all(output_dir);
     });
 }
@@ -3505,16 +3359,9 @@ fn e2e_typed_instance_graph_renders_class_symbols_and_shared_values() {
             "tests/fixtures/typed_wine.yaml",
             "tests/fixtures/typed_wine_instances.yaml",
         );
-        let (listener, port) = bind_ephemeral();
-        let base_url = format!("http://127.0.0.1:{}", port);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
         let playwright = Playwright::launch().await.expect("playwright");
-        let browser = playwright.chromium().launch().await.expect("chromium");
-        let page = browser.new_page().await.expect("page");
-        page.goto(&format!("{}/index.html", base_url), None)
+        let (browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
 
@@ -3609,15 +3456,20 @@ fn e2e_typed_instance_graph_renders_class_symbols_and_shared_values() {
         );
 
         browser.close().await.ok();
-        let _ = shutdown_tx.send(());
-        let _ = server_handle.await;
         let _ = fs::remove_dir_all(output_dir);
     });
 }
 
 /// Each graph's notation key is adaptive: it lists only the node and edge
-/// kinds that graph actually uses, from one code path serving both canvases./// Each graph's notation key is adaptive: it lists only the node and edge
 /// kinds that graph actually uses, from one code path serving both canvases.
+///
+/// **The one test still served over a real listener, deliberately.** It is
+/// the only one that serves two sites at once, which is awkward to express
+/// as interception — and keeping it bound makes it the control. panschema
+/// tracks playwright-rs `main`, so a `route_service` regression can arrive
+/// at any time; when this passes and the intercepted tests fail, the fault
+/// is the serving path rather than the app. Do not convert it without
+/// leaving some other test on a socket.
 #[test]
 fn e2e_legends_adapt_to_what_each_graph_contains() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
@@ -3830,16 +3682,9 @@ fn e2e_instance_graph_is_explorable_like_the_schema_graph() {
             "tests/fixtures/wine_catalog.yaml",
             "tests/fixtures/wine_instances.yaml",
         );
-        let (listener, port) = bind_ephemeral();
-        let base_url = format!("http://127.0.0.1:{}", port);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
         let playwright = Playwright::launch().await.expect("playwright");
-        let browser = playwright.chromium().launch().await.expect("chromium");
-        let page = browser.new_page().await.expect("page");
-        page.goto(&format!("{}/index.html", base_url), None)
+        let (browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
 
@@ -3986,8 +3831,6 @@ fn e2e_instance_graph_is_explorable_like_the_schema_graph() {
         );
 
         browser.close().await.ok();
-        let _ = shutdown_tx.send(());
-        let _ = server_handle.await;
         let _ = fs::remove_dir_all(output_dir);
     });
 }
@@ -4004,16 +3847,9 @@ fn e2e_instance_graph_renders_from_linkml_data() {
             "tests/fixtures/wine_catalog.yaml",
             "tests/fixtures/wine_instances.yaml",
         );
-        let (listener, port) = bind_ephemeral();
-        let base_url = format!("http://127.0.0.1:{}", port);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
         let playwright = Playwright::launch().await.expect("playwright");
-        let browser = playwright.chromium().launch().await.expect("chromium");
-        let page = browser.new_page().await.expect("page");
-        page.goto(&format!("{}/index.html", base_url), None)
+        let (_browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
 
@@ -4139,8 +3975,6 @@ fn e2e_instance_graph_renders_from_linkml_data() {
             "the LinkML instance graph should paint individual nodes; class-blue pixels={teal}"
         );
 
-        let _ = shutdown_tx.send(());
-        let _ = server_handle.await;
         let _ = fs::remove_dir_all(output_dir);
     });
 }
@@ -4156,26 +3990,21 @@ fn e2e_is_a_heavy_schema_auto_defaults_to_hierarchical() {
     let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
     rt.block_on(async {
         let output_dir = generate_docs_for("tests/fixtures/taxonomy.ttl");
-        let (listener, port) = bind_ephemeral();
-        let base_url = format!("http://127.0.0.1:{}", port);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
         let playwright = Playwright::launch()
             .await
             .expect("Failed to initialize Playwright");
-        let browser = playwright
-            .chromium()
-            .launch()
-            .await
-            .expect("Failed to launch Chromium");
-        let page = browser.new_page().await.expect("Failed to create page");
-        page.goto(&format!("{}/index.html", base_url), None)
+        let (browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("navigate");
-        // Give the wasm module time to load and the picker to settle.
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        // Wait for the viz to boot rather than guessing: the picker reads
+        // its markup default until the module sets the resolved layout, so a
+        // fixed sleep asserts the default on any machine slower than the one
+        // the number was picked on.
+        assert!(
+            wait_until_ready(&page, "!!window.__panschema_viz").await,
+            "the schema viz should boot"
+        );
         let select = page.locator("#graph-layout-select");
         let value = select
             .input_value(None)
@@ -4187,8 +4016,6 @@ fn e2e_is_a_heavy_schema_auto_defaults_to_hierarchical() {
             value
         );
         browser.close().await.expect("close browser");
-        let _ = shutdown_tx.send(());
-        let _ = server_handle.await;
         let _ = fs::remove_dir_all(output_dir);
     });
 }
@@ -4203,22 +4030,11 @@ fn e2e_renders_enum_and_type_sections() {
     let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
     rt.block_on(async {
         let output_dir = generate_docs_for("tests/fixtures/enum_type.yaml");
-        let (listener, port) = bind_ephemeral();
-        let base_url = format!("http://127.0.0.1:{}", port);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
         let playwright = Playwright::launch()
             .await
             .expect("Failed to initialize Playwright");
-        let browser = playwright
-            .chromium()
-            .launch()
-            .await
-            .expect("Failed to launch Chromium");
-        let page = browser.new_page().await.expect("Failed to create page");
-        page.goto(&format!("{}/index.html", base_url), None)
+        let (browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("navigate");
 
@@ -4253,8 +4069,6 @@ fn e2e_renders_enum_and_type_sections() {
         );
 
         browser.close().await.expect("close browser");
-        let _ = shutdown_tx.send(());
-        let _ = server_handle.await;
         let _ = fs::remove_dir_all(output_dir);
     });
 }
@@ -4271,22 +4085,11 @@ fn e2e_renders_linkml_card_features() {
     let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
     rt.block_on(async {
         let output_dir = generate_docs_for("tests/fixtures/card_features.yaml");
-        let (listener, port) = bind_ephemeral();
-        let base_url = format!("http://127.0.0.1:{}", port);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
         let playwright = Playwright::launch()
             .await
             .expect("Failed to initialize Playwright");
-        let browser = playwright
-            .chromium()
-            .launch()
-            .await
-            .expect("Failed to launch Chromium");
-        let page = browser.new_page().await.expect("Failed to create page");
-        page.goto(&format!("{}/index.html", base_url), None)
+        let (browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("navigate");
 
@@ -4345,8 +4148,6 @@ fn e2e_renders_linkml_card_features() {
         );
 
         browser.close().await.expect("close browser");
-        let _ = shutdown_tx.send(());
-        let _ = server_handle.await;
         let _ = fs::remove_dir_all(output_dir);
     });
 }
@@ -4474,13 +4275,6 @@ async fn capture_scale_screenshot(
     .expect("Failed to write synthetic TTL");
 
     let output_dir = generate_docs_for(fixture_path.to_str().unwrap());
-    let (listener, port) = bind_ephemeral();
-    let base_url = format!("http://127.0.0.1:{}", port);
-
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
     let browser = playwright
         .chromium()
         .launch()
@@ -4491,6 +4285,7 @@ async fn capture_scale_screenshot(
         .await
         .expect("Failed to create context");
     let page = context.new_page().await.expect("Failed to create page");
+    serve_site(&page, &output_dir).await;
 
     page.set_viewport_size(playwright_rs::Viewport {
         width: scale.viewport_w,
@@ -4507,7 +4302,7 @@ async fn capture_scale_screenshot(
     .await
     .expect("Failed to inject init script");
 
-    let url = format!("{}/index.html", base_url);
+    let url = format!("{SITE_ORIGIN}/index.html");
     page.goto(&url, None).await.expect("Failed to navigate");
 
     // wasm load + canvas wire-up + 300-tick settle (~5s at 60fps) +
@@ -4590,8 +4385,6 @@ async fn capture_scale_screenshot(
         .unwrap_or_default();
 
     browser.close().await.expect("Failed to close browser");
-    let _ = shutdown_tx.send(());
-    let _ = server_handle.await;
     let _ = fs::remove_dir_all(output_dir);
     let _ = fs::remove_file(fixture_path);
 
