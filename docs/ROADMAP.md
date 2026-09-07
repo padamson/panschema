@@ -140,6 +140,7 @@ Input → Reader → LinkML IR → [Filters] → Writer → Output
 | 39 | [Schema Diff + Migration Generation](features/39-schema-diff-and-migration-generation.md) | `diff` reports a semantic schema delta with a compatibility verdict; `migrate` renders it as a versioned Postgres migration file (append-only, never applied by panschema) | **Specced, not started** |
 | 46 | [panschema-model Crate](features/46-panschema-model-crate.md) | The LinkML IR, instance model, element identity, and diagnostics in their own crate; `panschema` re-exports it | **Shipped** |
 | 47 | [Datasets by Name](features/47-datasets-by-name.md) | A consumer manifest names a dependency's published dataset instead of pathing into its checkout, so the manifest survives the move from sibling checkout to pinned release | **Specced, not started** |
+| 49 | [In-Process E2E Serving](features/49-in-process-e2e-serving.md) | The browser suite serves its pages from an in-process service instead of binding a port per test, removing the port race and the start-up sleep | **In progress: slice 1 shipped, slice 2 remaining** |
 | 48 | CLI distribution for agents ([ADR-012](adr/012-cli-distribution-for-agents.md)) | Prebuilt binaries as npm platform packages, so an agent runs `npx -y panschema` with nothing installed; needs an arm64 Linux target and the crates.io publish first; a feature spec arrives when the prerequisites clear | **Decided, sequenced** |
 
 ## Delivery Approach

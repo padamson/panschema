@@ -19,12 +19,13 @@ mod mdbook;
 
 use std::fs;
 use std::net::TcpListener;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use playwright_rs::Playwright;
+use playwright_rs::{Browser, Page, Playwright};
 use tokio::sync::oneshot;
+use tower_http::services::ServeDir;
 
 /// Find an available port for the test server.
 /// Bind an ephemeral port and keep the socket: handing the live listener to
@@ -201,6 +202,51 @@ async fn wait_for_graph_viz_ready(page: &playwright_rs::Page) -> bool {
     .await
 }
 
+/// The origin the in-process service answers for. Interception decides
+/// which URLs a service owns, so this needs no certificate and no listener —
+/// and unlike `127.0.0.1:<port>` it is the same string in every test.
+const SITE_ORIGIN: &str = "https://panschema.test";
+
+/// Launch one of the three engines by name.
+async fn launch_browser(playwright: &Playwright, browser_name: &str) -> Browser {
+    match browser_name {
+        "firefox" => playwright
+            .firefox()
+            .launch()
+            .await
+            .expect("Failed to launch Firefox"),
+        "webkit" => playwright
+            .webkit()
+            .launch()
+            .await
+            .expect("Failed to launch WebKit"),
+        _ => playwright
+            .chromium()
+            .launch()
+            .await
+            .expect("Failed to launch Chromium"),
+    }
+}
+
+/// Open a page that serves `site` at [`SITE_ORIGIN`] from an in-process
+/// `ServeDir` — no port bound, no server task, so nothing to race for and
+/// nothing to wait for before navigating.
+///
+/// The browser is returned with the page because dropping it closes the
+/// page.
+async fn open_served_page(
+    playwright: &Playwright,
+    browser_name: &str,
+    site: &Path,
+) -> (Browser, Page) {
+    let browser = launch_browser(playwright, browser_name).await;
+    let page = browser.new_page().await.expect("Failed to create page");
+    page.route_service(&format!("{SITE_ORIGIN}/**"), ServeDir::new(site))
+        .await
+        .expect("Failed to serve the generated site in-process");
+    (browser, page)
+}
+
 /// Start a simple HTTP server serving static files.
 async fn start_server(
     output_dir: PathBuf,
@@ -240,34 +286,16 @@ fn get_browsers_to_test() -> Vec<&'static str> {
 }
 
 /// Run the happy-path E2E test with a specific browser.
-async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, base_url: &str) {
+async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, site: &Path) {
     println!("Testing with browser: {}", browser_name);
 
-    let browser = match browser_name {
-        "firefox" => playwright
-            .firefox()
-            .launch()
-            .await
-            .expect("Failed to launch Firefox"),
-        "webkit" => playwright
-            .webkit()
-            .launch()
-            .await
-            .expect("Failed to launch WebKit"),
-        _ => playwright
-            .chromium()
-            .launch()
-            .await
-            .expect("Failed to launch Chromium"),
-    };
-
-    let page = browser.new_page().await.expect("Failed to create page");
+    let (browser, page) = open_served_page(playwright, browser_name, site).await;
 
     // === HAPPY PATH TEST ===
     // This single test verifies the core user journey through the documentation.
 
     // 1. Navigate to the index page
-    let url = format!("{}/index.html", base_url);
+    let url = format!("{SITE_ORIGIN}/index.html");
     page.goto(&url, None)
         .await
         .expect("Failed to navigate to index page");
@@ -1590,32 +1618,18 @@ fn e2e_happy_path() {
     let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
 
     rt.block_on(async {
-        // Generate documentation
+        // Generate documentation. Nothing is bound or spawned to serve it:
+        // each page serves it from this process.
         let output_dir = generate_docs();
-        let (listener, port) = bind_ephemeral();
-        let base_url = format!("http://127.0.0.1:{}", port);
 
-        // Start server
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
-
-        // Give server time to start
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
-        // Initialize Playwright
         let playwright = Playwright::launch()
             .await
             .expect("Failed to initialize Playwright");
 
-        // Run test for each configured browser
-        let browsers = get_browsers_to_test();
-        for browser_name in browsers {
-            run_happy_path_test(&playwright, browser_name, &base_url).await;
+        for browser_name in get_browsers_to_test() {
+            run_happy_path_test(&playwright, browser_name, &output_dir).await;
         }
 
-        // Cleanup
-        let _ = shutdown_tx.send(());
-        let _ = server_handle.await;
         let _ = fs::remove_dir_all(output_dir);
     });
 }
