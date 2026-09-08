@@ -86,26 +86,35 @@ dependency is a sibling checkout or a fetched release.
 
 ### Slice 2: A dataset another dependency publishes against this schema
 
-**Status:** Not Started
+**Status:** Complete
 
 **User Value:** A consumer renders a dataset that one package publishes
 against another package's schema — a benchmark written in the grader's schema
 but shipped with the ontology it grades — by naming both.
 
 **Acceptance Criteria:**
-- [ ] `datasets = ["<dep>:<name>"]` on a `[generate.<other>]` entry renders
+- [x] `datasets = ["<dep>:<name>"]` on a `[generate.<other>]` entry renders
       the dataset `<dep>` publishes under `<name>`, against `<other>`'s
       schema.
-- [ ] The qualified form is accepted only when the dataset's publish entry
+- [x] The qualified form is accepted only when the dataset's publish entry
       names that same schema dependency; a mismatch fails naming both.
-- [ ] A `<dep>` the consumer does not declare fails naming the declared
+- [x] A `<dep>` the consumer does not declare fails naming the declared
       dependencies.
-- [ ] The shipped skill and the manifest reference document both forms, and
+- [x] The shipped skill and the manifest reference document both forms, and
       a consumer manifest in the test fixtures exercises each.
 
 **Notes:**
 - Bare `<name>` stays the dependency-of-this-entry form from slice 1, so a
   single-package consumer never writes a prefix.
+- One rule covers both spellings: a dataset conforms to the schema its
+  publish entry names, or to its publishing package's own when it names
+  none, and it must be named under the block for that schema. Slice 1's
+  self-referential case and slice 2's cross-package case fall out of it
+  rather than being special-cased.
+- Slice 1's refusal message pointed at `instances`, because no spelling
+  reached a cross-schema dataset then. It now names the block and the
+  qualified spelling, and the test asserts that spelling resolves — so the
+  remedy is checked, not just worded.
 - The colon is the separator because a dataset name is already a directory
   name in published output, where `/` is taken and `:` is not.
 
@@ -116,7 +125,7 @@ but shipped with the ontology it grades — by naming both.
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | Slice 1 | Must Have | None | Complete |
-| Slice 2 | Must Have | Slice 1 | Not Started |
+| Slice 2 | Must Have | Slice 1 | Complete |
 
 ## Things to watch
 
@@ -144,9 +153,9 @@ but shipped with the ontology it grades — by naming both.
 
 ## Definition of Done
 
-- [ ] All acceptance criteria met
-- [ ] All slices Complete
-- [ ] All tests passing: `cargo nextest run --workspace`
-- [ ] Code formatted and clippy clean
-- [ ] README.md, CHANGELOG.md, and the shipped skill's manifest reference
+- [x] All acceptance criteria met
+- [x] All slices Complete
+- [x] All tests passing: `cargo nextest run --workspace`
+- [x] Code formatted and clippy clean
+- [x] README.md, CHANGELOG.md, and the shipped skill's manifest reference
       updated

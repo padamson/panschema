@@ -241,14 +241,38 @@ pub enum DatasetError {
     },
     #[error(
         "[generate.{entry}]: `{dep}`'s dataset `{name}` conforms to schema `{schema}`, \
-         not `{entry}` — this block renders only the datasets `{dep}` publishes against \
-         `{entry}`'s own schema, so supply this one's file with `instances`"
+         not `{entry}` — {}",
+        match block {
+            Some(block) => format!("name it under [generate.{block}], as `{dep_key}:{name}`"),
+            None => format!(
+                "this manifest declares no [schemas] entry for `{schema}`, so there is no \
+                 block it belongs under"
+            ),
+        }
     )]
     WrongSchema {
         entry: String,
+        /// The publishing package's name, for reading.
         dep: String,
+        /// The consumer's `[schemas]` key for it — the qualifier that
+        /// actually resolves, which is not always the published name.
+        dep_key: String,
         name: String,
         schema: String,
+        /// The consumer's key for the schema this dataset conforms to, when
+        /// it declares one.
+        block: Option<String>,
+    },
+    #[error(
+        "[generate.{entry}]: `{name}` names dependency `{dep}`, which no [schemas] entry \
+         declares; declared are {}",
+        declared.join(", ")
+    )]
+    UnknownDependency {
+        entry: String,
+        dep: String,
+        name: String,
+        declared: Vec<String>,
     },
 }
 
@@ -274,28 +298,62 @@ impl Resolved {
 /// be rendered against a schema it does not conform to.
 pub fn resolve_named_datasets(
     entry: &str,
-    dep: &Resolved,
+    resolved: &std::collections::BTreeMap<String, Resolved>,
     names: &[String],
-) -> Result<Vec<PathBuf>, DatasetError> {
+) -> Result<Vec<PathBuf>, Box<DatasetError>> {
     let mut out = Vec::with_capacity(names.len());
     for name in names {
-        let Some(dataset) = dep.dataset(name) else {
-            return Err(DatasetError::Unknown {
-                entry: entry.to_string(),
-                dep: dep.published_name.clone(),
-                name: name.clone(),
-                available: dep.dataset_names(),
-            });
+        // `<dep>:<name>` names the package that publishes the dataset; a bare
+        // name means this entry's own dependency.
+        let (dep_key, dataset_name) = match name.split_once(':') {
+            Some((dep, dataset)) => (dep, dataset),
+            None => (entry, name.as_str()),
         };
-        if let Some(schema) = &dataset.schema
-            && schema != entry
-        {
-            return Err(DatasetError::WrongSchema {
+        let Some(dep) = resolved.get(dep_key) else {
+            return Err(Box::new(DatasetError::UnknownDependency {
+                entry: entry.to_string(),
+                dep: dep_key.to_string(),
+                name: name.clone(),
+                declared: resolved.keys().cloned().collect(),
+            }));
+        };
+        let Some(dataset) = dep.dataset(dataset_name) else {
+            return Err(Box::new(DatasetError::Unknown {
                 entry: entry.to_string(),
                 dep: dep.published_name.clone(),
-                name: name.clone(),
-                schema: schema.clone(),
-            });
+                name: dataset_name.to_string(),
+                available: dep.dataset_names(),
+            }));
+        };
+        // A dataset conforms to the schema its publish entry names, or — when
+        // it names none — to its own package's. Either way it belongs under
+        // the block for that schema, so this entry must be it.
+        //
+        // The publish entry names that schema by the *publisher's* manifest
+        // key, which the consumer need not spell the same way, so either that
+        // key or the published name of this entry's own package counts as a
+        // match.
+        let conforms_to = dataset.schema.as_deref().unwrap_or(dep_key);
+        let entry_names = |key: &str| {
+            key == entry
+                || resolved
+                    .get(entry)
+                    .is_some_and(|r| r.published_name == conforms_to)
+        };
+        if !entry_names(conforms_to) {
+            // Point at a block the consumer actually has, spelled its way.
+            let block = resolved
+                .iter()
+                .find(|(key, r)| key.as_str() == conforms_to || r.published_name == conforms_to)
+                .map(|(key, _)| key.clone());
+            return Err(Box::new(DatasetError::WrongSchema {
+                entry: entry.to_string(),
+                dep: dep.published_name.clone(),
+                dep_key: dep_key.to_string(),
+                name: dataset_name.to_string(),
+                schema: conforms_to.to_string(),
+                block,
+            }));
         }
         out.push(dataset.data.clone());
     }
@@ -994,12 +1052,68 @@ schema = "cqa"
         }
     }
 
+    /// The consumer's dependencies, keyed as its manifest declares them.
+    fn deps() -> std::collections::BTreeMap<String, Resolved> {
+        let mut map = std::collections::BTreeMap::new();
+        map.insert("wine".to_string(), published("/pkg/wine"));
+        let mut cqa = published("/pkg/cqa");
+        cqa.published_name = "cqa".to_string();
+        cqa.datasets.clear();
+        map.insert("cqa".to_string(), cqa);
+        map
+    }
+
+    /// A dataset one package publishes against another's schema is named by
+    /// both: which package ships it, and — by the block it sits under —
+    /// which schema it conforms to. This is the shape a benchmark takes,
+    /// written in the grader's schema but shipped with the ontology it
+    /// grades.
+    #[test]
+    fn a_qualified_name_resolves_a_datasets_publisher_and_its_schema() {
+        let paths = resolve_named_datasets("cqa", &deps(), &["wine:benchmark".to_string()])
+            .expect("wine publishes `benchmark` against cqa");
+        assert_eq!(paths, [PathBuf::from("/pkg/wine/data/wine-benchmark.yaml")]);
+    }
+
+    /// The qualifier must name a dependency the consumer declared, or there
+    /// is no package to look in.
+    #[test]
+    fn a_qualified_name_for_an_undeclared_dependency_lists_the_declared_ones() {
+        let err = resolve_named_datasets("cqa", &deps(), &["merlot:benchmark".to_string()])
+            .expect_err("`merlot` is not declared");
+        let message = err.to_string();
+        assert!(
+            message.contains("`merlot`") && message.contains("cqa, wine"),
+            "got {message}"
+        );
+    }
+
+    /// A dataset that conforms to its own package's schema does not belong
+    /// under another block, however it is spelled.
+    #[test]
+    fn a_qualified_name_still_checks_the_schema_the_dataset_conforms_to() {
+        let err = resolve_named_datasets("cqa", &deps(), &["wine:worked-example".to_string()])
+            .expect_err("`worked-example` conforms to wine's own schema");
+        assert!(
+            err.to_string().contains("conforms to schema `wine`"),
+            "got {err}"
+        );
+    }
+
+    /// Naming this entry's own dependency explicitly is the bare form spelled
+    /// long, and resolves the same way.
+    #[test]
+    fn a_qualified_name_may_name_this_entrys_own_dependency() {
+        let paths = resolve_named_datasets("wine", &deps(), &["wine:worked-example".to_string()])
+            .expect("resolves");
+        assert_eq!(paths, [PathBuf::from("/pkg/wine/data/wine-instances.yaml")]);
+    }
+
     /// A named dataset resolves to the file the package publishes, under
     /// the package's own directory — the consumer never writes that path.
     #[test]
     fn a_named_dataset_resolves_to_the_packages_own_file() {
-        let dep = published("/pkg/wine");
-        let paths = resolve_named_datasets("wine", &dep, &["worked-example".to_string()])
+        let paths = resolve_named_datasets("wine", &deps(), &["worked-example".to_string()])
             .expect("resolves");
         assert_eq!(paths, [PathBuf::from("/pkg/wine/data/wine-instances.yaml")]);
     }
@@ -1008,10 +1122,9 @@ schema = "cqa"
     /// order the consumer wrote.
     #[test]
     fn named_datasets_resolve_in_declaration_order() {
-        let dep = published("/pkg/wine");
         let paths = resolve_named_datasets(
             "wine",
-            &dep,
+            &deps(),
             &["worked-example".to_string(), "worked-example".to_string()],
         )
         .expect("resolves");
@@ -1022,8 +1135,7 @@ schema = "cqa"
     /// typo is one message away from the fix.
     #[test]
     fn an_unpublished_dataset_name_lists_what_is_published() {
-        let dep = published("/pkg/wine");
-        let err = resolve_named_datasets("wine", &dep, &["exemplar".to_string()])
+        let err = resolve_named_datasets("wine", &deps(), &["exemplar".to_string()])
             .expect_err("no such dataset");
         let message = err.to_string();
         assert!(
@@ -1036,23 +1148,69 @@ schema = "cqa"
 
     /// The package states which schema each dataset conforms to, so a
     /// dataset named under a block for a different schema is refused rather
-    /// than rendered against a schema it does not conform to. The message
-    /// offers the spelling that works today — a bare name resolves only
-    /// against the block's own dependency, so pointing at another block
-    /// would trade this error for an unknown-dataset one.
+    /// than rendered against a schema it does not conform to — and the
+    /// message names the block it belongs under, in the qualified spelling
+    /// that resolves there.
     #[test]
     fn a_dataset_conforming_to_another_schema_is_refused_with_a_usable_remedy() {
-        let dep = published("/pkg/wine");
-        let err = resolve_named_datasets("wine", &dep, &["benchmark".to_string()])
+        let err = resolve_named_datasets("wine", &deps(), &["benchmark".to_string()])
             .expect_err("benchmark conforms to cqa, not wine");
         let message = err.to_string();
         assert!(
-            message.contains("conforms to schema `cqa`") && message.contains("`instances`"),
+            message.contains("conforms to schema `cqa`")
+                && message.contains("[generate.cqa]")
+                && message.contains("`wine:benchmark`"),
             "got {message}"
         );
+
+        // And that spelling is the one that works.
+        let paths = resolve_named_datasets("cqa", &deps(), &["wine:benchmark".to_string()])
+            .expect("the remedy the message gives resolves");
+        assert_eq!(paths, [PathBuf::from("/pkg/wine/data/wine-benchmark.yaml")]);
+    }
+
+    /// A consumer may key a dependency by any name it likes, so the
+    /// qualifier that resolves is *its* key, not the package's published
+    /// name. The refusal has to spell it that way, or it sends the author to
+    /// a spelling that fails as an unknown dependency.
+    #[test]
+    fn the_remedy_spells_the_qualifier_the_consumer_would_have_to_write() {
+        let mut aliased = std::collections::BTreeMap::new();
+        aliased.insert("vino".to_string(), published("/pkg/wine")); // published_name: wine
+        let mut cqa = published("/pkg/cqa");
+        cqa.published_name = "cqa".to_string();
+        cqa.datasets.clear();
+        aliased.insert("grader".to_string(), cqa);
+
+        let err = resolve_named_datasets("vino", &aliased, &["benchmark".to_string()])
+            .expect_err("benchmark conforms to cqa, not wine");
+        let message = err.to_string();
         assert!(
-            !message.contains("[generate.cqa]"),
-            "must not send the author to a block where the name does not resolve; got {message}"
+            message.contains("`vino:benchmark`"),
+            "the qualifier must be the consumer's key; got {message}"
+        );
+        assert!(
+            message.contains("[generate.grader]"),
+            "the block must be the consumer's key for that schema; got {message}"
+        );
+
+        // And the spelling the message gives is the one that resolves.
+        let paths = resolve_named_datasets("grader", &aliased, &["vino:benchmark".to_string()])
+            .expect("the remedy resolves");
+        assert_eq!(paths, [PathBuf::from("/pkg/wine/data/wine-benchmark.yaml")]);
+    }
+
+    /// A dataset conforming to a schema this manifest does not declare has no
+    /// block to move to, and the message says that rather than naming one.
+    #[test]
+    fn a_dataset_for_an_undeclared_schema_says_there_is_no_block() {
+        let mut only_wine = std::collections::BTreeMap::new();
+        only_wine.insert("wine".to_string(), published("/pkg/wine"));
+        let err = resolve_named_datasets("wine", &only_wine, &["benchmark".to_string()])
+            .expect_err("cqa is not declared here");
+        assert!(
+            err.to_string().contains("no [schemas] entry for `cqa`"),
+            "got {err}"
         );
     }
 
@@ -1061,14 +1219,17 @@ schema = "cqa"
     /// which is the only block a bare name is resolved against.
     #[test]
     fn a_dataset_naming_its_own_packages_schema_resolves() {
-        let mut dep = published("/pkg/wine");
-        dep.datasets.push(PublishedDataset {
-            name: "restated".to_string(),
-            data: PathBuf::from("/pkg/wine/data/restated.yaml"),
-            schema: Some("wine".to_string()),
-        });
+        let mut all = deps();
+        all.get_mut("wine")
+            .expect("wine")
+            .datasets
+            .push(PublishedDataset {
+                name: "restated".to_string(),
+                data: PathBuf::from("/pkg/wine/data/restated.yaml"),
+                schema: Some("wine".to_string()),
+            });
         let paths =
-            resolve_named_datasets("wine", &dep, &["restated".to_string()]).expect("resolves");
+            resolve_named_datasets("wine", &all, &["restated".to_string()]).expect("resolves");
         assert_eq!(paths, [PathBuf::from("/pkg/wine/data/restated.yaml")]);
     }
 }

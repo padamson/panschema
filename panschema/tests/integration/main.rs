@@ -77,7 +77,11 @@ fn write_dataset_pkg(parent: &Path) {
             .expect("read catalog data"),
     )
     .expect("write data");
-    fs::write(pkg.join("data/audit.yaml"), "wines: []\n").expect("write audit data");
+    fs::write(
+        pkg.join("data/audit.yaml"),
+        "wines:\n  - id: auditedPour\n    name: Audited Pour\n",
+    )
+    .expect("write audit data");
 }
 
 fn run_generate_in(dir: &Path) -> std::process::Output {
@@ -161,6 +165,76 @@ fn a_named_dataset_renders_what_its_path_would_have() {
     assert!(
         page.contains("localPour") && page.contains("chateauMorgon"),
         "a path and a named dataset render together, each selectable on the page"
+    );
+}
+
+/// A dataset one package publishes against another's schema is named by
+/// both — `<dep>:<name>` — and renders under the block for the schema it
+/// conforms to, which is how a benchmark written in one schema and shipped
+/// with another's ontology reaches its page.
+#[test]
+fn a_qualified_dataset_renders_under_the_schema_it_conforms_to() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    write_dataset_pkg(tmp.path());
+    // A second package: the schema the first one's `audit` dataset conforms to.
+    let audit = tmp.path().join("audit-pkg");
+    fs::create_dir_all(&audit).expect("mkdir audit pkg");
+    fs::write(
+        audit.join("panschema-publish.toml"),
+        "[schema]\nname = \"audit\"\nversion = \"1.0.0\"\nlinkml = \"1.7.0\"\n\n\
+         [files]\nmain = \"audit.yaml\"\n",
+    )
+    .expect("write publish toml");
+    fs::write(
+        audit.join("audit.yaml"),
+        fs::read_to_string("../panschema-model/tests/fixtures/catalog.yaml")
+            .expect("read catalog schema"),
+    )
+    .expect("write schema");
+
+    let consumer = tmp.path().join("consumer");
+    fs::create_dir_all(&consumer).expect("mkdir consumer");
+    fs::write(
+        consumer.join("panschema.toml"),
+        "[schemas.catalog]\npath = \"../catalog-pkg\"\n\n\
+         [schemas.audit]\npath = \"../audit-pkg\"\n\n\
+         [generate.audit]\nttl = \"out.ttl\"\ndatasets = [\"catalog:audit\"]\n",
+    )
+    .expect("write manifest");
+
+    let out = run_generate_in(&consumer);
+    assert!(
+        out.status.success(),
+        "generate failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let qualified = fs::read_to_string(consumer.join("out.ttl")).expect("read output");
+    assert!(
+        qualified.contains("auditedPour"),
+        "the qualified dataset's records are in the output"
+    );
+
+    // The same dataset by path, under the same block: naming it must render
+    // exactly what pathing to it renders.
+    let by_path = tmp.path().join("by-path");
+    fs::create_dir_all(&by_path).expect("mkdir consumer");
+    fs::write(
+        by_path.join("panschema.toml"),
+        "[schemas.audit]\npath = \"../audit-pkg\"\n\n\
+         [generate.audit]\nttl = \"out.ttl\"\n\
+         instances = [\"../catalog-pkg/data/audit.yaml\"]\n",
+    )
+    .expect("write manifest");
+    let out = run_generate_in(&by_path);
+    assert!(
+        out.status.success(),
+        "generate failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        qualified,
+        fs::read_to_string(by_path.join("out.ttl")).expect("read by-path output"),
+        "a qualified name renders exactly what its path renders"
     );
 }
 

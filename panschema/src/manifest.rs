@@ -61,7 +61,7 @@ impl Manifest {
         &self,
         name: &str,
         resolved: &BTreeMap<String, crate::source::Resolved>,
-    ) -> Result<Vec<PathBuf>, crate::source::DatasetError> {
+    ) -> Result<Vec<PathBuf>, Box<crate::source::DatasetError>> {
         let mut out: Vec<PathBuf> = Vec::new();
         let lists = [
             self.generate.get(name).map(|g| &g.instances),
@@ -72,11 +72,13 @@ impl Manifest {
                 out.push(path.clone());
             }
         }
+        // No guard on this entry's own dependency: a name may qualify another
+        // package, and a bare name with no dependency to resolve against is
+        // the resolver's error to report, not a reason to skip silently.
         if let Some(gen_cfg) = self.generate.get(name)
             && !gen_cfg.datasets.is_empty()
-            && let Some(dep) = resolved.get(name)
         {
-            for path in crate::source::resolve_named_datasets(name, dep, &gen_cfg.datasets)? {
+            for path in crate::source::resolve_named_datasets(name, resolved, &gen_cfg.datasets)? {
                 if !out.contains(&path) {
                     out.push(path);
                 }
