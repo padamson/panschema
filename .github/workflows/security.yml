@@ -216,22 +216,9 @@ jobs:
       # html_writer.rs embeds via include_str!/include_bytes!, which
       # satisfies a lib-only build (the wasm bytes are never executed).
 
-      # Compute the right diff base for this trigger.
-      # - pull_request: merge base against the PR target branch
-      # - push: the `before` SHA of the push (the parent of `after`).
-      #   First push to a branch has `before = 000...0`; fall back to
-      #   HEAD~1 in that case.
       - name: Compute diff base
         id: base
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "ref=origin/${{ github.base_ref }}" >> $GITHUB_OUTPUT
-          elif [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
-            echo "ref=HEAD~1" >> $GITHUB_OUTPUT
-          else
-            echo "ref=${{ github.event.before }}" >> $GITHUB_OUTPUT
-          fi
+        uses: ./.github/actions/diff-base
 
       - name: Run mutation testing on diff
         run: ./scripts/mutants.sh ${{ steps.base.outputs.ref }}

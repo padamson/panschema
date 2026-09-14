@@ -1,0 +1,30 @@
+name: Diff base
+description: >-
+  The revision a job should diff the checkout against. For a pull request it
+  is the base branch's current tip — not the event payload's snapshot of it,
+  which goes stale as soon as the base moves and would fold the base's own
+  changes into the comparison. For a push it is the previous tip, or HEAD~1
+  on a branch's first push and on a manual run. Needs a fetch-depth 0
+  checkout.
+outputs:
+  ref:
+    description: A ref or SHA that `git diff <ref> HEAD` accepts.
+    value: ${{ steps.base.outputs.ref }}
+runs:
+  using: composite
+  steps:
+    - id: base
+      shell: bash
+      env:
+        EVENT: ${{ github.event_name }}
+        BASE_REF: ${{ github.base_ref }}
+        BEFORE: ${{ github.event.before }}
+      run: |
+        if [ "$EVENT" = pull_request ]; then
+          ref="origin/$BASE_REF"
+        elif [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+          ref="HEAD~1"
+        else
+          ref="$BEFORE"
+        fi
+        echo "ref=$ref" >> "$GITHUB_OUTPUT"

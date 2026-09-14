@@ -16,6 +16,34 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  skill-version:
+    name: Skill version guard
+    runs-on: ubuntu-latest
+    # The pre-commit hook of the same name is per-clone and opt-in, so a
+    # hookless clone or a `--no-verify` commit would ship a skill edit
+    # without the version bump installed consumers key their updates on.
+    # Same script, run against the PR base or the tip before the push.
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Compute diff base
+        id: base
+        uses: ./.github/actions/diff-base
+
+      # The script treats an unusable ref as an error; skipping when there
+      # is nothing to compare against is this job's call, not the script's.
+      - name: Check the skill version against the base
+        env:
+          BASE: ${{ steps.base.outputs.ref }}
+        run: |
+          if ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "Base $BASE is not reachable (force push or rewritten history); nothing to compare."
+            exit 0
+          fi
+          scripts/check-skill-version-bumped.sh --base "$BASE"
+
   msrv:
     name: MSRV Check
     runs-on: ubuntu-latest
