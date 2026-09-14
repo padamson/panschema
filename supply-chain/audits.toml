@@ -37,6 +37,24 @@ criteria = "safe-to-deploy"
 delta = "0.4.2 -> 0.4.3"
 notes = 'Patch release. WASI p2/p3 backend swaps the wasip2/wasip3 crate deps for a manual `unsafe extern "C"` binding to the `get-random-u64` host import (declared `safe fn`, forwarding to the platform RNG exactly as the dropped crates did). The wasm cfgs widen from target_arch = "wasm32" to target_family = "wasm" to add wasm64 support. Remainder is CHANGELOG/README docs and import reordering. No randomness logic changes and no new ambient capabilities.'
 
+[[audits.jsonschema]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.52.0 -> 0.53.0"
+notes = "Delta audit at safe-to-run, from a scan of every added line rather than a full read: 58 files, mostly src/keywords/ and a new canonical/ schema-canonicalization module. No process, env, fs or net access, no include!, no unsafe, no new dependency in this repo's graph; the one version bump is their dev-dependency hegeltest. Dev-only here: the JSON Schema writer's oracle in tests."
+
+[[audits.jsonschema-regex]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.52.1 -> 0.53.0"
+notes = "Delta audit. Version bumps only; no source change."
+
+[[audits.jsonschema-value]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.52.1 -> 0.53.0"
+notes = "Delta audit. Integer-detection helpers on the number trait; the one new unsafe is PyFloat_AsDouble inside the pyo3 module, behind a feature this repo does not enable. A wasm32-only getrandom dependency is added. No build script, no I/O."
+
 [[audits.oxigraph]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-deploy"
@@ -108,6 +126,12 @@ who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "0.10.0 -> 0.10.1"
 notes = "Doc-only patch release: CHANGELOG addition + version bump + two doc comments updated to reference the renamed rand::RngExt trait. Zero code changes; no unsafe; no new ambient capabilities."
+
+[[audits.referencing]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.52.1 -> 0.53.0"
+notes = "Delta audit. Replaces a hand-rolled percent-encoder with pct_enc's EString and strips fragments through the uri type; net code removal. No unsafe, no I/O."
 
 [[audits.sparesults]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
