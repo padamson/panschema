@@ -41,10 +41,9 @@ it; slice 2 converts the rest only if the number justifies it.
 One test keeps its listener deliberately. Not for coverage of panschema's
 own serving — the harness's server is a test-local `ServeDir`, so the socket
 exercises tower-http rather than anything this repo ships — but as a
-control. panschema tracks playwright-rs `main`, so an interception
-regression can arrive at any time; with every test intercepted, that
-presents as "the entire e2e suite is broken" with nothing to compare
-against.
+control. An interception regression arrives with any bump of the
+dependency, and with every test intercepted that presents as "the entire
+e2e suite is broken" with nothing to compare against.
 
 ---
 
@@ -133,9 +132,9 @@ look like.
 test that serves two sites at once — a schema-and-instances build plus an
 attribute-only build, on two listeners. Keeping it bound serves two ends:
 it is the awkward case to express as interception, and it is the
-differential. panschema tracks playwright-rs `main`, so a `route_service`
-regression can land at any time; if the control passes while the other
-twenty-seven fail, the fault is the interception path, not the app.
+differential. A `route_service` regression lands with any bump of the
+dependency; if the control passes while the other twenty-seven fail, the
+fault is the interception path, not the app.
 
 **Notes:**
 - Depends on slice 1's measurement. If interception proves materially

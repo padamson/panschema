@@ -55,6 +55,18 @@ criteria = "safe-to-deploy"
 delta = "0.2.3 -> 0.2.4"
 notes = "Delta audit of the oxigraph 2026-09 patch bumps: dependency pins, clippy lint lists, edition-2024 attribute migration, and small parser/optimizer correctness fixes. No new dependencies, build scripts, unsafe, network, or filesystem code."
 
+[[audits.playwright-rs]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+version = "0.18.0"
+notes = "Authored and maintained by the certifier. safe-to-run rather than safe-to-deploy: a dev-dependency that spawns a browser driver and talks to it over a local socket, so it is not a candidate for the stronger criteria."
+
+[[audits.playwright-rs-macros]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+version = "0.1.1"
+notes = "Authored and maintained by the certifier. Proc-macro half of playwright-rs; same dev-dependency scope and criteria."
+
 [[audits.rand_core]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-deploy"

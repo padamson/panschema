@@ -3,12 +3,14 @@
 //! These tests verify the generated documentation renders correctly in a real browser.
 //!
 //! ## Setup
-//! Install Playwright browsers matching the version bundled with playwright-rs:
+//! Install Playwright browsers matching the driver `playwright-rs` vendors:
 //! ```bash
-//! npx playwright@1.60.0 install
+//! cargo run --example install-browsers
 //! ```
 //!
-//! The required version is exposed as [`playwright_rs::PLAYWRIGHT_VERSION`].
+//! The example asks the crate which build that is, so nothing here names a
+//! Playwright version; [`playwright_rs::PLAYWRIGHT_VERSION`] is the source of
+//! truth.
 //!
 //! ## Running
 //! - Default (chromium): `cargo nextest run e2e`
@@ -3465,11 +3467,12 @@ fn e2e_typed_instance_graph_renders_class_symbols_and_shared_values() {
 ///
 /// **The one test still served over a real listener, deliberately.** It is
 /// the only one that serves two sites at once, which is awkward to express
-/// as interception — and keeping it bound makes it the control. panschema
-/// tracks playwright-rs `main`, so a `route_service` regression can arrive
-/// at any time; when this passes and the intercepted tests fail, the fault
-/// is the serving path rather than the app. Do not convert it without
-/// leaving some other test on a socket.
+/// as interception — and keeping it bound makes it the control. Every other
+/// test reaches its page through `route_service`, so a regression there
+/// reds the whole suite at once with nothing to compare against; when this
+/// one passes and the intercepted tests fail, the fault is the serving path
+/// rather than the app. Do not convert it without leaving some other test
+/// on a socket.
 #[test]
 fn e2e_legends_adapt_to_what_each_graph_contains() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");

@@ -26,13 +26,16 @@ updates:
     # PRs the auto-merge cascade costs O(N²) runs. No merge machinery
     # avoids a lockfile conflict; fewer PRs is the fix.
     groups:
-      # Listed first: a dependency joins the first group it matches, and a
-      # git-pinned bump carries no semver update-type, so the filtered
-      # groups below can never claim these.
-      git-dependencies:
+      # Listed first: a dependency joins the first group it matches, so
+      # this claims playwright-rs for every update type before the filtered
+      # groups below can. It is the one bump that also moves the browser
+      # driver and the browsers, so it is the one most likely to need work
+      # in the e2e suite; on its own it can wait without holding up the
+      # week's other minor bumps. That costs one extra PR only on the weeks
+      # it moves.
+      playwright-dependencies:
         patterns:
           - "playwright-rs"
-          - "playwright-rs-macros"
       start-dependencies:
         patterns:
           - "*"

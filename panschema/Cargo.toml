@@ -121,14 +121,13 @@ syn = { version = "3", features = ["full"] }
 # a real-Postgres apply/constraint-enforcement tier is not yet built.
 pg_query = "6"
 
-# E2E browser testing. Pinned to `padamson/playwright-rust` `main` (not a
-# crates.io release) to dogfood pre-release work ongoing — the author
-# maintains playwright-rust and wants real consumer friction before each
-# release. Browsers install through `cargo run --example install-browsers`,
+# E2E browser testing. Tracks the crates.io release; re-pin to
+# `padamson/playwright-rust` `main` when there is pre-release work to
+# dogfood. Browsers install through `cargo run --example install-browsers`,
 # which asks the crate for the build its own driver expects; nothing names
 # a Playwright version, so a bump moves crate, driver, and browsers
 # together.
-playwright-rs = { git = "https://github.com/padamson/playwright-rust", branch = "main" }
+playwright-rs = "0.18"
 
 # Spec-conformance validation of HtmlWriter output: the same HTML5 parser
 # Servo/Firefox use. A real browser silently repairs malformed markup, so

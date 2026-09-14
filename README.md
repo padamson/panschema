@@ -414,14 +414,17 @@ Read our [WHY.md](WHY.md) to understand the full vision.
 
 ### Prerequisites
 
-- Rust 1.85+ (edition 2024)
+- Rust 1.88+ (edition 2024)
 - `cargo-nextest` (recommended for testing)
-- Node.js 20+ and Playwright browsers (for E2E tests)
+- Playwright browsers (for E2E tests)
 
 ```bash
-# Install Playwright browsers
-npx playwright@1.60.0 install
+cargo run --example install-browsers                 # the build the crate's driver expects
+cargo run --example install-browsers -- --with-deps  # Linux: the system libraries too
 ```
+
+The example's own documentation explains why no Playwright version is
+written down anywhere in this repository.
 
 ### Building & Testing
 
