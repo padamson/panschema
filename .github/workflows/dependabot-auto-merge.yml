@@ -9,7 +9,7 @@ name: Dependabot auto-merge
 # merges made with GITHUB_TOKEN do not trigger workflows, so the push run
 # on main never fires for these merge commits. Every job that should block
 # a bump must be in the ruleset's required checks (all of them are, as of
-# 2026-09-05), and the ruleset keeps "require up to date" off so green PRs
+# 2026-09-14), and the ruleset keeps "require up to date" off so green PRs
 # merge without rebasing onto each sibling that merged first.
 
 on: pull_request
