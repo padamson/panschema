@@ -1,6 +1,30 @@
 
 # cargo-vet audits file
 
+[[audits.askama]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.16.0 -> 0.16.1"
+notes = "Delta audit. One changed line in src/filters/escape.rs: a redundant reference dropped from a write! argument. No build script, no unsafe, no I/O."
+
+[[audits.askama_derive]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.16.0 -> 0.16.1"
+notes = "Delta audit. Codegen for an optional type annotation on template let bindings (writes a colon token and the type), a clearer error for generic parameter defaults on filter functions, and a deref tweak in heritage.rs. Proc-macro crate; no build script, no unsafe, no I/O."
+
+[[audits.askama_macros]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.16.0 -> 0.16.1"
+notes = "Delta audit. Version bumps only; no source change."
+
+[[audits.askama_parser]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.16.0 -> 0.16.1"
+notes = "Delta audit. Parses an optional colon-type after a let variable, with cut errors for a missing type or expression; a string-literal error message loses a needless format!. Tests updated. No build script, no unsafe, no I/O."
+
 [[audits.base64]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-deploy"
@@ -18,6 +42,12 @@ who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "0.5.9 -> 0.5.10"
 notes = "Delta audit of the oxigraph 2026-09 patch bumps: dependency pins, clippy lint lists, edition-2024 attribute migration, and small parser/optimizer correctness fixes. No new dependencies, build scripts, unsafe, network, or filesystem code."
+
+[[audits.oxigraph]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.5.10 -> 0.5.11"
+notes = "Delta audit. A doc-comment correction in src/sparql/mod.rs and pinned sub-crate versions; no code change. Dev-dependency here (RDF oracle for the writer tests)."
 
 [[audits.oxjsonld]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
