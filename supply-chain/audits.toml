@@ -91,6 +91,12 @@ criteria = "safe-to-run"
 version = "0.18.0"
 notes = "Authored and maintained by the certifier. safe-to-run rather than safe-to-deploy: a dev-dependency that spawns a browser driver and talks to it over a local socket, so it is not a candidate for the stronger criteria."
 
+[[audits.playwright-rs]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.18.0 -> 0.18.1"
+notes = "Delta audit. src/protocol/page.rs split into page/ submodules with no behavior change (position-independent diff shows only impl blocks and re-export lists); AddStyleTagOptionsBuilder re-exported at protocol::; the crate's own lockfiles take rustls 0.23.45 for RUSTSEC-2026-0285, which does not affect this repo's resolution. No dependency, build-script, or unsafe change. Authored by the certifier."
+
 [[audits.playwright-rs-macros]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-run"
