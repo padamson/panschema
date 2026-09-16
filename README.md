@@ -58,20 +58,11 @@ npx skills add padamson/panschema
 
 Works with [Claude Code](https://claude.ai/code),
 [Codex](https://openai.com/codex/), [Cursor](https://cursor.com), and any
-other [compatible agent](https://agentskills.io/clients).
-
-Claude Code can also install it as a plugin, which tracks this repo:
-
-```
-/plugin marketplace add padamson/panschema
-/plugin install panschema@panschema
-```
-
-`/plugin update panschema` picks up new versions of the skill. The skill
-carries its own version, bumped whenever its content changes and enforced by
-a hook, so an update reaches you rather than reporting that you are already
-current. Installing through `npx skills add` copies the skill instead, so
-re-run it (or `npx skills update`) to take a newer one.
+other [compatible agent](https://agentskills.io/clients). The install copies
+the skill into your repo and records its source in `skills-lock.json`;
+`npx skills update` takes a newer one. The skill carries its own version in
+its frontmatter, bumped whenever its content changes and enforced by a hook,
+so the installed copy always says which panschema it describes.
 
 ## Quick Start
 

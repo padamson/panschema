@@ -3,7 +3,7 @@ name: panschema-development
 description: Use when working with LinkML or OWL schemas — generating schema documentation or a schema graph, converting a schema to RDF/Turtle, JSON Schema, OpenAPI, SHACL shapes, Rust types or Postgres DDL, verifying instance data against a schema, wiring a `panschema.toml` manifest, or publishing versioned schema docs. Also use when a repo contains `panschema.toml`, `panschema-publish.toml`, or `panschema.lock`.
 license: Apache-2.0
 metadata:
-  version: "0.5.3"
+  version: "0.5.4"
 ---
 
 # panschema
@@ -109,23 +109,16 @@ undocumented, fails CI.
 
 ## Installing and updating
 
-This skill installs from either channel. The Agent Skills CLI works with
-any compatible agent and copies the skill, so re-run it (or `npx skills
-update`) to take a newer one:
-
     npx skills add padamson/panschema
 
-Claude Code can instead install it as a plugin from panschema's own
-marketplace, which tracks this repo:
-
-    /plugin marketplace add padamson/panschema
-    /plugin install panschema@panschema
-
-Then `/plugin update panschema` picks up new versions of this skill. It
-carries its own version, bumped whenever its content changes, so an update
-reaches you instead of reporting that you are already current. That version
-is not the tool's: the skill describes the panschema on the default branch,
-which is ahead of the last release.
+The Agent Skills CLI works with any compatible agent. It copies the skill
+into the repo — `.agents/skills/`, linked from `.claude/skills/` for Claude
+Code — and records the source in `skills-lock.json`. Re-run it, or `npx
+skills update`, to take a newer one, and read `metadata.version` from the
+installed `SKILL.md` to see which one you have. That version is this
+skill's own, bumped whenever its content changes; it is not the tool's,
+because the skill describes the panschema on the default branch, which is
+ahead of the last release.
 
 The binary is separate: install it with `cargo install --git
 https://github.com/padamson/panschema panschema` (or from a local checkout

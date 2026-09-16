@@ -77,19 +77,20 @@ repos:
         entry: cargo nextest run -p panschema --test skill_docs --features panschema/dev
         language: system
         pass_filenames: false
-        files: ^(skills/|docs/|\.claude-plugin/|Cargo\.toml$|README\.md$|WHY\.md$|CLAUDE\.md$)
+        files: ^(skills/|docs/|Cargo\.toml$|README\.md$|WHY\.md$|CLAUDE\.md$)
 
-      # plugin.json's version is the `/plugin update` gate: until it moves,
-      # an update reports "already at the latest version" and a skill edit
-      # reaches nobody. Pure bookkeeping, so easy to forget; the hook makes
-      # forgetting impossible, and keeps the frontmatter's version with it.
+      # The skill's `metadata.version` is the only version an installed
+      # copy carries: `npx skills add` copies and compares nothing, so a
+      # content edit that leaves it alone is invisible to every consumer.
+      # Pure bookkeeping, so easy to forget; the hook makes forgetting
+      # impossible.
       - id: skill-version-bumped
         name: skill version bumped
-        description: Skill or plugin edits must bump the version consumers update against
+        description: Skill edits must bump the version consumers compare against
         entry: ./scripts/check-skill-version-bumped.sh
         language: system
         pass_filenames: false
-        files: ^(skills/|\.claude-plugin/)
+        files: ^skills/
 
       # Doctests deliberately run in CI only (test.yml): they are a third
       # full compilation mode for a test class that changes rarely, and

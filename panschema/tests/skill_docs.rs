@@ -285,41 +285,42 @@ fn the_skill_links_every_reference() {
     let _ = Path::new("");
 }
 
-/// The skill reaches consumers through two channels that version
-/// differently: `/plugin` gates updates on plugin.json's version, while the
-/// Agent Skills CLI has no version concept and re-pulls, so the frontmatter's
-/// `metadata.version` is the only version that channel's reader can compare.
-/// They must agree, or the two channels disagree about what is installed.
+/// The skill reaches consumers through the Agent Skills CLI, which copies it
+/// and compares nothing: the frontmatter's `metadata.version` is the only
+/// version an installed copy carries. It must be present, and written in the
+/// one shape the version guard reads — a double-quoted string on the
+/// `version:` line under `metadata:`. YAML would accept a bare `1.0` as a
+/// float and single quotes as a string; the guard reads both as nothing, so
+/// requiring the literal shape here keeps the two from disagreeing about one
+/// file.
 ///
 /// The skill versions on its own cadence rather than the crate's: the crate
 /// version on the default branch is the last release, while the skill there
 /// describes the next one, so pinning them made the skill claim a release
 /// whose binary it did not match.
+///
+/// The license travels in the frontmatter too, and it is the crate's: the
+/// skill is distributed on its own, so that field is the only license a
+/// consumer of it sees.
 #[test]
-fn the_skill_and_plugin_declare_one_version() {
-    let manifest = fs::read_to_string(repo_root().join(".claude-plugin/plugin.json"))
-        .expect("read plugin.json");
-    let plugin_version = manifest
-        .lines()
-        .find_map(|l| l.trim().strip_prefix("\"version\":"))
-        .map(|v| v.trim().trim_matches(|c| c == '"' || c == ',').to_string())
-        .expect("plugin.json declares a version");
-
+fn the_skill_declares_a_quoted_version_and_the_crate_license() {
     let front = skill_frontmatter();
-    let skill_version = front
+    let version = front
         .get("metadata")
         .and_then(|m| m.get("version"))
-        .and_then(|v| {
-            v.as_str()
-                .map(str::to_string)
-                .or_else(|| Some(v.as_f64()?.to_string()))
-        })
-        .expect("SKILL.md declares metadata.version");
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.is_empty())
+        .expect("SKILL.md declares metadata.version as a string");
+    assert!(
+        skill_md().contains(&format!("\n  version: \"{version}\"\n")),
+        "metadata.version must be the double-quoted string the version guard reads: \
+         `  version: \"{version}\"`"
+    );
 
     assert_eq!(
-        skill_version, plugin_version,
-        "the skill's metadata.version and the plugin's version must agree — \
-         bump them together"
+        front.get("license").and_then(|l| l.as_str()),
+        Some(env!("CARGO_PKG_LICENSE")),
+        "the skill's frontmatter license must be the crate's"
     );
 }
 
@@ -377,24 +378,25 @@ fn published_crates_share_the_workspace_version_and_viz_is_not_published() {
     );
 }
 
-/// The skill has to live where the plugin ships it from, under a directory
-/// its own frontmatter names. A copy left under `.claude/skills/` would be
-/// project-local (visible only when working *in* panschema) and would drift
-/// from the distributed one — including a copy under the pre-rename name,
-/// which would shadow-load while documenting a CLI that no longer exists.
+/// The skill has to live where the Agent Skills CLI finds it, under a
+/// directory its own frontmatter names. A copy left under `.claude/skills/`
+/// would be project-local (visible only when working *in* panschema) and
+/// would drift from the distributed one — including a copy under the
+/// pre-rename name, which would shadow-load while documenting a CLI that no
+/// longer exists.
 #[test]
-fn the_skill_ships_from_the_plugin_directory_only() {
+fn the_skill_ships_from_the_skills_directory_only() {
     assert!(
         repo_root()
             .join(format!("skills/{SKILL_DIR}/SKILL.md"))
             .is_file(),
-        "the plugin's skill directory holds the skill"
+        "the skills directory holds the skill"
     );
     assert_eq!(
         skill_frontmatter().get("name").and_then(|n| n.as_str()),
         Some(SKILL_DIR),
-        "the frontmatter must name the directory it sits in — both install \
-         channels key on the pair agreeing"
+        "the frontmatter must name the directory it sits in — the install \
+         keys on the pair agreeing"
     );
     for name in [SKILL_DIR, "panschema"] {
         assert!(
