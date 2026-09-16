@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "playwright-rs-usage": {
+      "source": "padamson/playwright-rust",
+      "sourceType": "github",
+      "skillPath": "skills/playwright-rs-usage/SKILL.md",
+      "computedHash": "a9a77dbe9efa6360b462d49571b92a2a44179deaea912fb9a65dc0592bc728c3"
+    }
+  }
+}

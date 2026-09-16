@@ -121,6 +121,29 @@ Pre-commit hooks enforce these automatically.
 - **Releases:** Triggered by git tags (v*.*.*), builds cross-platform binaries
 - **Dependabot:** Weekly updates for Cargo and GitHub Actions
 
+## Agent skills
+
+The e2e tier is written against `playwright-rs`, and that crate ships a
+skill for it. It is a pinned dependency like any other: `skills-lock.json`
+(committed) records the source and a content hash, and `npx skills add`
+fetches the content into `.claude/skills/` (some CLI versions put the copy
+under `.agents/` and link it from there). Both paths are gitignored, so run
+the install once after cloning, from a plain terminal — Claude Code's own
+sandbox denies writes under `.claude/skills/`, and the CLI exits 2 there
+without installing anything:
+
+```bash
+npx skills add padamson/playwright-rust -s playwright-rs-usage -a claude-code -y
+```
+
+Verify with `ls -l .claude/skills/`: one entry, `playwright-rs-usage`, a
+directory or a link into `.agents/skills/`. Claude Code auto-loads only that
+path, so a missing entry means the skill is installed but invisible. Refresh
+with `npx skills
+update -p` (project scope; the prompt defaults to Global) and confirm by
+reading `metadata.version` from the installed `SKILL.md` — the success
+message is not evidence.
+
 ## Key Files to Know
 
 - [WHY.md](WHY.md) - Project motivation and vision

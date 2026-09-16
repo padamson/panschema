@@ -1,8 +1,0 @@
-{
-  "extraKnownMarketplaces": {
-    "playwright-rust": {
-      "source": { "source": "github", "repo": "padamson/playwright-rust" }
-    }
-  },
-  "enabledPlugins": { "playwright-rs@playwright-rust": true }
-}

@@ -17,3 +17,12 @@ typos.toml
 /mutants.out/
 /mutants.out.old/
 panschema/viz-bundle/
+
+# Managed agent skills, materialized by `npx skills add`. The pin lives in
+# skills-lock.json (committed); the content is fetched, so it is not vendored
+# here. The Claude Code entry point is a symlink into .agents/, so tracking it
+# would leave a dangling link in any clone that has not run the install.
+# panschema's own skill lives in skills/ and is never installed here, so no
+# negation is needed.
+.agents/
+.claude/skills/
