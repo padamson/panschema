@@ -12,6 +12,28 @@ use std::path::{Path, PathBuf};
 
 use crate::manifest::SchemaDep;
 
+/// The prefix a `path:` source spec carries in the lockfile's `source`
+/// field. The one string both `source_spec` and the lockfile's reading of an
+/// entry key on, so they cannot disagree about what a path entry looks like.
+pub const PATH_SPEC_PREFIX: &str = "path:";
+
+/// The `[schemas]` names split into pins and path sources, in name order. A
+/// malformed entry is an error here rather than a third bucket: the caller
+/// reports it before deciding anything else, exactly as `generate` does.
+pub fn partition_pins(
+    schemas: &std::collections::BTreeMap<String, SchemaDep>,
+) -> Result<(Vec<&str>, Vec<&str>), SourceError> {
+    let (mut pinned, mut unpinned) = (Vec::new(), Vec::new());
+    for (name, dep) in schemas {
+        if SchemaSource::from_dep(name, dep)?.is_pinned() {
+            pinned.push(name.as_str());
+        } else {
+            unpinned.push(name.as_str());
+        }
+    }
+    Ok((pinned, unpinned))
+}
+
 /// Validated source spec for one entry under `[schemas]`.
 ///
 /// Both variants point at a "package" (directory containing
@@ -57,13 +79,28 @@ pub enum SourceError {
 
 impl SchemaSource {
     /// Stable lockfile/representation string — e.g. `"path:./local-pkg"`
-    /// or `"github:owner/repo"`. Mirrors the format already used by
-    /// [`crate::lockfile::path_source_spec`].
+    /// or `"github:owner/repo"`.
     pub fn source_spec(&self) -> String {
         match self {
-            Self::Path { path } => format!("path:{}", path.display()),
+            Self::Path { path } => format!("{PATH_SPEC_PREFIX}{}", path.display()),
             Self::Github { owner, repo, .. } => format!("github:{owner}/{repo}"),
         }
+    }
+
+    /// Whether this source is a pin: a released version that the lockfile
+    /// records and `fetch --check` verifies. A `path:` source is the working
+    /// tree — its content is whatever is on disk right now, and pinning that
+    /// would only report every edit as drift — so it is never a pin.
+    pub fn is_pinned(&self) -> bool {
+        matches!(self, Self::Github { .. })
+    }
+
+    /// [`is_pinned`](Self::is_pinned) for a spec string as the lockfile
+    /// stores it, where the kind is only recoverable from the prefix. The
+    /// two answers must agree for every spec `source_spec` can produce, so a
+    /// new source kind changes both here or neither.
+    pub fn spec_is_pinned(spec: &str) -> bool {
+        !spec.starts_with(PATH_SPEC_PREFIX)
     }
 
     /// Tag string corresponding to this source's version, if any.
@@ -1231,5 +1268,67 @@ schema = "cqa"
         let paths =
             resolve_named_datasets("wine", &all, &["restated".to_string()]).expect("resolves");
         assert_eq!(paths, [PathBuf::from("/pkg/wine/data/restated.yaml")]);
+    }
+
+    #[test]
+    fn a_spec_string_is_pinned_exactly_when_its_source_is() {
+        for dep in [
+            dep_github("github:o/r", "1.0.0"),
+            dep_path("./pkg"),
+            dep_path("."),
+        ] {
+            let source = SchemaSource::from_dep("s", &dep).unwrap();
+            assert_eq!(
+                SchemaSource::spec_is_pinned(&source.source_spec()),
+                source.is_pinned(),
+                "the spec-string rule agrees with the kind for {source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_released_version_is_a_pin() {
+        assert!(
+            SchemaSource::from_dep("c", &dep_github("github:o/r", "1.0.0"))
+                .unwrap()
+                .is_pinned(),
+            "a github source at a version is a pin"
+        );
+        assert!(
+            !SchemaSource::from_dep("p", &dep_path("./pkg"))
+                .unwrap()
+                .is_pinned(),
+            "a path source is the working tree, not a pin"
+        );
+        assert!(
+            !SchemaSource::from_dep("own", &dep_path("."))
+                .unwrap()
+                .is_pinned(),
+            "the manifest's own package is a path source like any other"
+        );
+    }
+
+    #[test]
+    fn partition_splits_pins_from_path_sources_and_refuses_a_malformed_entry() {
+        let mut schemas = std::collections::BTreeMap::new();
+        schemas.insert("own".to_string(), dep_path("."));
+        schemas.insert("contract".to_string(), dep_github("github:o/r", "1.0.0"));
+        schemas.insert("sibling".to_string(), dep_path("../sibling"));
+        let (pinned, unpinned) = partition_pins(&schemas).unwrap();
+        assert_eq!(pinned, ["contract"]);
+        assert_eq!(unpinned, ["own", "sibling"], "in name order");
+
+        schemas.insert(
+            "broken".to_string(),
+            SchemaDep {
+                path: Some(PathBuf::from(".")),
+                source: None,
+                version: Some("0.1.0".into()),
+            },
+        );
+        assert!(
+            partition_pins(&schemas).is_err(),
+            "a malformed entry is reported, not silently dropped from both halves"
+        );
     }
 }

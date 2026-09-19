@@ -44,10 +44,13 @@ Exactly one of two forms. **`path` and `source` are different fields.**
 - **A repo can generate from its own package**: `path = "."` when
   `panschema-publish.toml` sits at the repo root. This is the normal way to
   emit non-HTML artifacts for your own schema.
-- Caveat for that self-reference: `fetch` checksums the main file into
-  `panschema.lock`, so `fetch --check` reports drift after every edit to a live
-  schema. Keep `fetch`/`fetch --check` for real dependencies; `generate` never
-  consults the lockfile.
+- `panschema.lock` records pins only — `github:` sources at a version. A
+  `path:` source (that self-reference, or a sibling checkout) is the working
+  tree: `fetch` resolves it, so a broken package still fails, but does not
+  record it, and `fetch --check` never compares it, so editing it is not
+  drift. A manifest with no pins needs no lockfile and passes `fetch
+  --check`. To catch a schema edited without regenerating its outputs, use
+  `generate --check`; `generate` never consults the lockfile either way.
 
 ## `[generate.<name>]` — what to emit
 
@@ -117,6 +120,7 @@ overriding the built-in map. Used to resolve labels for external groundings.
 
 ## `panschema.lock`
 
-Written by `fetch`, checked by `fetch --check`. Records each dependency's resolved
-source and a `sha256:` checksum of its main file. `generate` does not read
-it.
+Written by `fetch`, checked by `fetch --check`. Records each **pin** — a
+`github:` source at a version — with its resolved source and a `sha256:`
+checksum of its main file; `path:` sources are never recorded, and with no
+pins the file is not written. `generate` does not read it.

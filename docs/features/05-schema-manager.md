@@ -110,11 +110,11 @@ Each slice delivers end-to-end user value: a complete `manifest → fetch → ge
 
 **Acceptance Criteria:**
 
-- [x] `panschema fetch` resolves all manifested schemas, computes SHA-256 of each schema's main file, writes `panschema.lock` with one entry per schema
-- [x] `panschema fetch --check` reads the lockfile and re-checksums each schema; errors with a clear diff when checksums disagree
+- [x] `panschema fetch` resolves all manifested schemas and writes `panschema.lock` with one entry per **pin** (`github:` source at a version): name, version, source spec, SHA-256 of the main file. Path sources resolve from the working tree and are not recorded (decision 2026-09-17, below); with no pins the file is not written
+- [x] `panschema fetch --check` reads the lockfile and re-checksums each pin; errors with a clear diff when checksums disagree
 - [x] `panschema generate` runs independently against the manifest (resolves fresh); doesn't require a lockfile
-- [x] Lockfile format includes: name, version (from publish.toml — populated for both source types), source spec, revision (reserved for future commit-identifier provenance — currently `None` for both `path:` and `github:` sources), checksum
-- [x] Local-path schemas are checksummed too — detects "schema edited but generate not re-run"
+- [x] Lockfile format includes: name, version (from publish.toml — populated for every pin), source spec, revision (reserved for future commit-identifier provenance — currently always `None`), checksum
+- [x] ~~Local-path schemas are checksummed too — detects "schema edited but generate not re-run"~~ Retired 2026-09-17: that guard is `generate --check`'s job, and checksumming a path source made every authoring edit read as dependency drift (ADR-013)
 - [x] Integration test: edit a fixture schema's content after `fetch`, expect `fetch --check` to fail
 
 **Notes:**
@@ -169,7 +169,7 @@ The schema name is read from `panschema-publish.toml` at the resolved location �
 - [x] Single positional spec: `<protocol>:<args>@<version>` (remote) or a filesystem path to a package directory. Parsed by clap via `FromStr` on `SchemaSpec`, so malformed input errors at parse time.
 - [x] Schema name inferred from `panschema-publish.toml`; `--name <alias>` overrides for local renaming.
 - [x] Path-source `path` field stored as a directory, canonicalized then re-relativized to the manifest's location.
-- [x] Fetches the new schema and updates the lockfile (delegates to slice 2's `fetch`).
+- [x] Fetches the new schema and, for a `github:` source, updates the lockfile (delegates to slice 2's `fetch`).
 - [x] Does **not** write a `[generate.<name>]` block. `add` is "declare a dependency" only; `[generate.<name>]` is owned by the user. `panschema generate` prints a clear "no `[generate.<name>]` block; skipping" hint for any schema without one, so the absence is self-discoverable. (Earlier behavior auto-wrote an empty block via a `--no-generate-config` opt-out flag; that flag is gone — dogfood feedback from t2t flagged the empty block as dead weight for verify-only consumers.)
 - [x] Idempotent: same shape is a no-op; different version → `AddError::VersionMismatch`; different source → `AddError::SourceMismatch`. A separate `update` command (out of scope for v0.3) handles the version-bump case.
 - [x] Errors fast on invalid spec (missing version for remote, unknown protocol, missing manifest, missing `panschema-publish.toml` at the target).
@@ -328,7 +328,7 @@ each will be handed off to another repo:
 ## Open Questions (resolve during implementation)
 
 1. **`[generate.<schema>]` location**: bundled in `panschema.toml` or split into a separate `panschema-codegen.toml`? Bundled for v0.3; revisit if it bloats.
-2. **Path-source verification semantics**: track local-path file checksums in the lockfile? Yes — detects "edited but not regenerated."
+2. **Path-source verification semantics**: track local-path file checksums in the lockfile? **No — decided 2026-09-17 (ADR-013).** The lockfile records pins; a `path:` source is the working tree by definition, so a checksum of it reports every edit as drift and can never be "held". "Edited but not regenerated" is what `generate --check` detects, and it does so without a lockfile. The original answer ("yes") predated `generate --check`.
 3. **Rust types writer**: a parallel workstream feeds writers (Rust types, deterministic TTL, SHACL, JSON Schema) which are the things the `[generate.<name>]` blocks reference. Slice 1 wires HtmlWriter through the pipeline so the manager work isn't blocked on writer development; the writers land independently and the manifest config grows to reference them as they ship.
 
 ---
@@ -362,7 +362,7 @@ each will be handed off to another repo:
 
 **Completed:**
 - `lockfile` module — `Lockfile`/`LockEntry` types serializing as TOML with `[[schema]]` array entries, `checksum_file` helper computing `sha256:<hex>`, `path_source_spec` for stable lockfile source strings, `Lockfile::entry` lookup
-- `panschema fetch` resolves every manifested schema, computes SHA-256, writes `panschema.lock` next to the manifest
+- `panschema fetch` resolves every manifested schema and writes the pins to `panschema.lock` next to the manifest (path sources are resolved but not recorded)
 - `panschema fetch --check` re-checksums against the lockfile and errors with a per-schema diff on drift (also surfaces stale lockfile-only entries and manifest-only entries that haven't been fetched)
 - Integration tests: happy path (fetch → verify succeeds), drift detection (edit schema after fetch, verify fails), and missing-lockfile error
 

@@ -2220,19 +2220,6 @@ const UNION_CATALOG_SCHEMA: &str = "id: https://example.org/catalog\nname: catal
 
 const UNION_BENCH_SCHEMA: &str = "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, anchors]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  anchors: {range: DomainRecord, multivalued: true}\n";
 
-fn copy_dir(from: &Path, to: &Path) {
-    fs::create_dir_all(to).expect("create dir");
-    for entry in fs::read_dir(from).expect("read dir") {
-        let entry = entry.expect("dir entry");
-        let target = to.join(entry.file_name());
-        if entry.path().is_dir() {
-            copy_dir(&entry.path(), &target);
-        } else {
-            fs::copy(entry.path(), target).expect("copy file");
-        }
-    }
-}
-
 fn run_in(consumer: &Path, args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args(args)
@@ -4342,425 +4329,59 @@ rust = "sample.rs"
     );
 }
 
-/// `panschema fetch` writes a lockfile with one entry per manifested schema;
-/// `panschema fetch --check` then succeeds against the unchanged on-disk content.
-#[test]
-fn fetch_writes_lockfile_and_fetch_check_succeeds() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let consumer = tmp.path();
-
-    write_sample_pkg(consumer, "sample-pkg");
-    fs::write(
-        consumer.join("panschema.toml"),
-        r#"
-[schemas]
-sample_schema = { path = "./sample-pkg" }
-"#,
-    )
-    .expect("write manifest");
-
-    // fetch: should produce a lockfile.
-    let fetch = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .arg("fetch")
-        .current_dir(consumer)
-        .status()
-        .expect("run panschema fetch");
-    assert!(fetch.success(), "panschema fetch failed");
-
-    let lockfile_path = consumer.join("panschema.lock");
-    assert!(lockfile_path.exists(), "lockfile was not created");
-    let lockfile_text = fs::read_to_string(&lockfile_path).expect("read lockfile");
-    assert!(
-        lockfile_text.contains("sample_schema"),
-        "lockfile missing schema name: {lockfile_text}"
-    );
-    assert!(
-        lockfile_text.contains(r#"version = "1.0.0""#),
-        "lockfile should now record the publish.toml version: {lockfile_text}"
-    );
-    assert!(
-        lockfile_text.contains("sha256:"),
-        "lockfile missing checksum prefix: {lockfile_text}"
-    );
-
-    // fetch --check: should succeed because nothing changed.
-    let check = run_in(consumer, &["fetch", "--check"]);
-    assert!(
-        check.status.success(),
-        "panschema fetch --check failed against the just-written lockfile"
-    );
-}
-
-/// `panschema fetch --check` errors with a diff when the schema content changes
-/// after `panschema fetch`.
-#[test]
-fn fetch_check_detects_schema_drift() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let consumer = tmp.path();
-
-    let pkg = write_sample_pkg(consumer, "sample-pkg");
-    let schema_file = pkg.join("sample_schema.yaml");
-    fs::write(
-        consumer.join("panschema.toml"),
-        r#"
-[schemas]
-sample_schema = { path = "./sample-pkg" }
-"#,
-    )
-    .expect("write manifest");
-
-    let fetch = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .arg("fetch")
-        .current_dir(consumer)
-        .status()
-        .expect("run fetch");
-    assert!(fetch.success());
-
-    let lock_path = consumer.join("panschema.lock");
-    let locked = fs::read_to_string(&lock_path).expect("lockfile");
-
-    // A version bump without a re-fetch is drift too: the lock records the
-    // package version, not only the main file's bytes.
-    let publish_toml = fs::read_dir(&pkg)
-        .expect("pkg dir")
-        .map(|e| e.expect("entry").path())
-        .find(|p| {
-            fs::read_to_string(p)
-                .map(|t| t.contains("version = \"1.0.0\""))
-                .unwrap_or(false)
-        })
-        .expect("the sample package declares version 1.0.0");
-    let pinned = fs::read_to_string(&publish_toml).expect("publish toml");
-    fs::write(
-        &publish_toml,
-        pinned.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
-    )
-    .expect("bump");
-    let check = run_in(consumer, &["fetch", "--check"]);
-    let stderr = String::from_utf8_lossy(&check.stderr);
-    assert!(
-        !check.status.success() && stderr.contains("version"),
-        "a bumped package version is lockfile drift; got: {stderr}"
-    );
-    fs::write(&publish_toml, pinned).expect("restore version");
-
-    // A repointed source is drift too, even when the bytes it points at are
-    // identical: the lock records where the schema came from.
-    let manifest_path = consumer.join("panschema.toml");
-    let manifest = fs::read_to_string(&manifest_path).expect("manifest");
-    copy_dir(&pkg, &consumer.join("sample-pkg-moved"));
-    fs::write(
-        &manifest_path,
-        manifest.replace("./sample-pkg", "./sample-pkg-moved"),
-    )
-    .expect("repoint");
-    let check = run_in(consumer, &["fetch", "--check"]);
-    let stderr = String::from_utf8_lossy(&check.stderr);
-    assert!(
-        !check.status.success() && stderr.contains("source"),
-        "a repointed source is lockfile drift; got: {stderr}"
-    );
-    fs::write(&manifest_path, manifest).expect("restore manifest");
-
-    // Mutate the schema after fetch.
-    let mut content = fs::read_to_string(&schema_file).expect("read schema");
-    content.push_str("\n# drift\n");
-    fs::write(&schema_file, content).expect("rewrite schema");
-
-    let check = run_in(consumer, &["fetch", "--check"]);
-    assert!(
-        !check.status.success(),
-        "fetch --check should have failed on drifted content"
-    );
-    let stderr = String::from_utf8_lossy(&check.stderr);
-    assert!(
-        stderr.contains("drift") || stderr.contains("sample_schema"),
-        "stderr should explain the drift; got: {stderr}"
-    );
-
-    assert_eq!(
-        fs::read_to_string(&lock_path).expect("lockfile"),
-        locked,
-        "`fetch --check` never rewrites the lockfile, even on drift"
-    );
-
-    // Bare `verify` is conformance, not the lockfile: the drifted tree
-    // leaves it green and silent about the lock.
-    let verify = run_in(consumer, &["verify"]);
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&verify.stdout),
-        String::from_utf8_lossy(&verify.stderr)
-    );
-    assert!(
-        verify.status.success() && !combined.contains("lockfile") && !combined.contains("drift"),
-        "bare `verify` runs conformance and ignores the lockfile; got: {combined}"
-    );
-}
-
 /// The manager flow (fetch/fetch --check/generate) dispatches input files by
 /// extension to the same readers as `--input`. This proves a `.ttl`
 /// schema flows end-to-end through the manager, not just YAML.
 #[test]
 fn manifest_flow_handles_ttl_input() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let consumer = tmp.path();
-
-    // Package shape: dir with publish.toml + a .ttl main file.
-    let pkg = consumer.join("ref-pkg");
-    fs::create_dir_all(&pkg).expect("mkdir pkg");
-    fs::copy("tests/fixtures/reference.ttl", pkg.join("reference.ttl")).expect("copy fixture");
-    fs::write(
-        pkg.join("panschema-publish.toml"),
-        publish_toml("reference", "1.0.0", "reference.ttl"),
-    )
-    .expect("write publish toml");
-
+    let consumer = tmp.path().join("consumer");
+    fs::create_dir_all(&consumer).expect("mkdir consumer");
+    // A pinned package whose main file is `.ttl`, so fetch and --check
+    // checksum a non-YAML main file and generate reads it through OwlReader.
+    let cache = tmp.path().join("cache");
+    seed_github_pkg(
+        &cache,
+        "test-owner",
+        "reference",
+        "1.0.0",
+        "reference.ttl",
+        &fs::read_to_string("tests/fixtures/reference.ttl").expect("read reference.ttl"),
+    );
     fs::write(
         consumer.join("panschema.toml"),
-        r#"
-[schemas]
-reference = { path = "./ref-pkg" }
-
-[generate.reference]
-html = "docs/"
-"#,
+        "[schemas]\nreference = { source = \"github:test-owner/reference\", version = \"1.0.0\" }\n\n[generate.reference]\nhtml = \"docs/\"\n",
     )
     .expect("write manifest");
-
-    // fetch + fetch --check should succeed against a TTL source.
+    let fetch = run_with_cache(&consumer, &cache, &["fetch"]);
     assert!(
-        Command::new(env!("CARGO_BIN_EXE_panschema"))
-            .arg("fetch")
-            .current_dir(consumer)
-            .status()
-            .expect("fetch")
-            .success(),
-        "fetch failed for TTL source"
+        fetch.status.success(),
+        "fetch of a .ttl pin: {}",
+        String::from_utf8_lossy(&fetch.stderr)
     );
     assert!(
-        run_in(consumer, &["fetch", "--check"]).status.success(),
-        "verify failed for TTL source"
+        fs::read_to_string(consumer.join("panschema.lock"))
+            .expect("lockfile")
+            .contains("sha256:"),
+        "the .ttl main file is checksummed"
     );
-
-    // generate (no --input) should produce HTML from the TTL via OwlReader.
+    let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
     assert!(
-        Command::new(env!("CARGO_BIN_EXE_panschema"))
-            .arg("generate")
-            .current_dir(consumer)
-            .status()
-            .expect("generate")
-            .success(),
-        "generate failed for TTL source"
+        check.status.success(),
+        "fetch --check of a .ttl pin: {}",
+        String::from_utf8_lossy(&check.stderr)
     );
-
+    let generate = run_with_cache(&consumer, &cache, &["generate"]);
+    assert!(
+        generate.status.success(),
+        "generate from a .ttl pin: {}",
+        String::from_utf8_lossy(&generate.stderr)
+    );
     let html = fs::read_to_string(consumer.join("docs").join("index.html"))
         .expect("read generated index.html");
     assert!(
         html.contains("panschema Reference Ontology"),
         "TTL-sourced HTML missing reference ontology title"
-    );
-}
-
-/// `panschema fetch` writes one lockfile entry per manifest schema, and
-/// `panschema fetch --check` checks all of them in one pass.
-#[test]
-fn fetch_and_fetch_check_handle_multiple_schemas() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let consumer = tmp.path();
-
-    write_pkg(
-        &consumer.join("a-pkg"),
-        "a",
-        "0.1.0",
-        "schema.yaml",
-        "id: https://x/a\nname: a\n",
-    );
-    write_pkg(
-        &consumer.join("b-pkg"),
-        "b",
-        "0.1.0",
-        "schema.yaml",
-        "id: https://x/b\nname: b\n",
-    );
-
-    fs::write(
-        consumer.join("panschema.toml"),
-        r#"
-[schemas]
-a = { path = "./a-pkg" }
-b = { path = "./b-pkg" }
-"#,
-    )
-    .expect("write manifest");
-
-    let fetch = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .arg("fetch")
-        .current_dir(consumer)
-        .status()
-        .expect("run fetch");
-    assert!(fetch.success(), "fetch failed");
-
-    let lockfile_text = fs::read_to_string(consumer.join("panschema.lock")).expect("read lock");
-    assert!(
-        lockfile_text.contains("name = \"a\""),
-        "missing entry a: {lockfile_text}"
-    );
-    assert!(
-        lockfile_text.contains("name = \"b\""),
-        "missing entry b: {lockfile_text}"
-    );
-
-    let check = run_in(consumer, &["fetch", "--check"]);
-    assert!(
-        check.status.success(),
-        "fetch --check failed against fresh lockfile"
-    );
-}
-
-/// Adding a schema to the manifest after `fetch` (without re-fetching) must
-/// be detected by `fetch --check`.
-#[test]
-fn fetch_check_detects_manifest_schema_missing_from_lockfile() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let consumer = tmp.path();
-    write_pkg(
-        &consumer.join("a-pkg"),
-        "a",
-        "0.1.0",
-        "schema.yaml",
-        "id: https://x/a\nname: a\n",
-    );
-
-    // Fetch with one schema.
-    fs::write(
-        consumer.join("panschema.toml"),
-        r#"
-[schemas]
-a = { path = "./a-pkg" }
-"#,
-    )
-    .expect("write manifest v1");
-    let fetch = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .arg("fetch")
-        .current_dir(consumer)
-        .status()
-        .expect("fetch");
-    assert!(fetch.success());
-
-    // Add a second schema to the manifest WITHOUT refetching.
-    write_pkg(
-        &consumer.join("b-pkg"),
-        "b",
-        "0.1.0",
-        "schema.yaml",
-        "id: https://x/b\nname: b\n",
-    );
-    fs::write(
-        consumer.join("panschema.toml"),
-        r#"
-[schemas]
-a = { path = "./a-pkg" }
-b = { path = "./b-pkg" }
-"#,
-    )
-    .expect("rewrite manifest v2");
-
-    let check = run_in(consumer, &["fetch", "--check"]);
-    assert!(
-        !check.status.success(),
-        "fetch --check should fail when manifest has schema not in lockfile"
-    );
-    let stderr = String::from_utf8_lossy(&check.stderr);
-    assert!(
-        stderr.contains("`b`") && (stderr.contains("not in lockfile") || stderr.contains("fetch")),
-        "stderr should call out the missing schema and suggest fetch; got: {stderr}"
-    );
-}
-
-/// Removing a schema from the manifest after `fetch` (without re-fetching)
-/// leaves a stale lockfile entry; `fetch --check` should call it out.
-#[test]
-fn fetch_check_detects_stale_lockfile_entries() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let consumer = tmp.path();
-    write_pkg(
-        &consumer.join("a-pkg"),
-        "a",
-        "0.1.0",
-        "schema.yaml",
-        "id: https://x/a\nname: a\n",
-    );
-    write_pkg(
-        &consumer.join("b-pkg"),
-        "b",
-        "0.1.0",
-        "schema.yaml",
-        "id: https://x/b\nname: b\n",
-    );
-
-    // Fetch with two schemas.
-    fs::write(
-        consumer.join("panschema.toml"),
-        r#"
-[schemas]
-a = { path = "./a-pkg" }
-b = { path = "./b-pkg" }
-"#,
-    )
-    .expect("write manifest v1");
-    let fetch = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .arg("fetch")
-        .current_dir(consumer)
-        .status()
-        .expect("fetch");
-    assert!(fetch.success());
-
-    // Drop b from the manifest WITHOUT refetching.
-    fs::write(
-        consumer.join("panschema.toml"),
-        r#"
-[schemas]
-a = { path = "./a-pkg" }
-"#,
-    )
-    .expect("rewrite manifest v2");
-
-    let check = run_in(consumer, &["fetch", "--check"]);
-    assert!(
-        !check.status.success(),
-        "fetch --check should fail with stale lockfile entry"
-    );
-    let stderr = String::from_utf8_lossy(&check.stderr);
-    assert!(
-        stderr.contains("`b`") && stderr.contains("stale"),
-        "stderr should call out the stale schema; got: {stderr}"
-    );
-}
-
-/// `panschema fetch --check` errors when no lockfile exists.
-#[test]
-fn fetch_check_errors_when_no_lockfile() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let consumer = tmp.path();
-
-    fs::write(
-        consumer.join("panschema.toml"),
-        r#"
-[schemas]
-"#,
-    )
-    .expect("write manifest");
-
-    let check = run_in(consumer, &["fetch", "--check"]);
-    assert!(
-        !check.status.success(),
-        "fetch --check should fail without lockfile"
-    );
-    let stderr = String::from_utf8_lossy(&check.stderr);
-    assert!(
-        stderr.contains("panschema.lock") || stderr.contains("fetch"),
-        "stderr should suggest fetch; got: {stderr}"
     );
 }
 
@@ -4831,48 +4452,520 @@ x = { path = "./naked-pkg" }
 }
 
 // ---------------------------------------------------------------------
-// Slice 4: `panschema add` CLI tests
+// `panschema add` CLI tests
 //
 // Path-source flow is exercised here via CLI subprocess; github-source
 // flow lives at the lib level in `panschema::source::tests` (needs
 // TarballSource trait injection, which CLI subprocesses can't do).
 // ---------------------------------------------------------------------
 
-/// `panschema add ./local-pkg` reads the package's publish.toml, writes
-/// an entry to `panschema.toml` under the declared name, adds a starter
-/// `[generate.<name>]` block, and runs fetch to produce the lockfile.
+/// Lay an extracted package into a local cache tree so
+/// `github:<owner>/<repo>` at `version` resolves offline through
+/// `PANSCHEMA_CACHE_ROOT`.
+fn seed_github_pkg(
+    cache_root: &Path,
+    owner: &str,
+    repo: &str,
+    version: &str,
+    main: &str,
+    body: &str,
+) {
+    let pkg = cache_root
+        .join("github")
+        .join(owner)
+        .join(repo)
+        .join(version)
+        .join(format!("{repo}-{version}"));
+    write_pkg(&pkg, repo, version, main, body);
+}
+
+fn run_with_cache(consumer: &Path, cache_root: &Path, args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args(args)
+        .current_dir(consumer)
+        .env("PANSCHEMA_CACHE_ROOT", cache_root)
+        .output()
+        .expect("run panschema")
+}
+
+const CONTRACT_PIN: &str =
+    "contract = { source = \"github:test-owner/contract\", version = \"1.0.0\" }";
+const OTHER_PIN: &str = "other = { source = \"github:test-owner/other\", version = \"2.0.0\" }";
+const CONTRACT_BODY: &str = "id: https://x/contract\nname: contract\n";
+
+/// A consumer directory beside a cache root seeded with `contract` 1.0.0,
+/// its manifest pinning that one dependency.
+fn pinned_consumer(tmp: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let consumer = tmp.join("consumer");
+    fs::create_dir_all(&consumer).expect("mkdir consumer");
+    let cache = tmp.join("cache");
+    seed_github_pkg(
+        &cache,
+        "test-owner",
+        "contract",
+        "1.0.0",
+        "schema.yaml",
+        CONTRACT_BODY,
+    );
+    fs::write(
+        consumer.join("panschema.toml"),
+        format!("[schemas]\n{CONTRACT_PIN}\n"),
+    )
+    .expect("write manifest");
+    (consumer, cache)
+}
+
+fn seed_other(cache: &Path) {
+    seed_github_pkg(
+        cache,
+        "test-owner",
+        "other",
+        "2.0.0",
+        "schema.yaml",
+        "id: https://x/other\nname: other\n",
+    );
+}
+
 #[test]
-fn add_path_source_updates_manifest_and_lockfile() {
+fn fetch_locks_pins_and_fetch_check_accepts_them() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (consumer, cache) = pinned_consumer(tmp.path());
+    seed_other(&cache);
+    fs::write(
+        consumer.join("panschema.toml"),
+        format!("[schemas]\n{CONTRACT_PIN}\n{OTHER_PIN}\n"),
+    )
+    .expect("write manifest");
+
+    let fetch = run_with_cache(&consumer, &cache, &["fetch"]);
+    assert!(
+        fetch.status.success(),
+        "fetch: {}",
+        String::from_utf8_lossy(&fetch.stderr)
+    );
+    let lock = fs::read_to_string(consumer.join("panschema.lock")).expect("lockfile");
+    assert!(
+        lock.contains("name = \"contract\"") && lock.contains("name = \"other\""),
+        "every pin is locked: {lock}"
+    );
+    assert!(
+        lock.contains("version = \"1.0.0\""),
+        "the lock records the package version: {lock}"
+    );
+    assert!(
+        lock.contains("sha256:"),
+        "the lock records a checksum: {lock}"
+    );
+
+    let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
+    assert!(
+        check.status.success(),
+        "a fresh lockfile passes: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+}
+
+#[test]
+fn fetch_check_detects_pin_drift_and_never_rewrites_the_lockfile() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (consumer, cache) = pinned_consumer(tmp.path());
+    assert!(
+        run_with_cache(&consumer, &cache, &["fetch"])
+            .status
+            .success()
+    );
+    let lock_path = consumer.join("panschema.lock");
+    let locked = fs::read_to_string(&lock_path).expect("lockfile");
+    let manifest_path = consumer.join("panschema.toml");
+    let manifest = fs::read_to_string(&manifest_path).expect("manifest");
+
+    seed_github_pkg(
+        &cache,
+        "test-owner",
+        "contract",
+        "1.1.0",
+        "schema.yaml",
+        CONTRACT_BODY,
+    );
+    fs::write(&manifest_path, manifest.replace("1.0.0", "1.1.0")).expect("bump pin");
+    let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
+    let stderr = String::from_utf8_lossy(&check.stderr);
+    assert!(
+        !check.status.success() && stderr.contains("lockfile records version"),
+        "a pin moved without a re-fetch is drift; got: {stderr}"
+    );
+
+    seed_github_pkg(
+        &cache,
+        "other-owner",
+        "contract",
+        "1.0.0",
+        "schema.yaml",
+        CONTRACT_BODY,
+    );
+    fs::write(
+        &manifest_path,
+        manifest.replace("test-owner", "other-owner"),
+    )
+    .expect("repoint pin");
+    let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
+    let stderr = String::from_utf8_lossy(&check.stderr);
+    assert!(
+        !check.status.success() && stderr.contains("lockfile records source"),
+        "a repointed pin is drift even when the bytes agree; got: {stderr}"
+    );
+    fs::write(&manifest_path, &manifest).expect("restore manifest");
+
+    seed_github_pkg(
+        &cache,
+        "test-owner",
+        "contract",
+        "1.0.0",
+        "schema.yaml",
+        "id: https://x/contract\nname: contract\n# tampered\n",
+    );
+    let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
+    let stderr = String::from_utf8_lossy(&check.stderr);
+    assert!(
+        !check.status.success() && stderr.contains("`contract`: lockfile has sha256:"),
+        "cached content that no longer matches the pin is drift, by name; got: {stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(&lock_path).expect("lockfile"),
+        locked,
+        "`fetch --check` never rewrites the lockfile, even on drift"
+    );
+
+    // Bare `verify` is conformance, not the lockfile: the drifted pin leaves
+    // it green and silent about the lock.
+    let verify = run_with_cache(&consumer, &cache, &["verify"]);
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&verify.stdout),
+        String::from_utf8_lossy(&verify.stderr)
+    );
+    assert!(
+        verify.status.success() && !combined.contains("lockfile") && !combined.contains("drift"),
+        "bare `verify` runs conformance and ignores the lockfile; got: {combined}"
+    );
+}
+
+#[test]
+fn fetch_check_detects_pins_missing_from_or_stale_in_the_lockfile() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (consumer, cache) = pinned_consumer(tmp.path());
+    assert!(
+        run_with_cache(&consumer, &cache, &["fetch"])
+            .status
+            .success()
+    );
+
+    seed_other(&cache);
+    fs::write(
+        consumer.join("panschema.toml"),
+        format!("[schemas]\n{CONTRACT_PIN}\n{OTHER_PIN}\n"),
+    )
+    .expect("add a pin without re-fetching");
+    let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
+    let stderr = String::from_utf8_lossy(&check.stderr);
+    assert!(
+        !check.status.success() && stderr.contains("`other`: in manifest but not in lockfile"),
+        "a pin the lockfile does not record is named, with the fix; got: {stderr}"
+    );
+
+    assert!(
+        run_with_cache(&consumer, &cache, &["fetch"])
+            .status
+            .success()
+    );
+    fs::write(
+        consumer.join("panschema.toml"),
+        format!("[schemas]\n{CONTRACT_PIN}\n"),
+    )
+    .expect("drop a pin without re-fetching");
+    let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
+    let stderr = String::from_utf8_lossy(&check.stderr);
+    assert!(
+        !check.status.success() && stderr.contains("`other`") && stderr.contains("stale"),
+        "a locked pin the manifest dropped is stale; got: {stderr}"
+    );
+}
+
+/// Own package at the root, a sibling checkout beside it, one pin.
+#[test]
+fn fetch_check_verifies_pins_and_leaves_path_sources_to_the_working_tree() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (consumer, cache) = pinned_consumer(tmp.path());
+    write_pkg(
+        &consumer,
+        "own_schema",
+        "0.1.0",
+        "own.yaml",
+        "id: https://x/own\nname: own\n",
+    );
+    let sibling = consumer.join("sibling-pkg");
+    write_pkg(
+        &sibling,
+        "sibling_schema",
+        "1.0.0",
+        "schema.yaml",
+        "id: https://x/sib\nname: sib\n",
+    );
+    let manifest = format!(
+        "[schemas]\nown = {{ path = \".\" }}\nsibling = {{ path = \"./sibling-pkg\" }}\n{CONTRACT_PIN}\n"
+    );
+    fs::write(consumer.join("panschema.toml"), &manifest).expect("write manifest");
+
+    let fetch = run_with_cache(&consumer, &cache, &["fetch"]);
+    assert!(
+        fetch.status.success(),
+        "fetch: {}",
+        String::from_utf8_lossy(&fetch.stderr)
+    );
+    let lock = fs::read_to_string(consumer.join("panschema.lock")).expect("lockfile");
+    assert!(
+        lock.contains("name = \"contract\""),
+        "the pin is locked: {lock}"
+    );
+    assert!(
+        !lock.contains("name = \"own\"") && !lock.contains("name = \"sibling\""),
+        "path sources carry no pin and are not locked: {lock}"
+    );
+
+    fs::write(
+        consumer.join("own.yaml"),
+        "id: https://x/own\nname: own\n# authoring edit\n",
+    )
+    .expect("edit own");
+    fs::write(
+        sibling.join("schema.yaml"),
+        "id: https://x/sib\nname: sib\n# sibling edit\n",
+    )
+    .expect("edit sibling");
+    let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
+    assert!(
+        check.status.success(),
+        "editing a path source is not drift; got: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+
+    seed_github_pkg(
+        &cache,
+        "test-owner",
+        "contract",
+        "1.0.0",
+        "schema.yaml",
+        "id: https://x/contract\nname: contract\n# tampered\n",
+    );
+    let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
+    let stderr = String::from_utf8_lossy(&check.stderr);
+    assert!(
+        !check.status.success() && stderr.contains("`contract`: lockfile has sha256:"),
+        "the pin is still verified, by name; got: {stderr}"
+    );
+    seed_github_pkg(
+        &cache,
+        "test-owner",
+        "contract",
+        "1.0.0",
+        "schema.yaml",
+        CONTRACT_BODY,
+    );
+
+    fs::remove_file(sibling.join("panschema-publish.toml")).expect("break the sibling package");
+    let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
+    let stderr = String::from_utf8_lossy(&check.stderr);
+    assert!(
+        !check.status.success() && stderr.contains("`sibling`"),
+        "every entry is still resolved, so a broken path source fails the check; got: {stderr}"
+    );
+    write_pkg(
+        &sibling,
+        "sibling_schema",
+        "1.0.0",
+        "schema.yaml",
+        "id: https://x/sib\nname: sib\n",
+    );
+
+    fs::write(
+        consumer.join("panschema.toml"),
+        manifest.replace(
+            "own = { path = \".\" }",
+            "own = { path = \".\", version = \"0.1.0\" }",
+        ),
+    )
+    .expect("malform the own entry");
+    let fetch = run_with_cache(&consumer, &cache, &["fetch"]);
+    let stderr = String::from_utf8_lossy(&fetch.stderr);
+    assert!(
+        !fetch.status.success() && stderr.contains("`version`"),
+        "a malformed entry fails `fetch` the same way it fails `generate`; got: {stderr}"
+    );
+}
+
+#[test]
+fn fetch_check_reads_lockfile_entries_by_what_they_record() {
+    use panschema::lockfile::{LockEntry, Lockfile};
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (consumer, cache) = pinned_consumer(tmp.path());
+    write_pkg(
+        &consumer.join("sibling-pkg"),
+        "sibling_schema",
+        "1.0.0",
+        "schema.yaml",
+        "id: https://x/sib\nname: sib\n",
+    );
+    let manifest_path = consumer.join("panschema.toml");
+    let manifest = format!("[schemas]\nsibling = {{ path = \"./sibling-pkg\" }}\n{CONTRACT_PIN}\n");
+    fs::write(&manifest_path, &manifest).expect("write manifest");
+    assert!(
+        run_with_cache(&consumer, &cache, &["fetch"])
+            .status
+            .success()
+    );
+    let lock_path = consumer.join("panschema.lock");
+    let good = Lockfile::from_path(&lock_path).expect("lockfile");
+    let path_entry = |name: &str| LockEntry {
+        name: name.into(),
+        version: Some("1.0.0".into()),
+        source: "path:./sibling-pkg".into(),
+        revision: None,
+        checksum: "sha256:0".into(),
+    };
+
+    let mut lock = good.clone();
+    lock.entries.push(path_entry("sibling"));
+    lock.write_to_path(&lock_path).expect("write lockfile");
+    let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
+    let stderr = String::from_utf8_lossy(&check.stderr);
+    assert!(
+        check.status.success()
+            && stderr.contains("`sibling`")
+            && stderr.contains("panschema fetch"),
+        "an entry recording a path source is a leftover to drop, not drift; got: {stderr}"
+    );
+
+    Lockfile {
+        entries: vec![path_entry("contract")],
+    }
+    .write_to_path(&lock_path)
+    .expect("write lockfile");
+    let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
+    let stderr = String::from_utf8_lossy(&check.stderr);
+    assert!(
+        !check.status.success() && stderr.contains("`contract`: in manifest but not in lockfile"),
+        "a leftover under a pinned name does not stand in for the pin; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("lockfile has sha256:"),
+        "nothing is compared against a leftover; got: {stderr}"
+    );
+
+    good.write_to_path(&lock_path).expect("restore lockfile");
+    fs::write(
+        &manifest_path,
+        manifest.replace(", version = \"1.0.0\"", ""),
+    )
+    .expect("malform the pin");
+    let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
+    let stderr = String::from_utf8_lossy(&check.stderr);
+    assert!(
+        !check.status.success() && stderr.contains("`version`") && !stderr.contains("path source"),
+        "a malformed pin fails with its own error, not a fabricated one; got: {stderr}"
+    );
+
+    fs::write(&manifest_path, "[schemas]\nsibling = { path = \"./sibling-pkg\" }\ncontract = { path = \"./sibling-pkg\" }\n")
+        .expect("repoint the pin to a path source");
+    let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
+    let stderr = String::from_utf8_lossy(&check.stderr);
+    assert!(
+        !check.status.success()
+            && stderr.contains("`contract`: lockfile records source `github:test-owner/contract`"),
+        "a lockfile pin the manifest no longer pins is drift; got: {stderr}"
+    );
+}
+
+#[test]
+fn a_manifest_with_no_pins_needs_no_lockfile() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    write_pkg(
+        consumer,
+        "own_schema",
+        "0.1.0",
+        "own.yaml",
+        "id: https://x/own\nname: own\n",
+    );
+    fs::write(
+        consumer.join("panschema.toml"),
+        "[schemas]\nown = { path = \".\" }\n",
+    )
+    .expect("write manifest");
+
+    let check = run_in(consumer, &["fetch", "--check"]);
+    let out = String::from_utf8_lossy(&check.stdout);
+    assert!(
+        check.status.success() && out.contains("no pinned dependencies"),
+        "nothing to check is a pass, and says so; stdout: {out}; stderr: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+
+    let lock_path = consumer.join("panschema.lock");
+    fs::write(&lock_path, "not a lockfile [[\n").expect("an unreadable leftover");
+    let check = run_in(consumer, &["fetch", "--check"]);
+    let stderr = String::from_utf8_lossy(&check.stderr);
+    assert!(
+        check.status.success() && stderr.contains("panschema fetch"),
+        "with nothing to check, an unreadable leftover is named with the fix, not failed; got: {stderr}"
+    );
+
+    let fetch = run_in(consumer, &["fetch"]);
+    let out = String::from_utf8_lossy(&fetch.stdout);
+    assert!(
+        fetch.status.success() && !lock_path.exists() && out.contains("removed"),
+        "`fetch` with nothing to pin writes no lockfile and removes a leftover, saying so; stdout: {out}"
+    );
+}
+
+#[test]
+fn fetch_check_errors_when_a_pin_is_declared_and_no_lockfile_exists() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (consumer, cache) = pinned_consumer(tmp.path());
+    let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
+    let stderr = String::from_utf8_lossy(&check.stderr);
+    assert!(
+        !check.status.success() && stderr.contains("panschema.lock") && stderr.contains("fetch"),
+        "a missing lockfile names itself and the fix; got: {stderr}"
+    );
+}
+
+#[test]
+fn add_path_source_updates_manifest_without_locking() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let consumer = tmp.path();
     write_sample_pkg(consumer, "sample-pkg");
-
     fs::write(consumer.join("panschema.toml"), "[schemas]\n").expect("write manifest");
-
-    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .arg("add")
-        .arg("./sample-pkg")
-        .current_dir(consumer)
-        .status()
-        .expect("Failed to execute panschema");
-    assert!(status.success(), "panschema add exited with error");
-
+    let lock_path = consumer.join("panschema.lock");
+    fs::write(&lock_path, "").expect("a leftover lockfile");
+    let out = run_in(consumer, &["add", "./sample-pkg"]);
+    assert!(
+        out.status.success(),
+        "panschema add: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let manifest = fs::read_to_string(consumer.join("panschema.toml")).expect("read manifest");
     assert!(
         manifest.contains("sample_schema"),
-        "manifest should contain the publish.toml-declared name: {manifest}"
+        "manifest records the publish.toml-declared name: {manifest}"
     );
-    // `add` is "declare a dependency" only — `[generate.<name>]` is the
-    // user's to write when they want codegen. `generate` itself prints
-    // a helpful "no [generate.<name>] block; skipping" message for any
-    // schema without one.
     assert!(
         !manifest.contains("[generate.sample_schema]"),
-        "add must not auto-write a starter `[generate.<name>]` block: {manifest}"
+        "add declares a dependency and writes no `[generate.<name>]` block: {manifest}"
     );
+    let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        consumer.join("panschema.lock").exists(),
-        "fetch should have written panschema.lock"
+        !lock_path.exists() && stdout.contains("removed"),
+        "a path source carries no pin: the re-run `fetch` removes a leftover lockfile and says so; stdout: {stdout}"
     );
 }
 

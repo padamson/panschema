@@ -12,8 +12,8 @@ bare no-subcommand form.
 | `serve` | Hot-reload dev server for HTML output |
 | `init` | Scaffold a `panschema-publish.toml` |
 | `add` | Add a schema dependency to `panschema.toml` and fetch it |
-| `fetch` | Resolve every dependency, checksum it, write `panschema.lock` |
-| `fetch --check` | Re-checksum against the lockfile and fail on drift; writes nothing |
+| `fetch` | Resolve every dependency; lock the pins (`github:` sources) in `panschema.lock` |
+| `fetch --check` | Verify every pin against the lockfile and fail on drift; writes nothing |
 | `release` | Bump the schema version in `panschema-publish.toml`, optionally commit/tag/push |
 | `completions` | Emit a shell completion script |
 | `styleguide` | Component preview page (requires the `dev` feature) |

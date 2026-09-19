@@ -15,7 +15,7 @@ panschema's consumer-side workflow uses three files:
 | File | What it does | You write it? |
 |---|---|---|
 | `panschema.toml` | Declares schema dependencies + per-schema codegen config | Yes (or via `panschema add`) |
-| `panschema.lock` | Records resolved versions + content checksums | Written by `panschema fetch`, committed to git |
+| `panschema.lock` | Records each pin's resolved version + content checksum | Written by `panschema fetch` when there is a pin, committed to git |
 | `panschema-publish.toml` | Lives in each *schema's* repo; declares its name/version/main file | Authored by the schema author, not you |
 
 Both `panschema.toml` and `panschema.lock` live at your project root
@@ -40,8 +40,8 @@ This:
    reads the directory for `path:` sources).
 2. Reads `panschema-publish.toml` to learn the schema's name.
 3. Inserts a `[schemas.<name>]` entry into your `panschema.toml`.
-4. Runs `panschema fetch` to populate the cache + update the
-   lockfile.
+4. Runs `panschema fetch` to populate the cache and, for a `github:`
+   source, lock the pin.
 
 `add` does *not* write a `[generate.<name>]` block. If you want
 codegen output, add the writer keys yourself — see the
@@ -121,10 +121,13 @@ Resolves every entry under `[schemas]`:
   reuses the cache when the version is already extracted.
 - `path:` sources: re-reads from disk.
 
-Then writes (or updates) `panschema.lock` with one entry per
-schema: name, version, source spec, and a SHA-256 checksum of the
-main file. (A `revision` field is reserved for future
-commit-identifier provenance; currently always `None`.)
+Then writes (or updates) `panschema.lock` with one entry per **pin** —
+each `github:` source at its version: name, version, source spec, and a
+SHA-256 checksum of the main file. (A `revision` field is reserved for
+future commit-identifier provenance; currently always `None`.) A `path:`
+source is the working tree, not a pin, so it is resolved (a broken one
+still fails) but not recorded; with no pins at all, no lockfile is
+written, and one left over from an earlier layout is removed.
 
 Cache lives at `~/.cache/panschema/github/<owner>/<repo>/<version>/`
 on Linux (XDG cache dir), `~/Library/Caches/...` on macOS,
@@ -137,21 +140,29 @@ your machine (cargo-style).
 panschema fetch --check
 ```
 
-Re-checksums every schema and compares against the lockfile. Fails
+Re-checksums every pin and compares against the lockfile. Fails
 loudly if:
 
-- A schema's main-file checksum differs (someone edited the schema
-  in your cache, or for path sources, in the source directory).
-- A schema's publish-toml-declared version differs from what was
-  recorded (the schema author bumped the version and you haven't
-  refetched).
-- A schema is in `panschema.toml` but missing from `panschema.lock`
+- A pin's main-file checksum differs (someone edited the schema in
+  your cache).
+- A pin's publish-toml-declared version differs from what was
+  recorded (you moved `version` in the manifest and haven't refetched).
+- A pin is in `panschema.toml` but missing from `panschema.lock`
   (run `fetch` first).
-- A schema is in `panschema.lock` but missing from `panschema.toml`
-  (run `fetch` to refresh the lockfile, or restore the manifest
-  entry).
+- A pin is in `panschema.lock` but missing from `panschema.toml`, or
+  the manifest now declares that name as a `path:` source (run `fetch`
+  to refresh the lockfile, or restore the manifest entry).
 
-Run `panschema fetch --check` in CI to guarantee reproducibility.
+Path sources are resolved — a missing package or a malformed entry
+fails here as it does in `generate` — but never compared, so editing
+your own schema (`path = "."`) or a sibling checkout is not drift. A
+lockfile entry that records a path source is a leftover from an earlier
+layout: `--check` names it and asks for a `fetch` to drop it, but does
+not fail. A manifest with no pins needs no lockfile and passes.
+
+Run `panschema fetch --check` in CI to guarantee that every pin still
+holds. To catch "schema edited but outputs not regenerated", run
+`panschema generate --check`.
 
 ### `panschema generate`
 
@@ -236,8 +247,8 @@ Updating to a new schema version:
 
 1. Edit the `version` field in `[schemas.<name>]` (or remove +
    re-add via `panschema add <spec>@<new-version>`).
-2. `panschema fetch` to repopulate the cache and refresh the
-   lockfile.
+2. `panschema fetch` to repopulate the cache and refresh the pin in
+   the lockfile.
 3. `panschema generate` to produce updated docs.
 4. Commit `panschema.toml` + `panschema.lock` changes.
 

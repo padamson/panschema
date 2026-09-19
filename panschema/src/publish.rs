@@ -1246,10 +1246,8 @@ fn resolve_dep_schema_at(repo_root: &Path, source: BuildSource<'_>, dep: &str) -
     // left from before a dependency switched to `path:` must not gate
     // the working tree, and one recorded as `path:` must not let a
     // pinned source escape the gate.
-    let pinned = matches!(
-        crate::source::SchemaSource::from_dep(dep, dep_spec),
-        Ok(crate::source::SchemaSource::Github { .. })
-    );
+    let pinned =
+        crate::source::SchemaSource::from_dep(dep, dep_spec).is_ok_and(|source| source.is_pinned());
     let resolved = match crate::source::resolve_dep(dep, dep_spec, repo_root, &OfflineTarballs) {
         Ok(resolved) => resolved,
         Err(e) => return DepAtRef::Failed(e.to_string()),

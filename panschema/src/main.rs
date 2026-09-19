@@ -147,6 +147,9 @@ enum Commands {
     ///   panschema add ./local-pkg
     ///   panschema add ./local-pkg --name custom-alias
     ///
+    /// Re-runs `fetch` afterwards, which locks a `github:` source and may
+    /// remove a lockfile with nothing left to pin.
+    ///
     /// The schema name is read from `panschema-publish.toml` at the
     /// resolved location. Pass `--name` to install under a different
     /// local key.
@@ -191,13 +194,18 @@ enum Commands {
         #[arg(long = "dry-run")]
         dry_run: bool,
     },
-    /// Resolve every schema in the manifest, compute checksums, and write
-    /// `panschema.lock`. Run this when you add or update a schema dependency.
+    /// Resolve every schema in the manifest and write the pins to
+    /// `panschema.lock`. A pin is a `github:` source at a version; a `path:`
+    /// source is resolved (a broken one still fails) but not recorded. With
+    /// no pins the lockfile is not written, and a leftover one is removed.
+    /// Run this when you add or update a schema dependency.
     ///
     /// With `--check`, resolve the same way but write no lockfile: compare
-    /// what `fetch` would record against `panschema.lock` — checksum, version,
-    /// source, revision — and exit non-zero on any drift. Run that form in CI.
-    /// (Resolving a `github:` source can still populate the local cache.)
+    /// each pin `fetch` would record against `panschema.lock` — checksum,
+    /// version, source, revision — and exit non-zero on any drift. A
+    /// lockfile entry recording a `path:` source is a leftover: noted, with
+    /// `fetch` as the remedy, not failed. Run that form in CI. (Resolving a
+    /// `github:` source can still populate the local cache.)
     Fetch {
         /// Compare against `panschema.lock` instead of writing it.
         #[arg(long)]
@@ -1778,8 +1786,9 @@ fn add_schema(
         }
     }
 
-    // Always re-run fetch so the new schema lands in the cache + lockfile,
-    // and so an idempotent `add` still gives a freshly-verified state.
+    // Always re-run fetch so the new schema lands in the cache and, when it
+    // is a pin, in the lockfile (which goes away when nothing is left to
+    // pin), and so an idempotent `add` still gives a freshly-verified state.
     fetch_from_manifest()?;
     Ok(())
 }
@@ -1848,9 +1857,10 @@ fn relative_path(base: &Path, target: &Path) -> PathBuf {
     rel
 }
 
-/// What `panschema fetch` would record: every manifested schema resolved,
-/// checksummed, and described. Shared by the write and `--check` paths so
-/// they cannot disagree.
+/// What `panschema fetch` would record: every entry under `[schemas]`
+/// resolved — so a broken one fails here as it would in `generate` — and
+/// the pins among them checksummed and described. Shared by the write and
+/// `--check` paths so they cannot disagree.
 fn resolve_lockfile(
     manifest: &panschema::manifest::Manifest,
     manifest_dir: &Path,
@@ -1858,7 +1868,7 @@ fn resolve_lockfile(
     use panschema::lockfile::{LockEntry, Lockfile, checksum_file};
     use panschema::source::SchemaSource;
 
-    let mut entries = Vec::with_capacity(manifest.schemas.len());
+    let mut entries = Vec::new();
     for (name, dep) in &manifest.schemas {
         let panschema::source::Resolved {
             schema_path,
@@ -1867,9 +1877,11 @@ fn resolve_lockfile(
             ..
         } = resolve_source(name, dep, manifest_dir)?;
         let source = SchemaSource::from_dep(name, dep)?;
+        if !source.is_pinned() {
+            continue;
+        }
         entries.push(LockEntry {
             name: name.clone(),
-            // Always populated now — both source types read publish.toml.
             version: Some(version),
             source: source.source_spec(),
             revision,
@@ -1879,17 +1891,44 @@ fn resolve_lockfile(
     Ok(Lockfile { entries })
 }
 
-/// `panschema fetch`: resolve every manifested schema, compute its checksum,
-/// and write `panschema.lock`.
+/// The parenthetical naming the entries `fetch` and `--check` leave alone.
+fn unpinned_clause(unpinned: &[&str]) -> String {
+    if unpinned.is_empty() {
+        return String::new();
+    }
+    format!(
+        " (path source(s) resolved from the working tree, not locked: `{}`)",
+        unpinned.join("`, `")
+    )
+}
+
+/// `panschema fetch`: resolve every entry under `[schemas]` and write the
+/// pins to `panschema.lock`. With no pins there is nothing to lock, so the
+/// file is not written, and one left over from before is removed.
 fn fetch_from_manifest() -> anyhow::Result<()> {
     use panschema::lockfile::LOCKFILE_FILENAME;
 
     let (manifest, manifest_dir) = load_manifest()?;
     let lockfile = resolve_lockfile(&manifest, &manifest_dir)?;
+    let (_, unpinned) =
+        panschema::source::partition_pins(&manifest.schemas).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let clause = unpinned_clause(&unpinned);
     let lock_path = manifest_dir.join(LOCKFILE_FILENAME);
+    if lockfile.entries.is_empty() {
+        if lock_path.exists() {
+            std::fs::remove_file(&lock_path)?;
+            println!(
+                "No pinned dependencies to lock{clause}; removed {}",
+                lock_path.display()
+            );
+        } else {
+            println!("No pinned dependencies to lock{clause}; nothing written");
+        }
+        return Ok(());
+    }
     lockfile.write_to_path(&lock_path)?;
     println!(
-        "Fetched {} schema(s); wrote {}",
+        "Locked {} pinned dependency(ies) in {}{clause}",
         lockfile.entries.len(),
         lock_path.display()
     );
@@ -2076,43 +2115,87 @@ fn verify_data(schema_path: &Path, data_paths: &[PathBuf]) -> anyhow::Result<()>
 }
 
 /// `panschema fetch --check`: compare what `fetch` would record with the
-/// committed lockfile and write nothing. Membership is checked first, from
-/// the two files alone, so a dependency missing from the lock is reported
-/// without resolving it; only then is every locked entry resolved and
-/// compared field by field.
+/// committed lockfile and write nothing. Only pins are recorded, so only
+/// pins are compared; every entry is still resolved, so a broken path
+/// source fails here as it would in `generate`. A lockfile entry is judged
+/// by what it records: one recording a path source is a leftover to drop,
+/// one recording a pin the manifest no longer pins is drift. Membership is
+/// checked first, from the two files alone, so a pin missing from the lock
+/// is reported without resolving anything; only then is every entry
+/// resolved and each pin compared field by field.
 fn check_lockfile() -> anyhow::Result<()> {
     use panschema::lockfile::{LOCKFILE_FILENAME, Lockfile};
 
+    use panschema::lockfile::{LockEntry, LockfileError};
+    use panschema::source::{SchemaSource, partition_pins};
+
     let (manifest, manifest_dir) = load_manifest()?;
+    let (pinned, unpinned) =
+        partition_pins(&manifest.schemas).map_err(|e| anyhow::anyhow!("{e}"))?;
     let lock_path = manifest_dir.join(LOCKFILE_FILENAME);
-    if !lock_path.exists() {
-        anyhow::bail!(
-            "no `{}` next to the manifest. Run `panschema fetch` first.",
-            LOCKFILE_FILENAME
-        );
-    }
-    let locked = Lockfile::from_path(&lock_path)?;
+    let locked = if !lock_path.exists() {
+        if pinned.is_empty() {
+            Lockfile::default()
+        } else {
+            anyhow::bail!(
+                "no `{}` next to the manifest. Run `panschema fetch` first.",
+                LOCKFILE_FILENAME
+            );
+        }
+    } else {
+        match Lockfile::from_path(&lock_path) {
+            Ok(locked) => locked,
+            // With nothing to check the file is a leftover whatever it holds;
+            // `fetch` removes it, so say that rather than fail on its contents.
+            Err(e @ LockfileError::Parse(_)) if pinned.is_empty() => {
+                eprintln!(
+                    "note: {LOCKFILE_FILENAME} does not parse ({e}); there are no pinned \
+                     dependencies, so it is a leftover — `panschema fetch` removes it."
+                );
+                Lockfile::default()
+            }
+            Err(e) => return Err(e.into()),
+        }
+    };
+    // A leftover recording a path source never stands in for a pin.
+    let locked_pin = |name: &str| locked.entry(name).filter(|e| e.records_a_pin());
 
     let mut findings = Vec::new();
-    for name in manifest.schemas.keys() {
-        if locked.entry(name).is_none() {
+    for name in &pinned {
+        if locked_pin(name).is_none() {
             findings.push(format!(
                 "  - `{name}`: in manifest but not in lockfile (run `panschema fetch`)"
             ));
         }
     }
     for entry in &locked.entries {
-        if !manifest.schemas.contains_key(&entry.name) {
+        let name = &entry.name;
+        if !entry.records_a_pin() {
+            eprintln!(
+                "note: `{name}` records a path source, which carries no pin and is not \
+                 locked. Run `panschema fetch` to drop the entry."
+            );
+        } else if let Some(dep) = manifest.schemas.get(name) {
+            if !pinned.contains(&name.as_str()) {
+                let declared = SchemaSource::from_dep(name, dep)
+                    .map(|source| source.source_spec())
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                findings.push(format!(
+                    "  - `{name}`: lockfile records source `{}`, the manifest declares `{declared}` \
+                     (run `panschema fetch` to refresh)",
+                    entry.source
+                ));
+            }
+        } else {
             findings.push(format!(
-                "  - `{}`: in lockfile but not in manifest (stale; run `panschema fetch` to refresh)",
-                entry.name
+                "  - `{name}`: in lockfile but not in manifest (stale; run `panschema fetch` to refresh)"
             ));
         }
     }
     if findings.is_empty() {
         let fresh = resolve_lockfile(&manifest, &manifest_dir)?;
         for want in &fresh.entries {
-            let Some(have) = locked.entry(&want.name) else {
+            let Some(have): Option<&LockEntry> = locked_pin(&want.name) else {
                 continue;
             };
             let name = &want.name;
@@ -2145,11 +2228,16 @@ fn check_lockfile() -> anyhow::Result<()> {
         }
     }
     if findings.is_empty() {
-        println!(
-            "Checked {} schema(s) against {}.",
-            manifest.schemas.len(),
-            LOCKFILE_FILENAME
-        );
+        let clause = unpinned_clause(&unpinned);
+        if pinned.is_empty() {
+            println!("Nothing to check: no pinned dependencies{clause}.");
+        } else {
+            println!(
+                "Checked {} pinned dependency(ies) against {}{clause}.",
+                pinned.len(),
+                LOCKFILE_FILENAME
+            );
+        }
         return Ok(());
     }
     anyhow::bail!(
