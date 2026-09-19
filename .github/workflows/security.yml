@@ -143,10 +143,15 @@ jobs:
 
       # `.cargo/mutants.toml` passes `--lib` to both the build and run
       # phases, so mutation testing never compiles or runs the
-      # integration/e2e test binaries — no wasm bundle, Node, or
-      # Playwright needed here. html_writer.rs embeds the pkg artifacts
-      # via include_str!/include_bytes!, and empty placeholders satisfy
-      # those for a lib-only build (the wasm bytes are never executed).
+      # integration/e2e test binaries — no wasm bundle or browser needed
+      # here. html_writer.rs embeds the pkg artifacts via
+      # include_str!/include_bytes!, and empty placeholders satisfy those
+      # for a lib-only build (the wasm bytes are never executed).
+      #
+      # playwright-rs is still compiled as a dev-dependency, and its build
+      # script downloads a browser driver into every fresh target dir —
+      # one per cargo-mutants copy, outside the `target/` cache above.
+      # Nothing here launches a browser, so the download is skipped.
       - name: Stub wasm bundle for lib-only build
         run: |
           mkdir -p panschema-viz/pkg
@@ -156,6 +161,8 @@ jobs:
       # mutant is killed by panschema's writer tests as often as by its own.
       - name: Run mutation testing (unit tests only, whole workspace)
         run: cargo mutants --test-workspace=true
+        env:
+          PLAYWRIGHT_SKIP_DRIVER_DOWNLOAD: "1"
 
       - name: Upload mutation report
         if: always()

@@ -101,6 +101,14 @@ if grep -q '^diff --git a/panschema-model/' "$DIFF"; then
   TEST_SCOPE="--test-workspace=true"
 fi
 
+# playwright-rs is a dev-dependency, so a `--lib` test build still runs its
+# build script, which assembles the browser driver from two downloads
+# (~128 MB) into every fresh target dir — and cargo-mutants builds in one
+# fresh copy per job. Nothing here launches a browser, so skip it: the crate
+# documents this variable for exactly that, and the gate stops depending
+# on the network.
+export PLAYWRIGHT_SKIP_DRIVER_DOWNLOAD=1
+
 exec cargo mutants --in-diff "$DIFF" --jobs 4 $TEST_SCOPE \
   --exclude 'panschema/src/components.rs' \
   --exclude 'panschema/src/bin/mdbook_panschema.rs' \

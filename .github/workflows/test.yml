@@ -68,6 +68,11 @@ jobs:
   lint:
     name: Lint and Docs
     runs-on: ubuntu-latest
+    # Clippy and the doctests compile playwright-rs as a dev-dependency but
+    # never launch a browser, so its build script's driver download is
+    # skipped: no network dependency, and nothing to cache for it.
+    env:
+      PLAYWRIGHT_SKIP_DRIVER_DOWNLOAD: "1"
     steps:
       - uses: actions/checkout@v7
 
@@ -132,6 +137,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         rust: [stable]
+    # Read by playwright-rs's build script, so it must hold for every cargo
+    # invocation in the job — the browser installer and the test runs build
+    # the same driver once, into the directory cached below.
+    env:
+      PLAYWRIGHT_DRIVER_CACHE_DIR: ${{ github.workspace }}/drivers
 
     steps:
     - uses: actions/checkout@v7
@@ -154,7 +164,6 @@ jobs:
           ~/.cargo/registry/cache/
           ~/.cargo/git/db/
           target/
-          drivers/
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: |
           ${{ runner.os }}-cargo-
@@ -178,10 +187,16 @@ jobs:
     # this repo names one). Keyed on the lockfile so a `playwright-rs` bump
     # misses the cache; `restore-keys` still seeds it from the previous run,
     # leaving the installer only the new build to fetch.
+    #
+    # The driver itself is assembled by playwright-rs's build script from
+    # two downloads. Relocated out of `target/` into `drivers/` — the
+    # crate's own knob for CI — so it lives on this key beside the browsers
+    # it must match, rather than riding the cargo cache by accident.
     - name: Cache Playwright browsers and driver
       uses: actions/cache@v6
       with:
         path: |
+          drivers/
           ~/.cache/ms-playwright
           ~/.cache/playwright-rust
           ~/Library/Caches/ms-playwright
