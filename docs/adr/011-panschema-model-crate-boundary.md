@@ -131,6 +131,20 @@ needs the model as a library — and does not claim the build-time benefit
   compile, and the three moved modules were a small part of it. The
   measurable win remains the external consumer's build, which now
   compiles none of the format, template, or CLI libraries.
+  **Measured again after slice 3 (2026-09-20), and the in-workspace loop
+  did shrink.** With instances, rules, diagnostics, and imports across as
+  well, `panschema/src` went from 61.5k lines to 43.3k, and the same method
+  (bare touch per sample, three samples, warm cache, no dependency
+  recompiles) gave 20 / 20 / 20 s for a tool-side edit and 30 / 31 / 29 s
+  for a model-side one; a `--timings` run splits the tool-side figure into
+  a 10.6 s lib unit and two 10.6 s bins built in parallel after it, against
+  the ~21 s lib and ~13 s bins issue #133 opened with. The test-profile lib
+  unit, which every pre-commit run and mutation baseline pays, fell from
+  24–42 s to 10–11 s. The slice-1 samples above were taken on a loaded
+  machine (their spread was 2×) with the smallest third of the model
+  moved; the larger half of a lib edit is now the two bins, which is link
+  time, so the remaining in-workspace lever is the linker rather than a
+  further carve-out. Issue #133 was closed on those numbers.
 - The boundary becomes a public API. Fifteen items widened to `pub` in
   the core slice, against the seven estimated: the class matcher and its
   spellings inverse, every element-IRI derivation, the by-id IRI index,
