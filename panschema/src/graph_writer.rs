@@ -2426,9 +2426,8 @@ mod tests {
             .insert("Animal".to_string(), ClassDefinition::new("Animal"));
 
         let writer = GraphWriter::new();
-        let temp_dir = std::env::temp_dir().join("panschema_graph_writer_test");
-        let _ = std::fs::remove_dir_all(&temp_dir);
-        std::fs::create_dir_all(&temp_dir).unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let temp_dir = scratch.path();
         let output_path = temp_dir.join("graph.json");
 
         writer
@@ -2443,9 +2442,6 @@ mod tests {
         assert_eq!(parsed.schema_name, "json_test");
         assert_eq!(parsed.schema_title, Some("JSON Test".to_string()));
         assert_eq!(parsed.nodes.len(), 1);
-
-        // Cleanup
-        let _ = std::fs::remove_dir_all(temp_dir);
     }
 
     // ========== Serialization/Deserialization Tests ==========

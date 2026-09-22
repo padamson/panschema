@@ -1560,11 +1560,10 @@ ex:morgon a owl:NamedIndividual, ex:Wine ; rdfs:label "Morgon" .
             "ex:Legacy a owl:Class ; owl:deprecated \"1\"^^xsd:boolean .\n",
             "ex:Live a owl:Class ; owl:deprecated \"0\"^^xsd:boolean .\n",
         );
-        let path =
-            std::env::temp_dir().join(format!("owl_reader_dep_one_{}.ttl", std::process::id()));
+        let scratch = tempfile::tempdir().unwrap();
+        let path = scratch.path().join("deprecated.ttl");
         std::fs::write(&path, ttl).unwrap();
         let meta = OwlReader::parse_ontology(&path).expect("parse inline ontology");
-        let _ = std::fs::remove_file(&path);
 
         let legacy = meta.classes.iter().find(|c| c.id == "Legacy").unwrap();
         assert!(

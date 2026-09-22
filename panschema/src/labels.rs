@@ -445,12 +445,6 @@ pub fn ensure_labels(
 mod tests {
     use super::*;
 
-    fn temp_cache_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("panschema_label_store_{tag}"));
-        let _ = fs::remove_dir_all(&dir);
-        dir
-    }
-
     fn term(label: &str) -> TermInfo {
         TermInfo {
             label: Some(label.to_string()),
@@ -466,9 +460,24 @@ mod tests {
     }
 
     #[test]
+    fn open_creates_a_missing_cache_directory() {
+        let scratch = tempfile::tempdir().unwrap();
+        let cache_dir = scratch.path().join("cache").join("labels");
+
+        let store = LabelStore::open(&cache_dir).unwrap();
+
+        assert!(
+            cache_dir.is_dir(),
+            "open creates the cache directory and its parents; got: {cache_dir:?}"
+        );
+        assert!(store.lookup("https://example.org/anything").is_none());
+    }
+
+    #[test]
     fn lookup_hits_after_insert_source() {
-        let dir = temp_cache_dir("insert");
-        let mut store = LabelStore::open(&dir).unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path();
+        let mut store = LabelStore::open(dir).unwrap();
         store
             .insert_source("https://example.org/cco.ttl", cco_labels())
             .unwrap();
@@ -479,19 +488,19 @@ mod tests {
             Some("Process")
         );
         assert!(store.lookup("https://example.org/unknown").is_none());
-        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
     fn labels_survive_reopen() {
-        let dir = temp_cache_dir("reopen");
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path();
         {
-            let mut store = LabelStore::open(&dir).unwrap();
+            let mut store = LabelStore::open(dir).unwrap();
             store
                 .insert_source("https://example.org/cco.ttl", cco_labels())
                 .unwrap();
         }
-        let store = LabelStore::open(&dir).unwrap();
+        let store = LabelStore::open(dir).unwrap();
         assert_eq!(
             store
                 .lookup("https://www.commoncoreontologies.org/ont00000958")
@@ -499,21 +508,21 @@ mod tests {
             Some("Process")
         );
         assert!(store.has_source("https://example.org/cco.ttl"));
-        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
     fn has_source_is_false_for_unfetched_url() {
-        let dir = temp_cache_dir("missing");
-        let store = LabelStore::open(&dir).unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path();
+        let store = LabelStore::open(dir).unwrap();
         assert!(!store.has_source("https://example.org/never-fetched.ttl"));
-        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
     fn distinct_source_urls_produce_distinct_cache_entries() {
-        let dir = temp_cache_dir("distinct_keys");
-        let mut store = LabelStore::open(&dir).unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path();
+        let mut store = LabelStore::open(dir).unwrap();
         store
             .insert_source("https://example.org/cco.ttl", cco_labels())
             .unwrap();
@@ -522,16 +531,15 @@ mod tests {
             !store.has_source("https://example.org/other.ttl"),
             "a different URL must not collide with the cached one"
         );
-        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
     fn corrupt_cache_file_is_skipped_not_fatal() {
-        let dir = temp_cache_dir("corrupt");
-        fs::create_dir_all(&dir).unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path();
         fs::write(dir.join("deadbeef.json"), "{not valid json").unwrap();
 
-        let mut store = LabelStore::open(&dir).unwrap();
+        let mut store = LabelStore::open(dir).unwrap();
         store
             .insert_source("https://example.org/cco.ttl", cco_labels())
             .unwrap();
@@ -541,7 +549,6 @@ mod tests {
                 .and_then(|t| t.label.as_deref()),
             Some("Process")
         );
-        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -550,13 +557,13 @@ mod tests {
         // key) must fail to parse via `deny_unknown_fields`, be skipped
         // on load, and leave the source uncached so it re-fetches in
         // the new shape — not load with the definition silently lost.
-        let dir = temp_cache_dir("old_def_shape");
-        fs::create_dir_all(&dir).unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path();
         let url = "https://example.org/cco.ttl";
         let old_format = r#"{"https://www.commoncoreontologies.org/ont00000958":{"label":"Process","definition":"old singular"}}"#;
         fs::write(dir.join(format!("{}.json", source_key(url))), old_format).unwrap();
 
-        let store = LabelStore::open(&dir).unwrap();
+        let store = LabelStore::open(dir).unwrap();
         assert!(
             !store.has_source(url),
             "old-shape file skipped on load, so the source is uncached and will refetch"
@@ -567,7 +574,6 @@ mod tests {
                 .is_none(),
             "no partial load of the stale shape"
         );
-        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -765,8 +771,9 @@ ex:DefinitionOnly skos:definition "Defined but unlabeled." .
 
     #[test]
     fn ensure_labels_fetches_known_prefix_and_skips_unknown() {
-        let dir = temp_cache_dir("ensure_fetch");
-        let mut store = LabelStore::open(&dir).unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path();
+        let mut store = LabelStore::open(dir).unwrap();
         let source = CountingSource {
             responses: BTreeMap::from([(cco_source_url().to_string(), Ok(CCO_TTL.to_string()))]),
             fetched: Default::default(),
@@ -791,13 +798,13 @@ ex:DefinitionOnly skos:definition "Defined but unlabeled." .
                 .and_then(|t| t.label.as_deref()),
             Some("Process")
         );
-        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
     fn ensure_labels_does_not_refetch_cached_sources() {
-        let dir = temp_cache_dir("ensure_cached");
-        let mut store = LabelStore::open(&dir).unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path();
+        let mut store = LabelStore::open(dir).unwrap();
         store.insert_source(cco_source_url(), cco_labels()).unwrap();
         let source = CountingSource {
             responses: BTreeMap::new(),
@@ -816,13 +823,13 @@ ex:DefinitionOnly skos:definition "Defined but unlabeled." .
             source.fetched.borrow().is_empty(),
             "cache hit must not trigger a fetch"
         );
-        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
     fn ensure_labels_survives_per_source_fetch_failure() {
-        let dir = temp_cache_dir("ensure_failopen");
-        let mut store = LabelStore::open(&dir).unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path();
+        let mut store = LabelStore::open(dir).unwrap();
         let mut schema = schema_with_cco_prefix();
         schema
             .prefixes
@@ -851,13 +858,13 @@ ex:DefinitionOnly skos:definition "Defined but unlabeled." .
             Some("Activity"),
             "prov labels land despite the CCO failure"
         );
-        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
     fn ensure_labels_override_url_wins_over_builtin() {
-        let dir = temp_cache_dir("ensure_override_builtin");
-        let mut store = LabelStore::open(&dir).unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path();
+        let mut store = LabelStore::open(dir).unwrap();
         let custom_url = "https://example.org/pinned-cco.ttl";
         let source = CountingSource {
             responses: BTreeMap::from([(custom_url.to_string(), Ok(CCO_TTL.to_string()))]),
@@ -884,13 +891,13 @@ ex:DefinitionOnly skos:definition "Defined but unlabeled." .
                 .and_then(|t| t.label.as_deref()),
             Some("Process")
         );
-        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
     fn ensure_labels_override_enables_unknown_prefix() {
-        let dir = temp_cache_dir("ensure_override_unknown");
-        let mut store = LabelStore::open(&dir).unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path();
+        let mut store = LabelStore::open(dir).unwrap();
         let local_url = "https://example.org/own/terms.ttl";
         let local_ttl = r#"
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
@@ -920,13 +927,13 @@ ex:DefinitionOnly skos:definition "Defined but unlabeled." .
             Some("Own Thing"),
             "a prefix outside the built-in map resolves through its override"
         );
-        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
     fn ensure_labels_refresh_refetches_cached_source() {
-        let dir = temp_cache_dir("ensure_refresh");
-        let mut store = LabelStore::open(&dir).unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path();
+        let mut store = LabelStore::open(dir).unwrap();
         store.insert_source(cco_source_url(), cco_labels()).unwrap();
         let updated_ttl = r#"
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
@@ -960,13 +967,13 @@ ex:DefinitionOnly skos:definition "Defined but unlabeled." .
             Some("Process (updated)"),
             "the re-fetched map replaces the stale cache entry"
         );
-        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
     fn remove_source_deletes_cache_file_and_lookups() {
-        let dir = temp_cache_dir("remove_source");
-        let mut store = LabelStore::open(&dir).unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path();
+        let mut store = LabelStore::open(dir).unwrap();
         store.insert_source(cco_source_url(), cco_labels()).unwrap();
         let cache_file = dir.join(format!("{}.json", source_key(cco_source_url())));
         assert!(cache_file.exists());
@@ -981,7 +988,6 @@ ex:DefinitionOnly skos:definition "Defined but unlabeled." .
             "the in-memory map is dropped too"
         );
         assert!(!store.has_source(cco_source_url()));
-        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -1000,8 +1006,9 @@ ex:DefinitionOnly skos:definition "Defined but unlabeled." .
 
     #[test]
     fn lookup_searches_across_multiple_sources() {
-        let dir = temp_cache_dir("multi");
-        let mut store = LabelStore::open(&dir).unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path();
+        let mut store = LabelStore::open(dir).unwrap();
         store
             .insert_source("https://example.org/cco.ttl", cco_labels())
             .unwrap();
@@ -1026,6 +1033,5 @@ ex:DefinitionOnly skos:definition "Defined but unlabeled." .
                 .and_then(|t| t.label.as_deref()),
             Some("Process")
         );
-        let _ = fs::remove_dir_all(dir);
     }
 }

@@ -2838,12 +2838,11 @@ mod tests {
         schema.types.insert("PhoneNumber".into(), phone);
 
         let writer = HtmlWriter::new();
-        let temp_dir = std::env::temp_dir().join("panschema_enum_type_sections_test");
-        let _ = fs::remove_dir_all(&temp_dir);
-        writer.write(&schema, &temp_dir).expect("write failed");
+        let scratch = tempfile::tempdir().unwrap();
+        let temp_dir = scratch.path();
+        writer.write(&schema, temp_dir).expect("write failed");
         let html =
             fs::read_to_string(temp_dir.join("index.html")).expect("failed to read index.html");
-        let _ = fs::remove_dir_all(&temp_dir);
 
         // Enumerations section + card + permissible values.
         assert!(html.contains(r#"id="enums""#), "enums section present");
@@ -3964,15 +3963,31 @@ mod tests {
     }
 
     #[test]
+    fn write_creates_a_missing_output_directory() {
+        let reader = OwlReader::new();
+        let schema = reader.read(&reference_ontology_path()).unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let output = scratch.path().join("docs").join("v1");
+
+        HtmlWriter::new().write(&schema, &output).expect("write");
+
+        assert!(
+            output.join("index.html").is_file(),
+            "the writer creates the output directory and its parents; got entries: {:?}",
+            fs::read_dir(scratch.path()).map(|d| d.count())
+        );
+    }
+
+    #[test]
     fn html_writer_writes_to_output_directory() {
         let reader = OwlReader::new();
         let schema = reader.read(&reference_ontology_path()).unwrap();
 
         let writer = HtmlWriter::new();
-        let temp_dir = std::env::temp_dir().join("panschema_html_writer_test");
-        let _ = fs::remove_dir_all(&temp_dir);
+        let scratch = tempfile::tempdir().unwrap();
+        let temp_dir = scratch.path();
 
-        let result = writer.write(&schema, &temp_dir);
+        let result = writer.write(&schema, temp_dir);
         assert!(result.is_ok(), "Write should succeed");
 
         let output_path = temp_dir.join("index.html");
@@ -3983,9 +3998,6 @@ mod tests {
             html.contains("panschema Reference Ontology"),
             "HTML should contain title"
         );
-
-        // Cleanup
-        let _ = fs::remove_dir_all(temp_dir);
     }
 
     #[test]
@@ -4720,13 +4732,11 @@ mod tests {
         let data = instance_set_from_yaml(&schema, "bottles:\n  - id: b1\n    name: Morgon\n");
 
         let render = |writer: HtmlWriter| {
-            let temp_dir = std::env::temp_dir()
-                .join(format!("panschema_composition_test_{}", std::process::id()));
-            let _ = fs::remove_dir_all(&temp_dir);
-            writer.write(&schema, &temp_dir).expect("write");
+            let scratch = tempfile::tempdir().unwrap();
+            let temp_dir = scratch.path();
+            writer.write(&schema, temp_dir).expect("write");
             let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
             let wasm = temp_dir.join("panschema_viz_bg.wasm").is_file();
-            let _ = fs::remove_dir_all(&temp_dir);
             (html, wasm)
         };
 
@@ -4830,11 +4840,10 @@ mod tests {
         let writer = HtmlWriter::new()
             .with_instance_dataset(InstanceDataset::new("preview", preview))
             .with_instance_dataset(InstanceDataset::new("worked-example", worked));
-        let temp_dir = std::env::temp_dir().join("panschema_instance_selector_test");
-        let _ = fs::remove_dir_all(&temp_dir);
-        writer.write(&schema, &temp_dir).expect("write");
+        let scratch = tempfile::tempdir().unwrap();
+        let temp_dir = scratch.path();
+        writer.write(&schema, temp_dir).expect("write");
         let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
-        let _ = fs::remove_dir_all(&temp_dir);
 
         assert!(
             html.contains(r#"role="tablist""#),
@@ -4897,11 +4906,10 @@ mod tests {
         let writer = HtmlWriter::new()
             .with_instance_dataset(InstanceDataset::new("preview", preview))
             .with_instance_dataset(InstanceDataset::new("worked-example", worked).as_default());
-        let temp_dir = std::env::temp_dir().join("panschema_default_dataset_test");
-        let _ = fs::remove_dir_all(&temp_dir);
-        writer.write(&schema, &temp_dir).expect("write");
+        let scratch = tempfile::tempdir().unwrap();
+        let temp_dir = scratch.path();
+        writer.write(&schema, temp_dir).expect("write");
         let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
-        let _ = fs::remove_dir_all(&temp_dir);
 
         // Order is unchanged: preview is still the first selector entry.
         let first_tab = html.find(">preview").expect("preview tab present");
@@ -4948,11 +4956,10 @@ mod tests {
         let writer = HtmlWriter::new()
             .with_instance_dataset(InstanceDataset::new("real", real))
             .with_instance_dataset(InstanceDataset::new("empty", empty).as_default());
-        let temp_dir = std::env::temp_dir().join("panschema_empty_default_test");
-        let _ = fs::remove_dir_all(&temp_dir);
-        writer.write(&schema, &temp_dir).expect("write");
+        let scratch = tempfile::tempdir().unwrap();
+        let temp_dir = scratch.path();
+        writer.write(&schema, temp_dir).expect("write");
         let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
-        let _ = fs::remove_dir_all(&temp_dir);
 
         assert_eq!(
             html.matches(r#"class="instance-dataset-panel""#).count(),
@@ -4985,11 +4992,10 @@ mod tests {
         let writer = HtmlWriter::new()
             .with_instance_dataset(InstanceDataset::new("preview", preview))
             .with_instance_dataset(InstanceDataset::new("worked-example", worked));
-        let temp_dir = std::env::temp_dir().join("panschema_shared_ids_test");
-        let _ = fs::remove_dir_all(&temp_dir);
-        writer.write(&schema, &temp_dir).expect("write");
+        let scratch = tempfile::tempdir().unwrap();
+        let temp_dir = scratch.path();
+        writer.write(&schema, temp_dir).expect("write");
         let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
-        let _ = fs::remove_dir_all(&temp_dir);
 
         let mut counts = std::collections::BTreeMap::new();
         let mut rest = html.as_str();
@@ -5024,11 +5030,10 @@ mod tests {
         );
 
         let writer = HtmlWriter::new().with_instance_dataset(InstanceDataset::new("only", only));
-        let temp_dir = std::env::temp_dir().join("panschema_instance_heading_count_test");
-        let _ = fs::remove_dir_all(&temp_dir);
-        writer.write(&schema, &temp_dir).expect("write");
+        let scratch = tempfile::tempdir().unwrap();
+        let temp_dir = scratch.path();
+        writer.write(&schema, temp_dir).expect("write");
         let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
-        let _ = fs::remove_dir_all(&temp_dir);
 
         // Two individuals joined by `stored_in`: two nodes, one edge.
         let heading = html
@@ -5063,11 +5068,10 @@ mod tests {
             .with_instance_dataset(
                 InstanceDataset::new("worked-example", worked).with_provenance("worked.yaml"),
             );
-        let temp_dir = std::env::temp_dir().join("panschema_dataset_counts_test");
-        let _ = fs::remove_dir_all(&temp_dir);
-        writer.write(&schema, &temp_dir).expect("write");
+        let scratch = tempfile::tempdir().unwrap();
+        let temp_dir = scratch.path();
+        writer.write(&schema, temp_dir).expect("write");
         let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
-        let _ = fs::remove_dir_all(&temp_dir);
 
         assert!(
             html.contains("preview.yaml") && html.contains("worked.yaml"),
@@ -5091,11 +5095,10 @@ mod tests {
         let only = instance_set_from_yaml(&schema, "bottles:\n  - id: b1\n    name: Morgon\n");
 
         let writer = HtmlWriter::new().with_instance_dataset(InstanceDataset::new("only", only));
-        let temp_dir = std::env::temp_dir().join("panschema_single_dataset_test");
-        let _ = fs::remove_dir_all(&temp_dir);
-        writer.write(&schema, &temp_dir).expect("write");
+        let scratch = tempfile::tempdir().unwrap();
+        let temp_dir = scratch.path();
+        writer.write(&schema, temp_dir).expect("write");
         let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
-        let _ = fs::remove_dir_all(&temp_dir);
 
         assert!(
             !html.contains(r#"role="tablist""#),
@@ -5126,11 +5129,10 @@ mod tests {
         );
 
         let writer = HtmlWriter::new().with_instance_dataset(InstanceDataset::new("only", set));
-        let temp_dir = std::env::temp_dir().join("panschema_entity_class_tag_test");
-        let _ = fs::remove_dir_all(&temp_dir);
-        writer.write(&schema, &temp_dir).expect("write");
+        let scratch = tempfile::tempdir().unwrap();
+        let temp_dir = scratch.path();
+        writer.write(&schema, temp_dir).expect("write");
         let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
-        let _ = fs::remove_dir_all(&temp_dir);
 
         let list = html
             .split_once(r#"class="entity-list""#)
@@ -5374,11 +5376,10 @@ mod tests {
         );
         let writer = HtmlWriter::new()
             .with_instance_dataset(InstanceDataset::new("only", only).with_provenance("only.yaml"));
-        let temp_dir = std::env::temp_dir().join("panschema_graph_first_test");
-        let _ = fs::remove_dir_all(&temp_dir);
-        writer.write(&schema, &temp_dir).expect("write");
+        let scratch = tempfile::tempdir().unwrap();
+        let temp_dir = scratch.path();
+        writer.write(&schema, temp_dir).expect("write");
         let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
-        let _ = fs::remove_dir_all(&temp_dir);
 
         // Singular heading for one dataset.
         assert!(
@@ -5419,11 +5420,10 @@ mod tests {
         let writer = HtmlWriter::new()
             .with_instance_dataset(InstanceDataset::new("a", a))
             .with_instance_dataset(InstanceDataset::new("b", b));
-        let temp_dir = std::env::temp_dir().join("panschema_plural_heading_test");
-        let _ = fs::remove_dir_all(&temp_dir);
-        writer.write(&schema, &temp_dir).expect("write");
+        let scratch = tempfile::tempdir().unwrap();
+        let temp_dir = scratch.path();
+        writer.write(&schema, temp_dir).expect("write");
         let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
-        let _ = fs::remove_dir_all(&temp_dir);
         assert!(
             html.contains("Instance Graphs"),
             "several datasets read plural"
@@ -5438,11 +5438,10 @@ mod tests {
         let schema = bottle_rack_schema();
 
         let writer = HtmlWriter::new();
-        let temp_dir = std::env::temp_dir().join("panschema_no_abox_test");
-        let _ = fs::remove_dir_all(&temp_dir);
-        writer.write(&schema, &temp_dir).expect("write");
+        let scratch = tempfile::tempdir().unwrap();
+        let temp_dir = scratch.path();
+        writer.write(&schema, temp_dir).expect("write");
         let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
-        let _ = fs::remove_dir_all(&temp_dir);
 
         assert!(
             html.contains("No individuals defined in this ontology."),
@@ -5467,11 +5466,10 @@ mod tests {
 
         let writer = HtmlWriter::with_options(false)
             .with_instance_dataset(InstanceDataset::new("only", only).with_provenance("only.yaml"));
-        let temp_dir = std::env::temp_dir().join("panschema_no_graph_cards_test");
-        let _ = fs::remove_dir_all(&temp_dir);
-        writer.write(&schema, &temp_dir).expect("write");
+        let scratch = tempfile::tempdir().unwrap();
+        let temp_dir = scratch.path();
+        writer.write(&schema, temp_dir).expect("write");
         let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
-        let _ = fs::remove_dir_all(&temp_dir);
 
         assert!(
             html.contains("Morgon"),
@@ -5500,11 +5498,10 @@ mod tests {
         let schema = reader.read(&reference_ontology_path()).unwrap();
 
         let writer = HtmlWriter::new();
-        let temp_dir = std::env::temp_dir().join("panschema_provenance_test");
-        let _ = fs::remove_dir_all(&temp_dir);
-        writer.write(&schema, &temp_dir).expect("write");
+        let scratch = tempfile::tempdir().unwrap();
+        let temp_dir = scratch.path();
+        writer.write(&schema, temp_dir).expect("write");
         let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
-        let _ = fs::remove_dir_all(&temp_dir);
 
         assert!(
             html.contains("Source: individuals embedded in the schema"),
@@ -5519,10 +5516,10 @@ mod tests {
         let schema = reader.read(&reference_ontology_path()).unwrap();
 
         let writer = HtmlWriter::new();
-        let temp_dir = std::env::temp_dir().join("panschema_roundtrip_test");
-        let _ = fs::remove_dir_all(&temp_dir);
+        let scratch = tempfile::tempdir().unwrap();
+        let temp_dir = scratch.path();
 
-        writer.write(&schema, &temp_dir).expect("Write failed");
+        writer.write(&schema, temp_dir).expect("Write failed");
 
         let html = fs::read_to_string(temp_dir.join("index.html")).expect("Failed to read");
 
@@ -5533,9 +5530,6 @@ mod tests {
         assert!(html.contains("class-Dog"));
         assert!(html.contains("slot-hasOwner"));
         assert!(html.contains("ind-fido"));
-
-        // Cleanup
-        let _ = fs::remove_dir_all(temp_dir);
     }
 
     /// Parse `html` with `html5ever` — the same spec-conformant HTML5
@@ -5576,11 +5570,10 @@ mod tests {
         let reader = OwlReader::new();
         let schema = reader.read(&reference_ontology_path()).unwrap();
         let writer = HtmlWriter::new();
-        let temp_dir = std::env::temp_dir().join("panschema_html5_validity_test");
-        let _ = fs::remove_dir_all(&temp_dir);
-        writer.write(&schema, &temp_dir).expect("Write failed");
+        let scratch = tempfile::tempdir().unwrap();
+        let temp_dir = scratch.path();
+        writer.write(&schema, temp_dir).expect("Write failed");
         let html = fs::read_to_string(temp_dir.join("index.html")).expect("Failed to read");
-        let _ = fs::remove_dir_all(&temp_dir);
 
         let errors = html5_parse_errors(&html);
         assert!(
@@ -5605,11 +5598,10 @@ mod tests {
         schema.classes.insert("Innocent".to_string(), class);
 
         let writer = HtmlWriter::new();
-        let temp_dir = std::env::temp_dir().join("panschema_graph_json_xss_test");
-        let _ = fs::remove_dir_all(&temp_dir);
-        writer.write(&schema, &temp_dir).expect("Write failed");
+        let scratch = tempfile::tempdir().unwrap();
+        let temp_dir = scratch.path();
+        writer.write(&schema, temp_dir).expect("Write failed");
         let html = fs::read_to_string(temp_dir.join("index.html")).expect("Failed to read");
-        let _ = fs::remove_dir_all(&temp_dir);
 
         let json_line = html
             .lines()
@@ -5627,9 +5619,9 @@ mod tests {
         let reader = OwlReader::new();
         let schema = reader.read(&reference_ontology_path()).unwrap();
         let writer = HtmlWriter::new();
-        let temp_dir = std::env::temp_dir().join("panschema_responsive_layout_test");
-        let _ = fs::remove_dir_all(&temp_dir);
-        writer.write(&schema, &temp_dir).expect("Write failed");
+        let scratch = tempfile::tempdir().unwrap();
+        let temp_dir = scratch.path();
+        writer.write(&schema, temp_dir).expect("Write failed");
         let html = fs::read_to_string(temp_dir.join("index.html")).expect("Failed to read");
 
         // Card grid uses `auto-fill` so it tiles at wide viewports and
@@ -5664,8 +5656,6 @@ mod tests {
             !html.contains("max-width: var(--content-max-width)"),
             "content-area max-width cap still constrains the layout"
         );
-
-        let _ = fs::remove_dir_all(temp_dir);
     }
 
     #[test]
@@ -5673,9 +5663,9 @@ mod tests {
         let reader = OwlReader::new();
         let schema = reader.read(&reference_ontology_path()).unwrap();
         let writer = HtmlWriter::new().with_graph_aspect(4, 3);
-        let temp_dir = std::env::temp_dir().join("panschema_aspect_override_test");
-        let _ = fs::remove_dir_all(&temp_dir);
-        writer.write(&schema, &temp_dir).expect("Write failed");
+        let scratch = tempfile::tempdir().unwrap();
+        let temp_dir = scratch.path();
+        writer.write(&schema, temp_dir).expect("Write failed");
         let html = fs::read_to_string(temp_dir.join("index.html")).expect("Failed to read");
         assert!(
             html.contains("--graph-aspect: 4 / 3"),
@@ -5685,7 +5675,6 @@ mod tests {
         // regardless of override (so the default applies if the inline
         // attribute is somehow stripped). The override is on the
         // container's inline style, asserted above.
-        let _ = fs::remove_dir_all(temp_dir);
     }
 
     #[test]
@@ -5722,10 +5711,10 @@ mod tests {
         let schema = reader.read(&reference_ontology_path()).unwrap();
 
         let writer = HtmlWriter::new();
-        let temp_dir = std::env::temp_dir().join("panschema_sidebar_graph_test");
-        let _ = fs::remove_dir_all(&temp_dir);
+        let scratch = tempfile::tempdir().unwrap();
+        let temp_dir = scratch.path();
 
-        writer.write(&schema, &temp_dir).expect("Write failed");
+        writer.write(&schema, temp_dir).expect("Write failed");
 
         let html = fs::read_to_string(temp_dir.join("index.html")).expect("Failed to read");
 
@@ -5766,9 +5755,6 @@ mod tests {
             graph_pos < namespaces_pos,
             "Schema Graph should appear before Namespaces"
         );
-
-        // Cleanup
-        let _ = fs::remove_dir_all(temp_dir);
     }
 
     #[test]
@@ -5777,10 +5763,10 @@ mod tests {
         let schema = reader.read(&reference_ontology_path()).unwrap();
 
         let writer = HtmlWriter::with_options(false); // No graph
-        let temp_dir = std::env::temp_dir().join("panschema_sidebar_no_graph_test");
-        let _ = fs::remove_dir_all(&temp_dir);
+        let scratch = tempfile::tempdir().unwrap();
+        let temp_dir = scratch.path();
 
-        writer.write(&schema, &temp_dir).expect("Write failed");
+        writer.write(&schema, temp_dir).expect("Write failed");
 
         let html = fs::read_to_string(temp_dir.join("index.html")).expect("Failed to read");
 
@@ -5789,9 +5775,6 @@ mod tests {
             !html.contains("href=\"#graph-visualization\""),
             "Sidebar should not contain Schema Graph link when graph is disabled"
         );
-
-        // Cleanup
-        let _ = fs::remove_dir_all(temp_dir);
     }
 
     #[test]
@@ -5954,9 +5937,9 @@ mod tests {
         use crate::labels::LabelStore;
         use crate::linkml::{ClassDefinition, SchemaDefinition};
 
-        let cache_dir = std::env::temp_dir().join("panschema_html_label_test");
-        let _ = std::fs::remove_dir_all(&cache_dir);
-        let mut store = LabelStore::open(&cache_dir).unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let cache_dir = scratch.path();
+        let mut store = LabelStore::open(cache_dir).unwrap();
         store
             .insert_source(
                 "https://example.org/cco.ttl",
@@ -6007,8 +5990,6 @@ mod tests {
         assert_eq!(exact.label.as_deref(), Some("supports"));
         let close = card.mappings.iter().find(|m| m.kind == "close").unwrap();
         assert!(close.label.is_none(), "uncached IRI renders unlabeled");
-
-        let _ = std::fs::remove_dir_all(cache_dir);
     }
 
     #[test]
