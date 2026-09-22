@@ -27,6 +27,7 @@ jobs:
   advisories:
     name: Check for new advisories
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ISSUE_TITLE: "Security: new dependency advisory detected"

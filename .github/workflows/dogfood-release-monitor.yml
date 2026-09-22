@@ -22,6 +22,7 @@ jobs:
   check-vendored-releases:
     name: Check vendored dogfood releases
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ISSUE_TITLE: "Dogfood: vendor missing schema releases"

@@ -2,6 +2,17 @@
 # reject the config or silently run the browser tests under `quick`.
 nextest-version = "0.9.77"
 
+[profile.default]
+# A hung test must fail, not hold the job until the runner's own ceiling.
+# The slowest non-browser test takes about 25 s on a CI runner; a test
+# still running after two 60 s periods is terminated and reported as
+# TIMEOUT, which fails the run.
+slow-timeout = { period = "60s", terminate-after = 2 }
+# The e2e tests spawn a dev server and a browser per test, and their
+# teardown outlives nextest's 100 ms default, which would report every
+# one as a leak. A process still alive after this is a real leak.
+leak-timeout = "1s"
+
 # Every e2e test launches its own Chromium; running the whole suite's
 # browsers at once starves page loads and first paints into flaky
 # timeouts. Cap how many run concurrently — the rest of the test run
@@ -9,9 +20,13 @@ nextest-version = "0.9.77"
 [test-groups]
 browser = { max-threads = 6 }
 
+# The slowest browser test takes about 30 s on the slowest CI runner, and
+# a browser that never finishes loading is the hang this timeout exists
+# for. One period, then terminate.
 [[profile.default.overrides]]
 filter = "binary(e2e)"
 test-group = "browser"
+slow-timeout = { period = "180s", terminate-after = 1 }
 
 # Opt-in inner-loop profile (`cargo nextest run --profile quick`):
 # skips *running* the browser e2e tests — the e2e binary still builds.

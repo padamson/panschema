@@ -20,6 +20,7 @@ jobs:
   audit:
     name: Security Audit
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
@@ -45,6 +46,7 @@ jobs:
   deny:
     name: License & Dependency Check
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
@@ -62,6 +64,7 @@ jobs:
   supply-chain:
     name: Supply Chain Review
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
@@ -82,6 +85,7 @@ jobs:
   semver-checks:
     name: Semver Compatibility
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v7
@@ -101,6 +105,7 @@ jobs:
   mutation-testing:
     name: Mutation Testing (full)
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     # Full-codebase mutation testing — only runs on manual
     # `workflow_dispatch`. Per-push verification is handled by
     # `mutation-testing-diff` below, which scopes to just the lines a
@@ -174,6 +179,7 @@ jobs:
   mutation-testing-diff:
     name: Mutation Testing (diff)
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     # Fast per-push variant of the mutation-testing job: scope to the
     # lines touched in this push or pull request via `cargo mutants
     # --in-diff`. Typical runtime is seconds-to-minutes rather than the
