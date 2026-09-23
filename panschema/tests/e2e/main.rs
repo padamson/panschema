@@ -27,9 +27,8 @@ use std::fs;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Duration;
 
-use playwright_rs::{Browser, Page, Playwright};
+use playwright_rs::{Browser, Page, Playwright, expect};
 use tokio::sync::oneshot;
 use tower_http::services::ServeDir;
 
@@ -72,22 +71,19 @@ async fn dom_click(page: &playwright_rs::Page, selector: &str) {
     .unwrap_or_else(|e| panic!("DOM click on `{selector}` failed: {e:?}"));
 }
 
-/// Poll (up to ~12s) until a JS readiness expression is truthy. Robust to
+/// Wait until a JS readiness expression is truthy, polling on animation
+/// frames through the driver with its default 30 s ceiling. Robust to
 /// variable CI load — e.g. a page that renders both a schema graph and a
-/// second instance graph, each loading wasm — where a fixed sleep would
-/// race. Returns `true` once ready, `false` if it never became ready.
-async fn wait_until_ready(page: &playwright_rs::Page, ready_expr: &str) -> bool {
-    let js = format!("(function(){{ return ({ready_expr}) ? 'ready' : 'no'; }})()");
-    // Generous window: the suite launches a browser per test, and a page
-    // can take many seconds to become interactive under that contention.
-    for _ in 0..150 {
-        let r = page.evaluate_value(&js).await.unwrap_or_default();
-        if r.contains("ready") {
-            return true;
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-    false
+/// second instance graph, each loading wasm. An expression that throws
+/// before the page is ready counts as not ready yet. The error names the
+/// cause: the driver's timeout, a closed page, or a bad expression.
+async fn wait_until_ready(
+    page: &playwright_rs::Page,
+    ready_expr: &str,
+) -> Result<(), playwright_rs::Error> {
+    let predicate =
+        format!("() => {{ try {{ return !!({ready_expr}); }} catch (_) {{ return false; }} }}");
+    page.wait_for_function(&predicate, None).await.map(|_| ())
 }
 
 /// A canvas click the drag gate accepts: press on the canvas, release on
@@ -101,7 +97,7 @@ const CLICK_AT_JS: &str = r#"function clickAt(sx, sy) {
 
 /// The schema graph's wasm viz is ready when `__panschema_viz` exists and
 /// node 0 has a canvas position.
-async fn wait_for_graph_viz_ready(page: &playwright_rs::Page) -> bool {
+async fn wait_for_graph_viz_ready(page: &playwright_rs::Page) -> Result<(), playwright_rs::Error> {
     wait_until_ready(
         page,
         "window.__panschema_viz && typeof window.__panschema_viz.node_canvas_pos === 'function' \
@@ -644,22 +640,11 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, site: 
     // click took effect.
     dom_click(&page, ".sidebar-link[href='#classes']").await;
 
-    // Wait for URL hash to update (page.url() now reflects hash changes in 0.8.3)
-    let mut url_updated = false;
-    for _ in 0..20 {
-        // Poll for up to 2 seconds
-        let current_url = page.url();
-        if current_url.contains("#classes") {
-            url_updated = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert!(
-        url_updated,
-        "[{}] URL hash should be #classes after click",
-        browser_name
-    );
+    wait_until_ready(&page, "location.hash === '#classes'")
+        .await
+        .unwrap_or_else(|e| {
+            panic!("[{browser_name}] URL hash should be #classes after click: {e}")
+        });
 
     // Verify classes section exists (the target of the link)
     let classes_section = page.locator("#classes");
@@ -675,25 +660,12 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, site: 
 
     // 7b. Verify scroll spy: after scrolling to #classes, the "Classes" sidebar
     //     link should be active and "Overview" should not.
-    let mut scroll_spy_updated = false;
-    for _ in 0..30 {
-        let classes_active = page
-            .evaluate_value(
-                "document.querySelector('.sidebar-link[href=\"#classes\"]')?.classList.contains('active') ?? false",
-            )
-            .await
-            .unwrap_or_default();
-        if classes_active.contains("true") {
-            scroll_spy_updated = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert!(
-        scroll_spy_updated,
-        "[{}] Scroll spy should mark Classes sidebar link as active after scrolling to #classes",
-        browser_name
-    );
+    wait_until_ready(
+        &page,
+        "document.querySelector('.sidebar-link[href=\"#classes\"]')?.classList.contains('active') ?? false",
+    )
+    .await
+    .unwrap_or_else(|e| panic!("[{browser_name}] Scroll spy should mark Classes sidebar link as active after scrolling to #classes: {e}"));
 
     // Metadata should no longer be active
     let metadata_active = page
@@ -740,9 +712,7 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, site: 
     );
 
     // 8a-1. Classes default to the tree view: Mammal's card is
-    // stacked below Animal's and indented under it. Wait for layout
-    // to settle after the resize.
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // stacked below Animal's and indented under it.
     let animal_box = page
         .locator("#class-Animal")
         .bounding_box()
@@ -804,7 +774,10 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, site: 
         .click(None)
         .await
         .expect("Failed to click the Flat toggle");
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    expect(page.locator("#class-cards"))
+        .to_have_attribute("data-view", "flat")
+        .await
+        .expect("the Flat toggle switches the card grid to the flat view");
     let animal_flat_box = page
         .locator("#class-Animal")
         .bounding_box()
@@ -830,7 +803,10 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, site: 
         .click(None)
         .await
         .expect("Failed to click the Tree toggle");
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    expect(page.locator("#class-cards"))
+        .to_have_attribute("data-view", "tree")
+        .await
+        .expect("the Tree toggle restores the tree view");
 
     // 8a-2. Graph container's aspect ratio matches the writer's
     // default (16:8) within 5% — derived dynamically rather than
@@ -863,18 +839,12 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, site: 
     .await
     .expect("Failed to set mobile viewport");
 
-    // Give CSS time to respond to viewport change
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    let toggle_visible_mobile = mobile_toggle
-        .is_visible()
+    expect(mobile_toggle.clone())
+        .to_be_visible()
         .await
-        .expect("Failed to check toggle visibility on mobile");
-    assert!(
-        toggle_visible_mobile,
-        "[{}] Mobile menu toggle should be visible on mobile viewport",
-        browser_name
-    );
+        .unwrap_or_else(|e| {
+            panic!("[{browser_name}] Mobile menu toggle should be visible on mobile viewport: {e}")
+        });
 
     // 8b-1. On a narrow viewport (375px) the card grid collapses to
     // one column — successive class cards stack rather than sharing
@@ -907,18 +877,9 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, site: 
         .await
         .expect("Failed to click mobile menu toggle");
 
-    // Wait for sidebar to become visible after toggle click
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
-    let sidebar_visible_after_toggle = sidebar
-        .is_visible()
-        .await
-        .expect("Failed to check sidebar visibility after toggle");
-    assert!(
-        sidebar_visible_after_toggle,
-        "[{}] Sidebar should be visible after clicking mobile menu toggle",
-        browser_name
-    );
+    expect(sidebar).to_be_visible().await.unwrap_or_else(|e| {
+        panic!("[{browser_name}] Sidebar should be visible after clicking mobile menu toggle: {e}")
+    });
 
     // === GRAPH VISUALIZATION TESTS ===
 
@@ -1117,24 +1078,11 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, site: 
         browser_name
     );
 
-    // Wait for canvas to be displayed (static fallback should show it)
-    let mut canvas_visible = false;
-    for _ in 0..20 {
-        let visible = canvas
-            .is_visible()
-            .await
-            .expect("Failed to check canvas visibility");
-        if visible {
-            canvas_visible = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert!(
-        canvas_visible,
-        "[{}] Graph canvas should become visible",
-        browser_name
-    );
+    // The static fallback shows the canvas even without wasm.
+    expect(canvas.clone())
+        .to_be_visible()
+        .await
+        .unwrap_or_else(|e| panic!("[{browser_name}] Graph canvas should become visible: {e}"));
 
     // 11. The graph badge reads `nodes / edges`, the same format every graph
     // count uses, with the spelled-out reading carried as a label.
@@ -1278,9 +1226,6 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, site: 
     .await
     .expect("Failed to set desktop viewport for graph tests");
 
-    // Give time for viewport change
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
     // Scroll to graph section to ensure buttons are visible
     page.evaluate::<(), ()>(
         // Driver 1.62.1+: scrollIntoView() evaluates to a result object
@@ -1290,7 +1235,6 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, site: 
     )
     .await
     .expect("Failed to scroll to graph section");
-    tokio::time::sleep(Duration::from_millis(200)).await;
 
     // 20. Test zoom button interaction - click zoom in and verify no errors
     let zoom_in_btn = page.locator("#graph-zoom-in");
@@ -1298,7 +1242,6 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, site: 
         .click(None)
         .await
         .expect("Failed to click zoom in button");
-    tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Verify no error overlay appeared after zoom
     let error_overlay = page.locator("#graph-error");
@@ -1318,7 +1261,6 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, site: 
         .click(None)
         .await
         .expect("Failed to click zoom out button");
-    tokio::time::sleep(Duration::from_millis(100)).await;
 
     // 22. Test reset button
     let reset_button = page.locator("#graph-reset");
@@ -1326,7 +1268,6 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, site: 
         .click(None)
         .await
         .expect("Failed to click reset button");
-    tokio::time::sleep(Duration::from_millis(100)).await;
 
     // 23. Verify canvas has non-zero dimensions (was actually rendered)
     let canvas_width = page
@@ -1435,21 +1376,9 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, site: 
         .await
         .expect("Failed to click Schema Graph sidebar link");
 
-    // Wait for URL hash to update
-    let mut graph_url_updated = false;
-    for _ in 0..20 {
-        let current_url = page.url();
-        if current_url.contains("#graph-visualization") {
-            graph_url_updated = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert!(
-        graph_url_updated,
-        "[{}] URL hash should be #graph-visualization after clicking sidebar link",
-        browser_name
-    );
+    wait_until_ready(&page, "location.hash === '#graph-visualization'")
+        .await
+        .unwrap_or_else(|e| panic!("[{browser_name}] URL hash should be #graph-visualization after clicking sidebar link: {e}"));
 
     // === SELECTION TESTS ===
 
@@ -1463,7 +1392,6 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, site: 
     )
     .await
     .expect("Failed to scroll to graph for selection test");
-    tokio::time::sleep(Duration::from_millis(300)).await;
 
     // Get initial selection state (should be -1 = no selection)
     let initial_selection = page
@@ -1481,7 +1409,6 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, site: 
         .click(None)
         .await
         .expect("Failed to click canvas for selection");
-    tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Get selection state after click
     let selection_after_click = page
@@ -1503,7 +1430,6 @@ async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, site: 
     )
     .await
     .expect("Failed to call deselect");
-    tokio::time::sleep(Duration::from_millis(100)).await;
 
     let selection_after_deselect = page
         .evaluate_value("typeof viz !== 'undefined' && viz.selected_node_index ? viz.selected_node_index() : -1")
@@ -1575,10 +1501,7 @@ fn e2e_click_pins_node_card_keeping_selection() {
 
         // Wait for the wasm graph to be interrogable (robust to CI load),
         // then click node 0 at its canvas position through the real handler.
-        assert!(
-            wait_for_graph_viz_ready(&page).await,
-            "schema graph viz never became ready"
-        );
+        wait_for_graph_viz_ready(&page).await.expect("schema graph viz never became ready");
         let clicked = page
             .evaluate_value(
                 r#"(function(){
@@ -1597,7 +1520,7 @@ fn e2e_click_pins_node_card_keeping_selection() {
             .await
             .unwrap_or_default();
         assert!(clicked.contains("clicked"), "expected to click a node; got: {clicked}");
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        wait_until_ready(&page, "document.getElementById('graph-hover-card').classList.contains('graph-hover-pinned')").await.expect("the clicked node's card never pinned");
 
         // The card is now pinned (persistent) with a visible close button.
         let card = page.locator("#graph-hover-card");
@@ -1629,15 +1552,10 @@ fn e2e_click_pins_node_card_keeping_selection() {
             .click(None)
             .await
             .expect("click close");
-        tokio::time::sleep(Duration::from_millis(150)).await;
-        assert!(
-            !page
-                .locator("#graph-hover-card")
-                .is_visible()
-                .await
-                .expect("visible after close"),
-            "card should hide after ×"
-        );
+        expect(page.locator("#graph-hover-card"))
+            .to_be_hidden()
+            .await
+            .expect("card should hide after ×");
         let sel_after = page
             .evaluate_value("window.__panschema_viz.selected_node_index()")
             .await
@@ -1664,10 +1582,7 @@ fn e2e_edge_hover_shows_the_triple_and_its_kind_blurb() {
         page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
-        assert!(
-            wait_for_graph_viz_ready(&page).await,
-            "schema graph viz never became ready"
-        );
+        wait_for_graph_viz_ready(&page).await.expect("schema graph viz never became ready");
 
         let states = page
             .evaluate_value(
@@ -1728,10 +1643,7 @@ fn e2e_node_hover_reuses_the_doc_card_in_full_mode() {
         page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
-        assert!(
-            wait_for_graph_viz_ready(&page).await,
-            "schema graph viz never became ready"
-        );
+        wait_for_graph_viz_ready(&page).await.expect("schema graph viz never became ready");
 
         let states = page
             .evaluate_value(
@@ -1789,10 +1701,7 @@ fn e2e_pinned_card_is_draggable_by_its_handle() {
             .expect("goto");
 
         // Wait for the wasm graph to be interrogable, then pin node 0.
-        assert!(
-            wait_for_graph_viz_ready(&page).await,
-            "schema graph viz never became ready"
-        );
+        wait_for_graph_viz_ready(&page).await.expect("schema graph viz never became ready");
         let clicked = page
             .evaluate_value(
                 r#"(function(){
@@ -1811,7 +1720,7 @@ fn e2e_pinned_card_is_draggable_by_its_handle() {
             .await
             .unwrap_or_default();
         assert!(clicked.contains("clicked"), "expected to pin a node; got: {clicked}");
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        wait_until_ready(&page, "document.getElementById('graph-hover-card').classList.contains('graph-hover-pinned')").await.expect("the clicked node's card never pinned");
 
         // Drag the handle to a fixed in-viewport target and report the
         // before/after card position plus the handler-expected target.
@@ -1886,10 +1795,7 @@ fn e2e_hovering_a_rule_entry_highlights_participant_nodes() {
 
         // Poll until the wasm graph is loaded and laid out — a fixed sleep
         // flakes as `no-viz` under CI load.
-        assert!(
-            wait_for_graph_viz_ready(&page).await,
-            "graph viz never became ready"
-        );
+        wait_for_graph_viz_ready(&page).await.expect("graph viz never became ready");
 
         // Hovering the rule entry highlights its participant nodes.
         let count = page
@@ -1978,10 +1884,7 @@ fn e2e_rule_touched_nodes_draw_a_persistent_amber_ring() {
 
         // Poll until the wasm graph is loaded and laid out — a fixed sleep
         // flakes as `no-viz` under CI load.
-        assert!(
-            wait_for_graph_viz_ready(&page).await,
-            "graph viz never became ready"
-        );
+        wait_for_graph_viz_ready(&page).await.expect("graph viz never became ready");
 
         // Assert the governed set resolved and its ring paints: scan the
         // canvas pixels in a box around the governed node for amber. No
@@ -2050,10 +1953,9 @@ fn e2e_external_grounding_paints_a_muted_node() {
             .await
             .expect("goto");
 
-        assert!(
-            wait_for_graph_viz_ready(&page).await,
-            "graph viz never became ready"
-        );
+        wait_for_graph_viz_ready(&page)
+            .await
+            .expect("graph viz never became ready");
 
         // Find the external node, then sample the canvas around it for the
         // muted grey fill (roughly equal r/g/b, b highest) — the blue class
@@ -2118,10 +2020,7 @@ fn e2e_groundings_toggle_hides_external_nodes() {
             .await
             .expect("goto");
 
-        assert!(
-            wait_for_graph_viz_ready(&page).await,
-            "graph viz never became ready"
-        );
+        wait_for_graph_viz_ready(&page).await.expect("graph viz never became ready");
 
         // The toggle is revealed only when external nodes exist.
         let visible = page
@@ -2285,10 +2184,7 @@ fn e2e_external_node_hover_shows_iri_and_definition_and_legend_documents_it() {
             .await
             .expect("goto");
 
-        assert!(
-            wait_for_graph_viz_ready(&page).await,
-            "graph viz never became ready"
-        );
+        wait_for_graph_viz_ready(&page).await.expect("graph viz never became ready");
 
         // Hover the external node with a real mousemove over the canvas so
         // the DOM hover card fills, then read its text.
@@ -2411,10 +2307,9 @@ fn e2e_instance_graph_renders_individuals_beneath_the_cards() {
         );
 
         // Wait for the instance viz to load its (separate) wasm module.
-        assert!(
-            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
-            "instance graph viz never became ready"
-        );
+        wait_until_ready(&page, "!!window.__panschema_instance_viz")
+            .await
+            .expect("instance graph viz never became ready");
 
         // The viz initialized and its canvas painted the individual
         // nodes — class-colored per the shared vocabulary, probed as the
@@ -2508,14 +2403,8 @@ fn e2e_data_only_composition_boots_the_instance_viz() {
             1,
             "the instance canvas renders"
         );
-        assert!(
-            wait_until_ready(&page, "!!window.PanschemaGraphShell").await,
-            "the graph shell script must load on a data-only page"
-        );
-        assert!(
-            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
-            "instance graph viz never became ready on the data-only page"
-        );
+        wait_until_ready(&page, "!!window.PanschemaGraphShell").await.expect("the graph shell script must load on a data-only page");
+        wait_until_ready(&page, "!!window.__panschema_instance_viz").await.expect("instance graph viz never became ready on the data-only page");
     });
 }
 
@@ -2583,10 +2472,7 @@ fn e2e_instance_dataset_selector_switches_cards_and_graph() {
         // the next hover shows the new dataset's node, not the old one's
         // cached under the same index. Activating the tab from script keeps
         // the pointer on the canvas, as a keyboard switch does.
-        assert!(
-            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
-            "instance graph viz never became ready"
-        );
+        wait_until_ready(&page, "!!window.__panschema_instance_viz").await.expect("instance graph viz never became ready");
         let swap = page
             .evaluate_value(
                 r#"(function(){
@@ -2682,10 +2568,7 @@ fn e2e_instance_dataset_selector_switches_cards_and_graph() {
         // The canvas is re-initialized over the newly selected A-box. The viz
         // may still have been loading when the tab was clicked; whenever it
         // lands it paints the dataset that is active by then.
-        assert!(
-            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
-            "instance graph viz never became ready"
-        );
+        wait_until_ready(&page, "!!window.__panschema_instance_viz").await.expect("instance graph viz never became ready");
         assert_eq!(
             page.evaluate_value("window.__panschema_instance_active")
                 .await
@@ -2744,14 +2627,8 @@ fn e2e_instance_graph_has_hover_card_and_toolbar_parity() {
         page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
-        assert!(
-            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
-            "instance graph viz never became ready"
-        );
-        assert!(
-            wait_for_graph_viz_ready(&page).await,
-            "schema graph viz never became ready"
-        );
+        wait_until_ready(&page, "!!window.__panschema_instance_viz").await.expect("instance graph viz never became ready");
+        wait_for_graph_viz_ready(&page).await.expect("schema graph viz never became ready");
 
         let wasm_fetches = page
             .evaluate_value(
@@ -2948,10 +2825,7 @@ fn e2e_instance_graph_nodes_are_draggable() {
         page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
-        assert!(
-            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
-            "instance graph viz never became ready"
-        );
+        wait_until_ready(&page, "!!window.__panschema_instance_viz").await.expect("instance graph viz never became ready");
 
         let dragged = page
             .evaluate_value(
@@ -3010,10 +2884,9 @@ fn e2e_instance_graph_click_pins_the_card_and_empty_space_deselects() {
         page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
-        assert!(
-            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
-            "instance graph viz never became ready"
-        );
+        wait_until_ready(&page, "!!window.__panschema_instance_viz")
+            .await
+            .expect("instance graph viz never became ready");
 
         let states = page
             .evaluate_value(
@@ -3071,10 +2944,7 @@ fn e2e_instance_pinned_card_closes_by_its_button_keeping_selection() {
         page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
-        assert!(
-            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
-            "instance graph viz never became ready"
-        );
+        wait_until_ready(&page, "!!window.__panschema_instance_viz").await.expect("instance graph viz never became ready");
 
         let states = page
             .evaluate_value(
@@ -3143,10 +3013,9 @@ fn e2e_instance_graph_selection_survives_pointer_jitter_and_escape_deselects() {
         page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
-        assert!(
-            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
-            "instance graph viz never became ready"
-        );
+        wait_until_ready(&page, "!!window.__panschema_instance_viz")
+            .await
+            .expect("instance graph viz never became ready");
 
         let states = page
             .evaluate_value(
@@ -3233,10 +3102,7 @@ fn e2e_typed_instance_graph_renders_class_symbols_and_shared_values() {
             .await
             .expect("goto");
 
-        assert!(
-            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
-            "instance graph viz never became ready"
-        );
+        wait_until_ready(&page, "!!window.__panschema_instance_viz").await.expect("instance graph viz never became ready");
 
         // The wire document carries the typed encoding: two shared value
         // nodes (red, white — unused rose mints nothing), each red wine
@@ -3351,7 +3217,6 @@ fn e2e_legends_adapt_to_what_each_graph_contains() {
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let server_handle = tokio::spawn(start_server(output_dir.to_path_buf(), listener, shutdown_rx));
-        tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch().await.expect("playwright");
         let browser = playwright.chromium().launch().await.expect("chromium");
@@ -3360,14 +3225,10 @@ fn e2e_legends_adapt_to_what_each_graph_contains() {
             .await
             .expect("goto");
 
-        assert!(
-            wait_until_ready(
+        wait_until_ready(
                 &page,
                 "!!window.__panschema_instance_viz && !!window.__panschema_viz"
-            )
-            .await,
-            "both graph visualizations should come up"
-        );
+            ).await.expect("both graph visualizations should come up");
 
         // The summary is built from the same row selectors the drawing
         // uses, so these assertions are assertions about the drawn key.
@@ -3433,16 +3294,12 @@ fn e2e_legends_adapt_to_what_each_graph_contains() {
             attr_listener,
             attr_shutdown_rx,
         ));
-        tokio::time::sleep(Duration::from_millis(100)).await;
         let attr_page = browser.new_page().await.expect("attributes-only page");
         attr_page
             .goto(&format!("http://127.0.0.1:{attr_port}/index.html"), None)
             .await
             .expect("goto attributes-only docs");
-        assert!(
-            wait_for_graph_viz_ready(&attr_page).await,
-            "attributes-only schema graph should become ready"
-        );
+        wait_for_graph_viz_ready(&attr_page).await.expect("attributes-only schema graph should become ready");
         let attr_summary = attr_page
             .evaluate_value(
                 r#"(function(){
@@ -3551,16 +3408,12 @@ fn e2e_instance_graph_is_explorable_like_the_schema_graph() {
             .await
             .expect("goto");
 
-        assert!(
-            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
-            "instance graph viz never became ready"
-        );
+        wait_until_ready(&page, "!!window.__panschema_instance_viz").await.expect("instance graph viz never became ready");
 
         // Viewport fill: after the layout settles and the camera fits, the
         // painted content spans a substantial share of the canvas rather than
         // clustering in one corner.
-        assert!(
-            wait_until_ready(
+        wait_until_ready(
                 &page,
                 r#"(function(){
                     var c = document.getElementById('instance-graph-canvas');
@@ -3592,9 +3445,8 @@ fn e2e_instance_graph_is_explorable_like_the_schema_graph() {
                         Math.abs(cy - c.height / 2) < c.height * 0.25;
                 })()"#
             )
-            .await,
-            "the settled instance graph should fill and center in its viewport"
-        );
+        .await
+        .expect("the settled instance graph should fill and center in its viewport");
 
         // Reset recovers from a far pan: after shoving the camera away, the
         // painted graph returns to a fitted, centered view.
@@ -3607,8 +3459,7 @@ fn e2e_instance_graph_is_explorable_like_the_schema_graph() {
             .click(None)
             .await
             .expect("click reset");
-        assert!(
-            wait_until_ready(
+        wait_until_ready(
                 &page,
                 r#"(function(){
                     var c = document.getElementById('instance-graph-canvas');
@@ -3635,9 +3486,8 @@ fn e2e_instance_graph_is_explorable_like_the_schema_graph() {
                         Math.abs(cy - c.height / 2) < c.height * 0.25;
                 })()"#
             )
-            .await,
-            "reset should re-fit and re-center the panned-away graph"
-        );
+        .await
+        .expect("reset should re-fit and re-center the panned-away graph");
 
         // The layout picker is present with the same options as the schema
         // graph's, and choosing another implemented layout re-creates the viz.
@@ -3660,14 +3510,10 @@ fn e2e_instance_graph_is_explorable_like_the_schema_graph() {
             .await
             .unwrap_or_default();
         assert!(switched.contains("changed"), "picker change failed: {switched}");
-        assert!(
-            wait_until_ready(
+        wait_until_ready(
                 &page,
                 "window.__panschema_instance_viz && window.__panschema_instance_viz !== window.__instance_viz_before"
-            )
-            .await,
-            "choosing a layout should re-create the instance viz"
-        );
+            ).await.expect("choosing a layout should re-create the instance viz");
 
         // Focus-on-hover: hovering a node focuses its neighborhood, exactly
         // as the schema graph does.
@@ -3801,10 +3647,9 @@ fn e2e_instance_graph_renders_from_linkml_data() {
             "two wines + two wineries + two produced_by edges; got {counts}"
         );
 
-        assert!(
-            wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
-            "instance graph viz never became ready"
-        );
+        wait_until_ready(&page, "!!window.__panschema_instance_viz")
+            .await
+            .expect("instance graph viz never became ready");
 
         // The canvas painted the teal individual nodes (RGB ~ 41,184,179) —
         // proof the LinkML-sourced A-box actually renders.
@@ -3863,10 +3708,9 @@ fn e2e_is_a_heavy_schema_auto_defaults_to_hierarchical() {
         // its markup default until the module sets the resolved layout, so a
         // fixed sleep asserts the default on any machine slower than the one
         // the number was picked on.
-        assert!(
-            wait_until_ready(&page, "!!window.__panschema_viz").await,
-            "the schema viz should boot"
-        );
+        wait_until_ready(&page, "!!window.__panschema_viz")
+            .await
+            .expect("the schema viz should boot");
         let select = page.locator("#graph-layout-select");
         let value = select
             .input_value(None)
@@ -4165,9 +4009,15 @@ async fn capture_scale_screenshot(
     let url = format!("{SITE_ORIGIN}/index.html");
     page.goto(&url, None).await.expect("Failed to navigate");
 
-    // wasm load + canvas wire-up + 300-tick settle (~5s at 60fps) +
-    // some headroom for slower viewports.
-    tokio::time::sleep(Duration::from_millis(8000)).await;
+    // The layout is scored, so capture a settled view: the shell refits the
+    // camera on a fixed tick schedule that ends at tick 300, and the camera
+    // then eases to the last fit.
+    wait_for_graph_viz_ready(&page)
+        .await
+        .expect("graph viz never became ready for the screenshot");
+    wait_until_ready(&page, "window.__panschema_viz_settled()")
+        .await
+        .expect("the graph never settled after its refit schedule");
 
     let container = page.locator(".graph-container");
 

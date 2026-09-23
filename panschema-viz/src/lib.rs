@@ -191,6 +191,12 @@ impl Visualization {
         self.renderer.update_animation();
     }
 
+    /// Whether the camera is still easing toward a fit or reset target,
+    /// so a caller can tell a settled view from one mid-transition.
+    pub fn is_animating(&self) -> bool {
+        self.renderer.is_animating()
+    }
+
     /// Render the current state
     pub fn render(&self) {
         // Compute connected nodes for focus mode

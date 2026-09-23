@@ -438,6 +438,11 @@ impl Canvas2DRenderer {
         self.camera.update_animation();
     }
 
+    /// Whether the camera is still easing toward a fit or reset target.
+    pub fn is_animating(&self) -> bool {
+        self.camera.is_animating
+    }
+
     /// Canvas-space position of a world point, using the same camera
     /// transform that places the node. Exposed so a test can dispatch a
     /// real pointer event at a node without guessing screen coordinates.

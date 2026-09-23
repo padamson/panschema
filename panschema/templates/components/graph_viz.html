@@ -814,6 +814,9 @@
         // don't read this — they hold their own `viz` reference inside
         // the IIFE.
         window.__panschema_viz = viz;
+        // Same audience: true once the refit schedule has run and the camera
+        // has finished easing, so a capture reads a settled view.
+        window.__panschema_viz_settled = () => refitter.isDone() && !viz.is_animating();
 
         // Update node count display
         if (nodeCount) {
