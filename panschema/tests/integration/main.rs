@@ -272,8 +272,8 @@ fn a_misnamed_dataset_says_what_the_package_publishes() {
 
 #[test]
 fn class_card_surfaces_mixins_slots_and_resolved_xrefs() {
-    let output_dir = std::env::temp_dir().join("panschema_class_card_dogfood");
-    let _ = fs::remove_dir_all(&output_dir);
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let output_dir = scratch.path();
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "generate",
@@ -378,9 +378,8 @@ classes:
       wasGeneratedBy:
         range: QuestionFormation
 "#;
-    let tmp = std::env::temp_dir().join("panschema_xwriter_consistency");
-    let _ = fs::remove_dir_all(&tmp);
-    fs::create_dir_all(&tmp).unwrap();
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let tmp = scratch.path();
     let schema_path = tmp.join("schema.yaml");
     fs::write(&schema_path, schema_yaml).unwrap();
     let output_dir = tmp.join("out");
@@ -433,8 +432,6 @@ classes:
         was_generated_by["range"], "QuestionFormation",
         "hover payload must carry the refined range, matching the class card"
     );
-
-    let _ = fs::remove_dir_all(tmp);
 }
 
 #[test]
@@ -444,8 +441,8 @@ fn every_graph_node_has_a_matching_html_card() {
     // last resort. This pins the invariant that makes that reuse safe:
     // every graph node id `<kind>:<name>` has a matching card element, so
     // the fallback is never the real render path.
-    let output_dir = std::env::temp_dir().join("panschema_node_card_correspondence");
-    let _ = fs::remove_dir_all(&output_dir);
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let output_dir = scratch.path();
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "generate",
@@ -485,8 +482,8 @@ fn every_graph_node_has_a_matching_html_card() {
 
 #[test]
 fn generates_documentation_from_reference_ontology() {
-    let output_dir = std::env::temp_dir().join("panschema_integration_test");
-    let _ = fs::remove_dir_all(&output_dir);
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let output_dir = scratch.path();
 
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
@@ -548,9 +545,6 @@ fn generates_documentation_from_reference_ontology() {
         html.contains("subclass_of"),
         "Missing subclass_of edges in graph data"
     );
-
-    // Cleanup
-    let _ = fs::remove_dir_all(output_dir);
 }
 
 #[test]
@@ -560,8 +554,8 @@ fn classes_section_renders_is_a_hierarchy_with_flat_toggle() {
     // descendants) flat alongside; the Flat/Tree toggle and the
     // alphabetical order ranks the flat view sorts by are part of the
     // same page.
-    let output_dir = std::env::temp_dir().join("panschema_class_tree_test");
-    let _ = fs::remove_dir_all(&output_dir);
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let output_dir = scratch.path();
 
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
@@ -650,14 +644,12 @@ fn classes_section_renders_is_a_hierarchy_with_flat_toggle() {
         html.contains("panschema-classes-view"),
         "view preference persists via localStorage key"
     );
-
-    let _ = fs::remove_dir_all(output_dir);
 }
 
 #[test]
 fn generates_documentation_from_linkml_yaml() {
-    let output_dir = std::env::temp_dir().join("panschema_yaml_integration_test");
-    let _ = fs::remove_dir_all(&output_dir);
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let output_dir = scratch.path();
 
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
@@ -696,9 +688,6 @@ fn generates_documentation_from_linkml_yaml() {
     assert!(html.contains("Person"), "Missing Person class");
     assert!(html.contains("Organization"), "Missing Organization class");
     assert!(html.contains("A human being"), "Missing Person description");
-
-    // Cleanup
-    let _ = fs::remove_dir_all(output_dir);
 }
 
 #[test]
@@ -707,9 +696,8 @@ fn owl_roundtrip_preserves_schema() {
     use std::path::PathBuf;
 
     let input_path = PathBuf::from("tests/fixtures/reference.ttl");
-    let output_dir = std::env::temp_dir().join("panschema_owl_roundtrip_test");
-    let _ = fs::remove_dir_all(&output_dir);
-    fs::create_dir_all(&output_dir).expect("Failed to create output dir");
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let output_dir = scratch.path();
 
     let output_path = output_dir.join("roundtrip.ttl");
 
@@ -805,15 +793,12 @@ fn owl_roundtrip_preserves_schema() {
         Some("hasOwner"),
         "owl:inverseOf must survive round-trip"
     );
-
-    // Cleanup
-    let _ = fs::remove_dir_all(output_dir);
 }
 
 #[test]
 fn no_graph_flag_disables_graph_visualization() {
-    let output_dir = std::env::temp_dir().join("panschema_no_graph_test");
-    let _ = fs::remove_dir_all(&output_dir);
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let output_dir = scratch.path();
 
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
@@ -843,15 +828,12 @@ fn no_graph_flag_disables_graph_visualization() {
         !html.contains("graph-visualization"),
         "Graph visualization section should not be present with --no-graph"
     );
-
-    // Cleanup
-    let _ = fs::remove_dir_all(output_dir);
 }
 
 #[test]
 fn generate_instances_renders_linkml_data_as_the_instance_graph() {
-    let output_dir = std::env::temp_dir().join("panschema_linkml_instances_test");
-    let _ = fs::remove_dir_all(&output_dir);
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let output_dir = scratch.path();
 
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
@@ -904,8 +886,6 @@ fn generate_instances_renders_linkml_data_as_the_instance_graph() {
                 && e["label"] == "produced_by"),
         "the produced_by edge should connect the wine to its winery, got {edges:?}"
     );
-
-    let _ = fs::remove_dir_all(output_dir);
 }
 
 #[test]
@@ -914,8 +894,8 @@ fn generate_reports_conformance_violations_in_the_instance_data() {
     // reference-integrity check can't see. Embedding an A-box into an output
     // must report it, not just dangling references — otherwise a broken
     // exemplar publishes onto a docs site silently.
-    let dir = std::env::temp_dir().join("panschema_instance_conformance_test");
-    let _ = fs::remove_dir_all(&dir);
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let dir = scratch.path();
 
     let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
@@ -955,14 +935,12 @@ fn generate_reports_conformance_violations_in_the_instance_data() {
         !out.status.success(),
         "--strict must fail on a non-conforming A-box"
     );
-
-    let _ = fs::remove_dir_all(dir);
 }
 
 #[test]
 fn generate_carries_several_curated_instance_graphs() {
-    let output_dir = std::env::temp_dir().join("panschema_multi_instances_test");
-    let _ = fs::remove_dir_all(&output_dir);
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let output_dir = scratch.path();
 
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
@@ -1024,15 +1002,12 @@ fn generate_carries_several_curated_instance_graphs() {
         4,
         "the worked example carries its own four records"
     );
-
-    let _ = fs::remove_dir_all(output_dir);
 }
 
 #[test]
 fn single_a_box_formats_reject_several_instances_files() {
-    let dir = std::env::temp_dir().join("panschema_multi_instances_reject_test");
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).expect("mkdir");
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let dir = scratch.path();
 
     // ttl folds one A-box into the emitted graph; several files have no
     // unambiguous meaning, so the build must say so rather than pick one.
@@ -1061,15 +1036,12 @@ fn single_a_box_formats_reject_several_instances_files() {
         stderr.contains("single instance graph") && stderr.contains("HTML"),
         "the error should explain the limit and the alternative; got: {stderr}"
     );
-
-    let _ = fs::remove_dir_all(dir);
 }
 
 #[test]
 fn instances_flag_warns_only_for_formats_that_ignore_it() {
-    let dir = std::env::temp_dir().join("panschema_instances_warn_test");
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).expect("mkdir");
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let dir = scratch.path();
 
     // With --instances on a format that consumes neither the graph nor the
     // A-box (e.g. rust), the flag is ignored — warn so the omission isn't
@@ -1133,8 +1105,6 @@ fn instances_flag_warns_only_for_formats_that_ignore_it() {
         !stderr.contains("--instances"),
         "no --instances warning should appear without the flag; got: {stderr}"
     );
-
-    let _ = fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -1263,8 +1233,8 @@ fn rendered_docs_carry_scoped_and_shared_iris_side_by_side() {
     // catalogue it references. The estate's record must be scoped under its
     // root, the shared record must not be, and the estate's reference must
     // resolve to the IRI the catalogue actually mints.
-    let dir = std::env::temp_dir().join("panschema_scoped_render_test");
-    let _ = fs::remove_dir_all(&dir);
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let dir = scratch.path();
     let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "generate",
@@ -1297,7 +1267,6 @@ fn rendered_docs_carry_scoped_and_shared_iris_side_by_side() {
         !html.contains("estate/acme/catalog"),
         "and the CURIE-named shared record is never nested under a scope"
     );
-    let _ = fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -1389,8 +1358,8 @@ fn cross_graph_reference_verifies_clean_and_is_summarized() {
 
 #[test]
 fn dangling_instance_reference_warns_and_fails_under_strict() {
-    let dir = std::env::temp_dir().join("panschema_instance_dangling_test");
-    let _ = fs::remove_dir_all(&dir);
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let dir = scratch.path();
 
     // A wine references a winery the data file doesn't define. Without
     // --strict, generation succeeds but warns, naming the dangling reference.
@@ -1431,8 +1400,6 @@ fn dangling_instance_reference_warns_and_fails_under_strict() {
         !out.status.success(),
         "--strict must fail on a dangling instance reference"
     );
-
-    let _ = fs::remove_dir_all(dir);
 }
 
 // ========== RDF Format Integration Tests ==========
@@ -1443,10 +1410,8 @@ fn instance_graph_json_renders_the_abox_as_its_own_artifact() {
     // graph has its own format id, and --output names exactly the file
     // produced — instance-kinded, nodes carrying the same minted IRIs the
     // RDF A-box uses.
-    let out_file = std::env::temp_dir().join(format!(
-        "panschema_instancegraph_{}.json",
-        std::process::id()
-    ));
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let out_file = scratch.path().join("instancegraph.json");
     let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "generate",
@@ -1481,17 +1446,14 @@ fn instance_graph_json_renders_the_abox_as_its_own_artifact() {
         uris.contains(&"https://example.org/wine/chateauMorgon"),
         "instance nodes should carry minted IRIs; got: {uris:?}"
     );
-    let _ = fs::remove_file(&out_file);
 }
 
 #[test]
 fn graph_json_stays_a_single_schema_document() {
     // The schema graph keeps its format id and single-document output —
     // supplying --instances doesn't graft an A-box onto it.
-    let out_file = std::env::temp_dir().join(format!(
-        "panschema_graphjson_plain_{}.json",
-        std::process::id()
-    ));
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let out_file = scratch.path().join("graphjson_plain.json");
     let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "generate",
@@ -1523,7 +1485,6 @@ fn graph_json_stays_a_single_schema_document() {
             .all(|n| n["node_type"] != "individual"),
         "the schema document must stay T-box-only"
     );
-    let _ = fs::remove_file(&out_file);
 }
 
 #[test]
@@ -1531,12 +1492,9 @@ fn rdf_family_with_instances_emits_the_abox() {
     // Every RDF-family format accepts --instances and carries the A-box:
     // the minted individual IRI appears in each serialization, so a triple
     // store loading any of them sees the same knowledge graph.
+    let scratch = tempfile::tempdir().expect("tempdir");
     for format in ["ttl", "jsonld", "rdfxml", "ntriples"] {
-        let out_file = std::env::temp_dir().join(format!(
-            "panschema_abox_{}_{}.out",
-            std::process::id(),
-            format
-        ));
+        let out_file = scratch.path().join(format!("abox.{format}"));
         let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
             .args([
                 "generate",
@@ -1565,16 +1523,13 @@ fn rdf_family_with_instances_emits_the_abox() {
             "{format} output should carry the minted individual IRI; got:\n{}",
             &content[..content.len().min(800)]
         );
-        let _ = fs::remove_file(&out_file);
     }
 }
 
 #[test]
 fn rdf_with_dangling_instance_reference_fails_under_strict() {
-    let out_file = std::env::temp_dir().join(format!(
-        "panschema_abox_dangling_{}.ttl",
-        std::process::id()
-    ));
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let out_file = scratch.path().join("abox_dangling.ttl");
     let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
             "generate",
@@ -1601,14 +1556,12 @@ fn rdf_with_dangling_instance_reference_fails_under_strict() {
             && stderr.contains("names no instance"),
         "stderr should name the referring slot and the missing target; got: {stderr}"
     );
-    let _ = fs::remove_file(&out_file);
 }
 
 #[test]
 fn generates_jsonld_via_cli() {
-    let output_dir = std::env::temp_dir().join("panschema_jsonld_test");
-    let _ = fs::remove_dir_all(&output_dir);
-    fs::create_dir_all(&output_dir).expect("Failed to create output dir");
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let output_dir = scratch.path();
 
     let output_path = output_dir.join("output.jsonld");
 
@@ -1638,16 +1591,12 @@ fn generates_jsonld_via_cli() {
         content.contains("http://example.org/panschema/reference"),
         "Missing ontology IRI in JSON-LD"
     );
-
-    // Cleanup
-    let _ = fs::remove_dir_all(output_dir);
 }
 
 #[test]
 fn generates_rdfxml_via_cli() {
-    let output_dir = std::env::temp_dir().join("panschema_rdfxml_test");
-    let _ = fs::remove_dir_all(&output_dir);
-    fs::create_dir_all(&output_dir).expect("Failed to create output dir");
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let output_dir = scratch.path();
 
     let output_path = output_dir.join("output.rdf");
 
@@ -1678,16 +1627,12 @@ fn generates_rdfxml_via_cli() {
         content.contains("http://example.org/panschema/reference"),
         "Missing ontology IRI in RDF/XML"
     );
-
-    // Cleanup
-    let _ = fs::remove_dir_all(output_dir);
 }
 
 #[test]
 fn generates_ntriples_via_cli() {
-    let output_dir = std::env::temp_dir().join("panschema_ntriples_test");
-    let _ = fs::remove_dir_all(&output_dir);
-    fs::create_dir_all(&output_dir).expect("Failed to create output dir");
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let output_dir = scratch.path();
 
     let output_path = output_dir.join("output.nt");
 
@@ -1718,9 +1663,6 @@ fn generates_ntriples_via_cli() {
         content.contains("<http://www.w3.org/2002/07/owl#Ontology>"),
         "Missing owl:Ontology type in N-Triples"
     );
-
-    // Cleanup
-    let _ = fs::remove_dir_all(output_dir);
 }
 
 #[test]
@@ -1729,9 +1671,8 @@ fn all_rdf_formats_produce_equivalent_content() {
     use std::path::PathBuf;
 
     let input_path = PathBuf::from("tests/fixtures/reference.ttl");
-    let output_dir = std::env::temp_dir().join("panschema_rdf_equivalence_test");
-    let _ = fs::remove_dir_all(&output_dir);
-    fs::create_dir_all(&output_dir).expect("Failed to create output dir");
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let output_dir = scratch.path();
 
     let registry = FormatRegistry::with_defaults();
 
@@ -1799,9 +1740,6 @@ fn all_rdf_formats_produce_equivalent_content() {
         nt_content.contains(&format!("<{}>", animal_uri)),
         "N-Triples missing Animal class"
     );
-
-    // Cleanup
-    let _ = fs::remove_dir_all(output_dir);
 }
 
 /// `panschema generate` (no --schema) discovers a `panschema.toml`, walks
@@ -3130,7 +3068,6 @@ instances = ["bench-data.yaml"]
         "a defective declaration fails --strict naming the slot it points at; got:\n{stderr}"
     );
     fs::write(&bench_schema_path, bench_schema).unwrap();
-    let _ = fs::remove_dir_all(&tmp);
 }
 
 /// A benchmark authored with bare anchors expanding against its own
@@ -3210,7 +3147,6 @@ resolve_against = ["catalog"]
         "the absolute spelling verifies identically; got:\n{}",
         String::from_utf8_lossy(&absolute.stderr)
     );
-    let _ = fs::remove_dir_all(&tmp);
 }
 
 /// A defective `asserts_absence` declaration — here a `via_slot` no
@@ -3265,7 +3201,6 @@ ttl = "bench.ttl"
             args.join(" ")
         );
     }
-    let _ = fs::remove_dir_all(&tmp);
 }
 
 /// A manifest naming instance data that isn't there fails loudly, naming the
@@ -3373,9 +3308,8 @@ classes:
       k:
         unique_key_slots: [service_type, offered_by]
 "#;
-    let tmp = std::env::temp_dir().join("panschema_unprojected_gap_test");
-    let _ = fs::remove_dir_all(&tmp);
-    fs::create_dir_all(&tmp).unwrap();
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let tmp = scratch.path();
     let schema_path = tmp.join("schema.yaml");
     fs::write(&schema_path, schema_yaml).unwrap();
 
@@ -3443,8 +3377,6 @@ classes:
         !stderr.contains("does not emit"),
         "html format renders both rules and unique_keys, so it must not warn about the gap; got:\n{stderr}"
     );
-
-    let _ = fs::remove_dir_all(&tmp);
 }
 
 /// `panschema generate --strict` exits non-zero on a dangling reference (here
@@ -3463,9 +3395,8 @@ slots:
   ships_to:
     range: Warehouse
 "#;
-    let tmp = std::env::temp_dir().join("panschema_strict_dangling_test");
-    let _ = fs::remove_dir_all(&tmp);
-    fs::create_dir_all(&tmp).unwrap();
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let tmp = scratch.path();
     let schema_path = tmp.join("schema.yaml");
     fs::write(&schema_path, schema_yaml).unwrap();
 
@@ -3507,8 +3438,6 @@ slots:
         String::from_utf8_lossy(&lax.stderr).contains("Warehouse"),
         "without --strict, the dangling reference must still warn"
     );
-
-    let _ = fs::remove_dir_all(&tmp);
 }
 
 /// A LinkML YAML schema that declares no `default_range` means
@@ -3557,9 +3486,8 @@ fn cli_verify_kind_checks_a_rangeless_slot_via_the_implicit_string_default() {
 /// file does standalone.
 #[test]
 fn cli_generate_strict_fails_on_a_rangeless_property_in_an_imported_turtle_file() {
-    let tmp = std::env::temp_dir().join("panschema_strict_imported_ttl_test");
-    let _ = fs::remove_dir_all(&tmp);
-    fs::create_dir_all(&tmp).unwrap();
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let tmp = scratch.path();
     fs::write(
         tmp.join("vocab.ttl"),
         r#"
@@ -3604,8 +3532,6 @@ ex:label a owl:DatatypeProperty ;
         "the failure must count the untyped slots; got:\n{}",
         String::from_utf8_lossy(&strict.stderr)
     );
-
-    let _ = fs::remove_dir_all(&tmp);
 }
 
 /// An OWL/Turtle property without `rdfs:range` is an untyped slot like any
@@ -3624,9 +3550,8 @@ ex:Server a owl:Class .
 ex:nickname a owl:DatatypeProperty ;
     rdfs:domain ex:Server .
 "#;
-    let tmp = std::env::temp_dir().join("panschema_strict_untyped_ttl_test");
-    let _ = fs::remove_dir_all(&tmp);
-    fs::create_dir_all(&tmp).unwrap();
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let tmp = scratch.path();
     let schema_path = tmp.join("schema.ttl");
     fs::write(&schema_path, schema_ttl).unwrap();
 
@@ -3669,8 +3594,6 @@ ex:nickname a owl:DatatypeProperty ;
         lax_err.contains("nickname") && lax_err.contains("rdfs:range"),
         "the warning must name the slot and the Turtle remediation; got:\n{lax_err}"
     );
-
-    let _ = fs::remove_dir_all(&tmp);
 }
 
 /// `panschema generate` for a schema whose `unique_keys` names a slot the
@@ -3692,9 +3615,8 @@ classes:
       k:
         unique_key_slots: [service_type, ghost]
 "#;
-    let tmp = std::env::temp_dir().join("panschema_unique_key_gap_test");
-    let _ = fs::remove_dir_all(&tmp);
-    fs::create_dir_all(&tmp).unwrap();
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let tmp = scratch.path();
     let schema_path = tmp.join("schema.yaml");
     fs::write(&schema_path, schema_yaml).unwrap();
 
@@ -3718,8 +3640,6 @@ classes:
         !stderr.contains("service_type"),
         "a resolved key slot must not warn; got:\n{stderr}"
     );
-
-    let _ = fs::remove_dir_all(&tmp);
 }
 
 /// `panschema generate` fans out across every populated writer key in
@@ -6413,8 +6333,8 @@ fn init_output_shows_from_provenance_when_from_used() {
 /// alongside the root's own class.
 #[test]
 fn generate_merges_single_import() {
-    let out_dir = std::env::temp_dir().join("panschema_generate_merges_single_import");
-    let _ = fs::remove_dir_all(&out_dir);
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let out_dir = scratch.path();
 
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
@@ -6441,5 +6361,4 @@ fn generate_merges_single_import() {
         html.contains(r##"id="class-Customer""##),
         "the root's own class should still render"
     );
-    let _ = fs::remove_dir_all(&out_dir);
 }

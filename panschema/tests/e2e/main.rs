@@ -44,7 +44,7 @@ fn bind_ephemeral() -> (TcpListener, u16) {
 }
 
 /// Generate documentation to a temporary directory.
-fn generate_docs() -> PathBuf {
+fn generate_docs() -> tempfile::TempDir {
     generate_docs_for("tests/fixtures/reference.ttl")
 }
 
@@ -52,17 +52,9 @@ fn generate_docs() -> PathBuf {
 /// that want a non-default ontology (e.g. the multi-scale screenshot
 /// harness, which writes a synthetic TTL to a tempfile and points
 /// here).
-fn generate_docs_for(fixture_path: &str) -> PathBuf {
-    let output_dir = std::env::temp_dir().join(format!(
-        "panschema_e2e_{}_{}",
-        std::process::id(),
-        fixture_path
-            .rsplit('/')
-            .next()
-            .unwrap_or("default")
-            .replace('.', "_")
-    ));
-    let _ = fs::remove_dir_all(&output_dir);
+fn generate_docs_for(fixture_path: &str) -> tempfile::TempDir {
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let output_dir = scratch.path();
 
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
@@ -76,22 +68,14 @@ fn generate_docs_for(fixture_path: &str) -> PathBuf {
         .expect("Failed to execute panschema");
 
     assert!(status.success(), "panschema failed to generate docs");
-    output_dir
+    scratch
 }
 
 /// Generate docs from a LinkML schema plus a LinkML instance-data file,
 /// rendering the data as the instance graph via `generate --instances`.
-fn generate_docs_with_instances(schema_path: &str, instances_path: &str) -> PathBuf {
-    let output_dir = std::env::temp_dir().join(format!(
-        "panschema_e2e_instances_{}_{}",
-        std::process::id(),
-        schema_path
-            .rsplit('/')
-            .next()
-            .unwrap_or("default")
-            .replace('.', "_")
-    ));
-    let _ = fs::remove_dir_all(&output_dir);
+fn generate_docs_with_instances(schema_path: &str, instances_path: &str) -> tempfile::TempDir {
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let output_dir = scratch.path();
 
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args([
@@ -110,7 +94,7 @@ fn generate_docs_with_instances(schema_path: &str, instances_path: &str) -> Path
         status.success(),
         "panschema failed to generate docs with instances"
     );
-    output_dir
+    scratch
 }
 
 /// Generate docs carrying several curated instance graphs, the
@@ -118,14 +102,9 @@ fn generate_docs_with_instances(schema_path: &str, instances_path: &str) -> Path
 fn generate_docs_with_several_instances(
     schema_path: &str,
     instance_paths: &[&str],
-    tag: &str,
-) -> PathBuf {
-    let output_dir = std::env::temp_dir().join(format!(
-        "panschema_e2e_multi_{}_{}",
-        std::process::id(),
-        tag
-    ));
-    let _ = fs::remove_dir_all(&output_dir);
+) -> tempfile::TempDir {
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let output_dir = scratch.path();
 
     let mut args = vec!["generate", "--schema", schema_path];
     for path in instance_paths {
@@ -143,7 +122,7 @@ fn generate_docs_with_several_instances(
         status.success(),
         "panschema failed to generate docs with several instance graphs"
     );
-    output_dir
+    scratch
 }
 
 /// Click an element through the DOM rather than Playwright's
@@ -1629,17 +1608,16 @@ fn e2e_happy_path() {
     rt.block_on(async {
         // Generate documentation. Nothing is bound or spawned to serve it:
         // each page serves it from this process.
-        let output_dir = generate_docs();
+        let site = generate_docs();
+        let output_dir = site.path();
 
         let playwright = Playwright::launch()
             .await
             .expect("Failed to initialize Playwright");
 
         for browser_name in get_browsers_to_test() {
-            run_happy_path_test(&playwright, browser_name, &output_dir).await;
+            run_happy_path_test(&playwright, browser_name, output_dir).await;
         }
-
-        let _ = fs::remove_dir_all(output_dir);
     });
 }
 
@@ -1652,9 +1630,10 @@ fn e2e_happy_path() {
 fn e2e_click_pins_node_card_keeping_selection() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
-        let output_dir = generate_docs();
+        let site = generate_docs();
+        let output_dir = site.path();
         let playwright = Playwright::launch().await.expect("playwright");
-        let (_browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        let (_browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
         page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
@@ -1740,8 +1719,6 @@ fn e2e_click_pins_node_card_keeping_selection() {
             !sel_after.contains("-1"),
             "node should stay selected after ×; got {sel_after}"
         );
-
-        let _ = fs::remove_dir_all(output_dir);
     });
 }
 
@@ -1753,9 +1730,10 @@ fn e2e_click_pins_node_card_keeping_selection() {
 fn e2e_edge_hover_shows_the_triple_and_its_kind_blurb() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
-        let output_dir = generate_docs();
+        let site = generate_docs();
+        let output_dir = site.path();
         let playwright = Playwright::launch().await.expect("playwright");
-        let (browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        let (browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
         page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
@@ -1809,7 +1787,6 @@ fn e2e_edge_hover_shows_the_triple_and_its_kind_blurb() {
         );
 
         browser.close().await.ok();
-        let _ = fs::remove_dir_all(output_dir);
     });
 }
 
@@ -1817,9 +1794,10 @@ fn e2e_edge_hover_shows_the_triple_and_its_kind_blurb() {
 fn e2e_node_hover_reuses_the_doc_card_in_full_mode() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
-        let output_dir = generate_docs();
+        let site = generate_docs();
+        let output_dir = site.path();
         let playwright = Playwright::launch().await.expect("playwright");
-        let (browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        let (browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
         page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
@@ -1864,7 +1842,6 @@ fn e2e_node_hover_reuses_the_doc_card_in_full_mode() {
         );
 
         browser.close().await.ok();
-        let _ = fs::remove_dir_all(output_dir);
     });
 }
 
@@ -1876,9 +1853,10 @@ fn e2e_node_hover_reuses_the_doc_card_in_full_mode() {
 fn e2e_pinned_card_is_draggable_by_its_handle() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
-        let output_dir = generate_docs();
+        let site = generate_docs();
+        let output_dir = site.path();
         let playwright = Playwright::launch().await.expect("playwright");
-        let (_browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        let (_browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
         page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
@@ -1948,8 +1926,6 @@ fn e2e_pinned_card_is_draggable_by_its_handle() {
             (a_left - b_left).abs() > 20.0 || (a_top - b_top).abs() > 20.0,
             "the card should have visibly moved; before ({b_left},{b_top}) after ({a_left},{a_top})"
         );
-
-        let _ = fs::remove_dir_all(output_dir);
     });
 }
 
@@ -1961,9 +1937,10 @@ fn e2e_pinned_card_is_draggable_by_its_handle() {
 fn e2e_hovering_a_rule_entry_highlights_participant_nodes() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
-        let output_dir = generate_docs_for("tests/fixtures/rules_graph.yaml");
+        let site = generate_docs_for("tests/fixtures/rules_graph.yaml");
+        let output_dir = site.path();
         let playwright = Playwright::launch().await.expect("playwright");
-        let (_browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        let (_browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
         page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
@@ -2051,8 +2028,6 @@ fn e2e_hovering_a_rule_entry_highlights_participant_nodes() {
             "0",
             "moving off the entry should clear the highlight; got {cleared}"
         );
-
-        let _ = fs::remove_dir_all(output_dir);
     });
 }
 
@@ -2066,9 +2041,10 @@ fn e2e_hovering_a_rule_entry_highlights_participant_nodes() {
 fn e2e_rule_touched_nodes_draw_a_persistent_amber_ring() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
-        let output_dir = generate_docs_for("tests/fixtures/rules_graph.yaml");
+        let site = generate_docs_for("tests/fixtures/rules_graph.yaml");
+        let output_dir = site.path();
         let playwright = Playwright::launch().await.expect("playwright");
-        let (_browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        let (_browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
         page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
@@ -2128,8 +2104,6 @@ fn e2e_rule_touched_nodes_draw_a_persistent_amber_ring() {
             "the persistent rule ring should paint amber near the node; amber pixels={}",
             parts[1]
         );
-
-        let _ = fs::remove_dir_all(output_dir);
     });
 }
 
@@ -2141,9 +2115,10 @@ fn e2e_rule_touched_nodes_draw_a_persistent_amber_ring() {
 fn e2e_external_grounding_paints_a_muted_node() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
-        let output_dir = generate_docs_for("tests/fixtures/external_grounding.yaml");
+        let site = generate_docs_for("tests/fixtures/external_grounding.yaml");
+        let output_dir = site.path();
         let playwright = Playwright::launch().await.expect("playwright");
-        let (_browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        let (_browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
         page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
@@ -2197,8 +2172,6 @@ fn e2e_external_grounding_paints_a_muted_node() {
             grey > 0,
             "the external grounding node's muted grey fill should paint; grey pixels={grey}"
         );
-
-        let _ = fs::remove_dir_all(output_dir);
     });
 }
 
@@ -2210,9 +2183,10 @@ fn e2e_external_grounding_paints_a_muted_node() {
 fn e2e_groundings_toggle_hides_external_nodes() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
-        let output_dir = generate_docs_for("tests/fixtures/external_grounding.yaml");
+        let site = generate_docs_for("tests/fixtures/external_grounding.yaml");
+        let output_dir = site.path();
         let playwright = Playwright::launch().await.expect("playwright");
-        let (_browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        let (_browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
         page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
@@ -2328,8 +2302,6 @@ fn e2e_groundings_toggle_hides_external_nodes() {
             "after toggling groundings off, the external node label should not linger; label pixels={}",
             parts[2]
         );
-
-        let _ = fs::remove_dir_all(output_dir);
     });
 }
 
@@ -2343,11 +2315,8 @@ fn e2e_external_node_hover_shows_iri_and_definition_and_legend_documents_it() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
         // Seed the label cache the way a prior online run would have.
-        let cache_root = std::env::temp_dir().join(format!(
-            "panschema_e2e_labelcache_{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&cache_root);
+        let cache_scratch = tempfile::tempdir().expect("tempdir");
+        let cache_root = cache_scratch.path();
         {
             use panschema::labels::{LabelStore, TermInfo};
             let mut store =
@@ -2367,13 +2336,10 @@ fn e2e_external_node_hover_shows_iri_and_definition_and_legend_documents_it() {
                 .expect("seed label cache");
         }
 
-        let output_dir = std::env::temp_dir().join(format!(
-            "panschema_e2e_grounding_hover_{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&output_dir);
+        let site = tempfile::tempdir().expect("tempdir");
+        let output_dir = site.path();
         let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
-            .env("PANSCHEMA_CACHE_ROOT", &cache_root)
+            .env("PANSCHEMA_CACHE_ROOT", cache_root)
             .args([
                 "generate",
                 "--schema",
@@ -2387,7 +2353,7 @@ fn e2e_external_node_hover_shows_iri_and_definition_and_legend_documents_it() {
         assert!(status.success(), "panschema failed to generate docs");
 
         let playwright = Playwright::launch().await.expect("playwright");
-        let (_browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        let (_browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
         page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
@@ -2469,9 +2435,6 @@ fn e2e_external_node_hover_shows_iri_and_definition_and_legend_documents_it() {
             hits > 0,
             "the legend should paint the external grounding swatch; matching pixels={hits}"
         );
-
-        let _ = fs::remove_dir_all(output_dir);
-        let _ = fs::remove_dir_all(cache_root);
     });
 }
 
@@ -2485,9 +2448,10 @@ fn e2e_external_node_hover_shows_iri_and_definition_and_legend_documents_it() {
 fn e2e_instance_graph_renders_individuals_beneath_the_cards() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
-        let output_dir = generate_docs_for("tests/fixtures/instance_graph.ttl");
+        let site = generate_docs_for("tests/fixtures/instance_graph.ttl");
+        let output_dir = site.path();
         let playwright = Playwright::launch().await.expect("playwright");
-        let (_browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        let (_browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
         page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
@@ -2558,8 +2522,6 @@ fn e2e_instance_graph_renders_individuals_beneath_the_cards() {
             teal > 0,
             "the instance graph should paint individual nodes; class-blue pixels={teal}"
         );
-
-        let _ = fs::remove_dir_all(output_dir);
     });
 }
 
@@ -2574,11 +2536,8 @@ fn e2e_data_only_composition_boots_the_instance_viz() {
         // Composition keys are manifest keys, so this page builds through
         // a minimal consumer manifest around the embedded-individuals
         // fixture.
-        let consumer = std::env::temp_dir().join(format!(
-            "panschema_e2e_composed_{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&consumer);
+        let scratch = tempfile::tempdir().expect("tempdir");
+        let consumer = scratch.path();
         fs::create_dir_all(consumer.join("pkg")).expect("mkdir pkg");
         fs::copy(
             "tests/fixtures/instance_graph.ttl",
@@ -2597,7 +2556,7 @@ fn e2e_data_only_composition_boots_the_instance_viz() {
         .expect("write manifest");
         let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
             .arg("generate")
-            .current_dir(&consumer)
+            .current_dir(consumer)
             .status()
             .expect("run panschema");
         assert!(status.success(), "composed generate failed");
@@ -2630,8 +2589,6 @@ fn e2e_data_only_composition_boots_the_instance_viz() {
             wait_until_ready(&page, "!!window.__panschema_instance_viz").await,
             "instance graph viz never became ready on the data-only page"
         );
-
-        let _ = fs::remove_dir_all(&consumer);
     });
 }
 
@@ -2643,16 +2600,16 @@ fn e2e_data_only_composition_boots_the_instance_viz() {
 fn e2e_instance_dataset_selector_switches_cards_and_graph() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
-        let output_dir = generate_docs_with_several_instances(
+        let site = generate_docs_with_several_instances(
             "tests/fixtures/wine_catalog.yaml",
             &[
                 "tests/fixtures/wine_instances_preview.yaml",
                 "tests/fixtures/wine_instances.yaml",
             ],
-            "selector",
         );
+        let output_dir = site.path();
         let playwright = Playwright::launch().await.expect("playwright");
-        let (browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        let (browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
         page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
@@ -2849,7 +2806,6 @@ fn e2e_instance_dataset_selector_switches_cards_and_graph() {
         );
 
         browser.close().await.ok();
-        let _ = fs::remove_dir_all(output_dir);
     });
 }
 
@@ -2860,12 +2816,13 @@ fn e2e_instance_dataset_selector_switches_cards_and_graph() {
 fn e2e_instance_graph_has_hover_card_and_toolbar_parity() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
-        let output_dir = generate_docs_with_instances(
+        let site = generate_docs_with_instances(
             "tests/fixtures/typed_wine.yaml",
             "tests/fixtures/typed_wine_instances.yaml",
         );
+        let output_dir = site.path();
         let playwright = Playwright::launch().await.expect("playwright");
-        let (browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        let (browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
         page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
@@ -3056,7 +3013,6 @@ fn e2e_instance_graph_has_hover_card_and_toolbar_parity() {
         );
 
         browser.close().await.ok();
-        let _ = fs::remove_dir_all(output_dir);
     });
 }
 
@@ -3067,12 +3023,13 @@ fn e2e_instance_graph_has_hover_card_and_toolbar_parity() {
 fn e2e_instance_graph_nodes_are_draggable() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
-        let output_dir = generate_docs_with_instances(
+        let site = generate_docs_with_instances(
             "tests/fixtures/typed_wine.yaml",
             "tests/fixtures/typed_wine_instances.yaml",
         );
+        let output_dir = site.path();
         let playwright = Playwright::launch().await.expect("playwright");
-        let (browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        let (browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
         page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
@@ -3118,7 +3075,6 @@ fn e2e_instance_graph_nodes_are_draggable() {
         );
 
         browser.close().await.ok();
-        let _ = fs::remove_dir_all(output_dir);
     });
 }
 
@@ -3129,12 +3085,13 @@ fn e2e_instance_graph_nodes_are_draggable() {
 fn e2e_instance_graph_click_pins_the_card_and_empty_space_deselects() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
-        let output_dir = generate_docs_with_instances(
+        let site = generate_docs_with_instances(
             "tests/fixtures/typed_wine.yaml",
             "tests/fixtures/typed_wine_instances.yaml",
         );
+        let output_dir = site.path();
         let playwright = Playwright::launch().await.expect("playwright");
-        let (browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        let (browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
         page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
@@ -3185,7 +3142,6 @@ fn e2e_instance_graph_click_pins_the_card_and_empty_space_deselects() {
         );
 
         browser.close().await.ok();
-        let _ = fs::remove_dir_all(output_dir);
     });
 }
 
@@ -3193,12 +3149,13 @@ fn e2e_instance_graph_click_pins_the_card_and_empty_space_deselects() {
 fn e2e_instance_pinned_card_closes_by_its_button_keeping_selection() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
-        let output_dir = generate_docs_with_instances(
+        let site = generate_docs_with_instances(
             "tests/fixtures/typed_wine.yaml",
             "tests/fixtures/typed_wine_instances.yaml",
         );
+        let output_dir = site.path();
         let playwright = Playwright::launch().await.expect("playwright");
-        let (browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        let (browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
         page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
@@ -3253,7 +3210,6 @@ fn e2e_instance_pinned_card_closes_by_its_button_keeping_selection() {
         );
 
         browser.close().await.ok();
-        let _ = fs::remove_dir_all(output_dir);
     });
 }
 
@@ -3265,12 +3221,13 @@ fn e2e_instance_pinned_card_closes_by_its_button_keeping_selection() {
 fn e2e_instance_graph_selection_survives_pointer_jitter_and_escape_deselects() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
-        let output_dir = generate_docs_with_instances(
+        let site = generate_docs_with_instances(
             "tests/fixtures/typed_wine.yaml",
             "tests/fixtures/typed_wine_instances.yaml",
         );
+        let output_dir = site.path();
         let playwright = Playwright::launch().await.expect("playwright");
-        let (browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        let (browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
         page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
@@ -3344,7 +3301,6 @@ fn e2e_instance_graph_selection_survives_pointer_jitter_and_escape_deselects() {
         );
 
         browser.close().await.ok();
-        let _ = fs::remove_dir_all(output_dir);
     });
 }
 
@@ -3357,12 +3313,13 @@ fn e2e_instance_graph_selection_survives_pointer_jitter_and_escape_deselects() {
 fn e2e_typed_instance_graph_renders_class_symbols_and_shared_values() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
-        let output_dir = generate_docs_with_instances(
+        let site = generate_docs_with_instances(
             "tests/fixtures/typed_wine.yaml",
             "tests/fixtures/typed_wine_instances.yaml",
         );
+        let output_dir = site.path();
         let playwright = Playwright::launch().await.expect("playwright");
-        let (browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        let (browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
         page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
@@ -3458,7 +3415,6 @@ fn e2e_typed_instance_graph_renders_class_symbols_and_shared_values() {
         );
 
         browser.close().await.ok();
-        let _ = fs::remove_dir_all(output_dir);
     });
 }
 
@@ -3480,14 +3436,15 @@ fn e2e_legends_adapt_to_what_each_graph_contains() {
         // wine_catalog declares classes and slots but no enums, so the
         // schema key must not advertise the enum diamond; the instance
         // graph's key must describe individuals and assertions only.
-        let output_dir = generate_docs_with_instances(
+        let site = generate_docs_with_instances(
             "tests/fixtures/wine_catalog.yaml",
             "tests/fixtures/wine_instances.yaml",
         );
+        let output_dir = site.path();
         let (listener, port) = bind_ephemeral();
         let base_url = format!("http://127.0.0.1:{}", port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_handle = tokio::spawn(start_server(output_dir.clone(), listener, shutdown_rx));
+        let server_handle = tokio::spawn(start_server(output_dir.to_path_buf(), listener, shutdown_rx));
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let playwright = Playwright::launch().await.expect("playwright");
@@ -3561,11 +3518,12 @@ fn e2e_legends_adapt_to_what_each_graph_contains() {
         // An attributes-only schema draws no slot pills, so its key has no
         // Slot row — the half of the adaptation the mixed fixture above can
         // no longer show.
-        let attr_only_dir = generate_docs_for("tests/fixtures/scoped_estate.yaml");
+        let attr_only_site = generate_docs_for("tests/fixtures/scoped_estate.yaml");
+        let attr_only_dir = attr_only_site.path();
         let (attr_listener, attr_port) = bind_ephemeral();
         let (attr_shutdown_tx, attr_shutdown_rx) = oneshot::channel();
         let attr_server = tokio::spawn(start_server(
-            attr_only_dir.clone(),
+            attr_only_dir.to_path_buf(),
             attr_listener,
             attr_shutdown_rx,
         ));
@@ -3600,7 +3558,6 @@ fn e2e_legends_adapt_to_what_each_graph_contains() {
         );
         let _ = attr_shutdown_tx.send(());
         let _ = attr_server.await;
-        let _ = fs::remove_dir_all(attr_only_dir);
 
         // The instance graph's key is reachable: toggling shows the panel.
         page.locator("#instance-graph-legend-toggle")
@@ -3670,7 +3627,6 @@ fn e2e_legends_adapt_to_what_each_graph_contains() {
         browser.close().await.ok();
         let _ = shutdown_tx.send(());
         let _ = server_handle.await;
-        let _ = fs::remove_dir_all(output_dir);
     });
 }
 
@@ -3681,12 +3637,13 @@ fn e2e_legends_adapt_to_what_each_graph_contains() {
 fn e2e_instance_graph_is_explorable_like_the_schema_graph() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
-        let output_dir = generate_docs_with_instances(
+        let site = generate_docs_with_instances(
             "tests/fixtures/wine_catalog.yaml",
             "tests/fixtures/wine_instances.yaml",
         );
+        let output_dir = site.path();
         let playwright = Playwright::launch().await.expect("playwright");
-        let (browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        let (browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
         page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
@@ -3834,7 +3791,6 @@ fn e2e_instance_graph_is_explorable_like_the_schema_graph() {
         );
 
         browser.close().await.ok();
-        let _ = fs::remove_dir_all(output_dir);
     });
 }
 
@@ -3846,12 +3802,13 @@ fn e2e_instance_graph_is_explorable_like_the_schema_graph() {
 fn e2e_instance_graph_renders_from_linkml_data() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
-        let output_dir = generate_docs_with_instances(
+        let site = generate_docs_with_instances(
             "tests/fixtures/wine_catalog.yaml",
             "tests/fixtures/wine_instances.yaml",
         );
+        let output_dir = site.path();
         let playwright = Playwright::launch().await.expect("playwright");
-        let (_browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        let (_browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
         page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("goto");
@@ -3977,8 +3934,6 @@ fn e2e_instance_graph_renders_from_linkml_data() {
             teal > 0,
             "the LinkML instance graph should paint individual nodes; class-blue pixels={teal}"
         );
-
-        let _ = fs::remove_dir_all(output_dir);
     });
 }
 
@@ -3992,11 +3947,12 @@ fn e2e_instance_graph_renders_from_linkml_data() {
 fn e2e_is_a_heavy_schema_auto_defaults_to_hierarchical() {
     let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
     rt.block_on(async {
-        let output_dir = generate_docs_for("tests/fixtures/taxonomy.ttl");
+        let site = generate_docs_for("tests/fixtures/taxonomy.ttl");
+        let output_dir = site.path();
         let playwright = Playwright::launch()
             .await
             .expect("Failed to initialize Playwright");
-        let (browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        let (browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
         page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("navigate");
@@ -4019,7 +3975,6 @@ fn e2e_is_a_heavy_schema_auto_defaults_to_hierarchical() {
             value
         );
         browser.close().await.expect("close browser");
-        let _ = fs::remove_dir_all(output_dir);
     });
 }
 
@@ -4032,11 +3987,12 @@ fn e2e_is_a_heavy_schema_auto_defaults_to_hierarchical() {
 fn e2e_renders_enum_and_type_sections() {
     let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
     rt.block_on(async {
-        let output_dir = generate_docs_for("tests/fixtures/enum_type.yaml");
+        let site = generate_docs_for("tests/fixtures/enum_type.yaml");
+        let output_dir = site.path();
         let playwright = Playwright::launch()
             .await
             .expect("Failed to initialize Playwright");
-        let (browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        let (browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
         page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("navigate");
@@ -4072,7 +4028,6 @@ fn e2e_renders_enum_and_type_sections() {
         );
 
         browser.close().await.expect("close browser");
-        let _ = fs::remove_dir_all(output_dir);
     });
 }
 
@@ -4087,11 +4042,12 @@ fn e2e_renders_enum_and_type_sections() {
 fn e2e_renders_linkml_card_features() {
     let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
     rt.block_on(async {
-        let output_dir = generate_docs_for("tests/fixtures/card_features.yaml");
+        let site = generate_docs_for("tests/fixtures/card_features.yaml");
+        let output_dir = site.path();
         let playwright = Playwright::launch()
             .await
             .expect("Failed to initialize Playwright");
-        let (browser, page) = open_served_page(&playwright, "chromium", &output_dir).await;
+        let (browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
         page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
             .await
             .expect("navigate");
@@ -4151,7 +4107,6 @@ fn e2e_renders_linkml_card_features() {
         );
 
         browser.close().await.expect("close browser");
-        let _ = fs::remove_dir_all(output_dir);
     });
 }
 
@@ -4266,18 +4221,17 @@ async fn capture_scale_screenshot(
     playwright: &Playwright,
     scale: &ScreenshotScale,
 ) -> (String, PathBuf) {
-    let fixture_path = std::env::temp_dir().join(format!(
-        "panschema_synthetic_{}_{}.ttl",
-        scale.name,
-        std::process::id()
-    ));
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let fixture_path = scratch.path().join(format!("synthetic_{}.ttl", scale.name));
     fs::write(
         &fixture_path,
         build_synthetic_ttl(scale.connected, scale.isolated),
     )
     .expect("Failed to write synthetic TTL");
 
-    let output_dir = generate_docs_for(fixture_path.to_str().unwrap());
+    let site = generate_docs_for(fixture_path.to_str().unwrap());
+
+    let output_dir = site.path();
     let browser = playwright
         .chromium()
         .launch()
@@ -4288,7 +4242,7 @@ async fn capture_scale_screenshot(
         .await
         .expect("Failed to create context");
     let page = context.new_page().await.expect("Failed to create page");
-    serve_site(&page, &output_dir).await;
+    serve_site(&page, output_dir).await;
 
     page.set_viewport_size(playwright_rs::Viewport {
         width: scale.viewport_w,
@@ -4388,8 +4342,6 @@ async fn capture_scale_screenshot(
         .unwrap_or_default();
 
     browser.close().await.expect("Failed to close browser");
-    let _ = fs::remove_dir_all(output_dir);
-    let _ = fs::remove_file(fixture_path);
 
     (stats_json, screenshot_path)
 }
