@@ -8,6 +8,13 @@ updates:
       time: "04:00"
       timezone: "America/New_York"
     open-pull-requests-limit: 10
+    ignore:
+      # The HTML5 conformance test parses through markup5ever_rcdom, whose
+      # latest release still pairs with html5ever 0.39; a newer html5ever
+      # brings a TreeSink trait rcdom does not implement, so the bump
+      # cannot compile until rcdom catches up. Drop this entry when it does.
+      - dependency-name: "html5ever"
+        update-types: ["version-update:semver-major"]
     # Wait before proposing a bump. cargo-vet's import sets (Mozilla,
     # Google, ISRG, ...) have not audited a version that is hours old, so
     # day-zero bumps are structurally guaranteed to fail Supply Chain
