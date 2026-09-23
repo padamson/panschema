@@ -79,8 +79,9 @@ tar = "0.4"
 directories = "6"
 fs2 = "0.4"
 
-# Versioned-publish — `git show <ref>:<path>` output lands in a temp
-# file managed via NamedTempFile (auto-unlinked on drop).
+# Versioned-publish lands `git show <ref>:<path>` output in a
+# NamedTempFile, and the unit tests write into `tempdir()` scratch
+# directories that are removed on every path, including a panic.
 tempfile = "3.24.0"
 
 # Empty no-op crate providing `#[mutants::skip]`. Used to suppress
