@@ -121,6 +121,11 @@ criteria = "safe-to-run"
 version = "0.1.1"
 notes = "Authored and maintained by the certifier. Proc-macro half of playwright-rs; same dev-dependency scope and criteria."
 
+[[audits.rand]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.10.2 -> 0.10.3"
+
 [[audits.rand_core]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-deploy"
