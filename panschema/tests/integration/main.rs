@@ -5330,47 +5330,19 @@ fn release_errors_when_neither_level_nor_version_given() {
 }
 
 /// `--git` in a clean git repo bumps + commits + tags.
-///
-/// Skipped automatically if `git` isn't on PATH.
 #[test]
 fn release_with_git_commits_and_tags() {
-    if Command::new("git").arg("--version").output().is_err() {
-        eprintln!("skipping: git not available");
-        return;
-    }
     let tmp = tempfile::tempdir().expect("tempdir");
     let dir = tmp.path();
 
     // Init a git repo + first commit so the working tree is clean.
-    Command::new("git")
-        .arg("init")
-        .arg("-q")
-        .arg("-b")
-        .arg("main")
-        .current_dir(dir)
-        .status()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "test@example.com"])
-        .current_dir(dir)
-        .status()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "Test"])
-        .current_dir(dir)
-        .status()
-        .unwrap();
+    git(dir, &["init", "-q", "-b", "main"]);
+    git(dir, &["config", "user.email", "test@example.com"]);
+    git(dir, &["config", "user.name", "Test"]);
+    git(dir, &["config", "commit.gpgsign", "false"]);
     seed_publish(dir, "0.1.0");
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(dir)
-        .status()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-qm", "initial"])
-        .current_dir(dir)
-        .status()
-        .unwrap();
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "initial"]);
 
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args(["release", "--level", "patch", "--git"])
@@ -5408,27 +5380,13 @@ fn release_with_git_commits_and_tags() {
 /// (beyond the bump itself).
 #[test]
 fn release_with_git_refuses_on_dirty_tree() {
-    if Command::new("git").arg("--version").output().is_err() {
-        return;
-    }
     let tmp = tempfile::tempdir().expect("tempdir");
     let dir = tmp.path();
 
-    Command::new("git")
-        .args(["init", "-q", "-b", "main"])
-        .current_dir(dir)
-        .status()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "test@example.com"])
-        .current_dir(dir)
-        .status()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "Test"])
-        .current_dir(dir)
-        .status()
-        .unwrap();
+    git(dir, &["init", "-q", "-b", "main"]);
+    git(dir, &["config", "user.email", "test@example.com"]);
+    git(dir, &["config", "user.name", "Test"]);
+    git(dir, &["config", "commit.gpgsign", "false"]);
     seed_publish(dir, "0.1.0");
     // Untracked file = dirty tree.
     fs::write(dir.join("STRAY.txt"), "uncommitted").unwrap();
@@ -5449,44 +5407,18 @@ fn release_with_git_refuses_on_dirty_tree() {
 /// `--git` refuses when the target tag already exists.
 #[test]
 fn release_with_git_refuses_when_tag_already_exists() {
-    if Command::new("git").arg("--version").output().is_err() {
-        return;
-    }
     let tmp = tempfile::tempdir().expect("tempdir");
     let dir = tmp.path();
 
-    Command::new("git")
-        .args(["init", "-q", "-b", "main"])
-        .current_dir(dir)
-        .status()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "test@example.com"])
-        .current_dir(dir)
-        .status()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "Test"])
-        .current_dir(dir)
-        .status()
-        .unwrap();
+    git(dir, &["init", "-q", "-b", "main"]);
+    git(dir, &["config", "user.email", "test@example.com"]);
+    git(dir, &["config", "user.name", "Test"]);
+    git(dir, &["config", "commit.gpgsign", "false"]);
     seed_publish(dir, "0.1.0");
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(dir)
-        .status()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-qm", "initial"])
-        .current_dir(dir)
-        .status()
-        .unwrap();
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "initial"]);
     // Pre-create the tag we're about to try to make.
-    Command::new("git")
-        .args(["tag", "v0.1.1"])
-        .current_dir(dir)
-        .status()
-        .unwrap();
+    git(dir, &["tag", "v0.1.1"]);
 
     let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args(["release", "--level", "patch", "--git"])
@@ -5548,38 +5480,16 @@ fn release_errors_on_noop_bump() {
 /// `git push --follow-tags` will push).
 #[test]
 fn release_with_git_creates_annotated_tag() {
-    if Command::new("git").arg("--version").output().is_err() {
-        return;
-    }
     let tmp = tempfile::tempdir().expect("tempdir");
     let dir = tmp.path();
 
-    Command::new("git")
-        .args(["init", "-q", "-b", "main"])
-        .current_dir(dir)
-        .status()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "test@example.com"])
-        .current_dir(dir)
-        .status()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "Test"])
-        .current_dir(dir)
-        .status()
-        .unwrap();
+    git(dir, &["init", "-q", "-b", "main"]);
+    git(dir, &["config", "user.email", "test@example.com"]);
+    git(dir, &["config", "user.name", "Test"]);
+    git(dir, &["config", "commit.gpgsign", "false"]);
     seed_publish(dir, "0.1.0");
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(dir)
-        .status()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-qm", "initial"])
-        .current_dir(dir)
-        .status()
-        .unwrap();
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "initial"]);
 
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .args(["release", "--level", "patch", "--git"])
@@ -5718,16 +5628,6 @@ fn init_output_shows_field_provenance() {
 fn publish_reports_collisions_across_its_declared_instances_entries() {
     // publish already knows the full declared set, so the cross-dataset check
     // runs without being asked.
-    fn git(cwd: &Path, args: &[&str]) {
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(cwd)
-            .args(args)
-            .status()
-            .expect("git on PATH");
-        assert!(status.success(), "git {args:?} failed");
-    }
-
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path();
 
@@ -5805,9 +5705,9 @@ output_dir = "site"
     );
 }
 
-/// Run a git command in `cwd`, asserting success. Shared by the
-/// publish fixtures that build tagged repos.
-fn publish_git(cwd: &Path, args: &[&str]) {
+/// Run a git command in `cwd`, asserting success. git is a standing
+/// requirement of this repo, so a host without it fails here.
+fn git(cwd: &Path, args: &[&str]) {
     let status = Command::new("git")
         .arg("-C")
         .arg(cwd)
@@ -5858,10 +5758,10 @@ fn contract_cache_pkg(cache_root: &Path, version: &str, marker_class: Option<&st
 /// Initialize a git repo publishing a trivial own schema plus one
 /// `records` dataset against the `contract` dependency, ready to tag.
 fn init_contract_consumer(repo: &Path, versions: &str) {
-    publish_git(repo, &["init", "--initial-branch=main", "--quiet"]);
-    publish_git(repo, &["config", "user.email", "test@example.com"]);
-    publish_git(repo, &["config", "user.name", "Test"]);
-    publish_git(repo, &["config", "commit.gpgsign", "false"]);
+    git(repo, &["init", "--initial-branch=main", "--quiet"]);
+    git(repo, &["config", "user.email", "test@example.com"]);
+    git(repo, &["config", "user.name", "Test"]);
+    git(repo, &["config", "commit.gpgsign", "false"]);
     fs::write(
         repo.join("schema.yaml"),
         "id: https://example.org/own\nname: own_schema\nversion: 0.1.0\n",
@@ -5914,17 +5814,17 @@ fn publish_renders_each_ref_against_its_pinned_dependency() {
     contract_cache_pkg(&cache_root, "0.2.0", Some("ContractV2"));
 
     init_contract_consumer(repo, "\"v0.1.0\", \"v0.2.0\"");
-    publish_git(repo, &["add", "."]);
-    publish_git(repo, &["commit", "-m", "release v0.1.0", "--quiet"]);
-    publish_git(repo, &["tag", "v0.1.0"]);
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-m", "release v0.1.0", "--quiet"]);
+    git(repo, &["tag", "v0.1.0"]);
     fs::write(
         repo.join("panschema.toml"),
         "[schemas.contract]\nsource = \"github:test-owner/contract\"\nversion = \"0.2.0\"\n",
     )
     .unwrap();
-    publish_git(repo, &["add", "."]);
-    publish_git(repo, &["commit", "-m", "bump contract to 0.2.0", "--quiet"]);
-    publish_git(repo, &["tag", "v0.2.0"]);
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-m", "bump contract to 0.2.0", "--quiet"]);
+    git(repo, &["tag", "v0.2.0"]);
 
     let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .arg("publish")
@@ -5974,9 +5874,9 @@ fn publish_refuses_cached_content_that_fails_the_refs_lockfile() {
         )
     };
     fs::write(repo.join("panschema.lock"), lock("0.1.0", &good)).unwrap();
-    publish_git(repo, &["add", "."]);
-    publish_git(repo, &["commit", "-m", "release v0.1.0", "--quiet"]);
-    publish_git(repo, &["tag", "v0.1.0"]);
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-m", "release v0.1.0", "--quiet"]);
+    git(repo, &["tag", "v0.1.0"]);
     fs::write(
         repo.join("panschema.lock"),
         lock(
@@ -5985,20 +5885,20 @@ fn publish_refuses_cached_content_that_fails_the_refs_lockfile() {
         ),
     )
     .unwrap();
-    publish_git(repo, &["add", "."]);
-    publish_git(repo, &["commit", "-m", "drift the lockfile", "--quiet"]);
-    publish_git(repo, &["tag", "v0.2.0"]);
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-m", "drift the lockfile", "--quiet"]);
+    git(repo, &["tag", "v0.2.0"]);
     fs::write(repo.join("panschema.lock"), "not = valid = toml").unwrap();
-    publish_git(repo, &["add", "."]);
-    publish_git(repo, &["commit", "-m", "break the lockfile", "--quiet"]);
-    publish_git(repo, &["tag", "v0.3.0"]);
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-m", "break the lockfile", "--quiet"]);
+    git(repo, &["tag", "v0.3.0"]);
     fs::write(repo.join("panschema.lock"), lock("0.9.9", &good)).unwrap();
-    publish_git(repo, &["add", "."]);
-    publish_git(
+    git(repo, &["add", "."]);
+    git(
         repo,
         &["commit", "-m", "stale the lockfile version", "--quiet"],
     );
-    publish_git(repo, &["tag", "v0.4.0"]);
+    git(repo, &["tag", "v0.4.0"]);
 
     let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .arg("publish")
@@ -6050,9 +5950,9 @@ fn publish_with_a_cold_cache_names_the_fetch_fix() {
     let cache_root = tmp.path().join("empty-cache");
 
     init_contract_consumer(repo, "\"v0.1.0\"");
-    publish_git(repo, &["add", "."]);
-    publish_git(repo, &["commit", "-m", "release v0.1.0", "--quiet"]);
-    publish_git(repo, &["tag", "v0.1.0"]);
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-m", "release v0.1.0", "--quiet"]);
+    git(repo, &["tag", "v0.1.0"]);
 
     let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .arg("publish")
@@ -6081,16 +5981,6 @@ fn publish_with_a_cold_cache_names_the_fetch_fix() {
 
 #[test]
 fn cli_publish_builds_per_version_subdirs_and_current_alias() {
-    fn git(cwd: &Path, args: &[&str]) {
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(cwd)
-            .args(args)
-            .status()
-            .expect("git on PATH");
-        assert!(status.success(), "git {args:?} failed");
-    }
-
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path();
 

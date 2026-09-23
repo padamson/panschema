@@ -407,7 +407,9 @@ pub(crate) use crate::linkml_resolve::resolve_effective_slots as resolve_slots;
 /// looping forever.
 fn is_a_ancestors(class: &ClassDefinition, schema: &SchemaDefinition) -> Vec<String> {
     let mut chain = Vec::new();
-    let mut seen = BTreeSet::new();
+    // Seeded with the class itself, so a cycle that leads back to it ends
+    // the chain instead of listing the class among its own ancestors.
+    let mut seen = BTreeSet::from([class.name.clone()]);
     let mut current = class.is_a.clone();
     while let Some(name) = current {
         if !seen.insert(name.clone()) {
@@ -1855,6 +1857,9 @@ fn variant_ident_for(text: &str) -> String {
 mod tests {
     use super::*;
     use crate::linkml::{ClassDefinition, EnumDefinition, PermissibleValue, SlotDefinition};
+    use crate::linkml_resolve::{
+        InheritancePath, Provenance, resolve_effective_slots_with_provenance,
+    };
 
     /// A chrono-default [`RenderCtx`] over borrowed schema and roles —
     /// the shape every direct render-fn test needs.
@@ -2196,43 +2201,72 @@ mod tests {
         assert!(is_descendant_of(&leaf, "M", &schema));
     }
 
-    // ----- cycle detection (slice 6.6) --------------------------------
+    // ----- cycle detection --------------------------------------------
 
-    #[test]
-    fn circular_is_a_chain_does_not_overflow() {
-        // A schema with `A is_a B` AND `B is_a A` is malformed but
-        // shouldn't crash the writer. The visited-set guard breaks the
-        // cycle on the second encounter, returning what was resolved
-        // up to that point. The test passes as long as it returns at
-        // all (no stack overflow / no infinite recursion).
-        let mut schema = SchemaDefinition::new("s");
-        let mut a = ClassDefinition::new("A");
-        a.is_a = Some("B".to_string());
-        let mut b = ClassDefinition::new("B");
-        b.is_a = Some("A".to_string());
-        schema.classes.insert("A".to_string(), a.clone());
-        schema.classes.insert("B".to_string(), b);
-
-        // Both must terminate.
-        let _ = resolve_slots(&a, &schema);
-        let _ = is_descendant_of(&a, "B", &schema);
-        let _ = is_a_ancestors(&a, &schema);
+    fn class_with_attribute(name: &str, attribute: &str) -> ClassDefinition {
+        let mut class = ClassDefinition::new(name);
+        class
+            .attributes
+            .insert(attribute.to_string(), SlotDefinition::new(attribute));
+        class
     }
 
+    // `A is_a B` and `B is_a A` is malformed. The walk keys its visited set
+    // on the class address, so the schema-owned class is what gets walked:
+    // A contributes `a_slot` once, as a direct slot, and B contributes
+    // `b_slot` through the is_a hop. A query for a class outside the cycle
+    // has to walk the whole loop and come back false.
     #[test]
-    fn circular_mixin_chain_does_not_overflow() {
-        // Mixin cycle: A mixes in B, B mixes in A. Same termination
-        // guarantee as the is_a cycle test.
+    fn circular_is_a_chain_resolves_each_class_once() {
         let mut schema = SchemaDefinition::new("s");
-        let mut a = ClassDefinition::new("A");
-        a.mixins.push("B".to_string());
-        let mut b = ClassDefinition::new("B");
-        b.mixins.push("A".to_string());
-        schema.classes.insert("A".to_string(), a.clone());
+        let mut a = class_with_attribute("A", "a_slot");
+        a.is_a = Some("B".to_string());
+        let mut b = class_with_attribute("B", "b_slot");
+        b.is_a = Some("A".to_string());
+        schema.classes.insert("A".to_string(), a);
         schema.classes.insert("B".to_string(), b);
+        let a = &schema.classes["A"];
 
-        let _ = resolve_slots(&a, &schema);
-        let _ = is_descendant_of(&a, "B", &schema);
+        let slots = resolve_effective_slots_with_provenance(a, &schema);
+        assert_eq!(slots["a_slot"].provenance, Provenance::Direct);
+        assert_eq!(
+            slots["b_slot"].provenance,
+            Provenance::Inherited {
+                from: "B".to_string(),
+                via: InheritancePath::IsA(vec!["B".to_string()]),
+            }
+        );
+        assert_eq!(slots.len(), 2, "got {:?}", slots.keys().collect::<Vec<_>>());
+        assert!(is_descendant_of(a, "B", &schema));
+        assert!(!is_descendant_of(a, "Z", &schema));
+        assert_eq!(is_a_ancestors(a, &schema), ["B"]);
+    }
+
+    // Mixin cycle: A mixes in B, B mixes in A. The mixin hop never
+    // overwrites, so `a_slot` stays direct and `b_slot` arrives via the mixin.
+    #[test]
+    fn circular_mixin_chain_resolves_each_class_once() {
+        let mut schema = SchemaDefinition::new("s");
+        let mut a = class_with_attribute("A", "a_slot");
+        a.mixins.push("B".to_string());
+        let mut b = class_with_attribute("B", "b_slot");
+        b.mixins.push("A".to_string());
+        schema.classes.insert("A".to_string(), a);
+        schema.classes.insert("B".to_string(), b);
+        let a = &schema.classes["A"];
+
+        let slots = resolve_effective_slots_with_provenance(a, &schema);
+        assert_eq!(slots["a_slot"].provenance, Provenance::Direct);
+        assert_eq!(
+            slots["b_slot"].provenance,
+            Provenance::Inherited {
+                from: "B".to_string(),
+                via: InheritancePath::Mixin("B".to_string()),
+            }
+        );
+        assert_eq!(slots.len(), 2, "got {:?}", slots.keys().collect::<Vec<_>>());
+        assert!(is_descendant_of(a, "B", &schema));
+        assert!(!is_descendant_of(a, "Z", &schema));
     }
 
     #[test]

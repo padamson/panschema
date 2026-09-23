@@ -128,13 +128,11 @@ fn temporal_schema() -> SchemaDefinition {
 
 /// The codegen fixture renders deliberately non-canonical layout, so
 /// `rustfmt --check` passing proves the in-file skip pragma — not luck —
-/// keeps generated code stable. Skipped when `rustfmt` is absent.
+/// keeps generated code stable. rustfmt is a standing requirement of this
+/// repo (the commit gate runs it), so its absence is a failure, not a skip.
 #[test]
 fn rustfmt_leaves_generated_code_untouched() {
-    let Some(rustfmt) = rustfmt_bin() else {
-        eprintln!("rustfmt not found on this host; skipping formatter-skip check");
-        return;
-    };
+    let rustfmt = rustfmt_bin();
     let body = RustWriter::new().render(&read_codegen_fixture());
     assert!(
         body.contains("#![cfg_attr(rustfmt, rustfmt_skip)]"),
@@ -157,15 +155,16 @@ fn rustfmt_leaves_generated_code_untouched() {
     );
 }
 
-/// Locate `rustfmt` via `rustup which`, falling back to `PATH`; `None`
-/// when neither resolves.
-fn rustfmt_bin() -> Option<PathBuf> {
+/// Locate `rustfmt` via `rustup which`, falling back to `PATH`. rustfmt is a
+/// standing requirement of this repo (the commit gate runs it), so a host
+/// without it fails here rather than skipping whatever asked for it.
+fn rustfmt_bin() -> PathBuf {
     if let Ok(out) = Command::new("rustup").args(["which", "rustfmt"]).output()
         && out.status.success()
     {
         let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
         if !path.is_empty() {
-            return Some(PathBuf::from(path));
+            return PathBuf::from(path);
         }
     }
     Command::new("rustfmt")
@@ -174,6 +173,7 @@ fn rustfmt_bin() -> Option<PathBuf> {
         .ok()
         .filter(|o| o.status.success())
         .map(|_| PathBuf::from("rustfmt"))
+        .expect("rustfmt on this host: `rustup component add rustfmt`")
 }
 
 // ---------------------------------------------------------------------------
