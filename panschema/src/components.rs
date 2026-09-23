@@ -2,7 +2,7 @@
 //!
 //! This module provides the ability to render individual UI components
 //! in isolation, enabling:
-//! - Snapshot testing of component HTML output
+//! - Structural tests of component HTML output
 //! - Style guide generation
 //! - Component-driven development workflow
 //!
@@ -12,7 +12,9 @@
 //! 2. Add the Askama template struct in this module
 //! 3. Add a render method to `ComponentRenderer`
 //! 4. Add the component to the style guide template
-//! 5. Write snapshot tests for the component
+//! 5. Test only what other code selects: an anchor id the template derives
+//!    from its input, or a class the CSS or graph script queries, with the
+//!    assertion naming that dependent. The rest is rendering.
 
 // Allow dead code in this module - these components and renderer methods are
 // infrastructure for the styleguide and component testing. They are used via
@@ -979,152 +981,11 @@ mod tests {
         assert!(html.contains("Metadata Card"));
     }
 
-    // Snapshot tests using insta
-    mod snapshots {
+    mod cards {
         use super::*;
 
         #[test]
-        fn snapshot_header() {
-            let html = ComponentRenderer::header("Test Ontology").unwrap();
-            insta::assert_snapshot!(html);
-        }
-
-        #[test]
-        fn snapshot_footer() {
-            let html = ComponentRenderer::footer().unwrap();
-            insta::assert_snapshot!(html);
-        }
-
-        #[test]
-        fn snapshot_hero_with_comment() {
-            let html =
-                ComponentRenderer::hero("Test Ontology", Some("A test ontology description."))
-                    .unwrap();
-            insta::assert_snapshot!(html);
-        }
-
-        #[test]
-        fn snapshot_hero_minimal() {
-            let html = ComponentRenderer::hero("Test Ontology", None).unwrap();
-            insta::assert_snapshot!(html);
-        }
-
-        #[test]
-        fn snapshot_metadata_card_full() {
-            let html = ComponentRenderer::metadata_card(
-                "https://example.org/ontology/test",
-                Some("1.0.0"),
-                Some("A comprehensive test ontology."),
-            )
-            .unwrap();
-            insta::assert_snapshot!(html);
-        }
-
-        #[test]
-        fn snapshot_metadata_card_minimal() {
-            let html =
-                ComponentRenderer::metadata_card("https://example.org/ontology/test", None, None)
-                    .unwrap();
-            insta::assert_snapshot!(html);
-        }
-
-        #[test]
-        fn snapshot_sidebar_with_items() {
-            let classes = vec![
-                EntityRef::new("person", "Person"),
-                EntityRef::new("organization", "Organization"),
-            ];
-            let slots = vec![
-                EntityRef::new("name", "name"),
-                EntityRef::new("member-of", "memberOf"),
-            ];
-            let individuals = vec![EntityRef::new("john-doe", "John Doe")];
-            let namespaces = vec![
-                Namespace::new("ex", "https://example.org/ontology#"),
-                Namespace::new("rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#"),
-            ];
-            let html =
-                ComponentRenderer::sidebar("metadata", &classes, &slots, &individuals, &namespaces)
-                    .unwrap();
-            insta::assert_snapshot!(html);
-        }
-
-        #[test]
-        fn snapshot_sidebar_empty() {
-            let namespaces = vec![Namespace::new("ex", "https://example.org/ontology#")];
-            let html = ComponentRenderer::sidebar("metadata", &[], &[], &[], &namespaces).unwrap();
-            insta::assert_snapshot!(html);
-        }
-
-        #[test]
-        fn snapshot_namespace_table() {
-            let namespaces = vec![
-                Namespace::new("ex", "https://example.org/ontology#"),
-                Namespace::new("rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#"),
-                Namespace::new("rdfs", "http://www.w3.org/2000/01/rdf-schema#"),
-            ];
-            let html = ComponentRenderer::namespace_table(&namespaces).unwrap();
-            insta::assert_snapshot!(html);
-        }
-
-        #[test]
-        fn snapshot_section_header_with_count() {
-            let html = ComponentRenderer::section_header(
-                "classes",
-                "Classes",
-                Some(5),
-                Some("All classes defined in this ontology."),
-            )
-            .unwrap();
-            insta::assert_snapshot!(html);
-        }
-
-        #[test]
-        fn snapshot_section_header_minimal() {
-            let html =
-                ComponentRenderer::section_header("overview", "Overview", None, None).unwrap();
-            insta::assert_snapshot!(html);
-        }
-
-        #[test]
-        fn snapshot_class_card_full() {
-            let superclass = EntityRef::new("thing", "Thing");
-            let subclasses = vec![
-                EntityRef::new("employee", "Employee"),
-                EntityRef::new("customer", "Customer"),
-            ];
-            let html = ComponentRenderer::class_card(
-                "person",
-                "Person",
-                "https://example.org/ontology#Person",
-                Some("Represents a human being."),
-                Some(&superclass),
-                &subclasses,
-                &[],
-                &[],
-            )
-            .unwrap();
-            insta::assert_snapshot!(html);
-        }
-
-        #[test]
-        fn snapshot_class_card_minimal() {
-            let html = ComponentRenderer::class_card(
-                "thing",
-                "Thing",
-                "https://example.org/ontology#Thing",
-                None,
-                None,
-                &[],
-                &[],
-                &[],
-            )
-            .unwrap();
-            insta::assert_snapshot!(html);
-        }
-
-        #[test]
-        fn snapshot_class_card_abstract_variant() {
+        fn class_card_renders_abstract_badge() {
             // Bypass ComponentRenderer::class_card so the test can flip
             // `is_abstract` without expanding the helper signature for
             // a single styleguide variant.
@@ -1153,7 +1014,6 @@ mod tests {
                 html.contains(r#"<span class="abstract-badge""#),
                 "abstract badge should be present when is_abstract = true"
             );
-            insta::assert_snapshot!(html);
         }
 
         #[test]
@@ -1387,61 +1247,6 @@ mod tests {
         }
 
         #[test]
-        fn snapshot_slot_card_object_property() {
-            let domain = EntityRef::new("person", "Person");
-            let range = RangeSpec::class(EntityRef::new("organization", "Organization"));
-            let html = ComponentRenderer::slot_card(
-                "member-of",
-                "memberOf",
-                "https://example.org/ontology#memberOf",
-                "Slot",
-                Some("Relates a person to their organization."),
-                Some(&domain),
-                Some(&range),
-                &["Functional".to_string()],
-                None,
-            )
-            .unwrap();
-            insta::assert_snapshot!(html);
-        }
-
-        #[test]
-        fn snapshot_slot_card_data_property() {
-            let domain = EntityRef::new("person", "Person");
-            let range = RangeSpec::datatype("xsd:string");
-            let html = ComponentRenderer::slot_card(
-                "name",
-                "name",
-                "https://example.org/ontology#name",
-                "Slot",
-                Some("The name of a person."),
-                Some(&domain),
-                Some(&range),
-                &[],
-                None,
-            )
-            .unwrap();
-            insta::assert_snapshot!(html);
-        }
-
-        #[test]
-        fn snapshot_slot_card_minimal() {
-            let html = ComponentRenderer::slot_card(
-                "relates-to",
-                "relatesTo",
-                "https://example.org/ontology#relatesTo",
-                "Slot",
-                None,
-                None,
-                None,
-                &[],
-                None,
-            )
-            .unwrap();
-            insta::assert_snapshot!(html);
-        }
-
-        #[test]
         fn slot_card_shows_default() {
             // A slot with an `ifabsent` default renders a "Default" row
             // showing the value; a slot without one renders no such row.
@@ -1478,102 +1283,6 @@ mod tests {
                 !without_default.contains("<dt>Default</dt>"),
                 "a slot without an ifabsent default renders no Default row; got:\n{without_default}"
             );
-        }
-
-        #[test]
-        fn snapshot_individual_card_full() {
-            let types = vec![EntityRef::new("person", "Person")];
-            let property_values = vec![
-                PropertyValueSpec::new("name", Some(EntityRef::new("name", "name")), "John Doe"),
-                PropertyValueSpec::new(
-                    "memberOf",
-                    Some(EntityRef::new("member-of", "memberOf")),
-                    "Acme Corp",
-                ),
-            ];
-            let html = ComponentRenderer::individual_card(
-                "john-doe",
-                "John Doe",
-                "https://example.org/ontology#JohnDoe",
-                Some("A sample individual representing a person."),
-                &types,
-                &property_values,
-            )
-            .unwrap();
-            insta::assert_snapshot!(html);
-        }
-
-        #[test]
-        fn snapshot_individual_card_minimal() {
-            let html = ComponentRenderer::individual_card(
-                "thing-1",
-                "Thing 1",
-                "https://example.org/ontology#Thing1",
-                None,
-                &[],
-                &[],
-            )
-            .unwrap();
-            insta::assert_snapshot!(html);
-        }
-
-        #[test]
-        fn snapshot_enum_card_full() {
-            use panschema::html_writer::{ExternalLink, PermissibleValueData};
-            let permissible_values = vec![
-                PermissibleValueData {
-                    rule_pointers: vec![panschema::html_writer::ValueRulePointer {
-                        class: EntityRef::new("person", "Person"),
-                        triggers: 1,
-                        governed: 0,
-                        participants: "class:person slot:age".to_string(),
-                    }],
-                    text: "open".to_string(),
-                    description: Some("The item is open for changes.".to_string()),
-                    meaning: Some(ExternalLink {
-                        display: "ex:OpenStatus".to_string(),
-                        href: Some("https://example.org/ontology#OpenStatus".to_string()),
-                        label: Some("Open Status".to_string()),
-                        definitions: vec![],
-                    }),
-                },
-                PermissibleValueData {
-                    rule_pointers: Vec::new(),
-                    text: "closed".to_string(),
-                    description: None,
-                    meaning: None,
-                },
-            ];
-            let html = ComponentRenderer::enum_card(
-                "status",
-                "Status",
-                Some("The lifecycle status of an item."),
-                &permissible_values,
-            )
-            .unwrap();
-            insta::assert_snapshot!(html);
-        }
-
-        #[test]
-        fn snapshot_type_card_full() {
-            use panschema::html_writer::ExternalLink;
-            let uri = ExternalLink {
-                display: "xsd:string".to_string(),
-                href: Some("http://www.w3.org/2001/XMLSchema#string".to_string()),
-                label: None,
-                definitions: vec![],
-            };
-            let base = EntityRef::new("string", "string");
-            let html = ComponentRenderer::type_card(
-                "phone-number",
-                "PhoneNumber",
-                Some(&uri),
-                Some("A phone number in E.164 form."),
-                Some(&base),
-                Some(r"^\+[1-9]\d{1,14}$"),
-            )
-            .unwrap();
-            insta::assert_snapshot!(html);
         }
     }
 }

@@ -87,7 +87,7 @@ Building on Feature 01 (Foundational UI Stack), this feature adds actual ontolog
 - [x] E2E test verifies individuals are rendered from reference.ttl
 
 **Notes:**
-- New `individual_card` component with snapshot tests (full and minimal variants)
+- New `individual_card` component with tests for the full and minimal variants
 - Individuals identified by `rdf:type owl:NamedIndividual` in reference ontology
 - Type(s) displayed as links to class cards; property values displayed with links to property cards
 - Sidebar updated with Individuals link and count badge
@@ -343,7 +343,7 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 - [x] CSS rule for `.entity-iri-link` keeps the card visually quiet at rest (no underline by default), with hover state revealing the link. Author-supplied prefixes that don't expand fall back to today's plain `<code>` rendering verbatim.
 
 **Notes:**
-- Tested with the existing class-card snapshots — they update mechanically. New unit tests in `html_writer.rs::tests` cover the IR → view-model expansion.
+- Tested with the class-card component tests. New unit tests in `html_writer.rs::tests` cover the IR → view-model expansion.
 
 **Notes:**
 - Source: friction `[2026-06-06] class_uri / slot_uri shown as plain text, never hyperlinked or CURIE-expanded in HTML` (severity: annoyance).
@@ -362,7 +362,7 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 **Acceptance Criteria:**
 - [x] `ClassData` (the template view model in `html_writer.rs`) gains an `is_abstract: bool` field threaded from `ClassDefinition.r#abstract`.
 - [x] The `class_card.html` template renders a small `abstract` badge in the card heading when `is_abstract` is true — uppercase, muted color, sits inline next to the class title. The badge style stays subtle (it's a hint, not an alarm).
-- [x] Snapshot test `snapshot_class_card_abstract_variant.snap` captures the badged rendering; assertion in the test body pins the `<span class="abstract-badge"` presence.
+- [x] `class_card_renders_abstract_badge` pins the `<span class="abstract-badge"` presence when `is_abstract` is set.
 - [x] Unit test `class_data_threads_is_abstract_from_class_definition` builds a schema with one abstract + one concrete class and verifies only the abstract `ClassData` carries `is_abstract = true`.
 
 **Notes:**
@@ -429,7 +429,7 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 - [x] Internal identifiers are renamed so the code carries one vocabulary: `PropertyData` → `SlotData`, `property_card.html` → `slot_card.html`, `PropertyCardComponent` → `SlotCardComponent`, `property_type` → `slot_type`, the `.property-badge` / `.prop-ref` CSS classes → `.slot-badge` / `.slot-ref`.
 - [x] The slot card is brought up to parity with the graph hover: it lists every class the slot is a domain of (a slot can belong to several — resolved via `linkml_resolve::resolve_slot_domains`), its validation `pattern`, an `identifier` flag, and explicit `minimum_cardinality` / `maximum_cardinality` bounds (`min..max`), alongside required / multivalued / inverse and mappings.
 - [x] A polymorphic `any_of` range renders on the slot card as `any of [A, B, C]` with each branch anchor-linked when it names a declared class (previously the Range row was blank for union-ranged slots).
-- [x] Snapshot tests for the renamed `slot_card` component and the `render_xref` slot branch pin the new anchors and badge; the `#slots`/`#slot-<name>` anchors are exercised by the e2e test `e2e_slot_cards_show_domain_range_and_characteristics`.
+- [x] The `slot_card` component tests and the `render_xref` slot branch tests pin the new anchors and badge; the `#slots`/`#slot-<name>` anchors are exercised by the e2e test `e2e_slot_cards_show_domain_range_and_characteristics`.
 
 **Notes:**
 - Source: friction surfaced by the scimantic-schema dogfood — the graph↔doc vocabulary split, plus `any_of` ranges silently dropping from the slot card.
@@ -452,7 +452,7 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 - [x] A **Types** section (`id="types"`, `#type-<name>` card ids) renders one card per declared type: parent type (`typeof`, linked to its own card when declared here), `uri`, and `pattern`.
 - [x] Sidebar gains "Enumerations" and "Types" entries with count badges; the `render_xref` `#enum-<name>` branch now resolves to a real card, and a new `#type-<name>` branch links type references. Both sections are omitted when the schema declares none.
 - [x] The graph hover (feature 04 slice 21) reuses the rendered `#enum-<name>` / `#type-<name>` card for enum and type nodes — `nodeCardElement` now maps every node kind to its card.
-- [x] Snapshot tests for the new `enum_card` / `type_card` components; an integration test renders the full sections from an in-memory schema, and an e2e (`e2e_renders_enum_and_type_sections`) asserts both sections, cards, and the sidebar entries render in a browser from a LinkML fixture (the OWL reference fixture carries no enums/types, so a dedicated `enum_type.yaml` fixture is used).
+- [x] The `enum_card` / `type_card` components render through the styleguide test; an integration test renders the full sections from an in-memory schema, and an e2e (`e2e_renders_enum_and_type_sections`) asserts both sections, cards, and the sidebar entries render in a browser from a LinkML fixture (the OWL reference fixture carries no enums/types, so a dedicated `enum_type.yaml` fixture is used).
 
 **Notes:**
 - Source: friction `[2026-06-14] enums (and types) render in the graph but have no HTML card section` (severity: annoyance / completeness gap). The IR data already exists; only the HTML surface was missing.

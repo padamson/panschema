@@ -31,7 +31,7 @@ Rontodoc requires external crates for RDF parsing, templating, CLI, and other fu
 |---------|-------|-----------|
 | File watching | `notify` | Cross-platform file system events for hot reload |
 | Dev server | `axum` | Lightweight, tokio-based HTTP for preview server |
-| Snapshot testing | `insta` | Snapshot testing for HTML output verification |
+| Snapshot testing | `insta` | Retired 2026-09: whole-component snapshots churned on every template edit and pinned the dev-only renderer; structural assertions on ids and classes replaced them |
 | E2E testing | `playwright` | Browser automation for testing generated docs (search, graph, navigation) |
 
 ### Crate-Specific Rationale

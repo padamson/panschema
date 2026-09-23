@@ -1,6 +1,6 @@
 # Component Development Guide
 
-panschema uses a component-driven development workflow inspired by Storybook. Components are isolated, documented in a style guide, and validated with snapshot tests.
+panschema uses a component-driven development workflow inspired by Storybook. Components are isolated, documented in a style guide, and validated by tests that pin the anchor ids and classes other code selects.
 
 > **Note:** The styleguide command requires building with the `dev` feature flag.
 
@@ -38,7 +38,7 @@ templates/
     └── property_card.html       # Property documentation card
 
 src/
-├── components.rs                # Component rendering and snapshot tests
+├── components.rs                # Component rendering and its structural tests
 └── renderer.rs                  # Page rendering (EntityRef, Namespace)
 ```
 
@@ -103,6 +103,8 @@ Automatically enabled via `prefers-color-scheme: dark`.
 1. Create template in `templates/components/`
 2. Add Askama struct and render method in `src/components.rs`
 3. Add to `styleguide.html`
-4. Add snapshot tests
+4. Test only what other code selects: an anchor id the template derives from
+   its input, or a class the CSS or graph script queries, with the assertion
+   naming that dependent. The rest is rendering.
 
 See existing components in `src/components.rs` for examples.

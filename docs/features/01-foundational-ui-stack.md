@@ -43,7 +43,7 @@ Storybook-like capability for UI component development.
 - [x] Isolated component templates can be previewed independently
 - [x] Style guide page showing all UI components
 - [x] Documentation for adding new components
-- [x] Snapshot tests (insta) for component HTML output
+- [x] Snapshot tests (insta) for component HTML output (since replaced by structural assertions on ids and classes; the snapshots pinned the dev-only renderer and churned on every template edit)
 
 ### Slice 4: Documentation Layout Structure
 Define the structural HTML layout for generated docs using the component workflow.

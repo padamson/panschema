@@ -99,9 +99,6 @@ dev = []
 test-fixtures = []
 
 [dev-dependencies]
-# Snapshot testing
-insta = "1"
-
 # Property-based testing: supplies its own schemas rather than only the
 # ones someone thought to write down, and shrinks a failure to a minimal
 # counterexample. Covers the input space between the example tests —

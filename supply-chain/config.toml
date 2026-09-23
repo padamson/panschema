@@ -99,10 +99,6 @@ criteria = "safe-to-run"
 version = "0.5.4"
 criteria = "safe-to-deploy"
 
-[[exemptions.console]]
-version = "0.16.3"
-criteria = "safe-to-run"
-
 [[exemptions.console_error_panic_hook]]
 version = "0.1.7"
 criteria = "safe-to-deploy"
@@ -193,10 +189,6 @@ criteria = "safe-to-run"
 
 [[exemptions.email_address]]
 version = "0.2.9"
-criteria = "safe-to-run"
-
-[[exemptions.encode_unicode]]
-version = "1.0.0"
 criteria = "safe-to-run"
 
 [[exemptions.etcetera]]
@@ -374,10 +366,6 @@ criteria = "safe-to-deploy"
 [[exemptions.inotify-sys]]
 version = "0.1.5"
 criteria = "safe-to-deploy"
-
-[[exemptions.insta]]
-version = "1.48.0"
-criteria = "safe-to-run"
 
 [[exemptions.iref]]
 version = "2.2.3"
