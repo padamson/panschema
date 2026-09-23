@@ -7,6 +7,10 @@ mod dogfood;
 mod migrate;
 mod rust_writer;
 
+#[path = "../common/mod.rs"]
+mod common;
+use common::generate_site;
+
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -272,19 +276,8 @@ fn a_misnamed_dataset_says_what_the_package_publishes() {
 
 #[test]
 fn class_card_surfaces_mixins_slots_and_resolved_xrefs() {
-    let scratch = tempfile::tempdir().expect("tempdir");
-    let output_dir = scratch.path();
-    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .args([
-            "generate",
-            "--schema",
-            "tests/fixtures/class_card_dogfood.yaml",
-            "--output",
-            output_dir.to_str().unwrap(),
-        ])
-        .status()
-        .expect("Failed to execute panschema");
-    assert!(status.success(), "panschema exited with error");
+    let site = generate_site("tests/fixtures/class_card_dogfood.yaml", &[]);
+    let output_dir = site.path();
 
     let html =
         fs::read_to_string(output_dir.join("index.html")).expect("Failed to read index.html");
@@ -382,19 +375,8 @@ classes:
     let tmp = scratch.path();
     let schema_path = tmp.join("schema.yaml");
     fs::write(&schema_path, schema_yaml).unwrap();
-    let output_dir = tmp.join("out");
-
-    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .args([
-            "generate",
-            "--schema",
-            schema_path.to_str().unwrap(),
-            "--output",
-            output_dir.to_str().unwrap(),
-        ])
-        .status()
-        .expect("Failed to execute panschema");
-    assert!(status.success(), "panschema exited with error");
+    let site = generate_site(schema_path.to_str().unwrap(), &[]);
+    let output_dir = site.path();
 
     let html = fs::read_to_string(output_dir.join("index.html")).expect("read index.html");
 
@@ -441,19 +423,8 @@ fn every_graph_node_has_a_matching_html_card() {
     // last resort. This pins the invariant that makes that reuse safe:
     // every graph node id `<kind>:<name>` has a matching card element, so
     // the fallback is never the real render path.
-    let scratch = tempfile::tempdir().expect("tempdir");
-    let output_dir = scratch.path();
-    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .args([
-            "generate",
-            "--schema",
-            "tests/fixtures/reference.ttl",
-            "--output",
-            output_dir.to_str().unwrap(),
-        ])
-        .status()
-        .expect("Failed to execute panschema");
-    assert!(status.success(), "panschema exited with error");
+    let site = generate_site("tests/fixtures/reference.ttl", &[]);
+    let output_dir = site.path();
     let html = fs::read_to_string(output_dir.join("index.html")).expect("read index.html");
 
     // Pull the embedded graph object (`window.__PANSCHEMA_GRAPH_DATA__ =
@@ -482,21 +453,8 @@ fn every_graph_node_has_a_matching_html_card() {
 
 #[test]
 fn generates_documentation_from_reference_ontology() {
-    let scratch = tempfile::tempdir().expect("tempdir");
-    let output_dir = scratch.path();
-
-    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .args([
-            "generate",
-            "--schema",
-            "tests/fixtures/reference.ttl",
-            "--output",
-            output_dir.to_str().unwrap(),
-        ])
-        .status()
-        .expect("Failed to execute panschema");
-
-    assert!(status.success(), "panschema exited with error");
+    let site = generate_site("tests/fixtures/reference.ttl", &[]);
+    let output_dir = site.path();
 
     let index_path = output_dir.join("index.html");
     assert!(index_path.exists(), "index.html was not generated");
@@ -554,20 +512,8 @@ fn classes_section_renders_is_a_hierarchy_with_flat_toggle() {
     // descendants) flat alongside; the Flat/Tree toggle and the
     // alphabetical order ranks the flat view sorts by are part of the
     // same page.
-    let scratch = tempfile::tempdir().expect("tempdir");
-    let output_dir = scratch.path();
-
-    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .args([
-            "generate",
-            "--schema",
-            "tests/fixtures/reference.ttl",
-            "--output",
-            output_dir.to_str().unwrap(),
-        ])
-        .status()
-        .expect("Failed to execute panschema");
-    assert!(status.success(), "panschema exited with error");
+    let site = generate_site("tests/fixtures/reference.ttl", &[]);
+    let output_dir = site.path();
 
     let html = fs::read_to_string(output_dir.join("index.html")).expect("read index.html");
 
@@ -648,21 +594,8 @@ fn classes_section_renders_is_a_hierarchy_with_flat_toggle() {
 
 #[test]
 fn generates_documentation_from_linkml_yaml() {
-    let scratch = tempfile::tempdir().expect("tempdir");
-    let output_dir = scratch.path();
-
-    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .args([
-            "generate",
-            "--schema",
-            "../panschema-model/tests/fixtures/sample_schema.yaml",
-            "--output",
-            output_dir.to_str().unwrap(),
-        ])
-        .status()
-        .expect("Failed to execute panschema");
-
-    assert!(status.success(), "panschema exited with error");
+    let site = generate_site("../panschema-model/tests/fixtures/sample_schema.yaml", &[]);
+    let output_dir = site.path();
 
     let index_path = output_dir.join("index.html");
     assert!(index_path.exists(), "index.html was not generated");
@@ -797,22 +730,8 @@ fn owl_roundtrip_preserves_schema() {
 
 #[test]
 fn no_graph_flag_disables_graph_visualization() {
-    let scratch = tempfile::tempdir().expect("tempdir");
-    let output_dir = scratch.path();
-
-    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .args([
-            "generate",
-            "--schema",
-            "tests/fixtures/reference.ttl",
-            "--output",
-            output_dir.to_str().unwrap(),
-            "--no-graph",
-        ])
-        .status()
-        .expect("Failed to execute panschema");
-
-    assert!(status.success(), "panschema exited with error");
+    let site = generate_site("tests/fixtures/reference.ttl", &["--no-graph"]);
+    let output_dir = site.path();
 
     let index_path = output_dir.join("index.html");
     assert!(index_path.exists(), "index.html was not generated");
@@ -832,22 +751,11 @@ fn no_graph_flag_disables_graph_visualization() {
 
 #[test]
 fn generate_instances_renders_linkml_data_as_the_instance_graph() {
-    let scratch = tempfile::tempdir().expect("tempdir");
-    let output_dir = scratch.path();
-
-    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .args([
-            "generate",
-            "--schema",
-            "tests/fixtures/wine_catalog.yaml",
-            "--instances",
-            "tests/fixtures/wine_instances.yaml",
-            "--output",
-            output_dir.to_str().unwrap(),
-        ])
-        .status()
-        .expect("Failed to execute panschema");
-    assert!(status.success(), "panschema exited with error");
+    let site = generate_site(
+        "tests/fixtures/wine_catalog.yaml",
+        &["--instances", "tests/fixtures/wine_instances.yaml"],
+    );
+    let output_dir = site.path();
 
     let html = fs::read_to_string(output_dir.join("index.html")).expect("read index.html");
 
@@ -939,24 +847,16 @@ fn generate_reports_conformance_violations_in_the_instance_data() {
 
 #[test]
 fn generate_carries_several_curated_instance_graphs() {
-    let scratch = tempfile::tempdir().expect("tempdir");
-    let output_dir = scratch.path();
-
-    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .args([
-            "generate",
-            "--schema",
-            "tests/fixtures/wine_catalog.yaml",
+    let site = generate_site(
+        "tests/fixtures/wine_catalog.yaml",
+        &[
             "--instances",
             "tests/fixtures/wine_instances_preview.yaml",
             "--instances",
             "tests/fixtures/wine_instances.yaml",
-            "--output",
-            output_dir.to_str().unwrap(),
-        ])
-        .status()
-        .expect("Failed to execute panschema");
-    assert!(status.success(), "panschema exited with error");
+        ],
+    );
+    let output_dir = site.path();
 
     let html = fs::read_to_string(output_dir.join("index.html")).expect("read index.html");
 
@@ -6333,24 +6233,11 @@ fn init_output_shows_from_provenance_when_from_used() {
 /// alongside the root's own class.
 #[test]
 fn generate_merges_single_import() {
-    let scratch = tempfile::tempdir().expect("tempdir");
-    let out_dir = scratch.path();
-
-    let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .args([
-            "generate",
-            "--schema",
-            "../panschema-model/tests/fixtures/imports/app.yaml",
-            "--format",
-            "html",
-            "--no-graph",
-            "--offline",
-            "--output",
-            out_dir.to_str().unwrap(),
-        ])
-        .status()
-        .expect("run panschema generate");
-    assert!(status.success(), "generate should succeed");
+    let site = generate_site(
+        "../panschema-model/tests/fixtures/imports/app.yaml",
+        &["--format", "html", "--no-graph", "--offline"],
+    );
+    let out_dir = site.path();
 
     let html = fs::read_to_string(out_dir.join("index.html")).expect("read index.html");
     assert!(
