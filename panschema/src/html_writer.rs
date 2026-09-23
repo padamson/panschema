@@ -2266,6 +2266,13 @@ mod tests {
     use crate::owl_reader::OwlReader;
     use std::path::PathBuf;
 
+    /// Renders `schema` into a scratch directory and returns `index.html`.
+    fn render_index(writer: &HtmlWriter, schema: &SchemaDefinition) -> String {
+        let scratch = tempfile::tempdir().unwrap();
+        writer.write(schema, scratch.path()).expect("write");
+        fs::read_to_string(scratch.path().join("index.html")).expect("read index.html")
+    }
+
     /// FNV-1a-64 known vectors: the empty input is the offset basis,
     /// and "a" is the canonical published value. Pins the XOR-then-
     /// multiply order — FNV-1 (multiply-then-XOR) or a swapped operator
@@ -2838,11 +2845,7 @@ mod tests {
         schema.types.insert("PhoneNumber".into(), phone);
 
         let writer = HtmlWriter::new();
-        let scratch = tempfile::tempdir().unwrap();
-        let temp_dir = scratch.path();
-        writer.write(&schema, temp_dir).expect("write failed");
-        let html =
-            fs::read_to_string(temp_dir.join("index.html")).expect("failed to read index.html");
+        let html = render_index(&writer, &schema);
 
         // Enumerations section + card + permissible values.
         assert!(html.contains(r#"id="enums""#), "enums section present");
@@ -4840,10 +4843,7 @@ mod tests {
         let writer = HtmlWriter::new()
             .with_instance_dataset(InstanceDataset::new("preview", preview))
             .with_instance_dataset(InstanceDataset::new("worked-example", worked));
-        let scratch = tempfile::tempdir().unwrap();
-        let temp_dir = scratch.path();
-        writer.write(&schema, temp_dir).expect("write");
-        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let html = render_index(&writer, &schema);
 
         assert!(
             html.contains(r#"role="tablist""#),
@@ -4906,10 +4906,7 @@ mod tests {
         let writer = HtmlWriter::new()
             .with_instance_dataset(InstanceDataset::new("preview", preview))
             .with_instance_dataset(InstanceDataset::new("worked-example", worked).as_default());
-        let scratch = tempfile::tempdir().unwrap();
-        let temp_dir = scratch.path();
-        writer.write(&schema, temp_dir).expect("write");
-        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let html = render_index(&writer, &schema);
 
         // Order is unchanged: preview is still the first selector entry.
         let first_tab = html.find(">preview").expect("preview tab present");
@@ -4956,10 +4953,7 @@ mod tests {
         let writer = HtmlWriter::new()
             .with_instance_dataset(InstanceDataset::new("real", real))
             .with_instance_dataset(InstanceDataset::new("empty", empty).as_default());
-        let scratch = tempfile::tempdir().unwrap();
-        let temp_dir = scratch.path();
-        writer.write(&schema, temp_dir).expect("write");
-        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let html = render_index(&writer, &schema);
 
         assert_eq!(
             html.matches(r#"class="instance-dataset-panel""#).count(),
@@ -4992,10 +4986,7 @@ mod tests {
         let writer = HtmlWriter::new()
             .with_instance_dataset(InstanceDataset::new("preview", preview))
             .with_instance_dataset(InstanceDataset::new("worked-example", worked));
-        let scratch = tempfile::tempdir().unwrap();
-        let temp_dir = scratch.path();
-        writer.write(&schema, temp_dir).expect("write");
-        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let html = render_index(&writer, &schema);
 
         let mut counts = std::collections::BTreeMap::new();
         let mut rest = html.as_str();
@@ -5030,10 +5021,7 @@ mod tests {
         );
 
         let writer = HtmlWriter::new().with_instance_dataset(InstanceDataset::new("only", only));
-        let scratch = tempfile::tempdir().unwrap();
-        let temp_dir = scratch.path();
-        writer.write(&schema, temp_dir).expect("write");
-        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let html = render_index(&writer, &schema);
 
         // Two individuals joined by `stored_in`: two nodes, one edge.
         let heading = html
@@ -5068,10 +5056,7 @@ mod tests {
             .with_instance_dataset(
                 InstanceDataset::new("worked-example", worked).with_provenance("worked.yaml"),
             );
-        let scratch = tempfile::tempdir().unwrap();
-        let temp_dir = scratch.path();
-        writer.write(&schema, temp_dir).expect("write");
-        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let html = render_index(&writer, &schema);
 
         assert!(
             html.contains("preview.yaml") && html.contains("worked.yaml"),
@@ -5095,10 +5080,7 @@ mod tests {
         let only = instance_set_from_yaml(&schema, "bottles:\n  - id: b1\n    name: Morgon\n");
 
         let writer = HtmlWriter::new().with_instance_dataset(InstanceDataset::new("only", only));
-        let scratch = tempfile::tempdir().unwrap();
-        let temp_dir = scratch.path();
-        writer.write(&schema, temp_dir).expect("write");
-        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let html = render_index(&writer, &schema);
 
         assert!(
             !html.contains(r#"role="tablist""#),
@@ -5129,10 +5111,7 @@ mod tests {
         );
 
         let writer = HtmlWriter::new().with_instance_dataset(InstanceDataset::new("only", set));
-        let scratch = tempfile::tempdir().unwrap();
-        let temp_dir = scratch.path();
-        writer.write(&schema, temp_dir).expect("write");
-        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let html = render_index(&writer, &schema);
 
         let list = html
             .split_once(r#"class="entity-list""#)
@@ -5376,10 +5355,7 @@ mod tests {
         );
         let writer = HtmlWriter::new()
             .with_instance_dataset(InstanceDataset::new("only", only).with_provenance("only.yaml"));
-        let scratch = tempfile::tempdir().unwrap();
-        let temp_dir = scratch.path();
-        writer.write(&schema, temp_dir).expect("write");
-        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let html = render_index(&writer, &schema);
 
         // Singular heading for one dataset.
         assert!(
@@ -5420,10 +5396,7 @@ mod tests {
         let writer = HtmlWriter::new()
             .with_instance_dataset(InstanceDataset::new("a", a))
             .with_instance_dataset(InstanceDataset::new("b", b));
-        let scratch = tempfile::tempdir().unwrap();
-        let temp_dir = scratch.path();
-        writer.write(&schema, temp_dir).expect("write");
-        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let html = render_index(&writer, &schema);
         assert!(
             html.contains("Instance Graphs"),
             "several datasets read plural"
@@ -5438,10 +5411,7 @@ mod tests {
         let schema = bottle_rack_schema();
 
         let writer = HtmlWriter::new();
-        let scratch = tempfile::tempdir().unwrap();
-        let temp_dir = scratch.path();
-        writer.write(&schema, temp_dir).expect("write");
-        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let html = render_index(&writer, &schema);
 
         assert!(
             html.contains("No individuals defined in this ontology."),
@@ -5466,10 +5436,7 @@ mod tests {
 
         let writer = HtmlWriter::with_options(false)
             .with_instance_dataset(InstanceDataset::new("only", only).with_provenance("only.yaml"));
-        let scratch = tempfile::tempdir().unwrap();
-        let temp_dir = scratch.path();
-        writer.write(&schema, temp_dir).expect("write");
-        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let html = render_index(&writer, &schema);
 
         assert!(
             html.contains("Morgon"),
@@ -5498,10 +5465,7 @@ mod tests {
         let schema = reader.read(&reference_ontology_path()).unwrap();
 
         let writer = HtmlWriter::new();
-        let scratch = tempfile::tempdir().unwrap();
-        let temp_dir = scratch.path();
-        writer.write(&schema, temp_dir).expect("write");
-        let html = fs::read_to_string(temp_dir.join("index.html")).expect("read");
+        let html = render_index(&writer, &schema);
 
         assert!(
             html.contains("Source: individuals embedded in the schema"),
@@ -5516,12 +5480,7 @@ mod tests {
         let schema = reader.read(&reference_ontology_path()).unwrap();
 
         let writer = HtmlWriter::new();
-        let scratch = tempfile::tempdir().unwrap();
-        let temp_dir = scratch.path();
-
-        writer.write(&schema, temp_dir).expect("Write failed");
-
-        let html = fs::read_to_string(temp_dir.join("index.html")).expect("Failed to read");
+        let html = render_index(&writer, &schema);
 
         // Verify key elements are present
         assert!(html.contains("panschema Reference Ontology"));
@@ -5570,10 +5529,7 @@ mod tests {
         let reader = OwlReader::new();
         let schema = reader.read(&reference_ontology_path()).unwrap();
         let writer = HtmlWriter::new();
-        let scratch = tempfile::tempdir().unwrap();
-        let temp_dir = scratch.path();
-        writer.write(&schema, temp_dir).expect("Write failed");
-        let html = fs::read_to_string(temp_dir.join("index.html")).expect("Failed to read");
+        let html = render_index(&writer, &schema);
 
         let errors = html5_parse_errors(&html);
         assert!(
@@ -5598,10 +5554,7 @@ mod tests {
         schema.classes.insert("Innocent".to_string(), class);
 
         let writer = HtmlWriter::new();
-        let scratch = tempfile::tempdir().unwrap();
-        let temp_dir = scratch.path();
-        writer.write(&schema, temp_dir).expect("Write failed");
-        let html = fs::read_to_string(temp_dir.join("index.html")).expect("Failed to read");
+        let html = render_index(&writer, &schema);
 
         let json_line = html
             .lines()
@@ -5619,10 +5572,7 @@ mod tests {
         let reader = OwlReader::new();
         let schema = reader.read(&reference_ontology_path()).unwrap();
         let writer = HtmlWriter::new();
-        let scratch = tempfile::tempdir().unwrap();
-        let temp_dir = scratch.path();
-        writer.write(&schema, temp_dir).expect("Write failed");
-        let html = fs::read_to_string(temp_dir.join("index.html")).expect("Failed to read");
+        let html = render_index(&writer, &schema);
 
         // Card grid uses `auto-fill` so it tiles at wide viewports and
         // collapses to one column when the minimum can't fit twice.
@@ -5663,10 +5613,7 @@ mod tests {
         let reader = OwlReader::new();
         let schema = reader.read(&reference_ontology_path()).unwrap();
         let writer = HtmlWriter::new().with_graph_aspect(4, 3);
-        let scratch = tempfile::tempdir().unwrap();
-        let temp_dir = scratch.path();
-        writer.write(&schema, temp_dir).expect("Write failed");
-        let html = fs::read_to_string(temp_dir.join("index.html")).expect("Failed to read");
+        let html = render_index(&writer, &schema);
         assert!(
             html.contains("--graph-aspect: 4 / 3"),
             "expected overridden 4:3 aspect ratio in inline custom property"
@@ -5711,12 +5658,7 @@ mod tests {
         let schema = reader.read(&reference_ontology_path()).unwrap();
 
         let writer = HtmlWriter::new();
-        let scratch = tempfile::tempdir().unwrap();
-        let temp_dir = scratch.path();
-
-        writer.write(&schema, temp_dir).expect("Write failed");
-
-        let html = fs::read_to_string(temp_dir.join("index.html")).expect("Failed to read");
+        let html = render_index(&writer, &schema);
 
         // Verify Schema Graph link is in sidebar
         assert!(
@@ -5763,12 +5705,7 @@ mod tests {
         let schema = reader.read(&reference_ontology_path()).unwrap();
 
         let writer = HtmlWriter::with_options(false); // No graph
-        let scratch = tempfile::tempdir().unwrap();
-        let temp_dir = scratch.path();
-
-        writer.write(&schema, temp_dir).expect("Write failed");
-
-        let html = fs::read_to_string(temp_dir.join("index.html")).expect("Failed to read");
+        let html = render_index(&writer, &schema);
 
         // Schema Graph link should NOT be present when graph is disabled
         assert!(
