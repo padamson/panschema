@@ -429,7 +429,7 @@ Each run writes `target/graph-2d-{phone,laptop,4k}.png` and dumps a JSON pixel-b
 - [x] Internal identifiers are renamed so the code carries one vocabulary: `PropertyData` → `SlotData`, `property_card.html` → `slot_card.html`, `PropertyCardComponent` → `SlotCardComponent`, `property_type` → `slot_type`, the `.property-badge` / `.prop-ref` CSS classes → `.slot-badge` / `.slot-ref`.
 - [x] The slot card is brought up to parity with the graph hover: it lists every class the slot is a domain of (a slot can belong to several — resolved via `linkml_resolve::resolve_slot_domains`), its validation `pattern`, an `identifier` flag, and explicit `minimum_cardinality` / `maximum_cardinality` bounds (`min..max`), alongside required / multivalued / inverse and mappings.
 - [x] A polymorphic `any_of` range renders on the slot card as `any of [A, B, C]` with each branch anchor-linked when it names a declared class (previously the Range row was blank for union-ranged slots).
-- [x] Snapshot tests for the renamed `slot_card` component and the `render_xref` slot branch pin the new anchors and badge; the `#slots`/`#slot-<name>` anchors are exercised by the e2e happy-path test.
+- [x] Snapshot tests for the renamed `slot_card` component and the `render_xref` slot branch pin the new anchors and badge; the `#slots`/`#slot-<name>` anchors are exercised by the e2e test `e2e_slot_cards_show_domain_range_and_characteristics`.
 
 **Notes:**
 - Source: friction surfaced by the scimantic-schema dogfood — the graph↔doc vocabulary split, plus `any_of` ranges silently dropping from the slot card.

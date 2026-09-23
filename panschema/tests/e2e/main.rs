@@ -24,8 +24,10 @@ mod common;
 use common::generate_site;
 
 use std::fs;
+use std::future::Future;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::process::Command;
 
 use playwright_rs::{Browser, Page, Playwright, expect};
@@ -196,1374 +198,1299 @@ fn get_browsers_to_test() -> Vec<&'static str> {
     }
 }
 
-/// Run the happy-path E2E test with a specific browser.
-async fn run_happy_path_test(playwright: &Playwright, browser_name: &str, site: &Path) {
-    println!("Testing with browser: {}", browser_name);
-
-    let (browser, page) = open_served_page(playwright, browser_name, site).await;
-
-    // === HAPPY PATH TEST ===
-    // This single test verifies the core user journey through the documentation.
-
-    // 1. Navigate to the index page
-    let url = format!("{SITE_ORIGIN}/index.html");
-    page.goto(&url, None)
-        .await
-        .expect("Failed to navigate to index page");
-
-    // 2. Verify page title
-    let title = page.title().await.expect("Failed to get page title");
-    assert!(
-        title.contains("panschema Reference Ontology"),
-        "[{}] Page title should contain ontology name, got: {}",
-        browser_name,
-        title
-    );
-
-    // 3. Verify sidebar is present
-    let sidebar = page.locator(".sidebar");
-    let sidebar_count = sidebar.count().await.expect("Failed to count sidebars");
-    assert!(
-        sidebar_count > 0,
-        "[{}] Sidebar should be present",
-        browser_name
-    );
-
-    // 5. Verify metadata card shows IRI and version
-    let page_content = page.content().await.expect("Failed to get page content");
-    assert!(
-        page_content.contains("http://example.org/panschema/reference"),
-        "[{}] Page should display ontology IRI",
-        browser_name
-    );
-    assert!(
-        page_content.contains("0.2.0"),
-        "[{}] Page should display version",
-        browser_name
-    );
-
-    // 6. Verify classes are extracted and displayed (not empty)
-    // The section header should show count of 6 (Animal, Cat, Dog, Mammal,
-    // Person, Pet)
-    let class_section = page.locator("#classes");
-    let class_section_html = class_section
-        .inner_html()
-        .await
-        .expect("Failed to get classes section");
-    assert!(
-        class_section_html.contains(">6<"),
-        "[{}] Classes section should show count of 6, got: {}",
-        browser_name,
-        class_section_html
-    );
-
-    // Verify some class links are present
-    let class_links = page.locator(".class-link");
-    let class_link_count = class_links
-        .count()
-        .await
-        .expect("Failed to count class links");
-    assert_eq!(
-        class_link_count, 6,
-        "[{}] Should have 6 class links",
-        browser_name
-    );
-
-    // Verify specific classes are present
-    assert!(
-        class_section_html.contains("Animal"),
-        "[{}] Classes section should contain 'Animal'",
-        browser_name
-    );
-    assert!(
-        class_section_html.contains("Dog"),
-        "[{}] Classes section should contain 'Dog'",
-        browser_name
-    );
-
-    // 6b. Verify class cards are rendered with full content
-    let class_cards = page.locator(".class-card");
-    let class_card_count = class_cards
-        .count()
-        .await
-        .expect("Failed to count class cards");
-    assert_eq!(
-        class_card_count, 6,
-        "[{}] Should have 6 class cards",
-        browser_name
-    );
-
-    // Verify class card content: Dog should show description
-    let dog_card = page.locator("#class-Dog");
-    let dog_card_html = dog_card.inner_html().await.expect("Failed to get Dog card");
-    assert!(
-        dog_card_html.contains("A domesticated carnivorous mammal"),
-        "[{}] Dog card should show description, got: {}",
-        browser_name,
-        dog_card_html
-    );
-
-    // Verify class card shows IRI
-    assert!(
-        dog_card_html.contains("http://example.org/panschema/reference#Dog"),
-        "[{}] Dog card should show IRI",
-        browser_name
-    );
-
-    // 6c. Verify class hierarchy relationships are displayed
-    // Dog should show "Subclass of" Mammal
-    assert!(
-        dog_card_html.contains("Subclass of"),
-        "[{}] Dog card should show 'Subclass of'",
-        browser_name
-    );
-    assert!(
-        dog_card_html.contains("href=\"#class-Mammal\""),
-        "[{}] Dog card should link to Mammal as superclass",
-        browser_name
-    );
-
-    // Mammal should show "Superclass of" (Dog and Cat)
-    let mammal_card = page.locator("#class-Mammal");
-    let mammal_card_html = mammal_card
-        .inner_html()
-        .await
-        .expect("Failed to get Mammal card");
-    assert!(
-        mammal_card_html.contains("Superclass of"),
-        "[{}] Mammal card should show 'Superclass of'",
-        browser_name
-    );
-    assert!(
-        mammal_card_html.contains("href=\"#class-Dog\""),
-        "[{}] Mammal card should link to Dog as subclass",
-        browser_name
-    );
-
-    // Animal should show "Superclass of" Mammal (root class)
-    let animal_card = page.locator("#class-Animal");
-    let animal_card_html = animal_card
-        .inner_html()
-        .await
-        .expect("Failed to get Animal card");
-    assert!(
-        animal_card_html.contains("Superclass of"),
-        "[{}] Animal card should show 'Superclass of'",
-        browser_name
-    );
-
-    // Person should NOT show "Subclass of" (it's a root class)
-    let person_card = page.locator("#class-Person");
-    let person_card_html = person_card
-        .inner_html()
-        .await
-        .expect("Failed to get Person card");
-    assert!(
-        !person_card_html.contains("Subclass of"),
-        "[{}] Person card should not show 'Subclass of' (it's a root class)",
-        browser_name
-    );
-
-    // 6d. Verify slots are extracted and displayed
-    let slot_section = page.locator("#slots");
-    let slot_section_html = slot_section
-        .inner_html()
-        .await
-        .expect("Failed to get slots section");
-    assert!(
-        slot_section_html.contains(">5<"),
-        "[{}] Slots section should show count of 5, got: {}",
-        browser_name,
-        slot_section_html
-    );
-
-    // Verify slot links are present
-    let slot_links = page.locator(".slot-link");
-    let slot_link_count = slot_links
-        .count()
-        .await
-        .expect("Failed to count slot links");
-    assert_eq!(
-        slot_link_count, 5,
-        "[{}] Should have 5 slot links",
-        browser_name
-    );
-
-    // 6e. Verify slot cards are rendered with full content
-    let slot_cards = page.locator(".slot-card");
-    let slot_card_count = slot_cards
-        .count()
-        .await
-        .expect("Failed to count slot cards");
-    assert_eq!(
-        slot_card_count, 5,
-        "[{}] Should have 5 slot cards",
-        browser_name
-    );
-
-    // Verify object-ranged slot card: hasOwner
-    let has_owner_card = page.locator("#slot-hasOwner");
-    let has_owner_html = has_owner_card
-        .inner_html()
-        .await
-        .expect("Failed to get hasOwner card");
-    assert!(
-        has_owner_html.contains("Slot"),
-        "[{}] hasOwner should show Slot badge",
-        browser_name
-    );
-    assert!(
-        has_owner_html.contains("Relates an animal to its owner"),
-        "[{}] hasOwner should show description",
-        browser_name
-    );
-    assert!(
-        has_owner_html.contains("Domain"),
-        "[{}] hasOwner should show Domain",
-        browser_name
-    );
-    assert!(
-        has_owner_html.contains("href=\"#class-Animal\""),
-        "[{}] hasOwner domain should link to Animal",
-        browser_name
-    );
-    assert!(
-        has_owner_html.contains("Range"),
-        "[{}] hasOwner should show Range",
-        browser_name
-    );
-    assert!(
-        has_owner_html.contains("href=\"#class-Person\""),
-        "[{}] hasOwner range should link to Person",
-        browser_name
-    );
-
-    // Verify datatype-ranged slot card: hasAge
-    let has_age_card = page.locator("#slot-hasAge");
-    let has_age_html = has_age_card
-        .inner_html()
-        .await
-        .expect("Failed to get hasAge card");
-    assert!(
-        has_age_html.contains("Slot"),
-        "[{}] hasAge should show Slot badge",
-        browser_name
-    );
-    assert!(
-        has_age_html.contains("integer"),
-        "[{}] hasAge range should show integer datatype",
-        browser_name
-    );
-
-    // Verify inverse slot: owns shows inverseOf characteristic
-    let owns_card = page.locator("#slot-owns");
-    let owns_html = owns_card
-        .inner_html()
-        .await
-        .expect("Failed to get owns card");
-    assert!(
-        owns_html.contains("Inverse of: has owner"),
-        "[{}] owns should show inverse of characteristic",
-        browser_name
-    );
-
-    // 6e-1. Card metadata rows that render only through the full
-    // OWL → IR → HTML path. The reference ontology carries a deprecated
-    // class, a class with aliases + see_also + a SKOS mapping, and a
-    // symmetric+transitive object property; each must surface in the
-    // browser DOM.
-
-    // Pet is `owl:deprecated true`: its card shows the "Deprecated"
-    // badge and the deprecation note.
-    let pet_card = page.locator("#class-Pet");
-    let pet_html = pet_card.inner_html().await.expect("Failed to get Pet card");
-    assert!(
-        pet_html.contains(r#"class="deprecated-badge""#),
-        "[{}] Pet card should show the Deprecated badge; got: {}",
-        browser_name,
-        pet_html
-    );
-    assert!(
-        pet_html.contains(r#"class="deprecated-note""#),
-        "[{}] Pet card should show the deprecation note; got: {}",
-        browser_name,
-        pet_html
-    );
-
-    // Person carries skos:altLabel (aliases), rdfs:seeAlso (see also),
-    // and skos:exactMatch (a mapping). The person_card_html captured
-    // above for the root-class check is reused here.
-    assert!(
-        person_card_html.contains("<dt>Aliases</dt>")
-            && person_card_html.contains("Human")
-            && person_card_html.contains("Individual"),
-        "[{}] Person card should show an Aliases row listing Human and Individual; got: {}",
-        browser_name,
-        person_card_html
-    );
-    assert!(
-        person_card_html.contains("<dt>See also</dt>")
-            && person_card_html.contains("xmlns.com/foaf/0.1/Person"),
-        "[{}] Person card should show a See also row linking to foaf:Person; got: {}",
-        browser_name,
-        person_card_html
-    );
-    assert!(
-        person_card_html.contains("<dt>Mappings</dt>")
-            && person_card_html.contains("schema.org/Person"),
-        "[{}] Person card should show a Mappings row linking to schema.org/Person; got: {}",
-        browser_name,
-        person_card_html
-    );
-
-    // relatedTo is owl:SymmetricProperty + owl:TransitiveProperty: its
-    // slot card shows both characteristic badges.
-    let related_card = page.locator("#slot-relatedTo");
-    let related_html = related_card
-        .inner_html()
-        .await
-        .expect("Failed to get relatedTo card");
-    assert!(
-        related_html.contains(r#"class="characteristic-badge""#)
-            && related_html.contains("Symmetric")
-            && related_html.contains("Transitive"),
-        "[{}] relatedTo card should show Symmetric and Transitive characteristic badges; got: {}",
-        browser_name,
-        related_html
-    );
-
-    // 6f. Verify individuals are extracted and displayed. The heading counts
-    // the graph — one individual, no assertions between individuals — rather
-    // than a bare individual count, so it reads like the schema graph's badge.
-    let ind_count = page
-        .locator("#instance-graph-count")
-        .inner_text()
-        .await
-        .expect("instance graph count");
-    assert_eq!(
-        ind_count.trim(),
-        "1 / 0",
-        "[{}] the instance heading should count nodes and edges, got: {}",
-        browser_name,
-        ind_count
-    );
-    let ind_section = page.locator("#individuals");
-    let ind_section_html = ind_section
-        .inner_html()
-        .await
-        .expect("Failed to get individuals section");
-    assert!(
-        ind_section_html.contains("ind-fido"),
-        "[{}] Individuals section should render the individual's card, got: {}",
-        browser_name,
-        ind_section_html
-    );
-
-    // Verify individual links are present
-    let ind_links = page.locator(".individual-link");
-    let ind_link_count = ind_links
-        .count()
-        .await
-        .expect("Failed to count individual links");
-    assert_eq!(
-        ind_link_count, 1,
-        "[{}] Should have 1 individual link",
-        browser_name
-    );
-
-    // Verify individual cards are rendered
-    let ind_cards = page.locator(".individual-card");
-    let ind_card_count = ind_cards
-        .count()
-        .await
-        .expect("Failed to count individual cards");
-    assert_eq!(
-        ind_card_count, 1,
-        "[{}] Should have 1 individual card",
-        browser_name
-    );
-
-    // Verify individual card content: fido
-    let fido_card = page.locator("#ind-fido");
-    let fido_card_html = fido_card
-        .inner_html()
-        .await
-        .expect("Failed to get fido card");
-    assert!(
-        fido_card_html.contains("Individual"),
-        "[{}] Fido card should show Individual badge",
-        browser_name
-    );
-    assert!(
-        fido_card_html.contains("Fido"),
-        "[{}] Fido card should show label 'Fido'",
-        browser_name
-    );
-    assert!(
-        fido_card_html.contains("href=\"#class-Dog\""),
-        "[{}] Fido card should link to Dog class as type",
-        browser_name
-    );
-    assert!(
-        fido_card_html.contains("has name"),
-        "[{}] Fido card should show 'has name' property",
-        browser_name
-    );
-    assert!(
-        fido_card_html.contains("has age"),
-        "[{}] Fido card should show 'has age' property",
-        browser_name
-    );
-
-    // Verify sidebar has individuals link
-    let ind_sidebar_link = page.locator(".sidebar-link[href='#individuals']");
-    let ind_sidebar_count = ind_sidebar_link
-        .count()
-        .await
-        .expect("Failed to count individuals sidebar link");
-    assert!(
-        ind_sidebar_count > 0,
-        "[{}] Individuals navigation link should exist in sidebar",
-        browser_name
-    );
-
-    // 7. Test sidebar navigation links exist and are clickable
-    let classes_link = page.locator(".sidebar-link[href='#classes']");
-    let link_count = classes_link.count().await.expect("Failed to count links");
-    assert!(
-        link_count > 0,
-        "[{}] Classes navigation link should exist in sidebar",
-        browser_name
-    );
-
-    // Presence is asserted above and the hash poll below verifies the
-    // click took effect.
-    dom_click(&page, ".sidebar-link[href='#classes']").await;
-
-    wait_until_ready(&page, "location.hash === '#classes'")
-        .await
-        .unwrap_or_else(|e| {
-            panic!("[{browser_name}] URL hash should be #classes after click: {e}")
-        });
-
-    // Verify classes section exists (the target of the link)
-    let classes_section = page.locator("#classes");
-    let section_count = classes_section
-        .count()
-        .await
-        .expect("Failed to count classes sections");
-    assert!(
-        section_count > 0,
-        "[{}] Classes section should exist as link target",
-        browser_name
-    );
-
-    // 7b. Verify scroll spy: after scrolling to #classes, the "Classes" sidebar
-    //     link should be active and "Overview" should not.
-    wait_until_ready(
-        &page,
-        "document.querySelector('.sidebar-link[href=\"#classes\"]')?.classList.contains('active') ?? false",
-    )
-    .await
-    .unwrap_or_else(|e| panic!("[{browser_name}] Scroll spy should mark Classes sidebar link as active after scrolling to #classes: {e}"));
-
-    // Metadata should no longer be active
-    let metadata_active = page
-        .evaluate_value(
-            "document.querySelector('.sidebar-link[href=\"#metadata\"]')?.classList.contains('active') ?? false",
-        )
-        .await
-        .unwrap_or_default();
-    assert!(
-        !metadata_active.contains("true"),
-        "[{}] Metadata sidebar link should not be active when viewing #classes",
-        browser_name
-    );
-
-    // 8. Responsive viewport tests using set_viewport_size()
-    // First verify desktop behavior: sidebar visible, mobile toggle hidden
-    page.set_viewport_size(playwright_rs::Viewport {
-        width: 1280,
-        height: 720,
-    })
-    .await
-    .expect("Failed to set desktop viewport");
-
-    let mobile_toggle = page.locator(".mobile-menu-toggle");
-    let toggle_visible_desktop = mobile_toggle
-        .is_visible()
-        .await
-        .expect("Failed to check toggle visibility");
-    assert!(
-        !toggle_visible_desktop,
-        "[{}] Mobile menu toggle should be hidden on desktop viewport",
-        browser_name
-    );
-
-    let sidebar = page.locator(".sidebar");
-    let sidebar_visible_desktop = sidebar
-        .is_visible()
-        .await
-        .expect("Failed to check sidebar visibility");
-    assert!(
-        sidebar_visible_desktop,
-        "[{}] Sidebar should be visible on desktop viewport",
-        browser_name
-    );
-
-    // 8a-1. Classes default to the tree view: Mammal's card is
-    // stacked below Animal's and indented under it.
-    let animal_box = page
-        .locator("#class-Animal")
-        .bounding_box()
-        .await
-        .expect("Failed to query Animal card box")
-        .expect("Animal class card should have a bounding box");
-    let mammal_box = page
-        .locator("#class-Mammal")
-        .bounding_box()
-        .await
-        .expect("Failed to query Mammal card box")
-        .expect("Mammal class card should have a bounding box");
-    assert!(
-        mammal_box.y > animal_box.y && mammal_box.x > animal_box.x,
-        "[{}] In the tree view Mammal should sit below and indented \
-         under Animal; got animal=({}, {}), mammal=({}, {})",
-        browser_name,
-        animal_box.x,
-        animal_box.y,
-        mammal_box.x,
-        mammal_box.y
-    );
-
-    // 8a-1a. Leaf siblings tile within their tree level: Cat and Dog
-    // (both children of Mammal with no descendants) share a row on a
-    // 1280px viewport instead of stacking.
-    let cat_box = page
-        .locator("#class-Cat")
-        .bounding_box()
-        .await
-        .expect("Failed to query Cat card box")
-        .expect("Cat class card should have a bounding box");
-    let dog_box = page
-        .locator("#class-Dog")
-        .bounding_box()
-        .await
-        .expect("Failed to query Dog card box")
-        .expect("Dog class card should have a bounding box");
-    assert!(
-        (cat_box.y - dog_box.y).abs() < 10.0,
-        "[{}] In the tree view the leaf siblings Cat and Dog should \
-         tile on the same row (Y delta < 10px); got y0={}, y1={}",
-        browser_name,
-        cat_box.y,
-        dog_box.y
-    );
-    assert!(
-        cat_box.x > mammal_box.x,
-        "[{}] Cat should be indented under Mammal; got cat.x={}, mammal.x={}",
-        browser_name,
-        cat_box.x,
-        mammal_box.x
-    );
-
-    // 8a-1b. The Flat toggle switches to an alphabetical grid:
-    // Animal and Cat (alphabetical neighbors) tile on the same row
-    // (within a small Y tolerance) on a 1280px viewport.
-    page.locator(r#".view-toggle-btn[data-view="flat"]"#)
-        .click(None)
-        .await
-        .expect("Failed to click the Flat toggle");
-    expect(page.locator("#class-cards"))
-        .to_have_attribute("data-view", "flat")
-        .await
-        .expect("the Flat toggle switches the card grid to the flat view");
-    let animal_flat_box = page
-        .locator("#class-Animal")
-        .bounding_box()
-        .await
-        .expect("Failed to query Animal card box (flat)")
-        .expect("Animal class card should have a bounding box (flat)");
-    let cat_flat_box = page
-        .locator("#class-Cat")
-        .bounding_box()
-        .await
-        .expect("Failed to query Cat card box (flat)")
-        .expect("Cat class card should have a bounding box (flat)");
-    assert!(
-        (animal_flat_box.y - cat_flat_box.y).abs() < 10.0,
-        "[{}] In the flat view Animal and Cat should tile on the same \
-         row (Y delta < 10px); got y0={}, y1={}",
-        browser_name,
-        animal_flat_box.y,
-        cat_flat_box.y
-    );
-    // Restore the tree default so later steps see the shipped state.
-    page.locator(r#".view-toggle-btn[data-view="tree"]"#)
-        .click(None)
-        .await
-        .expect("Failed to click the Tree toggle");
-    expect(page.locator("#class-cards"))
-        .to_have_attribute("data-view", "tree")
-        .await
-        .expect("the Tree toggle restores the tree view");
-
-    // 8a-2. Graph container's aspect ratio matches the writer's
-    // default (16:8) within 5% — derived dynamically rather than
-    // hard-coded so future default-ratio changes only need to bump
-    // this constant.
-    let graph_container = page.locator(".graph-container");
-    let graph_box = graph_container
-        .bounding_box()
-        .await
-        .expect("Failed to query graph container box")
-        .expect("Graph container should have a bounding box");
-    let ratio = graph_box.width / graph_box.height;
-    let target = 16.0_f64 / 8.0;
-    assert!(
-        (ratio - target).abs() / target < 0.05,
-        "[{}] Graph container aspect ratio should be ~16:8 (±5%); \
-         got w={}, h={}, ratio={:.3} (target {:.3})",
-        browser_name,
-        graph_box.width,
-        graph_box.height,
-        ratio,
-        target
-    );
-
-    // 8b. Resize to mobile viewport and verify responsive behavior
-    page.set_viewport_size(playwright_rs::Viewport {
-        width: 375,
-        height: 667,
-    })
-    .await
-    .expect("Failed to set mobile viewport");
-
-    expect(mobile_toggle.clone())
-        .to_be_visible()
-        .await
-        .unwrap_or_else(|e| {
-            panic!("[{browser_name}] Mobile menu toggle should be visible on mobile viewport: {e}")
-        });
-
-    // 8b-1. On a narrow viewport (375px) the card grid collapses to
-    // one column — successive class cards stack rather than sharing
-    // a row (each card's top sits below the previous card's bottom).
-    let m_card0 = class_cards
-        .nth(0)
-        .bounding_box()
-        .await
-        .expect("Failed to query first card box on mobile")
-        .expect("First class card should have a bounding box");
-    let m_card1 = class_cards
-        .nth(1)
-        .bounding_box()
-        .await
-        .expect("Failed to query second card box on mobile")
-        .expect("Second class card should have a bounding box");
-    assert!(
-        m_card1.y > m_card0.y + m_card0.height - 4.0,
-        "[{}] On a 375px viewport the class cards should stack \
-         (card2.y > card1.bottom); got card1 y={} h={}, card2 y={}",
-        browser_name,
-        m_card0.y,
-        m_card0.height,
-        m_card1.y
-    );
-
-    // 8c. Test mobile menu toggle functionality
-    mobile_toggle
-        .click(None)
-        .await
-        .expect("Failed to click mobile menu toggle");
-
-    expect(sidebar).to_be_visible().await.unwrap_or_else(|e| {
-        panic!("[{browser_name}] Sidebar should be visible after clicking mobile menu toggle: {e}")
-    });
-
-    // === GRAPH VISUALIZATION TESTS ===
-
-    // 9. Verify graph visualization section exists
-    let graph_section = page.locator("#graph-visualization");
-    let graph_section_count = graph_section
-        .count()
-        .await
-        .expect("Failed to count graph section");
-    assert!(
-        graph_section_count > 0,
-        "[{}] Graph visualization section should exist",
-        browser_name
-    );
-
-    // 9b. The ephemeral hover card (slice 9) ships in the template
-    // so the JS hover handler has somewhere to populate. Verifying
-    // the element renders pins the template wiring even though
-    // simulating an actual hover-over-node interaction requires the
-    // WASM-driven canvas, which is outside this happy-path test's
-    // scope.
-    let hover_card = page.locator("#graph-hover-card");
-    let hover_card_count = hover_card
-        .count()
-        .await
-        .expect("Failed to count hover card");
-    assert_eq!(
-        hover_card_count, 1,
-        "[{}] Hover card element (#graph-hover-card) should be rendered exactly once",
-        browser_name
-    );
-    let hover_card_classes = hover_card
-        .get_attribute("class")
-        .await
-        .expect("Failed to read hover card class attr")
-        .unwrap_or_default();
-    assert!(
-        hover_card_classes.contains("graph-hover-card"),
-        "[{}] Hover card should carry the graph-hover-card class for CSS targeting; got: {}",
-        browser_name,
-        hover_card_classes
-    );
-
-    // 9c. The Arrows toggle (slice 15 / ADR-005) ships in the
-    // controls strip, defaults on, and persists its off-state to
-    // localStorage. Direction is drawn on the WASM canvas, which a
-    // DOM test can't pixel-assert; this verifies the control contract.
-    let arrows_btn = page.locator("#graph-arrows");
-    assert_eq!(
-        arrows_btn.count().await.expect("count arrows toggle"),
-        1,
-        "[{}] Arrows toggle (#graph-arrows) should render exactly once",
-        browser_name
-    );
-    let arrows_default_active = arrows_btn
-        .get_attribute("class")
-        .await
-        .expect("read arrows class")
-        .unwrap_or_default()
-        .contains("active");
-    assert!(
-        arrows_default_active,
-        "[{}] Arrows toggle should default to active (arrowheads on)",
-        browser_name
-    );
-    // Click programmatically: the strip sits over the WASM canvas, so
-    // pointer-actionability is flaky in headless; the handler + the
-    // persisted pref are the contract this verifies.
-    page.evaluate::<(), ()>("document.getElementById('graph-arrows').click()", None)
-        .await
-        .expect("click arrows toggle");
-    let arrows_after = arrows_btn
-        .get_attribute("class")
-        .await
-        .expect("read arrows class after click")
-        .unwrap_or_default();
-    assert!(
-        !arrows_after.contains("active"),
-        "[{}] clicking Arrows should toggle it off; class still active: {}",
-        browser_name,
-        arrows_after
-    );
-    let persisted = page
-        .evaluate_value("localStorage.getItem('panschema-arrows')")
-        .await
-        .unwrap_or_default();
-    assert!(
-        persisted.contains('0'),
-        "[{}] arrows-off should persist to localStorage as '0'; got: {}",
-        browser_name,
-        persisted
-    );
-    // Restore the default so later steps see the shipped state.
-    page.evaluate::<(), ()>("document.getElementById('graph-arrows').click()", None)
-        .await
-        .expect("restore arrows toggle");
-
-    // Toggles drive the wasm viz, not just their own styling — the
-    // same contract the instance canvas asserts, on the schema canvas.
-    let toggled = page
-        .evaluate_value(
-            r#"(function(){
-                var viz = window.__panschema_viz;
-                var before = viz.node_labels_enabled() + ':' + viz.show_arrows();
-                document.getElementById('graph-labels-nodes').click();
-                document.getElementById('graph-arrows').click();
-                var after = viz.node_labels_enabled() + ':' + viz.show_arrows();
-                document.getElementById('graph-labels-nodes').click();
-                document.getElementById('graph-arrows').click();
-                return before + ' -> ' + after;
-            })()"#,
-        )
-        .await
-        .unwrap_or_default();
-    assert!(
-        toggled.contains("true:true -> false:false"),
-        "[{}] schema label and arrow toggles should flip viz state; got: {}",
-        browser_name,
-        toggled
-    );
-
-    // 9b. Notation legend: the Legend control renders the key onto a
-    // standalone canvas (proving the wasm `render_legend` export ran —
-    // a non-zero backing-store width means it sized and drew), defaults
-    // open on this roomy viewport, and toggles + persists. The glyph
-    // pixels can't be DOM-asserted; this verifies the control contract.
-    let legend_toggle = page.locator("#graph-legend-toggle");
-    assert_eq!(
-        legend_toggle.count().await.expect("count legend toggle"),
-        1,
-        "[{}] Legend toggle (#graph-legend-toggle) should render exactly once",
-        browser_name
-    );
-    let legend_canvas_width = page
-        .evaluate_value("document.getElementById('graph-legend-canvas').width")
-        .await
-        .unwrap_or_default();
-    let legend_width: i64 = legend_canvas_width
-        .trim()
-        .trim_matches('"')
-        .parse()
-        .unwrap_or(0);
-    assert!(
-        legend_width > 0,
-        "[{}] legend canvas should be sized by render_legend; width was {}",
-        browser_name,
-        legend_canvas_width
-    );
-    let legend_visible = || async {
-        page.evaluate_value(
-            "getComputedStyle(document.getElementById('graph-legend')).display !== 'none'",
-        )
-        .await
-        .unwrap_or_default()
-        .contains("true")
-    };
-    assert!(
-        legend_visible().await,
-        "[{}] legend should default open on a roomy viewport",
-        browser_name
-    );
-    page.evaluate::<(), ()>(
-        "document.getElementById('graph-legend-toggle').click()",
-        None,
-    )
-    .await
-    .expect("click legend toggle off");
-    assert!(
-        !legend_visible().await,
-        "[{}] clicking Legend should hide the key",
-        browser_name
-    );
-    let legend_persisted = page
-        .evaluate_value("localStorage.getItem('panschema-graph-legend-open')")
-        .await
-        .unwrap_or_default();
-    assert!(
-        legend_persisted.contains("false"),
-        "[{}] legend-closed should persist as 'false'; got: {}",
-        browser_name,
-        legend_persisted
-    );
-    page.evaluate::<(), ()>(
-        "document.getElementById('graph-legend-toggle').click()",
-        None,
-    )
-    .await
-    .expect("restore legend toggle");
-
-    // 10. Verify canvas is present and visible
-    let canvas = page.locator("#graph-canvas");
-    let canvas_count = canvas.count().await.expect("Failed to count canvas");
-    assert!(
-        canvas_count > 0,
-        "[{}] Graph canvas should exist",
-        browser_name
-    );
-
-    // The static fallback shows the canvas even without wasm.
-    expect(canvas.clone())
-        .to_be_visible()
-        .await
-        .unwrap_or_else(|e| panic!("[{browser_name}] Graph canvas should become visible: {e}"));
-
-    // 11. The graph badge reads `nodes / edges`, the same format every graph
-    // count uses, with the spelled-out reading carried as a label.
-    let node_count_badge = page.locator("#graph-node-count");
-    let badge_text = node_count_badge
-        .inner_text()
-        .await
-        .expect("Failed to get node count badge text");
-    let parts: Vec<&str> = badge_text.trim().split(" / ").collect();
-    assert!(
-        parts.len() == 2 && parts.iter().all(|p| p.parse::<usize>().is_ok()),
-        "[{}] the graph badge should read `nodes / edges`, got: {}",
-        browser_name,
-        badge_text
-    );
-    let badge_label = node_count_badge
-        .get_attribute("aria-label")
-        .await
-        .unwrap_or_default()
-        .unwrap_or_default();
-    assert!(
-        badge_label.contains("node") && badge_label.contains("edge"),
-        "[{}] the badge needs a label saying which number is which, got: {:?}",
-        browser_name,
-        badge_label
-    );
-
-    // 12. Verify graph controls are present
-    let reset_btn = page.locator("#graph-reset");
-    let reset_count = reset_btn
-        .count()
-        .await
-        .expect("Failed to count reset button");
-    assert!(
-        reset_count > 0,
-        "[{}] Graph reset button should exist",
-        browser_name
-    );
-
-    let zoom_in = page.locator("#graph-zoom-in");
-    let zoom_in_count = zoom_in
-        .count()
-        .await
-        .expect("Failed to count zoom-in button");
-    assert!(
-        zoom_in_count > 0,
-        "[{}] Zoom in button should exist",
-        browser_name
-    );
-
-    let zoom_out = page.locator("#graph-zoom-out");
-    let zoom_out_count = zoom_out
-        .count()
-        .await
-        .expect("Failed to count zoom-out button");
-    assert!(
-        zoom_out_count > 0,
-        "[{}] Zoom out button should exist",
-        browser_name
-    );
-
-    // 13. Verify loading indicator is hidden after initialization
-    let loading = page.locator("#graph-loading");
-    let loading_visible = loading
-        .is_visible()
-        .await
-        .expect("Failed to check loading visibility");
-    assert!(
-        !loading_visible,
-        "[{}] Loading indicator should be hidden after graph initializes",
-        browser_name
-    );
-
-    // 14. Verify graph data contains node labels
-    let has_node_labels = page
-        .evaluate_value(
-            "window.__PANSCHEMA_GRAPH_DATA__.nodes.every(n => n.label && n.label.length > 0)",
-        )
-        .await
-        .expect("Failed to check node labels");
-    assert!(
-        has_node_labels.contains("true"),
-        "[{}] All nodes should have labels",
-        browser_name
-    );
-
-    // 15. Verify graph data contains edge types (used for edge labels)
-    let has_edge_types = page
-        .evaluate_value(
-            "window.__PANSCHEMA_GRAPH_DATA__.edges.every(e => e.edge_type && e.edge_type.length > 0)",
-        )
-        .await
-        .expect("Failed to check edge types");
-    assert!(
-        has_edge_types.contains("true"),
-        "[{}] All edges should have edge_type for labeling",
-        browser_name
-    );
-
-    // 16. Verify specific node labels exist (Animal, Dog, Person are in reference ontology)
-    let has_animal_label = page
-        .evaluate_value("window.__PANSCHEMA_GRAPH_DATA__.nodes.some(n => n.label === 'Animal')")
-        .await
-        .expect("Failed to check Animal label");
-    assert!(
-        has_animal_label.contains("true"),
-        "[{}] Should have node with label 'Animal'",
-        browser_name
-    );
-
-    // 17. Verify edge labels - subclass_of edges exist
-    let has_subclass_edges = page
-        .evaluate_value(
-            "window.__PANSCHEMA_GRAPH_DATA__.edges.some(e => e.edge_type === 'subclass_of')",
-        )
-        .await
-        .expect("Failed to check subclass edges");
-    assert!(
-        has_subclass_edges.contains("true"),
-        "[{}] Should have subclass_of edges",
-        browser_name
-    );
-
-    // 18. Verify Schema Graph is in sidebar navigation
-    let graph_sidebar_link = page.locator(".sidebar-link[href='#graph-visualization']");
-    let graph_sidebar_count = graph_sidebar_link
-        .count()
-        .await
-        .expect("Failed to count graph sidebar link");
-    assert!(
-        graph_sidebar_count > 0,
-        "[{}] Schema Graph navigation link should exist in sidebar",
-        browser_name
-    );
-
-    // 19. Reset to desktop viewport for interaction tests
-    page.set_viewport_size(playwright_rs::Viewport {
-        width: 1280,
-        height: 720,
-    })
-    .await
-    .expect("Failed to set desktop viewport for graph tests");
-
-    // Scroll to graph section to ensure buttons are visible
-    page.evaluate::<(), ()>(
-        // Driver 1.62.1+: scrollIntoView() evaluates to a result object
-        // ({interrupted: bool}); void keeps the expression unit-shaped.
-        "void document.getElementById('graph-visualization').scrollIntoView()",
-        None,
-    )
-    .await
-    .expect("Failed to scroll to graph section");
-
-    // 20. Test zoom button interaction - click zoom in and verify no errors
-    let zoom_in_btn = page.locator("#graph-zoom-in");
-    zoom_in_btn
-        .click(None)
-        .await
-        .expect("Failed to click zoom in button");
-
-    // Verify no error overlay appeared after zoom
-    let error_overlay = page.locator("#graph-error");
-    let error_visible = error_overlay
-        .is_visible()
-        .await
-        .expect("Failed to check error visibility");
-    assert!(
-        !error_visible,
-        "[{}] Error overlay should not appear after zoom interaction",
-        browser_name
-    );
-
-    // 21. Test zoom out button
-    let zoom_out_btn = page.locator("#graph-zoom-out");
-    zoom_out_btn
-        .click(None)
-        .await
-        .expect("Failed to click zoom out button");
-
-    // 22. Test reset button
-    let reset_button = page.locator("#graph-reset");
-    reset_button
-        .click(None)
-        .await
-        .expect("Failed to click reset button");
-
-    // 23. Verify canvas has non-zero dimensions (was actually rendered)
-    let canvas_width = page
-        .evaluate_value("document.getElementById('graph-canvas').width")
-        .await
-        .expect("Failed to get canvas width");
-    let canvas_height = page
-        .evaluate_value("document.getElementById('graph-canvas').height")
-        .await
-        .expect("Failed to get canvas height");
-
-    // Canvas dimensions should be positive (not 0)
-    assert!(
-        !canvas_width.contains("\"0\""),
-        "[{}] Canvas should have non-zero width, got: {}",
-        browser_name,
-        canvas_width
-    );
-    assert!(
-        !canvas_height.contains("\"0\""),
-        "[{}] Canvas should have non-zero height, got: {}",
-        browser_name,
-        canvas_height
-    );
-
-    // 24b. Layout picker: the chrome is present, the implemented
-    // variant is selectable, and the rest are disabled.
-    let layout_select = page.locator("#graph-layout-select");
-    let layout_select_count = layout_select
-        .count()
-        .await
-        .expect("Failed to count layout picker");
-    assert!(
-        layout_select_count > 0,
-        "[{}] Layout picker <select> should exist",
-        browser_name
-    );
-    // The writer emits the `auto` not-pinned default, so the picker's
-    // initial value is the density-based recommendation. The reference
-    // fixture is mixed-edge (subclass_of + domain/range/inverse), below
-    // the inheritance threshold, so it auto-detects to `sgd` (feature
-    // 09 slice 9). An `is_a`-heavy schema would recommend hierarchical.
-    let initial_value = layout_select
-        .input_value(None)
-        .await
-        .expect("Failed to read layout select value");
-    assert_eq!(
-        initial_value, "sgd",
-        "[{}] mixed-edge reference fixture should auto-detect to sgd; got `{}`",
-        browser_name, initial_value
-    );
-    // Implemented options are present and selectable; the rest are
-    // reserved-wire-format placeholders carrying the disabled attribute.
-    for implemented in &[
-        "force-directed",
-        "kamada-kawai",
-        "hierarchical",
-        "stress",
-        "sgd",
-    ] {
-        let opt = page.locator(format!(
-            "#graph-layout-select option[value=\"{implemented}\"]"
-        ));
-        let count = opt.count().await.expect("Failed to count option");
-        assert_eq!(
-            count, 1,
-            "[{}] Picker should expose option for `{}`",
-            browser_name, implemented
-        );
-        let disabled = opt
-            .get_attribute("disabled")
-            .await
-            .expect("Failed to read disabled attr");
-        assert!(
-            disabled.is_none(),
-            "[{}] Option `{}` should be selectable",
-            browser_name,
-            implemented
-        );
-    }
-    for unimplemented in &["circular", "radial-tree"] {
-        let opt = page.locator(format!(
-            "#graph-layout-select option[value=\"{unimplemented}\"]"
-        ));
-        let count = opt.count().await.expect("Failed to count option");
-        assert_eq!(
-            count, 1,
-            "[{}] Picker should expose option for `{}`",
-            browser_name, unimplemented
-        );
-        let disabled = opt
-            .get_attribute("disabled")
-            .await
-            .expect("Failed to read disabled attr");
-        assert!(
-            disabled.is_some(),
-            "[{}] Option `{}` should be disabled (not yet implemented)",
-            browser_name,
-            unimplemented
-        );
-    }
-
-    // 25. Test sidebar navigation to Schema Graph section
-    graph_sidebar_link
-        .click(None)
-        .await
-        .expect("Failed to click Schema Graph sidebar link");
-
-    wait_until_ready(&page, "location.hash === '#graph-visualization'")
-        .await
-        .unwrap_or_else(|e| panic!("[{browser_name}] URL hash should be #graph-visualization after clicking sidebar link: {e}"));
-
-    // === SELECTION TESTS ===
-
-    // 26. Test click-to-select: clicking on canvas should update selection state
-    // First, scroll to graph and ensure viz is initialized
-    page.evaluate::<(), ()>(
-        // Driver 1.62.1+: scrollIntoView() evaluates to a result object
-        // ({interrupted: bool}); void keeps the expression unit-shaped.
-        "void document.getElementById('graph-visualization').scrollIntoView()",
-        None,
-    )
-    .await
-    .expect("Failed to scroll to graph for selection test");
-
-    // Get initial selection state (should be -1 = no selection)
-    let initial_selection = page
-        .evaluate_value("typeof viz !== 'undefined' && viz.selected_node_index ? viz.selected_node_index() : -1")
-        .await
-        .expect("Failed to get initial selection");
-    println!(
-        "[{}] Initial selection state: {}",
-        browser_name, initial_selection
-    );
-
-    // Click in the center of the canvas using canvas.click() which handles coordinates
-    // This clicks in the center of the element by default
-    canvas
-        .click(None)
-        .await
-        .expect("Failed to click canvas for selection");
-
-    // Get selection state after click
-    let selection_after_click = page
-        .evaluate_value("typeof viz !== 'undefined' && viz.selected_node_index ? viz.selected_node_index() : -1")
-        .await
-        .expect("Failed to get selection after click");
-    println!(
-        "[{}] Selection after center click: {}",
-        browser_name, selection_after_click
-    );
-
-    // Note: We can't guarantee a node is at the center, so we just verify the API works
-    // The test passes if no errors occur and selection state is tracked
-
-    // Test deselect by calling deselect via JavaScript
-    page.evaluate::<(), ()>(
-        "if (typeof viz !== 'undefined' && viz.deselect) { viz.deselect(); }",
-        None,
-    )
-    .await
-    .expect("Failed to call deselect");
-
-    let selection_after_deselect = page
-        .evaluate_value("typeof viz !== 'undefined' && viz.selected_node_index ? viz.selected_node_index() : -1")
-        .await
-        .expect("Failed to get selection after deselect");
-    println!(
-        "[{}] Selection after deselect (should be -1): {}",
-        browser_name, selection_after_deselect
-    );
-
-    // Verify deselect worked
-    assert!(
-        selection_after_deselect.contains("-1"),
-        "[{}] Selection should be -1 after deselect, got: {}",
-        browser_name,
-        selection_after_deselect
-    );
-
-    // Cleanup
-    browser.close().await.expect("Failed to close browser");
-
-    println!("[{}] All checks passed!", browser_name);
-}
-
-#[test]
-fn e2e_happy_path() {
+/// Opens `site` at its index on a fresh 1280×720 page in each of `browsers`
+/// and runs `body` there. A browser launch per test is the suite's unit of
+/// isolation; a panic unwinds through the Playwright handle, which closes
+/// every browser it launched.
+fn on_site<F>(site: &Path, browsers: &[&str], body: F)
+where
+    F: for<'a> Fn(&'a str, &'a Page) -> Pin<Box<dyn Future<Output = ()> + 'a>>,
+{
     let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-
     rt.block_on(async {
-        // Generate documentation. Nothing is bound or spawned to serve it:
-        // each page serves it from this process.
-        let site = generate_docs();
-        let output_dir = site.path();
-
         let playwright = Playwright::launch()
             .await
             .expect("Failed to initialize Playwright");
-
-        for browser_name in get_browsers_to_test() {
-            run_happy_path_test(&playwright, browser_name, output_dir).await;
+        for browser_name in browsers {
+            let (browser, page) = open_served_page(&playwright, browser_name, site).await;
+            page.set_viewport_size(playwright_rs::Viewport {
+                width: 1280,
+                height: 720,
+            })
+            .await
+            .expect("Failed to set the desktop viewport");
+            page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
+                .await
+                .expect("Failed to navigate to index page");
+            body(browser_name, &page).await;
+            browser.close().await.expect("Failed to close browser");
         }
+    });
+}
+
+/// The reference site in every browser `BROWSER` names: for claims about
+/// what the generated page renders, which every engine must agree on.
+fn in_every_browser<F>(body: F)
+where
+    F: for<'a> Fn(&'a str, &'a Page) -> Pin<Box<dyn Future<Output = ()> + 'a>>,
+{
+    let site = generate_docs();
+    on_site(site.path(), &get_browsers_to_test(), body);
+}
+
+/// `site` in Chromium only: for claims about one graph's behavior, where a
+/// second engine would repeat the same wasm run.
+fn in_chromium<F>(site: tempfile::TempDir, body: F)
+where
+    F: for<'a> Fn(&'a Page) -> Pin<Box<dyn Future<Output = ()> + 'a>>,
+{
+    on_site(site.path(), &["chromium"], move |_, page| body(page));
+}
+
+/// Clicks node `index` of the schema graph at the canvas position the viz
+/// reports for it, through the press, release, click sequence the drag
+/// gate expects. Nodes are canvas-drawn, so there is no DOM element to
+/// click. Panics when the viz has no such node.
+async fn click_schema_node(page: &Page, index: usize) {
+    let script = format!(
+        r#"(function(){{
+            var viz = window.__panschema_viz;
+            if (!viz || typeof viz.node_canvas_pos !== 'function') return 'no-viz';
+            var pos = viz.node_canvas_pos({index});
+            if (!pos || pos.length < 2) return 'no-pos';
+            var canvas = document.getElementById('graph-canvas');
+            var rect = canvas.getBoundingClientRect();
+            var dpr = window.devicePixelRatio || 1;
+            __CLICK_AT__
+            clickAt(rect.left + pos[0] / dpr, rect.top + pos[1] / dpr);
+            return 'clicked';
+        }})()"#
+    )
+    .replace("__CLICK_AT__", CLICK_AT_JS);
+    let clicked = page.evaluate_value(&script).await.unwrap_or_default();
+    assert!(
+        clicked.contains("clicked"),
+        "expected to click schema node {index}; got: {clicked}"
+    );
+}
+
+#[test]
+fn e2e_reference_page_shows_title_sidebar_and_metadata() {
+    in_every_browser(|browser_name, page| {
+        Box::pin(async move {
+            let title = page.title().await.expect("Failed to get page title");
+            assert!(
+                title.contains("panschema Reference Ontology"),
+                "[{}] Page title should contain ontology name, got: {}",
+                browser_name,
+                title
+            );
+
+            let sidebar_count = page
+                .locator(".sidebar")
+                .count()
+                .await
+                .expect("Failed to count sidebars");
+            assert!(
+                sidebar_count > 0,
+                "[{}] Sidebar should be present",
+                browser_name
+            );
+
+            let page_content = page.content().await.expect("Failed to get page content");
+            assert!(
+                page_content.contains("http://example.org/panschema/reference"),
+                "[{}] Page should display ontology IRI",
+                browser_name
+            );
+            assert!(
+                page_content.contains("0.2.0"),
+                "[{}] Page should display version",
+                browser_name
+            );
+        })
+    });
+}
+
+#[test]
+fn e2e_class_cards_show_content_and_hierarchy() {
+    in_every_browser(|browser_name, page| {
+        Box::pin(async move {
+            // The section header counts the six classes: Animal, Cat, Dog,
+            // Mammal, Person, Pet.
+            let class_section_html = page
+                .locator("#classes")
+                .inner_html()
+                .await
+                .expect("Failed to get classes section");
+            assert!(
+                class_section_html.contains(">6<"),
+                "[{}] Classes section should show count of 6, got: {}",
+                browser_name,
+                class_section_html
+            );
+            let class_link_count = page
+                .locator(".class-link")
+                .count()
+                .await
+                .expect("Failed to count class links");
+            assert_eq!(
+                class_link_count, 6,
+                "[{}] Should have 6 class links",
+                browser_name
+            );
+            assert!(
+                class_section_html.contains("Animal"),
+                "[{}] Classes section should contain 'Animal'",
+                browser_name
+            );
+            assert!(
+                class_section_html.contains("Dog"),
+                "[{}] Classes section should contain 'Dog'",
+                browser_name
+            );
+            let class_card_count = page
+                .locator(".class-card")
+                .count()
+                .await
+                .expect("Failed to count class cards");
+            assert_eq!(
+                class_card_count, 6,
+                "[{}] Should have 6 class cards",
+                browser_name
+            );
+
+            let dog_card_html = page
+                .locator("#class-Dog")
+                .inner_html()
+                .await
+                .expect("Failed to get Dog card");
+            assert!(
+                dog_card_html.contains("A domesticated carnivorous mammal"),
+                "[{}] Dog card should show description, got: {}",
+                browser_name,
+                dog_card_html
+            );
+            assert!(
+                dog_card_html.contains("http://example.org/panschema/reference#Dog"),
+                "[{}] Dog card should show IRI",
+                browser_name
+            );
+            assert!(
+                dog_card_html.contains("Subclass of"),
+                "[{}] Dog card should show 'Subclass of'",
+                browser_name
+            );
+            assert!(
+                dog_card_html.contains("href=\"#class-Mammal\""),
+                "[{}] Dog card should link to Mammal as superclass",
+                browser_name
+            );
+
+            let mammal_card_html = page
+                .locator("#class-Mammal")
+                .inner_html()
+                .await
+                .expect("Failed to get Mammal card");
+            assert!(
+                mammal_card_html.contains("Superclass of"),
+                "[{}] Mammal card should show 'Superclass of'",
+                browser_name
+            );
+            assert!(
+                mammal_card_html.contains("href=\"#class-Dog\""),
+                "[{}] Mammal card should link to Dog as subclass",
+                browser_name
+            );
+
+            let animal_card_html = page
+                .locator("#class-Animal")
+                .inner_html()
+                .await
+                .expect("Failed to get Animal card");
+            assert!(
+                animal_card_html.contains("Superclass of"),
+                "[{}] Animal card should show 'Superclass of'",
+                browser_name
+            );
+
+            let person_card_html = page
+                .locator("#class-Person")
+                .inner_html()
+                .await
+                .expect("Failed to get Person card");
+            assert!(
+                !person_card_html.contains("Subclass of"),
+                "[{}] Person card should not show 'Subclass of' (it's a root class)",
+                browser_name
+            );
+        })
+    });
+}
+
+/// Card metadata rows that render only through the full OWL → IR → HTML
+/// path: a deprecated class, and a class with aliases, see-also, and a
+/// SKOS mapping.
+#[test]
+fn e2e_class_cards_show_deprecation_aliases_and_mappings() {
+    in_every_browser(|browser_name, page| {
+        Box::pin(async move {
+            let pet_html = page
+                .locator("#class-Pet")
+                .inner_html()
+                .await
+                .expect("Failed to get Pet card");
+            assert!(
+                pet_html.contains(r#"class="deprecated-badge""#),
+                "[{}] Pet card should show the Deprecated badge; got: {}",
+                browser_name,
+                pet_html
+            );
+            assert!(
+                pet_html.contains(r#"class="deprecated-note""#),
+                "[{}] Pet card should show the deprecation note; got: {}",
+                browser_name,
+                pet_html
+            );
+
+            let person_card_html = page
+                .locator("#class-Person")
+                .inner_html()
+                .await
+                .expect("Failed to get Person card");
+            assert!(
+                person_card_html.contains("<dt>Aliases</dt>")
+                    && person_card_html.contains("Human")
+                    && person_card_html.contains("Individual"),
+                "[{}] Person card should show an Aliases row listing Human and Individual; got: {}",
+                browser_name,
+                person_card_html
+            );
+            assert!(
+                person_card_html.contains("<dt>See also</dt>")
+                    && person_card_html.contains("xmlns.com/foaf/0.1/Person"),
+                "[{}] Person card should show a See also row linking to foaf:Person; got: {}",
+                browser_name,
+                person_card_html
+            );
+            assert!(
+                person_card_html.contains("<dt>Mappings</dt>")
+                    && person_card_html.contains("schema.org/Person"),
+                "[{}] Person card should show a Mappings row linking to schema.org/Person; got: {}",
+                browser_name,
+                person_card_html
+            );
+        })
+    });
+}
+
+#[test]
+fn e2e_slot_cards_show_domain_range_and_characteristics() {
+    in_every_browser(|browser_name, page| {
+        Box::pin(async move {
+            let slot_section_html = page
+                .locator("#slots")
+                .inner_html()
+                .await
+                .expect("Failed to get slots section");
+            assert!(
+                slot_section_html.contains(">5<"),
+                "[{}] Slots section should show count of 5, got: {}",
+                browser_name,
+                slot_section_html
+            );
+            let slot_link_count = page
+                .locator(".slot-link")
+                .count()
+                .await
+                .expect("Failed to count slot links");
+            assert_eq!(
+                slot_link_count, 5,
+                "[{}] Should have 5 slot links",
+                browser_name
+            );
+            let slot_card_count = page
+                .locator(".slot-card")
+                .count()
+                .await
+                .expect("Failed to count slot cards");
+            assert_eq!(
+                slot_card_count, 5,
+                "[{}] Should have 5 slot cards",
+                browser_name
+            );
+
+            // Object-ranged: hasOwner links both ends.
+            let has_owner_html = page
+                .locator("#slot-hasOwner")
+                .inner_html()
+                .await
+                .expect("Failed to get hasOwner card");
+            assert!(
+                has_owner_html.contains("Slot"),
+                "[{}] hasOwner should show Slot badge",
+                browser_name
+            );
+            assert!(
+                has_owner_html.contains("Relates an animal to its owner"),
+                "[{}] hasOwner should show description",
+                browser_name
+            );
+            assert!(
+                has_owner_html.contains("Domain"),
+                "[{}] hasOwner should show Domain",
+                browser_name
+            );
+            assert!(
+                has_owner_html.contains("href=\"#class-Animal\""),
+                "[{}] hasOwner domain should link to Animal",
+                browser_name
+            );
+            assert!(
+                has_owner_html.contains("Range"),
+                "[{}] hasOwner should show Range",
+                browser_name
+            );
+            assert!(
+                has_owner_html.contains("href=\"#class-Person\""),
+                "[{}] hasOwner range should link to Person",
+                browser_name
+            );
+
+            // Datatype-ranged: hasAge names its datatype.
+            let has_age_html = page
+                .locator("#slot-hasAge")
+                .inner_html()
+                .await
+                .expect("Failed to get hasAge card");
+            assert!(
+                has_age_html.contains("Slot"),
+                "[{}] hasAge should show Slot badge",
+                browser_name
+            );
+            assert!(
+                has_age_html.contains("integer"),
+                "[{}] hasAge range should show integer datatype",
+                browser_name
+            );
+
+            let owns_html = page
+                .locator("#slot-owns")
+                .inner_html()
+                .await
+                .expect("Failed to get owns card");
+            assert!(
+                owns_html.contains("Inverse of: has owner"),
+                "[{}] owns should show inverse of characteristic",
+                browser_name
+            );
+
+            // relatedTo is symmetric and transitive: both badges show.
+            let related_html = page
+                .locator("#slot-relatedTo")
+                .inner_html()
+                .await
+                .expect("Failed to get relatedTo card");
+            assert!(
+                related_html.contains(r#"class="characteristic-badge""#)
+                    && related_html.contains("Symmetric")
+                    && related_html.contains("Transitive"),
+                "[{}] relatedTo card should show Symmetric and Transitive characteristic badges; got: {}",
+                browser_name,
+                related_html
+            );
+        })
+    });
+}
+
+/// The individuals heading counts the graph, one individual and no
+/// assertions between individuals, so it reads like the schema graph's
+/// badge rather than a bare individual count.
+#[test]
+fn e2e_individuals_section_counts_the_graph_and_renders_the_card() {
+    in_every_browser(|browser_name, page| {
+        Box::pin(async move {
+            let ind_count = page
+                .locator("#instance-graph-count")
+                .inner_text()
+                .await
+                .expect("instance graph count");
+            assert_eq!(
+                ind_count.trim(),
+                "1 / 0",
+                "[{}] the instance heading should count nodes and edges, got: {}",
+                browser_name,
+                ind_count
+            );
+            let ind_section_html = page
+                .locator("#individuals")
+                .inner_html()
+                .await
+                .expect("Failed to get individuals section");
+            assert!(
+                ind_section_html.contains("ind-fido"),
+                "[{}] Individuals section should render the individual's card, got: {}",
+                browser_name,
+                ind_section_html
+            );
+            let ind_link_count = page
+                .locator(".individual-link")
+                .count()
+                .await
+                .expect("Failed to count individual links");
+            assert_eq!(
+                ind_link_count, 1,
+                "[{}] Should have 1 individual link",
+                browser_name
+            );
+            let ind_card_count = page
+                .locator(".individual-card")
+                .count()
+                .await
+                .expect("Failed to count individual cards");
+            assert_eq!(
+                ind_card_count, 1,
+                "[{}] Should have 1 individual card",
+                browser_name
+            );
+
+            let fido_card_html = page
+                .locator("#ind-fido")
+                .inner_html()
+                .await
+                .expect("Failed to get fido card");
+            assert!(
+                fido_card_html.contains("Individual"),
+                "[{}] Fido card should show Individual badge",
+                browser_name
+            );
+            assert!(
+                fido_card_html.contains("Fido"),
+                "[{}] Fido card should show label 'Fido'",
+                browser_name
+            );
+            assert!(
+                fido_card_html.contains("href=\"#class-Dog\""),
+                "[{}] Fido card should link to Dog class as type",
+                browser_name
+            );
+            assert!(
+                fido_card_html.contains("has name"),
+                "[{}] Fido card should show 'has name' property",
+                browser_name
+            );
+            assert!(
+                fido_card_html.contains("has age"),
+                "[{}] Fido card should show 'has age' property",
+                browser_name
+            );
+
+            let ind_sidebar_count = page
+                .locator(".sidebar-link[href='#individuals']")
+                .count()
+                .await
+                .expect("Failed to count individuals sidebar link");
+            assert!(
+                ind_sidebar_count > 0,
+                "[{}] Individuals navigation link should exist in sidebar",
+                browser_name
+            );
+        })
+    });
+}
+
+#[test]
+fn e2e_sidebar_link_navigates_and_scroll_spy_follows() {
+    in_every_browser(|browser_name, page| {
+        Box::pin(async move {
+            let link_count = page
+                .locator(".sidebar-link[href='#classes']")
+                .count()
+                .await
+                .expect("Failed to count links");
+            assert!(
+                link_count > 0,
+                "[{}] Classes navigation link should exist in sidebar",
+                browser_name
+            );
+
+            // Presence is asserted above and the hash wait below verifies
+            // the click took effect.
+            dom_click(page, ".sidebar-link[href='#classes']").await;
+            wait_until_ready(page, "location.hash === '#classes'")
+                .await
+                .unwrap_or_else(|e| {
+                    panic!("[{browser_name}] URL hash should be #classes after click: {e}")
+                });
+            let section_count = page
+                .locator("#classes")
+                .count()
+                .await
+                .expect("Failed to count classes sections");
+            assert!(
+                section_count > 0,
+                "[{}] Classes section should exist as link target",
+                browser_name
+            );
+
+            // Scroll spy: the Classes link goes active and Metadata does not.
+            wait_until_ready(
+                page,
+                "document.querySelector('.sidebar-link[href=\"#classes\"]')?.classList.contains('active') ?? false",
+            )
+            .await
+            .unwrap_or_else(|e| panic!("[{browser_name}] Scroll spy should mark Classes sidebar link as active after scrolling to #classes: {e}"));
+            let metadata_active = page
+                .evaluate_value(
+                    "document.querySelector('.sidebar-link[href=\"#metadata\"]')?.classList.contains('active') ?? false",
+                )
+                .await
+                .unwrap_or_default();
+            assert!(
+                !metadata_active.contains("true"),
+                "[{}] Metadata sidebar link should not be active when viewing #classes",
+                browser_name
+            );
+        })
+    });
+}
+
+/// On a desktop viewport the sidebar shows without a menu toggle, and the
+/// classes render as a tree: a child sits below and indented under its
+/// parent, and leaf siblings tile on one row.
+#[test]
+fn e2e_desktop_viewport_shows_sidebar_and_trees_the_classes() {
+    in_every_browser(|browser_name, page| {
+        Box::pin(async move {
+            let toggle_visible_desktop = page
+                .locator(".mobile-menu-toggle")
+                .is_visible()
+                .await
+                .expect("Failed to check toggle visibility");
+            assert!(
+                !toggle_visible_desktop,
+                "[{}] Mobile menu toggle should be hidden on desktop viewport",
+                browser_name
+            );
+            let sidebar_visible_desktop = page
+                .locator(".sidebar")
+                .is_visible()
+                .await
+                .expect("Failed to check sidebar visibility");
+            assert!(
+                sidebar_visible_desktop,
+                "[{}] Sidebar should be visible on desktop viewport",
+                browser_name
+            );
+
+            let animal_box = page
+                .locator("#class-Animal")
+                .bounding_box()
+                .await
+                .expect("Failed to query Animal card box")
+                .expect("Animal class card should have a bounding box");
+            let mammal_box = page
+                .locator("#class-Mammal")
+                .bounding_box()
+                .await
+                .expect("Failed to query Mammal card box")
+                .expect("Mammal class card should have a bounding box");
+            assert!(
+                mammal_box.y > animal_box.y && mammal_box.x > animal_box.x,
+                "[{}] In the tree view Mammal should sit below and indented \
+                 under Animal; got animal=({}, {}), mammal=({}, {})",
+                browser_name,
+                animal_box.x,
+                animal_box.y,
+                mammal_box.x,
+                mammal_box.y
+            );
+
+            // Cat and Dog, both leaf children of Mammal, share a row.
+            let cat_box = page
+                .locator("#class-Cat")
+                .bounding_box()
+                .await
+                .expect("Failed to query Cat card box")
+                .expect("Cat class card should have a bounding box");
+            let dog_box = page
+                .locator("#class-Dog")
+                .bounding_box()
+                .await
+                .expect("Failed to query Dog card box")
+                .expect("Dog class card should have a bounding box");
+            assert!(
+                (cat_box.y - dog_box.y).abs() < 10.0,
+                "[{}] In the tree view the leaf siblings Cat and Dog should \
+                 tile on the same row (Y delta < 10px); got y0={}, y1={}",
+                browser_name,
+                cat_box.y,
+                dog_box.y
+            );
+            assert!(
+                cat_box.x > mammal_box.x,
+                "[{}] Cat should be indented under Mammal; got cat.x={}, mammal.x={}",
+                browser_name,
+                cat_box.x,
+                mammal_box.x
+            );
+        })
+    });
+}
+
+/// The Flat toggle switches the class grid to an alphabetical tiling:
+/// Animal and Cat, alphabetical neighbors, share a row on a 1280px
+/// viewport.
+#[test]
+fn e2e_flat_toggle_tiles_classes_alphabetically() {
+    in_every_browser(|browser_name, page| {
+        Box::pin(async move {
+            page.locator(r#".view-toggle-btn[data-view="flat"]"#)
+                .click(None)
+                .await
+                .expect("Failed to click the Flat toggle");
+            expect(page.locator("#class-cards"))
+                .to_have_attribute("data-view", "flat")
+                .await
+                .expect("the Flat toggle switches the card grid to the flat view");
+            let animal_flat_box = page
+                .locator("#class-Animal")
+                .bounding_box()
+                .await
+                .expect("Failed to query Animal card box (flat)")
+                .expect("Animal class card should have a bounding box (flat)");
+            let cat_flat_box = page
+                .locator("#class-Cat")
+                .bounding_box()
+                .await
+                .expect("Failed to query Cat card box (flat)")
+                .expect("Cat class card should have a bounding box (flat)");
+            assert!(
+                (animal_flat_box.y - cat_flat_box.y).abs() < 10.0,
+                "[{}] In the flat view Animal and Cat should tile on the same \
+                 row (Y delta < 10px); got y0={}, y1={}",
+                browser_name,
+                animal_flat_box.y,
+                cat_flat_box.y
+            );
+        })
+    });
+}
+
+/// On a 375px viewport the class cards stack in one column and the menu
+/// toggle opens the sidebar.
+#[test]
+fn e2e_mobile_viewport_stacks_cards_and_menu_opens_sidebar() {
+    in_every_browser(|browser_name, page| {
+        Box::pin(async move {
+            page.set_viewport_size(playwright_rs::Viewport {
+                width: 375,
+                height: 667,
+            })
+            .await
+            .expect("Failed to set mobile viewport");
+
+            let mobile_toggle = page.locator(".mobile-menu-toggle");
+            expect(mobile_toggle.clone())
+                .to_be_visible()
+                .await
+                .unwrap_or_else(|e| {
+                    panic!("[{browser_name}] Mobile menu toggle should be visible on mobile viewport: {e}")
+                });
+
+            let class_cards = page.locator(".class-card");
+            let m_card0 = class_cards
+                .nth(0)
+                .bounding_box()
+                .await
+                .expect("Failed to query first card box on mobile")
+                .expect("First class card should have a bounding box");
+            let m_card1 = class_cards
+                .nth(1)
+                .bounding_box()
+                .await
+                .expect("Failed to query second card box on mobile")
+                .expect("Second class card should have a bounding box");
+            assert!(
+                m_card1.y > m_card0.y + m_card0.height - 4.0,
+                "[{}] On a 375px viewport the class cards should stack \
+                 (card2.y > card1.bottom); got card1 y={} h={}, card2 y={}",
+                browser_name,
+                m_card0.y,
+                m_card0.height,
+                m_card1.y
+            );
+
+            mobile_toggle
+                .click(None)
+                .await
+                .expect("Failed to click mobile menu toggle");
+            expect(page.locator(".sidebar"))
+                .to_be_visible()
+                .await
+                .unwrap_or_else(|e| {
+                    panic!("[{browser_name}] Sidebar should be visible after clicking mobile menu toggle: {e}")
+                });
+        })
+    });
+}
+
+#[test]
+fn e2e_graph_section_ships_the_hover_card() {
+    in_every_browser(|browser_name, page| {
+        Box::pin(async move {
+            let graph_section_count = page
+                .locator("#graph-visualization")
+                .count()
+                .await
+                .expect("Failed to count graph section");
+            assert!(
+                graph_section_count > 0,
+                "[{}] Graph visualization section should exist",
+                browser_name
+            );
+            let hover_card = page.locator("#graph-hover-card");
+            assert_eq!(
+                hover_card
+                    .count()
+                    .await
+                    .expect("Failed to count hover card"),
+                1,
+                "[{}] Hover card element (#graph-hover-card) should be rendered exactly once",
+                browser_name
+            );
+            let hover_card_classes = hover_card
+                .get_attribute("class")
+                .await
+                .expect("Failed to read hover card class attr")
+                .unwrap_or_default();
+            assert!(
+                hover_card_classes.contains("graph-hover-card"),
+                "[{}] Hover card should carry the graph-hover-card class for CSS targeting; got: {}",
+                browser_name,
+                hover_card_classes
+            );
+        })
+    });
+}
+
+/// The Arrows toggle defaults on, and clicking it flips the viz's own state
+/// rather than only the button's styling, then persists to localStorage.
+/// Clicks go through the DOM: the control strip sits over the wasm canvas,
+/// so pointer actionability is flaky in headless.
+#[test]
+fn e2e_arrows_toggle_flips_the_viz_and_persists() {
+    in_every_browser(|browser_name, page| {
+        Box::pin(async move {
+            wait_for_graph_viz_ready(page).await.unwrap_or_else(|e| {
+                panic!("[{browser_name}] schema graph viz never became ready: {e}")
+            });
+            let arrows_btn = page.locator("#graph-arrows");
+            assert_eq!(
+                arrows_btn.count().await.expect("count arrows toggle"),
+                1,
+                "[{}] Arrows toggle (#graph-arrows) should render exactly once",
+                browser_name
+            );
+            let arrows_default_active = arrows_btn
+                .get_attribute("class")
+                .await
+                .expect("read arrows class")
+                .unwrap_or_default()
+                .contains("active");
+            assert!(
+                arrows_default_active,
+                "[{}] Arrows toggle should default to active (arrowheads on)",
+                browser_name
+            );
+
+            let toggled = page
+                .evaluate_value(
+                    r#"(function(){
+                        var viz = window.__panschema_viz;
+                        var before = viz.node_labels_enabled() + ':' + viz.show_arrows();
+                        document.getElementById('graph-labels-nodes').click();
+                        document.getElementById('graph-arrows').click();
+                        var after = viz.node_labels_enabled() + ':' + viz.show_arrows();
+                        return before + ' -> ' + after;
+                    })()"#,
+                )
+                .await
+                .unwrap_or_default();
+            assert!(
+                toggled.contains("true:true -> false:false"),
+                "[{}] the label and arrow toggles should flip viz state; got: {}",
+                browser_name,
+                toggled
+            );
+            let arrows_after = arrows_btn
+                .get_attribute("class")
+                .await
+                .expect("read arrows class after click")
+                .unwrap_or_default();
+            assert!(
+                !arrows_after.contains("active"),
+                "[{}] clicking Arrows should toggle it off; class still active: {}",
+                browser_name,
+                arrows_after
+            );
+            let persisted = page
+                .evaluate_value("localStorage.getItem('panschema-arrows')")
+                .await
+                .unwrap_or_default();
+            assert!(
+                persisted.contains('0'),
+                "[{}] arrows-off should persist to localStorage as '0'; got: {}",
+                browser_name,
+                persisted
+            );
+        })
+    });
+}
+
+/// The Legend control renders the key onto its own canvas (a non-zero
+/// backing-store width means the wasm `render_legend` export sized and
+/// drew), defaults open on the fixture's 1280px viewport, and toggles and
+/// persists. The glyph pixels cannot be DOM-asserted.
+#[test]
+fn e2e_legend_renders_defaults_open_and_persists() {
+    in_every_browser(|browser_name, page| {
+        Box::pin(async move {
+            wait_for_graph_viz_ready(page).await.unwrap_or_else(|e| {
+                panic!("[{browser_name}] schema graph viz never became ready: {e}")
+            });
+            let legend_toggle = page.locator("#graph-legend-toggle");
+            assert_eq!(
+                legend_toggle.count().await.expect("count legend toggle"),
+                1,
+                "[{}] Legend toggle (#graph-legend-toggle) should render exactly once",
+                browser_name
+            );
+            let legend_canvas_width = page
+                .evaluate_value("document.getElementById('graph-legend-canvas').width")
+                .await
+                .unwrap_or_default();
+            let legend_width: i64 = legend_canvas_width
+                .trim()
+                .trim_matches('"')
+                .parse()
+                .unwrap_or(0);
+            assert!(
+                legend_width > 0,
+                "[{}] legend canvas should be sized by render_legend; width was {}",
+                browser_name,
+                legend_canvas_width
+            );
+            let legend_visible = || async {
+                page.evaluate_value(
+                    "getComputedStyle(document.getElementById('graph-legend')).display !== 'none'",
+                )
+                .await
+                .unwrap_or_default()
+                .contains("true")
+            };
+            assert!(
+                legend_visible().await,
+                "[{}] legend should default open on a roomy viewport",
+                browser_name
+            );
+            page.evaluate::<(), ()>(
+                "document.getElementById('graph-legend-toggle').click()",
+                None,
+            )
+            .await
+            .expect("click legend toggle off");
+            assert!(
+                !legend_visible().await,
+                "[{}] clicking Legend should hide the key",
+                browser_name
+            );
+            let legend_persisted = page
+                .evaluate_value("localStorage.getItem('panschema-graph-legend-open')")
+                .await
+                .unwrap_or_default();
+            assert!(
+                legend_persisted.contains("false"),
+                "[{}] legend-closed should persist as 'false'; got: {}",
+                browser_name,
+                legend_persisted
+            );
+        })
+    });
+}
+
+/// The static fallback shows the canvas even before wasm; once the viz is
+/// up the loading indicator is gone.
+#[test]
+fn e2e_graph_canvas_shows_and_loading_hides_once_the_viz_is_up() {
+    in_every_browser(|browser_name, page| {
+        Box::pin(async move {
+            let canvas = page.locator("#graph-canvas");
+            assert!(
+                canvas.count().await.expect("Failed to count canvas") > 0,
+                "[{}] Graph canvas should exist",
+                browser_name
+            );
+            expect(canvas).to_be_visible().await.unwrap_or_else(|e| {
+                panic!("[{browser_name}] Graph canvas should become visible: {e}")
+            });
+            wait_for_graph_viz_ready(page).await.unwrap_or_else(|e| {
+                panic!("[{browser_name}] schema graph viz never became ready: {e}")
+            });
+            expect(page.locator("#graph-loading"))
+                .to_be_hidden()
+                .await
+                .unwrap_or_else(|e| {
+                    panic!("[{browser_name}] Loading indicator should be hidden after graph initializes: {e}")
+                });
+        })
+    });
+}
+
+/// The graph badge reads `nodes / edges`, the format every graph count
+/// uses, with the spelled-out reading carried as a label.
+#[test]
+fn e2e_graph_badge_reads_nodes_over_edges_with_a_label() {
+    in_every_browser(|browser_name, page| {
+        Box::pin(async move {
+            wait_for_graph_viz_ready(page).await.unwrap_or_else(|e| {
+                panic!("[{browser_name}] schema graph viz never became ready: {e}")
+            });
+            let node_count_badge = page.locator("#graph-node-count");
+            let badge_text = node_count_badge
+                .inner_text()
+                .await
+                .expect("Failed to get node count badge text");
+            let parts: Vec<&str> = badge_text.trim().split(" / ").collect();
+            assert!(
+                parts.len() == 2 && parts.iter().all(|p| p.parse::<usize>().is_ok()),
+                "[{}] the graph badge should read `nodes / edges`, got: {}",
+                browser_name,
+                badge_text
+            );
+            let badge_label = node_count_badge
+                .get_attribute("aria-label")
+                .await
+                .unwrap_or_default()
+                .unwrap_or_default();
+            assert!(
+                badge_label.contains("node") && badge_label.contains("edge"),
+                "[{}] the badge needs a label saying which number is which, got: {:?}",
+                browser_name,
+                badge_label
+            );
+        })
+    });
+}
+
+/// The graph container keeps the writer's default 16:8 aspect within 5%.
+/// The ratio is derived rather than hard-coded, so a change to the writer's
+/// default only moves this constant.
+#[test]
+fn e2e_graph_container_keeps_the_writer_aspect() {
+    in_every_browser(|browser_name, page| {
+        Box::pin(async move {
+            let graph_box = page
+                .locator(".graph-container")
+                .bounding_box()
+                .await
+                .expect("Failed to query graph container box")
+                .expect("Graph container should have a bounding box");
+            let ratio = graph_box.width / graph_box.height;
+            let target = 16.0_f64 / 8.0;
+            assert!(
+                (ratio - target).abs() / target < 0.05,
+                "[{}] Graph container aspect ratio should be ~16:8 (±5%);
+                 got w={}, h={}, ratio={:.3} (target {:.3})",
+                browser_name,
+                graph_box.width,
+                graph_box.height,
+                ratio,
+                target
+            );
+        })
+    });
+}
+
+#[test]
+fn e2e_graph_data_carries_node_labels_and_edge_types() {
+    in_every_browser(|browser_name, page| {
+        Box::pin(async move {
+            for (expr, claim) in [
+                (
+                    "window.__PANSCHEMA_GRAPH_DATA__.nodes.every(n => n.label && n.label.length > 0)",
+                    "All nodes should have labels",
+                ),
+                (
+                    "window.__PANSCHEMA_GRAPH_DATA__.edges.every(e => e.edge_type && e.edge_type.length > 0)",
+                    "All edges should have edge_type for labeling",
+                ),
+                (
+                    "window.__PANSCHEMA_GRAPH_DATA__.nodes.some(n => n.label === 'Animal')",
+                    "Should have node with label 'Animal'",
+                ),
+                (
+                    "window.__PANSCHEMA_GRAPH_DATA__.edges.some(e => e.edge_type === 'subclass_of')",
+                    "Should have subclass_of edges",
+                ),
+            ] {
+                let holds = page
+                    .evaluate_value(expr)
+                    .await
+                    .unwrap_or_else(|e| panic!("Failed to evaluate `{expr}`: {e}"));
+                assert!(
+                    holds.contains("true"),
+                    "[{}] {}; `{}` gave {}",
+                    browser_name,
+                    claim,
+                    expr,
+                    holds
+                );
+            }
+        })
+    });
+}
+
+#[test]
+fn e2e_schema_graph_sidebar_link_navigates_to_the_section() {
+    in_every_browser(|browser_name, page| {
+        Box::pin(async move {
+            let graph_sidebar_link = page.locator(".sidebar-link[href='#graph-visualization']");
+            assert!(
+                graph_sidebar_link
+                    .count()
+                    .await
+                    .expect("Failed to count graph sidebar link")
+                    > 0,
+                "[{}] Schema Graph navigation link should exist in sidebar",
+                browser_name
+            );
+            graph_sidebar_link
+                .click(None)
+                .await
+                .expect("Failed to click Schema Graph sidebar link");
+            wait_until_ready(page, "location.hash === '#graph-visualization'")
+                .await
+                .unwrap_or_else(|e| panic!("[{browser_name}] URL hash should be #graph-visualization after clicking sidebar link: {e}"));
+        })
+    });
+}
+
+/// The zoom and reset buttons act on the viz without raising the error
+/// overlay, the canvas has a real backing store, and the layout picker
+/// offers every implemented layout, auto-detecting `sgd` for the
+/// mixed-edge reference fixture, with the reserved layouts disabled.
+#[test]
+fn e2e_graph_controls_zoom_reset_and_layout_picker() {
+    in_every_browser(|browser_name, page| {
+        Box::pin(async move {
+            wait_for_graph_viz_ready(page).await.unwrap_or_else(|e| {
+                panic!("[{browser_name}] schema graph viz never became ready: {e}")
+            });
+            page.evaluate::<(), ()>(
+                // Driver 1.62.1+: scrollIntoView() evaluates to a result object
+                // ({interrupted: bool}); void keeps the expression unit-shaped.
+                "void document.getElementById('graph-visualization').scrollIntoView()",
+                None,
+            )
+            .await
+            .expect("Failed to scroll to graph section");
+
+            for id in ["#graph-zoom-in", "#graph-zoom-out", "#graph-reset"] {
+                page.locator(id)
+                    .click(None)
+                    .await
+                    .unwrap_or_else(|e| panic!("Failed to click {id}: {e}"));
+            }
+            expect(page.locator("#graph-error"))
+                .to_be_hidden()
+                .await
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "[{browser_name}] Error overlay should not appear after zoom and reset: {e}"
+                    )
+                });
+
+            for dimension in ["width", "height"] {
+                let value = page
+                    .evaluate_value(&format!(
+                        "document.getElementById('graph-canvas').{dimension}"
+                    ))
+                    .await
+                    .unwrap_or_else(|e| panic!("Failed to get canvas {dimension}: {e}"));
+                let pixels: u64 = value.trim().trim_matches('"').parse().unwrap_or(0);
+                assert!(
+                    pixels > 0,
+                    "[{}] Canvas should have non-zero {}, got: {}",
+                    browser_name,
+                    dimension,
+                    value
+                );
+            }
+
+            let layout_select = page.locator("#graph-layout-select");
+            assert!(
+                layout_select
+                    .count()
+                    .await
+                    .expect("Failed to count layout picker")
+                    > 0,
+                "[{}] Layout picker <select> should exist",
+                browser_name
+            );
+            // The writer emits the `auto` not-pinned default, so the picker's
+            // initial value is the density-based recommendation. The reference
+            // fixture is mixed-edge (subclass_of + domain/range/inverse), below
+            // the inheritance threshold, so it auto-detects to `sgd`; an
+            // `is_a`-heavy schema would recommend hierarchical.
+            let initial_value = layout_select
+                .input_value(None)
+                .await
+                .expect("Failed to read layout select value");
+            assert_eq!(
+                initial_value, "sgd",
+                "[{}] mixed-edge reference fixture should auto-detect to sgd; got `{}`",
+                browser_name, initial_value
+            );
+            for implemented in &[
+                "force-directed",
+                "kamada-kawai",
+                "hierarchical",
+                "stress",
+                "sgd",
+            ] {
+                let opt = page.locator(format!(
+                    "#graph-layout-select option[value=\"{implemented}\"]"
+                ));
+                assert_eq!(
+                    opt.count().await.expect("Failed to count option"),
+                    1,
+                    "[{}] Picker should expose option for `{}`",
+                    browser_name,
+                    implemented
+                );
+                let disabled = opt
+                    .get_attribute("disabled")
+                    .await
+                    .expect("Failed to read disabled attr");
+                assert!(
+                    disabled.is_none(),
+                    "[{}] Option `{}` should be selectable",
+                    browser_name,
+                    implemented
+                );
+            }
+            for unimplemented in &["circular", "radial-tree"] {
+                let opt = page.locator(format!(
+                    "#graph-layout-select option[value=\"{unimplemented}\"]"
+                ));
+                assert_eq!(
+                    opt.count().await.expect("Failed to count option"),
+                    1,
+                    "[{}] Picker should expose option for `{}`",
+                    browser_name,
+                    unimplemented
+                );
+                let disabled = opt
+                    .get_attribute("disabled")
+                    .await
+                    .expect("Failed to read disabled attr");
+                assert!(
+                    disabled.is_some(),
+                    "[{}] Option `{}` should be disabled (not yet implemented)",
+                    browser_name,
+                    unimplemented
+                );
+            }
+        })
     });
 }
 
 /// Clicking a graph node pins its card open (persistent, with a × close
 /// button); the old top-right details panel is gone; the × closes the card
-/// but keeps the node selected. Drives a *real* click at the node's canvas
+/// but keeps the node selected, and `deselect` clears it. Drives a *real*
+/// click at the node's canvas
 /// position (`node_canvas_pos`) — nodes are canvas-drawn, so there's no DOM
 /// element to target.
 #[test]
 fn e2e_click_pins_node_card_keeping_selection() {
-    let rt = tokio::runtime::Runtime::new().expect("runtime");
-    rt.block_on(async {
-        let site = generate_docs();
-        let output_dir = site.path();
-        let playwright = Playwright::launch().await.expect("playwright");
-        let (_browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
-        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
-            .await
-            .expect("goto");
+    in_chromium(generate_docs(), |page| {
+        Box::pin(async move {
+            // The old details panel must be gone entirely.
+            let details = page.locator("#graph-details-panel");
+            assert_eq!(
+                details.count().await.expect("count"),
+                0,
+                "the details panel should be removed"
+            );
 
-        // The old details panel must be gone entirely.
-        let details = page.locator("#graph-details-panel");
-        assert_eq!(
-            details.count().await.expect("count"),
-            0,
-            "the details panel should be removed"
-        );
-
-        // Wait for the wasm graph to be interrogable (robust to CI load),
-        // then click node 0 at its canvas position through the real handler.
-        wait_for_graph_viz_ready(&page).await.expect("schema graph viz never became ready");
-        let clicked = page
-            .evaluate_value(
-                r#"(function(){
-                    var viz = window.__panschema_viz;
-                    if (!viz || typeof viz.node_canvas_pos !== 'function') return 'no-viz';
-                    var pos = viz.node_canvas_pos(0);
-                    if (!pos || pos.length < 2) return 'no-pos';
-                    var canvas = document.getElementById('graph-canvas');
-                    var rect = canvas.getBoundingClientRect();
-                    var dpr = window.devicePixelRatio || 1;
-                    var x = rect.left + pos[0] / dpr, y = rect.top + pos[1] / dpr;
-                    canvas.dispatchEvent(new MouseEvent('click', {clientX: x, clientY: y, bubbles: true}));
-                    return 'clicked';
-                })()"#,
-            )
-            .await
-            .unwrap_or_default();
-        assert!(clicked.contains("clicked"), "expected to click a node; got: {clicked}");
-        wait_until_ready(&page, "document.getElementById('graph-hover-card').classList.contains('graph-hover-pinned')").await.expect("the clicked node's card never pinned");
-
-        // The card is now pinned (persistent) with a visible close button.
-        let card = page.locator("#graph-hover-card");
-        let card_class = card
-            .get_attribute("class")
-            .await
-            .expect("class")
-            .unwrap_or_default();
-        assert!(
-            card_class.contains("graph-hover-pinned"),
-            "card should be pinned; class = {card_class}"
-        );
-        assert!(card.is_visible().await.expect("visible"), "pinned card should be visible");
-        assert!(
-            page.locator("#graph-hover-close")
-                .is_visible()
+            // Wait for the wasm graph to be interrogable (robust to CI load),
+            // then click node 0 at its canvas position through the real handler.
+            wait_for_graph_viz_ready(page)
                 .await
-                .expect("close visible"),
-            "the close button should show when pinned"
-        );
-        let sel = page
-            .evaluate_value("window.__panschema_viz.selected_node_index()")
-            .await
-            .unwrap_or_default();
-        assert!(!sel.contains("-1"), "a node should be selected; got {sel}");
+                .expect("schema graph viz never became ready");
+            click_schema_node(page, 0).await;
+            wait_until_ready(page, "document.getElementById('graph-hover-card').classList.contains('graph-hover-pinned')").await.expect("the clicked node's card never pinned");
 
-        // × closes the card but keeps the node selected.
-        page.locator("#graph-hover-close")
-            .click(None)
-            .await
-            .expect("click close");
-        expect(page.locator("#graph-hover-card"))
-            .to_be_hidden()
-            .await
-            .expect("card should hide after ×");
-        let sel_after = page
-            .evaluate_value("window.__panschema_viz.selected_node_index()")
-            .await
-            .unwrap_or_default();
-        assert!(
-            !sel_after.contains("-1"),
-            "node should stay selected after ×; got {sel_after}"
-        );
+            // The card is now pinned (persistent) with a visible close button.
+            let card = page.locator("#graph-hover-card");
+            let card_class = card
+                .get_attribute("class")
+                .await
+                .expect("class")
+                .unwrap_or_default();
+            assert!(
+                card_class.contains("graph-hover-pinned"),
+                "card should be pinned; class = {card_class}"
+            );
+            assert!(
+                card.is_visible().await.expect("visible"),
+                "pinned card should be visible"
+            );
+            assert!(
+                page.locator("#graph-hover-close")
+                    .is_visible()
+                    .await
+                    .expect("close visible"),
+                "the close button should show when pinned"
+            );
+            let sel = page
+                .evaluate_value("window.__panschema_viz.selected_node_index()")
+                .await
+                .unwrap_or_default();
+            assert!(!sel.contains("-1"), "a node should be selected; got {sel}");
+
+            // × closes the card but keeps the node selected.
+            page.locator("#graph-hover-close")
+                .click(None)
+                .await
+                .expect("click close");
+            expect(page.locator("#graph-hover-card"))
+                .to_be_hidden()
+                .await
+                .expect("card should hide after ×");
+            let sel_after = page
+                .evaluate_value("window.__panschema_viz.selected_node_index()")
+                .await
+                .unwrap_or_default();
+            assert!(
+                !sel_after.contains("-1"),
+                "node should stay selected after ×; got {sel_after}"
+            );
+
+            // `deselect` clears the selection the click made.
+            page.evaluate::<(), ()>("window.__panschema_viz.deselect()", None)
+                .await
+                .expect("deselect");
+            let cleared = page
+                .evaluate_value("window.__panschema_viz.selected_node_index()")
+                .await
+                .unwrap_or_default();
+            assert!(
+                cleared.contains("-1"),
+                "deselect should clear the selection; got {cleared}"
+            );
+        })
     });
 }
 
@@ -1573,18 +1500,13 @@ fn e2e_click_pins_node_card_keeping_selection() {
 /// the cursor, so the assertion reads a genuine edge hover.
 #[test]
 fn e2e_edge_hover_shows_the_triple_and_its_kind_blurb() {
-    let rt = tokio::runtime::Runtime::new().expect("runtime");
-    rt.block_on(async {
-        let site = generate_docs();
-        let output_dir = site.path();
-        let playwright = Playwright::launch().await.expect("playwright");
-        let (browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
-        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
-            .await
-            .expect("goto");
-        wait_for_graph_viz_ready(&page).await.expect("schema graph viz never became ready");
+    in_chromium(generate_docs(), |page| {
+        Box::pin(async move {
+            wait_for_graph_viz_ready(page)
+                .await
+                .expect("schema graph viz never became ready");
 
-        let states = page
+            let states = page
             .evaluate_value(
                 r#"(function(){
                     var viz = window.__panschema_viz;
@@ -1619,33 +1541,27 @@ fn e2e_edge_hover_shows_the_triple_and_its_kind_blurb() {
             )
             .await
             .unwrap_or_default();
-        assert!(
-            states.contains("visible:true")
-                && states.contains("src:true")
-                && states.contains("type:true")
-                && states.contains("tgt:true")
-                && states.contains("blurb:true"),
-            "an edge hover shows source, type, target, and the kind blurb; got: {states}"
-        );
-
-        browser.close().await.ok();
+            assert!(
+                states.contains("visible:true")
+                    && states.contains("src:true")
+                    && states.contains("type:true")
+                    && states.contains("tgt:true")
+                    && states.contains("blurb:true"),
+                "an edge hover shows source, type, target, and the kind blurb; got: {states}"
+            );
+        })
     });
 }
 
 #[test]
 fn e2e_node_hover_reuses_the_doc_card_in_full_mode() {
-    let rt = tokio::runtime::Runtime::new().expect("runtime");
-    rt.block_on(async {
-        let site = generate_docs();
-        let output_dir = site.path();
-        let playwright = Playwright::launch().await.expect("playwright");
-        let (browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
-        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
-            .await
-            .expect("goto");
-        wait_for_graph_viz_ready(&page).await.expect("schema graph viz never became ready");
+    in_chromium(generate_docs(), |page| {
+        Box::pin(async move {
+            wait_for_graph_viz_ready(page)
+                .await
+                .expect("schema graph viz never became ready");
 
-        let states = page
+            let states = page
             .evaluate_value(
                 r#"(function(){
                     var viz = window.__panschema_viz;
@@ -1671,16 +1587,15 @@ fn e2e_node_hover_reuses_the_doc_card_in_full_mode() {
             )
             .await
             .unwrap_or_default();
-        assert!(
-            states.contains("hovered:0")
-                && states.contains("visible:true")
-                && states.contains("full:true")
-                && states.contains("docCard:true")
-                && states.contains("same:true"),
-            "a node hover shows its doc card in full mode; got: {states}"
-        );
-
-        browser.close().await.ok();
+            assert!(
+                states.contains("hovered:0")
+                    && states.contains("visible:true")
+                    && states.contains("full:true")
+                    && states.contains("docCard:true")
+                    && states.contains("same:true"),
+                "a node hover shows its doc card in full mode; got: {states}"
+            );
+        })
     });
 }
 
@@ -1690,41 +1605,18 @@ fn e2e_node_hover_reuses_the_doc_card_in_full_mode() {
 /// handler-computed target (drag offset applied, viewport-clamped).
 #[test]
 fn e2e_pinned_card_is_draggable_by_its_handle() {
-    let rt = tokio::runtime::Runtime::new().expect("runtime");
-    rt.block_on(async {
-        let site = generate_docs();
-        let output_dir = site.path();
-        let playwright = Playwright::launch().await.expect("playwright");
-        let (_browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
-        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
-            .await
-            .expect("goto");
+    in_chromium(generate_docs(), |page| {
+        Box::pin(async move {
+            // Wait for the wasm graph to be interrogable, then pin node 0.
+            wait_for_graph_viz_ready(page)
+                .await
+                .expect("schema graph viz never became ready");
+            click_schema_node(page, 0).await;
+            wait_until_ready(page, "document.getElementById('graph-hover-card').classList.contains('graph-hover-pinned')").await.expect("the clicked node's card never pinned");
 
-        // Wait for the wasm graph to be interrogable, then pin node 0.
-        wait_for_graph_viz_ready(&page).await.expect("schema graph viz never became ready");
-        let clicked = page
-            .evaluate_value(
-                r#"(function(){
-                    var viz = window.__panschema_viz;
-                    if (!viz || typeof viz.node_canvas_pos !== 'function') return 'no-viz';
-                    var pos = viz.node_canvas_pos(0);
-                    if (!pos || pos.length < 2) return 'no-pos';
-                    var canvas = document.getElementById('graph-canvas');
-                    var rect = canvas.getBoundingClientRect();
-                    var dpr = window.devicePixelRatio || 1;
-                    var x = rect.left + pos[0] / dpr, y = rect.top + pos[1] / dpr;
-                    canvas.dispatchEvent(new MouseEvent('click', {clientX: x, clientY: y, bubbles: true}));
-                    return 'clicked';
-                })()"#,
-            )
-            .await
-            .unwrap_or_default();
-        assert!(clicked.contains("clicked"), "expected to pin a node; got: {clicked}");
-        wait_until_ready(&page, "document.getElementById('graph-hover-card').classList.contains('graph-hover-pinned')").await.expect("the clicked node's card never pinned");
-
-        // Drag the handle to a fixed in-viewport target and report the
-        // before/after card position plus the handler-expected target.
-        let result = page
+            // Drag the handle to a fixed in-viewport target and report the
+            // before/after card position plus the handler-expected target.
+            let result = page
             .evaluate_value(
                 r#"(function(){
                     var card = document.getElementById('graph-hover-card');
@@ -1746,22 +1638,23 @@ fn e2e_pinned_card_is_draggable_by_its_handle() {
             )
             .await
             .unwrap_or_default();
-        let nums: Vec<f64> = result
-            .trim_matches('"')
-            .split(',')
-            .filter_map(|s| s.trim().parse::<f64>().ok())
-            .collect();
-        assert_eq!(nums.len(), 6, "expected 6 coords; got: {result}");
-        let (b_left, b_top, a_left, a_top, exp_left, exp_top) =
-            (nums[0], nums[1], nums[2], nums[3], nums[4], nums[5]);
-        assert!(
-            (a_left - exp_left).abs() <= 2.0 && (a_top - exp_top).abs() <= 2.0,
-            "card should land at the drag target ({exp_left},{exp_top}); got ({a_left},{a_top})"
-        );
-        assert!(
-            (a_left - b_left).abs() > 20.0 || (a_top - b_top).abs() > 20.0,
-            "the card should have visibly moved; before ({b_left},{b_top}) after ({a_left},{a_top})"
-        );
+            let nums: Vec<f64> = result
+                .trim_matches('"')
+                .split(',')
+                .filter_map(|s| s.trim().parse::<f64>().ok())
+                .collect();
+            assert_eq!(nums.len(), 6, "expected 6 coords; got: {result}");
+            let (b_left, b_top, a_left, a_top, exp_left, exp_top) =
+                (nums[0], nums[1], nums[2], nums[3], nums[4], nums[5]);
+            assert!(
+                (a_left - exp_left).abs() <= 2.0 && (a_top - exp_top).abs() <= 2.0,
+                "card should land at the drag target ({exp_left},{exp_top}); got ({a_left},{a_top})"
+            );
+            assert!(
+                (a_left - b_left).abs() > 20.0 || (a_top - b_top).abs() > 20.0,
+                "the card should have visibly moved; before ({b_left},{b_top}) after ({a_left},{a_top})"
+            );
+        })
     });
 }
 
@@ -1771,36 +1664,32 @@ fn e2e_pinned_card_is_draggable_by_its_handle() {
 /// (canvas pixels aren't readable); the amber ring is the visual layer.
 #[test]
 fn e2e_hovering_a_rule_entry_highlights_participant_nodes() {
-    let rt = tokio::runtime::Runtime::new().expect("runtime");
-    rt.block_on(async {
-        let site = generate_site("tests/fixtures/rules_graph.yaml", &[]);
-        let output_dir = site.path();
-        let playwright = Playwright::launch().await.expect("playwright");
-        let (_browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
-        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
-            .await
-            .expect("goto");
+    in_chromium(
+        generate_site("tests/fixtures/rules_graph.yaml", &[]),
+        |page| {
+            Box::pin(async move {
+                // The slot card's rule entry carries the participant node ids.
+                let attr = page
+                    .locator("#slot-approved_by [data-participants]")
+                    .get_attribute("data-participants")
+                    .await
+                    .expect("attr")
+                    .unwrap_or_default();
+                assert!(
+                    attr.contains("slot:approved_by") && attr.contains("class:ImageApproval"),
+                    "the rule entry should carry its participant ids; got: {attr}"
+                );
 
-        // The slot card's rule entry carries the participant node ids.
-        let attr = page
-            .locator("#slot-approved_by [data-participants]")
-            .get_attribute("data-participants")
-            .await
-            .expect("attr")
-            .unwrap_or_default();
-        assert!(
-            attr.contains("slot:approved_by") && attr.contains("class:ImageApproval"),
-            "the rule entry should carry its participant ids; got: {attr}"
-        );
+                // Poll until the wasm graph is loaded and laid out — a fixed sleep
+                // flakes as `no-viz` under CI load.
+                wait_for_graph_viz_ready(page)
+                    .await
+                    .expect("graph viz never became ready");
 
-        // Poll until the wasm graph is loaded and laid out — a fixed sleep
-        // flakes as `no-viz` under CI load.
-        wait_for_graph_viz_ready(&page).await.expect("graph viz never became ready");
-
-        // Hovering the rule entry highlights its participant nodes.
-        let count = page
-            .evaluate_value(
-                r#"(function(){
+                // Hovering the rule entry highlights its participant nodes.
+                let count = page
+                    .evaluate_value(
+                        r#"(function(){
                     var el = document.querySelector('#slot-approved_by [data-participants]');
                     if (!el) return 'no-el';
                     el.dispatchEvent(new MouseEvent('mouseover', {bubbles: true}));
@@ -1808,21 +1697,21 @@ fn e2e_hovering_a_rule_entry_highlights_participant_nodes() {
                     return (viz && typeof viz.highlighted_node_count === 'function')
                         ? String(viz.highlighted_node_count()) : 'no-viz';
                 })()"#,
-            )
-            .await
-            .unwrap_or_default();
-        let n: i32 = count.trim().trim_matches('"').parse().unwrap_or(0);
-        assert!(
-            n >= 2,
-            "hovering the rule should highlight its participant nodes; got count={count}"
-        );
+                    )
+                    .await
+                    .unwrap_or_default();
+                let n: i32 = count.trim().trim_matches('"').parse().unwrap_or(0);
+                assert!(
+                    n >= 2,
+                    "hovering the rule should highlight its participant nodes; got count={count}"
+                );
 
-        // The highlight must actually paint: after a render frame, the 2D
-        // canvas should contain amber ring pixels (state alone isn't enough —
-        // the render loop has to pick up the highlight).
-        let amber = page
-            .evaluate_value(
-                r#"(async function(){
+                // The highlight must actually paint: after a render frame, the 2D
+                // canvas should contain amber ring pixels (state alone isn't enough —
+                // the render loop has to pick up the highlight).
+                let amber = page
+                    .evaluate_value(
+                        r#"(async function(){
                     var el = document.querySelector('#slot-approved_by [data-participants]');
                     el.dispatchEvent(new MouseEvent('mouseover', {bubbles: true}));
                     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
@@ -1836,17 +1725,17 @@ fn e2e_hovering_a_rule_entry_highlights_participant_nodes() {
                     }
                     return String(c);
                 })()"#,
-            )
-            .await
-            .unwrap_or_default();
-        let amber_px: i64 = amber.trim().trim_matches('"').parse().unwrap_or(0);
-        assert!(
-            amber_px > 0,
-            "the amber highlight ring should paint on the canvas; amber pixels={amber}"
-        );
+                    )
+                    .await
+                    .unwrap_or_default();
+                let amber_px: i64 = amber.trim().trim_matches('"').parse().unwrap_or(0);
+                assert!(
+                    amber_px > 0,
+                    "the amber highlight ring should paint on the canvas; amber pixels={amber}"
+                );
 
-        // Moving off the entry clears the highlight.
-        let cleared = page
+                // Moving off the entry clears the highlight.
+                let cleared = page
             .evaluate_value(
                 r#"(function(){
                     var el = document.querySelector('#slot-approved_by [data-participants]');
@@ -1856,12 +1745,14 @@ fn e2e_hovering_a_rule_entry_highlights_participant_nodes() {
             )
             .await
             .unwrap_or_default();
-        assert_eq!(
-            cleared.trim().trim_matches('"'),
-            "0",
-            "moving off the entry should clear the highlight; got {cleared}"
-        );
-    });
+                assert_eq!(
+                    cleared.trim().trim_matches('"'),
+                    "0",
+                    "moving off the entry should clear the highlight; got {cleared}"
+                );
+            })
+        },
+    );
 }
 
 /// Every node a class rule touches — a trigger *or* governed slot, and the
@@ -1872,24 +1763,20 @@ fn e2e_hovering_a_rule_entry_highlights_participant_nodes() {
 /// persistent ring.
 #[test]
 fn e2e_rule_touched_nodes_draw_a_persistent_amber_ring() {
-    let rt = tokio::runtime::Runtime::new().expect("runtime");
-    rt.block_on(async {
-        let site = generate_site("tests/fixtures/rules_graph.yaml", &[]);
-        let output_dir = site.path();
-        let playwright = Playwright::launch().await.expect("playwright");
-        let (_browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
-        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
-            .await
-            .expect("goto");
+    in_chromium(
+        generate_site("tests/fixtures/rules_graph.yaml", &[]),
+        |page| {
+            Box::pin(async move {
+                // Poll until the wasm graph is loaded and laid out — a fixed sleep
+                // flakes as `no-viz` under CI load.
+                wait_for_graph_viz_ready(page)
+                    .await
+                    .expect("graph viz never became ready");
 
-        // Poll until the wasm graph is loaded and laid out — a fixed sleep
-        // flakes as `no-viz` under CI load.
-        wait_for_graph_viz_ready(&page).await.expect("graph viz never became ready");
-
-        // Assert the governed set resolved and its ring paints: scan the
-        // canvas pixels in a box around the governed node for amber. No
-        // hover is active, so the only amber is the persistent ring.
-        let result = page
+                // Assert the governed set resolved and its ring paints: scan the
+                // canvas pixels in a box around the governed node for amber. No
+                // hover is active, so the only amber is the persistent ring.
+                let result = page
             .evaluate_value(
                 r#"(async function(){
                     var viz = window.__panschema_viz;
@@ -1915,26 +1802,28 @@ fn e2e_rule_touched_nodes_draw_a_persistent_amber_ring() {
             )
             .await
             .unwrap_or_default();
-        let parts: Vec<i64> = result
-            .trim_matches('"')
-            .split('|')
-            .filter_map(|s| s.trim().parse::<i64>().ok())
-            .collect();
-        assert_eq!(parts.len(), 2, "expected 'count|amber'; got: {result}");
-        // The fixture's one rule touches a trigger slot (`verdict`), a
-        // governed slot (`approved_by`), and the owning class — all three
-        // ring at rest, not just the governed slot.
-        assert!(
-            parts[0] >= 3,
-            "the rule's trigger slot, governed slot, and class should all be flagged; got count={}",
-            parts[0]
-        );
-        assert!(
-            parts[1] > 0,
-            "the persistent rule ring should paint amber near the node; amber pixels={}",
-            parts[1]
-        );
-    });
+                let parts: Vec<i64> = result
+                    .trim_matches('"')
+                    .split('|')
+                    .filter_map(|s| s.trim().parse::<i64>().ok())
+                    .collect();
+                assert_eq!(parts.len(), 2, "expected 'count|amber'; got: {result}");
+                // The fixture's one rule touches a trigger slot (`verdict`), a
+                // governed slot (`approved_by`), and the owning class — all three
+                // ring at rest, not just the governed slot.
+                assert!(
+                    parts[0] >= 3,
+                    "the rule's trigger slot, governed slot, and class should all be flagged; got count={}",
+                    parts[0]
+                );
+                assert!(
+                    parts[1] > 0,
+                    "the persistent rule ring should paint amber near the node; amber pixels={}",
+                    parts[1]
+                );
+            })
+        },
+    );
 }
 
 /// A class grounded via `subclass_of` into an upstream ontology draws a muted
@@ -1943,27 +1832,21 @@ fn e2e_rule_touched_nodes_draw_a_persistent_amber_ring() {
 /// distinct from the blue class nodes.
 #[test]
 fn e2e_external_grounding_paints_a_muted_node() {
-    let rt = tokio::runtime::Runtime::new().expect("runtime");
-    rt.block_on(async {
-        let site = generate_site("tests/fixtures/external_grounding.yaml", &[]);
-        let output_dir = site.path();
-        let playwright = Playwright::launch().await.expect("playwright");
-        let (_browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
-        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
-            .await
-            .expect("goto");
+    in_chromium(
+        generate_site("tests/fixtures/external_grounding.yaml", &[]),
+        |page| {
+            Box::pin(async move {
+                wait_for_graph_viz_ready(page)
+                    .await
+                    .expect("graph viz never became ready");
 
-        wait_for_graph_viz_ready(&page)
-            .await
-            .expect("graph viz never became ready");
-
-        // Find the external node, then sample the canvas around it for the
-        // muted grey fill (roughly equal r/g/b, b highest) — the blue class
-        // fill (b ≫ r) can't match, so grey pixels prove the external node
-        // itself painted.
-        let result = page
-            .evaluate_value(
-                r#"(async function(){
+                // Find the external node, then sample the canvas around it for the
+                // muted grey fill (roughly equal r/g/b, b highest) — the blue class
+                // fill (b ≫ r) can't match, so grey pixels prove the external node
+                // itself painted.
+                let result = page
+                    .evaluate_value(
+                        r#"(async function(){
                     var viz = window.__panschema_viz;
                     if (!viz || typeof viz.node_count !== 'function') return 'no-viz';
                     var n = viz.node_count();
@@ -1989,19 +1872,21 @@ fn e2e_external_grounding_paints_a_muted_node() {
                     }
                     return 'external|' + grey;
                 })()"#,
-            )
-            .await
-            .unwrap_or_default();
-        let result = result.trim_matches('"');
-        let grey: i64 = result
-            .strip_prefix("external|")
-            .and_then(|s| s.trim().parse().ok())
-            .unwrap_or_else(|| panic!("expected 'external|<count>'; got: {result}"));
-        assert!(
-            grey > 0,
-            "the external grounding node's muted grey fill should paint; grey pixels={grey}"
-        );
-    });
+                    )
+                    .await
+                    .unwrap_or_default();
+                let result = result.trim_matches('"');
+                let grey: i64 = result
+                    .strip_prefix("external|")
+                    .and_then(|s| s.trim().parse().ok())
+                    .unwrap_or_else(|| panic!("expected 'external|<count>'; got: {result}"));
+                assert!(
+                    grey > 0,
+                    "the external grounding node's muted grey fill should paint; grey pixels={grey}"
+                );
+            })
+        },
+    );
 }
 
 /// The "Groundings" control shows only when the graph has external nodes, and
@@ -2010,41 +1895,37 @@ fn e2e_external_grounding_paints_a_muted_node() {
 /// pixels from the canvas.
 #[test]
 fn e2e_groundings_toggle_hides_external_nodes() {
-    let rt = tokio::runtime::Runtime::new().expect("runtime");
-    rt.block_on(async {
-        let site = generate_site("tests/fixtures/external_grounding.yaml", &[]);
-        let output_dir = site.path();
-        let playwright = Playwright::launch().await.expect("playwright");
-        let (_browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
-        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
-            .await
-            .expect("goto");
+    in_chromium(
+        generate_site("tests/fixtures/external_grounding.yaml", &[]),
+        |page| {
+            Box::pin(async move {
+                wait_for_graph_viz_ready(page)
+                    .await
+                    .expect("graph viz never became ready");
 
-        wait_for_graph_viz_ready(&page).await.expect("graph viz never became ready");
-
-        // The toggle is revealed only when external nodes exist.
-        let visible = page
-            .evaluate_value(
-                r#"(function(){
+                // The toggle is revealed only when external nodes exist.
+                let visible = page
+                    .evaluate_value(
+                        r#"(function(){
                     var b = document.getElementById('graph-toggle-external');
                     if (!b) return 'no-button';
                     return getComputedStyle(b).display !== 'none' ? 'shown' : 'hidden';
                 })()"#,
-            )
-            .await
-            .unwrap_or_default();
-        assert_eq!(
-            visible.trim_matches('"'),
-            "shown",
-            "the Groundings toggle should be visible for a grounded schema"
-        );
+                    )
+                    .await
+                    .unwrap_or_default();
+                assert_eq!(
+                    visible.trim_matches('"'),
+                    "shown",
+                    "the Groundings toggle should be visible for a grounded schema"
+                );
 
-        // Hover the external node so its label renders regardless of zoom
-        // (a hovered label always draws), then toggle groundings off: both the
-        // muted fill and the label must vanish, not linger.
-        let result = page
-            .evaluate_value(
-                r#"(async function(){
+                // Hover the external node so its label renders regardless of zoom
+                // (a hovered label always draws), then toggle groundings off: both the
+                // muted fill and the label must vanish, not linger.
+                let result = page
+                    .evaluate_value(
+                        r#"(async function(){
                     var viz = window.__panschema_viz;
                     if (!viz || typeof viz.node_count !== 'function') return 'no-viz';
                     var idx = -1, n = viz.node_count();
@@ -2100,35 +1981,37 @@ fn e2e_groundings_toggle_hides_external_nodes() {
                     var labelAfter = sample(labelBox(), isText);
                     return labelBefore + '|' + greyAfter + '|' + labelAfter;
                 })()"#,
-            )
-            .await
-            .unwrap_or_default();
-        let result = result.trim_matches('"');
-        let parts: Vec<i64> = result
-            .split('|')
-            .map(|s| {
-                s.trim().parse().unwrap_or_else(|_| {
-                    panic!("expected 'labelBefore|greyAfter|labelAfter'; got: {result}")
-                })
+                    )
+                    .await
+                    .unwrap_or_default();
+                let result = result.trim_matches('"');
+                let parts: Vec<i64> = result
+                    .split('|')
+                    .map(|s| {
+                        s.trim().parse().unwrap_or_else(|_| {
+                            panic!("expected 'labelBefore|greyAfter|labelAfter'; got: {result}")
+                        })
+                    })
+                    .collect();
+                assert_eq!(parts.len(), 3, "expected three counts; got: {result}");
+                assert!(
+                    parts[0] > 0,
+                    "the external node's hovered label should paint before toggling off; label pixels={}",
+                    parts[0]
+                );
+                assert_eq!(
+                    parts[1], 0,
+                    "after toggling groundings off, the external node fill should not paint; grey pixels={}",
+                    parts[1]
+                );
+                assert_eq!(
+                    parts[2], 0,
+                    "after toggling groundings off, the external node label should not linger; label pixels={}",
+                    parts[2]
+                );
             })
-            .collect();
-        assert_eq!(parts.len(), 3, "expected three counts; got: {result}");
-        assert!(
-            parts[0] > 0,
-            "the external node's hovered label should paint before toggling off; label pixels={}",
-            parts[0]
-        );
-        assert_eq!(
-            parts[1], 0,
-            "after toggling groundings off, the external node fill should not paint; grey pixels={}",
-            parts[1]
-        );
-        assert_eq!(
-            parts[2], 0,
-            "after toggling groundings off, the external node label should not linger; label pixels={}",
-            parts[2]
-        );
-    });
+        },
+    );
 }
 
 /// Hovering an external grounding node shows the full IRI and the cached
@@ -2269,55 +2152,49 @@ fn e2e_external_node_hover_shows_iri_and_definition_and_legend_documents_it() {
 /// distinct viz from the schema graph.
 #[test]
 fn e2e_instance_graph_renders_individuals_beneath_the_cards() {
-    let rt = tokio::runtime::Runtime::new().expect("runtime");
-    rt.block_on(async {
-        let site = generate_site("tests/fixtures/instance_graph.ttl", &[]);
-        let output_dir = site.path();
-        let playwright = Playwright::launch().await.expect("playwright");
-        let (_browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
-        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
-            .await
-            .expect("goto");
+    in_chromium(
+        generate_site("tests/fixtures/instance_graph.ttl", &[]),
+        |page| {
+            Box::pin(async move {
+                // The instance graph canvas exists — a second, distinct canvas.
+                assert_eq!(
+                    page.locator("#instance-graph-canvas")
+                        .count()
+                        .await
+                        .expect("count"),
+                    1,
+                    "the Individuals section should carry an instance-graph canvas"
+                );
 
-        // The instance graph canvas exists — a second, distinct canvas.
-        assert_eq!(
-            page.locator("#instance-graph-canvas")
-                .count()
-                .await
-                .expect("count"),
-            1,
-            "the Individuals section should carry an instance-graph canvas"
-        );
-
-        // The embedded A-box is exactly what the exporter built.
-        let counts = page
-            .evaluate_value(
-                r#"(function(){
+                // The embedded A-box is exactly what the exporter built.
+                let counts = page
+                    .evaluate_value(
+                        r#"(function(){
                     var g = window.__PANSCHEMA_INSTANCE_GRAPHS__;
                     var d = g && g[0] && g[0].data;
                     return d ? (d.nodes.length + ',' + d.edges.length) : 'none';
                 })()"#,
-            )
-            .await
-            .unwrap_or_default();
-        assert_eq!(
-            counts.trim().trim_matches('"'),
-            "3,1",
-            "three individuals + one object-property assertion; got {counts}"
-        );
+                    )
+                    .await
+                    .unwrap_or_default();
+                assert_eq!(
+                    counts.trim().trim_matches('"'),
+                    "3,1",
+                    "three individuals + one object-property assertion; got {counts}"
+                );
 
-        // Wait for the instance viz to load its (separate) wasm module.
-        wait_until_ready(&page, "!!window.__panschema_instance_viz")
-            .await
-            .expect("instance graph viz never became ready");
+                // Wait for the instance viz to load its (separate) wasm module.
+                wait_until_ready(page, "!!window.__panschema_instance_viz")
+                    .await
+                    .expect("instance graph viz never became ready");
 
-        // The viz initialized and its canvas painted the individual
-        // nodes — class-colored per the shared vocabulary, probed as the
-        // class-blue band around #4A90D9 — proof the A-box graph actually
-        // renders, not just that the data embedded.
-        let result = page
-            .evaluate_value(
-                r#"(async function(){
+                // The viz initialized and its canvas painted the individual
+                // nodes — class-colored per the shared vocabulary, probed as the
+                // class-blue band around #4A90D9 — proof the A-box graph actually
+                // renders, not just that the data embedded.
+                let result = page
+                    .evaluate_value(
+                        r#"(async function(){
                     var viz = window.__panschema_instance_viz;
                     if (!viz) return 'no-viz';
                     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
@@ -2331,20 +2208,22 @@ fn e2e_instance_graph_renders_individuals_beneath_the_cards() {
                     }
                     return 'ok:' + teal;
                 })()"#,
-            )
-            .await
-            .unwrap_or_default();
-        let result = result.trim().trim_matches('"').to_string();
-        assert!(
-            result.starts_with("ok:"),
-            "the instance viz should have initialized; got {result}"
-        );
-        let teal: i64 = result.trim_start_matches("ok:").parse().unwrap_or(0);
-        assert!(
-            teal > 0,
-            "the instance graph should paint individual nodes; class-blue pixels={teal}"
-        );
-    });
+                    )
+                    .await
+                    .unwrap_or_default();
+                let result = result.trim().trim_matches('"').to_string();
+                assert!(
+                    result.starts_with("ok:"),
+                    "the instance viz should have initialized; got {result}"
+                );
+                let teal: i64 = result.trim_start_matches("ok:").parse().unwrap_or(0);
+                assert!(
+                    teal > 0,
+                    "the instance graph should paint individual nodes; class-blue pixels={teal}"
+                );
+            })
+        },
+    );
 }
 
 /// A data-only composition (`html_schema_sections = false`) still boots
@@ -2414,66 +2293,70 @@ fn e2e_data_only_composition_boots_the_instance_viz() {
 /// describing the previous dataset is the defect this pins down.
 #[test]
 fn e2e_instance_dataset_selector_switches_cards_and_graph() {
-    let rt = tokio::runtime::Runtime::new().expect("runtime");
-    rt.block_on(async {
-        let site = generate_site("tests/fixtures/wine_catalog.yaml", &["--instances", "tests/fixtures/wine_instances_preview.yaml", "--instances", "tests/fixtures/wine_instances.yaml"]);
-        let output_dir = site.path();
-        let playwright = Playwright::launch().await.expect("playwright");
-        let (browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
-        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
-            .await
-            .expect("goto");
+    in_chromium(
+        generate_site(
+            "tests/fixtures/wine_catalog.yaml",
+            &[
+                "--instances",
+                "tests/fixtures/wine_instances_preview.yaml",
+                "--instances",
+                "tests/fixtures/wine_instances.yaml",
+            ],
+        ),
+        |page| {
+            Box::pin(async move {
+                // Both datasets are offered, and the first is the one selected.
+                let tabs = page.locator(".instance-dataset-tab");
+                assert_eq!(
+                    tabs.count().await.expect("count"),
+                    2,
+                    "each declared dataset needs a selector entry"
+                );
+                let selected = page
+                    .locator(".instance-dataset-tab[aria-selected='true']")
+                    .inner_text()
+                    .await
+                    .expect("selected tab text");
+                assert!(
+                    selected.contains("wine_instances_preview"),
+                    "the first declared dataset starts selected; got: {selected}"
+                );
 
-        // Both datasets are offered, and the first is the one selected.
-        let tabs = page.locator(".instance-dataset-tab");
-        assert_eq!(
-            tabs.count().await.expect("count"),
-            2,
-            "each declared dataset needs a selector entry"
-        );
-        let selected = page
-            .locator(".instance-dataset-tab[aria-selected='true']")
-            .inner_text()
-            .await
-            .expect("selected tab text");
-        assert!(
-            selected.contains("wine_instances_preview"),
-            "the first declared dataset starts selected; got: {selected}"
-        );
+                // The preview's card is visible; the worked example's is not, because
+                // its panel is hidden.
+                assert!(
+                    page.locator("#d0-ind-previewWine")
+                        .is_visible()
+                        .await
+                        .unwrap_or(false),
+                    "the selected dataset's individual card should be visible"
+                );
+                assert!(
+                    !page
+                        .locator("#d1-ind-chateauMorgon")
+                        .is_visible()
+                        .await
+                        .unwrap_or(true),
+                    "the unselected dataset's cards should be hidden"
+                );
+                assert_eq!(
+                    page.locator("#instance-graph-count")
+                        .inner_text()
+                        .await
+                        .expect("heading count")
+                        .trim(),
+                    "2 / 1",
+                    "on load the heading describes the default dataset"
+                );
 
-        // The preview's card is visible; the worked example's is not, because
-        // its panel is hidden.
-        assert!(
-            page.locator("#d0-ind-previewWine")
-                .is_visible()
-                .await
-                .unwrap_or(false),
-            "the selected dataset's individual card should be visible"
-        );
-        assert!(
-            !page
-                .locator("#d1-ind-chateauMorgon")
-                .is_visible()
-                .await
-                .unwrap_or(true),
-            "the unselected dataset's cards should be hidden"
-        );
-        assert_eq!(
-            page.locator("#instance-graph-count")
-                .inner_text()
-                .await
-                .expect("heading count")
-                .trim(),
-            "2 / 1",
-            "on load the heading describes the default dataset"
-        );
-
-        // A swap while a card is up: the card resets with the dataset, and
-        // the next hover shows the new dataset's node, not the old one's
-        // cached under the same index. Activating the tab from script keeps
-        // the pointer on the canvas, as a keyboard switch does.
-        wait_until_ready(&page, "!!window.__panschema_instance_viz").await.expect("instance graph viz never became ready");
-        let swap = page
+                // A swap while a card is up: the card resets with the dataset, and
+                // the next hover shows the new dataset's node, not the old one's
+                // cached under the same index. Activating the tab from script keeps
+                // the pointer on the canvas, as a keyboard switch does.
+                wait_until_ready(page, "!!window.__panschema_instance_viz")
+                    .await
+                    .expect("instance graph viz never became ready");
+                let swap = page
             .evaluate_value(
                 r#"(function(){
                     var viz = window.__panschema_instance_viz;
@@ -2499,88 +2382,90 @@ fn e2e_instance_dataset_selector_switches_cards_and_graph() {
             )
             .await
             .unwrap_or_default();
-        assert!(
-            swap.contains("before:true") && swap.contains("afterSwap:false"),
-            "switching datasets clears the hover card; got: {swap}"
-        );
-        assert!(
-            swap.contains("hoverAfter:true") && swap.contains("stale:false"),
-            "the next hover renders the new dataset's node; got: {swap}"
-        );
+                assert!(
+                    swap.contains("before:true") && swap.contains("afterSwap:false"),
+                    "switching datasets clears the hover card; got: {swap}"
+                );
+                assert!(
+                    swap.contains("hoverAfter:true") && swap.contains("stale:false"),
+                    "the next hover renders the new dataset's node; got: {swap}"
+                );
 
-        // Switching: click the second tab. Cards, provenance, and the graph
-        // all follow to the worked example. The tabs are wired independently
-        // of the wasm viz, so this works without waiting for it.
-        page.locator(".instance-dataset-tab[data-instance-dataset='1']")
-            .click(None)
-            .await
-            .expect("click second dataset");
+                // Switching: click the second tab. Cards, provenance, and the graph
+                // all follow to the worked example. The tabs are wired independently
+                // of the wasm viz, so this works without waiting for it.
+                page.locator(".instance-dataset-tab[data-instance-dataset='1']")
+                    .click(None)
+                    .await
+                    .expect("click second dataset");
 
-        assert!(
-            page.locator("#d1-ind-chateauMorgon")
-                .is_visible()
-                .await
-                .unwrap_or(false),
-            "the newly selected dataset's cards should be visible"
-        );
-        assert!(
-            !page
-                .locator("#d0-ind-previewWine")
-                .is_visible()
-                .await
-                .unwrap_or(true),
-            "the previously selected dataset's cards should be hidden"
-        );
-        // The heading describes the dataset on screen: the worked example has
-        // two nodes and one edge where the preview had one node and none.
-        let heading = page
-            .locator("#instance-graph-count")
-            .inner_text()
-            .await
-            .expect("heading count");
-        assert_eq!(
-            heading.trim(),
-            "4 / 2",
-            "the heading count should follow the selected dataset; got: {heading}"
-        );
-        // The sidebar describes the same graph, so it must not be left showing
-        // the landing dataset's numbers.
-        assert_eq!(
-            page.locator("#instance-graph-sidebar-count")
-                .inner_text()
-                .await
-                .expect("sidebar count")
-                .trim(),
-            "4 / 2",
-            "the sidebar count should agree with the heading after switching"
-        );
+                assert!(
+                    page.locator("#d1-ind-chateauMorgon")
+                        .is_visible()
+                        .await
+                        .unwrap_or(false),
+                    "the newly selected dataset's cards should be visible"
+                );
+                assert!(
+                    !page
+                        .locator("#d0-ind-previewWine")
+                        .is_visible()
+                        .await
+                        .unwrap_or(true),
+                    "the previously selected dataset's cards should be hidden"
+                );
+                // The heading describes the dataset on screen: the worked example has
+                // two nodes and one edge where the preview had one node and none.
+                let heading = page
+                    .locator("#instance-graph-count")
+                    .inner_text()
+                    .await
+                    .expect("heading count");
+                assert_eq!(
+                    heading.trim(),
+                    "4 / 2",
+                    "the heading count should follow the selected dataset; got: {heading}"
+                );
+                // The sidebar describes the same graph, so it must not be left showing
+                // the landing dataset's numbers.
+                assert_eq!(
+                    page.locator("#instance-graph-sidebar-count")
+                        .inner_text()
+                        .await
+                        .expect("sidebar count")
+                        .trim(),
+                    "4 / 2",
+                    "the sidebar count should agree with the heading after switching"
+                );
 
-        let prov = page
-            .locator(".instance-dataset-panel:not([hidden]) .instance-provenance")
-            .inner_text()
-            .await
-            .expect("provenance");
-        assert!(
-            prov.contains("wine_instances.yaml") && !prov.contains("preview"),
-            "the visible panel names the selected dataset's source; got: {prov}"
-        );
+                let prov = page
+                    .locator(".instance-dataset-panel:not([hidden]) .instance-provenance")
+                    .inner_text()
+                    .await
+                    .expect("provenance");
+                assert!(
+                    prov.contains("wine_instances.yaml") && !prov.contains("preview"),
+                    "the visible panel names the selected dataset's source; got: {prov}"
+                );
 
-        // The canvas is re-initialized over the newly selected A-box. The viz
-        // may still have been loading when the tab was clicked; whenever it
-        // lands it paints the dataset that is active by then.
-        wait_until_ready(&page, "!!window.__panschema_instance_viz").await.expect("instance graph viz never became ready");
-        assert_eq!(
-            page.evaluate_value("window.__panschema_instance_active")
-                .await
-                .unwrap_or_default()
-                .trim()
-                .trim_matches('"'),
-            "1",
-            "the selected dataset is the one the viz was asked to paint"
-        );
-        let painted = page
-            .evaluate_value(
-                r#"(async function(){
+                // The canvas is re-initialized over the newly selected A-box. The viz
+                // may still have been loading when the tab was clicked; whenever it
+                // lands it paints the dataset that is active by then.
+                wait_until_ready(page, "!!window.__panschema_instance_viz")
+                    .await
+                    .expect("instance graph viz never became ready");
+                assert_eq!(
+                    page.evaluate_value("window.__panschema_instance_active")
+                        .await
+                        .unwrap_or_default()
+                        .trim()
+                        .trim_matches('"'),
+                    "1",
+                    "the selected dataset is the one the viz was asked to paint"
+                );
+                let painted = page
+                    .evaluate_value(
+                        r#"(async function(){
                     var viz = window.__panschema_instance_viz;
                     if (!viz) return 'no-viz';
                     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
@@ -2594,23 +2479,23 @@ fn e2e_instance_dataset_selector_switches_cards_and_graph() {
                     }
                     return 'ok:' + teal;
                 })()"#,
-            )
-            .await
-            .unwrap_or_default();
-        let teal: u32 = painted
-            .trim()
-            .trim_matches('"')
-            .strip_prefix("ok:")
-            .unwrap_or("0")
-            .parse()
-            .unwrap_or(0);
-        assert!(
-            teal > 0,
-            "the swapped-in A-box should paint individual nodes; got: {painted}"
-        );
-
-        browser.close().await.ok();
-    });
+                    )
+                    .await
+                    .unwrap_or_default();
+                let teal: u32 = painted
+                    .trim()
+                    .trim_matches('"')
+                    .strip_prefix("ok:")
+                    .unwrap_or("0")
+                    .parse()
+                    .unwrap_or(0);
+                assert!(
+                    teal > 0,
+                    "the swapped-in A-box should paint individual nodes; got: {painted}"
+                );
+            })
+        },
+    );
 }
 
 /// The instance graph offers the schema graph's inspection affordances:
@@ -2618,53 +2503,55 @@ fn e2e_instance_dataset_selector_switches_cards_and_graph() {
 /// and the toolbar toggles, wired once through the shared shell.
 #[test]
 fn e2e_instance_graph_has_hover_card_and_toolbar_parity() {
-    let rt = tokio::runtime::Runtime::new().expect("runtime");
-    rt.block_on(async {
-        let site = generate_site("tests/fixtures/typed_wine.yaml", &["--instances", "tests/fixtures/typed_wine_instances.yaml"]);
-        let output_dir = site.path();
-        let playwright = Playwright::launch().await.expect("playwright");
-        let (browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
-        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
-            .await
-            .expect("goto");
-        wait_until_ready(&page, "!!window.__panschema_instance_viz").await.expect("instance graph viz never became ready");
-        wait_for_graph_viz_ready(&page).await.expect("schema graph viz never became ready");
+    in_chromium(
+        generate_site(
+            "tests/fixtures/typed_wine.yaml",
+            &["--instances", "tests/fixtures/typed_wine_instances.yaml"],
+        ),
+        |page| {
+            Box::pin(async move {
+                wait_until_ready(page, "!!window.__panschema_instance_viz")
+                    .await
+                    .expect("instance graph viz never became ready");
+                wait_for_graph_viz_ready(page)
+                    .await
+                    .expect("schema graph viz never became ready");
 
-        let wasm_fetches = page
-            .evaluate_value(
-                "String(performance.getEntriesByType('resource')\
+                let wasm_fetches = page
+                    .evaluate_value(
+                        "String(performance.getEntriesByType('resource')\
                  .filter(r => r.name.includes('panschema_viz_bg.wasm')).length)",
-            )
-            .await
-            .unwrap_or_default();
-        assert_eq!(
-            wasm_fetches.trim().trim_matches('"'),
-            "1",
-            "a page with both graphs must fetch the wasm exactly once"
-        );
+                    )
+                    .await
+                    .unwrap_or_default();
+                assert_eq!(
+                    wasm_fetches.trim().trim_matches('"'),
+                    "1",
+                    "a page with both graphs must fetch the wasm exactly once"
+                );
 
-        // The toolbar is present with the schema graph's controls.
-        for id in [
-            "instance-graph-reset",
-            "instance-graph-zoom-in",
-            "instance-graph-zoom-out",
-            "instance-graph-labels-all",
-            "instance-graph-labels-nodes",
-            "instance-graph-labels-edges",
-            "instance-graph-focus-on-hover",
-            "instance-graph-arrows",
-        ] {
-            assert_eq!(
-                page.locator(format!("#{id}")).count().await.expect("count"),
-                1,
-                "missing toolbar control #{id}"
-            );
-        }
+                // The toolbar is present with the schema graph's controls.
+                for id in [
+                    "instance-graph-reset",
+                    "instance-graph-zoom-in",
+                    "instance-graph-zoom-out",
+                    "instance-graph-labels-all",
+                    "instance-graph-labels-nodes",
+                    "instance-graph-labels-edges",
+                    "instance-graph-focus-on-hover",
+                    "instance-graph-arrows",
+                ] {
+                    assert_eq!(
+                        page.locator(format!("#{id}")).count().await.expect("count"),
+                        1,
+                        "missing toolbar control #{id}"
+                    );
+                }
 
-        // Toggles drive the visualization, not just their own styling.
-        let toggled = page
-            .evaluate_value(
-                r#"(function(){
+                // Toggles drive the visualization, not just their own styling.
+                let toggled = page
+                    .evaluate_value(
+                        r#"(function(){
                     var viz = window.__panschema_instance_viz;
                     var before = viz.node_labels_enabled() + ':' + viz.show_arrows();
                     document.getElementById('instance-graph-labels-nodes').click();
@@ -2672,21 +2559,21 @@ fn e2e_instance_graph_has_hover_card_and_toolbar_parity() {
                     var after = viz.node_labels_enabled() + ':' + viz.show_arrows();
                     return before + ' -> ' + after;
                 })()"#,
-            )
-            .await
-            .unwrap_or_default();
-        assert!(
-            toggled.contains("true:true -> false:false"),
-            "label and arrow toggles should flip viz state; got: {toggled}"
-        );
+                    )
+                    .await
+                    .unwrap_or_default();
+                assert!(
+                    toggled.contains("true:true -> false:false"),
+                    "label and arrow toggles should flip viz state; got: {toggled}"
+                );
 
-        // The keyboard gap is closed: pressing L flips label state on the
-        // instance canvas exactly as the schema graph's L key does. The
-        // toggles above left node labels off; L (all labels) drives the
-        // viz, proving the shared toolbar's (L) hint is honest here.
-        let keyed = page
-            .evaluate_value(
-                r#"(function(){
+                // The keyboard gap is closed: pressing L flips label state on the
+                // instance canvas exactly as the schema graph's L key does. The
+                // toggles above left node labels off; L (all labels) drives the
+                // viz, proving the shared toolbar's (L) hint is honest here.
+                let keyed = page
+                    .evaluate_value(
+                        r#"(function(){
                     var viz = window.__panschema_instance_viz;
                     var container = document.querySelector('.instance-graph-container');
                     // Scoped to the hovered graph: L fires while the pointer
@@ -2701,19 +2588,19 @@ fn e2e_instance_graph_has_hover_card_and_toolbar_parity() {
                     var afterLeave = viz.labels_enabled();
                     return before + ' -> ' + whileHovered + ' -> ' + afterLeave;
                 })()"#,
-            )
-            .await
-            .unwrap_or_default();
-        assert!(
-            keyed.contains("true -> false -> false"),
-            "L toggles labels while hovering the graph and is inert once the              pointer leaves (so a two-graph page never drives both); got: {keyed}"
-        );
+                    )
+                    .await
+                    .unwrap_or_default();
+                assert!(
+                    keyed.contains("true -> false -> false"),
+                    "L toggles labels while hovering the graph and is inert once the              pointer leaves (so a two-graph page never drives both); got: {keyed}"
+                );
 
-        // Focus-on-hover honours its toggle: off means hovering focuses
-        // nothing; back on, hovering focuses the node's neighborhood.
-        let focus = page
-            .evaluate_value(
-                r#"(function(){
+                // Focus-on-hover honours its toggle: off means hovering focuses
+                // nothing; back on, hovering focuses the node's neighborhood.
+                let focus = page
+                    .evaluate_value(
+                        r#"(function(){
                     var viz = window.__panschema_instance_viz;
                     var canvas = document.getElementById('instance-graph-canvas');
                     var rect = canvas.getBoundingClientRect();
@@ -2735,18 +2622,18 @@ fn e2e_instance_graph_has_hover_card_and_toolbar_parity() {
                     var whileOn = viz.focused_node_index();
                     return 'off:' + whileOff + ' on:' + whileOn;
                 })()"#,
-            )
-            .await
-            .unwrap_or_default();
-        assert!(
-            focus.contains("off:-1") && focus.contains("on:0"),
-            "the focus toggle should gate hover focusing; got: {focus}"
-        );
+                    )
+                    .await
+                    .unwrap_or_default();
+                assert!(
+                    focus.contains("off:-1") && focus.contains("on:0"),
+                    "the focus toggle should gate hover focusing; got: {focus}"
+                );
 
-        // The legend button reflects its state like every other toggle.
-        let legend_state = page
-            .evaluate_value(
-                r#"(function(){
+                // The legend button reflects its state like every other toggle.
+                let legend_state = page
+                    .evaluate_value(
+                        r#"(function(){
                     var b = document.getElementById('instance-graph-legend-toggle');
                     b.click();
                     var on = b.classList.contains('active') + ':' + b.getAttribute('aria-pressed');
@@ -2754,20 +2641,20 @@ fn e2e_instance_graph_has_hover_card_and_toolbar_parity() {
                     var off = b.classList.contains('active') + ':' + b.getAttribute('aria-pressed');
                     return on + ' / ' + off;
                 })()"#,
-            )
-            .await
-            .unwrap_or_default();
-        assert!(
-            legend_state.contains("true:true / false:false"),
-            "the legend button should light while open and dim when closed; got: {legend_state}"
-        );
+                    )
+                    .await
+                    .unwrap_or_default();
+                assert!(
+                    legend_state.contains("true:true / false:false"),
+                    "the legend button should light while open and dim when closed; got: {legend_state}"
+                );
 
-        // The hover card: an individual shows its class; a shared value node
-        // shows its enum and how many individuals chose it — the wire's
-        // usage_count has no other surface.
-        let card = page
-            .evaluate_value(
-                r#"(function(){
+                // The hover card: an individual shows its class; a shared value node
+                // shows its enum and how many individuals chose it — the wire's
+                // usage_count has no other surface.
+                let card = page
+                    .evaluate_value(
+                        r#"(function(){
                     var viz = window.__panschema_instance_viz;
                     var g = (window.__PANSCHEMA_INSTANCE_GRAPHS__ || [])[0];
                     var canvas = document.getElementById('instance-graph-canvas');
@@ -2795,20 +2682,20 @@ fn e2e_instance_graph_has_hover_card_and_toolbar_parity() {
                     var ind = el && el.style.display !== 'none' ? el.textContent : '(hidden)';
                     return 'value[' + value + '] individual[' + ind + ']';
                 })()"#,
-            )
-            .await
-            .unwrap_or_default();
-        assert!(
-            card.contains("WineColorEnum") && card.contains('2'),
-            "the value card should name its enum and usage count; got: {card}"
-        );
-        assert!(
-            card.contains("Morgon") && card.contains("Wine"),
-            "the individual card should show its label and class; got: {card}"
-        );
-
-        browser.close().await.ok();
-    });
+                    )
+                    .await
+                    .unwrap_or_default();
+                assert!(
+                    card.contains("WineColorEnum") && card.contains('2'),
+                    "the value card should name its enum and usage count; got: {card}"
+                );
+                assert!(
+                    card.contains("Morgon") && card.contains("Wine"),
+                    "the individual card should show its label and class; got: {card}"
+                );
+            })
+        },
+    );
 }
 
 /// Grabbing a node on the instance canvas drags THE NODE, as on the schema
@@ -2816,18 +2703,18 @@ fn e2e_instance_graph_has_hover_card_and_toolbar_parity() {
 /// changes the dragged node's position relative to the others.
 #[test]
 fn e2e_instance_graph_nodes_are_draggable() {
-    let rt = tokio::runtime::Runtime::new().expect("runtime");
-    rt.block_on(async {
-        let site = generate_site("tests/fixtures/typed_wine.yaml", &["--instances", "tests/fixtures/typed_wine_instances.yaml"]);
-        let output_dir = site.path();
-        let playwright = Playwright::launch().await.expect("playwright");
-        let (browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
-        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
-            .await
-            .expect("goto");
-        wait_until_ready(&page, "!!window.__panschema_instance_viz").await.expect("instance graph viz never became ready");
+    in_chromium(
+        generate_site(
+            "tests/fixtures/typed_wine.yaml",
+            &["--instances", "tests/fixtures/typed_wine_instances.yaml"],
+        ),
+        |page| {
+            Box::pin(async move {
+                wait_until_ready(page, "!!window.__panschema_instance_viz")
+                    .await
+                    .expect("instance graph viz never became ready");
 
-        let dragged = page
+                let dragged = page
             .evaluate_value(
                 r#"(function(){
                     var viz = window.__panschema_instance_viz;
@@ -2851,20 +2738,20 @@ fn e2e_instance_graph_nodes_are_draggable() {
             )
             .await
             .unwrap_or_default();
-        let moved: i64 = dragged
-            .trim()
-            .trim_matches('"')
-            .strip_prefix("relMoved:")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(-1);
-        assert!(
-            moved > 20,
-            "grabbing a node should move it relative to its neighbors (a pan moves \
+                let moved: i64 = dragged
+                    .trim()
+                    .trim_matches('"')
+                    .strip_prefix("relMoved:")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(-1);
+                assert!(
+                    moved > 20,
+                    "grabbing a node should move it relative to its neighbors (a pan moves \
              everything together); got: {dragged}"
-        );
-
-        browser.close().await.ok();
-    });
+                );
+            })
+        },
+    );
 }
 
 /// Clicking a node on the instance canvas selects it, as on the schema
@@ -2872,25 +2759,20 @@ fn e2e_instance_graph_nodes_are_draggable() {
 /// node is deselected by clicking empty space.
 #[test]
 fn e2e_instance_graph_click_pins_the_card_and_empty_space_deselects() {
-    let rt = tokio::runtime::Runtime::new().expect("runtime");
-    rt.block_on(async {
-        let site = generate_site(
+    in_chromium(
+        generate_site(
             "tests/fixtures/typed_wine.yaml",
             &["--instances", "tests/fixtures/typed_wine_instances.yaml"],
-        );
-        let output_dir = site.path();
-        let playwright = Playwright::launch().await.expect("playwright");
-        let (browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
-        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
-            .await
-            .expect("goto");
-        wait_until_ready(&page, "!!window.__panschema_instance_viz")
-            .await
-            .expect("instance graph viz never became ready");
+        ),
+        |page| {
+            Box::pin(async move {
+                wait_until_ready(page, "!!window.__panschema_instance_viz")
+                    .await
+                    .expect("instance graph viz never became ready");
 
-        let states = page
-            .evaluate_value(
-                &r#"(function(){
+                let states = page
+                    .evaluate_value(
+                        &r#"(function(){
                     var viz = window.__panschema_instance_viz;
                     var canvas = document.getElementById('instance-graph-canvas');
                     var card = document.getElementById('instance-graph-hover-card');
@@ -2911,42 +2793,42 @@ fn e2e_instance_graph_click_pins_the_card_and_empty_space_deselects() {
                     out.push('cardAfterEmptyClick:' + cardVisible());
                     return out.join(' ');
                 })()"#
-                    .replace("__CLICK_AT__", CLICK_AT_JS),
-            )
-            .await
-            .unwrap_or_default();
-        assert!(
-            states.contains("sel:0") && states.contains("card:true"),
-            "clicking a node should select it and pin its card open; got: {states}"
-        );
-        assert!(
-            states.contains("cardAfterMoveAway:true"),
-            "the pinned card should survive the cursor moving off the node; got: {states}"
-        );
-        assert!(
-            states.contains("selAfterEmptyClick:-1")
-                && states.contains("cardAfterEmptyClick:false"),
-            "clicking empty space should deselect and close the card; got: {states}"
-        );
-
-        browser.close().await.ok();
-    });
+                            .replace("__CLICK_AT__", CLICK_AT_JS),
+                    )
+                    .await
+                    .unwrap_or_default();
+                assert!(
+                    states.contains("sel:0") && states.contains("card:true"),
+                    "clicking a node should select it and pin its card open; got: {states}"
+                );
+                assert!(
+                    states.contains("cardAfterMoveAway:true"),
+                    "the pinned card should survive the cursor moving off the node; got: {states}"
+                );
+                assert!(
+                    states.contains("selAfterEmptyClick:-1")
+                        && states.contains("cardAfterEmptyClick:false"),
+                    "clicking empty space should deselect and close the card; got: {states}"
+                );
+            })
+        },
+    );
 }
 
 #[test]
 fn e2e_instance_pinned_card_closes_by_its_button_keeping_selection() {
-    let rt = tokio::runtime::Runtime::new().expect("runtime");
-    rt.block_on(async {
-        let site = generate_site("tests/fixtures/typed_wine.yaml", &["--instances", "tests/fixtures/typed_wine_instances.yaml"]);
-        let output_dir = site.path();
-        let playwright = Playwright::launch().await.expect("playwright");
-        let (browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
-        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
-            .await
-            .expect("goto");
-        wait_until_ready(&page, "!!window.__panschema_instance_viz").await.expect("instance graph viz never became ready");
+    in_chromium(
+        generate_site(
+            "tests/fixtures/typed_wine.yaml",
+            &["--instances", "tests/fixtures/typed_wine_instances.yaml"],
+        ),
+        |page| {
+            Box::pin(async move {
+                wait_until_ready(page, "!!window.__panschema_instance_viz")
+                    .await
+                    .expect("instance graph viz never became ready");
 
-        let states = page
+                let states = page
             .evaluate_value(
                 &r#"(function(){
                     var viz = window.__panschema_instance_viz;
@@ -2976,23 +2858,24 @@ fn e2e_instance_pinned_card_closes_by_its_button_keeping_selection() {
             )
             .await
             .unwrap_or_default();
-        assert!(
-            states.contains("sel:0")
-                && states.contains("pinned:true")
-                && states.contains("close:true"),
-            "clicking a node pins its card with a visible close button; got: {states}"
-        );
-        assert!(
-            states.contains("cardAfterClose:false") && states.contains("selAfterClose:0"),
-            "the close button hides the card and keeps the node selected; got: {states}"
-        );
-        assert!(
-            states.contains("hoverAfterClose:true") && states.contains("hoverAfterDeselect:true"),
-            "closing the card locks nothing: the still-selected node hovers normally, before and after deselect; got: {states}"
-        );
-
-        browser.close().await.ok();
-    });
+                assert!(
+                    states.contains("sel:0")
+                        && states.contains("pinned:true")
+                        && states.contains("close:true"),
+                    "clicking a node pins its card with a visible close button; got: {states}"
+                );
+                assert!(
+                    states.contains("cardAfterClose:false") && states.contains("selAfterClose:0"),
+                    "the close button hides the card and keeps the node selected; got: {states}"
+                );
+                assert!(
+                    states.contains("hoverAfterClose:true")
+                        && states.contains("hoverAfterDeselect:true"),
+                    "closing the card locks nothing: the still-selected node hovers normally, before and after deselect; got: {states}"
+                );
+            })
+        },
+    );
 }
 
 /// A click is a click even when the pointer jitters. A trackpad click moves
@@ -3001,25 +2884,20 @@ fn e2e_instance_pinned_card_closes_by_its_button_keeping_selection() {
 /// passing for synthetic events dispatched at one coordinate.
 #[test]
 fn e2e_instance_graph_selection_survives_pointer_jitter_and_escape_deselects() {
-    let rt = tokio::runtime::Runtime::new().expect("runtime");
-    rt.block_on(async {
-        let site = generate_site(
+    in_chromium(
+        generate_site(
             "tests/fixtures/typed_wine.yaml",
             &["--instances", "tests/fixtures/typed_wine_instances.yaml"],
-        );
-        let output_dir = site.path();
-        let playwright = Playwright::launch().await.expect("playwright");
-        let (browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
-        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
-            .await
-            .expect("goto");
-        wait_until_ready(&page, "!!window.__panschema_instance_viz")
-            .await
-            .expect("instance graph viz never became ready");
+        ),
+        |page| {
+            Box::pin(async move {
+                wait_until_ready(page, "!!window.__panschema_instance_viz")
+                    .await
+                    .expect("instance graph viz never became ready");
 
-        let states = page
-            .evaluate_value(
-                r#"(function(){
+                let states = page
+                    .evaluate_value(
+                        r#"(function(){
                     var viz = window.__panschema_instance_viz;
                     var canvas = document.getElementById('instance-graph-canvas');
                     var card = document.getElementById('instance-graph-hover-card');
@@ -3059,30 +2937,31 @@ fn e2e_instance_graph_selection_survives_pointer_jitter_and_escape_deselects() {
                     out.push('afterEmptyJitter_sel:' + viz.selected_node_index());
                     return out.join(' ');
                 })()"#,
-            )
-            .await
-            .unwrap_or_default();
+                    )
+                    .await
+                    .unwrap_or_default();
 
-        assert!(
-            states.contains("pinnedAfterJitter:true"),
-            "a click that wobbles a couple of pixels must still pin the card; got: {states}"
-        );
-        assert!(
-            states.contains("afterEscape_card:false") && states.contains("afterEscape_sel:-1"),
-            "Escape must deselect and close the card; got: {states}"
-        );
-        assert!(
-            states.contains("rePinned:true"),
-            "clicking the node again must re-pin; got: {states}"
-        );
-        assert!(
-            states.contains("afterEmptyJitter_card:false")
-                && states.contains("afterEmptyJitter_sel:-1"),
-            "a wobbling click on empty space must still deselect; got: {states}"
-        );
-
-        browser.close().await.ok();
-    });
+                assert!(
+                    states.contains("pinnedAfterJitter:true"),
+                    "a click that wobbles a couple of pixels must still pin the card; got: {states}"
+                );
+                assert!(
+                    states.contains("afterEscape_card:false")
+                        && states.contains("afterEscape_sel:-1"),
+                    "Escape must deselect and close the card; got: {states}"
+                );
+                assert!(
+                    states.contains("rePinned:true"),
+                    "clicking the node again must re-pin; got: {states}"
+                );
+                assert!(
+                    states.contains("afterEmptyJitter_card:false")
+                        && states.contains("afterEmptyJitter_sel:-1"),
+                    "a wobbling click on empty space must still deselect; got: {states}"
+                );
+            })
+        },
+    );
 }
 
 /// The instance graph is typed: individuals wear their class's circle and
@@ -3092,22 +2971,21 @@ fn e2e_instance_graph_selection_survives_pointer_jitter_and_escape_deselects() {
 /// renders nothing.
 #[test]
 fn e2e_typed_instance_graph_renders_class_symbols_and_shared_values() {
-    let rt = tokio::runtime::Runtime::new().expect("runtime");
-    rt.block_on(async {
-        let site = generate_site("tests/fixtures/typed_wine.yaml", &["--instances", "tests/fixtures/typed_wine_instances.yaml"]);
-        let output_dir = site.path();
-        let playwright = Playwright::launch().await.expect("playwright");
-        let (browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
-        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
-            .await
-            .expect("goto");
+    in_chromium(
+        generate_site(
+            "tests/fixtures/typed_wine.yaml",
+            &["--instances", "tests/fixtures/typed_wine_instances.yaml"],
+        ),
+        |page| {
+            Box::pin(async move {
+                wait_until_ready(page, "!!window.__panschema_instance_viz")
+                    .await
+                    .expect("instance graph viz never became ready");
 
-        wait_until_ready(&page, "!!window.__panschema_instance_viz").await.expect("instance graph viz never became ready");
-
-        // The wire document carries the typed encoding: two shared value
-        // nodes (red, white — unused rose mints nothing), each red wine
-        // linking to the ONE red node.
-        let wire = page
+                // The wire document carries the typed encoding: two shared value
+                // nodes (red, white — unused rose mints nothing), each red wine
+                // linking to the ONE red node.
+                let wire = page
             .evaluate_value(
                 r#"(function(){
                     var g = (window.__PANSCHEMA_INSTANCE_GRAPHS__ || [])[0];
@@ -3125,36 +3003,36 @@ fn e2e_typed_instance_graph_renders_class_symbols_and_shared_values() {
             )
             .await
             .unwrap_or_default();
-        assert!(
-            wire.contains("values:2")
-                && wire.contains("redSources:individual:fleurie,individual:morgon")
-                && wire.contains("labels:color,color")
-                && wire.contains("usage:2")
-                && wire.contains("version:1.2"),
-            "the typed wire encoding should reach the page; got: {wire}"
-        );
+                assert!(
+                    wire.contains("values:2")
+                        && wire.contains("redSources:individual:fleurie,individual:morgon")
+                        && wire.contains("labels:color,color")
+                        && wire.contains("usage:2")
+                        && wire.contains("version:1.2"),
+                    "the typed wire encoding should reach the page; got: {wire}"
+                );
 
-        // The legend describes the typed key.
-        let summary = page
-            .evaluate_value(
-                r#"(function(){
+                // The legend describes the typed key.
+                let summary = page
+                    .evaluate_value(
+                        r#"(function(){
                     var viz = window.__panschema_instance_viz;
                     return viz && typeof viz.legend_summary_json === 'function'
                         ? viz.legend_summary_json() : 'no-api';
                 })()"#,
-            )
-            .await
-            .unwrap_or_default();
-        assert!(
-            summary.contains("Individual") && summary.contains("Enum value"),
-            "the key lists both typed kinds; got: {summary}"
-        );
+                    )
+                    .await
+                    .unwrap_or_default();
+                assert!(
+                    summary.contains("Individual") && summary.contains("Enum value"),
+                    "the key lists both typed kinds; got: {summary}"
+                );
 
-        // And the canvas actually paints them: class-blue circles for the
-        // wines and enum-purple diamonds for the shared values.
-        let painted = page
-            .evaluate_value(
-                r#"(async function(){
+                // And the canvas actually paints them: class-blue circles for the
+                // wines and enum-purple diamonds for the shared values.
+                let painted = page
+                    .evaluate_value(
+                        r#"(async function(){
                     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
                     var c = document.getElementById('instance-graph-canvas');
                     var ctx = c.getContext('2d');
@@ -3169,28 +3047,28 @@ fn e2e_typed_instance_graph_renders_class_symbols_and_shared_values() {
                     }
                     return 'blue:' + blue + ' purple:' + purple + ' teal:' + teal;
                 })()"#,
-            )
-            .await
-            .unwrap_or_default();
-        let count_of = |k: &str| -> i64 {
-            painted
-                .split_whitespace()
-                .find_map(|p| p.strip_prefix(&format!("{k}:")))
-                .and_then(|v| v.trim_matches('"').parse().ok())
-                .unwrap_or(-1)
-        };
-        assert!(
-            count_of("blue") > 0 && count_of("purple") > 0,
-            "class-coloured individuals and enum-coloured values should paint; got: {painted}"
-        );
-        assert_eq!(
-            count_of("teal"),
-            0,
-            "no generic teal markers remain; got: {painted}"
-        );
-
-        browser.close().await.ok();
-    });
+                    )
+                    .await
+                    .unwrap_or_default();
+                let count_of = |k: &str| -> i64 {
+                    painted
+                        .split_whitespace()
+                        .find_map(|p| p.strip_prefix(&format!("{k}:")))
+                        .and_then(|v| v.trim_matches('"').parse().ok())
+                        .unwrap_or(-1)
+                };
+                assert!(
+                    count_of("blue") > 0 && count_of("purple") > 0,
+                    "class-coloured individuals and enum-coloured values should paint; got: {painted}"
+                );
+                assert_eq!(
+                    count_of("teal"),
+                    0,
+                    "no generic teal markers remain; got: {painted}"
+                );
+            })
+        },
+    );
 }
 
 /// Each graph's notation key is adaptive: it lists only the node and edge
@@ -3398,24 +3276,23 @@ fn e2e_legends_adapt_to_what_each_graph_contains() {
 /// picker, and focuses the hovered node's neighborhood.
 #[test]
 fn e2e_instance_graph_is_explorable_like_the_schema_graph() {
-    let rt = tokio::runtime::Runtime::new().expect("runtime");
-    rt.block_on(async {
-        let site = generate_site("tests/fixtures/wine_catalog.yaml", &["--instances", "tests/fixtures/wine_instances.yaml"]);
-        let output_dir = site.path();
-        let playwright = Playwright::launch().await.expect("playwright");
-        let (browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
-        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
-            .await
-            .expect("goto");
+    in_chromium(
+        generate_site(
+            "tests/fixtures/wine_catalog.yaml",
+            &["--instances", "tests/fixtures/wine_instances.yaml"],
+        ),
+        |page| {
+            Box::pin(async move {
+                wait_until_ready(page, "!!window.__panschema_instance_viz")
+                    .await
+                    .expect("instance graph viz never became ready");
 
-        wait_until_ready(&page, "!!window.__panschema_instance_viz").await.expect("instance graph viz never became ready");
-
-        // Viewport fill: after the layout settles and the camera fits, the
-        // painted content spans a substantial share of the canvas rather than
-        // clustering in one corner.
-        wait_until_ready(
-                &page,
-                r#"(function(){
+                // Viewport fill: after the layout settles and the camera fits, the
+                // painted content spans a substantial share of the canvas rather than
+                // clustering in one corner.
+                wait_until_ready(
+                    page,
+                    r#"(function(){
                     var c = document.getElementById('instance-graph-canvas');
                     if (!c) return false;
                     var ctx = c.getContext('2d');
@@ -3443,25 +3320,25 @@ fn e2e_instance_graph_is_explorable_like_the_schema_graph() {
                     return w > c.width * 0.5 && h > c.height * 0.4 &&
                         Math.abs(cx - c.width / 2) < c.width * 0.25 &&
                         Math.abs(cy - c.height / 2) < c.height * 0.25;
-                })()"#
-            )
-        .await
-        .expect("the settled instance graph should fill and center in its viewport");
+                })()"#,
+                )
+                .await
+                .expect("the settled instance graph should fill and center in its viewport");
 
-        // Reset recovers from a far pan: after shoving the camera away, the
-        // painted graph returns to a fitted, centered view.
-        page.evaluate_value(
+                // Reset recovers from a far pan: after shoving the camera away, the
+                // painted graph returns to a fitted, centered view.
+                page.evaluate_value(
             "(function(){ window.__panschema_instance_viz.pan(4000, 4000); return 'panned'; })()",
         )
         .await
         .expect("pan");
-        page.locator("#instance-graph-reset")
-            .click(None)
-            .await
-            .expect("click reset");
-        wait_until_ready(
-                &page,
-                r#"(function(){
+                page.locator("#instance-graph-reset")
+                    .click(None)
+                    .await
+                    .expect("click reset");
+                wait_until_ready(
+                    page,
+                    r#"(function(){
                     var c = document.getElementById('instance-graph-canvas');
                     var ctx = c.getContext('2d');
                     if (!ctx) return false;
@@ -3484,40 +3361,43 @@ fn e2e_instance_graph_is_explorable_like_the_schema_graph() {
                     return (maxX - minX) > c.width * 0.5 &&
                         Math.abs(cx - c.width / 2) < c.width * 0.25 &&
                         Math.abs(cy - c.height / 2) < c.height * 0.25;
-                })()"#
-            )
-        .await
-        .expect("reset should re-fit and re-center the panned-away graph");
+                })()"#,
+                )
+                .await
+                .expect("reset should re-fit and re-center the panned-away graph");
 
-        // The layout picker is present with the same options as the schema
-        // graph's, and choosing another implemented layout re-creates the viz.
-        let picker = page.locator("#instance-graph-layout-select");
-        assert_eq!(
-            picker.count().await.expect("picker count"),
-            1,
-            "the instance graph should offer the layout picker"
-        );
-        let switched = page
-            .evaluate_value(
-                r#"(function(){
+                // The layout picker is present with the same options as the schema
+                // graph's, and choosing another implemented layout re-creates the viz.
+                let picker = page.locator("#instance-graph-layout-select");
+                assert_eq!(
+                    picker.count().await.expect("picker count"),
+                    1,
+                    "the instance graph should offer the layout picker"
+                );
+                let switched = page
+                    .evaluate_value(
+                        r#"(function(){
                     var s = document.getElementById('instance-graph-layout-select');
                     window.__instance_viz_before = window.__panschema_instance_viz;
                     s.value = 'force-directed';
                     s.dispatchEvent(new Event('change', {bubbles: true}));
                     return 'changed';
                 })()"#,
-            )
-            .await
-            .unwrap_or_default();
-        assert!(switched.contains("changed"), "picker change failed: {switched}");
-        wait_until_ready(
-                &page,
+                    )
+                    .await
+                    .unwrap_or_default();
+                assert!(
+                    switched.contains("changed"),
+                    "picker change failed: {switched}"
+                );
+                wait_until_ready(
+                page,
                 "window.__panschema_instance_viz && window.__panschema_instance_viz !== window.__instance_viz_before"
             ).await.expect("choosing a layout should re-create the instance viz");
 
-        // Focus-on-hover: hovering a node focuses its neighborhood, exactly
-        // as the schema graph does.
-        let focused = page
+                // Focus-on-hover: hovering a node focuses its neighborhood, exactly
+                // as the schema graph does.
+                let focused = page
             .evaluate_value(
                 r#"(function(){
                     var viz = window.__panschema_instance_viz;
@@ -3534,13 +3414,13 @@ fn e2e_instance_graph_is_explorable_like_the_schema_graph() {
             )
             .await
             .unwrap_or_default();
-        assert!(
-            focused.contains("hovered:0"),
-            "hovering a node should register on the viz; got: {focused}"
-        );
-
-        browser.close().await.ok();
-    });
+                assert!(
+                    focused.contains("hovered:0"),
+                    "hovering a node should register on the viz; got: {focused}"
+                );
+            })
+        },
+    );
 }
 
 /// The `generate --instances` path renders a LinkML instance-data file as the
@@ -3549,113 +3429,107 @@ fn e2e_instance_graph_is_explorable_like_the_schema_graph() {
 /// class-colored individual nodes.
 #[test]
 fn e2e_instance_graph_renders_from_linkml_data() {
-    let rt = tokio::runtime::Runtime::new().expect("runtime");
-    rt.block_on(async {
-        let site = generate_site(
+    in_chromium(
+        generate_site(
             "tests/fixtures/wine_catalog.yaml",
             &["--instances", "tests/fixtures/wine_instances.yaml"],
-        );
-        let output_dir = site.path();
-        let playwright = Playwright::launch().await.expect("playwright");
-        let (_browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
-        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
-            .await
-            .expect("goto");
+        ),
+        |page| {
+            Box::pin(async move {
+                // The instance-graph canvas exists even though the schema has no
+                // OWL individuals — the A-box is the LinkML data file.
+                assert_eq!(
+                    page.locator("#instance-graph-canvas")
+                        .count()
+                        .await
+                        .expect("count"),
+                    1,
+                    "the LinkML instance data should render an instance-graph canvas"
+                );
 
-        // The instance-graph canvas exists even though the schema has no
-        // OWL individuals — the A-box is the LinkML data file.
-        assert_eq!(
-            page.locator("#instance-graph-canvas")
-                .count()
-                .await
-                .expect("count"),
-            1,
-            "the LinkML instance data should render an instance-graph canvas"
-        );
+                // The sidebar carries an Instance Graph entry with node/edge badges
+                // that navigates to the section.
+                let sidebar_link = page.locator("a.sidebar-link[href='#individuals']");
+                assert_eq!(
+                    sidebar_link.count().await.expect("count"),
+                    1,
+                    "sidebar should carry an Instance Graph entry"
+                );
+                let link_text = sidebar_link.inner_text().await.expect("link text");
+                assert!(
+                    link_text.contains("Instance Graph"),
+                    "sidebar entry should be named Instance Graph; got: {link_text}"
+                );
+                assert!(
+                    link_text.contains("4 / 2"),
+                    "badge should show node/edge counts; got: {link_text}"
+                );
+                // Text asserted above, hash asserted below.
+                dom_click(page, "a.sidebar-link[href='#individuals']").await;
+                let hash = page
+                    .evaluate_value("window.location.hash")
+                    .await
+                    .unwrap_or_default();
+                assert!(
+                    hash.contains("#individuals"),
+                    "clicking the entry should navigate to the section; hash = {hash}"
+                );
 
-        // The sidebar carries an Instance Graph entry with node/edge badges
-        // that navigates to the section.
-        let sidebar_link = page.locator("a.sidebar-link[href='#individuals']");
-        assert_eq!(
-            sidebar_link.count().await.expect("count"),
-            1,
-            "sidebar should carry an Instance Graph entry"
-        );
-        let link_text = sidebar_link.inner_text().await.expect("link text");
-        assert!(
-            link_text.contains("Instance Graph"),
-            "sidebar entry should be named Instance Graph; got: {link_text}"
-        );
-        assert!(
-            link_text.contains("4 / 2"),
-            "badge should show node/edge counts; got: {link_text}"
-        );
-        // Text asserted above, hash asserted below.
-        dom_click(&page, "a.sidebar-link[href='#individuals']").await;
-        let hash = page
-            .evaluate_value("window.location.hash")
-            .await
-            .unwrap_or_default();
-        assert!(
-            hash.contains("#individuals"),
-            "clicking the entry should navigate to the section; hash = {hash}"
-        );
+                // The section states where the A-box came from.
+                let prov = page
+                    .locator(".instance-provenance")
+                    .inner_text()
+                    .await
+                    .expect("provenance");
+                assert!(
+                    prov.contains("wine_instances.yaml"),
+                    "provenance should name the data file; got: {prov}"
+                );
 
-        // The section states where the A-box came from.
-        let prov = page
-            .locator(".instance-provenance")
-            .inner_text()
-            .await
-            .expect("provenance");
-        assert!(
-            prov.contains("wine_instances.yaml"),
-            "provenance should name the data file; got: {prov}"
-        );
+                // LinkML-data instances get cards through the same path as OWL
+                // individuals: typed, with the reference linking to the referenced
+                // individual's card.
+                assert_eq!(
+                    page.locator("#ind-chateauMorgon")
+                        .count()
+                        .await
+                        .expect("count"),
+                    1,
+                    "a LinkML-data instance should render an individual card"
+                );
+                let ref_link = page.locator("#ind-chateauMorgon a[href='#ind-morgonEstate']");
+                assert_eq!(
+                    ref_link.count().await.expect("count"),
+                    1,
+                    "the produced_by reference should link to the referenced individual's card"
+                );
 
-        // LinkML-data instances get cards through the same path as OWL
-        // individuals: typed, with the reference linking to the referenced
-        // individual's card.
-        assert_eq!(
-            page.locator("#ind-chateauMorgon")
-                .count()
-                .await
-                .expect("count"),
-            1,
-            "a LinkML-data instance should render an individual card"
-        );
-        let ref_link = page.locator("#ind-chateauMorgon a[href='#ind-morgonEstate']");
-        assert_eq!(
-            ref_link.count().await.expect("count"),
-            1,
-            "the produced_by reference should link to the referenced individual's card"
-        );
-
-        // The A-box read from the data file: four records, two reference edges.
-        let counts = page
-            .evaluate_value(
-                r#"(function(){
+                // The A-box read from the data file: four records, two reference edges.
+                let counts = page
+                    .evaluate_value(
+                        r#"(function(){
                     var g = window.__PANSCHEMA_INSTANCE_GRAPHS__;
                     var d = g && g[0] && g[0].data;
                     return d ? (d.nodes.length + ',' + d.edges.length) : 'none';
                 })()"#,
-            )
-            .await
-            .unwrap_or_default();
-        assert_eq!(
-            counts.trim().trim_matches('"'),
-            "4,2",
-            "two wines + two wineries + two produced_by edges; got {counts}"
-        );
+                    )
+                    .await
+                    .unwrap_or_default();
+                assert_eq!(
+                    counts.trim().trim_matches('"'),
+                    "4,2",
+                    "two wines + two wineries + two produced_by edges; got {counts}"
+                );
 
-        wait_until_ready(&page, "!!window.__panschema_instance_viz")
-            .await
-            .expect("instance graph viz never became ready");
+                wait_until_ready(page, "!!window.__panschema_instance_viz")
+                    .await
+                    .expect("instance graph viz never became ready");
 
-        // The canvas painted the teal individual nodes (RGB ~ 41,184,179) —
-        // proof the LinkML-sourced A-box actually renders.
-        let result = page
-            .evaluate_value(
-                r#"(async function(){
+                // The canvas painted the teal individual nodes (RGB ~ 41,184,179) —
+                // proof the LinkML-sourced A-box actually renders.
+                let result = page
+                    .evaluate_value(
+                        r#"(async function(){
                     var viz = window.__panschema_instance_viz;
                     if (!viz) return 'no-viz';
                     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
@@ -3669,59 +3543,52 @@ fn e2e_instance_graph_renders_from_linkml_data() {
                     }
                     return 'ok:' + teal;
                 })()"#,
-            )
-            .await
-            .unwrap_or_default();
-        let result = result.trim().trim_matches('"').to_string();
-        assert!(
-            result.starts_with("ok:"),
-            "the instance viz should have initialized; got {result}"
-        );
-        let teal: i64 = result.trim_start_matches("ok:").parse().unwrap_or(0);
-        assert!(
-            teal > 0,
-            "the LinkML instance graph should paint individual nodes; class-blue pixels={teal}"
-        );
-    });
+                    )
+                    .await
+                    .unwrap_or_default();
+                let result = result.trim().trim_matches('"').to_string();
+                assert!(
+                    result.starts_with("ok:"),
+                    "the instance viz should have initialized; got {result}"
+                );
+                let teal: i64 = result.trim_start_matches("ok:").parse().unwrap_or(0);
+                assert!(
+                    teal > 0,
+                    "the LinkML instance graph should paint individual nodes; class-blue pixels={teal}"
+                );
+            })
+        },
+    );
 }
 
-// Proves the layout auto-default end-to-end (feature 09 slice 9): an
-// is_a-heavy schema, with no layout pinned and no persisted choice,
-// must initialize the picker to `hierarchical` via the wasm density
-// recommendation. The reference-fixture happy-path asserts the SGD
-// side; this asserts the Hierarchical side, so SGD-for-a-real-schema
-// is known to be a real recommendation, not a silent fallback.
+// Proves the layout auto-default end-to-end: an is_a-heavy schema, with
+// no layout pinned and no persisted choice, must initialize the picker to
+// `hierarchical` via the wasm density recommendation. The reference
+// fixture's picker test (`e2e_graph_controls_zoom_reset_and_layout_picker`)
+// asserts the SGD side; this asserts the Hierarchical side, so SGD for a
+// real schema is known to be a real recommendation, not a silent fallback.
 #[test]
 fn e2e_is_a_heavy_schema_auto_defaults_to_hierarchical() {
-    let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-    rt.block_on(async {
-        let site = generate_site("tests/fixtures/taxonomy.ttl", &[]);
-        let output_dir = site.path();
-        let playwright = Playwright::launch()
-            .await
-            .expect("Failed to initialize Playwright");
-        let (browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
-        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
-            .await
-            .expect("navigate");
-        // Wait for the viz to boot rather than guessing: the picker reads
-        // its markup default until the module sets the resolved layout, so a
-        // fixed sleep asserts the default on any machine slower than the one
-        // the number was picked on.
-        wait_until_ready(&page, "!!window.__panschema_viz")
-            .await
-            .expect("the schema viz should boot");
-        let select = page.locator("#graph-layout-select");
-        let value = select
-            .input_value(None)
-            .await
-            .expect("read layout select value");
-        assert_eq!(
-            value, "hierarchical",
-            "an is_a-heavy schema should auto-detect to hierarchical; got `{}`",
-            value
-        );
-        browser.close().await.expect("close browser");
+    in_chromium(generate_site("tests/fixtures/taxonomy.ttl", &[]), |page| {
+        Box::pin(async move {
+            // Wait for the viz to boot rather than guessing: the picker reads
+            // its markup default until the module sets the resolved layout, so a
+            // fixed sleep asserts the default on any machine slower than the one
+            // the number was picked on.
+            wait_until_ready(page, "!!window.__panschema_viz")
+                .await
+                .expect("the schema viz should boot");
+            let select = page.locator("#graph-layout-select");
+            let value = select
+                .input_value(None)
+                .await
+                .expect("read layout select value");
+            assert_eq!(
+                value, "hierarchical",
+                "an is_a-heavy schema should auto-detect to hierarchical; got `{}`",
+                value
+            );
+        })
     });
 }
 
@@ -3732,50 +3599,42 @@ fn e2e_is_a_heavy_schema_auto_defaults_to_hierarchical() {
 // permissible values are present in the rendered DOM.
 #[test]
 fn e2e_renders_enum_and_type_sections() {
-    let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-    rt.block_on(async {
-        let site = generate_site("tests/fixtures/enum_type.yaml", &[]);
-        let output_dir = site.path();
-        let playwright = Playwright::launch()
-            .await
-            .expect("Failed to initialize Playwright");
-        let (browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
-        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
-            .await
-            .expect("navigate");
+    in_chromium(
+        generate_site("tests/fixtures/enum_type.yaml", &[]),
+        |page| {
+            Box::pin(async move {
+                // Enumerations section + card + permissible values.
+                let enum_card = page.locator("#enum-Status");
+                let enum_html = enum_card
+                    .inner_html()
+                    .await
+                    .expect("Status enum card should be present");
+                assert!(
+                    enum_html.contains("open") && enum_html.contains("closed"),
+                    "enum card lists its permissible values; got: {enum_html}"
+                );
 
-        // Enumerations section + card + permissible values.
-        let enum_card = page.locator("#enum-Status");
-        let enum_html = enum_card
-            .inner_html()
-            .await
-            .expect("Status enum card should be present");
-        assert!(
-            enum_html.contains("open") && enum_html.contains("closed"),
-            "enum card lists its permissible values; got: {enum_html}"
-        );
+                // Types section + card with its pattern constraint.
+                let type_card = page.locator("#type-PhoneNumber");
+                let type_html = type_card
+                    .inner_html()
+                    .await
+                    .expect("PhoneNumber type card should be present");
+                assert!(
+                    type_html.contains(r"\+[1-9]"),
+                    "type card shows its pattern; got: {type_html}"
+                );
 
-        // Types section + card with its pattern constraint.
-        let type_card = page.locator("#type-PhoneNumber");
-        let type_html = type_card
-            .inner_html()
-            .await
-            .expect("PhoneNumber type card should be present");
-        assert!(
-            type_html.contains(r"\+[1-9]"),
-            "type card shows its pattern; got: {type_html}"
-        );
-
-        // Sidebar gained the two nav entries.
-        let nav = page.locator(".sidebar-nav");
-        let nav_html = nav.inner_html().await.expect("sidebar nav present");
-        assert!(
-            nav_html.contains("Enumerations") && nav_html.contains("Types"),
-            "sidebar lists Enumerations and Types; got: {nav_html}"
-        );
-
-        browser.close().await.expect("close browser");
-    });
+                // Sidebar gained the two nav entries.
+                let nav = page.locator(".sidebar-nav");
+                let nav_html = nav.inner_html().await.expect("sidebar nav present");
+                assert!(
+                    nav_html.contains("Enumerations") && nav_html.contains("Types"),
+                    "sidebar lists Enumerations and Types; got: {nav_html}"
+                );
+            })
+        },
+    );
 }
 
 // Proves the LinkML-only card features render in a browser. These have
@@ -3787,74 +3646,68 @@ fn e2e_renders_enum_and_type_sections() {
 // are present in the rendered DOM.
 #[test]
 fn e2e_renders_linkml_card_features() {
-    let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-    rt.block_on(async {
-        let site = generate_site("tests/fixtures/card_features.yaml", &[]);
-        let output_dir = site.path();
-        let playwright = Playwright::launch()
-            .await
-            .expect("Failed to initialize Playwright");
-        let (browser, page) = open_served_page(&playwright, "chromium", output_dir).await;
-        page.goto(&format!("{SITE_ORIGIN}/index.html"), None)
-            .await
-            .expect("navigate");
+    in_chromium(
+        generate_site("tests/fixtures/card_features.yaml", &[]),
+        |page| {
+            Box::pin(async move {
+                // Abstract class: NamedThing carries the abstract badge.
+                let abstract_card = page.locator("#class-NamedThing");
+                let abstract_html = abstract_card
+                    .inner_html()
+                    .await
+                    .expect("NamedThing card should be present");
+                assert!(
+                    abstract_html.contains(r#"class="abstract-badge""#),
+                    "abstract class card shows the abstract badge; got: {abstract_html}"
+                );
 
-        // Abstract class: NamedThing carries the abstract badge.
-        let abstract_card = page.locator("#class-NamedThing");
-        let abstract_html = abstract_card
-            .inner_html()
-            .await
-            .expect("NamedThing card should be present");
-        assert!(
-            abstract_html.contains(r#"class="abstract-badge""#),
-            "abstract class card shows the abstract badge; got: {abstract_html}"
-        );
+                // Mixins + examples: Person mixes in HasIdentifier and lists a
+                // worked example.
+                let person_card = page.locator("#class-Person");
+                let person_html = person_card
+                    .inner_html()
+                    .await
+                    .expect("Person card should be present");
+                assert!(
+                    person_html.contains("<dt>Mixes in</dt>")
+                        && person_html.contains(r##"href="#class-HasIdentifier""##),
+                    "class card shows a Mixes in row linking to the mixin; got: {person_html}"
+                );
+                assert!(
+                    person_html.contains("<dt>Examples</dt>")
+                        && person_html.contains("Ada Lovelace"),
+                    "class card shows an Examples section with the worked value; got: {person_html}"
+                );
 
-        // Mixins + examples: Person mixes in HasIdentifier and lists a
-        // worked example.
-        let person_card = page.locator("#class-Person");
-        let person_html = person_card
-            .inner_html()
-            .await
-            .expect("Person card should be present");
-        assert!(
-            person_html.contains("<dt>Mixes in</dt>")
-                && person_html.contains(r##"href="#class-HasIdentifier""##),
-            "class card shows a Mixes in row linking to the mixin; got: {person_html}"
-        );
-        assert!(
-            person_html.contains("<dt>Examples</dt>") && person_html.contains("Ada Lovelace"),
-            "class card shows an Examples section with the worked value; got: {person_html}"
-        );
+                // Value bounds: the age slot card surfaces ≥ / ≤ characteristic
+                // badges from minimum_value / maximum_value.
+                let age_card = page.locator("#slot-age");
+                let age_html = age_card
+                    .inner_html()
+                    .await
+                    .expect("age slot card should be present");
+                assert!(
+                    age_html.contains(r#"class="characteristic-badge""#)
+                        && age_html.contains("≥ 0")
+                        && age_html.contains("≤ 130"),
+                    "slot card shows value-bound badges; got: {age_html}"
+                );
 
-        // Value bounds: the age slot card surfaces ≥ / ≤ characteristic
-        // badges from minimum_value / maximum_value.
-        let age_card = page.locator("#slot-age");
-        let age_html = age_card
-            .inner_html()
-            .await
-            .expect("age slot card should be present");
-        assert!(
-            age_html.contains(r#"class="characteristic-badge""#)
-                && age_html.contains("≥ 0")
-                && age_html.contains("≤ 130"),
-            "slot card shows value-bound badges; got: {age_html}"
-        );
-
-        // ifabsent default: the membership slot card surfaces a Default row
-        // rendering the readable value (`"basic"`).
-        let membership_card = page.locator("#slot-membership");
-        let membership_html = membership_card
-            .inner_html()
-            .await
-            .expect("membership slot card should be present");
-        assert!(
-            membership_html.contains("<dt>Default</dt>") && membership_html.contains("basic"),
-            "slot card shows a Default row with the ifabsent value; got: {membership_html}"
-        );
-
-        browser.close().await.expect("close browser");
-    });
+                // ifabsent default: the membership slot card surfaces a Default row
+                // rendering the readable value (`"basic"`).
+                let membership_card = page.locator("#slot-membership");
+                let membership_html = membership_card
+                    .inner_html()
+                    .await
+                    .expect("membership slot card should be present");
+                assert!(
+                    membership_html.contains("<dt>Default</dt>")
+                        && membership_html.contains("basic"),
+                    "slot card shows a Default row with the ifabsent value; got: {membership_html}"
+                );
+            })
+        },
+    );
 }
 
 /// A target viewport + graph size for the multi-scale screenshot

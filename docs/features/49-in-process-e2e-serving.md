@@ -66,7 +66,8 @@ before the pattern spreads.
 - [x] The helper that opens a served page is shared, so converting a
       further test is a call-site change rather than a copied block.
 
-**Measured 2026-09-07** on one laptop, `e2e_happy_path`, `BROWSER=all`
+**Measured 2026-09-07** on one laptop, `e2e_happy_path` (since split into
+the `in_every_browser` tests), `BROWSER=all`
 (the test drives all three engines in one run):
 
 | Serving | Wall clock |
