@@ -3348,30 +3348,36 @@ mod tests {
         let schema = parse(
             "name: s\nclasses:\n  Bad:\n    is_a: MissingParent\n    mixins: [MissingMixin]\nslots:\n  r:\n    range: NoSuchClass\n  inv:\n    inverse: no_such_slot\n",
         );
-        let msgs: Vec<String> = dangling_references(&schema)
-            .iter()
-            .map(|d| d.message())
-            .collect();
-        assert!(
-            msgs.iter()
-                .any(|m| m.contains("has range") && m.contains("NoSuchClass")),
-            "range message missing or unlabeled; got: {msgs:?}"
+        let refs = dangling_references(&schema);
+        let found: std::collections::BTreeSet<(&str, &str)> =
+            refs.iter().map(|d| (d.kind, d.name.as_str())).collect();
+        assert_eq!(
+            found,
+            std::collections::BTreeSet::from([
+                ("range", "NoSuchClass"),
+                ("is_a", "MissingParent"),
+                ("mixin", "MissingMixin"),
+                ("inverse", "no_such_slot"),
+            ])
         );
-        assert!(
-            msgs.iter()
-                .any(|m| m.contains("has parent") && m.contains("MissingParent")),
-            "is_a message missing or unlabeled; got: {msgs:?}"
-        );
-        assert!(
-            msgs.iter()
-                .any(|m| m.contains("mixes in") && m.contains("MissingMixin")),
-            "mixin message missing or unlabeled; got: {msgs:?}"
-        );
-        assert!(
-            msgs.iter()
-                .any(|m| m.contains("has inverse") && m.contains("no_such_slot")),
-            "inverse message missing or unlabeled; got: {msgs:?}"
-        );
+        // Each message names its kind by the verb readers see and the name
+        // they can search for.
+        for reference in &refs {
+            let verb = match reference.kind {
+                "range" => "has range",
+                "is_a" => "has parent",
+                "mixin" => "mixes in",
+                "inverse" => "has inverse",
+                other => panic!("unexpected kind {other}"),
+            };
+            let message = reference.message();
+            assert!(
+                message.contains(verb) && message.contains(&reference.name),
+                "the {} message should read `{verb}` and name `{}`; got: {message}",
+                reference.kind,
+                reference.name
+            );
+        }
     }
 
     #[test]

@@ -1876,6 +1876,223 @@ mod tests {
         }
     }
 
+    /// Structural views of generated Rust, so a test states what an item is
+    /// rather than how the writer happened to spell it. Everything goes
+    /// through syn first, so output that does not parse fails here with the
+    /// source attached.
+    mod ast {
+        use syn::{Attribute, Block, File, Item, Signature, Type};
+
+        pub fn parse(src: &str) -> File {
+            syn::parse_file(src)
+                .unwrap_or_else(|e| panic!("generated Rust must parse: {e}\n--- source ---\n{src}"))
+        }
+
+        pub fn ty(src: &str) -> Type {
+            syn::parse_str(src).unwrap_or_else(|e| panic!("bad expected type `{src}`: {e}"))
+        }
+
+        pub fn block(src: &str) -> Block {
+            syn::parse_str(src).unwrap_or_else(|e| panic!("bad expected block `{src}`: {e}"))
+        }
+
+        fn path_last(path: &syn::Path) -> String {
+            path.segments
+                .last()
+                .map(|s| s.ident.to_string())
+                .unwrap_or_default()
+        }
+
+        fn type_last(ty: &Type) -> String {
+            match ty {
+                Type::Path(p) => path_last(&p.path),
+                _ => String::new(),
+            }
+        }
+
+        fn has_item(src: &str, pred: impl Fn(&Item) -> bool) -> bool {
+            parse(src).items.iter().any(pred)
+        }
+
+        pub fn has_trait(src: &str, name: &str) -> bool {
+            has_item(src, |i| matches!(i, Item::Trait(t) if t.ident == name))
+        }
+
+        pub fn has_struct(src: &str, name: &str) -> bool {
+            has_item(src, |i| matches!(i, Item::Struct(s) if s.ident == name))
+        }
+
+        pub fn has_enum(src: &str, name: &str) -> bool {
+            has_item(src, |i| matches!(i, Item::Enum(e) if e.ident == name))
+        }
+
+        /// The supertraits of trait `name`, in the order written. Panics when
+        /// the trait is absent.
+        pub fn trait_supertraits(src: &str, name: &str) -> Vec<String> {
+            let file = parse(src);
+            let item = file
+                .items
+                .iter()
+                .find_map(|i| match i {
+                    Item::Trait(t) if t.ident == name => Some(t),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("no trait `{name}` in:\n{src}"));
+            item.supertraits
+                .iter()
+                .map(|bound| match bound {
+                    syn::TypeParamBound::Trait(t) => path_last(&t.path),
+                    other => panic!("unexpected supertrait bound {other:?}"),
+                })
+                .collect()
+        }
+
+        /// Whether `impl <trait_name> for <for_type>` is present, matched on
+        /// the last path segment of each with generics ignored.
+        pub fn impls(src: &str, trait_name: &str, for_type: &str) -> bool {
+            parse(src).items.iter().any(|i| match i {
+                Item::Impl(im) => {
+                    im.trait_
+                        .as_ref()
+                        .is_some_and(|(path, _)| path_last(path) == trait_name)
+                        && type_last(&im.self_ty) == for_type
+                }
+                _ => false,
+            })
+        }
+
+        fn struct_field<'a>(file: &'a File, strukt: &str, field: &str) -> Option<&'a syn::Field> {
+            file.items.iter().find_map(|i| match i {
+                Item::Struct(s) if s.ident == strukt => s
+                    .fields
+                    .iter()
+                    .find(|f| f.ident.as_ref().is_some_and(|id| id == field)),
+                _ => None,
+            })
+        }
+
+        /// The declared type of `field` on `strukt`, or `None` when either is
+        /// absent.
+        pub fn field_type(src: &str, strukt: &str, field: &str) -> Option<Type> {
+            struct_field(&parse(src), strukt, field).map(|f| f.ty.clone())
+        }
+
+        /// The outer attributes on `field`. Panics when the field is absent.
+        fn field_attrs(src: &str, strukt: &str, field: &str) -> Vec<Attribute> {
+            struct_field(&parse(src), strukt, field)
+                .unwrap_or_else(|| panic!("no field `{strukt}.{field}` in:\n{src}"))
+                .attrs
+                .clone()
+        }
+
+        /// The serde attributes on `field`. Panics when the field is absent.
+        pub fn field_serde_attrs(src: &str, strukt: &str, field: &str) -> Vec<Attribute> {
+            field_attrs(src, strukt, field)
+                .into_iter()
+                .filter(|a| a.path().is_ident("serde"))
+                .collect()
+        }
+
+        /// The doc lines on `field`, trimmed. Panics when the field is absent.
+        pub fn field_docs(src: &str, strukt: &str, field: &str) -> Vec<String> {
+            field_attrs(src, strukt, field)
+                .iter()
+                .filter_map(|attr| match &attr.meta {
+                    syn::Meta::NameValue(nv) if nv.path.is_ident("doc") => match &nv.value {
+                        syn::Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Str(s),
+                            ..
+                        }) => Some(s.value().trim().to_string()),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .collect()
+        }
+
+        /// The traits the struct or enum `name` derives. Panics when absent.
+        pub fn derives(src: &str, name: &str) -> Vec<String> {
+            let file = parse(src);
+            let attrs = file
+                .items
+                .iter()
+                .find_map(|i| match i {
+                    Item::Struct(s) if s.ident == name => Some(&s.attrs),
+                    Item::Enum(e) if e.ident == name => Some(&e.attrs),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("no struct or enum `{name}` in:\n{src}"));
+            attrs
+                .iter()
+                .filter(|a| a.path().is_ident("derive"))
+                .flat_map(|a| {
+                    a.parse_args_with(
+                        syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
+                    )
+                    .expect("derive list")
+                    .into_iter()
+                    .map(|p| path_last(&p))
+                })
+                .collect()
+        }
+
+        /// The field types of variant `variant` on enum `enm`, or `None` when
+        /// either is absent.
+        pub fn enum_variant_types(src: &str, enm: &str, variant: &str) -> Option<Vec<Type>> {
+            parse(src).items.iter().find_map(|i| match i {
+                Item::Enum(e) if e.ident == enm => e
+                    .variants
+                    .iter()
+                    .find(|v| v.ident == variant)
+                    .map(|v| v.fields.iter().map(|f| f.ty.clone()).collect()),
+                _ => None,
+            })
+        }
+
+        fn method_sig(file: &File, self_ty: &str, name: &str) -> Option<Signature> {
+            file.items.iter().find_map(|i| match i {
+                Item::Impl(im) if im.trait_.is_none() && type_last(&im.self_ty) == self_ty => {
+                    im.items.iter().find_map(|ii| match ii {
+                        syn::ImplItem::Fn(f) if f.sig.ident == name => Some(f.sig.clone()),
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+        }
+
+        /// The named parameters of the inherent method `self_ty::name`, in
+        /// order; `None` when the type has no such method.
+        pub fn method_params(src: &str, self_ty: &str, name: &str) -> Option<Vec<(String, Type)>> {
+            method_sig(&parse(src), self_ty, name).map(|sig| {
+                sig.inputs
+                    .iter()
+                    .filter_map(|arg| match arg {
+                        syn::FnArg::Typed(t) => match &*t.pat {
+                            syn::Pat::Ident(p) => Some((p.ident.to_string(), (*t.ty).clone())),
+                            _ => None,
+                        },
+                        syn::FnArg::Receiver(_) => None,
+                    })
+                    .collect()
+            })
+        }
+
+        /// The return type and body of free fn `name`; `None` when absent.
+        pub fn fn_returns(src: &str, name: &str) -> Option<(Type, Block)> {
+            parse(src).items.iter().find_map(|i| match i {
+                Item::Fn(f) if f.sig.ident == name => {
+                    let ret = match &f.sig.output {
+                        syn::ReturnType::Type(_, t) => (**t).clone(),
+                        syn::ReturnType::Default => ty("()"),
+                    };
+                    Some((ret, (*f.block).clone()))
+                }
+                _ => None,
+            })
+        }
+    }
+
     /// The manifest value maps to exactly the two supported crates; any
     /// other spelling is `None`, so a typo errors instead of silently
     /// falling back to chrono.
@@ -2734,7 +2951,7 @@ mod tests {
         let mut out = String::new();
         render_trait(&mut out, "UncertaintyModel", &child, &schema, &roles).unwrap();
         assert!(
-            out.contains("pub trait UncertaintyModel: Entity {}"),
+            ast::trait_supertraits(&out, "UncertaintyModel") == ["Entity"],
             "expected `pub trait UncertaintyModel: Entity {{}}`, got: {out}"
         );
     }
@@ -2772,7 +2989,7 @@ mod tests {
         let mut out = String::new();
         render_trait(&mut out, "Annotated", &multi, &schema, &roles).unwrap();
         assert!(
-            out.contains("pub trait Annotated: Entity + Tagged + Versioned {}"),
+            ast::trait_supertraits(&out, "Annotated") == ["Entity", "Tagged", "Versioned"],
             "expected combined supertrait chain in order; got: {out}"
         );
     }
@@ -2800,7 +3017,7 @@ mod tests {
         render_trait(&mut out, "OnlyOne", &leaf, &schema, &roles).unwrap();
         // PhantomMixin isn't in schema.classes → omit from supertraits.
         assert!(
-            out.contains("pub trait OnlyOne {}"),
+            ast::trait_supertraits(&out, "OnlyOne").is_empty(),
             "phantom mixin must not appear in supertrait chain; got: {out}"
         );
         assert!(
@@ -2844,7 +3061,7 @@ mod tests {
         // class that itself is a leaf with mixins" — emits a trait
         // referencing the mixins as supertraits.
         assert!(
-            out.contains("pub trait OnlyOne: Tagged {}"),
+            ast::trait_supertraits(&out, "OnlyOne") == ["Tagged"],
             "expected `pub trait OnlyOne: Tagged {{}}`; got: {out}"
         );
     }
@@ -2953,11 +3170,11 @@ mod tests {
         .unwrap();
         // Both the mixin AND the mixin's `is_a` parent are satisfied.
         assert!(
-            out.contains("impl MidTrait for Leaf {}"),
+            ast::impls(&out, "MidTrait", "Leaf"),
             "expected `impl MidTrait for Leaf {{}}`; got: {out}"
         );
         assert!(
-            out.contains("impl RootTrait for Leaf {}"),
+            ast::impls(&out, "RootTrait", "Leaf"),
             "expected `impl RootTrait for Leaf {{}}` (mixin's is_a ancestor); got: {out}"
         );
     }
@@ -2990,7 +3207,8 @@ mod tests {
         .unwrap();
         // `label` is required + single + name matches → no serde attrs at all.
         assert!(
-            out.contains("    pub label: String,\n"),
+            ast::field_type(&out, "Thing", "label") == Some(ast::ty("String"))
+                && ast::field_serde_attrs(&out, "Thing", "label").is_empty(),
             "expected bare `pub label: String,`; got: {out}"
         );
         assert!(
@@ -3036,16 +3254,12 @@ mod tests {
         )
         .unwrap();
         assert!(
-            out.contains("pub r#type: String,"),
+            ast::field_type(&out, "Item", "r#type") == Some(ast::ty("String")),
             "reserved keyword field must be a raw ident; got: {out}"
         );
         assert!(
             out.contains(r#"rename = "type""#),
             "escaped field must keep wire name via serde rename; got: {out}"
-        );
-        assert!(
-            !out.contains("pub type:"),
-            "must not emit a bare reserved-keyword field; got: {out}"
         );
     }
 
@@ -3071,16 +3285,12 @@ mod tests {
         let body = RustWriter::new().render(&schema);
 
         assert!(
-            body.contains("pub struct r#move {"),
+            ast::has_struct(&body, "r#move"),
             "keyword class name must be defined as a raw ident; got:\n{body}"
         );
         assert!(
-            body.contains("pub noted: Box<r#move>,"),
+            ast::field_type(&body, "Holder", "noted") == Some(ast::ty("Box<r#move>")),
             "reference to a keyword-named class must use the same raw ident; got:\n{body}"
-        );
-        assert!(
-            !body.contains("pub struct move ") && !body.contains("Box<move>"),
-            "must not emit a bare keyword type name; got:\n{body}"
         );
     }
 
@@ -3111,7 +3321,8 @@ mod tests {
         )
         .unwrap();
         assert!(
-            out.contains("pub fn new(r#move: String) -> Self"),
+            ast::method_params(&out, "Action", "new")
+                == Some(vec![("r#move".to_string(), ast::ty("String"))]),
             "constructor param must be a raw ident; got: {out}"
         );
         assert!(
@@ -3148,7 +3359,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            out.contains("pub self_: String,"),
+            ast::field_type(&out, "Node", "self_") == Some(ast::ty("String")),
             "non-raw keyword field must be underscore-mangled; got: {out}"
         );
         assert!(
@@ -3185,8 +3396,11 @@ mod tests {
             &mut any_of_enums,
         )
         .unwrap();
-        assert!(out.contains("impl Entity for Vagueness {}"));
-        assert!(out.contains("impl UncertaintyModel for Vagueness {}"));
+        assert!(ast::impls(&out, "Entity", "Vagueness"), "got: {out}");
+        assert!(
+            ast::impls(&out, "UncertaintyModel", "Vagueness"),
+            "got: {out}"
+        );
     }
 
     #[test]
@@ -3212,15 +3426,28 @@ mod tests {
             &designators_by_class(&schema),
         )
         .unwrap();
-        assert!(out.contains("pub enum AnimalKind"));
-        assert!(out.contains("Cat(Box<Cat>)"));
-        assert!(out.contains("Dog(Box<Dog>)"));
+        assert!(ast::has_enum(&out, "AnimalKind"));
+        assert_eq!(
+            ast::enum_variant_types(&out, "AnimalKind", "Cat"),
+            Some(vec![ast::ty("Box<Cat>")]),
+            "got: {out}"
+        );
+        assert_eq!(
+            ast::enum_variant_types(&out, "AnimalKind", "Dog"),
+            Some(vec![ast::ty("Box<Dog>")]),
+            "got: {out}"
+        );
         assert!(
             out.contains("#[serde(untagged)]"),
             "with no designator, shape decides the variant; got: {out}"
         );
         assert!(out.contains("#[non_exhaustive]"));
-        assert!(out.contains("PartialEq"));
+        assert!(
+            ast::derives(&out, "AnimalKind")
+                .iter()
+                .any(|d| d == "PartialEq"),
+            "got: {out}"
+        );
 
         // A type designator on the trait class generates a deserializer
         // that dispatches on the authored value — each concrete class
@@ -3246,7 +3473,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            out.contains("impl<'de> serde::Deserialize<'de> for AnimalKind"),
+            ast::impls(&out, "Deserialize", "AnimalKind"),
             "the designator dispatches through a generated impl; got: {out}"
         );
         assert!(
@@ -3305,17 +3532,14 @@ mod tests {
         dog.is_a = Some("Animal".to_string());
         schema.classes.insert("Dog".to_string(), dog);
         let out = RustWriter::new().render(&schema);
-        assert!(out.contains("pub trait Animal"), "got: {out}");
+        assert!(ast::has_trait(&out, "Animal"), "got: {out}");
         assert!(
-            !out.contains("pub trait Dog"),
+            !ast::has_trait(&out, "Dog"),
             "a struct-role class is never a trait; got: {out}"
         );
-        assert!(out.contains("pub struct Dog"), "got: {out}");
-        assert!(out.contains("pub enum AnimalKind"), "got: {out}");
-        assert!(
-            out.contains("impl<'de> serde::Deserialize<'de> for AnimalKind"),
-            "got: {out}"
-        );
+        assert!(ast::has_struct(&out, "Dog"), "got: {out}");
+        assert!(ast::has_enum(&out, "AnimalKind"), "got: {out}");
+        assert!(ast::impls(&out, "Deserialize", "AnimalKind"), "got: {out}");
         assert!(
             out.contains("serde_json = \"1\""),
             "a designated kind enum alone requires serde_json; got: {out}"
@@ -3334,7 +3558,7 @@ mod tests {
         schema.classes.insert("Holder".to_string(), holder);
         let out = RustWriter::new().render(&schema);
         assert!(
-            out.contains("impl<'de> serde::Deserialize<'de> for HolderFixture"),
+            ast::impls(&out, "Deserialize", "HolderFixture"),
             "got: {out}"
         );
         assert!(
@@ -3429,7 +3653,7 @@ mod tests {
             "should emit breadcrumb explaining missing Kind enum; got: {out}"
         );
         assert!(
-            !out.contains("pub enum PhantomKind"),
+            !ast::has_enum(&out, "PhantomKind"),
             "should NOT emit an empty PhantomKind enum; got: {out}"
         );
 
@@ -3574,25 +3798,23 @@ mod tests {
         let out = render_placed_item(&schema, &def);
 
         assert!(
-            out.contains("pub status: ItemStatus,"),
+            ast::field_type(&out, "PlacedItem", "status") == Some(ast::ty("ItemStatus")),
             "status should render as the bare enum type; got:\n{out}"
-        );
-        assert!(
-            !out.contains("Option<ItemStatus>"),
-            "an ifabsent-defaulted field must not be wrapped in Option; got:\n{out}"
         );
         assert!(
             out.contains("#[serde(default = \"default_placed_item_status\")]"),
             "field should carry the serde default attribute; got:\n{out}"
         );
         assert!(
-            out.contains("fn default_placed_item_status() -> ItemStatus { ItemStatus::planned }"),
+            ast::fn_returns(&out, "default_placed_item_status")
+                == Some((ast::ty("ItemStatus"), ast::block("{ ItemStatus::planned }"))),
             "should emit a default fn returning the matching variant; got:\n{out}"
         );
         // The default is always present, so it is not a `new()` param and
         // is initialized from the variant in the constructor body.
         assert!(
-            !out.contains("pub fn new(status:"),
+            !ast::method_params(&out, "PlacedItem", "new")
+                .is_some_and(|params| params.iter().any(|(name, _)| name == "status")),
             "ifabsent-defaulted field must not be a constructor parameter; got:\n{out}"
         );
     }
@@ -3606,11 +3828,12 @@ mod tests {
         let out = render_placed_item(&schema, &def);
 
         assert!(
-            out.contains("pub status: ItemStatus,"),
+            ast::field_type(&out, "PlacedItem", "status") == Some(ast::ty("ItemStatus")),
             "bare-form ifabsent should render the bare enum type; got:\n{out}"
         );
         assert!(
-            out.contains("fn default_placed_item_status() -> ItemStatus { ItemStatus::placed }"),
+            ast::fn_returns(&out, "default_placed_item_status")
+                == Some((ast::ty("ItemStatus"), ast::block("{ ItemStatus::placed }"))),
             "bare-form ifabsent should resolve to the matching variant; got:\n{out}"
         );
     }
@@ -3629,11 +3852,11 @@ mod tests {
             "an unresolvable ifabsent should emit a warning; got:\n{out}"
         );
         assert!(
-            out.contains("pub status: Option<ItemStatus>,"),
+            ast::field_type(&out, "PlacedItem", "status") == Some(ast::ty("Option<ItemStatus>")),
             "unresolvable ifabsent should fall back to Option; got:\n{out}"
         );
         assert!(
-            !out.contains("fn default_placed_item_status"),
+            ast::fn_returns(&out, "default_placed_item_status").is_none(),
             "no default fn should be emitted for an unresolvable ifabsent; got:\n{out}"
         );
     }
@@ -3659,7 +3882,7 @@ mod tests {
             "ifabsent over a non-enum range should warn; got:\n{out}"
         );
         assert!(
-            !out.contains("fn default_placed_item_status"),
+            ast::fn_returns(&out, "default_placed_item_status").is_none(),
             "no default fn for a non-enum ifabsent range; got:\n{out}"
         );
     }
@@ -3719,27 +3942,33 @@ mod tests {
         }
 
         assert!(
-            out.contains("fn default_config_port() -> i64 { 8080 }"),
+            ast::fn_returns(&out, "default_config_port")
+                == Some((ast::ty("i64"), ast::block("{ 8080 }"))),
             "int default fn should return the integer literal; got:\n{out}"
         );
         assert!(
-            out.contains("fn default_config_ratio() -> f64 { 1.0 }"),
+            ast::fn_returns(&out, "default_config_ratio")
+                == Some((ast::ty("f64"), ast::block("{ 1.0 }"))),
             "float default fn should return the float literal; got:\n{out}"
         );
         assert!(
-            out.contains("fn default_config_scale() -> f64 { 2f64 }"),
+            ast::fn_returns(&out, "default_config_scale")
+                == Some((ast::ty("f64"), ast::block("{ 2f64 }"))),
             "whole-number double should be suffixed to type as f64; got:\n{out}"
         );
         assert!(
-            out.contains("fn default_config_prefix() -> String { \"svc\".to_string() }"),
+            ast::fn_returns(&out, "default_config_prefix")
+                == Some((ast::ty("String"), ast::block("{ \"svc\".to_string() }"))),
             "string default fn should return an escaped owned String; got:\n{out}"
         );
         assert!(
-            out.contains("fn default_config_enabled() -> bool { true }"),
+            ast::fn_returns(&out, "default_config_enabled")
+                == Some((ast::ty("bool"), ast::block("{ true }"))),
             "boolean `true` should default to true; got:\n{out}"
         );
         assert!(
-            out.contains("fn default_config_verbose() -> bool { false }"),
+            ast::fn_returns(&out, "default_config_verbose")
+                == Some((ast::ty("bool"), ast::block("{ false }"))),
             "boolean `False` should default to false; got:\n{out}"
         );
     }
@@ -3816,10 +4045,23 @@ mod tests {
         .unwrap();
         assert!(out.contains("#[serde(untagged)]"));
         assert!(out.contains("#[non_exhaustive]"));
-        assert!(out.contains("PartialEq"));
-        assert!(out.contains("pub enum QuestionWasDerivedFrom"));
-        assert!(out.contains("Question(Box<Question>)"));
-        assert!(out.contains("Annotation(Box<Annotation>)"));
+        assert!(
+            ast::derives(&out, "QuestionWasDerivedFrom")
+                .iter()
+                .any(|d| d == "PartialEq"),
+            "got: {out}"
+        );
+        assert!(ast::has_enum(&out, "QuestionWasDerivedFrom"), "got: {out}");
+        assert_eq!(
+            ast::enum_variant_types(&out, "QuestionWasDerivedFrom", "Question"),
+            Some(vec![ast::ty("Box<Question>")]),
+            "got: {out}"
+        );
+        assert_eq!(
+            ast::enum_variant_types(&out, "QuestionWasDerivedFrom", "Annotation"),
+            Some(vec![ast::ty("Box<Annotation>")]),
+            "got: {out}"
+        );
         assert!(
             out.contains("Deserialize"),
             "an undesignated union derives its Deserialize; got: {out}"
@@ -3913,7 +4155,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            out.contains("impl<'de> serde::Deserialize<'de> for Fixture"),
+            ast::impls(&out, "Deserialize", "Fixture"),
             "the designator dispatches through a generated impl; got: {out}"
         );
         assert!(
@@ -4006,7 +4248,11 @@ mod tests {
             &mut any_of_enums,
         )
         .unwrap();
-        assert!(out.contains("pub was_derived_from: Vec<QuestionWasDerivedFrom>"));
+        assert_eq!(
+            ast::field_type(&out, "Question", "was_derived_from"),
+            Some(ast::ty("Vec<QuestionWasDerivedFrom>")),
+            "got: {out}"
+        );
         assert_eq!(
             any_of_enums.get("QuestionWasDerivedFrom"),
             Some(&vec!["Question".to_string(), "Annotation".to_string()])
@@ -4285,11 +4531,8 @@ mod tests {
         )
         .unwrap();
         assert!(
-            out.contains("impl Question {"),
-            "expected an impl block; got:\n{out}"
-        );
-        assert!(
-            out.contains("pub fn new(label: String)"),
+            ast::method_params(&out, "Question", "new")
+                == Some(vec![("label".to_string(), ast::ty("String"))]),
             "expected constructor to take only the required field; got:\n{out}"
         );
         assert!(
@@ -4335,7 +4578,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            !out.contains("impl Loose {"),
+            ast::method_params(&out, "Loose", "new").is_none(),
             "no required fields → no constructor; got:\n{out}"
         );
     }
@@ -4376,7 +4619,8 @@ mod tests {
         )
         .unwrap();
         assert!(
-            out.contains("pub fn new(name: String)"),
+            ast::method_params(&out, "Holder", "new")
+                == Some(vec![("name".to_string(), ast::ty("String"))]),
             "multivalued field must not appear in param list; got:\n{out}"
         );
         assert!(
@@ -4445,20 +4689,20 @@ mod tests {
         schema.classes.insert("Child".into(), child);
 
         let out = RustWriter::new().render(&schema);
-        let start = out.find("pub struct Child").expect("Child struct rendered");
-        let end = out[start..].find('}').map(|n| start + n).unwrap();
-        let body = &out[start..end];
         assert!(
-            body.contains("/// Inherited from Parent."),
-            "inherited is_a field must say where it came from; got: {body}"
+            ast::field_docs(&out, "Child", "name").contains(&"Inherited from Parent.".to_string()),
+            "inherited is_a field must say where it came from; got: {out}"
         );
         assert!(
-            body.contains("/// Inherited from mixin Auditable."),
-            "mixin-flattened field must name the mixin; got: {body}"
+            ast::field_docs(&out, "Child", "created_at")
+                .contains(&"Inherited from mixin Auditable.".to_string()),
+            "mixin-flattened field must name the mixin; got: {out}"
         );
         assert!(
-            !body.contains("/// Inherited from Child"),
-            "direct fields must not carry an origin line; got: {body}"
+            !ast::field_docs(&out, "Child", "own")
+                .iter()
+                .any(|d| d.starts_with("Inherited from")),
+            "direct fields must not carry an origin line; got: {out}"
         );
     }
 
@@ -4572,18 +4816,33 @@ mod tests {
     fn fixture_renders_as_syntactically_valid_rust() {
         let schema = fixture_schema();
         let body = RustWriter::new().render(&schema);
-        syn::parse_file(&body)
-            .unwrap_or_else(|e| panic!("generated Rust failed to parse: {e}\n---\n{body}"));
+        ast::parse(&body);
     }
 
     #[test]
     fn fixture_field_types_are_correct() {
         let schema = fixture_schema();
         let body = RustWriter::new().render(&schema);
-        assert!(body.contains("pub name: String,"));
-        assert!(body.contains("pub tags: Vec<String>,"));
-        assert!(body.contains("pub color: Option<Color>,"));
-        assert!(body.contains("pub created_at: chrono::DateTime<chrono::Utc>,"));
+        assert_eq!(
+            ast::field_type(&body, "Sample", "name"),
+            Some(ast::ty("String")),
+            "got: {body}"
+        );
+        assert_eq!(
+            ast::field_type(&body, "Sample", "tags"),
+            Some(ast::ty("Vec<String>")),
+            "got: {body}"
+        );
+        assert_eq!(
+            ast::field_type(&body, "Sample", "color"),
+            Some(ast::ty("Option<Color>")),
+            "got: {body}"
+        );
+        assert_eq!(
+            ast::field_type(&body, "Sample", "created_at"),
+            Some(ast::ty("chrono::DateTime<chrono::Utc>")),
+            "got: {body}"
+        );
     }
 
     #[test]
