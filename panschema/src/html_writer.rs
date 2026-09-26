@@ -2266,6 +2266,26 @@ mod tests {
     use crate::owl_reader::OwlReader;
     use std::path::PathBuf;
 
+    /// The element carrying `id`, from its `id` attribute to `close_tag`.
+    /// The anchor keeps the attribute's leading space, so a `data-id` or
+    /// any other attribute ending in `id` cannot start the slice.
+    fn element<'a>(html: &'a str, id: &str, close_tag: &str) -> &'a str {
+        let anchor = format!(r##" id="{id}""##);
+        let start = html
+            .find(&anchor)
+            .unwrap_or_else(|| panic!("no element with id `{id}`"));
+        let end = html[start..]
+            .find(close_tag)
+            .map(|n| start + n)
+            .unwrap_or_else(|| panic!("element `{id}` has no `{close_tag}`"));
+        &html[start..end]
+    }
+
+    /// The card with `id` in a generated page, up to its closing tag.
+    fn card<'a>(html: &'a str, id: &str) -> &'a str {
+        element(html, id, "</article>")
+    }
+
     /// Renders `schema` into a scratch directory and returns `index.html`.
     fn render_index(writer: &HtmlWriter, schema: &SchemaDefinition) -> String {
         let scratch = tempfile::tempdir().unwrap();
@@ -3560,26 +3580,31 @@ mod tests {
         crate::io::Writer::write(&writer, &schema, out.path()).unwrap();
         let html = std::fs::read_to_string(out.path().join("index.html")).unwrap();
 
-        assert!(html.contains("Rules"), "expected a Rules row; got: {html}");
+        let deployment = card(&html, "class-Deployment");
         assert!(
-            html.contains("actual deployments are located"),
-            "expected the rule title; got: {html}"
+            deployment.contains("Rules"),
+            "expected a Rules row on the Deployment card; got: {deployment}"
         );
         assert!(
-            html.contains("ties status to required fields"),
-            "expected the rendered description; got: {html}"
+            deployment.contains("actual deployments are located"),
+            "expected the rule title on the Deployment card; got: {deployment}"
         );
         assert!(
-            html.contains("<code>status</code>") && html.contains("<code>actual</code>"),
-            "expected the precondition rendered with slot/value as code; got: {html}"
+            deployment.contains("ties status to required fields"),
+            "expected the rendered description on the Deployment card; got: {deployment}"
         );
         assert!(
-            html.contains("<code>region</code>") && html.contains("is required"),
-            "expected the postcondition rendered; got: {html}"
+            deployment.contains("<code>status</code>")
+                && deployment.contains("<code>actual</code>"),
+            "expected the precondition rendered with slot/value as code; got: {deployment}"
         );
         assert!(
-            html.contains("when") && html.contains("then"),
-            "expected a when…then sentence; got: {html}"
+            deployment.contains("<code>region</code>") && deployment.contains("is required"),
+            "expected the postcondition rendered; got: {deployment}"
+        );
+        assert!(
+            deployment.contains("when") && deployment.contains("then"),
+            "expected a when…then sentence; got: {deployment}"
         );
     }
 
@@ -3671,18 +3696,19 @@ mod tests {
         crate::io::Writer::write(&writer, &schema, out.path()).unwrap();
         let html = std::fs::read_to_string(out.path().join("index.html")).unwrap();
 
+        let offering = card(&html, "class-Offering");
         assert!(
-            html.contains("Unique keys"),
-            "expected a Unique keys row; got: {html}"
+            offering.contains("Unique keys"),
+            "expected a Unique keys row on the Offering card; got: {offering}"
         );
         assert!(
-            html.contains("<code class=\"mono\">service_type</code>")
-                && html.contains("<code class=\"mono\">offered_by</code>"),
-            "expected the key's slot tuple rendered as code; got: {html}"
+            offering.contains("<code class=\"mono\">service_type</code>")
+                && offering.contains("<code class=\"mono\">offered_by</code>"),
+            "expected the key's slot tuple rendered as code; got: {offering}"
         );
         assert!(
-            html.contains("unique per service type and provider"),
-            "expected the key description; got: {html}"
+            offering.contains("unique per service type and provider"),
+            "expected the key description on the Offering card; got: {offering}"
         );
     }
 
@@ -5359,8 +5385,8 @@ mod tests {
 
         // Singular heading for one dataset.
         assert!(
-            html.contains(">Instance Graph<") || html.contains("Instance Graph\n"),
-            "one dataset reads singular"
+            element(&html, "individuals", "</section>").contains("Instance Graph"),
+            "the instances section heading reads singular for one dataset"
         );
         assert!(
             !html.contains("Instance Graphs"),

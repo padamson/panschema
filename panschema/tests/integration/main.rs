@@ -321,14 +321,50 @@ fn class_card_surfaces_mixins_slots_and_resolved_xrefs() {
 }
 
 fn extract_class_card<'a>(html: &'a str, class_id: &str) -> &'a str {
-    let anchor = format!(r##"id="class-{class_id}""##);
+    element_by_id(html, &format!("class-{class_id}"), "</article>")
+}
+
+/// The element carrying `id`, from its `id` attribute to `close_tag`. The
+/// anchor is the attribute with its leading space, so a `data-id` or any
+/// other attribute ending in `id` cannot start the slice.
+fn element_by_id<'a>(html: &'a str, id: &str, close_tag: &str) -> &'a str {
+    let anchor = format!(r##" id="{id}""##);
     let start = html
         .find(&anchor)
-        .unwrap_or_else(|| panic!("`{class_id}` class card not found"));
+        .unwrap_or_else(|| panic!("no element with id `{id}`"));
     let end = html[start..]
-        .find("</article>")
+        .find(close_tag)
         .map(|n| start + n)
-        .unwrap_or_else(|| panic!("`{class_id}` class card has no closing tag"));
+        .unwrap_or_else(|| panic!("element `{id}` has no `{close_tag}`"));
+    &html[start..end]
+}
+
+/// The `<section id="{id}">` of a generated page, up to its closing tag.
+fn section<'a>(html: &'a str, id: &str) -> &'a str {
+    element_by_id(html, id, "</section>")
+}
+
+/// The content panel of the instance dataset at `index`: the panel whose
+/// opening tag carries that index, up to the next panel or the end of the
+/// instances section. The meta panel carries a second class, so its tag
+/// never matches the bare class attribute.
+fn dataset_panel(html: &str, index: usize) -> &str {
+    let class_attr = r#"class="instance-dataset-panel""#;
+    let index_attr = format!(r#"data-instance-dataset="{index}""#);
+    let start = html
+        .match_indices(class_attr)
+        .map(|(at, _)| at)
+        .find(|&at| {
+            let tag_end = html[at..].find('>').map_or(html.len(), |n| at + n);
+            html[at..tag_end].contains(&index_attr)
+        })
+        .unwrap_or_else(|| panic!("dataset panel {index} not found"));
+    let rest = &html[start + class_attr.len()..];
+    let end = [rest.find(class_attr), rest.find("</section>")]
+        .into_iter()
+        .flatten()
+        .min()
+        .map_or(html.len(), |n| start + class_attr.len() + n);
     &html[start..end]
 }
 
@@ -463,8 +499,8 @@ fn generates_documentation_from_reference_ontology() {
 
     // Verify key content
     assert!(
-        html.contains("panschema Reference Ontology"),
-        "Missing ontology title"
+        html.contains("<title>panschema Reference Ontology</title>"),
+        "the document title should be the ontology title"
     );
     assert!(
         html.contains("http://example.org/panschema/reference"),
@@ -472,8 +508,8 @@ fn generates_documentation_from_reference_ontology() {
     );
     assert!(html.contains("0.2.0"), "Missing version");
     assert!(
-        html.contains("A reference ontology for testing"),
-        "Missing description"
+        section(&html, "metadata").contains("A reference ontology for testing"),
+        "the metadata card should carry the description"
     );
 
     // Verify graph visualization is included
@@ -604,8 +640,8 @@ fn generates_documentation_from_linkml_yaml() {
 
     // Verify key content from YAML schema
     assert!(
-        html.contains("Sample LinkML Schema"),
-        "Missing schema title"
+        html.contains("<title>Sample LinkML Schema</title>"),
+        "the document title should be the schema title"
     );
     assert!(
         html.contains("https://example.org/sample"),
@@ -613,14 +649,17 @@ fn generates_documentation_from_linkml_yaml() {
     );
     assert!(html.contains("1.0.0"), "Missing version");
     assert!(
-        html.contains("A sample schema for testing"),
-        "Missing description"
+        section(&html, "metadata").contains("A sample schema for testing"),
+        "the metadata card should carry the description"
     );
 
     // Verify classes are rendered
     assert!(html.contains("Person"), "Missing Person class");
     assert!(html.contains("Organization"), "Missing Organization class");
-    assert!(html.contains("A human being"), "Missing Person description");
+    assert!(
+        extract_class_card(&html, "Person").contains("A human being"),
+        "the Person card should carry its description"
+    );
 }
 
 #[test]
@@ -881,9 +920,14 @@ fn generate_carries_several_curated_instance_graphs() {
     );
 
     // Individuals from both A-boxes are in the page, each in its own panel.
+    let (preview, worked) = (dataset_panel(&html, 0), dataset_panel(&html, 1));
     assert!(
-        html.contains("Preview Pinot") && html.contains("Château Morgon"),
-        "both datasets' individual cards must render"
+        preview.contains("Preview Pinot") && !preview.contains("Château Morgon"),
+        "the first panel holds only the preview dataset; got: {preview}"
+    );
+    assert!(
+        worked.contains("Château Morgon") && !worked.contains("Preview Pinot"),
+        "the second panel holds only the worked dataset; got: {worked}"
     );
 
     // Each payload entry carries its own graph, in declaration order.
@@ -2281,8 +2325,9 @@ resolve_against = ["catalog"]
     let stderr = String::from_utf8_lossy(&strict.stderr);
     assert!(!strict.status.success());
     assert!(
-        stderr.contains("does not resolve") || stderr.contains("no resolve-against dataset mints"),
-        "the check finding is reported; got:\n{stderr}"
+        stderr.contains("no resolve-against dataset mints")
+            && stderr.contains("1 of 1 cross-graph reference(s) do not resolve against `catalog`"),
+        "the unresolved reference and the strict summary are both reported; got:\n{stderr}"
     );
     assert!(
         stderr.contains("expects an integer"),
@@ -4233,8 +4278,8 @@ html = "docs/"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("does not exist") || stderr.contains("ghost"),
-        "stderr should explain the missing path; got: {stderr}"
+        stderr.contains("schema `ghost`: package path") && stderr.contains("does not exist"),
+        "stderr should name the schema and say its path does not exist; got: {stderr}"
     );
 }
 
@@ -5087,8 +5132,8 @@ fn init_refuses_clobber_without_force() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("already exists") || stderr.contains("--force"),
-        "stderr should mention the clobber refusal: {stderr}"
+        stderr.contains("already exists") && stderr.contains("--force"),
+        "stderr should refuse to clobber and name the override: {stderr}"
     );
 
     // The seed file is intact.
@@ -5399,7 +5444,7 @@ fn release_with_git_refuses_on_dirty_tree() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("not clean") || stderr.contains("dirty"),
+        stderr.contains("git working tree is not clean"),
         "stderr should call out the dirty tree: {stderr}"
     );
 }
