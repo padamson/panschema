@@ -20,18 +20,483 @@ use serde_norway::Value;
 use std::fmt;
 
 /// A single way the data fails to conform to the schema.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Violation {
     /// The offending record's identifier, or a positional label when it has no
-    /// identifier (e.g. ``Wine#2``).
+    /// identifier (e.g. ``Wine#2``), or `(root)` for the dataset itself.
     pub record: String,
+    /// Which check failed, carrying what it found.
+    pub kind: ViolationKind,
+}
+
+impl Violation {
     /// What is wrong, as a ready-to-print clause.
-    pub detail: String,
+    pub fn detail(&self) -> String {
+        self.kind.detail()
+    }
 }
 
 impl fmt::Display for Violation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "instance `{}`: {}", self.record, self.detail)
+        write!(f, "instance `{}`: {}", self.record, self.detail())
+    }
+}
+
+/// The checks a record or dataset can fail, each carrying what it found.
+/// Findings the instance model already reports as values are carried as
+/// that value, so nothing the model recorded is lost here. Variants may be
+/// added as checks are; match with a wildcard arm.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq)]
+pub enum ViolationKind {
+    /// A required slot has no value on the record.
+    RequiredSlotAbsent { class: String, slot: String },
+    /// A single-valued slot holds more than one value.
+    SingleValuedSlotRepeated {
+        class: String,
+        slot: String,
+        count: usize,
+    },
+    /// A multivalued slot holds fewer values than its declared minimum.
+    FewerValuesThanMinimum {
+        class: String,
+        slot: String,
+        count: usize,
+        minimum: u32,
+    },
+    /// A multivalued slot holds more values than its declared maximum.
+    MoreValuesThanMaximum {
+        class: String,
+        slot: String,
+        count: usize,
+        maximum: u32,
+    },
+    /// A type designator's value names a class other than the record's own.
+    DesignatorNamesAnotherClass {
+        class: String,
+        slot: String,
+        value: String,
+    },
+    /// A type designator holds a value that is not a string.
+    DesignatorNotAString { class: String, slot: String },
+    /// The schema's pattern for the slot is not a valid regular expression.
+    InvalidPattern {
+        class: String,
+        slot: String,
+        pattern: String,
+    },
+    /// An object at a union of class ranges names none of them by its fields.
+    ObjectNamesNoClassRange {
+        class: String,
+        slot: String,
+        ranges: Vec<String>,
+    },
+    /// A value whose shape the slot's range cannot take. `shape` is the
+    /// instance reader's phrase for it (`an object`, `a number`), and
+    /// `ranges` the declared range, empty when the slot declares none.
+    ValueShapeOutsideRange {
+        class: String,
+        slot: String,
+        shape: String,
+        ranges: Vec<String>,
+    },
+    /// A reference into a union range whose target's class satisfies no
+    /// member of the union.
+    ReferenceOutsideUnion {
+        class: String,
+        slot: String,
+        target: String,
+        actual: String,
+        ranges: Vec<String>,
+    },
+    /// A scalar whose kind matches none of the primitives the range demands.
+    ScalarKindOutsideRange {
+        class: String,
+        slot: String,
+        value: ScalarValue,
+        ranges: Vec<String>,
+        primitives: Vec<String>,
+    },
+    /// A value the slot's range enum does not permit.
+    NotAPermissibleValue {
+        class: String,
+        slot: String,
+        value: ScalarValue,
+        enum_name: String,
+    },
+    /// A string the slot's pattern does not match.
+    PatternMismatch {
+        class: String,
+        slot: String,
+        value: String,
+        pattern: String,
+    },
+    /// A number below the slot's declared minimum.
+    BelowMinimum {
+        class: String,
+        slot: String,
+        value: f64,
+        minimum: f64,
+    },
+    /// A number above the slot's declared maximum.
+    AboveMaximum {
+        class: String,
+        slot: String,
+        value: f64,
+        maximum: f64,
+    },
+    /// A non-numeric value at a slot that declares a numeric bound.
+    NotNumericUnderBound {
+        class: String,
+        slot: String,
+        value: ScalarValue,
+    },
+    /// A value of a specializing slot that its parent slot does not hold.
+    OutsideSpecializedSlot {
+        class: String,
+        slot: String,
+        value: InstanceValue,
+        parent: String,
+    },
+    /// A rule whose precondition holds and whose postcondition on `slot`
+    /// fails. The rule is its 0-based position in the class and its title.
+    RulePostconditionFailed {
+        class: String,
+        rule_index: usize,
+        rule_title: Option<String>,
+        slot: String,
+        failure: SlotConditionFailure,
+    },
+    /// A rule whose precondition holds and none of whose postcondition
+    /// alternatives the record satisfies.
+    RuleAlternativesFailed {
+        class: String,
+        rule_index: usize,
+        rule_title: Option<String>,
+    },
+    /// A typed reference to an id no record in the set defines.
+    DanglingReference(crate::diagnostics::DanglingInstanceRef),
+    /// A field the record's class never declared.
+    UndeclaredField(crate::instances::UndeclaredField),
+    /// The data matched none of the schema's `tree_root` classes, or more
+    /// than one equally.
+    NoRootMatched { candidates: Vec<String> },
+    /// A record whose bare values could not expand against their base.
+    ExpansionGap(crate::instances::ExpansionGap),
+    /// An identifier used by more than one record.
+    DuplicateIdentifier { id: String },
+    /// A collection entry that loaded nothing.
+    UnusableCollectionEntry(crate::instances::UnusableCollectionEntry),
+    /// The dataset container's id is also a record's id.
+    RootIdCollidesWithRecord { id: String },
+    /// The data is not a mapping, so it cannot be a `tree_root` container.
+    DataNotAMapping,
+}
+
+impl ViolationKind {
+    /// What is wrong, as a ready-to-print clause.
+    pub fn detail(&self) -> String {
+        match self {
+            Self::RequiredSlotAbsent { class, slot } => {
+                format!("required slot `{slot}` (class `{class}`) is absent")
+            }
+            Self::SingleValuedSlotRepeated { class, slot, count } => {
+                format!("single-valued slot `{slot}` (class `{class}`) has {count} values")
+            }
+            Self::FewerValuesThanMinimum {
+                class,
+                slot,
+                count,
+                minimum,
+            } => format!(
+                "slot `{slot}` (class `{class}`) has {count} value(s), fewer than its minimum of {minimum}"
+            ),
+            Self::MoreValuesThanMaximum {
+                class,
+                slot,
+                count,
+                maximum,
+            } => format!(
+                "slot `{slot}` (class `{class}`) has {count} value(s), exceeding its maximum of {maximum}"
+            ),
+            Self::DesignatorNamesAnotherClass { class, slot, value } => format!(
+                "type designator `{slot}` value `{value}` does not name the record's class `{class}`"
+            ),
+            Self::DesignatorNotAString { class, slot } => format!(
+                "type designator `{slot}` (class `{class}`) has a non-string value; a designator names a class"
+            ),
+            Self::InvalidPattern {
+                class,
+                slot,
+                pattern,
+            } => format!("slot `{slot}` (class `{class}`) has an invalid pattern `{pattern}`"),
+            Self::ObjectNamesNoClassRange {
+                class,
+                slot,
+                ranges,
+            } => format!(
+                "slot `{slot}` (class `{class}`) has an object whose fields name no one of its \
+                 class ranges `{}`; give it a field that only the intended one declares",
+                ranges.join(" or ")
+            ),
+            Self::ValueShapeOutsideRange {
+                class,
+                slot,
+                shape,
+                ranges,
+            } => format!(
+                "slot `{slot}` (class `{class}`) has {shape} value, which isn't valid for its range `{}`",
+                if ranges.is_empty() {
+                    "?".to_string()
+                } else {
+                    ranges.join(" or ")
+                }
+            ),
+            Self::ReferenceOutsideUnion {
+                class,
+                slot,
+                target,
+                actual,
+                ranges,
+            } => format!(
+                "slot `{slot}` (class `{class}`) references `{target}`, a `{actual}`, which is none of `{}`",
+                ranges.join("`, `")
+            ),
+            Self::ScalarKindOutsideRange {
+                class,
+                slot,
+                value,
+                ranges,
+                primitives,
+            } => {
+                let shown = scalar_to_display(value);
+                let kind = crate::primitives::scalar_kind_phrase(value);
+                let expected = match (ranges.as_slice(), primitives.as_slice()) {
+                    ([range], [primitive]) => format!(
+                        "the slot's range `{range}` expects {}",
+                        with_article(primitive)
+                    ),
+                    _ => format!(
+                        "none of the slot's ranges `{}` permit it",
+                        ranges.join("`, `")
+                    ),
+                };
+                format!("slot `{slot}` (class `{class}`) value `{shown}` is {kind}, but {expected}")
+            }
+            Self::NotAPermissibleValue {
+                class,
+                slot,
+                value,
+                enum_name,
+            } => format!(
+                "slot `{slot}` (class `{class}`) value `{}` is not a permissible value of enum `{enum_name}`",
+                scalar_to_display(value)
+            ),
+            Self::PatternMismatch {
+                class,
+                slot,
+                value,
+                pattern,
+            } => format!(
+                "slot `{slot}` (class `{class}`) value `{value}` does not match pattern `{pattern}`"
+            ),
+            Self::BelowMinimum {
+                class,
+                slot,
+                value,
+                minimum,
+            } => format!(
+                "slot `{slot}` (class `{class}`) value {value} is below its minimum of {minimum}"
+            ),
+            Self::AboveMaximum {
+                class,
+                slot,
+                value,
+                maximum,
+            } => format!(
+                "slot `{slot}` (class `{class}`) value {value} is above its maximum of {maximum}"
+            ),
+            Self::NotNumericUnderBound { class, slot, value } => format!(
+                "slot `{slot}` (class `{class}`) value `{}` is not numeric, but the slot declares a numeric bound",
+                scalar_to_display(value)
+            ),
+            Self::OutsideSpecializedSlot {
+                class,
+                slot,
+                value,
+                parent,
+            } => format!(
+                "slot `{slot}` (class `{class}`) value `{}` is not among the values of \
+                 `{parent}`, which `{slot}` specializes",
+                value_display(value)
+            ),
+            Self::RulePostconditionFailed {
+                class,
+                rule_index,
+                rule_title,
+                slot,
+                failure,
+            } => format!(
+                "rule `{}` (class `{class}`) applies, but slot `{slot}` {}",
+                crate::rules::rule_label_of(rule_title.as_deref(), *rule_index),
+                failure.detail()
+            ),
+            Self::RuleAlternativesFailed {
+                class,
+                rule_index,
+                rule_title,
+            } => format!(
+                "rule `{}` (class `{class}`) applies, but the record satisfies none of its \
+                 postcondition alternatives",
+                crate::rules::rule_label_of(rule_title.as_deref(), *rule_index)
+            ),
+            Self::DanglingReference(d) => d.detail(),
+            Self::UndeclaredField(u) => match u.key_kind {
+                Some(crate::instances::KeyKind::Quotable) => format!(
+                    "field key `{}` (class `{}`) is not a string; its value is dropped — \
+                     quote the key",
+                    u.field, u.class
+                ),
+                Some(crate::instances::KeyKind::Unquotable) => format!(
+                    "a field key on class `{}` is {}, not a string; its value is dropped — \
+                     only string keys can name fields",
+                    u.class, u.field
+                ),
+                None => format!(
+                    "field `{}` is not declared by class `{}`; it renders and emits as an \
+                     undeclared property",
+                    u.field, u.class
+                ),
+            },
+            Self::NoRootMatched { candidates } => format!(
+                "the data conforms to none of this schema's `tree_root` classes, or to \
+                 more than one equally: {}. Name the collections of exactly one of them \
+                 so the dataset can be read.",
+                candidates.join(", ")
+            ),
+            Self::ExpansionGap(g) => match &g.kind {
+                crate::instances::ExpansionGapKind::UnusableBase(reason) => match &g.supplied_by {
+                    Some(who) => format!(
+                        "slot `{}` expands against `{}`, but the containing record `{who}` \
+                         supplies {reason} there; the bare values were read as authored",
+                        g.slot, g.base_slot
+                    ),
+                    None => format!(
+                        "slot `{}` expands against `{}`, but this record supplies {reason} there; \
+                         its bare values were read as authored",
+                        g.slot, g.base_slot
+                    ),
+                },
+                crate::instances::ExpansionGapKind::InlineRecord => format!(
+                    "slot `{}` declares its values expand into an external namespace (against \
+                     `{}`), but this record authors an inline record there",
+                    g.slot, g.base_slot
+                ),
+            },
+            Self::DuplicateIdentifier { id } => {
+                format!("identifier `{id}` is used by more than one record")
+            }
+            Self::UnusableCollectionEntry(u) => {
+                let place = match &u.record {
+                    Some(record) => format!("record `{record}` slot `{}`", u.slot),
+                    None => format!("container slot `{}`", u.slot),
+                };
+                match &u.key {
+                    Some(key) => format!("{place} entry `{key}` {}", u.reason),
+                    None => format!("a {place} entry {}", u.reason),
+                }
+            }
+            Self::RootIdCollidesWithRecord { id } => format!(
+                "the dataset container's id `{id}` is already a record's id; no container \
+                 is emitted and key-scoped records mint unscoped until the collision is \
+                 resolved"
+            ),
+            Self::DataNotAMapping => {
+                "instance data must be a mapping (a tree_root container object)".to_string()
+            }
+        }
+    }
+}
+
+/// Why a rule's slot condition failed on a record's values, rendered by
+/// [`SlotConditionFailure::detail`] to follow "slot `x` …". Variants may be
+/// added as conditions are; match with a wildcard arm.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq)]
+pub enum SlotConditionFailure {
+    /// The condition requires a value and the slot has none.
+    RequiredAbsent,
+    /// `value_presence: PRESENT` and the slot has no value.
+    MustBePresent,
+    /// `value_presence: ABSENT` and the slot has a value.
+    MustBeAbsent,
+    /// Fewer values than the condition's minimum cardinality.
+    FewerThanMinimum { count: usize, minimum: u32 },
+    /// More values than the condition's maximum cardinality.
+    MoreThanMaximum { count: usize, maximum: u32 },
+    /// None of the condition's `any_of` alternatives holds.
+    NoAlternativeSatisfied,
+    /// No value equals the condition's `equals_string`.
+    NotEqualString {
+        expected: String,
+        values: Vec<InstanceValue>,
+    },
+    /// No value equals the condition's `equals_number`.
+    NotEqualNumber {
+        expected: f64,
+        values: Vec<InstanceValue>,
+    },
+    /// A non-numeric value where the condition declares a bound.
+    NotNumeric { value: ScalarValue },
+    /// A value below the condition's minimum.
+    BelowMinimum { value: f64, minimum: f64 },
+    /// A value above the condition's maximum.
+    AboveMaximum { value: f64, maximum: f64 },
+    /// A string the condition's pattern does not match.
+    PatternMismatch { value: String, pattern: String },
+    /// The condition's pattern is not a valid regular expression.
+    InvalidPattern { pattern: String },
+}
+
+impl SlotConditionFailure {
+    /// The failure as a clause following "slot `x` ".
+    pub fn detail(&self) -> String {
+        match self {
+            Self::RequiredAbsent => "is required but absent".to_string(),
+            Self::MustBePresent => "must have a value but is absent".to_string(),
+            Self::MustBeAbsent => "must be absent but has a value".to_string(),
+            Self::FewerThanMinimum { count, minimum } => {
+                format!("has {count} value(s), fewer than the required minimum of {minimum}")
+            }
+            Self::MoreThanMaximum { count, maximum } => {
+                format!("has {count} value(s), more than the permitted maximum of {maximum}")
+            }
+            Self::NoAlternativeSatisfied => {
+                "satisfies none of the permitted alternatives".to_string()
+            }
+            Self::NotEqualString { expected, values } => {
+                equals_failure(values, &format!("`{expected}`"))
+            }
+            Self::NotEqualNumber { expected, values } => {
+                equals_failure(values, &expected.to_string())
+            }
+            Self::NotNumeric { value } => format!(
+                "value `{}` is not numeric, but a bound is required",
+                scalar_to_display(value)
+            ),
+            Self::BelowMinimum { value, minimum } => {
+                format!("value {value} is below the required minimum of {minimum}")
+            }
+            Self::AboveMaximum { value, maximum } => {
+                format!("value {value} is above the required maximum of {maximum}")
+            }
+            Self::PatternMismatch { value, pattern } => {
+                format!("value `{value}` does not match required pattern `{pattern}`")
+            }
+            Self::InvalidPattern { pattern } => {
+                format!("is constrained by an invalid pattern `{pattern}`")
+            }
+        }
     }
 }
 
@@ -41,9 +506,6 @@ impl fmt::Display for Violation {
 /// `InstanceSet` — LinkML data today, OWL individuals or JSON later — validates
 /// through it. Deterministic: violations are ordered by record (the set is
 /// sorted by id), then by slot, then the reference-integrity violations.
-///
-/// Slice 1 checks: a required slot absent from a record, and a reference whose
-/// target names no record in the set.
 pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<Violation> {
     let mut out = Vec::new();
     // Each record's class, for resolving what a reference actually points at.
@@ -83,40 +545,47 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
             let card = effective_cardinality(slot);
             let authored = inst.slot_values.iter().find(|sv| &sv.slot == slot_name);
             let count = authored.map_or(0, |sv| sv.values.len());
-            let mut push = |detail: String| {
+            let mut push = |kind: ViolationKind| {
                 out.push(Violation {
                     record: inst.id.clone(),
-                    detail,
+                    kind,
                 })
             };
+            let here = || (class_name.clone(), slot_name.clone());
 
             if count == 0 {
                 if card.required {
-                    push(format!(
-                        "required slot `{slot_name}` (class `{class_name}`) is absent"
-                    ));
+                    let (class, slot) = here();
+                    push(ViolationKind::RequiredSlotAbsent { class, slot });
                 }
                 // No values to size-check.
                 continue;
             }
             if !card.multivalued && count > 1 {
-                push(format!(
-                    "single-valued slot `{slot_name}` (class `{class_name}`) has {count} values"
-                ));
+                let (class, slot) = here();
+                push(ViolationKind::SingleValuedSlotRepeated { class, slot, count });
             }
-            if let Some(min) = card.min
-                && (count as u32) < min
+            if let Some(minimum) = card.min
+                && (count as u32) < minimum
             {
-                push(format!(
-                    "slot `{slot_name}` (class `{class_name}`) has {count} value(s), fewer than its minimum of {min}"
-                ));
+                let (class, slot) = here();
+                push(ViolationKind::FewerValuesThanMinimum {
+                    class,
+                    slot,
+                    count,
+                    minimum,
+                });
             }
-            if let Some(max) = card.max
-                && (count as u32) > max
+            if let Some(maximum) = card.max
+                && (count as u32) > maximum
             {
-                push(format!(
-                    "slot `{slot_name}` (class `{class_name}`) has {count} value(s), exceeding its maximum of {max}"
-                ));
+                let (class, slot) = here();
+                push(ViolationKind::MoreValuesThanMaximum {
+                    class,
+                    slot,
+                    count,
+                    maximum,
+                });
             }
 
             // A type designator's authored value must name the record's
@@ -135,16 +604,18 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
                                 authored,
                             );
                             if !matches!(named, crate::linkml_resolve::ClassMatch::One(_)) {
-                                push(format!(
-                                    "type designator `{slot_name}` value `{authored}` does not \
-                                     name the record's class `{class_name}`"
-                                ));
+                                let (class, slot) = here();
+                                push(ViolationKind::DesignatorNamesAnotherClass {
+                                    class,
+                                    slot,
+                                    value: authored.clone(),
+                                });
                             }
                         }
-                        InstanceValue::Scalar(_) => push(format!(
-                            "type designator `{slot_name}` (class `{class_name}`) has a \
-                             non-string value; a designator names a class"
-                        )),
+                        InstanceValue::Scalar(_) => {
+                            let (class, slot) = here();
+                            push(ViolationKind::DesignatorNotAString { class, slot });
+                        }
                         _ => {}
                     }
                 }
@@ -160,11 +631,14 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
             // in the schema is reported here rather than crashing the validator.
             let pattern = match slot.pattern.as_deref() {
                 Some(p) => match Regex::new(p) {
-                    Ok(re) => Some(re),
+                    Ok(re) => Some((re, p)),
                     Err(_) => {
-                        push(format!(
-                            "slot `{slot_name}` (class `{class_name}`) has an invalid pattern `{p}`"
-                        ));
+                        let (class, slot) = here();
+                        push(ViolationKind::InvalidPattern {
+                            class,
+                            slot,
+                            pattern: p.to_string(),
+                        });
                         None
                     }
                 },
@@ -190,35 +664,39 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
                     // A value the reader couldn't fit to the slot's range kind
                     // (an object where a scalar is declared, or a non-reference
                     // scalar where a class is) — a range-kind mismatch.
-                    InstanceValue::Unexpected(kind) => {
+                    InstanceValue::Unexpected(shape) => {
                         // The unusable-entry finding beside it names the
                         // fix; this value exists so the slot reads as
                         // authored — one problem yields one report.
-                        if *kind == "an identifier-keyed dict" {
+                        if *shape == "an identifier-keyed dict" {
                             continue;
                         }
-                        let range = if ranges.is_empty() {
-                            slot.range.as_deref().unwrap_or("?").to_string()
+                        let declared = if ranges.is_empty() {
+                            slot.range.clone().into_iter().collect()
                         } else {
-                            ranges.join(" or ")
+                            ranges.clone()
                         };
+                        let (class, slot) = here();
                         // An object at a union of classes is the right shape
                         // — what failed is that its fields name no single
                         // member — so saying the kind is invalid would send
                         // the author looking in the wrong place.
-                        if *kind == "an object"
+                        if *shape == "an object"
                             && ranges.iter().any(|r| schema.classes.contains_key(r))
                         {
-                            push(format!(
-                                "slot `{slot_name}` (class `{class_name}`) has an object whose \
-                                 fields name no one of its class ranges `{range}`; give it a \
-                                 field that only the intended one declares"
-                            ));
+                            push(ViolationKind::ObjectNamesNoClassRange {
+                                class,
+                                slot,
+                                ranges: declared,
+                            });
                             continue;
                         }
-                        push(format!(
-                            "slot `{slot_name}` (class `{class_name}`) has {kind} value, which isn't valid for its range `{range}`"
-                        ));
+                        push(ViolationKind::ValueShapeOutsideRange {
+                            class,
+                            slot,
+                            shape: (*shape).to_string(),
+                            ranges: declared,
+                        });
                         continue;
                     }
                     // Existence is the integrity pass's job; what this checks
@@ -232,11 +710,14 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
                                 .iter()
                                 .any(|r| crate::linkml_resolve::class_satisfies(schema, actual, r))
                         {
-                            push(format!(
-                                "slot `{slot_name}` (class `{class_name}`) references `{target}`, \
-                                 a `{actual}`, which is none of `{}`",
-                                ranges.join("`, `")
-                            ));
+                            let (class, slot) = here();
+                            push(ViolationKind::ReferenceOutsideUnion {
+                                class,
+                                slot,
+                                target: target.clone(),
+                                actual: (*actual).to_string(),
+                                ranges: ranges.clone(),
+                            });
                         }
                         continue;
                     }
@@ -248,22 +729,17 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
                 if !expected_primitives.is_empty()
                     && !expected_primitives.iter().any(|p| kind_matches(p, scalar))
                 {
-                    let shown = scalar_to_display(scalar);
-                    let kind = crate::primitives::scalar_kind_phrase(scalar);
-                    let expected = match (ranges.as_slice(), expected_primitives.as_slice()) {
-                        ([range], [primitive]) => format!(
-                            "the slot's range `{range}` expects {}",
-                            with_article(primitive)
-                        ),
-                        _ => format!(
-                            "none of the slot's ranges `{}` permit it",
-                            ranges.join("`, `")
-                        ),
-                    };
-                    push(format!(
-                        "slot `{slot_name}` (class `{class_name}`) value `{shown}` is {kind}, \
-                         but {expected}"
-                    ));
+                    let (class, slot) = here();
+                    push(ViolationKind::ScalarKindOutsideRange {
+                        class,
+                        slot,
+                        value: scalar.clone(),
+                        ranges: ranges.clone(),
+                        primitives: expected_primitives
+                            .iter()
+                            .map(|p| (*p).to_string())
+                            .collect(),
+                    });
                     // A wrong-kinded value can't be meaningfully pattern- or
                     // bounds-checked; one problem yields one report.
                     continue;
@@ -271,45 +747,63 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
                 if let Some((enum_name, enum_def)) = range_enum
                     && !enum_permits(enum_def, scalar)
                 {
-                    let shown = scalar_to_display(scalar);
-                    push(format!(
-                        "slot `{slot_name}` (class `{class_name}`) value `{shown}` is not a permissible value of enum `{enum_name}`"
-                    ));
+                    let (class, slot) = here();
+                    push(ViolationKind::NotAPermissibleValue {
+                        class,
+                        slot,
+                        value: scalar.clone(),
+                        enum_name: enum_name.to_string(),
+                    });
                 }
                 // Pattern: partial match (unanchored `find`), matching the
                 // semantics panschema's SHACL `sh:pattern` and Postgres `~`
                 // projections use.
-                if let Some(re) = &pattern
+                if let Some((re, source)) = &pattern
                     && let ScalarValue::String(s) = scalar
                     && !re.is_match(s)
                 {
-                    push(format!(
-                        "slot `{slot_name}` (class `{class_name}`) value `{s}` does not match pattern `{}`",
-                        slot.pattern.as_deref().unwrap_or_default()
-                    ));
+                    let (class, slot) = here();
+                    push(ViolationKind::PatternMismatch {
+                        class,
+                        slot,
+                        value: s.clone(),
+                        pattern: (*source).to_string(),
+                    });
                 }
                 if has_bound {
                     match numeric(scalar) {
                         Some(n) => {
-                            if let Some(min) = slot.minimum_value
-                                && n < min
+                            if let Some(minimum) = slot.minimum_value
+                                && n < minimum
                             {
-                                push(format!(
-                                    "slot `{slot_name}` (class `{class_name}`) value {n} is below its minimum of {min}"
-                                ));
+                                let (class, slot) = here();
+                                push(ViolationKind::BelowMinimum {
+                                    class,
+                                    slot,
+                                    value: n,
+                                    minimum,
+                                });
                             }
-                            if let Some(max) = slot.maximum_value
-                                && n > max
+                            if let Some(maximum) = slot.maximum_value
+                                && n > maximum
                             {
-                                push(format!(
-                                    "slot `{slot_name}` (class `{class_name}`) value {n} is above its maximum of {max}"
-                                ));
+                                let (class, slot) = here();
+                                push(ViolationKind::AboveMaximum {
+                                    class,
+                                    slot,
+                                    value: n,
+                                    maximum,
+                                });
                             }
                         }
-                        None => push(format!(
-                            "slot `{slot_name}` (class `{class_name}`) value `{}` is not numeric, but the slot declares a numeric bound",
-                            scalar_to_display(scalar)
-                        )),
+                        None => {
+                            let (class, slot) = here();
+                            push(ViolationKind::NotNumericUnderBound {
+                                class,
+                                slot,
+                                value: scalar.clone(),
+                            });
+                        }
                     }
                 }
             }
@@ -335,11 +829,13 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
                         continue;
                     }
                     reported.push(value);
-                    push(format!(
-                        "slot `{slot_name}` (class `{class_name}`) value `{}` is not \
-                         among the values of `{parent_name}`, which `{slot_name}` specializes",
-                        value_display(value)
-                    ));
+                    let (class, slot) = here();
+                    push(ViolationKind::OutsideSpecializedSlot {
+                        class,
+                        slot,
+                        value: value.clone(),
+                        parent: parent_name.to_string(),
+                    });
                 }
             }
         }
@@ -358,16 +854,18 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
             let Some(post) = &rule.postconditions else {
                 continue;
             };
-            let label = crate::rules::rule_label(rule, i);
             for (slot_name, cond) in &post.slot_conditions {
                 let values = slot_values(inst, slot_name);
-                if let Some(reason) = slot_condition_failure(cond, values) {
+                if let Some(failure) = slot_condition_failure(cond, values) {
                     out.push(Violation {
                         record: inst.id.clone(),
-                        detail: format!(
-                            "rule `{label}` (class `{class_name}`) applies, but slot \
-                             `{slot_name}` {reason}"
-                        ),
+                        kind: ViolationKind::RulePostconditionFailed {
+                            class: class_name.clone(),
+                            rule_index: i,
+                            rule_title: rule.title.clone(),
+                            slot: slot_name.clone(),
+                            failure,
+                        },
                     });
                 }
             }
@@ -375,10 +873,11 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
             {
                 out.push(Violation {
                     record: inst.id.clone(),
-                    detail: format!(
-                        "rule `{label}` (class `{class_name}`) applies, but the record \
-                         satisfies none of its postcondition alternatives"
-                    ),
+                    kind: ViolationKind::RuleAlternativesFailed {
+                        class: class_name.clone(),
+                        rule_index: i,
+                        rule_title: rule.title.clone(),
+                    },
                 });
             }
         }
@@ -389,7 +888,7 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
     for d in crate::diagnostics::dangling_instance_references(set) {
         out.push(Violation {
             record: d.referrer.clone(),
-            detail: d.detail(),
+            kind: ViolationKind::DanglingReference(d),
         });
     }
 
@@ -399,23 +898,7 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
     for u in &set.undeclared_fields {
         out.push(Violation {
             record: u.record.clone(),
-            detail: match u.key_kind {
-                Some(crate::instances::KeyKind::Quotable) => format!(
-                    "field key `{}` (class `{}`) is not a string; its value is dropped — \
-                     quote the key",
-                    u.field, u.class
-                ),
-                Some(crate::instances::KeyKind::Unquotable) => format!(
-                    "a field key on class `{}` is {}, not a string; its value is dropped — \
-                     only string keys can name fields",
-                    u.class, u.field
-                ),
-                None => format!(
-                    "field `{}` is not declared by class `{}`; it renders and emits as an \
-                     undeclared property",
-                    u.field, u.class
-                ),
-            },
+            kind: ViolationKind::UndeclaredField(u.clone()),
         });
     }
 
@@ -424,12 +907,9 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
     if let Some(candidates) = &set.root_candidates {
         out.push(Violation {
             record: "(root)".to_string(),
-            detail: format!(
-                "the data conforms to none of this schema's `tree_root` classes, or to \
-                 more than one equally: {}. Name the collections of exactly one of them \
-                 so the dataset can be read.",
-                candidates.join(", ")
-            ),
+            kind: ViolationKind::NoRootMatched {
+                candidates: candidates.clone(),
+            },
         });
     }
 
@@ -437,28 +917,9 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
     // schema's `expand_against` declaration names supplied nothing
     // usable, so the values were read as authored.
     for g in &set.expansion_gaps {
-        let detail = match &g.kind {
-            crate::instances::ExpansionGapKind::UnusableBase(reason) => match &g.supplied_by {
-                Some(who) => format!(
-                    "slot `{}` expands against `{}`, but the containing record `{who}` \
-                     supplies {reason} there; the bare values were read as authored",
-                    g.slot, g.base_slot
-                ),
-                None => format!(
-                    "slot `{}` expands against `{}`, but this record supplies {reason} there; \
-                     its bare values were read as authored",
-                    g.slot, g.base_slot
-                ),
-            },
-            crate::instances::ExpansionGapKind::InlineRecord => format!(
-                "slot `{}` declares its values expand into an external namespace (against \
-                 `{}`), but this record authors an inline record there",
-                g.slot, g.base_slot
-            ),
-        };
         out.push(Violation {
             record: g.record.clone(),
-            detail,
+            kind: ViolationKind::ExpansionGap(g.clone()),
         });
     }
 
@@ -466,36 +927,25 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
     for id in &set.duplicate_ids {
         out.push(Violation {
             record: id.clone(),
-            detail: format!("identifier `{id}` is used by more than one record"),
+            kind: ViolationKind::DuplicateIdentifier { id: id.clone() },
         });
     }
 
     for u in &set.unusable_collection_entries {
-        let place = match &u.record {
-            Some(record) => format!("record `{record}` slot `{}`", u.slot),
-            None => format!("container slot `{}`", u.slot),
-        };
         out.push(Violation {
             record: u
                 .record
                 .clone()
                 .or_else(|| u.key.clone())
                 .unwrap_or_else(|| u.slot.clone()),
-            detail: match &u.key {
-                Some(key) => format!("{place} entry `{key}` {}", u.reason),
-                None => format!("a {place} entry {}", u.reason),
-            },
+            kind: ViolationKind::UnusableCollectionEntry(u.clone()),
         });
     }
 
     if let Some(id) = &set.root_collision {
         out.push(Violation {
             record: id.clone(),
-            detail: format!(
-                "the dataset container's id `{id}` is already a record's id; no container \
-                 is emitted and key-scoped records mint unscoped until the collision is \
-                 resolved"
-            ),
+            kind: ViolationKind::RootIdCollidesWithRecord { id: id.clone() },
         });
     }
 
@@ -510,7 +960,7 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
 pub fn validate_instance_data(schema: &SchemaDefinition, data: &Value) -> Vec<Violation> {
     match instance_set_for(schema, data) {
         Ok(set) => validate_instances(schema, &set),
-        Err(v) => vec![v],
+        Err(v) => vec![*v],
     }
 }
 
@@ -518,12 +968,15 @@ pub fn validate_instance_data(schema: &SchemaDefinition, data: &Value) -> Vec<Vi
 /// data being loadable at all. Callers that want to report on more than
 /// violations — cross-graph references, say — take this and validate the set
 /// themselves rather than building it twice.
-pub fn instance_set_for(schema: &SchemaDefinition, data: &Value) -> Result<InstanceSet, Violation> {
+pub fn instance_set_for(
+    schema: &SchemaDefinition,
+    data: &Value,
+) -> Result<InstanceSet, Box<Violation>> {
     if data.as_mapping().is_none() {
-        return Err(Violation {
+        return Err(Box::new(Violation {
             record: "(root)".to_string(),
-            detail: "instance data must be a mapping (a tree_root container object)".to_string(),
-        });
+            kind: ViolationKind::DataNotAMapping,
+        }));
     }
     Ok(InstanceSet::from_linkml_data(schema, data))
 }
@@ -557,34 +1010,37 @@ fn conditions_hold(cond: &RuleConditions, inst: &crate::instances::Instance) -> 
 /// violation's text. A condition's `range` is a type assertion rather than a
 /// value test and is not evaluated here — the slot's own declared range is
 /// already checked for every record.
-fn slot_condition_failure(cond: &SlotCondition, values: &[InstanceValue]) -> Option<String> {
+fn slot_condition_failure(
+    cond: &SlotCondition,
+    values: &[InstanceValue],
+) -> Option<SlotConditionFailure> {
     if cond.required && values.is_empty() {
-        return Some("is required but absent".to_string());
+        return Some(SlotConditionFailure::RequiredAbsent);
     }
     match cond.value_presence {
         Some(ValuePresence::Present) if values.is_empty() => {
-            return Some("must have a value but is absent".to_string());
+            return Some(SlotConditionFailure::MustBePresent);
         }
         Some(ValuePresence::Absent) if !values.is_empty() => {
-            return Some("must be absent but has a value".to_string());
+            return Some(SlotConditionFailure::MustBeAbsent);
         }
         _ => {}
     }
-    if let Some(min) = cond.minimum_cardinality
-        && (values.len() as u32) < min
+    if let Some(minimum) = cond.minimum_cardinality
+        && (values.len() as u32) < minimum
     {
-        return Some(format!(
-            "has {} value(s), fewer than the required minimum of {min}",
-            values.len()
-        ));
+        return Some(SlotConditionFailure::FewerThanMinimum {
+            count: values.len(),
+            minimum,
+        });
     }
-    if let Some(max) = cond.maximum_cardinality
-        && (values.len() as u32) > max
+    if let Some(maximum) = cond.maximum_cardinality
+        && (values.len() as u32) > maximum
     {
-        return Some(format!(
-            "has {} value(s), more than the permitted maximum of {max}",
-            values.len()
-        ));
+        return Some(SlotConditionFailure::MoreThanMaximum {
+            count: values.len(),
+            maximum,
+        });
     }
     if !cond.any_of.is_empty()
         && !cond
@@ -592,7 +1048,7 @@ fn slot_condition_failure(cond: &SlotCondition, values: &[InstanceValue]) -> Opt
             .iter()
             .any(|alt| slot_condition_failure(alt, values).is_none())
     {
-        return Some("satisfies none of the permitted alternatives".to_string());
+        return Some(SlotConditionFailure::NoAlternativeSatisfied);
     }
     // Equals conditions are membership tests — at least one value equals,
     // matching the `sh:hasValue` the SHACL projection emits for the same
@@ -602,14 +1058,20 @@ fn slot_condition_failure(cond: &SlotCondition, values: &[InstanceValue]) -> Opt
             .iter()
             .any(|v| matches!(v, InstanceValue::Scalar(s) if scalar_display_eq(s, want)))
     {
-        return Some(equals_failure(values, &format!("`{want}`")));
+        return Some(SlotConditionFailure::NotEqualString {
+            expected: want.clone(),
+            values: values.to_vec(),
+        });
     }
     if let Some(want) = cond.equals_number
         && !values
             .iter()
             .any(|v| numeric_value(v).is_some_and(|n| n == want || (n.is_nan() && want.is_nan())))
     {
-        return Some(equals_failure(values, &want.to_string()));
+        return Some(SlotConditionFailure::NotEqualNumber {
+            expected: want,
+            values: values.to_vec(),
+        });
     }
     for value in values {
         let InstanceValue::Scalar(scalar) = value else {
@@ -617,20 +1079,25 @@ fn slot_condition_failure(cond: &SlotCondition, values: &[InstanceValue]) -> Opt
         };
         if cond.minimum_value.is_some() || cond.maximum_value.is_some() {
             let Some(n) = numeric(scalar) else {
-                return Some(format!(
-                    "value `{}` is not numeric, but a bound is required",
-                    scalar_to_display(scalar)
-                ));
+                return Some(SlotConditionFailure::NotNumeric {
+                    value: scalar.clone(),
+                });
             };
             if let Some(min) = cond.minimum_value
                 && n < min
             {
-                return Some(format!("value {n} is below the required minimum of {min}"));
+                return Some(SlotConditionFailure::BelowMinimum {
+                    value: n,
+                    minimum: min,
+                });
             }
             if let Some(max) = cond.maximum_value
                 && n > max
             {
-                return Some(format!("value {n} is above the required maximum of {max}"));
+                return Some(SlotConditionFailure::AboveMaximum {
+                    value: n,
+                    maximum: max,
+                });
             }
         }
         if let Some(p) = &cond.pattern {
@@ -639,12 +1106,15 @@ fn slot_condition_failure(cond: &SlotCondition, values: &[InstanceValue]) -> Opt
                     if let ScalarValue::String(text) = scalar
                         && !re.is_match(text)
                     {
-                        return Some(format!(
-                            "value `{text}` does not match required pattern `{p}`"
-                        ));
+                        return Some(SlotConditionFailure::PatternMismatch {
+                            value: text.clone(),
+                            pattern: p.clone(),
+                        });
                     }
                 }
-                Err(_) => return Some(format!("is constrained by an invalid pattern `{p}`")),
+                Err(_) => {
+                    return Some(SlotConditionFailure::InvalidPattern { pattern: p.clone() });
+                }
             }
         }
     }
@@ -824,7 +1294,13 @@ pets:
         let violations = validate_instances(&schema, &set);
         let designator_faults: Vec<&Violation> = violations
             .iter()
-            .filter(|v| v.detail.contains("type designator"))
+            .filter(|v| {
+                matches!(
+                    v.kind,
+                    ViolationKind::DesignatorNamesAnotherClass { .. }
+                        | ViolationKind::DesignatorNotAString { .. }
+                )
+            })
             .collect();
         assert!(
             !designator_faults
@@ -834,14 +1310,16 @@ pets:
         );
         assert!(
             designator_faults.iter().any(|v| v.record == "a1"
-                && v.detail.contains("Hamster")
-                && v.detail.contains("Animal")),
+                && matches!(
+                    &v.kind,
+                    ViolationKind::DesignatorNamesAnotherClass { class, value, .. }
+                        if class == "Animal" && value == "Hamster"
+                )),
             "a value naming no class of the record's is reported with both sides; got: {designator_faults:?}"
         );
         assert!(
-            designator_faults
-                .iter()
-                .any(|v| v.record == "a2" && v.detail.contains("non-string")),
+            designator_faults.iter().any(|v| v.record == "a2"
+                && matches!(v.kind, ViolationKind::DesignatorNotAString { .. })),
             "a non-string designator value is reported; got: {designator_faults:?}"
         );
     }
@@ -859,7 +1337,7 @@ pets:
         assert!(
             violations
                 .iter()
-                .any(|v| v.detail.contains("name no one of its class ranges")),
+                .any(|v| matches!(v.kind, ViolationKind::ObjectNamesNoClassRange { .. })),
             "the report must point at the fields, not call an object invalid for a class range; got: {:?}",
             violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
         );
@@ -878,7 +1356,7 @@ pets:
         assert!(
             violations
                 .iter()
-                .any(|v| v.detail.contains("no container is emitted")),
+                .any(|v| matches!(v.kind, ViolationKind::RootIdCollidesWithRecord { .. })),
             "the degraded state is stated, not just the duplicate id; got: {:?}",
             violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
         );
@@ -919,7 +1397,7 @@ pets:
         assert!(
             violations
                 .iter()
-                .any(|v| v.to_string().contains("question")),
+                .any(|v| matches!(&v.kind, ViolationKind::ScalarKindOutsideRange { slot, .. } if slot == "question")),
             "explicit ranges are typed too; got: {:?}",
             violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
         );
@@ -949,7 +1427,7 @@ pets:
         let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
         let violations = validate_instances(&schema, &set);
         assert!(
-            violations.iter().any(|v| v.to_string().contains("count")),
+            violations.iter().any(|v| matches!(&v.kind, ViolationKind::ScalarKindOutsideRange { slot, .. } if slot == "count")),
             "a fractional value at an integer slot is a violation; got: {:?}",
             violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
         );
@@ -1003,7 +1481,7 @@ pets:
         assert!(
             violations
                 .iter()
-                .any(|v| v.to_string().contains("expects an integer")),
+                .any(|v| v.detail().contains("expects an integer")),
             "\"an integer\", not \"a integer\"; got: {:?}",
             violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
         );
@@ -1025,7 +1503,7 @@ pets:
         assert!(
             violations
                 .iter()
-                .any(|v| v.to_string().contains("question")),
+                .any(|v| matches!(&v.kind, ViolationKind::ScalarKindOutsideRange { slot, .. } if slot == "question")),
             "xsd:string via `uri:` types the slot; got: {:?}",
             violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
         );
@@ -1047,7 +1525,7 @@ pets:
         assert!(
             violations
                 .iter()
-                .any(|v| v.to_string().contains("is not numeric")),
+                .any(|v| matches!(v.kind, ViolationKind::NotNumericUnderBound { .. })),
             "the bogus bound is reported; got: {:?}",
             violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
         );
@@ -1102,7 +1580,7 @@ slots:
             violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
         );
         assert!(
-            !violations.iter().any(|v| v.to_string().contains("rec-b")),
+            !violations.iter().any(|v| matches!(&v.kind, ViolationKind::OutsideSpecializedSlot { value, .. } if value_display(value).contains("rec-b"))),
             "a value the parent also holds conforms; got: {:?}",
             violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
         );
@@ -1275,7 +1753,7 @@ slots:
         assert!(
             !violations
                 .iter()
-                .any(|v| v.to_string().contains("specializes")),
+                .any(|v| matches!(v.kind, ViolationKind::OutsideSpecializedSlot { .. })),
             "a citation among the anchors conforms; got: {:?}",
             violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
         );
@@ -1349,12 +1827,12 @@ slots:
         let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
         let violations = validate_instances(&schema, &set);
         assert!(
-            violations.iter().any(|v| v.to_string().contains("score")),
+            violations.iter().any(|v| matches!(&v.kind, ViolationKind::ScalarKindOutsideRange { slot, .. } if slot == "score")),
             "the typeof chain resolves Score to integer; got: {:?}",
             violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
         );
         assert!(
-            !violations.iter().any(|v| v.to_string().contains("free")),
+            !violations.iter().any(|v| matches!(&v.kind, ViolationKind::ScalarKindOutsideRange { slot, .. } if slot == "free")),
             "an unresolvable range is the dangling diagnostic's problem, \
              not a typing guess; got: {:?}",
             violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
@@ -1378,7 +1856,7 @@ slots:
         assert!(
             violations
                 .iter()
-                .any(|v| v.to_string().contains("question")),
+                .any(|v| matches!(&v.kind, ViolationKind::ScalarKindOutsideRange { slot, .. } if slot == "question")),
             "an integer at a string-defaulted slot must be reported; got: {:?}",
             violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
         );
@@ -1412,9 +1890,9 @@ wineries:
         assert_eq!(v.len(), 1, "one duplicated identifier, reported once");
         assert_eq!(v[0].record, "w1");
         assert!(
-            v[0].detail.contains("used by more than one record"),
+            matches!(&v[0].kind, ViolationKind::DuplicateIdentifier { id } if id == "w1"),
             "got: {}",
-            v[0].detail
+            v[0].detail()
         );
     }
 
@@ -1433,9 +1911,9 @@ wineries:
         );
         assert_eq!(v[0].record, "w1");
         assert!(
-            v[0].detail.contains("colour") && v[0].detail.contains("Wine"),
+            matches!(&v[0].kind, ViolationKind::UndeclaredField(f) if f.field == "colour" && f.class == "Wine"),
             "the violation must name the field and the class; got: {}",
-            v[0].detail
+            v[0].detail()
         );
     }
 
@@ -1476,9 +1954,9 @@ wineries:
         assert_eq!(violations.len(), 1, "one missing required slot");
         assert_eq!(violations[0].record, "chateauMorgon");
         assert!(
-            violations[0].detail.contains("name") && violations[0].detail.contains("Wine"),
+            matches!(&violations[0].kind, ViolationKind::RequiredSlotAbsent { class, slot } if slot == "name" && class == "Wine"),
             "detail names the missing slot and class; got: {}",
-            violations[0].detail
+            violations[0].detail()
         );
     }
 
@@ -1498,7 +1976,11 @@ wineries:
         let violations = validate_instance_data(&schema(), &d);
         assert_eq!(violations.len(), 1, "one dangling reference");
         assert_eq!(violations[0].record, "chateauMorgon");
-        assert!(violations[0].detail.contains("ghostWinery"));
+        assert!(
+            matches!(&violations[0].kind, ViolationKind::DanglingReference(d) if d.target == "ghostWinery"),
+            "got: {:?}",
+            violations[0].kind
+        );
     }
 
     #[test]
@@ -1535,9 +2017,9 @@ wineries:
         assert_eq!(violations.len(), 1, "the required name is missing");
         assert_eq!(violations[0].record, "badWinery");
         assert!(
-            violations[0].detail.contains("name"),
-            "detail names the missing slot; got: {}",
-            violations[0].detail
+            matches!(&violations[0].kind, ViolationKind::RequiredSlotAbsent { slot, .. } if slot == "name"),
+            "the missing slot is named; got: {}",
+            violations[0].detail()
         );
     }
 
@@ -1546,7 +2028,7 @@ wineries:
         let d = data("- just\n- a\n- list\n");
         let violations = validate_instance_data(&schema(), &d);
         assert_eq!(violations.len(), 1);
-        assert!(violations[0].detail.contains("must be a mapping"));
+        assert_eq!(violations[0].kind, ViolationKind::DataNotAMapping);
     }
 
     /// A schema exercising each cardinality bound: a single-valued slot and a
@@ -1598,9 +2080,9 @@ classes:
         let v = validate_instance_data(&card_schema(), &d);
         assert_eq!(v.len(), 1, "color is single-valued");
         assert!(
-            v[0].detail.contains("single-valued") && v[0].detail.contains("color"),
+            matches!(&v[0].kind, ViolationKind::SingleValuedSlotRepeated { slot, count, .. } if slot == "color" && *count == 2),
             "got: {}",
-            v[0].detail
+            v[0].detail()
         );
     }
 
@@ -1610,9 +2092,9 @@ classes:
         let v = validate_instance_data(&card_schema(), &d);
         assert_eq!(v.len(), 1, "tags has one value, minimum is two");
         assert!(
-            v[0].detail.contains("fewer than its minimum") && v[0].detail.contains("tags"),
+            matches!(&v[0].kind, ViolationKind::FewerValuesThanMinimum { slot, count, minimum, .. } if slot == "tags" && *count == 1 && *minimum == 2),
             "got: {}",
-            v[0].detail
+            v[0].detail()
         );
     }
 
@@ -1622,9 +2104,9 @@ classes:
         let v = validate_instance_data(&card_schema(), &d);
         assert_eq!(v.len(), 1, "tags has four values, maximum is three");
         assert!(
-            v[0].detail.contains("exceeding its maximum") && v[0].detail.contains("tags"),
+            matches!(&v[0].kind, ViolationKind::MoreValuesThanMaximum { slot, count, maximum, .. } if slot == "tags" && *count == 4 && *maximum == 3),
             "got: {}",
-            v[0].detail
+            v[0].detail()
         );
     }
 
@@ -1685,9 +2167,9 @@ enums:
         let v = value_violations("items:\n  - id: a\n    level: 0.5\n");
         assert_eq!(v.len(), 1);
         assert!(
-            v[0].detail.contains("below its minimum") && v[0].detail.contains("level"),
+            matches!(&v[0].kind, ViolationKind::BelowMinimum { slot, .. } if slot == "level"),
             "got: {}",
-            v[0].detail
+            v[0].detail()
         );
     }
 
@@ -1702,9 +2184,13 @@ enums:
         let v = value_violations("items:\n  - id: a\n    code: abcd\n");
         assert_eq!(v.len(), 1);
         assert!(
-            v[0].detail.contains("does not match pattern") && v[0].detail.contains("code"),
+            matches!(
+                &v[0].kind,
+                ViolationKind::PatternMismatch { slot, value, pattern, .. }
+                    if slot == "code" && value == "abcd" && pattern == "^[A-Z]{3}$"
+            ),
             "got: {}",
-            v[0].detail
+            v[0].detail()
         );
     }
 
@@ -1714,11 +2200,13 @@ enums:
         let v = value_violations("items:\n  - id: a\n    code:\n      nested: x\n");
         assert_eq!(v.len(), 1);
         assert!(
-            v[0].detail.contains("an object")
-                && v[0].detail.contains("code")
-                && v[0].detail.contains("range `string`"),
+            matches!(
+                &v[0].kind,
+                ViolationKind::ValueShapeOutsideRange { slot, shape, ranges, .. }
+                    if slot == "code" && shape == "an object" && ranges == &["string"]
+            ),
             "got: {}",
-            v[0].detail
+            v[0].detail()
         );
     }
 
@@ -1730,18 +2218,24 @@ enums:
         let v = validate_instance_data(&schema(), &d);
         assert_eq!(v.len(), 1);
         assert!(
-            v[0].detail.contains("a number")
-                && v[0].detail.contains("produced_by")
-                && v[0].detail.contains("range `Winery`"),
+            matches!(
+                &v[0].kind,
+                ViolationKind::ValueShapeOutsideRange { slot, shape, ranges, .. }
+                    if slot == "produced_by" && shape == "a number" && ranges == &["Winery"]
+            ),
             "got: {}",
-            v[0].detail
+            v[0].detail()
         );
 
         // A boolean at the same class-ranged slot names its kind distinctly.
         let d = data("wines:\n  - id: w2\n    name: W\n    produced_by: true\n");
         let v = validate_instance_data(&schema(), &d);
         assert_eq!(v.len(), 1);
-        assert!(v[0].detail.contains("a boolean"), "got: {}", v[0].detail);
+        assert!(
+            matches!(&v[0].kind, ViolationKind::ValueShapeOutsideRange { shape, .. } if shape == "a boolean"),
+            "got: {:?}",
+            v[0].kind
+        );
     }
 
     #[test]
@@ -1755,9 +2249,9 @@ enums:
         let v = validate_instance_data(&schema, &data("items:\n  - id: a\n    code: x\n"));
         assert_eq!(v.len(), 1);
         assert!(
-            v[0].detail.contains("invalid pattern"),
+            matches!(v[0].kind, ViolationKind::InvalidPattern { .. }),
             "got: {}",
-            v[0].detail
+            v[0].detail()
         );
     }
 
@@ -1773,11 +2267,13 @@ enums:
         let v = value_violations("items:\n  - id: a\n    color: blue\n");
         assert_eq!(v.len(), 1);
         assert!(
-            v[0].detail
-                .contains("permissible value of enum `ColorEnum`")
-                && v[0].detail.contains("blue"),
+            matches!(
+                &v[0].kind,
+                ViolationKind::NotAPermissibleValue { enum_name, value, .. }
+                    if enum_name == "ColorEnum" && matches!(value, ScalarValue::String(s) if s == "blue")
+            ),
             "got: {}",
-            v[0].detail
+            v[0].detail()
         );
     }
 
@@ -1786,9 +2282,9 @@ enums:
         let v = value_violations("items:\n  - id: a\n    strength: -0.5\n");
         assert_eq!(v.len(), 1);
         assert!(
-            v[0].detail.contains("below its minimum"),
+            matches!(v[0].kind, ViolationKind::BelowMinimum { .. }),
             "got: {}",
-            v[0].detail
+            v[0].detail()
         );
     }
 
@@ -1797,9 +2293,9 @@ enums:
         let v = value_violations("items:\n  - id: a\n    strength: 1.5\n");
         assert_eq!(v.len(), 1);
         assert!(
-            v[0].detail.contains("above its maximum"),
+            matches!(v[0].kind, ViolationKind::AboveMaximum { .. }),
             "got: {}",
-            v[0].detail
+            v[0].detail()
         );
     }
 
@@ -1811,9 +2307,9 @@ enums:
         let v = value_violations("items:\n  - id: a\n    strength: high\n");
         assert_eq!(v.len(), 1, "one problem, one report; got: {v:?}");
         assert!(
-            v[0].detail.contains("expects a float"),
+            matches!(&v[0].kind, ViolationKind::ScalarKindOutsideRange { primitives, .. } if primitives == &["float"]),
             "the kind mismatch names the declared range; got: {}",
-            v[0].detail
+            v[0].detail()
         );
     }
 
@@ -1990,8 +2486,8 @@ classes:
             "an actual deployment missing both bindings violates the rule twice; got: {v:?}"
         );
         assert!(
-            v.iter().any(|x| x.detail.contains("in_environment"))
-                && v.iter().any(|x| x.detail.contains("on_provider")),
+            v.iter().any(|x| matches!(&x.kind, ViolationKind::RulePostconditionFailed { slot, .. } if slot == "in_environment"))
+                && v.iter().any(|x| matches!(&x.kind, ViolationKind::RulePostconditionFailed { slot, .. } if slot == "on_provider")),
             "both governed slots should be named; got: {v:?}"
         );
         assert!(
@@ -2105,14 +2601,14 @@ classes:
 
         let data: serde_norway::Value = serde_norway::from_str("widgets:\n  - id: w1\n").unwrap();
         let violations = validate_instance_data(&schema, &data);
-        let detail = violations
-            .iter()
-            .map(|v| v.detail.clone())
-            .collect::<Vec<_>>()
-            .join("\n");
         assert!(
-            detail.contains("Enterprise") && detail.contains("ProviderCatalog"),
-            "the violation names both candidate roots; got: {detail}"
+            violations.iter().any(|v| matches!(
+                &v.kind,
+                ViolationKind::NoRootMatched { candidates }
+                    if candidates.contains(&"Enterprise".to_string())
+                        && candidates.contains(&"ProviderCatalog".to_string())
+            )),
+            "the violation names both candidate roots; got: {violations:?}"
         );
     }
 
@@ -2169,7 +2665,11 @@ classes:
         // The exemption must not swallow the check it sits beside.
         let v = union_violations("states:\n  - {id: s1, qualifies: nope}\n");
         assert_eq!(v.len(), 1, "got: {v:?}");
-        assert!(v[0].detail.contains("nope"), "got: {}", v[0].detail);
+        assert!(
+            matches!(&v[0].kind, ViolationKind::DanglingReference(d) if d.target == "nope"),
+            "got: {:?}",
+            v[0].kind
+        );
     }
 
     #[test]
@@ -2182,9 +2682,13 @@ classes:
             "a Question is neither a Claim nor a Method; got: {v:?}"
         );
         assert!(
-            v[0].detail.contains("Claim") && v[0].detail.contains("Method"),
-            "the message should name the permitted classes; got: {}",
-            v[0].detail
+            matches!(
+                &v[0].kind,
+                ViolationKind::ReferenceOutsideUnion { ranges, .. }
+                    if ranges == &["Claim", "Method"]
+            ),
+            "the permitted classes are named; got: {}",
+            v[0].detail()
         );
     }
 
@@ -2234,7 +2738,11 @@ classes:
         // The branch check must not pile a second violation on top of it.
         let v = union_violations("states:\n  - {id: s1, qualifies: nope}\n");
         assert_eq!(v.len(), 1, "exactly one report for one problem; got: {v:?}");
-        assert!(v[0].detail.contains("nope"), "got: {}", v[0].detail);
+        assert!(
+            matches!(&v[0].kind, ViolationKind::DanglingReference(d) if d.target == "nope"),
+            "got: {:?}",
+            v[0].kind
+        );
     }
 
     #[test]
@@ -2242,9 +2750,12 @@ classes:
         let v = union_violations("states:\n  - {id: s1, qualifies: 42}\n");
         assert_eq!(v.len(), 1, "got: {v:?}");
         assert!(
-            v[0].detail.contains("Claim") && v[0].detail.contains("Method"),
-            "a range-kind mismatch at a union slot should name the members, not `?`; got: {}",
-            v[0].detail
+            matches!(
+                &v[0].kind,
+                ViolationKind::ValueShapeOutsideRange { ranges, .. } if ranges == &["Claim", "Method"]
+            ),
+            "a range-kind mismatch at a union slot should name the members, not `?`; got: {:?}",
+            v[0].kind
         );
     }
 
@@ -2264,9 +2775,9 @@ classes:
             "the rule fires whichever other kinds ride along; got: {v:?}"
         );
         assert!(
-            v[0].detail.contains("unconnected_anchors"),
-            "got: {}",
-            v[0].detail
+            matches!(&v[0].kind, ViolationKind::RulePostconditionFailed { slot, .. } if slot == "unconnected_anchors"),
+            "got: {:?}",
+            v[0].kind
         );
         let single = rule_violations(
             "questions:\n  - {id: q1, answer_kind: [closed-world-negative], sources: []}\n",
@@ -2390,9 +2901,15 @@ classes:
             "an open shipment must not be cancelled; got: {v:?}"
         );
         assert!(
-            v[0].detail.contains("must be absent"),
-            "got: {}",
-            v[0].detail
+            matches!(
+                &v[0].kind,
+                ViolationKind::RulePostconditionFailed {
+                    failure: SlotConditionFailure::MustBeAbsent,
+                    ..
+                }
+            ),
+            "got: {:?}",
+            v[0].kind
         );
         assert!(
             rule_violations("shipments:\n  - {id: p1, status: open}\n").is_empty(),
@@ -2408,7 +2925,14 @@ classes:
         );
         let v = rule_violations("shipments:\n  - {id: p1, status: express, weight: 6}\n");
         assert_eq!(v.len(), 1, "got: {v:?}");
-        assert!(v[0].detail.contains("must equal 5"), "got: {}", v[0].detail);
+        assert!(
+            matches!(
+                &v[0].kind,
+                ViolationKind::RulePostconditionFailed { failure: SlotConditionFailure::NotEqualNumber { expected, .. }, .. } if *expected == 5.0
+            ),
+            "got: {:?}",
+            v[0].kind
+        );
     }
 
     #[test]
@@ -2429,10 +2953,30 @@ classes:
         }
         let v = rule_violations("batches:\n  - {id: b1, kind: bulk, items: [i0]}\n");
         assert_eq!(v.len(), 1, "got: {v:?}");
-        assert!(v[0].detail.contains("fewer than"), "got: {}", v[0].detail);
+        assert!(
+            matches!(
+                &v[0].kind,
+                ViolationKind::RulePostconditionFailed {
+                    failure: SlotConditionFailure::FewerThanMinimum { .. },
+                    ..
+                }
+            ),
+            "got: {:?}",
+            v[0].kind
+        );
         let v = rule_violations("batches:\n  - {id: b1, kind: bulk, items: [i0, i1, i2, i3]}\n");
         assert_eq!(v.len(), 1, "got: {v:?}");
-        assert!(v[0].detail.contains("more than"), "got: {}", v[0].detail);
+        assert!(
+            matches!(
+                &v[0].kind,
+                ViolationKind::RulePostconditionFailed {
+                    failure: SlotConditionFailure::MoreThanMaximum { .. },
+                    ..
+                }
+            ),
+            "got: {:?}",
+            v[0].kind
+        );
     }
 
     #[test]
@@ -2444,9 +2988,15 @@ classes:
         let v = rule_violations("batches:\n  - {id: b1, kind: coded, code: X-1}\n");
         assert_eq!(v.len(), 1, "got: {v:?}");
         assert!(
-            v[0].detail.contains("does not match required pattern"),
-            "got: {}",
-            v[0].detail
+            matches!(
+                &v[0].kind,
+                ViolationKind::RulePostconditionFailed {
+                    failure: SlotConditionFailure::PatternMismatch { .. },
+                    ..
+                }
+            ),
+            "got: {:?}",
+            v[0].kind
         );
     }
 
@@ -2461,9 +3011,15 @@ classes:
         let v = rule_violations("batches:\n  - {id: b1, kind: scored, score: 9}\n");
         assert_eq!(v.len(), 1, "got: {v:?}");
         assert!(
-            v[0].detail.contains("below the required minimum"),
-            "got: {}",
-            v[0].detail
+            matches!(
+                &v[0].kind,
+                ViolationKind::RulePostconditionFailed {
+                    failure: SlotConditionFailure::BelowMinimum { .. },
+                    ..
+                }
+            ),
+            "got: {:?}",
+            v[0].kind
         );
     }
 
@@ -2475,10 +3031,10 @@ classes:
             let v = rule_violations(&format!("tickets:\n  - {{id: t1, tier: {tier}}}\n"));
             assert_eq!(v.len(), 1, "`{tier}` fires the rule; got: {v:?}");
             assert!(
-                v[0].detail
+                v[0].detail()
                     .contains("satisfies none of its postcondition alternatives"),
                 "got: {}",
-                v[0].detail
+                v[0].detail()
             );
         }
         assert!(
@@ -2494,12 +3050,112 @@ classes:
         }
     }
 
+    /// The clause a rule failure renders to is what `verify` prints after
+    /// "slot `x` ", so the wording is the contract here, one clause per
+    /// variant.
+    #[test]
+    fn slot_condition_failures_render_their_clauses() {
+        let one = vec![InstanceValue::Scalar(ScalarValue::Integer(4))];
+        let cases = [
+            (
+                SlotConditionFailure::RequiredAbsent,
+                "is required but absent",
+            ),
+            (
+                SlotConditionFailure::MustBePresent,
+                "must have a value but is absent",
+            ),
+            (
+                SlotConditionFailure::MustBeAbsent,
+                "must be absent but has a value",
+            ),
+            (
+                SlotConditionFailure::FewerThanMinimum {
+                    count: 1,
+                    minimum: 2,
+                },
+                "has 1 value(s), fewer than the required minimum of 2",
+            ),
+            (
+                SlotConditionFailure::MoreThanMaximum {
+                    count: 4,
+                    maximum: 3,
+                },
+                "has 4 value(s), more than the permitted maximum of 3",
+            ),
+            (
+                SlotConditionFailure::NoAlternativeSatisfied,
+                "satisfies none of the permitted alternatives",
+            ),
+            (
+                SlotConditionFailure::NotEqualString {
+                    expected: "x".into(),
+                    values: vec![],
+                },
+                "has no value, but must equal `x`",
+            ),
+            (
+                SlotConditionFailure::NotEqualNumber {
+                    expected: 5.0,
+                    values: one.clone(),
+                },
+                "is `4`, but must equal 5",
+            ),
+            (
+                SlotConditionFailure::NotEqualNumber {
+                    expected: 5.0,
+                    values: vec![one[0].clone(), one[0].clone()],
+                },
+                "none of its 2 values equals 5",
+            ),
+            (
+                SlotConditionFailure::NotNumeric {
+                    value: ScalarValue::String("hi".into()),
+                },
+                "value `hi` is not numeric, but a bound is required",
+            ),
+            (
+                SlotConditionFailure::BelowMinimum {
+                    value: 0.5,
+                    minimum: 1.0,
+                },
+                "value 0.5 is below the required minimum of 1",
+            ),
+            (
+                SlotConditionFailure::AboveMaximum {
+                    value: 9.0,
+                    maximum: 5.0,
+                },
+                "value 9 is above the required maximum of 5",
+            ),
+            (
+                SlotConditionFailure::PatternMismatch {
+                    value: "X-1".into(),
+                    pattern: "^B".into(),
+                },
+                "value `X-1` does not match required pattern `^B`",
+            ),
+            (
+                SlotConditionFailure::InvalidPattern {
+                    pattern: "[".into(),
+                },
+                "is constrained by an invalid pattern `[`",
+            ),
+        ];
+        for (failure, clause) in cases {
+            assert_eq!(failure.detail(), clause, "for {failure:?}");
+        }
+    }
+
     #[test]
     fn an_untitled_rule_is_named_by_its_position() {
         let v = rule_violations("deployments:\n  - id: d1\n    status: actual\n");
         assert!(
-            v.iter()
-                .all(|x| x.detail.contains("actual deployments are bound")),
+            v.iter().all(|x| matches!(
+                &x.kind,
+                ViolationKind::RulePostconditionFailed { rule_title: Some(title), .. }
+                    if title == "actual deployments are bound"
+            )),
             "a titled rule is named by its title; got: {v:?}"
         );
         let mut schema = rule_schema();
@@ -2512,7 +3168,7 @@ classes:
         let d = data("deployments:\n  - id: d1\n    status: actual\n");
         let v = validate_instance_data(&schema, &d);
         assert!(
-            v.iter().all(|x| x.detail.contains("rule `#1`")),
+            v.iter().all(|x| x.detail().contains("rule `#1`")),
             "an untitled rule falls back to its 1-based position; got: {v:?}"
         );
     }
@@ -2539,7 +3195,7 @@ classes:
         let v = validate_instance_data(&schema, &data);
         assert!(
             v.iter().any(|x| x.record == "q1"
-                && x.detail
+                && x.detail()
                     .contains("the containing record `b1` supplies a list")),
             "the finding names the supplying record; got: {v:?}"
         );
@@ -2558,9 +3214,16 @@ classes:
                 "`{verdict}` should fire the rule, leaving approved_by absent; got: {v:?}"
             );
             assert!(
-                v[0].detail.contains("approved_by") && v[0].detail.contains("absent"),
-                "got: {}",
-                v[0].detail
+                matches!(
+                    &v[0].kind,
+                    ViolationKind::RulePostconditionFailed {
+                        slot,
+                        failure: SlotConditionFailure::MustBePresent | SlotConditionFailure::RequiredAbsent,
+                        ..
+                    } if slot == "approved_by"
+                ),
+                "got: {:?}",
+                v[0].kind
             );
         }
         let v = rule_violations("reviews:\n  - id: r1\n    verdict: pending\n");
@@ -2577,9 +3240,15 @@ classes:
         );
         assert_eq!(v.len(), 1, "score 9 exceeds the rule's maximum; got: {v:?}");
         assert!(
-            v[0].detail.contains("above the required maximum"),
-            "got: {}",
-            v[0].detail
+            matches!(
+                &v[0].kind,
+                ViolationKind::RulePostconditionFailed {
+                    failure: SlotConditionFailure::AboveMaximum { .. },
+                    ..
+                }
+            ),
+            "got: {:?}",
+            v[0].kind
         );
 
         let v = rule_violations(
@@ -2591,9 +3260,15 @@ classes:
             "score 0 is below the rule's minimum; got: {v:?}"
         );
         assert!(
-            v[0].detail.contains("below the required minimum"),
-            "got: {}",
-            v[0].detail
+            matches!(
+                &v[0].kind,
+                ViolationKind::RulePostconditionFailed {
+                    failure: SlotConditionFailure::BelowMinimum { .. },
+                    ..
+                }
+            ),
+            "got: {:?}",
+            v[0].kind
         );
 
         // Both boundary values conform: the bounds are inclusive.
@@ -2681,7 +3356,10 @@ classes:
         );
         let violations = validate_instances(&schema, &set);
         assert!(
-            violations.iter().any(|v| v.detail.contains("a1")),
+            violations.iter().any(|v| matches!(
+                &v.kind,
+                ViolationKind::UnusableCollectionEntry(u) if u.key.as_deref() == Some("a1")
+            )),
             "validation names the entry; got: {:?}",
             violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
         );
@@ -2765,17 +3443,21 @@ classes:
         );
         let violations = validate_instances(&schema, &set);
         assert!(
-            violations
-                .iter()
-                .any(|v| v.detail.contains("2024") && v.detail.contains("quote")),
-            "quoting fixes a scalar key, and the report says so; got: {:?}",
+            violations.iter().any(|v| matches!(
+                &v.kind,
+                ViolationKind::UndeclaredField(f)
+                    if f.field == "2024" && f.key_kind == Some(crate::instances::KeyKind::Quotable)
+            )),
+            "quoting fixes a scalar key; got: {:?}",
             violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
         );
         assert!(
-            violations
-                .iter()
-                .any(|v| v.detail.contains("only string keys") && !v.detail.contains("quote")),
-            "an unquotable key gets its own wording, not impossible advice; got: {:?}",
+            violations.iter().any(|v| matches!(
+                &v.kind,
+                ViolationKind::UndeclaredField(f)
+                    if f.key_kind == Some(crate::instances::KeyKind::Unquotable)
+            )),
+            "an unquotable key is reported as one; got: {:?}",
             violations.iter().map(|v| v.to_string()).collect::<Vec<_>>()
         );
     }

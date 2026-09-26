@@ -66,9 +66,15 @@ pub fn permitted_value_key<'e>(enum_def: &'e EnumDefinition, value: &str) -> Opt
 /// read uniformly; the one spelling every diagnostic and message uses,
 /// so a reader can match a report against the schema.
 pub fn rule_label(rule: &ClassRule, index: usize) -> String {
-    rule.title
-        .clone()
+    rule_label_of(rule.title.as_deref(), index)
+}
+
+/// [`rule_label`] for a caller that carries the rule's title and 0-based
+/// position apart from the rule itself.
+pub fn rule_label_of(title: Option<&str>, index: usize) -> String {
+    title
         .filter(|t| !t.trim().is_empty())
+        .map(str::to_string)
         .unwrap_or_else(|| format!("#{}", index + 1))
 }
 

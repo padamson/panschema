@@ -2029,7 +2029,7 @@ fn verify_datasets(
                 sets.push((data_path.display().to_string(), set));
                 violations
             }
-            Err(v) => vec![v],
+            Err(v) => vec![*v],
         };
         for v in &violations {
             if label_lines {
