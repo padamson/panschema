@@ -26,3 +26,11 @@ panschema/viz-bundle/
 # negation is needed.
 .agents/
 .claude/skills/
+
+# Claude Code. The sandbox block is tracked in .claude/settings.json so every
+# clone gets the same one; personal permission allowlists and local state are
+# not, and must not be committed by a clone whose user-level ignore file
+# doesn't already cover them.
+.claude/settings.local.json
+.claude/.cc-writes/
+.claude/scheduled_tasks.lock
