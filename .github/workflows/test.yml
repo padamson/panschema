@@ -221,6 +221,26 @@ jobs:
         restore-keys: |
           playwright-${{ runner.os }}-
 
+    # The driver is assembled by playwright-rs's build script, so a cargo
+    # cache hit skips it — and the two caches can come apart, because the
+    # repo shares one 10 GB ceiling and the larger cargo cache outlives
+    # this one under LRU eviction. When that happens the installer below
+    # finds no driver and fails with `ServerNotFound`, and nothing else in
+    # the job would ever refetch it. Re-running the build script does.
+    # Keyed on the directory being empty rather than on `cache-hit`, so a
+    # partial restore under `restore-keys` (any Cargo.lock change, which
+    # means every dependency bump) does not pay for a rebuild it doesn't
+    # need.
+    - name: Refetch the Playwright driver if its cache is gone
+      shell: bash
+      run: |
+        if [ -z "$(ls -A drivers 2>/dev/null)" ]; then
+          echo "drivers/ is empty; rebuilding playwright-rs so its build script refetches the driver"
+          cargo clean -p playwright-rs
+        else
+          echo "driver present in drivers/"
+        fi
+
     - name: Install Playwright browsers
       if: runner.os != 'Linux'
       run: cargo run --example install-browsers
