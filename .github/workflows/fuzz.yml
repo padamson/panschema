@@ -41,7 +41,7 @@ jobs:
       matrix:
         target: [owl_reader, yaml_reader]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # panschema's build.rs exits when the wasm artifacts are absent and
       # wasm-pack is not installed; empty placeholders satisfy the
@@ -58,7 +58,7 @@ jobs:
           rustup component add llvm-tools-preview --toolchain nightly
 
       - name: Install cargo-fuzz
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
         with:
           tool: cargo-fuzz
 
@@ -66,7 +66,7 @@ jobs:
       # every campaign restarts from the seeds and re-derives the same
       # coverage frontier instead of pushing past it.
       - name: Cache working corpus
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: fuzz/corpus/${{ matrix.target }}
           key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
@@ -101,7 +101,7 @@ jobs:
 
       - name: Upload crash artifacts
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: fuzz-artifacts-${{ matrix.target }}
           path: fuzz/artifacts/${{ matrix.target }}/
