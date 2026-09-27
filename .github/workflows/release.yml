@@ -191,10 +191,37 @@ jobs:
       id: auth
       uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
 
-    # `--workspace` publishes the members in dependency order, so
-    # `panschema-model` lands before the `panschema` that requires it, and
-    # `panschema-viz` (publish = false) is skipped.
+    # Published one at a time, in dependency order, skipping any version
+    # already on the index. `--workspace` would order them for us, but it
+    # aborts on a member that is already published, so a release that got
+    # partway — the first crate up, the second refused — could not be
+    # finished by re-running this job. Skipping makes the job idempotent.
+    # cargo waits for each publish to reach the index before the next.
     - name: Publish to crates.io
-      run: cargo publish --workspace --allow-dirty
       env:
         CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+      run: |
+        set -euo pipefail
+        version="${GITHUB_REF#refs/tags/v}"
+        ordered=(panschema-model panschema)
+
+        # A member added later publishes in whatever order cargo picks
+        # unless it is listed above, so make the omission loud here
+        # rather than a dependency-order failure at upload.
+        for crate in $(cargo metadata --no-deps --format-version 1 \
+                       | jq -r '.packages[] | select(.publish != []) | .name'); do
+          if ! printf '%s\n' "${ordered[@]}" | grep -qx "$crate"; then
+            echo "::error::workspace member $crate is publishable but missing from the ordered list in this step"
+            exit 1
+          fi
+        done
+
+        for crate in "${ordered[@]}"; do
+          if curl -sfo /dev/null \
+               -A "panschema release workflow (github.com/padamson/panschema)" \
+               "https://crates.io/api/v1/crates/$crate/$version"; then
+            echo "$crate $version is already on crates.io; skipping"
+            continue
+          fi
+          cargo publish -p "$crate" --allow-dirty
+        done
