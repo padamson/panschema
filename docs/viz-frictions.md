@@ -10,7 +10,7 @@ the right backlog falls out.
 quality, interaction (hover/click/focus), and any mode that affects
 how a viewer perceives the schema's structure. *Not* authoring-side
 lints (those go in `docs/authoring-frictions.md` per
-[feature 10](features/10-authoring-experience.md)).
+feature 10 (spec not yet written)).
 
 **Companion:** [feature 09 — Graph Layout Selection](features/09-graph-layout-selection.md).
 

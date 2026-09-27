@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-27
+
 ### Added
 - **A consumer manifest can name a dependency's published dataset instead of pathing into it.** `datasets = ["worked-example"]` on a `[generate.<dep>]` entry renders the dataset that dependency's `panschema-publish.toml` lists under that name, resolved from wherever the dependency resolved to — so the manifest keeps working when the source moves from a sibling checkout to a pinned release the consumer has no path into. Named datasets render after any `instances` paths, and both keys can appear on one entry. `datasets = ["wine:benchmark"]` names the package that publishes a dataset, for one shipped against another package's schema — a benchmark written in a grader's schema but published with the ontology it grades. Named datasets join the entry's declared set, so `verify` and `resolve_against` cover them exactly as they cover pathed ones. A name the package does not publish fails listing the ones it does, and a dataset whose publish entry names a different schema is refused rather than rendered against a schema it does not conform to.
 - **The LinkML model is its own crate, `panschema-model`.** The schema model, its inheritance and slot-usage resolution, the LinkML YAML reader, the `Reader` trait, the instance model with anchor expansion and record IRIs, the element-identity rules every projection mints IRIs by, class rules, `imports:` resolution, and the load, projection, and cross-graph diagnostics now ship as a library that depends on no RDF, template, CLI, or async library, for tools that reason over schemas and datasets without running the CLI; a dependency gate keeps those libraries out of it. `panschema` re-exports every moved module at its previous path, so both binaries and nearly every library caller are unchanged, and the two crates version together. One documented entry, `load_dataset`, loads a schema with its imports and reads a dataset's records against it, so a consumer gets each record's minted IRI — the string panschema's own RDF and graph outputs name it by — without composing anything itself; it names the file in every read or parse error, and warns rather than returning an empty set when the schema declares no `tree_root` container or the dataset's shape matches none. The one deliberate change for library callers: the schema loader returns the warnings a load raises, as values on the loaded schema, instead of printing them; the commands print them exactly as before.
@@ -345,7 +347,8 @@ Initial release of rontodoc — a fast, single-binary ontology documentation gen
 - Responsive two-column layout with dark mode support.
 - Component-driven UI with style guide (`--features dev`).
 
-[Unreleased]: https://github.com/padamson/panschema/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/padamson/panschema/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/padamson/panschema/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/padamson/panschema/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/padamson/panschema/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/padamson/panschema/compare/v0.1.0...v0.2.0

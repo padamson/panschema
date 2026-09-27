@@ -43,7 +43,7 @@ which builds the embedded visualization bundle):
 
 ```bash
 cargo install wasm-pack
-cargo install --git https://github.com/padamson/panschema --tag v0.3.0 panschema
+cargo install --git https://github.com/padamson/panschema --tag v0.4.0 panschema
 ```
 
 ### Working with an AI coding agent
