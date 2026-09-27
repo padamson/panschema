@@ -158,6 +158,11 @@ async fn serve_site(page: &Page, site: &Path) {
     page.route_service(&format!("{SITE_ORIGIN}/**"), ServeDir::new(site))
         .await
         .expect("Failed to serve the generated site in-process");
+    // The page is answered in-process, so a slow first load is CPU contention
+    // on a runner with several browsers up, not the network. The driver's
+    // 30 s navigation default has tripped there; nextest's slow timeout is
+    // what bounds a real hang.
+    page.set_default_navigation_timeout(120_000.0).await;
 }
 
 /// Start a simple HTTP server serving static files.
