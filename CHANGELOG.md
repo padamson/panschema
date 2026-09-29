@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The graph's layout numerics are vendored rather than pulled from a git dependency.** The Kamada-Kawai, stress-majorization and SGD layouts came from `egraph-rs`, whose Rust crates are published to PyPI and not to crates.io — so they were reachable only as a git pin, and the patch panschema needed was never taken upstream, which meant carrying a fork. The slice actually used is small and finished: three algorithms over a 2D Euclidean drawing sharing one all-pairs Dijkstra. It now lives in the tree under the MIT terms it came with, recorded in `THIRD-PARTY.md`. Nothing about the rendered graph changes; the copies are unmodified apart from import paths.
+
 ## [0.4.0] - 2026-09-27
 
 ### Added

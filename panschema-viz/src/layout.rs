@@ -21,6 +21,8 @@
 //! Kamada-Kawai pilot helper ([`kamada_kawai`]) that proves the
 //! integration end-to-end.
 
+mod algo;
+
 /// Identifies which layout algorithm should produce node positions for
 /// the schema-graph render. Only [`LayoutAlgorithm::ForceDirected`]
 /// resolves to a real implementation; the rest are placeholders that
@@ -36,7 +38,8 @@ pub enum LayoutAlgorithm {
     Hierarchical,
     /// Stress majorization, via `egraph-rs`.
     Stress,
-    /// Kamada-Kawai energy minimization, via `egraph-rs`.
+    /// Kamada-Kawai energy minimization, over the vendored layout
+    /// numerics in [`algo`].
     KamadaKawai,
     /// Stochastic Gradient Descent, via `egraph-rs`. The default.
     Sgd,
@@ -185,8 +188,7 @@ pub fn to_petgraph(
 /// algorithm leaves unset (e.g. nodes the algorithm couldn't place)
 /// fall back to `(0.0, 0.0)`.
 pub fn kamada_kawai(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> Vec<(f32, f32)> {
-    use petgraph_drawing::DrawingEuclidean2d;
-    use petgraph_layout_kamada_kawai::KamadaKawai;
+    use algo::{DrawingEuclidean2d, KamadaKawai};
 
     if graph.nodes.is_empty() {
         return Vec::new();

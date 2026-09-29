@@ -38,7 +38,6 @@ serde_json = "1"
 # across our direct deps. Repin to upstream once our PRs land there.
 petgraph = "0.8"
 petgraph-drawing = { version = "0.1", git = "https://github.com/padamson/egraph-rs", rev = "9b38f5d17992b20c1ea0466c1e8805f014ad3b88" }
-petgraph-layout-kamada-kawai = { version = "0.1", git = "https://github.com/padamson/egraph-rs", rev = "9b38f5d17992b20c1ea0466c1e8805f014ad3b88" }
 petgraph-layout-stress-majorization = { version = "0.1", git = "https://github.com/padamson/egraph-rs", rev = "9b38f5d17992b20c1ea0466c1e8805f014ad3b88" }
 petgraph-layout-sgd = { version = "0.1", git = "https://github.com/padamson/egraph-rs", rev = "9b38f5d17992b20c1ea0466c1e8805f014ad3b88" }
 # Matches the rand version petgraph-layout-sgd depends on. Used to
@@ -58,5 +57,13 @@ mutants = "0.0.4"
 # (post-fork), so we no longer carry both petgraph 0.6 and 0.8 in the
 # lock file.
 rust-sugiyama = "0.4"
+
+# Used by the vendored layout numerics in src/layout/algo/. All three were
+# already resolved in the lockfile as transitive dependencies of the
+# egraph-rs crates the vendoring replaces, so naming them directly adds no
+# new package.
+ndarray = "0.16"
+num-traits = "0.2"
+ordered-float = "3"
 
 # Profile settings are in workspace root Cargo.toml
