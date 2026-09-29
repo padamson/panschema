@@ -11,9 +11,10 @@ those, and neither tool sees vendored source, which is why this file exists.
   `9b38f5d17992b20c1ea0466c1e8805f014ad3b88` — a fork carrying petgraph-0.8
   and rand-0.10 ports. That revision is a fork merge commit and is not
   reachable from any upstream branch, which is why the fork is named here.
-  The vendored files are byte-identical to upstream `8e986826534774fe7beb9546154407927260e446`
-  apart from imports, so the fork's deltas never touched them; re-sync
-  against upstream, not the fork.
+  The fork's deltas touch none of the vendored files — `git diff
+  8e98682 9b38f5d` over them is empty — so re-sync against upstream
+  `8e986826534774fe7beb9546154407927260e446`, not the fork, and carry
+  forward the deliberate changes listed below.
 - **License:** MIT, Copyright (c) 2018 Yosuke Onoue (full text below)
 - **Vendored at:** `panschema-viz/src/layout/algo/`
 
@@ -43,18 +44,38 @@ still pinned.
 | `crates/algorithm/shortest-path/src/distance_matrix.rs` | `algo/distance_matrix.rs` | `DistanceMatrix`, `FullDistanceMatrix`, `IndexIterator` |
 | `crates/algorithm/shortest-path/src/dijkstra.rs` | `algo/dijkstra.rs` | `dijkstra_with_distance_matrix`, `all_sources_dijkstra` |
 | `crates/layout/kamada-kawai/src/lib.rs` | `algo/kamada_kawai.rs` | all |
+| `crates/layout/stress-majorization/src/lib.rs` | `algo/stress_majorization.rs` | all |
 
 Not vendored: the N-dimensional, spherical, hyperbolic and torus drawing
 spaces and their metrics; `SubDistanceMatrix` and the single- and
 multi-source Dijkstra wrappers built on it; the BFS, Warshall-Floyd and
 weighted-edge-length shortest-path implementations.
 
-Apart from import paths rewritten for the flattened module (and their
-re-ordering by this repository's rustfmt) and the omissions above, the files
-are unmodified copies. Keeping them diffable against the
-revision they came from is deliberate: it is what makes a later re-sync or an
-upstream bug-fix cheap to apply, and it is why the module carries an
-`allow(dead_code)` rather than being trimmed to exactly what is called.
+The algorithm code is unmodified. Every deliberate change is listed here, so
+a re-sync knows what to carry forward:
+
+- **An attribution header** is prepended to every vendored file.
+- **`algo/mod.rs` is this repository's own module root**, not a copy: only its
+  two traits come from upstream's `crates/drawing/src/lib.rs`. Don't diff the
+  rest of it against upstream.
+- **Import paths**, rewritten for the flattened module, and re-ordered by this
+  repository's rustfmt.
+- **Doc examples** in `kamada_kawai.rs` and `stress_majorization.rs` are marked
+  `ignore`, prefixed with a paragraph saying why, and their imports repointed.
+  The module is private, so rustdoc would compile each example as an external
+  crate that cannot reach it.
+- **One upstream test assertion is corrected**, in `stress_majorization.rs`.
+  `test_stress_majorization_parameters` asserted the default epsilon
+  `== 1e-4`, but the constructor builds it as `(1e-4).into()` through
+  `From<f32>`, so under the test's `f64` it is `9.999999747378752e-5`. It
+  fails the same way in upstream's own checkout at the vendored revision;
+  it never ran here before because it lived inside a dependency. The layout
+  itself is unaffected, since panschema instantiates with `f32`.
+
+Keeping the copies otherwise diffable against the revision they came from is
+deliberate: it is what makes a later re-sync or an upstream bug-fix cheap to
+apply, and it is why the module carries an `allow(dead_code)` rather than
+being trimmed to exactly what is called.
 
 ### License
 

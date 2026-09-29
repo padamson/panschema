@@ -2623,7 +2623,6 @@ dependencies = [
  "petgraph 0.8.3",
  "petgraph-drawing",
  "petgraph-layout-sgd",
- "petgraph-layout-stress-majorization",
  "rand 0.10.3",
  "rust-sugiyama",
  "serde",
@@ -2788,17 +2787,6 @@ dependencies = [
  "petgraph-algorithm-shortest-path",
  "petgraph-drawing",
  "rand 0.10.3",
-]
-
-[[package]]
-name = "petgraph-layout-stress-majorization"
-version = "0.1.0"
-source = "git+https://github.com/padamson/egraph-rs?rev=9b38f5d17992b20c1ea0466c1e8805f014ad3b88#9b38f5d17992b20c1ea0466c1e8805f014ad3b88"
-dependencies = [
- "ndarray",
- "petgraph 0.8.3",
- "petgraph-algorithm-shortest-path",
- "petgraph-drawing",
 ]
 
 [[package]]

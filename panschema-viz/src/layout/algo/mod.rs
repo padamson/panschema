@@ -25,6 +25,7 @@ mod drawing_euclidean_2d;
 mod kamada_kawai;
 mod metric;
 mod metric_euclidean_2d;
+mod stress_majorization;
 
 pub use dijkstra::all_sources_dijkstra;
 pub use distance_matrix::{DistanceMatrix, FullDistanceMatrix};
@@ -33,6 +34,7 @@ pub use drawing_euclidean_2d::DrawingEuclidean2d;
 pub use kamada_kawai::KamadaKawai;
 pub use metric::{Delta, Metric, MetricCartesian};
 pub use metric_euclidean_2d::{DeltaEuclidean2d, MetricEuclidean2d};
+pub use stress_majorization::StressMajorization;
 
 use ndarray::prelude::*;
 use num_traits::{FloatConst, FromPrimitive, Signed};

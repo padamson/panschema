@@ -1,9 +1,6 @@
-// Vendored from egraph-rs (https://github.com/likr/egraph-rs), MIT licensed,
-// at rev 9b38f5d. Copyright (c) the egraph-rs authors. See THIRD-PARTY.md.
-//
-// Only the Euclidean-2D path panschema's graph uses is kept; the spherical,
-// hyperbolic and torus spaces, the sparse SGD variants, and the BFS and
-// Warshall-Floyd shortest-path implementations are not vendored.
+// Vendored from egraph-rs (https://github.com/likr/egraph-rs), MIT licensed.
+// Copyright (c) the egraph-rs authors. See THIRD-PARTY.md for the revision
+// and for what was and was not vendored.
 
 //! # Kamada-Kawai Graph Layout Algorithm
 //!

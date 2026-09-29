@@ -36,10 +36,9 @@ pub enum LayoutAlgorithm {
     /// Sugiyama-style layered layout for `is_a` / `subClassOf` DAGs,
     /// via `rust-sugiyama`.
     Hierarchical,
-    /// Stress majorization, via `egraph-rs`.
+    /// Stress majorization, vendored from `egraph-rs`.
     Stress,
-    /// Kamada-Kawai energy minimization, over the vendored layout
-    /// numerics in [`algo`].
+    /// Kamada-Kawai energy minimization, vendored from `egraph-rs`.
     KamadaKawai,
     /// Stochastic Gradient Descent, via `egraph-rs`. The default.
     Sgd,
@@ -215,7 +214,7 @@ pub fn kamada_kawai(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> Vec<(f32
 }
 
 /// Stress majorization over the LinkML schema graph. Mirrors the
-/// `kamada_kawai` entry-point shape — runs `egraph-rs`'s implementation
+/// `kamada_kawai` entry-point shape — runs the vendored implementation
 /// over the petgraph conversion, applies the same `√(w/h)` / `√(h/w)`
 /// aspect bias as a post-process so the resulting bbox approximates the
 /// configured aspect while preserving area.
@@ -451,19 +450,19 @@ fn stress_majorization_component(
     pg: &petgraph::Graph<String, (), petgraph::Undirected>,
     component: &[NodeIndex],
 ) -> (Vec<(f32, f32)>, f32) {
+    use algo::{DrawingEuclidean2d, StressMajorization};
     use petgraph::visit::EdgeRef;
-    use petgraph_drawing::DrawingEuclidean2d;
-    use petgraph_layout_stress_majorization::StressMajorization;
 
     if component.len() < 2 {
         return (vec![(0.0, 0.0); component.len()], 0.0);
     }
     if component.len() == 2 {
-        // egraph-rs's `initial_placement` produces coincident starting
-        // coordinates for 2-node graphs; stress's gradient is zero at
-        // a coincident pair so the nodes never separate. Place them
-        // manually at the target edge length the algorithm would have
-        // converged on if it could.
+        // Stress solves a single edge exactly on its first iteration, but
+        // `run` stops on the *relative* change in stress, which never drops
+        // below epsilon once stress is ~0. It keeps iterating, and within a
+        // few iterations the coordinates go NaN, which the non-finite guard
+        // below maps to the origin — both nodes on one point. Return the
+        // converged answer, the pair at the target edge length, directly.
         return (vec![(0.0, 0.0), (1.0, 0.0)], 1.0);
     }
 
@@ -1486,10 +1485,10 @@ mod tests {
     fn stress_majorization_separates_2_node_components() {
         // A 2-node component sits inside a larger graph (so the
         // shelf-packer's main path runs). The 2-node piece must not
-        // collapse to a single point — egraph-rs's `initial_placement`
-        // would otherwise leave both nodes at coincident coordinates
-        // and stress's gradient is zero there, so the nodes never
-        // separate without help from the wrapper. Manifested in the
+        // collapse to a single point: left running, stress turns a single
+        // edge's coordinates NaN within a few iterations, and the
+        // component wrapper's non-finite guard maps both to the origin
+        // unless it short-circuits the pair. Manifested in the
         // scimantic-schema v0.2.0 dogfood as two overlapping labels
         // in the orphan corner of the rendered graph.
         let mut graph = GraphData {
