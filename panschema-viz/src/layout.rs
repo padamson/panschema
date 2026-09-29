@@ -1406,6 +1406,90 @@ mod tests {
         }
     }
 
+    fn make_path(n: usize) -> GraphData {
+        let mut graph = make_ring(n);
+        graph.edges.pop(); // the ring's closing edge, n{n-1} -> n0
+        graph.schema_name = "path".into();
+        graph
+    }
+
+    /// Panics unless `positions` lays a path out in node order with every
+    /// pair at a distance proportional to its hop count: the worst relative
+    /// error against the mean edge length must stay under `PATH_TOLERANCE`.
+    /// A path is the one graph whose stress optimum is known exactly —
+    /// collinear and evenly spaced — so the error is 0 there, whatever the
+    /// layout's scale.
+    fn assert_spaces_path_evenly(positions: &[(f32, f32)]) {
+        let dist = |i: usize, j: usize| {
+            let (a, b) = (positions[i], positions[j]);
+            (a.0 - b.0).hypot(a.1 - b.1)
+        };
+        let n = positions.len();
+        let unit = (1..n).map(|i| dist(i - 1, i)).sum::<f32>() / (n - 1) as f32;
+        // Every ratio below divides by `unit`. A layout that collapsed to a
+        // point, or went non-finite, makes each one NaN — and `f32::max`
+        // discards NaN, so the tolerance check alone would pass it.
+        assert!(
+            unit.is_finite() && unit > 0.0,
+            "path collapsed or went non-finite: mean edge length {unit}; positions {positions:?}"
+        );
+        let mut worst = 0.0_f32;
+        for j in 1..n {
+            for i in 0..j {
+                let expected = unit * (j - i) as f32;
+                worst = worst.max((dist(i, j) - expected).abs() / expected);
+            }
+        }
+        assert!(
+            worst < PATH_TOLERANCE,
+            "worst distortion {worst}; positions {positions:?}"
+        );
+    }
+
+    /// A path as the per-component layout functions receive it: the
+    /// petgraph and its nodes in path order, so `positions[i]` is `n{i}`.
+    ///
+    /// The stress and SGD tests go through these rather than the public
+    /// entry points on purpose. Those end with a realized-aspect
+    /// correction that scales x and y independently, and on a
+    /// near-straight path that amplifies exactly the perpendicular drift
+    /// being measured. Kamada-Kawai's entry point applies a fixed
+    /// `√(w/h)` factor instead, the identity at square aspect, so its
+    /// test can use the entry point.
+    fn path_component(
+        n: usize,
+    ) -> (
+        petgraph::Graph<String, (), petgraph::Undirected>,
+        Vec<NodeIndex>,
+    ) {
+        let graph = make_path(n);
+        let (pg, id_to_idx) = to_petgraph(&graph);
+        let component = graph.nodes.iter().map(|node| id_to_idx[&node.id]).collect();
+        (pg, component)
+    }
+
+    // A converged layout measures at most about 0.05 here (Kamada-Kawai;
+    // stress and SGD about 0.01), and a layout that never moves a node, or
+    // stops after one step, measures 0.79 or more. 0.15 sits clear of both.
+    const PATH_TOLERANCE: f32 = 0.15;
+
+    #[test]
+    fn kamada_kawai_spaces_a_path_by_graph_distance() {
+        assert_spaces_path_evenly(&kamada_kawai(&make_path(5), 1.0, 1.0));
+    }
+
+    #[test]
+    fn stress_majorization_spaces_a_path_by_graph_distance() {
+        let (pg, component) = path_component(5);
+        assert_spaces_path_evenly(&stress_majorization_component(&pg, &component).0);
+    }
+
+    #[test]
+    fn sgd_spaces_a_path_by_graph_distance() {
+        let (pg, component) = path_component(5);
+        assert_spaces_path_evenly(&sgd_component(&pg, &component).0);
+    }
+
     #[test]
     fn sgd_shelf_packs_disconnected_components_without_overlap() {
         // Same per-component pattern as stress majorization: two
