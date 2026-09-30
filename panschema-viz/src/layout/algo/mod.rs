@@ -22,23 +22,41 @@ mod dijkstra;
 mod distance_matrix;
 mod drawing;
 mod drawing_euclidean_2d;
+mod full_sgd;
 mod kamada_kawai;
 mod metric;
 mod metric_euclidean_2d;
+mod scheduler;
+mod scheduler_exponential;
+mod sgd;
 mod stress_majorization;
 
 pub use dijkstra::all_sources_dijkstra;
 pub use distance_matrix::{DistanceMatrix, FullDistanceMatrix};
 pub use drawing::Drawing;
 pub use drawing_euclidean_2d::DrawingEuclidean2d;
+pub use full_sgd::FullSgd;
 pub use kamada_kawai::KamadaKawai;
 pub use metric::{Delta, Metric, MetricCartesian};
 pub use metric_euclidean_2d::{DeltaEuclidean2d, MetricEuclidean2d};
+pub use scheduler::Scheduler;
+pub use scheduler_exponential::SchedulerExponential;
+pub use sgd::Sgd;
 pub use stress_majorization::StressMajorization;
 
 use ndarray::prelude::*;
 use num_traits::{FloatConst, FromPrimitive, Signed};
 use std::hash::Hash;
+
+/// The randomness SGD needs: an in-place shuffle of its node pairs.
+///
+/// This trait is panschema's, not upstream's. Upstream's `Sgd::shuffle` took a
+/// `rand::Rng`; this keeps it generic without that crate, and keeps the vendored
+/// code free of any path into the rest of panschema. `layout::rng::SplitMix64`
+/// implements it.
+pub trait Shuffle {
+    fn shuffle<T>(&mut self, items: &mut [T]);
+}
 
 /// A type usable as a node identifier in a drawing.
 pub trait DrawingIndex: Eq + Hash {}

@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- **The graph's layout numerics are vendored rather than pulled from a git dependency.** The Kamada-Kawai, stress-majorization and SGD layouts came from `egraph-rs`, whose Rust crates are published to PyPI and not to crates.io — so they were reachable only as a git pin, and the patch panschema needed was never taken upstream, which meant carrying a fork. The slice actually used is small and finished: three algorithms over a 2D Euclidean drawing sharing one all-pairs Dijkstra. It now lives in the tree under the MIT terms it came with, recorded in `THIRD-PARTY.md`. Nothing about the rendered graph changes: the algorithm code is copied unmodified.
+- **The graph's layout numerics are vendored rather than pulled from a git dependency.** The Kamada-Kawai, stress-majorization and SGD layouts came from `egraph-rs`, whose Rust crates are published to PyPI and not to crates.io — so they were reachable only as a git pin, and the patch panschema needed was never taken upstream, which meant carrying a fork. The slice actually used is small and finished: three algorithms over a 2D Euclidean drawing sharing one all-pairs Dijkstra. It now lives in the tree under the MIT terms it came with, recorded in `THIRD-PARTY.md`. Kamada-Kawai and stress majorization lay out exactly as before. SGD, the default, now shuffles with a small seeded generator of panschema's own instead of `rand`, so its node positions move once; it stays deterministic from run to run, so republishing an unchanged schema still produces identical pages. `rand` and `getrandom` no longer ship in the graph's wasm bundle.
 
 ## [0.4.0] - 2026-09-27
 

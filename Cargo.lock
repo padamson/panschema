@@ -1132,11 +1132,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
 dependencies = [
  "cfg-if",
- "js-sys",
  "libc",
  "r-efi 6.0.0",
  "rand_core 0.10.1",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -2614,16 +2612,12 @@ name = "panschema-viz"
 version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
- "getrandom 0.4.3",
  "js-sys",
  "mutants",
  "ndarray",
  "num-traits",
  "ordered-float",
  "petgraph 0.8.3",
- "petgraph-drawing",
- "petgraph-layout-sgd",
- "rand 0.10.3",
  "rust-sugiyama",
  "serde",
  "serde_json",
@@ -2754,39 +2748,6 @@ dependencies = [
  "hashbrown 0.15.5",
  "indexmap 2.14.0",
  "serde",
-]
-
-[[package]]
-name = "petgraph-algorithm-shortest-path"
-version = "0.1.0"
-source = "git+https://github.com/padamson/egraph-rs?rev=9b38f5d17992b20c1ea0466c1e8805f014ad3b88#9b38f5d17992b20c1ea0466c1e8805f014ad3b88"
-dependencies = [
- "ndarray",
- "ordered-float",
- "petgraph 0.8.3",
-]
-
-[[package]]
-name = "petgraph-drawing"
-version = "0.1.0"
-source = "git+https://github.com/padamson/egraph-rs?rev=9b38f5d17992b20c1ea0466c1e8805f014ad3b88#9b38f5d17992b20c1ea0466c1e8805f014ad3b88"
-dependencies = [
- "ndarray",
- "num-traits",
- "petgraph 0.8.3",
-]
-
-[[package]]
-name = "petgraph-layout-sgd"
-version = "0.1.0"
-source = "git+https://github.com/padamson/egraph-rs?rev=9b38f5d17992b20c1ea0466c1e8805f014ad3b88#9b38f5d17992b20c1ea0466c1e8805f014ad3b88"
-dependencies = [
- "ndarray",
- "ordered-float",
- "petgraph 0.8.3",
- "petgraph-algorithm-shortest-path",
- "petgraph-drawing",
- "rand 0.10.3",
 ]
 
 [[package]]

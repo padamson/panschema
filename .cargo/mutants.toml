@@ -27,7 +27,7 @@ additional_cargo_args = ["--lib"]
 # Examine `panschema`, `panschema-model`, and the host-testable parts of
 # `panschema-viz`.
 # `panschema-viz` is a wasm-targeted crate, but `simulation.rs`,
-# `sim_common.rs`, and `legend.rs` are pure-Rust helpers with real
+# `sim_common.rs`, `legend.rs`, and `layout/rng.rs` are pure-Rust helpers with real
 # native unit tests that `cargo test --lib` runs on the host — this
 # allow-list is the gate, so host-testable viz logic must be BOTH
 # added here and kept out of the excluded drawing/wasm files.
@@ -49,6 +49,7 @@ examine_globs = [
     "panschema-viz/src/simulation.rs",
     "panschema-viz/src/sim_common.rs",
     "panschema-viz/src/legend.rs",
+    "panschema-viz/src/layout/rng.rs",
 ]
 exclude_globs = [
     "panschema/src/components.rs",

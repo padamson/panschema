@@ -25,12 +25,11 @@ reachable as a git dependency. panschema additionally needed a patch upstream
 had not taken, which meant carrying a fork and rebasing it against upstream
 churn. What the graph actually uses is a small, finished slice: three layout
 algorithms over a 2D Euclidean drawing, sharing one all-pairs Dijkstra. Owning
-that slice costs less than owning the fork. The aim is to leave no
-git-sourced crate in the dependency graph at all: `cargo vet` models registry
-dependencies only, so anything pinned by git is invisible to it, and
-`deny.toml` needs an `allow-git` entry to permit it. Vendoring proceeds one
-algorithm at a time, so until the last one lands some egraph-rs crates are
-still pinned.
+that slice costs less than owning the fork, and it leaves no git-sourced
+crate in the dependency graph: `cargo vet` models registry dependencies only,
+so a git pin was invisible to it, and `deny.toml` needed an `allow-git` entry
+to permit one. Vendoring SGD also took `rand` and `getrandom` out of the wasm
+bundle; see the SGD shuffle below.
 
 ### What was taken, and what was not
 
@@ -45,25 +44,39 @@ still pinned.
 | `crates/algorithm/shortest-path/src/dijkstra.rs` | `algo/dijkstra.rs` | `dijkstra_with_distance_matrix`, `all_sources_dijkstra` |
 | `crates/layout/kamada-kawai/src/lib.rs` | `algo/kamada_kawai.rs` | all |
 | `crates/layout/stress-majorization/src/lib.rs` | `algo/stress_majorization.rs` | all |
+| `crates/layout/sgd/src/sgd.rs` | `algo/sgd.rs` | all, shuffle changed (below) |
+| `crates/layout/sgd/src/full_sgd.rs` | `algo/full_sgd.rs` | all |
+| `crates/layout/sgd/src/scheduler.rs` | `algo/scheduler.rs` | the `Scheduler` trait |
+| `crates/layout/sgd/src/scheduler/scheduler_exponential.rs` | `algo/scheduler_exponential.rs` | all |
 
 Not vendored: the N-dimensional, spherical, hyperbolic and torus drawing
 spaces and their metrics; `SubDistanceMatrix` and the single- and
 multi-source Dijkstra wrappers built on it; the BFS, Warshall-Floyd and
-weighted-edge-length shortest-path implementations.
+weighted-edge-length shortest-path implementations; the sparse SGD variant;
+and the constant, linear, quadratic and reciprocal SGD schedulers.
 
-The algorithm code is unmodified. Every deliberate change is listed here, so
-a re-sync knows what to carry forward:
+The algorithm code is unmodified apart from SGD's shuffle. Every deliberate
+change is listed here, so a re-sync knows what to carry forward:
 
 - **An attribution header** is prepended to every vendored file.
-- **`algo/mod.rs` is this repository's own module root**, not a copy: only its
-  two traits come from upstream's `crates/drawing/src/lib.rs`. Don't diff the
-  rest of it against upstream.
+- **`algo/mod.rs` is this repository's own module root**, not a copy: only
+  `DrawingIndex` and `DrawingValue` come from upstream's
+  `crates/drawing/src/lib.rs`. The `Shuffle` trait beside them is panschema's.
+  Don't diff the rest of it against upstream.
 - **Import paths**, rewritten for the flattened module, and re-ordered by this
   repository's rustfmt.
 - **Doc examples** in `kamada_kawai.rs` and `stress_majorization.rs` are marked
   `ignore`, prefixed with a paragraph saying why, and their imports repointed.
   The module is private, so rustdoc would compile each example as an external
   crate that cannot reach it.
+- **SGD's shuffle is generic over `Shuffle` instead of `rand::Rng`.** Upstream's
+  `Sgd::shuffle<R: Rng>` becomes `Sgd::shuffle<R: Shuffle>`, and its body calls
+  the trait. `Shuffle` is defined in `algo/mod.rs`, so the vendored file still
+  reaches nothing outside `algo/`. panschema supplies the `SplitMix64` in
+  `panschema-viz/src/layout/rng.rs`, which is this repository's code, not
+  vendored. The shuffle is still Fisher–Yates, but the generator's sequence
+  differs, so an SGD layout's coordinates differ from upstream's for the same
+  seed. It stays deterministic from run to run.
 - **One upstream test assertion is corrected**, in `stress_majorization.rs`.
   `test_stress_majorization_parameters` asserted the default epsilon
   `== 1e-4`, but the constructor builds it as `(1e-4).into()` through

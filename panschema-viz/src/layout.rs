@@ -16,12 +16,13 @@
 //!
 //! The module also hosts the conversion glue between panschema-viz's
 //! wire-format [`GraphData`](crate::graph_types::GraphData) and the
-//! [`petgraph`] graphs consumed by `egraph-rs`-backed layout
-//! algorithms ([`to_petgraph`]), plus the
-//! Kamada-Kawai pilot helper ([`kamada_kawai`]) that proves the
-//! integration end-to-end.
+//! [`petgraph`] graphs consumed by the stress-based layout
+//! algorithms ([`to_petgraph`]), and the layouts themselves:
+//! [`kamada_kawai`], [`stress_majorization`], [`sgd`], and
+//! [`hierarchical`].
 
 mod algo;
+mod rng;
 
 /// Identifies which layout algorithm should produce node positions for
 /// the schema-graph render. Only [`LayoutAlgorithm::ForceDirected`]
@@ -40,7 +41,7 @@ pub enum LayoutAlgorithm {
     Stress,
     /// Kamada-Kawai energy minimization, vendored from `egraph-rs`.
     KamadaKawai,
-    /// Stochastic Gradient Descent, via `egraph-rs`. The default.
+    /// Stochastic Gradient Descent, vendored from `egraph-rs`. The default.
     Sgd,
     /// Uniform-on-a-circle (or ellipse for non-square aspects).
     /// Planned implementation: in-tree.
@@ -149,7 +150,7 @@ use petgraph::graph::NodeIndex;
 use std::collections::BTreeMap;
 
 /// Convert panschema-viz's wire-format [`GraphData`] into an
-/// undirected [`petgraph::Graph`] suitable for `egraph-rs`-backed
+/// undirected [`petgraph::Graph`] suitable for the stress-based
 /// layout algorithms.
 ///
 /// Returns the graph plus an `id → NodeIndex` lookup so callers can
@@ -512,7 +513,7 @@ fn stress_majorization_component(
 /// schema graph. Like [`stress_majorization`], SGD minimizes a stress
 /// function but using a stochastic per-pair update instead of a global
 /// majorization step — typically the best quality-per-time of the
-/// `egraph-rs` lineup, converging in `O(N · iters)` time with
+/// stress-based layouts here, converging in `O(N · iters)` time with
 /// visibly comparable quality to stress majorization.
 ///
 /// Same shelf-pack-by-component pattern as [`stress_majorization`]:
@@ -712,20 +713,18 @@ fn sgd_component(
     pg: &petgraph::Graph<String, (), petgraph::Undirected>,
     component: &[NodeIndex],
 ) -> (Vec<(f32, f32)>, f32) {
+    use algo::{DrawingEuclidean2d, FullSgd, Scheduler, SchedulerExponential};
     use petgraph::visit::EdgeRef;
-    use petgraph_drawing::DrawingEuclidean2d;
-    use petgraph_layout_sgd::{FullSgd, Scheduler, SchedulerExponential};
-    use rand::SeedableRng;
-    use rand::rngs::StdRng;
+    use rng::SplitMix64;
 
     if component.len() < 2 {
         return (vec![(0.0, 0.0); component.len()], 0.0);
     }
     if component.len() == 2 {
-        // Match stress_majorization_component's 2-node handling —
-        // `initial_placement` for tiny graphs leaves both nodes at
-        // coincident coordinates and SGD's gradient at coincident
-        // pairs is zero, so the nodes never separate without help.
+        // SGD separates a single edge on its own, landing it at the target
+        // length in whatever orientation it started. This returns the same
+        // horizontal pair as stress_majorization_component's guard instead,
+        // so a lone edge is laid out identically under both.
         return (vec![(0.0, 0.0), (1.0, 0.0)], 1.0);
     }
 
@@ -748,7 +747,7 @@ fn sgd_component(
 
     let mut sgd_state = FullSgd::new().build(&sub, |_| 1.0_f32);
     let mut drawing = DrawingEuclidean2d::<NodeIndex, f32>::initial_placement(&sub);
-    let mut rng = StdRng::seed_from_u64(42);
+    let mut rng = SplitMix64::new(42);
     let mut scheduler = sgd_state.scheduler::<SchedulerExponential<f32>>(100, 0.1);
     scheduler.run(&mut |eta| {
         sgd_state.shuffle(&mut rng);
@@ -788,8 +787,8 @@ pub const WORLD_TARGET_DIMENSION: f32 = 600.0;
 /// scale.
 ///
 /// Used by static (non-force-directed) layouts so their natural
-/// coordinate system (typically O(1) magnitudes from `egraph-rs` or
-/// `petgraph_drawing`) lands inside the visualization's expected world
+/// coordinate system (typically O(1) magnitudes from the stress-based
+/// layouts) lands inside the visualization's expected world
 /// range.
 pub fn scale_to_world(positions: &mut [(f32, f32)], target_max_dim: f32) {
     if positions.len() < 2 {
