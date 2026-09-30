@@ -3017,6 +3017,33 @@ fn e2e_typed_instance_graph_renders_class_symbols_and_shared_values() {
                     "the typed wire encoding should reach the page; got: {wire}"
                 );
 
+                // Checked on the data rather than the canvas, where anti-aliasing
+                // can put stray pixels in any color band wherever the layout lands.
+                let individual_colors = page
+                    .evaluate_value(
+                        r#"(function(){
+                    var g = (window.__PANSCHEMA_INSTANCE_GRAPHS__ || [])[0];
+                    if (!g || !g.data) return '';
+                    return g.data.nodes
+                        .filter(function(n){ return n.node_type === 'individual'; })
+                        .map(function(n){
+                            return n.color.slice(0, 3)
+                                .map(function(c){ return Math.round(c * 255); }).join(',');
+                        })
+                        .join(' ');
+                })()"#,
+                    )
+                    .await
+                    .unwrap_or_default();
+                let colors: Vec<&str> = individual_colors
+                    .trim_matches('"')
+                    .split_whitespace()
+                    .collect();
+                assert!(
+                    !colors.is_empty() && !colors.contains(&"41,184,179"),
+                    "expected the wines' colors, none the generic individual color 41,184,179; got: {individual_colors:?}"
+                );
+
                 // The legend describes the typed key.
                 let summary = page
                     .evaluate_value(
@@ -3043,14 +3070,13 @@ fn e2e_typed_instance_graph_renders_class_symbols_and_shared_values() {
                     var ctx = c.getContext('2d');
                     if (!ctx) return 'no-ctx';
                     var d = ctx.getImageData(0, 0, c.width, c.height).data;
-                    var blue = 0, purple = 0, teal = 0;
+                    var blue = 0, purple = 0;
                     for (var i = 0; i < d.length; i += 4) {
                         var r = d[i], g = d[i+1], b = d[i+2];
                         if (r < 110 && g > 110 && g < 180 && b > 180) blue++;
                         if (r > 120 && r < 190 && g < 120 && b > 140) purple++;
-                        if (r < 100 && g > 150 && g < 215 && b > 150 && b < 215) teal++;
                     }
-                    return 'blue:' + blue + ' purple:' + purple + ' teal:' + teal;
+                    return 'blue:' + blue + ' purple:' + purple;
                 })()"#,
                     )
                     .await
@@ -3065,11 +3091,6 @@ fn e2e_typed_instance_graph_renders_class_symbols_and_shared_values() {
                 assert!(
                     count_of("blue") > 0 && count_of("purple") > 0,
                     "class-coloured individuals and enum-coloured values should paint; got: {painted}"
-                );
-                assert_eq!(
-                    count_of("teal"),
-                    0,
-                    "no generic teal markers remain; got: {painted}"
                 );
             })
         },
