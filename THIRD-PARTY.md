@@ -42,7 +42,7 @@ bundle; see the SGD shuffle below.
 | `crates/drawing/src/lib.rs` | `algo/mod.rs` | the `DrawingIndex` / `DrawingValue` traits |
 | `crates/algorithm/shortest-path/src/distance_matrix.rs` | `algo/distance_matrix.rs` | `DistanceMatrix`, `FullDistanceMatrix` |
 | `crates/algorithm/shortest-path/src/dijkstra.rs` | `algo/dijkstra.rs` | `dijkstra_with_distance_matrix`, `all_sources_dijkstra` |
-| `crates/layout/kamada-kawai/src/lib.rs` | `algo/kamada_kawai.rs` | all |
+| `crates/layout/kamada-kawai/src/lib.rs` | `algo/kamada_kawai.rs` | all, `run` bounded (below) |
 | `crates/layout/stress-majorization/src/lib.rs` | `algo/stress_majorization.rs` | all |
 | `crates/layout/sgd/src/sgd.rs` | `algo/sgd.rs` | `Sgd`, shuffle changed (below) |
 | `crates/layout/sgd/src/full_sgd.rs` | `algo/full_sgd.rs` | `FullSgd` |
@@ -96,6 +96,12 @@ changes below, which a re-sync should carry forward:
   removals above, was read only for its length. `Drawing::len` now counts the
   coordinates and `DistanceMatrix::shape` reports the matrix's own dimensions,
   which is the same number.
+- **Kamada-Kawai's `run` is bounded.** Upstream looped until convergence with
+  no limit, so a layout that never converged would never return. It now stops
+  after `max_moves` node moves, a new public field defaulting to 10·n². Moves
+  grow with the square of the node count, staying well under n² across the
+  graph shapes measured, so the bound changes no layout that converges. It
+  guarantees termination, not speed: each move rescans every pair.
 - **One upstream test assertion is corrected**, in `stress_majorization.rs`.
   `test_stress_majorization_parameters` asserted the default epsilon
   `== 1e-4`, but the constructor builds it as `(1e-4).into()` through

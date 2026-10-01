@@ -65,6 +65,13 @@ pub struct KamadaKawai<S> {
     l: Array2<S>,
     /// Convergence threshold
     pub eps: S,
+    /// Most node moves `run` makes. Set by panschema, not upstream, which ran
+    /// until convergence with no bound, so a layout that never converged never
+    /// returned. Moves grow with the square of the node count, staying well under
+    /// n² across the graph shapes measured, so the default of 10·n² binds only
+    /// when convergence fails. It guarantees `run` returns; it does not make
+    /// a large non-converging run fast, since each move rescans every pair.
+    pub max_moves: usize,
 }
 
 impl<S> KamadaKawai<S> {
@@ -121,7 +128,13 @@ impl<S> KamadaKawai<S> {
                 k[[i, j]] = S::one() / (l[[i, j]] * l[[i, j]]);
             }
         }
-        KamadaKawai { k, l, eps }
+        let max_moves = n.saturating_mul(n).saturating_mul(10);
+        KamadaKawai {
+            k,
+            l,
+            eps,
+            max_moves,
+        }
     }
 
     /// Selects the node with the maximum energy gradient to move next.
@@ -223,10 +236,11 @@ impl<S> KamadaKawai<S> {
         drawing.raw_entry_mut(m).1 -= delta_y;
     }
 
-    /// Runs the Kamada-Kawai algorithm until convergence.
+    /// Runs the Kamada-Kawai algorithm until convergence, or until it has made
+    /// `max_moves` node moves.
     ///
     /// This method repeatedly selects the node with the maximum energy gradient
-    /// and moves it to reduce the energy, until the layout converges.
+    /// and moves it to reduce the energy.
     ///
     /// # Arguments
     ///
@@ -236,8 +250,11 @@ impl<S> KamadaKawai<S> {
         N: DrawingIndex,
         S: DrawingValue,
     {
-        while let Some(m) = self.select_node(drawing) {
-            self.apply_to_node(m, drawing);
+        for _ in 0..self.max_moves {
+            match self.select_node(drawing) {
+                Some(m) => self.apply_to_node(m, drawing),
+                None => return,
+            }
         }
     }
 }
@@ -266,5 +283,109 @@ fn test_kamada_kawai() {
 
     for &u in &nodes {
         println!("{:?}", coordinates.position(u));
+    }
+}
+
+// panschema's, not upstream's. A hang is not a failure, so `run` goes on its own
+// thread: with `eps` at zero the stop test can never pass, and a regression fails
+// here instead of never finishing.
+#[test]
+fn run_returns_when_the_layout_cannot_converge() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let (done, finished) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let graph = graph_from(5, &[(0, 1), (1, 2), (2, 3), (3, 4)]);
+        let mut drawing =
+            DrawingEuclidean2d::<petgraph::graph::NodeIndex, f32>::initial_placement(&graph);
+        let mut kamada_kawai = KamadaKawai::new(&graph, |_| 1.0_f32);
+        kamada_kawai.eps = 0.0;
+        kamada_kawai.run(&mut drawing);
+        done.send(()).unwrap();
+    });
+    match finished.recv_timeout(Duration::from_secs(10)) {
+        Ok(()) => {}
+        Err(mpsc::RecvTimeoutError::Timeout) => panic!("run never returned with eps = 0"),
+        // The worker died before reporting back: surface its panic, not a hang.
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            std::panic::resume_unwind(worker.join().unwrap_err())
+        }
+    }
+}
+
+#[cfg(test)]
+fn graph_from(n: usize, edges: &[(usize, usize)]) -> petgraph::Graph<(), (), petgraph::Undirected> {
+    let mut graph = petgraph::Graph::new_undirected();
+    let nodes: Vec<_> = (0..n).map(|_| graph.add_node(())).collect();
+    for &(a, b) in edges {
+        graph.add_edge(nodes[a], nodes[b], ());
+    }
+    graph
+}
+
+#[test]
+fn run_with_no_moves_leaves_the_drawing_unchanged() {
+    let graph = graph_from(5, &[(0, 1), (1, 2), (2, 3), (3, 4)]);
+    let initial = DrawingEuclidean2d::<petgraph::graph::NodeIndex, f32>::initial_placement(&graph);
+    let mut drawing =
+        DrawingEuclidean2d::<petgraph::graph::NodeIndex, f32>::initial_placement(&graph);
+    let mut kamada_kawai = KamadaKawai::new(&graph, |_| 1.0_f32);
+    kamada_kawai.max_moves = 0;
+    kamada_kawai.run(&mut drawing);
+    for i in 0..5 {
+        assert_eq!(
+            (drawing.raw_entry(i).0, drawing.raw_entry(i).1),
+            (initial.raw_entry(i).0, initial.raw_entry(i).1),
+            "node {i} moved with max_moves = 0"
+        );
+    }
+}
+
+// The default bound is meant to bind only when convergence fails. These shapes,
+// at 25 to 30 nodes, need several hundred moves; each must reach convergence
+// rather than be cut off.
+#[test]
+fn the_default_bound_lets_representative_layouts_converge() {
+    let n = 30;
+    let tree: Vec<_> = (1..n).map(|i| ((i - 1) / 2, i)).collect();
+    let mut tree_with_chords = tree.clone();
+    for i in (3..n).step_by(7) {
+        tree_with_chords.push((i, (i * 5) % n));
+    }
+    let ring: Vec<_> = (0..n).map(|i| (i, (i + 1) % n)).collect();
+    let mut grid = vec![];
+    for r in 0..5 {
+        for c in 0..5 {
+            let v = r * 5 + c;
+            if c + 1 < 5 {
+                grid.push((v, v + 1));
+            }
+            if r + 1 < 5 {
+                grid.push((v, v + 5));
+            }
+        }
+    }
+    for (shape, graph) in [
+        ("tree", graph_from(n, &tree)),
+        ("tree with chords", graph_from(n, &tree_with_chords)),
+        ("ring", graph_from(n, &ring)),
+        ("grid", graph_from(25, &grid)),
+    ] {
+        let mut drawing =
+            DrawingEuclidean2d::<petgraph::graph::NodeIndex, f32>::initial_placement(&graph);
+        let kamada_kawai = KamadaKawai::new(&graph, |_| 1.0_f32);
+        kamada_kawai.run(&mut drawing);
+        // select_node also reports None when a coordinate is NaN, so convergence
+        // means that and finite coordinates.
+        assert!(
+            kamada_kawai.select_node(&drawing).is_none(),
+            "the {shape} was cut off by the default bound before converging"
+        );
+        assert!(
+            (0..drawing.len())
+                .all(|i| drawing.raw_entry(i).0.is_finite() && drawing.raw_entry(i).1.is_finite()),
+            "the {shape} ended with a non-finite coordinate"
+        );
     }
 }
