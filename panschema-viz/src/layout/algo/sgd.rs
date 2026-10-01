@@ -33,16 +33,6 @@ where
         Self { node_pairs }
     }
 
-    /// Returns a reference to the node pairs used in the SGD algorithm.
-    ///
-    /// Each tuple contains:
-    /// - `(i, j)`: Indices of the node pair
-    /// - `(dij, dji)`: Target distances from i to j and j to i
-    /// - `(wij, wji)`: Weights for the forces from i to j and j to i
-    pub fn node_pairs(&self) -> &Vec<(usize, usize, S, S, S, S)> {
-        &self.node_pairs
-    }
-
     /// Creates a scheduler with parameters suitable for this SGD instance.
     ///
     /// This method creates a scheduler that uses eta_min and eta_max calculated
@@ -121,46 +111,6 @@ where
                 *drawing.raw_entry_mut(i) += delta.clone() * -r_i * mu_i;
                 *drawing.raw_entry_mut(j) += delta.clone() * r_j * mu_j;
             }
-        }
-    }
-
-    /// Updates the target distances for all node pairs using the provided function.
-    ///
-    /// This method allows dynamically adjusting the target distances during the layout process,
-    /// which can be useful for algorithms that refine their distance model over time.
-    ///
-    /// # Parameters
-    /// * `distance` - A function that takes (node_i, node_j, current_distance, current_weight)
-    ///   and returns a new target distance
-    pub fn update_distance<F>(&mut self, mut distance: F)
-    where
-        F: FnMut(usize, usize, S, S) -> S,
-        S: Copy,
-    {
-        for p in &mut self.node_pairs {
-            let (i, j, dij, dji, wij, wji) = *p;
-            p.2 = distance(i, j, dij, wij);
-            p.3 = distance(j, i, dji, wji);
-        }
-    }
-
-    /// Updates the weights for all node pairs using the provided function.
-    ///
-    /// Weights control how strongly each node pair affects the layout. Higher weights
-    /// cause node pairs to more strongly enforce their target distances.
-    ///
-    /// # Parameters
-    /// * `weight` - A function that takes (node_i, node_j, current_distance, current_weight)
-    ///   and returns a new weight value
-    pub fn update_weight<F>(&mut self, mut weight: F)
-    where
-        F: FnMut(usize, usize, S, S) -> S,
-        S: Copy,
-    {
-        for p in &mut self.node_pairs {
-            let (i, j, dij, dji, wij, wji) = *p;
-            p.4 = weight(i, j, dij, wij);
-            p.5 = weight(j, i, dji, wji);
         }
     }
 }

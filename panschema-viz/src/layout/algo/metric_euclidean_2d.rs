@@ -5,8 +5,6 @@
 use super::{Delta, DrawingValue, Metric};
 use std::ops::{Add, AddAssign, Div, Mul, Sub, SubAssign};
 
-use super::MetricCartesian;
-
 /// Represents the difference vector between two points in 2D Euclidean space.
 ///
 /// This struct implements the `Delta` trait for 2D Euclidean space.
@@ -118,30 +116,5 @@ where
 
     fn sub(self, other: &'b MetricEuclidean2d<S>) -> DeltaEuclidean2d<S> {
         DeltaEuclidean2d(self.0 - other.0, self.1 - other.1)
-    }
-}
-
-impl<S> MetricCartesian for MetricEuclidean2d<S>
-where
-    S: DrawingValue,
-{
-    fn nth(&self, n: usize) -> &S {
-        if n == 0 {
-            &self.0
-        } else if n == 1 {
-            &self.1
-        } else {
-            unreachable!("index error");
-        }
-    }
-
-    fn nth_mut(&mut self, n: usize) -> &mut S {
-        if n == 0 {
-            &mut self.0
-        } else if n == 1 {
-            &mut self.1
-        } else {
-            unreachable!("index error");
-        }
     }
 }

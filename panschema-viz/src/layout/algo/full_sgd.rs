@@ -15,12 +15,6 @@ use petgraph::visit::{IntoEdges, IntoNodeIdentifiers};
 /// the optimization process, which makes it accurate but potentially slow for large graphs.
 pub struct FullSgd;
 
-impl Default for FullSgd {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl FullSgd {
     pub fn new() -> Self {
         Self

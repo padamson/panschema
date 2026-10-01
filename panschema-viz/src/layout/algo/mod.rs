@@ -9,14 +9,12 @@
 //!
 //! Only the Euclidean-2D path is kept. The spherical, hyperbolic and torus
 //! spaces, the sparse SGD variants, and the BFS and Warshall-Floyd
-//! shortest-path implementations are not vendored. Attribution and the
-//! upstream revision are in THIRD-PARTY.md.
-
-// Upstream's trait surface is kept intact rather than trimmed to exactly what
-// the layouts call. An unmodified copy stays diffable against the revision it
-// came from, which is what keeps a later re-sync or an upstream bug-fix cheap
-// to apply; trimming would buy a little less code and cost that.
-#![allow(dead_code)]
+//! shortest-path implementations are not vendored. Within what is kept, only
+//! code panschema uses remains. The compiler's dead-code lint holds that for
+//! functions, methods and types, but it cannot see trait impls or derives:
+//! those were checked by hand, and the two small value types keep their
+//! ordinary derives (`Copy`, `Debug`, `Default`) whether or not anything uses
+//! them. Attribution and the upstream revision are in THIRD-PARTY.md.
 
 mod dijkstra;
 mod distance_matrix;
@@ -37,7 +35,7 @@ pub use drawing::Drawing;
 pub use drawing_euclidean_2d::DrawingEuclidean2d;
 pub use full_sgd::FullSgd;
 pub use kamada_kawai::KamadaKawai;
-pub use metric::{Delta, Metric, MetricCartesian};
+pub use metric::{Delta, Metric};
 pub use metric_euclidean_2d::{DeltaEuclidean2d, MetricEuclidean2d};
 pub use scheduler::Scheduler;
 pub use scheduler_exponential::SchedulerExponential;

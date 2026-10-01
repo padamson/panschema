@@ -36,16 +36,16 @@ bundle; see the SGD shuffle below.
 | Upstream path | Vendored as | Kept |
 |---|---|---|
 | `crates/drawing/src/drawing.rs` | `algo/drawing.rs` | the `Drawing` trait |
-| `crates/drawing/src/drawing/drawing_euclidean_2d.rs` | `algo/drawing_euclidean_2d.rs` | all |
-| `crates/drawing/src/metric.rs` | `algo/metric.rs` | `Delta`, `Metric`, `MetricCartesian` |
-| `crates/drawing/src/metric/metric_euclidean_2d.rs` | `algo/metric_euclidean_2d.rs` | all |
+| `crates/drawing/src/drawing/drawing_euclidean_2d.rs` | `algo/drawing_euclidean_2d.rs` | `DrawingEuclidean2d` |
+| `crates/drawing/src/metric.rs` | `algo/metric.rs` | `Delta`, `Metric` |
+| `crates/drawing/src/metric/metric_euclidean_2d.rs` | `algo/metric_euclidean_2d.rs` | `DeltaEuclidean2d`, `MetricEuclidean2d` |
 | `crates/drawing/src/lib.rs` | `algo/mod.rs` | the `DrawingIndex` / `DrawingValue` traits |
-| `crates/algorithm/shortest-path/src/distance_matrix.rs` | `algo/distance_matrix.rs` | `DistanceMatrix`, `FullDistanceMatrix`, `IndexIterator` |
+| `crates/algorithm/shortest-path/src/distance_matrix.rs` | `algo/distance_matrix.rs` | `DistanceMatrix`, `FullDistanceMatrix` |
 | `crates/algorithm/shortest-path/src/dijkstra.rs` | `algo/dijkstra.rs` | `dijkstra_with_distance_matrix`, `all_sources_dijkstra` |
 | `crates/layout/kamada-kawai/src/lib.rs` | `algo/kamada_kawai.rs` | all |
 | `crates/layout/stress-majorization/src/lib.rs` | `algo/stress_majorization.rs` | all |
-| `crates/layout/sgd/src/sgd.rs` | `algo/sgd.rs` | all, shuffle changed (below) |
-| `crates/layout/sgd/src/full_sgd.rs` | `algo/full_sgd.rs` | all |
+| `crates/layout/sgd/src/sgd.rs` | `algo/sgd.rs` | `Sgd`, shuffle changed (below) |
+| `crates/layout/sgd/src/full_sgd.rs` | `algo/full_sgd.rs` | `FullSgd` |
 | `crates/layout/sgd/src/scheduler.rs` | `algo/scheduler.rs` | the `Scheduler` trait |
 | `crates/layout/sgd/src/scheduler/scheduler_exponential.rs` | `algo/scheduler_exponential.rs` | all |
 
@@ -55,8 +55,22 @@ multi-source Dijkstra wrappers built on it; the BFS, Warshall-Floyd and
 weighted-edge-length shortest-path implementations; the sparse SGD variant;
 and the constant, linear, quadratic and reciprocal SGD schedulers.
 
-The algorithm code is unmodified apart from SGD's shuffle. Every deliberate
-change is listed here, so a re-sync knows what to carry forward:
+Within the items that were kept, the members nothing in panschema uses are
+removed: `DistanceMatrix::get`, `set`, `row_indices` and `col_indices`, with the
+`IndexIterator` the last two return, and `FullDistanceMatrix`'s private
+`index`; `Drawing::is_empty`, `dimension`, `node_id` and `index`;
+`DrawingEuclidean2d::set_x`, `set_y`, `centralize`, `clamp_region`,
+`initial_placement_with_bfs_order` and `edge_segments`; the `MetricCartesian`
+trait and its impl for `MetricEuclidean2d`; `Sgd::node_pairs`,
+`update_distance` and `update_weight`; `FullSgd`'s `Default` impl; and the
+`Clone` derive on `DrawingEuclidean2d`. With them gone the module no longer
+needs `allow(dead_code)`, so the compiler's dead-code lint covers it again —
+for functions, methods and types. It cannot see trait impls or derives, so
+those were checked by hand; the two small value types keep their ordinary
+derives (`Copy`, `Debug`, `Default`) whether or not anything uses them.
+
+Apart from those removals, the code is unmodified except for the deliberate
+changes below, which a re-sync should carry forward:
 
 - **An attribution header** is prepended to every vendored file.
 - **`algo/mod.rs` is this repository's own module root**, not a copy: only
@@ -77,6 +91,11 @@ change is listed here, so a re-sync knows what to carry forward:
   vendored. The shuffle is still Fisher–Yates, but the generator's sequence
   differs, so an SGD layout's coordinates differ from upstream's for the same
   seed. It stays deterministic from run to run.
+- **The node-id vectors are no longer stored.** `DrawingEuclidean2d` and
+  `FullDistanceMatrix` each kept a `Vec` of node identifiers that, once the
+  removals above, was read only for its length. `Drawing::len` now counts the
+  coordinates and `DistanceMatrix::shape` reports the matrix's own dimensions,
+  which is the same number.
 - **One upstream test assertion is corrected**, in `stress_majorization.rs`.
   `test_stress_majorization_parameters` asserted the default epsilon
   `== 1e-4`, but the constructor builds it as `(1e-4).into()` through
@@ -85,10 +104,10 @@ change is listed here, so a re-sync knows what to carry forward:
   it never ran here before because it lived inside a dependency. The layout
   itself is unaffected, since panschema instantiates with `f32`.
 
-Keeping the copies otherwise diffable against the revision they came from is
-deliberate: it is what makes a later re-sync or an upstream bug-fix cheap to
-apply, and it is why the module carries an `allow(dead_code)` rather than
-being trimmed to exactly what is called.
+A re-sync against upstream therefore has to account for two kinds of
+difference: the deliberate changes just listed, which carry forward, and the
+removed members listed before them, which a diff will show as deletions and
+which should stay deleted unless panschema starts using them.
 
 ### License
 

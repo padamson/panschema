@@ -35,22 +35,3 @@ pub trait Metric: Sized + AddAssign<Self::D> + SubAssign<Self::D> {
     /// The type representing the difference (vector) between two points in this metric space.
     type D: Delta;
 }
-
-/// A specialized metric for Cartesian coordinate systems.
-///
-/// This trait extends the basic `Metric` trait with functionality specific to
-/// Cartesian coordinate systems, such as accessing individual dimensions.
-pub trait MetricCartesian: Metric {
-    /// Returns the value of the `n`-th dimension of this point.
-    ///
-    /// # Parameters
-    ///
-    /// * `n`: The index of the dimension to access.
-    ///
-    /// # Returns
-    ///
-    /// The scalar value of the `n`-th dimension.
-    fn nth(&self, n: usize) -> &<<Self as Metric>::D as Delta>::S;
-
-    fn nth_mut(&mut self, n: usize) -> &mut <<Self as Metric>::D as Delta>::S;
-}
