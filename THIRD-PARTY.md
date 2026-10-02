@@ -100,8 +100,23 @@ changes below, which a re-sync should carry forward:
   no limit, so a layout that never converged would never return. It now stops
   after `max_moves` node moves, a new public field defaulting to 10·n². Moves
   grow with the square of the node count, staying well under n² across the
-  graph shapes measured, so the bound changes no layout that converges. It
-  guarantees termination, not speed: each move rescans every pair.
+  graph shapes measured, so the bound changes no layout that converges.
+- **Kamada-Kawai's `run` keeps its gradients as running sums.** Upstream
+  recomputed every node's gradient before each move, rescanning all n² pairs.
+  Moving one node changes only the springs attached to it, so `run` now
+  updates each gradient by the moved node's change, O(n) per move. Drift in
+  the sums is never trusted: the node they pick is checked from scratch before
+  it moves, and when they report convergence every gradient is recomputed and
+  the run stops only if that agrees. The sums only pick which node moves
+  next; the move itself is computed from the drawing as before, so a layout
+  changes only if drift picks a different node, which happened on no graph
+  measured. `select_node` is no longer called by `run` and is private and
+  compiled for tests only, as the from-scratch reference they check `run`
+  against.
+- **`k` and `l` are filled from one triangle of the distance matrix**, so
+  they are symmetric bit for bit, which the per-move check above relies on.
+  Upstream copied the matrix as given. A shortest-path matrix is symmetric up
+  to rounding, so for the unit lengths panschema uses nothing changes.
 - **One upstream test assertion is corrected**, in `stress_majorization.rs`.
   `test_stress_majorization_parameters` asserted the default epsilon
   `== 1e-4`, but the constructor builds it as `(1e-4).into()` through

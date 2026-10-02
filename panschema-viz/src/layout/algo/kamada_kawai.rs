@@ -47,6 +47,13 @@ use super::{Drawing, DrawingEuclidean2d, DrawingIndex, DrawingValue};
 use ndarray::prelude::*;
 use petgraph::visit::{IntoEdges, IntoNodeIdentifiers, NodeCount};
 
+#[cfg(test)]
+thread_local! {
+    /// Spring terms `pair_gradient` has evaluated on this thread, so tests can
+    /// check what `run` costs without timing it.
+    static PAIR_GRADIENTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 fn norm<S>(x: S, y: S) -> S
 where
     S: DrawingValue,
@@ -69,8 +76,8 @@ pub struct KamadaKawai<S> {
     /// until convergence with no bound, so a layout that never converged never
     /// returned. Moves grow with the square of the node count, staying well under
     /// n² across the graph shapes measured, so the default of 10·n² binds only
-    /// when convergence fails. It guarantees `run` returns; it does not make
-    /// a large non-converging run fast, since each move rescans every pair.
+    /// when convergence fails. Each move costs O(n); a full O(n²) recompute
+    /// is added only when the running sums report convergence, to confirm it.
     pub max_moves: usize,
 }
 
@@ -120,11 +127,15 @@ impl<S> KamadaKawai<S> {
         let eps = S::from_f32(1e-1).unwrap();
         let n = d.shape().0;
 
+        // Both halves are read from one triangle so that k and l are symmetric
+        // bit for bit, which `shares_of` relies on. A shortest-path matrix is
+        // symmetric up to rounding, but summing a path's lengths in the other
+        // order can differ in the last bit.
         let mut l = Array2::zeros((n, n));
         let mut k = Array2::zeros((n, n));
         for i in 0..n {
             for j in 0..n {
-                l[[i, j]] = d.get_by_index(i, j);
+                l[[i, j]] = d.get_by_index(i.min(j), i.max(j));
                 k[[i, j]] = S::one() / (l[[i, j]] * l[[i, j]]);
             }
         }
@@ -137,57 +148,115 @@ impl<S> KamadaKawai<S> {
         }
     }
 
-    /// Selects the node with the maximum energy gradient to move next.
-    ///
-    /// This method calculates the energy gradient for each node and returns
-    /// the index of the node with the maximum gradient magnitude, if it exceeds
-    /// the convergence threshold. If all nodes have gradients below the threshold,
-    /// it returns None, indicating the layout has converged.
-    ///
-    /// # Arguments
-    ///
-    /// * `drawing` - The current node positions
-    ///
-    /// # Returns
-    ///
-    /// The index of the selected node, or None if the layout has converged
-    pub fn select_node<N>(&self, drawing: &DrawingEuclidean2d<N, S>) -> Option<usize>
+    /// The node with the largest gradient, computed from scratch, or None once
+    /// every gradient is under `eps`. `run` keeps running sums instead; tests
+    /// use this as the reference it must agree with.
+    #[cfg(test)]
+    fn select_node<N>(&self, drawing: &DrawingEuclidean2d<N, S>) -> Option<usize>
     where
         N: DrawingIndex,
         S: DrawingValue,
     {
-        let n = drawing.len();
-        let KamadaKawai { k, l, eps, .. } = self;
+        let mut gradients = vec![(S::zero(), S::zero()); drawing.len()];
+        self.fill_gradients(drawing, &mut gradients);
+        self.steepest(&gradients)
+    }
+
+    /// Computes every node's energy gradient from scratch into `gradients`.
+    fn fill_gradients<N>(&self, drawing: &DrawingEuclidean2d<N, S>, gradients: &mut [(S, S)])
+    where
+        N: DrawingIndex,
+        S: DrawingValue,
+    {
+        for (m, gradient) in gradients.iter_mut().enumerate() {
+            *gradient = self.gradient(m, drawing);
+        }
+    }
+
+    /// The node with the largest gradient, or None once every gradient is
+    /// under `eps`. NaN never compares greater, so a NaN gradient reads as
+    /// converged.
+    fn steepest(&self, gradients: &[(S, S)]) -> Option<usize>
+    where
+        S: DrawingValue,
+    {
         let mut delta2_max = S::zero();
         let mut m_target = 0;
-        for m in 0..n {
-            let xm = drawing.raw_entry(m).0;
-            let ym = drawing.raw_entry(m).1;
-            let mut dedx = S::zero();
-            let mut dedy = S::zero();
-            for i in 0..n {
-                if i != m {
-                    let xi = drawing.raw_entry(i).0;
-                    let yi = drawing.raw_entry(i).1;
-                    let dx = xm - xi;
-                    let dy = ym - yi;
-                    let d = norm(dx, dy);
-                    dedx += k[[m, i]] * (S::one() - l[[m, i]] / d) * dx;
-                    dedy += k[[m, i]] * (S::one() - l[[m, i]] / d) * dy;
-                }
-            }
+        for (m, &(dedx, dedy)) in gradients.iter().enumerate() {
             let delta2 = dedx * dedx + dedy * dedy;
             if delta2 > delta2_max {
                 delta2_max = delta2;
                 m_target = m;
             }
         }
-
-        if delta2_max < *eps * *eps {
+        if delta2_max < self.eps * self.eps {
             None
         } else {
             Some(m_target)
         }
+    }
+
+    /// The energy gradient at node `m`: the sum of `pair_gradient(m, i)` over
+    /// every other node `i`.
+    fn gradient<N>(&self, m: usize, drawing: &DrawingEuclidean2d<N, S>) -> (S, S)
+    where
+        N: DrawingIndex,
+        S: DrawingValue,
+    {
+        let mut dedx = S::zero();
+        let mut dedy = S::zero();
+        for i in (0..drawing.len()).filter(|&i| i != m) {
+            let (gx, gy) = self.pair_gradient(m, i, drawing);
+            dedx += gx;
+            dedy += gy;
+        }
+        (dedx, dedy)
+    }
+
+    /// Writes into `shares[i]` the share of node `i`'s gradient that comes from
+    /// its spring to `m`, and returns `m`'s own gradient. `k` and `l` are
+    /// symmetric, so each spring pulls on `m` exactly opposite to how it pulls
+    /// on `i`: `m`'s gradient is the negated sum, bit for bit what `gradient`
+    /// computes.
+    fn shares_of<N>(
+        &self,
+        m: usize,
+        drawing: &DrawingEuclidean2d<N, S>,
+        shares: &mut [(S, S)],
+    ) -> (S, S)
+    where
+        N: DrawingIndex,
+        S: DrawingValue,
+    {
+        let mut dedx = S::zero();
+        let mut dedy = S::zero();
+        for (i, share) in shares.iter_mut().enumerate() {
+            *share = if i == m {
+                (S::zero(), S::zero())
+            } else {
+                self.pair_gradient(i, m, drawing)
+            };
+            dedx -= share.0;
+            dedy -= share.1;
+        }
+        (dedx, dedy)
+    }
+
+    /// The share of the energy gradient at `m` that comes from the spring
+    /// between `m` and `i`.
+    fn pair_gradient<N>(&self, m: usize, i: usize, drawing: &DrawingEuclidean2d<N, S>) -> (S, S)
+    where
+        N: DrawingIndex,
+        S: DrawingValue,
+    {
+        #[cfg(test)]
+        PAIR_GRADIENTS.with(|count| count.set(count.get() + 1));
+        let KamadaKawai { k, l, .. } = self;
+        let dx = drawing.raw_entry(m).0 - drawing.raw_entry(i).0;
+        let dy = drawing.raw_entry(m).1 - drawing.raw_entry(i).1;
+        let d = norm(dx, dy);
+        let scale = k[[m, i]] * (S::one() - l[[m, i]] / d);
+        (scale * dx, scale * dy)
     }
 
     /// Moves a single node to reduce its energy.
@@ -242,6 +311,20 @@ impl<S> KamadaKawai<S> {
     /// This method repeatedly selects the node with the maximum energy gradient
     /// and moves it to reduce the energy.
     ///
+    /// Moving one node changes only the springs attached to it, so the
+    /// gradients are kept as running sums: each move subtracts the moved node's
+    /// springs' old shares from every other node's gradient and adds their new
+    /// ones, which costs O(n) rather than the O(n²) of recomputing them all.
+    ///
+    /// Running sums drift, so neither of their verdicts is taken on trust. The
+    /// node they pick is checked from scratch before it moves, at no extra cost
+    /// since its gradient falls out of the shares the move needs anyway, and is
+    /// skipped if it has in fact settled. When they report convergence, every
+    /// gradient is recomputed, O(n²), and the run stops only if that agrees;
+    /// otherwise the node that recompute picks moves without a further check.
+    /// Skips cannot stall the run: each leaves one more sum exact and under
+    /// `eps` and touches no other, so they run out and a recompute follows.
+    ///
     /// # Arguments
     ///
     /// * `drawing` - The initial node positions, which will be updated to the final layout
@@ -250,11 +333,44 @@ impl<S> KamadaKawai<S> {
         N: DrawingIndex,
         S: DrawingValue,
     {
-        for _ in 0..self.max_moves {
-            match self.select_node(drawing) {
-                Some(m) => self.apply_to_node(m, drawing),
-                None => return,
+        let mut gradients = vec![(S::zero(), S::zero()); drawing.len()];
+        let mut shares = gradients.clone();
+        self.fill_gradients(drawing, &mut gradients);
+        let mut moves = 0;
+        while moves < self.max_moves {
+            let m = match self.steepest(&gradients) {
+                Some(m) => {
+                    let (dedx, dedy) = self.shares_of(m, drawing, &mut shares);
+                    gradients[m] = (dedx, dedy);
+                    // As in `steepest`, a NaN gradient reads as settled.
+                    let delta2 = dedx * dedx + dedy * dedy;
+                    if delta2.is_nan() || delta2 < self.eps * self.eps {
+                        continue;
+                    }
+                    m
+                }
+                None => {
+                    self.fill_gradients(drawing, &mut gradients);
+                    match self.steepest(&gradients) {
+                        Some(m) => {
+                            self.shares_of(m, drawing, &mut shares);
+                            m
+                        }
+                        None => return,
+                    }
+                }
+            };
+            for (gradient, share) in gradients.iter_mut().zip(&shares) {
+                gradient.0 -= share.0;
+                gradient.1 -= share.1;
             }
+            self.apply_to_node(m, drawing);
+            gradients[m] = self.shares_of(m, drawing, &mut shares);
+            for (gradient, share) in gradients.iter_mut().zip(&shares) {
+                gradient.0 += share.0;
+                gradient.1 += share.1;
+            }
+            moves += 1;
         }
     }
 }
@@ -386,6 +502,60 @@ fn the_default_bound_lets_representative_layouts_converge() {
             (0..drawing.len())
                 .all(|i| drawing.raw_entry(i).0.is_finite() && drawing.raw_entry(i).1.is_finite()),
             "the {shape} ended with a non-finite coordinate"
+        );
+    }
+}
+
+// `run` keeps running sums of the gradients; selecting each move from scratch is
+// the reference. The sums only steer which node moves next, and each move is
+// computed from the drawing itself, so the same picks give the same layout to
+// the bit. A different pick would still converge to a nearby layout, so this is
+// exact on purpose: the pick sequence is the contract.
+// Selecting from scratch evaluates every spring for every move, `run` only the
+// moved node's, so it must evaluate a small fraction of the reference's terms.
+#[test]
+fn run_matches_selecting_from_scratch_at_a_fraction_of_the_cost() {
+    let evaluated = |work: &mut dyn FnMut()| {
+        PAIR_GRADIENTS.with(|count| count.set(0));
+        work();
+        PAIR_GRADIENTS.with(|count| count.get())
+    };
+    let n = 60;
+    let tree: Vec<_> = (1..n).map(|i| ((i - 1) / 2, i)).collect();
+    let ring: Vec<_> = (0..n).map(|i| (i, (i + 1) % n)).collect();
+    for (shape, graph) in [
+        ("tree", graph_from(n, &tree)),
+        ("ring", graph_from(n, &ring)),
+    ] {
+        let kamada_kawai = KamadaKawai::new(&graph, |_| 1.0_f32);
+        let mut reference =
+            DrawingEuclidean2d::<petgraph::graph::NodeIndex, f32>::initial_placement(&graph);
+        let reference_cost = evaluated(&mut || {
+            for _ in 0..kamada_kawai.max_moves {
+                match kamada_kawai.select_node(&reference) {
+                    Some(m) => kamada_kawai.apply_to_node(m, &mut reference),
+                    None => break,
+                }
+            }
+        });
+        assert!(
+            kamada_kawai.select_node(&reference).is_none(),
+            "the {shape} reference did not converge"
+        );
+        let mut drawing =
+            DrawingEuclidean2d::<petgraph::graph::NodeIndex, f32>::initial_placement(&graph);
+        let run_cost = evaluated(&mut || kamada_kawai.run(&mut drawing));
+        for i in 0..n {
+            let (x, y) = (drawing.raw_entry(i).0, drawing.raw_entry(i).1);
+            let (rx, ry) = (reference.raw_entry(i).0, reference.raw_entry(i).1);
+            assert!(
+                x == rx && y == ry,
+                "{shape} node {i}: run put it at ({x}, {y}), the reference at ({rx}, {ry})"
+            );
+        }
+        assert!(
+            run_cost * 10 < reference_cost,
+            "the {shape} cost {run_cost} spring terms against the reference's {reference_cost}"
         );
     }
 }
