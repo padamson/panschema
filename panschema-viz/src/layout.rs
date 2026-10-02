@@ -214,35 +214,25 @@ pub fn kamada_kawai(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> Vec<(f32
         .collect()
 }
 
-/// Stress majorization over the LinkML schema graph. Mirrors the
-/// `kamada_kawai` entry-point shape — runs the vendored implementation
-/// over the petgraph conversion, applies the same `√(w/h)` / `√(h/w)`
-/// aspect bias as a post-process so the resulting bbox approximates the
-/// configured aspect while preserving area.
+/// Lays out one connected component, returning positions in `component` order.
+type ComponentLayout = fn(&Graph<String, (), Undirected>, &[NodeIndex]) -> Vec<(f32, f32)>;
+
+/// Lay `graph` out one connected component at a time with `layout_component`,
+/// then shelf-pack the components into a single drawing.
 ///
-/// Stress majorization is the literature reference point for "what a
-/// good static layout looks like" on graphs in the 50–2000 node range
-/// (the algorithm behind graphviz's `neato -Kstress`). Compared with
-/// `kamada_kawai`'s one-node-at-a-time gradient descent, the
-/// majorization formulation converges in ~30 iterations of
-/// `O(N²)` updates and produces cleaner cluster separation and more
-/// uniform edge lengths.
+/// The stress-based layouts' all-pairs distance formulation produces NaN
+/// across the entire optimization when any two nodes are unreachable, not
+/// just the disconnected ones. Real schemas have isolated nodes (unused enums,
+/// types, slots), so each component is laid out on its own, then the results
+/// are shelf-packed into a rectangle whose aspect approximates the configured
+/// `aspect_w : aspect_h` — taller components first, wrapping to a new row when
+/// adding the next would exceed the target row width. This produces a roughly
+/// rectangular final bbox even when the input has many small disconnected
+/// pieces, instead of a thin horizontal strip.
 ///
-/// Stress majorization's all-pairs distance formulation produces NaN
-/// across the entire optimization when any two nodes are unreachable,
-/// not just the disconnected ones. Real schemas have isolated nodes
-/// (unused enums, types, slots), so the helper splits the input into
-/// connected components, runs stress on each independently, then shelf-
-/// packs the components into a rectangle whose aspect approximates the
-/// configured `aspect_w : aspect_h` — taller components first, wrap to
-/// a new row when adding the next would exceed the target row width.
-/// This produces a roughly rectangular final bbox even when the input
-/// has many small disconnected pieces, instead of a thin horizontal
-/// strip.
-///
-/// Single-node components carry no useful stress signal and place at
-/// the origin (their per-component bbox is 0×0; the shelf-packer
-/// treats them as zero-area packing items).
+/// Every component gets at least a `min_cell` square cell, so single nodes,
+/// whose own bbox is 0×0, grid into a compact block instead of collapsing
+/// into a zero-height row.
 ///
 /// Empty input returns an empty `Vec`.
 ///
@@ -250,27 +240,24 @@ pub fn kamada_kawai(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> Vec<(f32
 /// observationally-equivalent formulations of the bbox accumulation,
 /// `total_area` / `target_row_width` formula, wrap condition, and
 /// per-row position assignment — different mutations produce
-/// alternative-but-still-valid layouts that pass the wrapper's
-/// contracts (finite coordinates, non-overlapping components,
-/// aspect-biased bbox). The contracts are pinned by the
-/// `stress_majorization_*` tests; the specific arithmetic chosen
-/// here is one valid implementation, not the only one. The
-/// `stress_majorization_component` helper is skipped for the same
-/// reason.
+/// alternative-but-still-valid layouts that pass the callers' contracts
+/// (finite coordinates, non-overlapping components, aspect-biased bbox).
+/// Those contracts are pinned by the `stress_majorization_*` and `sgd_*`
+/// tests; the specific arithmetic chosen here is one valid implementation,
+/// not the only one.
 #[mutants::skip]
-pub fn stress_majorization(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> Vec<(f32, f32)> {
+fn layout_by_components(
+    graph: &GraphData,
+    aspect_w: f32,
+    aspect_h: f32,
+    layout_component: ComponentLayout,
+) -> Vec<(f32, f32)> {
     if graph.nodes.is_empty() {
         return Vec::new();
     }
 
     let (pg, _) = to_petgraph(graph);
     let components = connected_components_of(&pg);
-    let id_to_node_idx: BTreeMap<&str, usize> = graph
-        .nodes
-        .iter()
-        .enumerate()
-        .map(|(i, n)| (n.id.as_str(), i))
-        .collect();
 
     // Lay out each component independently and translate so its bbox
     // starts at the origin (positions are returned as offsets from the
@@ -285,7 +272,7 @@ pub fn stress_majorization(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> V
     let mut laid: Vec<LaidOut> = components
         .into_iter()
         .map(|component| {
-            let (raw, _) = stress_majorization_component(&pg, &component);
+            let raw = layout_component(&pg, &component);
             let (mut min_x, mut max_x, mut min_y, mut max_y) = (
                 f32::INFINITY,
                 f32::NEG_INFINITY,
@@ -320,9 +307,9 @@ pub fn stress_majorization(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> V
     });
 
     // The per-component gap must scale with the components' own
-    // coordinate space — a fixed gap dominates the layout when stress
-    // produces a small natural bbox, and disappears when stress
-    // produces a large one. 5% of the largest component's dimension
+    // coordinate space — a fixed gap dominates the layout when a
+    // component's natural bbox is small, and disappears when it is
+    // large. 5% of the largest component's dimension
     // gives clear visual separation without smearing the cluster's
     // bbox to the corners of the viewport. A floor of 1.0 keeps tiny
     // single-edge components from packing on top of each other.
@@ -366,270 +353,10 @@ pub fn stress_majorization(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> V
         // cell so a singleton sits in the middle of its grid slot.
         let off_x = row_x + (cw - c.width) / 2.0;
         let off_y = row_y + (ch - c.height) / 2.0;
+        // `to_petgraph` adds one node per `graph.nodes` entry, in order, so a
+        // node's index is its position in the output.
         for (sub_pos, &node_index) in c.positions.iter().zip(c.component.iter()) {
-            let id = pg[node_index].as_str();
-            if let Some(&out_idx) = id_to_node_idx.get(id) {
-                positions[out_idx] = (sub_pos.0 + off_x, sub_pos.1 + off_y);
-            }
-        }
-        row_x += cw + component_gap;
-        row_height = row_height.max(ch);
-    }
-
-    // Correct the *realized* bounding-box aspect toward the target,
-    // area-preserving — see the matching note in `sgd`. The shelf-packer
-    // tends to come out near-square; measuring the realized aspect and
-    // stretching by `√(target / realized)` lands it on the target
-    // without the double-apply smear a blind `√(target)` stretch caused.
-    let (mut min_x, mut max_x, mut min_y, mut max_y) = (
-        f32::INFINITY,
-        f32::NEG_INFINITY,
-        f32::INFINITY,
-        f32::NEG_INFINITY,
-    );
-    for &(x, y) in &positions {
-        min_x = min_x.min(x);
-        max_x = max_x.max(x);
-        min_y = min_y.min(y);
-        max_y = max_y.max(y);
-    }
-    let (bw, bh) = (max_x - min_x, max_y - min_y);
-    if bw > f32::EPSILON && bh > f32::EPSILON && aspect_w > 0.0 && aspect_h > 0.0 {
-        let realized = bw / bh;
-        let target = aspect_w / aspect_h;
-        let s = (target / realized).sqrt();
-        for p in positions.iter_mut() {
-            p.0 *= s;
-            p.1 /= s;
-        }
-    }
-
-    positions
-}
-
-/// Enumerate connected components of an undirected petgraph as lists
-/// of [`NodeIndex`]. Used by [`stress_majorization`] to dispatch the
-/// algorithm per component (the all-pairs distance matrix breaks on
-/// disconnected inputs); the same pattern is useful for any future
-/// static layout that doesn't handle disconnected graphs natively.
-fn connected_components_of(
-    pg: &petgraph::Graph<String, (), petgraph::Undirected>,
-) -> Vec<Vec<NodeIndex>> {
-    use petgraph::visit::{Bfs, IntoNodeIdentifiers};
-    use std::collections::HashSet;
-
-    let mut components: Vec<Vec<NodeIndex>> = Vec::new();
-    let mut visited: HashSet<NodeIndex> = HashSet::new();
-    for start in pg.node_identifiers() {
-        if visited.contains(&start) {
-            continue;
-        }
-        let mut component = Vec::new();
-        let mut bfs = Bfs::new(pg, start);
-        while let Some(node) = bfs.next(pg) {
-            if visited.insert(node) {
-                component.push(node);
-            }
-        }
-        components.push(component);
-    }
-    components
-}
-
-/// Run stress majorization on a single connected component. Returns
-/// (positions in `component` order, bbox width) — width feeds the
-/// per-component x-offset accumulator in [`stress_majorization`].
-/// Singletons (1-node components) carry no useful stress signal and
-/// place at the origin with zero width.
-///
-/// `#[mutants::skip]`: same rationale as [`stress_majorization`] —
-/// the small-component bounds and bbox-width formula admit
-/// observationally-equivalent variants under the existing test
-/// suite.
-#[mutants::skip]
-fn stress_majorization_component(
-    pg: &petgraph::Graph<String, (), petgraph::Undirected>,
-    component: &[NodeIndex],
-) -> (Vec<(f32, f32)>, f32) {
-    use algo::{DrawingEuclidean2d, StressMajorization};
-    use petgraph::visit::EdgeRef;
-
-    if component.len() < 2 {
-        return (vec![(0.0, 0.0); component.len()], 0.0);
-    }
-    if component.len() == 2 {
-        // Stress solves a single edge exactly on its first iteration, but
-        // `run` stops on the *relative* change in stress, which never drops
-        // below epsilon once stress is ~0. It keeps iterating, and within a
-        // few iterations the coordinates go NaN, which the non-finite guard
-        // below maps to the origin — both nodes on one point. Return the
-        // converged answer, the pair at the target edge length, directly.
-        return (vec![(0.0, 0.0), (1.0, 0.0)], 1.0);
-    }
-
-    let mut sub: petgraph::Graph<(), (), petgraph::Undirected> = petgraph::Graph::new_undirected();
-    let mut orig_to_sub: BTreeMap<NodeIndex, NodeIndex> = BTreeMap::new();
-    for &orig in component {
-        let new_id = sub.add_node(());
-        orig_to_sub.insert(orig, new_id);
-    }
-    for &orig in component {
-        for edge in pg.edges(orig) {
-            let target = edge.target();
-            if orig.index() <= target.index()
-                && let (Some(&from), Some(&to)) = (orig_to_sub.get(&orig), orig_to_sub.get(&target))
-            {
-                sub.add_edge(from, to, ());
-            }
-        }
-    }
-
-    let mut drawing = DrawingEuclidean2d::<NodeIndex, f32>::initial_placement(&sub);
-    let mut sm = StressMajorization::new(&sub, &drawing, &mut |_| 1.0_f32);
-    sm.run(&mut drawing);
-
-    let mut positions: Vec<(f32, f32)> = Vec::with_capacity(component.len());
-    let mut min_x = f32::INFINITY;
-    let mut max_x = f32::NEG_INFINITY;
-    for &orig in component {
-        let sub_idx = orig_to_sub[&orig];
-        let x = drawing.x(sub_idx).unwrap_or(0.0);
-        let y = drawing.y(sub_idx).unwrap_or(0.0);
-        let x = if x.is_finite() { x } else { 0.0 };
-        let y = if y.is_finite() { y } else { 0.0 };
-        positions.push((x, y));
-        min_x = min_x.min(x);
-        max_x = max_x.max(x);
-    }
-    let width = if positions.len() >= 2 {
-        max_x - min_x
-    } else {
-        0.0
-    };
-    (positions, width)
-}
-
-/// Run SGD (Stochastic Gradient Descent) layout over the LinkML
-/// schema graph. Like [`stress_majorization`], SGD minimizes a stress
-/// function but using a stochastic per-pair update instead of a global
-/// majorization step — typically the best quality-per-time of the
-/// stress-based layouts here, converging in `O(N · iters)` time with
-/// visibly comparable quality to stress majorization.
-///
-/// Same shelf-pack-by-component pattern as [`stress_majorization`]:
-/// SGD's all-pairs distance matrix doesn't tolerate unreachable pairs,
-/// so the helper splits the input into connected components, runs SGD
-/// on each independently, and shelf-packs the results into a
-/// rectangle whose aspect approximates the configured aspect.
-///
-/// The RNG is seeded deterministically so the same input produces
-/// byte-identical output across runs; this matters for the
-/// idempotent-publish guarantee that `panschema publish` makes.
-///
-/// `#[mutants::skip]`: same rationale as [`stress_majorization`] —
-/// the shelf-packing arithmetic has multiple observationally-
-/// equivalent formulations.
-#[mutants::skip]
-pub fn sgd(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> Vec<(f32, f32)> {
-    if graph.nodes.is_empty() {
-        return Vec::new();
-    }
-
-    let (pg, _) = to_petgraph(graph);
-    let components = connected_components_of(&pg);
-    let id_to_node_idx: BTreeMap<&str, usize> = graph
-        .nodes
-        .iter()
-        .enumerate()
-        .map(|(i, n)| (n.id.as_str(), i))
-        .collect();
-
-    struct LaidOut {
-        positions: Vec<(f32, f32)>,
-        component: Vec<NodeIndex>,
-        width: f32,
-        height: f32,
-    }
-    let mut laid: Vec<LaidOut> = components
-        .into_iter()
-        .map(|component| {
-            let (raw, _) = sgd_component(&pg, &component);
-            let (mut min_x, mut max_x, mut min_y, mut max_y) = (
-                f32::INFINITY,
-                f32::NEG_INFINITY,
-                f32::INFINITY,
-                f32::NEG_INFINITY,
-            );
-            for &(x, y) in &raw {
-                min_x = min_x.min(x);
-                max_x = max_x.max(x);
-                min_y = min_y.min(y);
-                max_y = max_y.max(y);
-            }
-            let width = (max_x - min_x).max(0.0);
-            let height = (max_y - min_y).max(0.0);
-            let translated: Vec<(f32, f32)> =
-                raw.iter().map(|(x, y)| (x - min_x, y - min_y)).collect();
-            LaidOut {
-                positions: translated,
-                component,
-                width,
-                height,
-            }
-        })
-        .collect();
-
-    laid.sort_by(|a, b| {
-        b.height
-            .partial_cmp(&a.height)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    let max_dim = laid
-        .iter()
-        .map(|c| c.width.max(c.height))
-        .fold(0.0_f32, f32::max);
-    let component_gap = (max_dim * 0.05).max(1.0);
-    // Singletons (and 2-node lines) have a ~0×0 — or zero-height — bbox.
-    // Without a floor the shelf-packer strings them into a single
-    // zero-height row that wastes all the vertical space (a thin
-    // horizontal smear). Give every component a minimum *square* cell so
-    // isolated nodes grid up into a compact 2D block instead of a line.
-    let min_cell = (max_dim * 0.12).max(component_gap * 2.0);
-    let cell = |c: &LaidOut| (c.width.max(min_cell), c.height.max(min_cell));
-    let total_area: f32 = laid
-        .iter()
-        .map(|c| {
-            let (w, h) = cell(c);
-            w * h
-        })
-        .sum();
-    // Floor the row width at the widest component (not an absolute
-    // constant) so the target tracks the layout's own coordinate scale —
-    // a fixed floor that exceeds the content forces everything onto one
-    // row and re-creates the horizontal smear.
-    let target_row_width = (total_area * aspect_w / aspect_h).sqrt().max(max_dim);
-
-    let mut positions: Vec<(f32, f32)> = vec![(0.0, 0.0); graph.nodes.len()];
-    let mut row_x = 0.0_f32;
-    let mut row_y = 0.0_f32;
-    let mut row_height = 0.0_f32;
-    for c in &laid {
-        let (cw, ch) = cell(c);
-        if row_x > 0.0 && row_x + cw > target_row_width {
-            row_y += row_height + component_gap;
-            row_x = 0.0;
-            row_height = 0.0;
-        }
-        // Center each component's own bbox within its (possibly larger)
-        // cell so a singleton sits in the middle of its grid slot.
-        let off_x = row_x + (cw - c.width) / 2.0;
-        let off_y = row_y + (ch - c.height) / 2.0;
-        for (sub_pos, &node_index) in c.positions.iter().zip(c.component.iter()) {
-            let id = pg[node_index].as_str();
-            if let Some(&out_idx) = id_to_node_idx.get(id) {
-                positions[out_idx] = (sub_pos.0 + off_x, sub_pos.1 + off_y);
-            }
+            positions[node_index.index()] = (sub_pos.0 + off_x, sub_pos.1 + off_y);
         }
         row_x += cw + component_gap;
         row_height = row_height.max(ch);
@@ -670,6 +397,142 @@ pub fn sgd(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> Vec<(f32, f32)> {
     positions
 }
 
+/// Stress majorization over the LinkML schema graph, laid out one component
+/// at a time and shelf-packed by `layout_by_components`.
+///
+/// Stress majorization is the literature reference point for "what a
+/// good static layout looks like" on graphs in the 50–2000 node range
+/// (the algorithm behind graphviz's `neato -Kstress`). Compared with
+/// `kamada_kawai`'s one-node-at-a-time gradient descent, the
+/// majorization formulation converges in ~30 iterations of
+/// `O(N²)` updates and produces cleaner cluster separation and more
+/// uniform edge lengths.
+pub fn stress_majorization(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> Vec<(f32, f32)> {
+    layout_by_components(graph, aspect_w, aspect_h, stress_majorization_component)
+}
+
+/// Enumerate connected components of an undirected petgraph as lists
+/// of [`NodeIndex`]. Used by `layout_by_components` to dispatch a layout per
+/// component, since the stress-based layouts' all-pairs distance matrix
+/// breaks on disconnected inputs.
+fn connected_components_of(
+    pg: &petgraph::Graph<String, (), petgraph::Undirected>,
+) -> Vec<Vec<NodeIndex>> {
+    use petgraph::visit::{Bfs, IntoNodeIdentifiers};
+    use std::collections::HashSet;
+
+    let mut components: Vec<Vec<NodeIndex>> = Vec::new();
+    let mut visited: HashSet<NodeIndex> = HashSet::new();
+    for start in pg.node_identifiers() {
+        if visited.contains(&start) {
+            continue;
+        }
+        let mut component = Vec::new();
+        let mut bfs = Bfs::new(pg, start);
+        while let Some(node) = bfs.next(pg) {
+            if visited.insert(node) {
+                component.push(node);
+            }
+        }
+        components.push(component);
+    }
+    components
+}
+
+/// The layout of a component too small to need an algorithm, if it is one: a
+/// single node at the origin, or a lone edge at the target length.
+///
+/// The lone edge is not only a shortcut. Stress solves it exactly on its first
+/// iteration, but its stop test is the relative change in stress, which never
+/// drops below epsilon once stress is ~0; it keeps iterating, and within a few
+/// iterations the coordinates go NaN, which `finite_positions` maps to the
+/// origin — both nodes on one point. SGD separates a lone edge on its own;
+/// returning this same pair keeps a lone edge identical under every layout.
+fn trivial_component(component: &[NodeIndex]) -> Option<Vec<(f32, f32)>> {
+    match component.len() {
+        0 | 1 => Some(vec![(0.0, 0.0); component.len()]),
+        2 => Some(vec![(0.0, 0.0), (1.0, 0.0)]),
+        _ => None,
+    }
+}
+
+/// The subgraph induced by `component`. Its node `i` is `component[i]`, which
+/// is what lets `finite_positions` read positions back in `component` order.
+fn component_subgraph(
+    pg: &Graph<String, (), Undirected>,
+    component: &[NodeIndex],
+) -> Graph<(), (), Undirected> {
+    use petgraph::visit::EdgeRef;
+
+    let mut sub: Graph<(), (), Undirected> = Graph::new_undirected();
+    let mut orig_to_sub: BTreeMap<NodeIndex, NodeIndex> = BTreeMap::new();
+    for &orig in component {
+        let new_id = sub.add_node(());
+        orig_to_sub.insert(orig, new_id);
+    }
+    for &orig in component {
+        for edge in pg.edges(orig) {
+            let target = edge.target();
+            if orig.index() <= target.index()
+                && let (Some(&from), Some(&to)) = (orig_to_sub.get(&orig), orig_to_sub.get(&target))
+            {
+                sub.add_edge(from, to, ());
+            }
+        }
+    }
+    sub
+}
+
+/// The first `n` positions of `drawing`, in node order, with any non-finite
+/// coordinate replaced by 0 so it cannot poison the packing.
+fn finite_positions(
+    drawing: &algo::DrawingEuclidean2d<NodeIndex, f32>,
+    n: usize,
+) -> Vec<(f32, f32)> {
+    let finite = |v: Option<f32>| v.filter(|v| v.is_finite()).unwrap_or(0.0);
+    (0..n)
+        .map(|i| {
+            let idx = NodeIndex::new(i);
+            (finite(drawing.x(idx)), finite(drawing.y(idx)))
+        })
+        .collect()
+}
+
+/// Run stress majorization on a single connected component, returning
+/// positions in `component` order.
+fn stress_majorization_component(
+    pg: &Graph<String, (), Undirected>,
+    component: &[NodeIndex],
+) -> Vec<(f32, f32)> {
+    use algo::{DrawingEuclidean2d, StressMajorization};
+
+    if let Some(positions) = trivial_component(component) {
+        return positions;
+    }
+    let sub = component_subgraph(pg, component);
+    let mut drawing = DrawingEuclidean2d::<NodeIndex, f32>::initial_placement(&sub);
+    let mut sm = StressMajorization::new(&sub, &drawing, &mut |_| 1.0_f32);
+    sm.run(&mut drawing);
+    finite_positions(&drawing, component.len())
+}
+
+/// Run SGD (Stochastic Gradient Descent) layout over the LinkML
+/// schema graph. Like [`stress_majorization`], SGD minimizes a stress
+/// function but using a stochastic per-pair update instead of a global
+/// majorization step — typically the best quality-per-time of the
+/// stress-based layouts here, converging in `O(N · iters)` time with
+/// visibly comparable quality to stress majorization.
+///
+/// Laid out one component at a time and shelf-packed by
+/// `layout_by_components`, for the same reason as [`stress_majorization`].
+///
+/// The RNG is seeded deterministically so the same input produces
+/// byte-identical output across runs; this matters for the
+/// idempotent-publish guarantee that `panschema publish` makes.
+pub fn sgd(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> Vec<(f32, f32)> {
+    layout_by_components(graph, aspect_w, aspect_h, sgd_component)
+}
+
 /// Recommend the 2D default layout from the graph's inheritance
 /// density: the fraction of edges that are `subclass_of` or `mixin`.
 /// When at least half the edges are inheritance, the graph is a tree
@@ -704,47 +567,16 @@ pub fn recommend_default_layout(graph: &GraphData) -> LayoutAlgorithm {
     }
 }
 
-/// Run SGD on a single connected component. Returns
-/// (positions in `component` order, bbox width).
-///
-/// `#[mutants::skip]`: matches [`stress_majorization_component`].
-#[mutants::skip]
-fn sgd_component(
-    pg: &petgraph::Graph<String, (), petgraph::Undirected>,
-    component: &[NodeIndex],
-) -> (Vec<(f32, f32)>, f32) {
+/// Run SGD on a single connected component, returning positions in
+/// `component` order.
+fn sgd_component(pg: &Graph<String, (), Undirected>, component: &[NodeIndex]) -> Vec<(f32, f32)> {
     use algo::{DrawingEuclidean2d, FullSgd, Scheduler, SchedulerExponential};
-    use petgraph::visit::EdgeRef;
     use rng::SplitMix64;
 
-    if component.len() < 2 {
-        return (vec![(0.0, 0.0); component.len()], 0.0);
+    if let Some(positions) = trivial_component(component) {
+        return positions;
     }
-    if component.len() == 2 {
-        // SGD separates a single edge on its own, landing it at the target
-        // length in whatever orientation it started. This returns the same
-        // horizontal pair as stress_majorization_component's guard instead,
-        // so a lone edge is laid out identically under both.
-        return (vec![(0.0, 0.0), (1.0, 0.0)], 1.0);
-    }
-
-    let mut sub: petgraph::Graph<(), (), petgraph::Undirected> = petgraph::Graph::new_undirected();
-    let mut orig_to_sub: BTreeMap<NodeIndex, NodeIndex> = BTreeMap::new();
-    for &orig in component {
-        let new_id = sub.add_node(());
-        orig_to_sub.insert(orig, new_id);
-    }
-    for &orig in component {
-        for edge in pg.edges(orig) {
-            let target = edge.target();
-            if orig.index() <= target.index()
-                && let (Some(&from), Some(&to)) = (orig_to_sub.get(&orig), orig_to_sub.get(&target))
-            {
-                sub.add_edge(from, to, ());
-            }
-        }
-    }
-
+    let sub = component_subgraph(pg, component);
     let mut sgd_state = FullSgd::new().build(&sub, |_| 1.0_f32);
     let mut drawing = DrawingEuclidean2d::<NodeIndex, f32>::initial_placement(&sub);
     let mut rng = SplitMix64::new(42);
@@ -753,26 +585,7 @@ fn sgd_component(
         sgd_state.shuffle(&mut rng);
         sgd_state.apply(&mut drawing, eta);
     });
-
-    let mut positions: Vec<(f32, f32)> = Vec::with_capacity(component.len());
-    let mut min_x = f32::INFINITY;
-    let mut max_x = f32::NEG_INFINITY;
-    for &orig in component {
-        let sub_idx = orig_to_sub[&orig];
-        let x = drawing.x(sub_idx).unwrap_or(0.0);
-        let y = drawing.y(sub_idx).unwrap_or(0.0);
-        let x = if x.is_finite() { x } else { 0.0 };
-        let y = if y.is_finite() { y } else { 0.0 };
-        positions.push((x, y));
-        min_x = min_x.min(x);
-        max_x = max_x.max(x);
-    }
-    let width = if positions.len() >= 2 {
-        max_x - min_x
-    } else {
-        0.0
-    };
-    (positions, width)
+    finite_positions(&drawing, component.len())
 }
 
 /// Default target for [`scale_to_world`] in world units. Sized so the
@@ -1480,13 +1293,13 @@ mod tests {
     #[test]
     fn stress_majorization_spaces_a_path_by_graph_distance() {
         let (pg, component) = path_component(5);
-        assert_spaces_path_evenly(&stress_majorization_component(&pg, &component).0);
+        assert_spaces_path_evenly(&stress_majorization_component(&pg, &component));
     }
 
     #[test]
     fn sgd_spaces_a_path_by_graph_distance() {
         let (pg, component) = path_component(5);
-        assert_spaces_path_evenly(&sgd_component(&pg, &component).0);
+        assert_spaces_path_evenly(&sgd_component(&pg, &component));
     }
 
     #[test]
@@ -1704,32 +1517,36 @@ mod tests {
     }
 
     #[test]
-    fn stress_majorization_aspect_bias_scales_coordinates() {
+    fn stress_and_sgd_scale_coordinates_by_the_aspect_bias() {
         // The aspect-bias post-process is the same for every static
-        // layout: x ← x · √(w/h), y ← y · √(h/w). Mirrors the KK
-        // version of this test — the 4:2 case is the load-bearing one
-        // that distinguishes √(w/h) from any commutative alternative.
+        // layout: x ← x · √(w/h), y ← y · √(h/w). The 4:2 case is the
+        // load-bearing one that distinguishes √(w/h) from any commutative
+        // alternative.
         let ring = make_ring(10);
-        let square = stress_majorization(&ring, 1.0, 1.0);
-        for (aw, ah) in [(2.0_f32, 1.0), (4.0, 2.0), (1.0, 3.0)] {
-            let biased = stress_majorization(&ring, aw, ah);
-            assert_eq!(biased.len(), square.len());
-            let sx_expected = (aw / ah).sqrt();
-            let sy_expected = (ah / aw).sqrt();
-            for (i, ((sx, sy), (bx, by))) in square.iter().zip(biased.iter()).enumerate() {
-                if sx.abs() > 0.01 {
-                    let ratio = bx / sx;
-                    assert!(
-                        (ratio - sx_expected).abs() < 1e-4,
-                        "aspect {aw}:{ah} node {i}: x ratio {ratio} != expected {sx_expected}"
-                    );
-                }
-                if sy.abs() > 0.01 {
-                    let ratio = by / sy;
-                    assert!(
-                        (ratio - sy_expected).abs() < 1e-4,
-                        "aspect {aw}:{ah} node {i}: y ratio {ratio} != expected {sy_expected}"
-                    );
+        type Layout = fn(&GraphData, f32, f32) -> Vec<(f32, f32)>;
+        let layouts: [(&str, Layout); 2] = [("stress", stress_majorization), ("sgd", sgd)];
+        for (layout, run) in layouts {
+            let square = run(&ring, 1.0, 1.0);
+            for (aw, ah) in [(2.0_f32, 1.0), (4.0, 2.0), (1.0, 3.0)] {
+                let biased = run(&ring, aw, ah);
+                assert_eq!(biased.len(), square.len());
+                let sx_expected = (aw / ah).sqrt();
+                let sy_expected = (ah / aw).sqrt();
+                for (i, ((sx, sy), (bx, by))) in square.iter().zip(biased.iter()).enumerate() {
+                    if sx.abs() > 0.01 {
+                        let ratio = bx / sx;
+                        assert!(
+                            (ratio - sx_expected).abs() < 1e-4,
+                            "{layout} aspect {aw}:{ah} node {i}: x ratio {ratio} != expected {sx_expected}"
+                        );
+                    }
+                    if sy.abs() > 0.01 {
+                        let ratio = by / sy;
+                        assert!(
+                            (ratio - sy_expected).abs() < 1e-4,
+                            "{layout} aspect {aw}:{ah} node {i}: y ratio {ratio} != expected {sy_expected}"
+                        );
+                    }
                 }
             }
         }
