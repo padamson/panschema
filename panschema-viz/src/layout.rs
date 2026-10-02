@@ -174,44 +174,35 @@ pub fn to_petgraph(
     (pg, id_to_idx)
 }
 
-/// Run Kamada-Kawai energy-minimization via
-/// `petgraph-layout-kamada-kawai` and return positions in the
-/// original [`GraphData`] node order.
+/// Kamada-Kawai energy minimization over the LinkML schema graph, laid out one
+/// component at a time and shelf-packed by `layout_by_components`, returning
+/// positions in the original [`GraphData`] node order.
 ///
-/// Applies an aspect-bias post-process so the rendered bounding box
-/// approximates `aspect_w : aspect_h` while preserving area: `x` is
-/// scaled by √(w/h), `y` by √(h/w). Disconnected components carry
-/// the algorithm's native placement, which may overlap; cluster
-/// separation for disconnected graphs is the caller's concern.
+/// Each component is laid out on its own because Kamada-Kawai cannot lay out
+/// a graph whose nodes are not all reachable from one another: an unreachable
+/// pair makes every node's gradient NaN, which the algorithm reads as already
+/// converged, so it would return its starting positions unmoved.
 ///
-/// Empty input returns an empty `Vec`. Coordinates that the
-/// algorithm leaves unset (e.g. nodes the algorithm couldn't place)
-/// fall back to `(0.0, 0.0)`.
+/// Empty input returns an empty `Vec`.
 pub fn kamada_kawai(graph: &GraphData, aspect_w: f32, aspect_h: f32) -> Vec<(f32, f32)> {
+    layout_by_components(graph, aspect_w, aspect_h, kamada_kawai_component)
+}
+
+/// Run Kamada-Kawai on a single connected component, returning positions in
+/// `component` order.
+fn kamada_kawai_component(
+    pg: &Graph<String, (), Undirected>,
+    component: &[NodeIndex],
+) -> Vec<(f32, f32)> {
     use algo::{DrawingEuclidean2d, KamadaKawai};
 
-    if graph.nodes.is_empty() {
-        return Vec::new();
+    if let Some(positions) = trivial_component(component) {
+        return positions;
     }
-
-    let (pg, id_to_idx) = to_petgraph(graph);
-    let mut drawing = DrawingEuclidean2d::<NodeIndex, f32>::initial_placement(&pg);
-    let kk = KamadaKawai::new(&pg, |_| 1.0_f32);
-    kk.run(&mut drawing);
-
-    let sx = (aspect_w / aspect_h).sqrt();
-    let sy = (aspect_h / aspect_w).sqrt();
-
-    graph
-        .nodes
-        .iter()
-        .map(|n| {
-            let idx = id_to_idx[&n.id];
-            let x = drawing.x(idx).unwrap_or(0.0);
-            let y = drawing.y(idx).unwrap_or(0.0);
-            (x * sx, y * sy)
-        })
-        .collect()
+    let sub = component_subgraph(pg, component);
+    let mut drawing = DrawingEuclidean2d::<NodeIndex, f32>::initial_placement(&sub);
+    KamadaKawai::new(&sub, |_| 1.0_f32).run(&mut drawing);
+    finite_positions(&drawing, component.len())
 }
 
 /// Lays out one connected component, returning positions in `component` order.
@@ -242,7 +233,8 @@ type ComponentLayout = fn(&Graph<String, (), Undirected>, &[NodeIndex]) -> Vec<(
 /// per-row position assignment — different mutations produce
 /// alternative-but-still-valid layouts that pass the callers' contracts
 /// (finite coordinates, non-overlapping components, aspect-biased bbox).
-/// Those contracts are pinned by the `stress_majorization_*` and `sgd_*`
+/// Those contracts are pinned by the `every_layout_*` tests, which run all
+/// three layouts that share this pipeline, and by the stress and SGD packing
 /// tests; the specific arithmetic chosen here is one valid implementation,
 /// not the only one.
 #[mutants::skip]
@@ -683,8 +675,9 @@ fn advance_component_offset(x_offset: f64, width: f64, gap: f64) -> f64 {
 /// region so the connected layered cluster keeps the central
 /// viewport.
 ///
-/// `aspect_w` and `aspect_h` bias the final bbox toward that aspect
-/// via the same √(w/h), √(h/w) post-process used by [`kamada_kawai`].
+/// `aspect_w` and `aspect_h` bias the final bbox toward that aspect with a
+/// fixed stretch: x is scaled by √(w/h) and y by √(h/w). Unlike the
+/// stress-based layouts it does not measure the realized aspect first.
 ///
 /// Cycles in the hierarchy edge subset (which LinkML schemas
 /// shouldn't have, but pathological inputs might) are broken by
@@ -1029,177 +1022,105 @@ mod tests {
         assert_eq!(pg.edge_count(), 3);
     }
 
-    #[test]
-    fn kamada_kawai_returns_position_per_node_on_ring() {
-        let ring = make_ring(15);
-        let positions = kamada_kawai(&ring, 1.0, 1.0);
-        assert_eq!(positions.len(), 15);
-        for (x, y) in &positions {
-            assert!(x.is_finite(), "x must be finite, got {x}");
-            assert!(y.is_finite(), "y must be finite, got {y}");
-        }
-        // A 15-node ring with KK should not collapse to a single
-        // point: the bbox must have non-zero width and height.
-        let xs: Vec<f32> = positions.iter().map(|p| p.0).collect();
-        let ys: Vec<f32> = positions.iter().map(|p| p.1).collect();
-        let w = xs.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
-            - xs.iter().cloned().fold(f32::INFINITY, f32::min);
-        let h = ys.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
-            - ys.iter().cloned().fold(f32::INFINITY, f32::min);
-        assert!(w > 0.1, "ring layout collapsed in x (width={w})");
-        assert!(h > 0.1, "ring layout collapsed in y (height={h})");
-    }
+    type Layout = fn(&GraphData, f32, f32) -> Vec<(f32, f32)>;
+
+    /// The layouts that share `layout_by_components`.
+    const LAYOUTS: [(&str, Layout); 3] = [
+        ("stress", stress_majorization),
+        ("sgd", sgd),
+        ("kamada_kawai", kamada_kawai),
+    ];
 
     #[test]
-    fn kamada_kawai_returns_position_per_node_on_lopsided_graph() {
-        // 20 connected nodes in a ring + 8 isolated singletons.
-        // The pilot must not panic on disconnected components and
-        // must emit exactly one position per input node.
-        let graph = make_lopsided(20, 8);
-        let positions = kamada_kawai(&graph, 1.0, 1.0);
-        assert_eq!(positions.len(), 28);
-        for (x, y) in &positions {
-            assert!(x.is_finite(), "x must be finite on disconnected input");
-            assert!(y.is_finite(), "y must be finite on disconnected input");
-        }
-    }
-
-    #[test]
-    fn stress_majorization_returns_position_per_node_on_ring() {
-        let ring = make_ring(15);
-        let positions = stress_majorization(&ring, 1.0, 1.0);
-        assert_eq!(positions.len(), 15);
-        for (x, y) in &positions {
-            assert!(x.is_finite(), "x must be finite, got {x}");
-            assert!(y.is_finite(), "y must be finite, got {y}");
-        }
-        let xs: Vec<f32> = positions.iter().map(|p| p.0).collect();
-        let ys: Vec<f32> = positions.iter().map(|p| p.1).collect();
-        let w = xs.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
-            - xs.iter().cloned().fold(f32::INFINITY, f32::min);
-        let h = ys.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
-            - ys.iter().cloned().fold(f32::INFINITY, f32::min);
-        assert!(w > 0.1, "ring layout collapsed in x (width={w})");
-        assert!(h > 0.1, "ring layout collapsed in y (height={h})");
-    }
-
-    #[test]
-    fn stress_majorization_packs_components_into_disjoint_bboxes() {
-        // Two disconnected 5-node rings. After per-component stress +
-        // shelf-packing, the two components must occupy disjoint
-        // regions — no node of component A may sit inside component
-        // B's bbox or vice versa. Pins the position-assignment
-        // arithmetic (`sub_pos + row_x`, `sub_pos + row_y`) and the
-        // shelf-packer's row/x accumulation — any swap of `+` for
-        // `-` or `*` would either overlap the components or send
-        // their coordinates to nonsensical positions.
-        let mut graph = GraphData {
-            schema_name: "two_rings".into(),
-            schema_title: None,
-            format_version: "1.0".into(),
-            graph_kind: crate::graph_types::GraphKind::default(),
-            nodes: Vec::new(),
-            edges: Vec::new(),
-        };
-        for i in 0..10 {
-            graph.nodes.push(crate::graph_types::GraphNode {
-                id: format!("n{i}"),
-                label: format!("n{i}"),
-                node_type: crate::graph_types::NodeType::Class,
-                color: [1.0, 1.0, 1.0, 1.0],
-                description: None,
-                uri: None,
-                uri_unresolved: false,
-                is_abstract: false,
-                kind_metadata: None,
-            });
-        }
-        // Ring A: n0..n4
-        for (s, t) in [(0, 1), (1, 2), (2, 3), (3, 4), (4, 0)] {
-            graph.edges.push(crate::graph_types::GraphEdge {
-                source: format!("n{s}"),
-                target: format!("n{t}"),
-                edge_type: crate::graph_types::EdgeType::SubclassOf,
-                label: None,
-            });
-        }
-        // Ring B: n5..n9 — disconnected from A
-        for (s, t) in [(5, 6), (6, 7), (7, 8), (8, 9), (9, 5)] {
-            graph.edges.push(crate::graph_types::GraphEdge {
-                source: format!("n{s}"),
-                target: format!("n{t}"),
-                edge_type: crate::graph_types::EdgeType::SubclassOf,
-                label: None,
-            });
-        }
-        let positions = stress_majorization(&graph, 1.0, 1.0);
-        assert_eq!(positions.len(), 10);
-
-        let bbox = |slice: &[(f32, f32)]| -> (f32, f32, f32, f32) {
-            let mut min_x = f32::INFINITY;
-            let mut max_x = f32::NEG_INFINITY;
-            let mut min_y = f32::INFINITY;
-            let mut max_y = f32::NEG_INFINITY;
-            for &(x, y) in slice {
-                min_x = min_x.min(x);
-                max_x = max_x.max(x);
-                min_y = min_y.min(y);
-                max_y = max_y.max(y);
+    fn every_layout_returns_a_finite_position_per_node() {
+        for (layout, run) in LAYOUTS {
+            for graph in [make_ring(15), make_lopsided(20, 8)] {
+                let positions = run(&graph, 1.0, 1.0);
+                assert_eq!(positions.len(), graph.nodes.len(), "{layout}");
+                assert!(
+                    positions
+                        .iter()
+                        .all(|(x, y)| x.is_finite() && y.is_finite()),
+                    "{layout}: non-finite coordinate in {positions:?}"
+                );
+                let (min_x, max_x, min_y, max_y) = bbox(&positions);
+                assert!(max_x - min_x > 0.1, "{layout}: collapsed in x");
+                assert!(max_y - min_y > 0.1, "{layout}: collapsed in y");
             }
-            (min_x, max_x, min_y, max_y)
-        };
-
-        // Components are sorted by height-desc internally, so we can't
-        // assume index 0..5 corresponds to which packing slot. Just
-        // assert the two bboxes don't overlap on at least one axis.
-        let (a_min_x, a_max_x, a_min_y, a_max_y) = bbox(&positions[0..5]);
-        let (b_min_x, b_max_x, b_min_y, b_max_y) = bbox(&positions[5..10]);
-
-        // Each component must itself have a non-degenerate bbox —
-        // otherwise an overlap check is meaningless.
-        assert!(a_max_x - a_min_x > 0.5, "ring A collapsed in x");
-        assert!(a_max_y - a_min_y > 0.5, "ring A collapsed in y");
-        assert!(b_max_x - b_min_x > 0.5, "ring B collapsed in x");
-        assert!(b_max_y - b_min_y > 0.5, "ring B collapsed in y");
-
-        let overlap_x = (a_max_x.min(b_max_x) - a_min_x.max(b_min_x)).max(0.0);
-        let overlap_y = (a_max_y.min(b_max_y) - a_min_y.max(b_min_y)).max(0.0);
-        assert!(
-            overlap_x == 0.0 || overlap_y == 0.0,
-            "components must be disjoint on at least one axis; got overlap ({overlap_x}, {overlap_y})"
-        );
-    }
-
-    #[test]
-    fn sgd_returns_position_per_node_on_ring() {
-        let ring = make_ring(15);
-        let positions = sgd(&ring, 1.0, 1.0);
-        assert_eq!(positions.len(), 15);
-        for (x, y) in &positions {
-            assert!(x.is_finite(), "x must be finite, got {x}");
-            assert!(y.is_finite(), "y must be finite, got {y}");
         }
-        let xs: Vec<f32> = positions.iter().map(|p| p.0).collect();
-        let ys: Vec<f32> = positions.iter().map(|p| p.1).collect();
-        let w = xs.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
-            - xs.iter().cloned().fold(f32::INFINITY, f32::min);
-        let h = ys.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
-            - ys.iter().cloned().fold(f32::INFINITY, f32::min);
-        assert!(w > 0.1, "ring layout collapsed in x (width={w})");
-        assert!(h > 0.1, "ring layout collapsed in y (height={h})");
     }
 
     #[test]
-    fn sgd_on_empty_graph_returns_empty_vec() {
-        let empty = GraphData {
-            schema_name: "empty".into(),
-            schema_title: None,
-            format_version: "1.0".into(),
-            graph_kind: crate::graph_types::GraphKind::default(),
-            nodes: Vec::new(),
-            edges: Vec::new(),
-        };
-        assert!(sgd(&empty, 1.0, 1.0).is_empty());
+    fn every_layout_returns_nothing_for_an_empty_graph() {
+        let mut empty = make_ring(1);
+        empty.nodes.clear();
+        empty.edges.clear();
+        for (layout, run) in LAYOUTS {
+            assert!(run(&empty, 1.0, 1.0).is_empty(), "{layout}");
+        }
+    }
+
+    #[test]
+    fn every_layout_scales_into_the_simulation_world() {
+        // The picker hands static layouts to the CpuSimulation, whose hard
+        // MAX_RADIUS is 800. After `scale_to_world` the larger bbox dimension
+        // must be exactly WORLD_TARGET_DIMENSION and every node inside the
+        // radius, for connected and disconnected input alike.
+        for (layout, run) in LAYOUTS {
+            for graph in [make_ring(15), make_lopsided(20, 8), make_ring(30)] {
+                let mut positions = run(&graph, 1.0, 1.0);
+                scale_to_world(&mut positions, WORLD_TARGET_DIMENSION);
+                for &(x, y) in &positions {
+                    let r = x.hypot(y);
+                    assert!(r < 800.0, "{layout}: node at radius {r} exceeds MAX_RADIUS");
+                }
+                let (min_x, max_x, min_y, max_y) = bbox(&positions);
+                let (w, h) = (max_x - min_x, max_y - min_y);
+                assert!(w >= 100.0, "{layout}: scaled width {w} is degenerate");
+                assert!(h >= 100.0, "{layout}: scaled height {h} is degenerate");
+                assert!(w.max(h) - WORLD_TARGET_DIMENSION < 1e-2, "{layout}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_layout_packs_components_into_disjoint_boxes() {
+        // Two disconnected 5-node rings. Each layout must lay both out and pack
+        // them into regions that do not overlap. Pins the position-assignment
+        // arithmetic and the shelf-packer's row and x accumulation, which a swap
+        // of `+` for `-` or `*` would turn into overlapping or nonsensical boxes.
+        let mut graph = make_ring(10);
+        graph.edges = (0..5)
+            .map(|i| (i, (i + 1) % 5))
+            .chain((0..5).map(|i| (5 + i, 5 + (i + 1) % 5)))
+            .map(|(s, t)| GraphEdge {
+                source: format!("n{s}"),
+                target: format!("n{t}"),
+                edge_type: EdgeType::SubclassOf,
+                label: None,
+            })
+            .collect();
+        for (layout, run) in LAYOUTS {
+            let positions = run(&graph, 1.0, 1.0);
+            // Components are packed tallest first, so which ring lands in which
+            // slot is not fixed; only that the two boxes are disjoint.
+            let (a_min_x, a_max_x, a_min_y, a_max_y) = bbox(&positions[0..5]);
+            let (b_min_x, b_max_x, b_min_y, b_max_y) = bbox(&positions[5..10]);
+            for (ring, extent) in [
+                ("ring A x", a_max_x - a_min_x),
+                ("ring A y", a_max_y - a_min_y),
+                ("ring B x", b_max_x - b_min_x),
+                ("ring B y", b_max_y - b_min_y),
+            ] {
+                assert!(extent > 0.5, "{layout}: {ring} collapsed (extent {extent})");
+            }
+            let overlap_x = (a_max_x.min(b_max_x) - a_min_x.max(b_min_x)).max(0.0);
+            let overlap_y = (a_max_y.min(b_max_y) - a_min_y.max(b_min_y)).max(0.0);
+            assert!(
+                overlap_x == 0.0 || overlap_y == 0.0,
+                "{layout}: components overlap by ({overlap_x}, {overlap_y})"
+            );
+        }
     }
 
     #[test]
@@ -1261,13 +1182,10 @@ mod tests {
     /// A path as the per-component layout functions receive it: the
     /// petgraph and its nodes in path order, so `positions[i]` is `n{i}`.
     ///
-    /// The stress and SGD tests go through these rather than the public
-    /// entry points on purpose. Those end with a realized-aspect
-    /// correction that scales x and y independently, and on a
-    /// near-straight path that amplifies exactly the perpendicular drift
-    /// being measured. Kamada-Kawai's entry point applies a fixed
-    /// `√(w/h)` factor instead, the identity at square aspect, so its
-    /// test can use the entry point.
+    /// The path tests go through these rather than the public entry points
+    /// on purpose. Those end with a realized-aspect correction that scales x
+    /// and y independently, and on a near-straight path that amplifies
+    /// exactly the perpendicular drift being measured.
     fn path_component(
         n: usize,
     ) -> (
@@ -1287,7 +1205,8 @@ mod tests {
 
     #[test]
     fn kamada_kawai_spaces_a_path_by_graph_distance() {
-        assert_spaces_path_evenly(&kamada_kawai(&make_path(5), 1.0, 1.0));
+        let (pg, component) = path_component(5);
+        assert_spaces_path_evenly(&kamada_kawai_component(&pg, &component));
     }
 
     #[test]
@@ -1300,81 +1219,6 @@ mod tests {
     fn sgd_spaces_a_path_by_graph_distance() {
         let (pg, component) = path_component(5);
         assert_spaces_path_evenly(&sgd_component(&pg, &component));
-    }
-
-    #[test]
-    fn sgd_shelf_packs_disconnected_components_without_overlap() {
-        // Same per-component pattern as stress majorization: two
-        // disconnected 5-node rings, packed into disjoint bboxes.
-        let mut graph = GraphData {
-            schema_name: "two_rings".into(),
-            schema_title: None,
-            format_version: "1.0".into(),
-            graph_kind: crate::graph_types::GraphKind::default(),
-            nodes: Vec::new(),
-            edges: Vec::new(),
-        };
-        for i in 0..10 {
-            graph.nodes.push(crate::graph_types::GraphNode {
-                id: format!("n{i}"),
-                label: format!("n{i}"),
-                node_type: crate::graph_types::NodeType::Class,
-                color: [1.0, 1.0, 1.0, 1.0],
-                description: None,
-                uri: None,
-                uri_unresolved: false,
-                is_abstract: false,
-                kind_metadata: None,
-            });
-        }
-        for (s, t) in [(0, 1), (1, 2), (2, 3), (3, 4), (4, 0)] {
-            graph.edges.push(crate::graph_types::GraphEdge {
-                source: format!("n{s}"),
-                target: format!("n{t}"),
-                edge_type: crate::graph_types::EdgeType::SubclassOf,
-                label: None,
-            });
-        }
-        for (s, t) in [(5, 6), (6, 7), (7, 8), (8, 9), (9, 5)] {
-            graph.edges.push(crate::graph_types::GraphEdge {
-                source: format!("n{s}"),
-                target: format!("n{t}"),
-                edge_type: crate::graph_types::EdgeType::SubclassOf,
-                label: None,
-            });
-        }
-        let positions = sgd(&graph, 1.0, 1.0);
-        assert_eq!(positions.len(), 10);
-
-        let bbox = |slice: &[(f32, f32)]| -> (f32, f32, f32, f32) {
-            let mut min_x = f32::INFINITY;
-            let mut max_x = f32::NEG_INFINITY;
-            let mut min_y = f32::INFINITY;
-            let mut max_y = f32::NEG_INFINITY;
-            for &(x, y) in slice {
-                min_x = min_x.min(x);
-                max_x = max_x.max(x);
-                min_y = min_y.min(y);
-                max_y = max_y.max(y);
-            }
-            (min_x, max_x, min_y, max_y)
-        };
-        let (a_min_x, a_max_x, a_min_y, a_max_y) = bbox(&positions[0..5]);
-        let (b_min_x, b_max_x, b_min_y, b_max_y) = bbox(&positions[5..10]);
-        for (label, lo, hi) in [
-            ("ring A x", a_max_x - a_min_x, 0.5),
-            ("ring A y", a_max_y - a_min_y, 0.5),
-            ("ring B x", b_max_x - b_min_x, 0.5),
-            ("ring B y", b_max_y - b_min_y, 0.5),
-        ] {
-            assert!(lo > hi, "{label} collapsed (extent {lo})");
-        }
-        let overlap_x = (a_max_x.min(b_max_x) - a_min_x.max(b_min_x)).max(0.0);
-        let overlap_y = (a_max_y.min(b_max_y) - a_min_y.max(b_min_y)).max(0.0);
-        assert!(
-            overlap_x == 0.0 || overlap_y == 0.0,
-            "components must be disjoint on at least one axis"
-        );
     }
 
     #[test]
@@ -1504,28 +1348,14 @@ mod tests {
     }
 
     #[test]
-    fn stress_majorization_on_empty_graph_returns_empty_vec() {
-        let empty = GraphData {
-            schema_name: "empty".into(),
-            schema_title: None,
-            format_version: "1.0".into(),
-            graph_kind: crate::graph_types::GraphKind::default(),
-            nodes: Vec::new(),
-            edges: Vec::new(),
-        };
-        assert!(stress_majorization(&empty, 1.0, 1.0).is_empty());
-    }
-
-    #[test]
-    fn stress_and_sgd_scale_coordinates_by_the_aspect_bias() {
-        // The aspect-bias post-process is the same for every static
-        // layout: x ← x · √(w/h), y ← y · √(h/w). The 4:2 case is the
-        // load-bearing one that distinguishes √(w/h) from any commutative
+    fn every_layout_scales_coordinates_by_the_aspect_bias() {
+        // Each layout scales x by √(target / realized) and y by its inverse.
+        // On one component the raw layout does not depend on the aspect, so
+        // against the square run the ratio is exactly √(w/h) in x and √(h/w)
+        // in y. The 4:2 case distinguishes √(w/h) from any commutative
         // alternative.
         let ring = make_ring(10);
-        type Layout = fn(&GraphData, f32, f32) -> Vec<(f32, f32)>;
-        let layouts: [(&str, Layout); 2] = [("stress", stress_majorization), ("sgd", sgd)];
-        for (layout, run) in layouts {
+        for (layout, run) in LAYOUTS {
             let square = run(&ring, 1.0, 1.0);
             for (aw, ah) in [(2.0_f32, 1.0), (4.0, 2.0), (1.0, 3.0)] {
                 let biased = run(&ring, aw, ah);
@@ -1547,53 +1377,6 @@ mod tests {
                             "{layout} aspect {aw}:{ah} node {i}: y ratio {ratio} != expected {sy_expected}"
                         );
                     }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn kamada_kawai_on_empty_graph_returns_empty_vec() {
-        let empty = GraphData {
-            schema_name: "empty".into(),
-            schema_title: None,
-            format_version: "1.0".into(),
-            graph_kind: crate::graph_types::GraphKind::default(),
-            nodes: Vec::new(),
-            edges: Vec::new(),
-        };
-        assert!(kamada_kawai(&empty, 1.0, 1.0).is_empty());
-    }
-
-    #[test]
-    fn kamada_kawai_aspect_bias_scales_coordinates() {
-        // Aspect bias is a deterministic per-coordinate scaling, so
-        // for any aspect (w, h) the ratio of the biased position to
-        // the square (1, 1) position must be exactly √(w/h) in x and
-        // √(h/w) in y. The 4:2 case is the load-bearing one: it
-        // distinguishes the `/` formula from any commutative
-        // alternative (`*`, `+`) — √(4/2)=√2 ≠ √(4*2)=√8.
-        let ring = make_ring(10);
-        let square = kamada_kawai(&ring, 1.0, 1.0);
-        for (aw, ah) in [(2.0_f32, 1.0), (4.0, 2.0), (1.0, 3.0)] {
-            let biased = kamada_kawai(&ring, aw, ah);
-            assert_eq!(biased.len(), square.len());
-            let sx_expected = (aw / ah).sqrt();
-            let sy_expected = (ah / aw).sqrt();
-            for (i, ((sx, sy), (bx, by))) in square.iter().zip(biased.iter()).enumerate() {
-                if sx.abs() > 0.01 {
-                    let ratio = bx / sx;
-                    assert!(
-                        (ratio - sx_expected).abs() < 1e-4,
-                        "aspect {aw}:{ah} node {i}: x ratio {ratio} != expected {sx_expected}"
-                    );
-                }
-                if sy.abs() > 0.01 {
-                    let ratio = by / sy;
-                    assert!(
-                        (ratio - sy_expected).abs() < 1e-4,
-                        "aspect {aw}:{ah} node {i}: y ratio {ratio} != expected {sy_expected}"
-                    );
                 }
             }
         }
@@ -2040,63 +1823,6 @@ mod tests {
         assert_eq!(positions.len(), 4);
         for (x, y) in &positions {
             assert!(x.is_finite() && y.is_finite(), "cycle broke Sugiyama");
-        }
-    }
-
-    #[test]
-    fn kamada_kawai_scaled_bbox_is_non_degenerate_and_within_world_bounds() {
-        // Picker integration requires KK output to land inside the
-        // in-tree CpuSimulation's world (its hard MAX_RADIUS = 800).
-        // After `scale_to_world(..., WORLD_TARGET_DIMENSION = 600.0)`
-        // the bbox larger dimension must be exactly 600 and every
-        // node's distance from origin must stay under MAX_RADIUS.
-        for graph in [make_ring(15), make_lopsided(20, 8), make_ring(30)] {
-            let mut positions = kamada_kawai(&graph, 1.0, 1.0);
-            scale_to_world(&mut positions, WORLD_TARGET_DIMENSION);
-            for &(x, y) in &positions {
-                assert!(x.is_finite() && y.is_finite(), "non-finite coordinate");
-                let r = (x * x + y * y).sqrt();
-                assert!(
-                    r < 800.0,
-                    "node at radius {r} exceeds simulation MAX_RADIUS"
-                );
-            }
-            let (min_x, max_x, min_y, max_y) = bbox(&positions);
-            let w = max_x - min_x;
-            let h = max_y - min_y;
-            assert!(w >= 100.0, "scaled bbox width {w} is degenerate (< 100)");
-            assert!(h >= 100.0, "scaled bbox height {h} is degenerate (< 100)");
-            assert!(w.max(h) - WORLD_TARGET_DIMENSION < 1e-2);
-        }
-    }
-
-    #[test]
-    fn stress_majorization_scaled_bbox_is_non_degenerate_and_within_world_bounds() {
-        // Same picker-integration contract as the KK version: after
-        // `scale_to_world(..., WORLD_TARGET_DIMENSION = 600.0)` the
-        // bbox larger dimension must equal 600 and every node must
-        // stay inside the CpuSimulation's MAX_RADIUS safety net.
-        // Both connected (`make_ring`) and disconnected
-        // (`make_lopsided`) inputs land inside the simulation's world
-        // bounds — the per-component shelf-packing means disconnected
-        // pieces no longer collapse to origin.
-        for graph in [make_ring(15), make_lopsided(20, 8), make_ring(30)] {
-            let mut positions = stress_majorization(&graph, 1.0, 1.0);
-            scale_to_world(&mut positions, WORLD_TARGET_DIMENSION);
-            for &(x, y) in &positions {
-                assert!(x.is_finite() && y.is_finite(), "non-finite coordinate");
-                let r = (x * x + y * y).sqrt();
-                assert!(
-                    r < 800.0,
-                    "node at radius {r} exceeds simulation MAX_RADIUS"
-                );
-            }
-            let (min_x, max_x, min_y, max_y) = bbox(&positions);
-            let w = max_x - min_x;
-            let h = max_y - min_y;
-            assert!(w >= 100.0, "scaled bbox width {w} is degenerate (< 100)");
-            assert!(h >= 100.0, "scaled bbox height {h} is degenerate (< 100)");
-            assert!(w.max(h) - WORLD_TARGET_DIMENSION < 1e-2);
         }
     }
 }
