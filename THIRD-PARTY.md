@@ -107,9 +107,11 @@ changes below, which a re-sync should carry forward:
   key orders the values that do reach it exactly as `OrderedFloat` did.
 - **Kamada-Kawai's `run` is bounded.** Upstream looped until convergence with
   no limit, so a layout that never converged would never return. It now stops
-  after `max_moves` node moves, a new public field defaulting to 10·n². Moves
-  grow with the square of the node count, staying well under n² across the
-  graph shapes measured, so the bound changes no layout that converges.
+  after `max_moves` iterations, a new public field defaulting to 10·n²; each
+  iteration moves a node or, when the running sums below have drifted, skips
+  one, so the bound alone ends the run. Moves grow with the square of the
+  node count, staying well under n² across the graph shapes measured, and no
+  measured graph skipped, so the bound changes no layout that converges.
 - **Kamada-Kawai's `run` keeps its gradients as running sums.** Upstream
   recomputed every node's gradient before each move, rescanning all n² pairs.
   Moving one node changes only the springs attached to it, so `run` now

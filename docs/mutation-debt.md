@@ -216,7 +216,7 @@ per-push gate once it had direct tests. Before them, a full run over its
 553 mutants missed 127: a path's stress optimum is exact whatever the
 weights, and every algorithm converges whatever its stopping rule, so
 layout-level tests could not see most of the arithmetic. With the direct
-tests, 17 survive, and none can be killed by a test:
+tests, 20 survive, and none can be killed by a test:
 
 | File | Line | Mutation | Why no test can tell |
 |---|---|---|---|
@@ -224,14 +224,16 @@ tests, 17 survive, and none can be killed by a test:
 | `stress_majorization.rs` | 132 | `<` → `<=` or `==` in `conjugate_gradient`'s early exit | The solve already ends after `n` iterations, where conjugate gradient has converged; the early exit only saves work |
 | `stress_majorization.rs` | 313, 333 | `<` → `<=` in the coincident-node guard | Differs only for two nodes exactly `1e-4` apart |
 | `stress_majorization.rs` | 385 | `<` → `<=` in `run`'s stop | Differs only for a step whose gain is exactly `epsilon` |
-| `kamada_kawai.rs` | 192 | `<` → `<=` in `steepest`'s threshold | Differs only for a gradient exactly at `eps` |
-| `kamada_kawai.rs` | 347 | `\|\|` → `&&` in `run`'s skip check | The skip fires only when drift in the running gradient sums picks a node a fresh computation shows has settled, which no tested or measured graph produces |
+| `kamada_kawai.rs` | 194 | `<` → `<=` in `steepest`'s threshold | Differs only for a gradient exactly at `eps` |
+| `kamada_kawai.rs` | 347, 348 | `run`'s skip check: `*` → `/` in the gradient norm, `\|\|` → `&&`, `<` → `<=` or `==` (4 mutants) | The skip fires only when drift in the running gradient sums picks a node a fresh computation shows has settled, which no tested or measured graph produces; three of these hung instead of surviving until skips counted toward `max_moves` |
 | `sgd.rs` | 67, 70 | `<` → `<=`, `>` → `>=` when finding the extreme weights | A tie stores the same value either way |
 
-The 20 that time out are counted as caught. Fifteen break Kamada-Kawai's
-node selection or skip check so that `run` skips forever; three stop the
-SGD scheduler from finishing; and two keep Dijkstra's queue from emptying,
-by subtracting edge lengths or by dropping every distance it records.
+Five time out and are counted as caught: three stop the SGD scheduler from
+finishing, and two keep Dijkstra's queue from emptying, by subtracting edge
+lengths or by dropping every distance it records. Fifteen more in
+Kamada-Kawai used to hang by making `run` skip forever; once a skip counted
+toward `max_moves` like a move, twelve became ordinary failures and three
+joined the equivalent skip-check mutants above.
 
 ## Updating this snapshot
 

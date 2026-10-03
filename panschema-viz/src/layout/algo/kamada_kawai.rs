@@ -72,12 +72,14 @@ pub struct KamadaKawai<S> {
     l: Array2<S>,
     /// Convergence threshold
     pub eps: S,
-    /// Most node moves `run` makes. Set by panschema, not upstream, which ran
-    /// until convergence with no bound, so a layout that never converged never
-    /// returned. Moves grow with the square of the node count, staying well under
-    /// n² across the graph shapes measured, so the default of 10·n² binds only
-    /// when convergence fails. Each move costs O(n); a full O(n²) recompute
-    /// is added only when the running sums report convergence, to confirm it.
+    /// Most iterations `run` makes, each a node move or, when the running
+    /// gradient sums have drifted, a skipped node. Set by panschema, not
+    /// upstream, which ran until convergence with no bound, so a layout that
+    /// never converged never returned. Moves grow with the square of the node
+    /// count, staying well under n² across the graph shapes measured, and no
+    /// measured graph skipped, so the default of 10·n² binds only when
+    /// convergence fails. Each iteration costs O(n); a full O(n²) recompute is
+    /// added only when the running sums report convergence, to confirm it.
     pub max_moves: usize,
 }
 
@@ -305,8 +307,8 @@ impl<S> KamadaKawai<S> {
         drawing.raw_entry_mut(m).1 -= delta_y;
     }
 
-    /// Runs the Kamada-Kawai algorithm until convergence, or until it has made
-    /// `max_moves` node moves.
+    /// Runs the Kamada-Kawai algorithm until convergence, or for `max_moves`
+    /// iterations.
     ///
     /// This method repeatedly selects the node with the maximum energy gradient
     /// and moves it to reduce the energy.
@@ -322,8 +324,8 @@ impl<S> KamadaKawai<S> {
     /// skipped if it has in fact settled. When they report convergence, every
     /// gradient is recomputed, O(n²), and the run stops only if that agrees;
     /// otherwise the node that recompute picks moves without a further check.
-    /// Skips cannot stall the run: each leaves one more sum exact and under
-    /// `eps` and touches no other, so they run out and a recompute follows.
+    /// A skip counts toward `max_moves` like a move, so the bound alone ends
+    /// the run whatever the sums do.
     ///
     /// # Arguments
     ///
@@ -336,8 +338,7 @@ impl<S> KamadaKawai<S> {
         let mut gradients = vec![(S::zero(), S::zero()); drawing.len()];
         let mut shares = gradients.clone();
         self.fill_gradients(drawing, &mut gradients);
-        let mut moves = 0;
-        while moves < self.max_moves {
+        for _ in 0..self.max_moves {
             let m = match self.steepest(&gradients) {
                 Some(m) => {
                     let (dedx, dedy) = self.shares_of(m, drawing, &mut shares);
@@ -370,7 +371,6 @@ impl<S> KamadaKawai<S> {
                 gradient.0 += share.0;
                 gradient.1 += share.1;
             }
-            moves += 1;
         }
     }
 }
