@@ -69,3 +69,23 @@ impl FullSgd {
         Sgd::new(node_pairs)
     }
 }
+
+// panschema's tests, not upstream's.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::layout::algo::test_support::path;
+
+    #[test]
+    fn every_pair_appears_once_weighted_by_its_inverse_square_distance() {
+        let sgd = FullSgd::new().build(&path(3), |_| 1.0_f32);
+        assert_eq!(
+            sgd.node_pairs(),
+            [
+                (0, 1, 1.0, 1.0, 1.0, 1.0),
+                (0, 2, 2.0, 2.0, 0.25, 0.25),
+                (1, 2, 1.0, 1.0, 1.0, 1.0),
+            ]
+        );
+    }
+}

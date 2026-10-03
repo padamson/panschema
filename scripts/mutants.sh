@@ -24,7 +24,7 @@
 #    bytes at runtime).
 # 2. The .cargo/mutants.toml `examine_globs` covers the `panschema` and
 #    `panschema-model` crates and the host-testable `panschema-viz` files it
-#    lists (~4800 mutants). `--in-diff` narrows that
+#    lists (about 3,300 mutants). `--in-diff` narrows that
 #    to just the lines you touched in your active diff.
 # 3. A model-crate mutant is killed by panschema's writer and integration
 #    tests as often as by the model crate's own, so a diff that touches

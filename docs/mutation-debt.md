@@ -208,6 +208,31 @@ The `rdf_serializers.rs` and `rust_writer.rs` misses (13 between
 them) are the highest-payoff catch-up targets when the next
 maintenance window opens — small files with clear test patterns.
 
+## Vendored layout numerics — 2026-10-03
+
+`panschema-viz/src/layout/algo/` (the Kamada-Kawai, stress-majorization
+and SGD code vendored from egraph-rs; see `THIRD-PARTY.md`) joined the
+per-push gate once it had direct tests. Before them, a full run over its
+553 mutants missed 127: a path's stress optimum is exact whatever the
+weights, and every algorithm converges whatever its stopping rule, so
+layout-level tests could not see most of the arithmetic. With the direct
+tests, 17 survive, and none can be killed by a test:
+
+| File | Line | Mutation | Why no test can tell |
+|---|---|---|---|
+| `stress_majorization.rs` | 251, 253, 266 | `n - 1` → `n + 1` or `n / 1` in an array size (10 mutants) | The arrays only grow; the extra rows and columns are zero and never read |
+| `stress_majorization.rs` | 132 | `<` → `<=` or `==` in `conjugate_gradient`'s early exit | The solve already ends after `n` iterations, where conjugate gradient has converged; the early exit only saves work |
+| `stress_majorization.rs` | 313, 333 | `<` → `<=` in the coincident-node guard | Differs only for two nodes exactly `1e-4` apart |
+| `stress_majorization.rs` | 385 | `<` → `<=` in `run`'s stop | Differs only for a step whose gain is exactly `epsilon` |
+| `kamada_kawai.rs` | 192 | `<` → `<=` in `steepest`'s threshold | Differs only for a gradient exactly at `eps` |
+| `kamada_kawai.rs` | 347 | `\|\|` → `&&` in `run`'s skip check | The skip fires only when drift in the running gradient sums picks a node a fresh computation shows has settled, which no tested or measured graph produces |
+| `sgd.rs` | 67, 70 | `<` → `<=`, `>` → `>=` when finding the extreme weights | A tie stores the same value either way |
+
+The 20 that time out are counted as caught. Fifteen break Kamada-Kawai's
+node selection or skip check so that `run` skips forever; three stop the
+SGD scheduler from finishing; and two keep Dijkstra's queue from emptying,
+by subtracting edge lengths or by dropping every distance it records.
+
 ## Updating this snapshot
 
 When you want a fresh picture of remaining debt:

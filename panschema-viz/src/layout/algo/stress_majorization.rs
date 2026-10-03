@@ -503,3 +503,149 @@ fn test_stress_majorization_parameters() {
     assert_eq!(stress_majorization.epsilon, 1e-6);
     assert_eq!(stress_majorization.max_iterations, 200);
 }
+
+// panschema's tests. A path's stress optimum is exact under any weights and
+// stress majorization converges to it however it stops, so most of the
+// algorithm is invisible to layout-level tests; these pin the pieces directly.
+
+#[cfg(test)]
+use super::test_support::{graph_from, path, placed, positions};
+
+/// Stress straight from its definition: the sum over pairs of w·(|pᵢ − pⱼ| − dᵢⱼ)².
+#[cfg(test)]
+fn reference_stress(
+    points: &[(f64, f64)],
+    d: impl Fn(usize, usize) -> f64,
+    w: impl Fn(usize, usize) -> f64,
+) -> f64 {
+    let mut s = 0.0;
+    for j in 1..points.len() {
+        for i in 0..j {
+            let e = (points[i].0 - points[j].0).hypot(points[i].1 - points[j].1) - d(i, j);
+            s += w(i, j) * e * e;
+        }
+    }
+    s
+}
+
+// `stress` stores every node relative to the last one, which sits at the
+// origin; distinct weights and distances keep each term's arithmetic visible.
+#[test]
+fn stress_is_the_weighted_sum_of_squared_distance_errors() {
+    let points = [(1.0, 1.0), (4.0, 5.0), (0.0, 0.0)];
+    let d = arr2(&[[0.0, 2.0, 1.0], [2.0, 0.0, 3.0], [1.0, 3.0, 0.0]]);
+    let w = arr2(&[[0.0, 2.0, 3.0], [2.0, 0.0, 0.5], [3.0, 0.5, 0.0]]);
+    let x = arr1(&[points[0].0, points[1].0]);
+    let y = arr1(&[points[0].1, points[1].1]);
+    let expected = reference_stress(&points, |i, j| d[[i, j]], |i, j| w[[i, j]]);
+    assert!((stress(&x, &y, &w, &d) - expected).abs() < 1e-12);
+}
+
+#[test]
+fn pairs_are_weighted_by_their_inverse_square_distance() {
+    let graph = path(3);
+    let drawing = placed(&graph, &[(0.0_f64, 0.0); 3]);
+    let sm = StressMajorization::new(&graph, &drawing, |_| 1.0);
+    assert_eq!((sm.w[[0, 1]], sm.w[[0, 2]], sm.w[[1, 2]]), (1.0, 0.25, 1.0));
+}
+
+// `apply` returns how much one step lowered the stress, as a fraction of what
+// it was, which is what `run` compares against `epsilon`.
+#[test]
+fn apply_reports_the_relative_drop_in_stress() {
+    let graph = path(3);
+    let start = [(0.0, 0.0), (3.0, 0.5), (1.0, 2.0)];
+    let mut drawing = placed(&graph, &start);
+    let mut sm = StressMajorization::new(&graph, &drawing, |_| 1.0);
+    let path_distance = |i: usize, j: usize| (j - i) as f64;
+    let weight = |i: usize, j: usize| 1.0 / ((j - i) as f64).powi(2);
+    let before = reference_stress(&start, path_distance, weight);
+    let reported = sm.apply(&mut drawing);
+    let after = reference_stress(&positions(&drawing), path_distance, weight);
+    assert!(
+        after < before,
+        "the step raised stress from {before} to {after}"
+    );
+    assert!(
+        (reported - (before - after) / before).abs() < 1e-9,
+        "reported {reported}, stress went from {before} to {after}"
+    );
+}
+
+// Each step solves for new positions in the frame where the last node is the
+// origin. Near the optimum the solution is near where the nodes already are;
+// a sign error in the right-hand side mirrors them through the last node,
+// which keeps every distance and so every distance-based check.
+#[test]
+fn a_step_from_near_the_optimum_stays_near_it() {
+    // On a diagonal, so a mirror image shows on both axes.
+    let graph = path(3);
+    let start = [(-1.25_f64, -1.55), (-0.58, -0.83), (0.0, 0.0)];
+    let mut drawing = placed(&graph, &start);
+    let mut sm = StressMajorization::new(&graph, &drawing, |_| 1.0);
+    sm.apply(&mut drawing);
+    for (i, &(x, y)) in start.iter().enumerate() {
+        let (nx, ny) = (drawing.raw_entry(i).0, drawing.raw_entry(i).1);
+        assert!(
+            (nx - x).hypot(ny - y) < 0.1,
+            "node {i} went from ({x}, {y}) to ({nx}, {ny})"
+        );
+    }
+}
+
+// `run` stops when a step lowers stress by less than `epsilon` of what it
+// was. A graph that can be drawn with zero stress, like a path, keeps losing
+// about the same fraction each step and runs to the bound, so this uses a
+// star whose three leaves cannot all be 2 apart. `epsilon` also stops each
+// step's conjugate-gradient solve, so the default is kept and `run` is
+// compared with stepping by hand.
+#[test]
+fn run_stops_at_the_first_step_that_gains_less_than_epsilon() {
+    let star = graph_from(4, &[(0, 1), (0, 2), (0, 3)]);
+    let start = [(0.0_f64, 0.0), (3.0, 0.5), (1.0, 2.0), (-1.0, 0.5)];
+    let mut drawing = placed(&star, &start);
+    StressMajorization::new(&star, &drawing, |_| 1.0).run(&mut drawing);
+    let mut by_hand = placed(&star, &start);
+    let mut sm = StressMajorization::new(&star, &by_hand, |_| 1.0);
+    let mut steps = 0;
+    while steps < sm.max_iterations {
+        steps += 1;
+        if sm.apply(&mut by_hand) < sm.epsilon {
+            break;
+        }
+    }
+    assert!(steps > 1, "the first step already gained less than epsilon");
+    assert!(steps < sm.max_iterations, "converged only at the bound");
+    for i in 0..4 {
+        assert_eq!(
+            (drawing.raw_entry(i).0, drawing.raw_entry(i).1),
+            (by_hand.raw_entry(i).0, by_hand.raw_entry(i).1),
+            "node {i} after {steps} steps"
+        );
+    }
+}
+
+#[test]
+fn coincident_nodes_do_not_make_the_layout_non_finite() {
+    // Two nodes at the same point have no direction between them; the step
+    // must leave that pair's term out rather than divide by zero.
+    // The last node is the frame's origin, so a node on top of it is a case
+    // of its own.
+    let graph = path(3);
+    for (case, start) in [
+        ("two free nodes", [(1.0_f64, 1.0), (1.0, 1.0), (0.0, 0.0)]),
+        (
+            "a node on the last one",
+            [(0.0, 0.0), (2.0, 1.0), (0.0, 0.0)],
+        ),
+    ] {
+        let mut drawing = placed(&graph, &start);
+        let mut sm = StressMajorization::new(&graph, &drawing, |_| 1.0);
+        sm.apply(&mut drawing);
+        assert!(
+            (0..3)
+                .all(|i| drawing.raw_entry(i).0.is_finite() && drawing.raw_entry(i).1.is_finite()),
+            "{case}"
+        );
+    }
+}

@@ -106,3 +106,31 @@ where
         }
     }
 }
+
+// panschema's tests, not upstream's.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::layout::algo::test_support::graph_from;
+
+    #[test]
+    fn a_new_matrix_is_infinite_and_indexed_in_graph_order() {
+        let graph = graph_from(3, &[]);
+        let nodes: Vec<_> = graph.node_indices().collect();
+        let mut d = FullDistanceMatrix::<petgraph::graph::NodeIndex, f32>::new(&graph);
+        assert_eq!(d.shape(), (3, 3));
+        for (i, &u) in nodes.iter().enumerate() {
+            assert_eq!(d.row_index(u), Some(i));
+            assert_eq!(d.col_index(u), Some(i));
+        }
+        assert!((0..3).all(|i| (0..3).all(|j| d.get_by_index(i, j) == f32::INFINITY)));
+        d.set_by_index(1, 2, 7.0);
+        assert_eq!(d.get_by_index(1, 2), 7.0);
+        assert_eq!(d.get_by_index(2, 1), f32::INFINITY, "set writes one cell");
+        let elsewhere = petgraph::graph::NodeIndex::new(9);
+        assert_eq!(
+            (d.row_index(elsewhere), d.col_index(elsewhere)),
+            (None, None)
+        );
+    }
+}

@@ -72,3 +72,42 @@ where
         self.t >= self.t_max
     }
 }
+
+// panschema's tests, not upstream's.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn etas(t_max: usize, eta_min: f32, eta_max: f32) -> Vec<f32> {
+        let mut scheduler = SchedulerExponential::init(t_max, eta_min, eta_max);
+        let mut etas = vec![];
+        scheduler.run(&mut |eta| etas.push(eta));
+        etas
+    }
+
+    #[test]
+    fn decays_geometrically_from_eta_max_to_eta_min_in_t_max_steps() {
+        // (0.01 / 100)^(1/4) = 0.1, so each step is a tenth of the last.
+        let etas = etas(5, 0.01, 100.0);
+        assert_eq!(etas.len(), 5);
+        let expected = [100.0, 10.0, 1.0, 0.1, 0.01];
+        for (eta, want) in etas.iter().zip(expected) {
+            assert!((eta / want - 1.0).abs() < 1e-5, "etas {etas:?}");
+        }
+    }
+
+    #[test]
+    fn a_single_step_uses_eta_max() {
+        assert_eq!(etas(1, 0.01, 100.0), [100.0]);
+    }
+
+    #[test]
+    fn finishes_after_exactly_t_max_steps() {
+        let mut scheduler = SchedulerExponential::init(3, 0.1_f32, 1.0);
+        for step in 0..3 {
+            assert!(!scheduler.is_finished(), "finished before step {step}");
+            scheduler.step(&mut |_| {});
+        }
+        assert!(scheduler.is_finished());
+    }
+}

@@ -131,3 +131,73 @@ where
         self.raw_entry(i) - self.raw_entry(j)
     }
 }
+
+// panschema's tests, not upstream's.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::layout::algo::Delta;
+    use crate::layout::algo::test_support::graph_from;
+
+    #[test]
+    fn nodes_are_found_by_id_and_unknown_ids_are_not() {
+        let mut drawing = DrawingEuclidean2d::<char, f32>::from_node_indices(&['a', 'b']);
+        assert_eq!(drawing.len(), 2);
+        *drawing.position_mut('b').unwrap() = MetricEuclidean2d(3.0, 4.0);
+        assert_eq!((drawing.x('a'), drawing.y('a')), (Some(0.0), Some(0.0)));
+        assert_eq!((drawing.x('b'), drawing.y('b')), (Some(3.0), Some(4.0)));
+        assert_eq!((drawing.raw_entry(1).0, drawing.raw_entry(1).1), (3.0, 4.0));
+        assert!(drawing.position('z').is_none());
+        assert!(drawing.position_mut('z').is_none());
+        assert_eq!(drawing.x('z'), None);
+        assert_eq!(drawing.y('z'), None);
+    }
+
+    #[test]
+    fn delta_points_from_the_second_node_to_the_first() {
+        let mut drawing = DrawingEuclidean2d::<char, f32>::from_node_indices(&['a', 'b']);
+        *drawing.raw_entry_mut(0) = MetricEuclidean2d(1.0, 1.0);
+        *drawing.raw_entry_mut(1) = MetricEuclidean2d(4.0, 5.0);
+        let delta = drawing.delta(0, 1);
+        assert_eq!((delta.0, delta.1), (-3.0, -4.0));
+        assert_eq!(delta.norm(), 5.0);
+    }
+
+    // The k-th node in the given order sits at radius 10·√k, turned k golden
+    // angles (π(3 − √5)) from the x axis: a sunflower spiral, so no two nodes
+    // start on top of each other and none sits far from the rest.
+    #[test]
+    fn initial_placement_spirals_out_in_the_given_order() {
+        let graph = graph_from(4, &[]);
+        let nodes: Vec<_> = graph.node_indices().collect();
+        let order = [nodes[3], nodes[1], nodes[0], nodes[2]];
+        let drawing = DrawingEuclidean2d::<petgraph::graph::NodeIndex, f32>::initial_placement_with_node_order(
+            &graph, &order,
+        );
+        let golden = std::f32::consts::PI * (3.0 - 5.0_f32.sqrt());
+        for (k, &u) in order.iter().enumerate() {
+            let r = 10.0 * (k as f32).sqrt();
+            let theta = golden * k as f32;
+            let (x, y) = (drawing.x(u).unwrap(), drawing.y(u).unwrap());
+            assert!(
+                (x - r * theta.cos()).abs() < 1e-4 && (y - r * theta.sin()).abs() < 1e-4,
+                "node {k} in order at ({x}, {y}), expected radius {r} at angle {theta}"
+            );
+        }
+    }
+
+    #[test]
+    fn initial_placement_follows_the_graph_order() {
+        let graph = graph_from(3, &[]);
+        let nodes: Vec<_> = graph.node_indices().collect();
+        let by_graph =
+            DrawingEuclidean2d::<petgraph::graph::NodeIndex, f32>::initial_placement(&graph);
+        let by_order = DrawingEuclidean2d::<petgraph::graph::NodeIndex, f32>::initial_placement_with_node_order(
+            &graph, &nodes,
+        );
+        for &u in &nodes {
+            assert_eq!(by_graph.x(u), by_order.x(u));
+            assert_eq!(by_graph.y(u), by_order.y(u));
+        }
+    }
+}

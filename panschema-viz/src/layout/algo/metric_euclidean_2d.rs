@@ -118,3 +118,34 @@ where
         DeltaEuclidean2d(self.0 - other.0, self.1 - other.1)
     }
 }
+
+// panschema's tests, not upstream's.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pair(d: DeltaEuclidean2d<f32>) -> (f32, f32) {
+        (d.0, d.1)
+    }
+
+    #[test]
+    fn deltas_combine_componentwise() {
+        let (a, b) = (DeltaEuclidean2d(3.0_f32, 4.0), DeltaEuclidean2d(1.0, -2.0));
+        assert_eq!(pair(a + b), (4.0, 2.0));
+        assert_eq!(pair(a - b), (2.0, 6.0));
+        assert_eq!(pair(a * 2.0), (6.0, 8.0));
+        assert_eq!(pair(a / 2.0), (1.5, 2.0));
+        assert_eq!(a.norm(), 5.0);
+    }
+
+    #[test]
+    fn points_move_by_deltas_and_differ_by_them() {
+        let mut p = MetricEuclidean2d(1.0_f32, 1.0);
+        p += DeltaEuclidean2d(2.0, 3.0);
+        assert_eq!((p.0, p.1), (3.0, 4.0));
+        p -= DeltaEuclidean2d(1.0, 5.0);
+        assert_eq!((p.0, p.1), (2.0, -1.0));
+        let q = MetricEuclidean2d(5.0_f32, 3.0);
+        assert_eq!(pair(&q - &p), (3.0, 4.0));
+    }
+}

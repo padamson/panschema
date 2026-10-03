@@ -402,6 +402,9 @@ fn test_kamada_kawai() {
     }
 }
 
+#[cfg(test)]
+use super::test_support::{graph_from, placed};
+
 // panschema's, not upstream's. A hang is not a failure, so `run` goes on its own
 // thread: with `eps` at zero the stop test can never pass, and a regression fails
 // here instead of never finishing.
@@ -428,16 +431,6 @@ fn run_returns_when_the_layout_cannot_converge() {
             std::panic::resume_unwind(worker.join().unwrap_err())
         }
     }
-}
-
-#[cfg(test)]
-fn graph_from(n: usize, edges: &[(usize, usize)]) -> petgraph::Graph<(), (), petgraph::Undirected> {
-    let mut graph = petgraph::Graph::new_undirected();
-    let nodes: Vec<_> = (0..n).map(|_| graph.add_node(())).collect();
-    for &(a, b) in edges {
-        graph.add_edge(nodes[a], nodes[b], ());
-    }
-    graph
 }
 
 #[test]
@@ -493,11 +486,20 @@ fn the_default_bound_lets_representative_layouts_converge() {
         let kamada_kawai = KamadaKawai::new(&graph, |_| 1.0_f32);
         kamada_kawai.run(&mut drawing);
         // select_node also reports None when a coordinate is NaN, so convergence
-        // means that and finite coordinates.
+        // means that and finite coordinates. The gradients are checked against
+        // eps directly too, so a wrong threshold in the shared check shows.
         assert!(
             kamada_kawai.select_node(&drawing).is_none(),
             "the {shape} was cut off by the default bound before converging"
         );
+        for m in 0..drawing.len() {
+            let (gx, gy) = kamada_kawai.gradient(m, &drawing);
+            assert!(
+                gx.hypot(gy) < kamada_kawai.eps,
+                "the {shape} stopped with node {m}'s gradient at {}",
+                gx.hypot(gy)
+            );
+        }
         assert!(
             (0..drawing.len())
                 .all(|i| drawing.raw_entry(i).0.is_finite() && drawing.raw_entry(i).1.is_finite()),
@@ -558,4 +560,53 @@ fn run_matches_selecting_from_scratch_at_a_fraction_of_the_cost() {
             "the {shape} cost {run_cost} spring terms against the reference's {reference_cost}"
         );
     }
+}
+
+// With one spring, Newton's step lands on the optimum whatever the rest length
+// l: the Hessian maps the spring's direction to itself, so the step moves node 0
+// straight along the spring to distance l from node 1. Node 1 sits at (3, 4),
+// five away, so l = 1 lands at (2.4, 3.2) and l = 2 at (1.8, 2.4). Off-axis, so
+// the cross term shapes the step; two lengths, so l is not mistaken for 1/l.
+#[test]
+fn one_newton_step_settles_a_single_spring() {
+    let graph = graph_from(2, &[(0, 1)]);
+    for (length, expected) in [(1.0_f32, (2.4, 3.2)), (2.0, (1.8, 2.4))] {
+        let mut drawing = placed(&graph, &[(0.0, 0.0), (3.0, 4.0)]);
+        let kamada_kawai = KamadaKawai::new(&graph, |_| length);
+        kamada_kawai.apply_to_node(0, &mut drawing);
+        let (x, y) = (drawing.raw_entry(0).0, drawing.raw_entry(0).1);
+        assert!(
+            (x - expected.0).abs() < 1e-5 && (y - expected.1).abs() < 1e-5,
+            "rest length {length}: node 0 at ({x}, {y}), expected {expected:?}"
+        );
+        assert_eq!((drawing.raw_entry(1).0, drawing.raw_entry(1).1), (3.0, 4.0));
+    }
+}
+
+#[test]
+fn ties_go_to_the_lowest_index() {
+    // Both ends of one stretched spring feel the same pull, so the first move
+    // is decided by the tie rule alone, which keeps runs reproducible.
+    let graph = graph_from(2, &[(0, 1)]);
+    let mut drawing = placed(&graph, &[(0.0, 0.0), (3.0, 0.0)]);
+    let mut kamada_kawai = KamadaKawai::new(&graph, |_| 1.0_f32);
+    kamada_kawai.max_moves = 1;
+    kamada_kawai.run(&mut drawing);
+    let (x, y) = (drawing.raw_entry(0).0, drawing.raw_entry(0).1);
+    assert!((x - 2.0).abs() < 1e-5 && y == 0.0, "node 0 at ({x}, {y})");
+    assert_eq!((drawing.raw_entry(1).0, drawing.raw_entry(1).1), (3.0, 0.0));
+}
+
+#[test]
+fn springs_stiffen_with_the_inverse_square_of_their_rest_length() {
+    let kamada_kawai = KamadaKawai::new(&graph_from(3, &[(0, 1), (1, 2)]), |_| 1.0_f32);
+    assert_eq!(kamada_kawai.l[[0, 2]], 2.0);
+    assert_eq!(
+        (
+            kamada_kawai.k[[0, 1]],
+            kamada_kawai.k[[0, 2]],
+            kamada_kawai.k[[1, 2]]
+        ),
+        (1.0, 0.25, 1.0)
+    );
 }

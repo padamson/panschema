@@ -69,3 +69,57 @@ impl<T> DrawingValue for T where
     T: NdFloat + FromPrimitive + FloatConst + Signed + Into<f64> + From<f32>
 {
 }
+
+/// Fixtures the vendored files' tests share. panschema's, not upstream's.
+#[cfg(test)]
+mod test_support {
+    use super::{Drawing, DrawingEuclidean2d, DrawingIndex, DrawingValue, MetricEuclidean2d};
+    use petgraph::graph::NodeIndex;
+    use petgraph::{Graph, Undirected};
+
+    pub(super) type TestGraph = Graph<(), (), Undirected>;
+
+    /// Nodes `0..n`, joined by `edges`.
+    pub(super) fn graph_from(n: usize, edges: &[(usize, usize)]) -> TestGraph {
+        let mut graph = Graph::new_undirected();
+        let nodes: Vec<_> = (0..n).map(|_| graph.add_node(())).collect();
+        for &(a, b) in edges {
+            graph.add_edge(nodes[a], nodes[b], ());
+        }
+        graph
+    }
+
+    /// Nodes `0..n` joined in a line.
+    pub(super) fn path(n: usize) -> TestGraph {
+        graph_from(n, &(1..n).map(|i| (i - 1, i)).collect::<Vec<_>>())
+    }
+
+    /// Puts node `i` at `points[i]`.
+    pub(super) fn place<N: DrawingIndex, S: DrawingValue>(
+        drawing: &mut DrawingEuclidean2d<N, S>,
+        points: &[(S, S)],
+    ) {
+        for (i, &(x, y)) in points.iter().enumerate() {
+            *drawing.raw_entry_mut(i) = MetricEuclidean2d(x, y);
+        }
+    }
+
+    /// A drawing of `graph` with node `i` at `points[i]`.
+    pub(super) fn placed<S: DrawingValue + Default>(
+        graph: &TestGraph,
+        points: &[(S, S)],
+    ) -> DrawingEuclidean2d<NodeIndex, S> {
+        let mut drawing = DrawingEuclidean2d::new(graph);
+        place(&mut drawing, points);
+        drawing
+    }
+
+    /// Every node's position, in index order.
+    pub(super) fn positions<N: DrawingIndex, S: DrawingValue>(
+        drawing: &DrawingEuclidean2d<N, S>,
+    ) -> Vec<(S, S)> {
+        (0..drawing.len())
+            .map(|i| (drawing.raw_entry(i).0, drawing.raw_entry(i).1))
+            .collect()
+    }
+}

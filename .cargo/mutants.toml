@@ -27,7 +27,8 @@ additional_cargo_args = ["--lib"]
 # Examine `panschema`, `panschema-model`, and the host-testable parts of
 # `panschema-viz`.
 # `panschema-viz` is a wasm-targeted crate, but `simulation.rs`,
-# `sim_common.rs`, `legend.rs`, and `layout/rng.rs` are pure-Rust helpers with real
+# `sim_common.rs`, `legend.rs`, `layout/rng.rs` and the vendored layout
+# numerics in `layout/algo/` are pure-Rust helpers with real
 # native unit tests that `cargo test --lib` runs on the host — this
 # allow-list is the gate, so host-testable viz logic must be BOTH
 # added here and kept out of the excluded drawing/wasm files.
@@ -40,9 +41,10 @@ additional_cargo_args = ["--lib"]
 # `{% include %}` directly, not these helper functions, so
 # component-level mutations have no production-observable effect.
 #
-# The explicit exclude_globs are required because `--in-diff` doesn't
-# honor examine_globs alone; the same excludes are mirrored in
-# scripts/mutants.sh as `--exclude` CLI flags.
+# `--in-diff` honors these globs: a diff that touches only files outside
+# them yields no mutants (checked 2026-10-03, cargo-mutants 27.1). The
+# exclude_globs are also mirrored in scripts/mutants.sh as `--exclude`
+# CLI flags, so the per-push run never depends on config discovery.
 examine_globs = [
     "panschema/src/**/*.rs",
     "panschema-model/src/**/*.rs",
@@ -50,6 +52,7 @@ examine_globs = [
     "panschema-viz/src/sim_common.rs",
     "panschema-viz/src/legend.rs",
     "panschema-viz/src/layout/rng.rs",
+    "panschema-viz/src/layout/algo/*.rs",
 ]
 exclude_globs = [
     "panschema/src/components.rs",

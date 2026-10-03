@@ -123,10 +123,44 @@ where
     distance_matrix
 }
 
+// panschema's tests, not upstream's.
 #[cfg(test)]
 mod tests {
     use super::*;
     use petgraph::Graph;
+
+    #[test]
+    fn lengths_are_equal_exactly_when_they_order_equal() {
+        assert!(Length(1.5_f32) == Length(1.5));
+        assert!(Length(1.5_f32) != Length(2.0));
+    }
+
+    // A node already reached at the shortest length is not queued again when a
+    // second path ties it. Diamond s–a–t, s–b–t of unit edges: t is reached
+    // through a and then tied through b. Relaxing each popped node's two edges,
+    // s, a, b and t once each, is 8 length calls; requeueing t on the tie pops
+    // it twice and makes 10.
+    #[test]
+    fn a_tied_path_does_not_requeue_a_node() {
+        let mut graph = Graph::<(), f32, petgraph::Undirected>::new_undirected();
+        let [s, a, b, t] = [(); 4].map(|_| graph.add_node(()));
+        for (u, v) in [(s, a), (s, b), (a, t), (b, t)] {
+            graph.add_edge(u, v, 1.0);
+        }
+        let mut calls = 0;
+        let mut distances = FullDistanceMatrix::new(&graph);
+        dijkstra_with_distance_matrix(
+            &graph,
+            |e| {
+                calls += 1;
+                *e.weight()
+            },
+            s,
+            &mut distances,
+        );
+        assert_eq!(calls, 8);
+        assert_eq!(distances.get_by_index(0, 3), 2.0);
+    }
 
     #[test]
     fn the_heap_pops_the_shortest_length_first() {

@@ -62,8 +62,8 @@ removed: `DistanceMatrix::get`, `set`, `row_indices` and `col_indices`, with the
 `DrawingEuclidean2d::set_x`, `set_y`, `centralize`, `clamp_region`,
 `initial_placement_with_bfs_order` and `edge_segments`; the `MetricCartesian`
 trait and its impl for `MetricEuclidean2d`; `Sgd::node_pairs`,
-`update_distance` and `update_weight`; `FullSgd`'s `Default` impl; and the
-`Clone` derive on `DrawingEuclidean2d`. With them gone the module no longer
+`update_distance` and `update_weight`; `FullSgd`'s `Default` impl; and the `Clone` derive on
+`DrawingEuclidean2d`. With them gone the module no longer
 needs `allow(dead_code)`, so the compiler's dead-code lint covers it again —
 for functions, methods and types. It cannot see trait impls or derives, so
 those were checked by hand; the two small value types keep their ordinary
@@ -75,8 +75,9 @@ changes below, which a re-sync should carry forward:
 - **An attribution header** is prepended to every vendored file.
 - **`algo/mod.rs` is this repository's own module root**, not a copy: only
   `DrawingIndex` and `DrawingValue` come from upstream's
-  `crates/drawing/src/lib.rs`. The `Shuffle` trait beside them is panschema's.
-  Don't diff the rest of it against upstream.
+  `crates/drawing/src/lib.rs`. The `Shuffle` trait and the `test_support`
+  module beside them are panschema's. Don't diff the rest of it against
+  upstream.
 - **Import paths**, rewritten for the flattened module, and re-ordered by this
   repository's rustfmt.
 - **Doc examples** in `kamada_kawai.rs` and `stress_majorization.rs` are marked
@@ -125,6 +126,16 @@ changes below, which a re-sync should carry forward:
   they are symmetric bit for bit, which the per-move check above relies on.
   Upstream copied the matrix as given. A shortest-path matrix is symmetric up
   to rounding, so for the unit lengths panschema uses nothing changes.
+- **`Sgd::node_pairs` is a test-only accessor.** Upstream's public method
+  is replaced by a `pub(super)`, `#[cfg(test)]` one returning a slice; only
+  tests read the pairs.
+- **The vendored files carry panschema's own tests** (all but the three that
+  only declare traits), in a `#[cfg(test)]` module or, in `kamada_kawai.rs` and `stress_majorization.rs`, after a
+  comment saying they are panschema's. They share the fixtures in
+  `algo/mod.rs`'s `test_support` and are additions to keep on a re-sync,
+  not upstream drift. Upstream's own tests (`test_kamada_kawai`,
+  `test_conjugate_gradient`, `test_stress_majorization` and
+  `test_stress_majorization_parameters`) stay where they were.
 - **One upstream test assertion is corrected**, in `stress_majorization.rs`.
   `test_stress_majorization_parameters` asserted the default epsilon
   `== 1e-4`, but the constructor builds it as `(1e-4).into()` through
