@@ -48,6 +48,12 @@ who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-run"
 delta = "0.53.0 -> 0.56.0"
 
+[[audits.jsonschema]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.56.0 -> 0.58.0"
+notes = "Canonicalization and discriminator changes. No new unsafe outside doc comments; network and fs code is pre-existing and feature-gated (we build with default-features = false)."
+
 [[audits.jsonschema-regex]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-run"
@@ -59,6 +65,12 @@ who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-run"
 delta = "0.53.0 -> 0.56.0"
 
+[[audits.jsonschema-regex]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.56.0 -> 0.58.5"
+notes = "One parser rule widened (identity escapes outside the u flag) plus tests. No unsafe, no I/O."
+
 [[audits.jsonschema-value]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-run"
@@ -69,6 +81,18 @@ notes = "Delta audit. Integer-detection helpers on the number trait; the one new
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-run"
 delta = "0.53.0 -> 0.56.0"
+
+[[audits.jsonschema-value]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.56.0 -> 0.58.5"
+notes = "New jsonb reader (no unsafe) and pyo3/magnus FFI changes behind features we do not enable. New build.rs is a no-op without the pyo3 feature."
+
+[[audits.ndarray]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.16.1 -> 0.17.2"
+notes = "ArrayRef refactor and packaging cut (tests, benches, examples dropped). Every added unsafe line read: view construction from (ptr, dim, strides), from_raw_parts on the array's own pointer, ref-type casts. No build script, no I/O; process::abort pre-existing."
 
 [[audits.oxigraph]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
@@ -157,6 +181,12 @@ notes = "Delta audit. Replaces a hand-rolled percent-encoder with pct_enc's EStr
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-run"
 delta = "0.53.0 -> 0.56.0"
+
+[[audits.referencing]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.56.0 -> 0.58.5"
+notes = "Dynamic-anchor base URI fix and $schema lookup order. Pure logic, no unsafe, no I/O."
 
 [[audits.sparesults]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"

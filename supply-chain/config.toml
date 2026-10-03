@@ -595,10 +595,6 @@ criteria = "safe-to-run"
 version = "0.9.116"
 criteria = "safe-to-run"
 
-[[exemptions.ordered-float]]
-version = "3.9.2"
-criteria = "safe-to-deploy"
-
 [[exemptions.outref]]
 version = "0.5.2"
 criteria = "safe-to-run"
@@ -789,7 +785,7 @@ criteria = "safe-to-deploy"
 
 [[exemptions.rand]]
 version = "0.10.2"
-criteria = "safe-to-deploy"
+criteria = "safe-to-run"
 
 [[exemptions.rawpointer]]
 version = "0.2.1"
