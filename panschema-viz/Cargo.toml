@@ -44,8 +44,8 @@ mutants = "0.0.4"
 rust-sugiyama = "0.4"
 
 # Used by the vendored layout numerics in src/layout/algo/.
-ndarray = "0.16"
+ndarray = "0.17"
 num-traits = "0.2"
-ordered-float = "3"
+ordered-float = "5"
 
 # Profile settings are in workspace root Cargo.toml
