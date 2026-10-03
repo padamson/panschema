@@ -136,6 +136,15 @@ changes below, which a re-sync should carry forward:
   not upstream drift. Upstream's own tests (`test_kamada_kawai`,
   `test_conjugate_gradient`, `test_stress_majorization` and
   `test_stress_majorization_parameters`) stay where they were.
+- **Stress majorization stops cleanly at an exact optimum.** Upstream's
+  conjugate-gradient line search divided by the curvature along its search
+  direction, which is zero when the system is already solved, so a solved
+  system turned every coordinate NaN; the step is now zero when there is no
+  direction to search along. And `apply` reported a step from zero stress as
+  0/0, which `run` could never read as converged; it now reports zero gain. A
+  lone edge hits both: one step solves it exactly. The `epsilon` doc on
+  `conjugate_gradient` now says it bounds the squared residual norm, which is
+  what the code compares.
 - **One upstream test assertion is corrected**, in `stress_majorization.rs`.
   `test_stress_majorization_parameters` asserted the default epsilon
   `== 1e-4`, but the constructor builds it as `(1e-4).into()` through

@@ -74,6 +74,11 @@ fn line_search<S: DrawingValue>(a: &Array2<S>, dx: &Array1<S>, d: &Array1<S>) ->
             s += d[i] * d[j] * a[[i, j]];
         }
     }
+    // No direction to search along, as when the system is already solved:
+    // the step is zero, not 0/0.
+    if s == S::zero() {
+        return S::zero();
+    }
     alpha /= s;
     alpha
 }
@@ -107,7 +112,7 @@ fn delta_f<S: DrawingValue>(a: &Array2<S>, b: &Array1<S>, x: &Array1<S>, dx: &mu
 /// * `a` - The coefficient matrix A
 /// * `b` - The right-hand side vector b
 /// * `x` - The initial guess for x, which will be updated with the solution
-/// * `epsilon` - The convergence threshold (algorithm stops when the residual norm is less than this value)
+/// * `epsilon` - The convergence threshold (algorithm stops when the squared residual norm is less than this value)
 pub fn conjugate_gradient<S: DrawingValue>(
     a: &Array2<S>,
     b: &Array1<S>,
@@ -359,7 +364,13 @@ where
         conjugate_gradient(l_w, b, &mut self.x_y, self.epsilon);
 
         let stress = stress(&self.x_x, &self.x_y, w, d);
-        let diff = (self.stress - stress) / self.stress;
+        // At zero stress there is nothing left to gain, and the ratio below
+        // would be 0/0.
+        let diff = if self.stress == S::zero() {
+            S::zero()
+        } else {
+            (self.stress - stress) / self.stress
+        };
         self.stress = stress;
         for i in 0..n - 1 {
             drawing.raw_entry_mut(i).0 = self.x_x[i];
@@ -648,4 +659,59 @@ fn coincident_nodes_do_not_make_the_layout_non_finite() {
             "{case}"
         );
     }
+}
+
+#[test]
+fn conjugate_gradient_leaves_an_exact_solution_alone() {
+    // The residual is zero from the start, so the first line search has no
+    // direction and must take a zero step rather than divide zero by zero.
+    let a = arr2(&[[3.0_f64, 1.0], [1.0, 2.0]]);
+    let b = arr1(&[6.0, 7.0]);
+    let mut x = arr1(&[1.0, 3.0]);
+    conjugate_gradient(&a, &b, &mut x, 1e-4);
+    assert_eq!(x.to_vec(), [1.0, 3.0]);
+}
+
+// A layout already at zero stress: two tests, since the step's return value
+// and the coordinates are kept finite by separate fixes.
+#[test]
+fn a_step_from_zero_stress_reports_no_gain() {
+    let edge = path(2);
+    let mut drawing = placed(&edge, &[(0.0_f64, 0.0), (1.0, 0.0)]);
+    let mut sm = StressMajorization::new(&edge, &drawing, |_| 1.0);
+    assert_eq!(sm.apply(&mut drawing), 0.0);
+}
+
+#[test]
+fn a_step_from_zero_stress_leaves_the_layout_where_it_is() {
+    let edge = path(2);
+    let mut drawing = placed(&edge, &[(0.0_f64, 0.0), (1.0, 0.0)]);
+    StressMajorization::new(&edge, &drawing, |_| 1.0).apply(&mut drawing);
+    // Every step reports the layout in the frame with the last node at the
+    // origin, so "unchanged" is the same pair shifted there.
+    assert_eq!(positions(&drawing), [(-1.0, 0.0), (0.0, 0.0)]);
+}
+
+// One step solves a lone edge exactly. The run must then stop, with a further
+// step gaining nothing, rather than step from a zero residual into NaN. In
+// f32 from the spiral start, as the layouts run it, that is what happened.
+#[test]
+fn run_lays_out_a_lone_edge_at_its_length() {
+    let edge = path(2);
+    let mut drawing =
+        DrawingEuclidean2d::<petgraph::graph::NodeIndex, f32>::initial_placement(&edge);
+    let mut sm = StressMajorization::new(&edge, &drawing, |_| 1.0_f32);
+    sm.run(&mut drawing);
+    let [(ax, ay), (bx, by)] = positions(&drawing)[..] else {
+        unreachable!()
+    };
+    assert!(
+        ((ax - bx).hypot(ay - by) - 1.0).abs() < 1e-5,
+        "nodes at ({ax}, {ay}) and ({bx}, {by})"
+    );
+    assert_eq!(
+        sm.apply(&mut drawing),
+        0.0,
+        "a further step gained something"
+    );
 }

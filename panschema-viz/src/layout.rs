@@ -434,12 +434,8 @@ fn connected_components_of(
 /// The layout of a component too small to need an algorithm, if it is one: a
 /// single node at the origin, or a lone edge at the target length.
 ///
-/// The lone edge is not only a shortcut. Stress solves it exactly on its first
-/// iteration, but its stop test is the relative change in stress, which never
-/// drops below epsilon once stress is ~0; it keeps iterating, and within a few
-/// iterations the coordinates go NaN, which `finite_positions` maps to the
-/// origin — both nodes on one point. SGD separates a lone edge on its own;
-/// returning this same pair keeps a lone edge identical under every layout.
+/// Every algorithm lays a lone edge out at its length on its own; returning
+/// this pair keeps a lone edge identical under every layout.
 fn trivial_component(component: &[NodeIndex]) -> Option<Vec<(f32, f32)>> {
     match component.len() {
         0 | 1 => Some(vec![(0.0, 0.0); component.len()]),
