@@ -1194,14 +1194,16 @@ mod tests {
         (pg, component)
     }
 
-    // A converged layout measures at most about 0.05 here (Kamada-Kawai;
-    // stress and SGD about 0.01), and a layout that never moves a node, or
-    // stops after one step, measures 0.79 or more. 0.15 sits clear of both.
+    // A converged layout measures at most about 0.01 here (stress and SGD;
+    // Kamada-Kawai 0.002), and a layout that never moves a node, or stops
+    // after one step, measures 0.77 or more. 0.15 sits clear of both.
     const PATH_TOLERANCE: f32 = 0.15;
 
     #[test]
     fn kamada_kawai_spaces_a_path_by_graph_distance() {
-        let (pg, component) = path_component(5);
+        // Eight nodes, not five: at the algorithm's own loose threshold the
+        // chain still bends well past the tolerance by eight.
+        let (pg, component) = path_component(8);
         assert_spaces_path_evenly(&kamada_kawai_component(&pg, &component));
     }
 

@@ -110,8 +110,13 @@ changes below, which a re-sync should carry forward:
   after `max_moves` iterations, a new public field defaulting to 10·n²; each
   iteration moves a node or, when the running sums below have drifted, skips
   one, so the bound alone ends the run. Moves grow with the square of the
-  node count, staying well under n² across the graph shapes measured, and no
-  measured graph skipped, so the bound changes no layout that converges.
+  node count, staying under 1.4·n² at the default `eps` (the measurements
+  are in that field's doc), and no measured graph skipped, so the bound
+  changes no layout that converges.
+- **Kamada-Kawai's `eps` defaults to 0.001, not upstream's 0.1.** At 0.1
+  the algorithm stopped while a chain of nodes still sagged by 6 to 33
+  percent of its length; at 0.001 that is 2 to 3 percent, for two to four
+  times the moves. The field's doc carries the measurements.
 - **Kamada-Kawai's `run` keeps its gradients as running sums.** Upstream
   recomputed every node's gradient before each move, rescanning all n² pairs.
   Moving one node changes only the springs attached to it, so `run` now
@@ -120,8 +125,10 @@ changes below, which a re-sync should carry forward:
   it moves, and when they report convergence every gradient is recomputed and
   the run stops only if that agrees. The sums only pick which node moves
   next; the move itself is computed from the drawing as before, so a layout
-  changes only if drift picks a different node, which happened on no graph
-  measured. `select_node` is no longer called by `run` and is private and
+  changes only where drift reorders two nearly equal picks. Late in a run
+  that happens: against the from-scratch sequence, layouts of up to 120
+  nodes agree to within a ten-thousandth of their span and never differ in
+  shape. `select_node` is no longer called by `run` and is private and
   compiled for tests only, as the from-scratch reference they check `run`
   against.
 - **`k` and `l` are filled from one triangle of the distance matrix**, so
