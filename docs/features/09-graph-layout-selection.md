@@ -400,6 +400,30 @@ Existing in-tree CPU force simulation (slice 7 work in [Feature 02](02-core-onto
 
 ---
 
+### Slice 13: Fold a chain that cannot be shown legibly straight
+
+**Status:** Proposed
+
+**Priority:** Could Have
+
+**User Value:** Slice 12 lays a chain along the canvas at its own length, which is the right drawing up to about twenty steps. Past that the camera fits the chain's length to the canvas width, node size stays put and the spacing shrinks as one over the count: labels collide around 20 steps, the spacing is under three node diameters at about 26, and the nodes themselves overlap by 75. A long chain then wastes the canvas's height and is unreadable along its width. Folding it into switchbacks, left to right then right to left, multiplies the spacing by the number of rows and fills the canvas, and it reads like text.
+
+**Acceptance Criteria:**
+- [ ] A component that is a pure chain, and whose node spacing on the configured canvas would fall below a stated multiple of the node size when drawn straight, is folded into rows; a chain that fits legibly straight is drawn straight, exactly as slice 12 leaves it.
+- [ ] Within a row, neighbors in the graph are neighbors on the canvas in order; the chain changes direction only at a row's end, so every place where canvas distance misrepresents graph distance is a visible turn.
+- [ ] The number of rows is the fewest that brings the spacing up to the stated multiple on the configured canvas, so the fold uses the canvas's height without exceeding it.
+- [ ] A component with any edge other than the chain's own is never folded, since a fold would lay such an edge across rows and misstate the distance it represents; the slice-12 orientation still applies to it.
+- [ ] The fold is deterministic: republishing an unchanged schema produces identical pages.
+- [ ] A chain of about 30 and one of about 100 steps are checked by eye at phone, laptop and 4K sizes, alongside a 10-step chain that must be unchanged.
+
+**Notes:**
+- The stress-based layouts cannot produce a fold on their own: they minimize the gap between canvas distance and graph distance, for which a chain's exact optimum is a straight line, and a switchback places nodes many steps apart next to each other. The fold is therefore a deliberate post-process that overrides that objective for pure chains only, where there are no cross-links for it to misrepresent.
+- A spiral fills a square rather than a wide canvas and rotates the reading direction continuously, which suits a cycle better than a sequence; switchbacks keep a left-to-right reading within each row.
+- The thresholds above come from the renderer's fixed node radius after `scale_to_world` (about 9 px at laptop width); the stated multiple should be a named constant with the measurement behind it, as slice 12's elongation threshold is.
+- No schema in the corpus measured for slice 12 has a chain at all; this slice waits for one, or for a consumer who asks.
+
+---
+
 ## Slice Priority and Dependencies
 
 | Slice | Priority | Depends On | Status |
@@ -416,6 +440,7 @@ Existing in-tree CPU force simulation (slice 7 work in [Feature 02](02-core-onto
 | Slice 10: Compact multi-component packing | Should Have | Slices 4, 5 | ✅ Complete |
 | Slice 11: Variable edge length so FD clusters (LinLog / ForceAtlas2) | Could Have | Slice 2 | ❌ Won't Do (use SGD/Stress; picker reordered) |
 | Slice 12: Fit by rotation before stretch | Could Have | Slice 10 | In Progress (screenshot review pending) |
+| Slice 13: Fold a long chain into switchbacks | Could Have | Slice 12 | Proposed |
 
 **Prerequisite (✓ cleared):** Feature 02 [slice 7](02-core-ontology-documentation.md#slice-7-improve-force-directed-default-so-the-graph-fills-its-viewport) — the force-directed default fills the viewport with legible labels at all 3 scales. The picker can now expose the existing force-directed implementation as the "Force-directed" option without that option spreading a bad reputation across the others.
 
