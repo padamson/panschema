@@ -205,6 +205,95 @@ fn kamada_kawai_component(
     finite_positions(&drawing, component.len())
 }
 
+/// Whether the canvas's long axis is x. A square canvas counts as wide: x is
+/// the reading direction, so a chain lies along it and a tall compact layout
+/// is widened toward square. `orient_along_canvas` and `fit_to_aspect` both
+/// take their side from here, so they cannot disagree.
+fn canvas_is_wide(aspect_w: f32, aspect_h: f32) -> bool {
+    aspect_w >= aspect_h
+}
+
+/// Below this ratio of a component's principal spreads it has no long axis
+/// worth turning toward the canvas, and `orient_along_canvas` leaves it as
+/// the algorithm laid it out. Real schema graphs measured in 2026-10 lie
+/// between 1.0 and 1.5; chains lie beyond 15.
+const MIN_ELONGATION_TO_ORIENT: f32 = 2.0;
+
+/// Turns `positions` about their centroid so that their long axis lies along
+/// x when `wide`, along y otherwise, with the first position toward the left
+/// or the top, and returns whether it turned them.
+///
+/// The long axis is the principal axis of the positions' covariance, and the
+/// elongation is the ratio of the spreads along and across it. Below
+/// [`MIN_ELONGATION_TO_ORIENT`] there is no long axis to speak of and nothing
+/// moves. A single node or a lone edge is placed directly by the pipeline
+/// rather than laid out, and is left as placed. A turn keeps every distance,
+/// so a chain stays exactly as straight as the layout left it, which is what
+/// lets it use the canvas's length without being stretched to it. An axis
+/// has two directions; putting the first position first along it keeps a
+/// chain reading the same way however the layout happened to tilt it.
+fn orient_along_canvas(positions: &mut [(f32, f32)], wide: bool) -> bool {
+    if positions.len() < 3 {
+        return false;
+    }
+    let n = positions.len() as f64;
+    let (mx, my) = positions
+        .iter()
+        .fold((0.0_f64, 0.0_f64), |(sx, sy), &(x, y)| {
+            (sx + f64::from(x), sy + f64::from(y))
+        });
+    let (mx, my) = (mx / n, my / n);
+    let (sxx, syy, sxy) =
+        positions
+            .iter()
+            .fold((0.0_f64, 0.0_f64, 0.0_f64), |(sxx, syy, sxy), &(x, y)| {
+                let (dx, dy) = (f64::from(x) - mx, f64::from(y) - my);
+                (sxx + dx * dx, syy + dy * dy, sxy + dx * dy)
+            });
+    // Eigenvalues of the covariance matrix [[sxx, sxy], [sxy, syy]].
+    let half_trace = (sxx + syy) / 2.0;
+    let discriminant = (half_trace * half_trace - (sxx * syy - sxy * sxy))
+        .max(0.0)
+        .sqrt();
+    let (along, across) = (
+        half_trace + discriminant,
+        (half_trace - discriminant).max(0.0),
+    );
+    // A smaller spread of zero means collinear positions, an elongation past
+    // any threshold; the floor keeps that a number rather than a division by
+    // zero. Positions all at one point have no spread at all and stay.
+    let elongation = (along / across.max(f64::MIN_POSITIVE)).sqrt();
+    if elongation < f64::from(MIN_ELONGATION_TO_ORIENT) {
+        return false;
+    }
+    let axis = 0.5 * (2.0 * sxy).atan2(sxx - syy);
+    let turn = if wide {
+        -axis
+    } else {
+        std::f64::consts::FRAC_PI_2 - axis
+    };
+    let rotated = |turn: f64, (x, y): (f32, f32)| {
+        let (dx, dy) = (f64::from(x) - mx, f64::from(y) - my);
+        (
+            dx * turn.cos() - dy * turn.sin(),
+            dx * turn.sin() + dy * turn.cos(),
+        )
+    };
+    // The other way round, a half turn more, if the first position would
+    // land past the centroid; exactly on it, the direction stays as it is.
+    let (first_x, first_y) = rotated(turn, positions[0]);
+    let direction = if (wide && first_x > 0.0) || (!wide && first_y > 0.0) {
+        -1.0
+    } else {
+        1.0
+    };
+    for p in positions.iter_mut() {
+        let (dx, dy) = rotated(turn, *p);
+        *p = ((mx + direction * dx) as f32, (my + direction * dy) as f32);
+    }
+    true
+}
+
 /// The least the realized-aspect correction in `fit_to_aspect` is allowed to
 /// scale either axis, up or down; [`stretch_cap`] raises it when the canvas
 /// needs more.
@@ -268,6 +357,11 @@ type ComponentLayout = fn(&Graph<String, (), Undirected>, &[NodeIndex]) -> Vec<(
 ///
 /// Empty input returns an empty `Vec`.
 ///
+/// Before packing, each component is turned so that its long axis, if it has
+/// one, runs along the canvas's long axis (`orient_along_canvas`); a turn
+/// keeps every distance, so this uses the canvas without distorting the
+/// layout, and compact components are left as laid out.
+///
 /// `#[mutants::skip]`: the shelf-packing arithmetic admits several
 /// observationally-equivalent formulations of the bbox accumulation,
 /// `total_area` / `target_row_width` formula, wrap condition, and
@@ -305,7 +399,8 @@ fn layout_by_components(
     let mut laid: Vec<LaidOut> = components
         .into_iter()
         .map(|component| {
-            let raw = layout_component(&pg, &component);
+            let mut raw = layout_component(&pg, &component);
+            orient_along_canvas(&mut raw, canvas_is_wide(aspect_w, aspect_h));
             let (min_x, max_x, min_y, max_y) = bounding_box(&raw);
             let width = (max_x - min_x).max(0.0);
             let height = (max_y - min_y).max(0.0);
@@ -391,8 +486,8 @@ fn layout_by_components(
     positions
 }
 
-/// Corrects the *realized* bounding-box aspect of `positions` toward
-/// `aspect_w : aspect_h`, area-preserving: x is scaled by
+/// Lengthens `positions` along the canvas's long axis toward the canvas's
+/// aspect `aspect_w : aspect_h`, area-preserving: x is scaled by
 /// `√(target / realized)` and y by its inverse.
 ///
 /// The shelf-packer gets the arrangement roughly right, but with a big
@@ -402,29 +497,43 @@ fn layout_by_components(
 /// no-op when already there, so it cannot double-apply into a horizontal
 /// smear the way a blind `√(target)` stretch did.
 ///
+/// The fit only ever lengthens along the canvas's long axis, x for a wide or
+/// square canvas and y for a tall one. A layout already longer than the
+/// canvas, a turned chain above all, is left alone for the camera to fit by
+/// its length: squashing it would bend whatever bow it has for no gain in
+/// fill.
+///
 /// With `cap_stretch`, the stretch is capped per axis at [`stretch_cap`], so
-/// a layout far from the target, a chain above all, is fitted only as far as
-/// the cap allows rather than distorted onto the target. The cap protects
-/// what an algorithm laid out; a graph of only singletons and lone edges,
-/// placed directly, has no such shape, and the caller leaves it uncapped so
-/// a few isolated pairs still spread to fill the canvas. A degenerate
-/// bounding box or aspect is left alone.
+/// a layout far from the target is fitted only as far as the cap allows
+/// rather than distorted onto the target. The cap protects what an algorithm
+/// laid out; a graph of only singletons and lone edges, placed directly, has
+/// no such shape, and the caller leaves it uncapped so a few isolated pairs
+/// still spread to fill the canvas. A degenerate bounding box or aspect is
+/// left alone.
 fn fit_to_aspect(positions: &mut [(f32, f32)], aspect_w: f32, aspect_h: f32, cap_stretch: bool) {
     let (min_x, max_x, min_y, max_y) = bounding_box(positions);
     let (bw, bh) = (max_x - min_x, max_y - min_y);
-    if bw > f32::EPSILON && bh > f32::EPSILON && aspect_w > 0.0 && aspect_h > 0.0 {
-        let realized = bw / bh;
-        let target = aspect_w / aspect_h;
-        let cap = if cap_stretch {
-            stretch_cap(target)
-        } else {
-            f32::INFINITY
-        };
-        let s = (target / realized).sqrt().clamp(cap.recip(), cap);
-        for p in positions.iter_mut() {
-            p.0 *= s;
-            p.1 /= s;
-        }
+    if !(bw > f32::EPSILON && bh > f32::EPSILON && aspect_w > 0.0 && aspect_h > 0.0) {
+        return;
+    }
+    let realized = bw / bh;
+    let target = aspect_w / aspect_h;
+    let cap = if cap_stretch {
+        stretch_cap(target)
+    } else {
+        f32::INFINITY
+    };
+    // The bounds only ever lengthen along the canvas's long axis: x may grow
+    // for a wide canvas and shrink for a tall one, never the other way.
+    let (lowest, highest) = if canvas_is_wide(aspect_w, aspect_h) {
+        (1.0, cap)
+    } else {
+        (cap.recip(), 1.0)
+    };
+    let s = (target / realized).sqrt().clamp(lowest, highest);
+    for p in positions.iter_mut() {
+        p.0 *= s;
+        p.1 /= s;
     }
 }
 
@@ -1137,6 +1246,22 @@ mod tests {
     // A small instance graph is often a few isolated pairs. Nothing in it was
     // laid out by an algorithm, so there is no shape for the cap to protect,
     // and the pairs are spread to fill the canvas exactly as before the cap.
+    // A ring with isolated nodes packs into a block narrower than a 16:8
+    // canvas by more than the cap can make up, so the cap shows through the
+    // public entry points: the block is widened, but stops short of the
+    // canvas aspect.
+    #[test]
+    fn every_layout_caps_how_far_a_packed_graph_is_widened() {
+        let graph = make_lopsided(20, 8);
+        for (layout, run) in LAYOUTS {
+            let fitted = aspect(&run(&graph, 2.0, 1.0));
+            assert!(
+                fitted > 1.0 && fitted < 1.95,
+                "{layout}: packed graph came out at aspect {fitted}; the cap should stop it short of 2"
+            );
+        }
+    }
+
     #[test]
     fn every_layout_fills_the_canvas_with_a_graph_of_lone_edges() {
         let mut pairs = make_ring(4);
@@ -1154,6 +1279,182 @@ mod tests {
                 (fitted - 2.0).abs() < 1e-3,
                 "{layout}: two lone edges came out with aspect {fitted} on a 2:1 canvas"
             );
+        }
+    }
+
+    fn rectangle(w: f32, h: f32) -> Vec<(f32, f32)> {
+        vec![(0.0, 0.0), (w, 0.0), (0.0, h), (w, h), (w / 2.0, h / 2.0)]
+    }
+
+    #[test]
+    fn a_square_canvas_counts_as_wide() {
+        assert!(canvas_is_wide(1.0, 1.0));
+        assert!(canvas_is_wide(16.0, 8.0));
+        assert!(!canvas_is_wide(8.0, 16.0));
+    }
+
+    // The fit only lengthens a layout along the canvas's long axis, toward the
+    // canvas's aspect and within the cap. A layout already longer than the
+    // canvas is left to the camera, which fits its width; squashing it would
+    // bend whatever bow it has for no gain in fill. A square canvas counts as
+    // wide, so a tall layout on it is widened and a wide one is left alone.
+    #[test]
+    fn the_fit_only_lengthens_a_layout_along_the_canvas() {
+        let cases = [
+            // name, width, height of the layout, canvas, expected aspect after
+            ("too square for a wide canvas", 1.0, 1.0, (2.0, 1.0), 2.0),
+            (
+                "far too tall for a wide canvas, capped",
+                1.0,
+                3.0,
+                (2.0, 1.0),
+                0.75,
+            ),
+            (
+                "already wider than a wide canvas",
+                3.0,
+                1.0,
+                (2.0, 1.0),
+                3.0,
+            ),
+            ("too square for a tall canvas", 1.0, 1.0, (1.0, 2.0), 0.5),
+            (
+                "far too wide for a tall canvas, capped",
+                3.0,
+                1.0,
+                (1.0, 2.0),
+                3.0 / 2.25,
+            ),
+            (
+                "already taller than a tall canvas",
+                1.0,
+                3.0,
+                (1.0, 2.0),
+                1.0 / 3.0,
+            ),
+            (
+                "a wide layout on a square canvas",
+                3.0,
+                1.0,
+                (1.0, 1.0),
+                3.0,
+            ),
+            (
+                "a tall layout on a square canvas, widened within the cap",
+                1.0,
+                3.0,
+                (1.0, 1.0),
+                0.75,
+            ),
+        ];
+        for (name, w, h, (aw, ah), expected) in cases {
+            let mut positions = rectangle(w, h);
+            fit_to_aspect(&mut positions, aw, ah, true);
+            let fitted = aspect(&positions);
+            assert!(
+                (fitted / expected - 1.0).abs() < 1e-5,
+                "{name}: {w}x{h} on {aw}:{ah} came out {fitted}, expected {expected}"
+            );
+        }
+    }
+
+    // A layout with no extent on an axis, or one a hair wide, has no aspect to
+    // fit; a canvas with no extent has no aspect to fit to. All are left
+    // exactly as they are rather than scaled by zero or infinity.
+    #[test]
+    fn the_fit_leaves_a_degenerate_layout_or_canvas_alone() {
+        let hair = f32::EPSILON;
+        for (name, points, (aw, ah)) in [
+            (
+                "a vertical line on a wide canvas",
+                vec![(1.0, 0.0), (1.0, 2.0), (1.0, 1.0)],
+                (2.0, 1.0),
+            ),
+            (
+                "a horizontal line on a tall canvas",
+                vec![(0.0, 1.0), (2.0, 1.0), (1.0, 1.0)],
+                (1.0, 2.0),
+            ),
+            (
+                "a hairline wide on a wide canvas",
+                rectangle(hair, 1.0),
+                (2.0, 1.0),
+            ),
+            (
+                "a hairline tall on a tall canvas",
+                rectangle(1.0, hair),
+                (1.0, 2.0),
+            ),
+            ("a canvas with no width", rectangle(1.0, 1.0), (0.0, 1.0)),
+            ("a canvas with no height", rectangle(1.0, 1.0), (1.0, 0.0)),
+        ] {
+            let mut positions = points.clone();
+            fit_to_aspect(&mut positions, aw, ah, true);
+            assert_eq!(positions, points, "{name}");
+        }
+    }
+
+    #[test]
+    fn an_uncapped_fit_lengthens_all_the_way_to_the_canvas() {
+        let mut positions = rectangle(1.0, 3.0);
+        fit_to_aspect(&mut positions, 2.0, 1.0, false);
+        assert!(
+            (aspect(&positions) - 2.0).abs() < 1e-5,
+            "got {}",
+            aspect(&positions)
+        );
+    }
+
+    /// Angle of a chain's end-to-end line from the x axis, folded into [0, 90°].
+    fn chain_angle_degrees(chain: &[(f32, f32)]) -> f32 {
+        let (ax, ay) = chain[0];
+        let (bx, by) = chain[chain.len() - 1];
+        let angle = (by - ay).atan2(bx - ax).to_degrees().abs();
+        if angle > 90.0 { 180.0 - angle } else { angle }
+    }
+
+    /// Every pairwise distance, sorted, so two layouts of the same nodes can
+    /// be compared as shapes regardless of where and how they are turned.
+    fn distances(positions: &[(f32, f32)]) -> Vec<f32> {
+        let mut out = vec![];
+        for j in 1..positions.len() {
+            for i in 0..j {
+                out.push((positions[i].0 - positions[j].0).hypot(positions[i].1 - positions[j].1));
+            }
+        }
+        out.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        out
+    }
+
+    // A chain is turned to lie along the canvas's long axis and is then longer
+    // than the canvas, so the fit leaves it alone: it keeps every distance the
+    // layout gave it, bow included, and only the turn and the packing's shift
+    // distinguish it from the raw component layout.
+    #[test]
+    fn every_layout_lays_a_chain_along_the_canvas_at_its_own_length() {
+        for (layout, component, run) in COMPONENT_LAYOUTS {
+            for n in [5, 8, 12] {
+                let (pg, chain) = path_component(n);
+                let raw = component(&pg, &chain);
+                for (aw, ah, along_x) in [
+                    (16.0_f32, 9.0_f32, true),
+                    (2.0, 1.0, true),
+                    (1.0, 2.0, false),
+                ] {
+                    let laid = run(&make_path(n), aw, ah);
+                    let angle = chain_angle_degrees(&laid);
+                    assert!(
+                        if along_x { angle < 10.0 } else { angle > 80.0 },
+                        "{layout}, {n} nodes on {aw}:{ah}: chain lies at {angle} degrees"
+                    );
+                    for (d, r) in distances(&laid).iter().zip(distances(&raw)) {
+                        assert!(
+                            (d - r).abs() <= 1e-3 * r.max(1e-3),
+                            "{layout}, {n} nodes on {aw}:{ah}: a distance changed from {r} to {d}"
+                        );
+                    }
+                }
+            }
         }
     }
 
@@ -1421,49 +1722,31 @@ mod tests {
         );
     }
 
+    // A compact graph is lengthened toward the canvas's aspect: x by
+    // √(target / realized) and y by its inverse, so the aspect moves by that
+    // factor squared. The 4:2 case distinguishes √(w/h) from any commutative
+    // alternative. A ring is near square, so these aspects stay inside the
+    // stretch cap, which is checked here so that a cap that engaged would be
+    // reported as such; the cap and the lengthen-only rule have their own tests.
     #[test]
-    fn every_layout_scales_coordinates_by_the_aspect_bias() {
-        // Each layout scales x by √(target / realized) and y by its inverse.
-        // On one component the raw layout does not depend on the aspect, so
-        // against the square run the ratio is exactly √(w/h) in x and √(h/w)
-        // in y. The 4:2 case distinguishes √(w/h) from any commutative
-        // alternative. A ring is near square, so these aspects stay inside
-        // the stretch cap, which is checked here so that a cap that engaged
-        // would be reported as such; the cap has its own tests.
+    fn every_layout_lengthens_a_compact_graph_toward_the_canvas_aspect() {
         let ring = make_ring(10);
         let (pg, nodes) = single_component(&ring);
         for (layout, component, run) in COMPONENT_LAYOUTS {
             let raw = aspect(&component(&pg, &nodes));
-            let square = run(&ring, 1.0, 1.0);
             for (aw, ah) in [(2.0_f32, 1.0), (4.0, 2.0), (1.0, 2.0)] {
-                for target in [1.0, aw / ah] {
-                    let needed = (target / raw).sqrt();
-                    let cap = stretch_cap(target);
-                    assert!(
-                        needed > cap.recip() && needed < cap,
-                        "{layout}: the ring's raw aspect {raw} needs {needed} to reach {target}, and the cap would engage"
-                    );
-                }
-                let biased = run(&ring, aw, ah);
-                assert_eq!(biased.len(), square.len());
-                let sx_expected = (aw / ah).sqrt();
-                let sy_expected = (ah / aw).sqrt();
-                for (i, ((sx, sy), (bx, by))) in square.iter().zip(biased.iter()).enumerate() {
-                    if sx.abs() > 0.01 {
-                        let ratio = bx / sx;
-                        assert!(
-                            (ratio - sx_expected).abs() < 1e-4,
-                            "{layout} aspect {aw}:{ah} node {i}: x ratio {ratio} != expected {sx_expected}"
-                        );
-                    }
-                    if sy.abs() > 0.01 {
-                        let ratio = by / sy;
-                        assert!(
-                            (ratio - sy_expected).abs() < 1e-4,
-                            "{layout} aspect {aw}:{ah} node {i}: y ratio {ratio} != expected {sy_expected}"
-                        );
-                    }
-                }
+                let target = aw / ah;
+                let needed = (target / raw).sqrt();
+                let cap = stretch_cap(target);
+                assert!(
+                    needed > cap.recip() && needed < cap,
+                    "{layout}: the ring's raw aspect {raw} needs {needed} to reach {target}, and the cap would engage"
+                );
+                let fitted = aspect(&run(&ring, aw, ah));
+                assert!(
+                    (fitted / target - 1.0).abs() < 1e-3,
+                    "{layout} on {aw}:{ah}: raw aspect {raw} came out {fitted}, expected {target}"
+                );
             }
         }
     }
@@ -1479,24 +1762,6 @@ mod tests {
         let (min_x, max_x, min_y, max_y) = bounding_box(positions);
         (max_x - min_x) / (max_y - min_y)
     }
-
-    /// How far a chain bows: its furthest node's distance from the line between
-    /// its ends, as a fraction of the distance between the ends.
-    fn sag(chain: &[(f32, f32)]) -> f32 {
-        let (ax, ay) = chain[0];
-        let (bx, by) = chain[chain.len() - 1];
-        let length = (bx - ax).hypot(by - ay);
-        let (ux, uy) = ((bx - ax) / length, (by - ay) / length);
-        chain
-            .iter()
-            .map(|&(x, y)| ((x - ax) * -uy + (y - ay) * ux).abs())
-            .fold(0.0_f32, f32::max)
-            / length
-    }
-
-    /// Square, 16:9, the default 16:8 and its transpose. Chains lie both
-    /// ways, so across the layouts these drive the stretch to both bounds.
-    const ASPECTS: [(f32, f32); 4] = [(1.0, 1.0), (16.0, 9.0), (2.0, 1.0), (1.0, 2.0)];
 
     #[test]
     fn the_stretch_cap_is_the_floor_or_what_a_square_layout_needs() {
@@ -1514,58 +1779,149 @@ mod tests {
         assert_eq!(stretch_cap(0.25), 2.0, "and 2x the other way to reach 1:4");
     }
 
-    // The correction stretches one axis and shrinks the other by the same
-    // factor, so a layout's aspect moves toward the target by that factor
-    // squared, and stops moving once the factor hits the cap. Chains are the
-    // case that matters: a chain's raw aspect is extreme, so an uncapped
-    // correction would square it up. Both bounds of the cap must come into
-    // play somewhere in the cases, or a bound could be lost unnoticed.
+    fn turned(points: &[(f32, f32)], degrees: f32) -> Vec<(f32, f32)> {
+        let (c, s) = (degrees.to_radians().cos(), degrees.to_radians().sin());
+        points
+            .iter()
+            .map(|&(x, y)| (x * c - y * s, x * s + y * c))
+            .collect()
+    }
+
+    fn bowed_chain(n: usize) -> Vec<(f32, f32)> {
+        (0..n).map(|i| (i as f32, 0.1 * (i as f32).sin())).collect()
+    }
+
     #[test]
-    fn the_aspect_correction_stretches_each_axis_at_most_the_cap() {
-        let (mut hit_lower, mut hit_upper) = (false, false);
-        for (layout, component, run) in COMPONENT_LAYOUTS {
-            for n in [5, 8, 12] {
-                let (pg, chain) = path_component(n);
-                let raw = aspect(&component(&pg, &chain));
-                for (aw, ah) in ASPECTS {
-                    let target = aw / ah;
-                    let cap = stretch_cap(target);
-                    let stretch = (target / raw).sqrt().clamp(cap.recip(), cap);
-                    hit_lower |= stretch == cap.recip();
-                    hit_upper |= stretch == cap;
-                    let expected = raw * stretch * stretch;
-                    let actual = aspect(&run(&make_path(n), aw, ah));
-                    assert!(
-                        (actual / expected - 1.0).abs() < 1e-3,
-                        "{layout}, {n} nodes at {aw}:{ah}: raw aspect {raw}, corrected to {actual}, expected {expected}"
-                    );
+    fn orienting_turns_a_chain_along_the_axis_and_keeps_every_distance() {
+        // The chain is bowed, so its end-to-end line sits a degree or so off
+        // its principal axis; the axis is what lies along the canvas. It is
+        // tilted one way and the reverse way, since an axis has two
+        // directions and the first node must come first along it either way.
+        let centroid = |points: &[(f32, f32)]| {
+            let n = points.len() as f32;
+            (
+                points.iter().map(|p| p.0).sum::<f32>() / n,
+                points.iter().map(|p| p.1).sum::<f32>() / n,
+            )
+        };
+        for (tilt, wide, low, high) in [
+            (40.0, true, 0.0, 5.0),
+            (220.0, true, 0.0, 5.0),
+            (40.0, false, 85.0, 90.0),
+            (220.0, false, 85.0, 90.0),
+        ] {
+            let tilted = turned(&bowed_chain(8), tilt);
+            let mut positions = tilted.clone();
+            assert!(
+                orient_along_canvas(&mut positions, wide),
+                "tilt {tilt}, wide = {wide}: not turned"
+            );
+            let angle = chain_angle_degrees(&positions);
+            assert!(
+                (low..=high).contains(&angle),
+                "tilt {tilt}, wide = {wide}: chain lies at {angle} degrees"
+            );
+            let first = positions[0];
+            let first_comes_first = positions.iter().all(|p| {
+                if wide {
+                    p.0 >= first.0 - 1e-4
+                } else {
+                    p.1 >= first.1 - 1e-4
                 }
+            });
+            assert!(
+                first_comes_first,
+                "tilt {tilt}, wide = {wide}: the first node is not first along the axis: {positions:?}"
+            );
+            for (d, r) in distances(&positions).iter().zip(distances(&tilted)) {
+                assert!(
+                    (d - r).abs() < 1e-4,
+                    "tilt {tilt}, wide = {wide}: distance {r} became {d}"
+                );
             }
+            let (before, after) = (centroid(&tilted), centroid(&positions));
+            assert!(
+                (before.0 - after.0).abs() < 1e-4 && (before.1 - after.1).abs() < 1e-4,
+                "tilt {tilt}, wide = {wide}: the turn moved the centroid from {before:?} to {after:?}"
+            );
         }
+        // Three positions are the fewest with a spread to measure.
+        let mut three = turned(&bowed_chain(3), 40.0);
         assert!(
-            hit_lower && hit_upper,
-            "lower bound hit: {hit_lower}, upper: {hit_upper}"
+            orient_along_canvas(&mut three, true),
+            "three positions not turned"
         );
     }
 
-    // Scaling the axes apart by a factor magnifies a chain's sag by at most
-    // that factor squared, so the cap bounds how far the correction can bend
-    // a nearly straight chain.
+    // When the first node sits on the centroid line there is no side for it
+    // to be on, and the layout keeps the direction it had.
     #[test]
-    fn the_aspect_correction_bends_a_chain_at_most_the_cap_squared() {
-        for (layout, component, run) in COMPONENT_LAYOUTS {
-            for n in [5, 8, 12] {
-                let (pg, chain) = path_component(n);
-                let raw = sag(&component(&pg, &chain));
-                for (aw, ah) in ASPECTS {
-                    let cap = stretch_cap(aw / ah);
-                    let bound = cap * cap;
-                    let bent = sag(&run(&make_path(n), aw, ah));
-                    assert!(
-                        bent <= raw * bound * 1.001 + 1e-6,
-                        "{layout}, {n} nodes at {aw}:{ah}: sag {raw} became {bent}, over {bound}x"
-                    );
-                }
+    fn orienting_keeps_the_direction_when_the_first_node_is_central() {
+        let mut along_x = vec![(0.0_f32, 0.0_f32), (-2.0, 0.0), (2.0, 0.0)];
+        assert!(orient_along_canvas(&mut along_x, true));
+        assert_eq!(along_x, [(0.0, 0.0), (-2.0, 0.0), (2.0, 0.0)]);
+        let mut along_y = vec![(0.0_f32, 0.0_f32), (0.0, -2.0), (0.0, 2.0)];
+        assert!(orient_along_canvas(&mut along_y, false));
+        assert_eq!(along_y, [(0.0, 0.0), (0.0, -2.0), (0.0, 2.0)]);
+    }
+
+    // The threshold is a ratio of spreads and inclusive: a 1.9:1 rectangle at
+    // a slant and a square are left exactly as they are; a 2.1:1 one is
+    // turned, and so is one exactly 2:1 (its spreads are 4 and 1, so the
+    // ratio is exact in floating point).
+    #[test]
+    fn orienting_leaves_a_near_square_layout_alone() {
+        for (name, points, expect_turn) in [
+            (
+                "a 1.9:1 rectangle",
+                turned(&rectangle(1.9, 1.0), 30.0),
+                false,
+            ),
+            ("a square", turned(&rectangle(1.0, 1.0), 30.0), false),
+            (
+                "a 2.1:1 rectangle",
+                turned(&rectangle(2.1, 1.0), 30.0),
+                true,
+            ),
+            ("a rectangle exactly 2:1", rectangle(2.0, 1.0), true),
+        ] {
+            let mut positions = points.clone();
+            let turned_it = orient_along_canvas(&mut positions, true);
+            assert_eq!(turned_it, expect_turn, "{name}");
+            if !expect_turn {
+                assert_eq!(positions, points, "{name} moved");
+            }
+        }
+        let mut two = vec![(0.0, 0.0), (5.0, 1.0)];
+        assert!(
+            !orient_along_canvas(&mut two, true),
+            "two points have no spread to measure"
+        );
+    }
+
+    // Each component is turned on its own before packing, so a graph of two
+    // chains has both lying along the canvas.
+    #[test]
+    fn every_layout_turns_each_component_before_packing() {
+        let mut chains = make_ring(10);
+        chains.edges = (0..4)
+            .map(|i| (i, i + 1))
+            .chain((5..9).map(|i| (i, i + 1)))
+            .map(|(s, t)| GraphEdge {
+                source: format!("n{s}"),
+                target: format!("n{t}"),
+                edge_type: EdgeType::SubclassOf,
+                label: None,
+            })
+            .collect();
+        for (layout, run) in LAYOUTS {
+            let positions = run(&chains, 2.0, 1.0);
+            for (which, chain) in [("first", &positions[0..5]), ("second", &positions[5..10])] {
+                let angle = chain_angle_degrees(chain);
+                assert!(
+                    angle < 10.0,
+                    "{layout}: the {which} chain lies at {angle} degrees"
+                );
             }
         }
     }

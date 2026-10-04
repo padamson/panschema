@@ -377,24 +377,26 @@ Existing in-tree CPU force simulation (slice 7 work in [Feature 02](02-core-onto
 
 ### Slice 12: Fit a layout to the canvas by rotation before stretch
 
-**Status:** Proposed
+**Status:** In Progress — code and tests landed; the screenshot review (last criterion) is pending
 
 **Priority:** Could Have
 
 **User Value:** A schema whose graph is much longer than it is wide — a chain of `is_a` steps, a spine with short branches — fills a wide canvas today only by being stretched, and the stretch is capped (slice 10's later change) because it magnifies any bow in the chain. With the cap, such a graph sits in the middle of the canvas at whatever angle the layout happened to leave it, using a fraction of the width. Turning the layout so its long axis runs along the canvas's long axis uses the canvas without distorting the layout at all: rotation preserves every distance, so a chain stays exactly as straight as the layout left it.
 
 **Acceptance Criteria:**
-- [ ] A single-component graph whose layout is at least twice as long as it is wide is rotated so that its long axis lies along the canvas's long axis before any stretch is applied; the pairwise distances between its nodes are unchanged by the rotation.
-- [ ] After rotation, the remaining stretch toward the canvas aspect is at most the slice-10 cap, and for a chain it is no more than what fitting a straight line needs.
-- [ ] A near-square layout is left unrotated (its principal axis is not meaningful), so compact graphs are laid out exactly as before.
-- [ ] Multi-component graphs rotate each component before packing, so each cluster is oriented and the packer arranges the oriented clusters.
-- [ ] The rotation is deterministic: republishing an unchanged schema produces identical pages.
+- [x] A single-component graph whose layout is at least twice as long as it is wide is rotated so that its long axis lies along the canvas's long axis before any stretch is applied; the pairwise distances between its nodes are unchanged by the rotation.
+- [x] The fit toward the canvas aspect only lengthens a layout along the canvas's long axis, within the slice-10 cap; a layout already longer than the canvas, a rotated chain above all, is left at its own length. A square canvas counts as wide, for the rotation and the fit alike.
+- [x] A near-square layout is left unrotated (its principal axis is not meaningful), so compact graphs are laid out exactly as before.
+- [x] Multi-component graphs rotate each component before packing, so each cluster is oriented and the packer arranges the oriented clusters.
+- [x] The rotation is deterministic: republishing an unchanged schema produces identical pages.
 - [ ] The reference fixture and at least one chain-heavy fixture are checked by eye at phone, laptop and 4K sizes before the change ships, since every published layout of an elongated graph will change once.
 
 **Notes:**
 - Measured on 2026-10-03: no layout leaves a chain straight (stress bows it by 3–10% of its length from the spiral start and 3–5% after a thousand iterations; SGD up to 5%; Kamada-Kawai 2–3% at its tightened threshold), and the uncapped aspect stretch magnified any bow by the chain's own aspect ratio, so every chain came out as an L. The cap stops the L; this slice is what would let a chain use the canvas.
 - The principal axis is the eigenvector of the positions' covariance; a layout with two nearly equal eigenvalues has no meaningful axis, which is the "near-square" guard above.
 - Rotation changes every elongated graph's published layout once. That is the reason this is a slice with screenshot review rather than a follow-on to the cap.
+- Decision, 2026-10-04: the fit lengthens only. Three rules were weighed on every fixture schema (SGD, 16:8): fit from both sides as before; never squash single components; never squash at all. Every real multi-class graph measured (two downstream schemas of 69 and 84 nodes, the reference fixture, taxonomy, wine catalog, a 31-node tree, a 15-ring) has a largest-component elongation of 1.0 to 1.5, so rotation never touches it and the three rules coincide there. They differ only on chains, which after rotation lie along the canvas at aspects of 18 to 388: the two-sided fit would squash each by the cap, bowing it 2.25× for no visible gain in fill, while lengthen-only leaves it at its own length. No measured packing came out wider than the canvas (the widest, 1.41), so the only cost of lengthen-only, a wide packing keeping unused height, did not arise.
+- The elongation threshold of 2 sits in an empty band: the corpus has nothing between 1.5 and 17.
 
 ---
 
@@ -413,7 +415,7 @@ Existing in-tree CPU force simulation (slice 7 work in [Feature 02](02-core-onto
 | Slice 9: Auto-default to Hierarchical for `is_a`-heavy schemas | Should Have | Slice 6 | ✅ Complete |
 | Slice 10: Compact multi-component packing | Should Have | Slices 4, 5 | ✅ Complete |
 | Slice 11: Variable edge length so FD clusters (LinLog / ForceAtlas2) | Could Have | Slice 2 | ❌ Won't Do (use SGD/Stress; picker reordered) |
-| Slice 12: Fit by rotation before stretch | Could Have | Slice 10 | Proposed |
+| Slice 12: Fit by rotation before stretch | Could Have | Slice 10 | In Progress (screenshot review pending) |
 
 **Prerequisite (✓ cleared):** Feature 02 [slice 7](02-core-ontology-documentation.md#slice-7-improve-force-directed-default-so-the-graph-fills-its-viewport) — the force-directed default fills the viewport with legible labels at all 3 scales. The picker can now expose the existing force-directed implementation as the "Force-directed" option without that option spreading a bad reputation across the others.
 
