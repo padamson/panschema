@@ -82,8 +82,9 @@ echo "mutating changes in ${BASE}..HEAD ($(wc -l < "$DIFF") diff lines)"
 # - `panschema-viz/src/{lib,canvas2d,camera,interaction,labels,graph_types}.rs`:
 #   wasm-only or otherwise need a browser context to test; mutation
 #   testing on the native target can't catch their mutants.
-# - `panschema-viz/src/{simulation,sim_common}.rs` are intentionally
-#   *included* — they're pure-Rust with real native unit tests.
+# - `panschema-viz/src/{simulation,sim_common,legend,layout}.rs`,
+#   `layout/rng.rs` and `layout/algo/*.rs` are intentionally *included* —
+#   they're pure-Rust with real native unit tests.
 # - `panschema/src/components.rs`: dev-only renderer scaffolding for the
 #   styleguide command. Production `panschema generate --format html` uses
 #   Askama's `{% include %}` directly, not these helper functions; the

@@ -205,6 +205,47 @@ fn kamada_kawai_component(
     finite_positions(&drawing, component.len())
 }
 
+/// The least the realized-aspect correction in `fit_to_aspect` is allowed to
+/// scale either axis, up or down; [`stretch_cap`] raises it when the canvas
+/// needs more.
+///
+/// The correction scales the axes apart to bring a layout's aspect to the
+/// canvas's, which magnifies any bow in a nearly straight run of nodes by the
+/// factor squared. No layout leaves a chain straight: measured from the
+/// spiral start, stress leaves it bowed by 3 to 10 percent of its length,
+/// SGD by up to 5 and Kamada-Kawai by 2 to 3, and a chain's own aspect is so
+/// extreme that an uncapped correction turned any of those into an L. At 1.5
+/// the bow grows by at most 2.25×, a gentle curve. The default 16:8 canvas
+/// needs 1.41× to fit a square layout, inside this floor.
+const MAX_ASPECT_STRETCH: f32 = 1.5;
+
+/// How far `fit_to_aspect` may scale either axis for a canvas of aspect
+/// `target`: [`MAX_ASPECT_STRETCH`], or what a square layout needs to reach
+/// the target if that is more, so a compact graph is always fitted to the
+/// canvas it was configured for and only an elongated one is held back.
+fn stretch_cap(target: f32) -> f32 {
+    let square_needs = target.sqrt();
+    MAX_ASPECT_STRETCH
+        .max(square_needs)
+        .max(square_needs.recip())
+}
+
+/// The bounding box of `points` as `(min_x, max_x, min_y, max_y)`; infinite
+/// and inverted when there are none.
+fn bounding_box(points: &[(f32, f32)]) -> (f32, f32, f32, f32) {
+    points.iter().fold(
+        (
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+        ),
+        |(min_x, max_x, min_y, max_y), &(x, y)| {
+            (min_x.min(x), max_x.max(x), min_y.min(y), max_y.max(y))
+        },
+    )
+}
+
 /// Lays out one connected component, returning positions in `component` order.
 type ComponentLayout = fn(&Graph<String, (), Undirected>, &[NodeIndex]) -> Vec<(f32, f32)>;
 
@@ -265,18 +306,7 @@ fn layout_by_components(
         .into_iter()
         .map(|component| {
             let raw = layout_component(&pg, &component);
-            let (mut min_x, mut max_x, mut min_y, mut max_y) = (
-                f32::INFINITY,
-                f32::NEG_INFINITY,
-                f32::INFINITY,
-                f32::NEG_INFINITY,
-            );
-            for &(x, y) in &raw {
-                min_x = min_x.min(x);
-                max_x = max_x.max(x);
-                min_y = min_y.min(y);
-                max_y = max_y.max(y);
-            }
+            let (min_x, max_x, min_y, max_y) = bounding_box(&raw);
             let width = (max_x - min_x).max(0.0);
             let height = (max_y - min_y).max(0.0);
             let translated: Vec<(f32, f32)> =
@@ -354,39 +384,36 @@ fn layout_by_components(
         row_height = row_height.max(ch);
     }
 
-    // Correct the *realized* bounding-box aspect toward the target,
-    // area-preserving. The shelf-packer gets the arrangement roughly
-    // right, but with a big component plus many singletons it tends to
-    // come out near-square (narrower than the target), leaving the wide
-    // canvas mostly empty. Measuring the realized aspect and stretching
-    // by `√(target / realized)` lands it on the target for both single-
-    // and multi-component graphs — and is a no-op when already on
-    // target, so it can't double-apply into a horizontal smear the way a
-    // blind `√(target)` stretch did.
-    let (mut min_x, mut max_x, mut min_y, mut max_y) = (
-        f32::INFINITY,
-        f32::NEG_INFINITY,
-        f32::INFINITY,
-        f32::NEG_INFINITY,
-    );
-    for &(x, y) in &positions {
-        min_x = min_x.min(x);
-        max_x = max_x.max(x);
-        min_y = min_y.min(y);
-        max_y = max_y.max(y);
-    }
+    fit_to_aspect(&mut positions, aspect_w, aspect_h);
+    positions
+}
+
+/// Corrects the *realized* bounding-box aspect of `positions` toward
+/// `aspect_w : aspect_h`, area-preserving: x is scaled by
+/// `√(target / realized)` and y by its inverse.
+///
+/// The shelf-packer gets the arrangement roughly right, but with a big
+/// component plus many singletons it tends to come out near-square, narrower
+/// than a wide canvas, leaving it mostly empty. Measuring the realized aspect
+/// lands single- and multi-component graphs on the target alike, and is a
+/// no-op when already there, so it cannot double-apply into a horizontal
+/// smear the way a blind `√(target)` stretch did. The stretch is capped per
+/// axis at [`stretch_cap`], so a layout far from the target, a chain above
+/// all, is fitted only as far as the cap allows rather than distorted onto
+/// the target. A degenerate bounding box or aspect is left alone.
+fn fit_to_aspect(positions: &mut [(f32, f32)], aspect_w: f32, aspect_h: f32) {
+    let (min_x, max_x, min_y, max_y) = bounding_box(positions);
     let (bw, bh) = (max_x - min_x, max_y - min_y);
     if bw > f32::EPSILON && bh > f32::EPSILON && aspect_w > 0.0 && aspect_h > 0.0 {
         let realized = bw / bh;
         let target = aspect_w / aspect_h;
-        let s = (target / realized).sqrt();
+        let cap = stretch_cap(target);
+        let s = (target / realized).sqrt().clamp(cap.recip(), cap);
         for p in positions.iter_mut() {
             p.0 *= s;
             p.1 /= s;
         }
     }
-
-    positions
 }
 
 /// Stress majorization over the LinkML schema graph, laid out one component
@@ -1039,7 +1066,7 @@ mod tests {
                         .all(|(x, y)| x.is_finite() && y.is_finite()),
                     "{layout}: non-finite coordinate in {positions:?}"
                 );
-                let (min_x, max_x, min_y, max_y) = bbox(&positions);
+                let (min_x, max_x, min_y, max_y) = bounding_box(&positions);
                 assert!(max_x - min_x > 0.1, "{layout}: collapsed in x");
                 assert!(max_y - min_y > 0.1, "{layout}: collapsed in y");
             }
@@ -1070,12 +1097,28 @@ mod tests {
                     let r = x.hypot(y);
                     assert!(r < 800.0, "{layout}: node at radius {r} exceeds MAX_RADIUS");
                 }
-                let (min_x, max_x, min_y, max_y) = bbox(&positions);
+                let (min_x, max_x, min_y, max_y) = bounding_box(&positions);
                 let (w, h) = (max_x - min_x, max_y - min_y);
                 assert!(w >= 100.0, "{layout}: scaled width {w} is degenerate");
                 assert!(h >= 100.0, "{layout}: scaled height {h} is degenerate");
                 assert!(w.max(h) - WORLD_TARGET_DIMENSION < 1e-2, "{layout}");
             }
+        }
+    }
+
+    // A lone edge is the one component every algorithm could lay out but none
+    // needs to: the pipeline places it directly, so it looks the same whichever
+    // layout a schema's reader picks, and a graph of isolated pairs stays tidy.
+    #[test]
+    fn every_layout_draws_a_lone_edge_the_same_way() {
+        let edge = make_path(2);
+        let reference = stress_majorization(&edge, 1.0, 1.0);
+        let [(ax, ay), (bx, by)] = reference[..] else {
+            unreachable!()
+        };
+        assert_eq!((bx - ax, by - ay), (1.0, 0.0), "a unit edge, lying flat");
+        for (layout, run) in LAYOUTS {
+            assert_eq!(run(&edge, 1.0, 1.0), reference, "{layout}");
         }
     }
 
@@ -1100,8 +1143,8 @@ mod tests {
             let positions = run(&graph, 1.0, 1.0);
             // Components are packed tallest first, so which ring lands in which
             // slot is not fixed; only that the two boxes are disjoint.
-            let (a_min_x, a_max_x, a_min_y, a_max_y) = bbox(&positions[0..5]);
-            let (b_min_x, b_max_x, b_min_y, b_max_y) = bbox(&positions[5..10]);
+            let (a_min_x, a_max_x, a_min_y, a_max_y) = bounding_box(&positions[0..5]);
+            let (b_min_x, b_max_x, b_min_y, b_max_y) = bounding_box(&positions[5..10]);
             for (ring, extent) in [
                 ("ring A x", a_max_x - a_min_x),
                 ("ring A y", a_max_y - a_min_y),
@@ -1188,8 +1231,18 @@ mod tests {
         petgraph::Graph<String, (), petgraph::Undirected>,
         Vec<NodeIndex>,
     ) {
-        let graph = make_path(n);
-        let (pg, id_to_idx) = to_petgraph(&graph);
+        single_component(&make_path(n))
+    }
+
+    /// A connected graph as the per-component layout functions receive it:
+    /// the petgraph and its nodes in `graph.nodes` order.
+    fn single_component(
+        graph: &GraphData,
+    ) -> (
+        petgraph::Graph<String, (), petgraph::Undirected>,
+        Vec<NodeIndex>,
+    ) {
+        let (pg, id_to_idx) = to_petgraph(graph);
         let component = graph.nodes.iter().map(|node| id_to_idx[&node.id]).collect();
         (pg, component)
     }
@@ -1284,19 +1337,7 @@ mod tests {
 
         // Isolated nodes are appended after the connected ring, so they
         // are indices 20..36.
-        let iso = &positions[20..];
-        let (mut min_x, mut max_x, mut min_y, mut max_y) = (
-            f32::INFINITY,
-            f32::NEG_INFINITY,
-            f32::INFINITY,
-            f32::NEG_INFINITY,
-        );
-        for &(x, y) in iso {
-            min_x = min_x.min(x);
-            max_x = max_x.max(x);
-            min_y = min_y.min(y);
-            max_y = max_y.max(y);
-        }
+        let (min_x, max_x, min_y, max_y) = bounding_box(&positions[20..]);
         let (w, h) = (max_x - min_x, max_y - min_y);
         assert!(
             h > 0.0,
@@ -1351,11 +1392,23 @@ mod tests {
         // On one component the raw layout does not depend on the aspect, so
         // against the square run the ratio is exactly √(w/h) in x and √(h/w)
         // in y. The 4:2 case distinguishes √(w/h) from any commutative
-        // alternative.
+        // alternative. A ring is near square, so these aspects stay inside
+        // the stretch cap, which is checked here so that a cap that engaged
+        // would be reported as such; the cap has its own tests.
         let ring = make_ring(10);
-        for (layout, run) in LAYOUTS {
+        let (pg, nodes) = single_component(&ring);
+        for (layout, component, run) in COMPONENT_LAYOUTS {
+            let raw = aspect(&component(&pg, &nodes));
             let square = run(&ring, 1.0, 1.0);
-            for (aw, ah) in [(2.0_f32, 1.0), (4.0, 2.0), (1.0, 3.0)] {
+            for (aw, ah) in [(2.0_f32, 1.0), (4.0, 2.0), (1.0, 2.0)] {
+                for target in [1.0, aw / ah] {
+                    let needed = (target / raw).sqrt();
+                    let cap = stretch_cap(target);
+                    assert!(
+                        needed > cap.recip() && needed < cap,
+                        "{layout}: the ring's raw aspect {raw} needs {needed} to reach {target}, and the cap would engage"
+                    );
+                }
                 let biased = run(&ring, aw, ah);
                 assert_eq!(biased.len(), square.len());
                 let sx_expected = (aw / ah).sqrt();
@@ -1380,16 +1433,106 @@ mod tests {
         }
     }
 
-    fn bbox(positions: &[(f32, f32)]) -> (f32, f32, f32, f32) {
-        let (mut min_x, mut max_x) = (f32::INFINITY, f32::NEG_INFINITY);
-        let (mut min_y, mut max_y) = (f32::INFINITY, f32::NEG_INFINITY);
-        for &(x, y) in positions {
-            min_x = min_x.min(x);
-            max_x = max_x.max(x);
-            min_y = min_y.min(y);
-            max_y = max_y.max(y);
+    /// Each layout's component function beside its entry point.
+    const COMPONENT_LAYOUTS: [(&str, ComponentLayout, Layout); 3] = [
+        ("stress", stress_majorization_component, stress_majorization),
+        ("sgd", sgd_component, sgd),
+        ("kamada_kawai", kamada_kawai_component, kamada_kawai),
+    ];
+
+    fn aspect(positions: &[(f32, f32)]) -> f32 {
+        let (min_x, max_x, min_y, max_y) = bounding_box(positions);
+        (max_x - min_x) / (max_y - min_y)
+    }
+
+    /// How far a chain bows: its furthest node's distance from the line between
+    /// its ends, as a fraction of the distance between the ends.
+    fn sag(chain: &[(f32, f32)]) -> f32 {
+        let (ax, ay) = chain[0];
+        let (bx, by) = chain[chain.len() - 1];
+        let length = (bx - ax).hypot(by - ay);
+        let (ux, uy) = ((bx - ax) / length, (by - ay) / length);
+        chain
+            .iter()
+            .map(|&(x, y)| ((x - ax) * -uy + (y - ay) * ux).abs())
+            .fold(0.0_f32, f32::max)
+            / length
+    }
+
+    /// Square, 16:9, the default 16:8 and its transpose. Chains lie both
+    /// ways, so across the layouts these drive the stretch to both bounds.
+    const ASPECTS: [(f32, f32); 4] = [(1.0, 1.0), (16.0, 9.0), (2.0, 1.0), (1.0, 2.0)];
+
+    #[test]
+    fn the_stretch_cap_is_the_floor_or_what_a_square_layout_needs() {
+        assert_eq!(stretch_cap(1.0), MAX_ASPECT_STRETCH);
+        assert_eq!(
+            stretch_cap(2.0),
+            MAX_ASPECT_STRETCH,
+            "16:8 needs 1.41, under the floor"
+        );
+        assert_eq!(
+            stretch_cap(4.0),
+            2.0,
+            "a square layout needs 2x to reach 4:1"
+        );
+        assert_eq!(stretch_cap(0.25), 2.0, "and 2x the other way to reach 1:4");
+    }
+
+    // The correction stretches one axis and shrinks the other by the same
+    // factor, so a layout's aspect moves toward the target by that factor
+    // squared, and stops moving once the factor hits the cap. Chains are the
+    // case that matters: a chain's raw aspect is extreme, so an uncapped
+    // correction would square it up. Both bounds of the cap must come into
+    // play somewhere in the cases, or a bound could be lost unnoticed.
+    #[test]
+    fn the_aspect_correction_stretches_each_axis_at_most_the_cap() {
+        let (mut hit_lower, mut hit_upper) = (false, false);
+        for (layout, component, run) in COMPONENT_LAYOUTS {
+            for n in [5, 8, 12] {
+                let (pg, chain) = path_component(n);
+                let raw = aspect(&component(&pg, &chain));
+                for (aw, ah) in ASPECTS {
+                    let target = aw / ah;
+                    let cap = stretch_cap(target);
+                    let stretch = (target / raw).sqrt().clamp(cap.recip(), cap);
+                    hit_lower |= stretch == cap.recip();
+                    hit_upper |= stretch == cap;
+                    let expected = raw * stretch * stretch;
+                    let actual = aspect(&run(&make_path(n), aw, ah));
+                    assert!(
+                        (actual / expected - 1.0).abs() < 1e-3,
+                        "{layout}, {n} nodes at {aw}:{ah}: raw aspect {raw}, corrected to {actual}, expected {expected}"
+                    );
+                }
+            }
         }
-        (min_x, max_x, min_y, max_y)
+        assert!(
+            hit_lower && hit_upper,
+            "lower bound hit: {hit_lower}, upper: {hit_upper}"
+        );
+    }
+
+    // Scaling the axes apart by a factor magnifies a chain's sag by at most
+    // that factor squared, so the cap bounds how far the correction can bend
+    // a nearly straight chain.
+    #[test]
+    fn the_aspect_correction_bends_a_chain_at_most_the_cap_squared() {
+        for (layout, component, run) in COMPONENT_LAYOUTS {
+            for n in [5, 8, 12] {
+                let (pg, chain) = path_component(n);
+                let raw = sag(&component(&pg, &chain));
+                for (aw, ah) in ASPECTS {
+                    let cap = stretch_cap(aw / ah);
+                    let bound = cap * cap;
+                    let bent = sag(&run(&make_path(n), aw, ah));
+                    assert!(
+                        bent <= raw * bound * 1.001 + 1e-6,
+                        "{layout}, {n} nodes at {aw}:{ah}: sag {raw} became {bent}, over {bound}x"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -1398,7 +1541,7 @@ mod tests {
         // and the smaller dimension preserves the input aspect ratio.
         let mut positions = vec![(0.0, 0.0), (4.0, 0.0), (4.0, 2.0), (0.0, 2.0)];
         scale_to_world(&mut positions, 600.0);
-        let (min_x, max_x, min_y, max_y) = bbox(&positions);
+        let (min_x, max_x, min_y, max_y) = bounding_box(&positions);
         let w = max_x - min_x;
         let h = max_y - min_y;
         assert!((w - 600.0).abs() < 1e-3, "width {w} != 600");
@@ -1410,7 +1553,7 @@ mod tests {
     fn scale_to_world_centers_bbox_on_origin() {
         let mut positions = vec![(100.0, 200.0), (400.0, 800.0)];
         scale_to_world(&mut positions, 600.0);
-        let (min_x, max_x, min_y, max_y) = bbox(&positions);
+        let (min_x, max_x, min_y, max_y) = bounding_box(&positions);
         // Centroid sits at origin so the rendered layout fills the
         // simulation's world symmetrically around (0, 0).
         assert!((min_x + max_x).abs() < 1e-3);

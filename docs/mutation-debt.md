@@ -235,6 +235,19 @@ Kamada-Kawai used to hang by making `run` skip forever; once a skip counted
 toward `max_moves` like a move, twelve became ordinary failures and three
 joined the equivalent skip-check mutants above.
 
+## Layout pipeline — 2026-10-04
+
+`panschema-viz/src/layout.rs`, the pipeline that splits a graph into
+components, lays each out, packs them and fits the result to the canvas,
+joined the per-push gate. A full run over its 184 mutants missed 4. A new
+test that every layout draws a lone edge identically killed two; the other
+two cannot be killed by a test:
+
+| Line | Mutation | Why no test can tell |
+|---|---|---|
+| 468 | delete the one-node arm of `trivial_component` | A single node then goes through the algorithm, which has nothing to move and leaves it at the origin, where the shortcut put it; the zero-node arm is unreachable, since a connected component is never empty |
+| 491 | `<=` → `>` when copying a component's edges | Each undirected edge is seen from both ends, and either comparison keeps it exactly once; they differ only on a self-loop, which no shortest-path distance depends on |
+
 ## Updating this snapshot
 
 When you want a fresh picture of remaining debt:

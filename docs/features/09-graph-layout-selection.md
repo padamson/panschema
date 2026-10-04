@@ -351,6 +351,7 @@ Existing in-tree CPU force simulation (slice 7 work in [Feature 02](02-core-onto
 - [x] Existing per-component packing tests (disjoint bounding boxes) still pass.
 
 **Notes:**
+- Later change: the realized-aspect stretch is capped per axis at 1.5×, or at what a square layout needs to reach the configured aspect if that is more (the default 16:8 needs 1.41×). A chain of nodes has an extreme raw aspect, and no layout leaves it perfectly straight (measured bow from the spiral start: stress 3–10% of length, SGD up to 5%, Kamada-Kawai 2–3%), so the uncapped stretch squared any chain up into an L. The cap limits the bow's growth to 2.25× at the default aspect while a compact graph is still fitted fully. Fitting a chain *across* the canvas by rotation rather than stretch is the subject of a proposed slice below.
 - Source: scimantic-schema dogfood — the three `is_a` trees smeared horizontally with empty vertical space, and clusters were too small to inspect (compounded the zoom/glyph legibility issues fixed in feature 04 slice 20).
 
 ---
@@ -374,6 +375,29 @@ Existing in-tree CPU force simulation (slice 7 work in [Feature 02](02-core-onto
 
 ---
 
+### Slice 12: Fit a layout to the canvas by rotation before stretch
+
+**Status:** Proposed
+
+**Priority:** Could Have
+
+**User Value:** A schema whose graph is much longer than it is wide — a chain of `is_a` steps, a spine with short branches — fills a wide canvas today only by being stretched, and the stretch is capped (slice 10's later change) because it magnifies any bow in the chain. With the cap, such a graph sits in the middle of the canvas at whatever angle the layout happened to leave it, using a fraction of the width. Turning the layout so its long axis runs along the canvas's long axis uses the canvas without distorting the layout at all: rotation preserves every distance, so a chain stays exactly as straight as the layout left it.
+
+**Acceptance Criteria:**
+- [ ] A single-component graph whose layout is at least twice as long as it is wide is rotated so that its long axis lies along the canvas's long axis before any stretch is applied; the pairwise distances between its nodes are unchanged by the rotation.
+- [ ] After rotation, the remaining stretch toward the canvas aspect is at most the slice-10 cap, and for a chain it is no more than what fitting a straight line needs.
+- [ ] A near-square layout is left unrotated (its principal axis is not meaningful), so compact graphs are laid out exactly as before.
+- [ ] Multi-component graphs rotate each component before packing, so each cluster is oriented and the packer arranges the oriented clusters.
+- [ ] The rotation is deterministic: republishing an unchanged schema produces identical pages.
+- [ ] The reference fixture and at least one chain-heavy fixture are checked by eye at phone, laptop and 4K sizes before the change ships, since every published layout of an elongated graph will change once.
+
+**Notes:**
+- Measured on 2026-10-03: no layout leaves a chain straight (stress bows it by 3–10% of its length from the spiral start and 3–5% after a thousand iterations; SGD up to 5%; Kamada-Kawai 2–3% at its tightened threshold), and the uncapped aspect stretch magnified any bow by the chain's own aspect ratio, so every chain came out as an L. The cap stops the L; this slice is what would let a chain use the canvas.
+- The principal axis is the eigenvector of the positions' covariance; a layout with two nearly equal eigenvalues has no meaningful axis, which is the "near-square" guard above.
+- Rotation changes every elongated graph's published layout once. That is the reason this is a slice with screenshot review rather than a follow-on to the cap.
+
+---
+
 ## Slice Priority and Dependencies
 
 | Slice | Priority | Depends On | Status |
@@ -389,6 +413,7 @@ Existing in-tree CPU force simulation (slice 7 work in [Feature 02](02-core-onto
 | Slice 9: Auto-default to Hierarchical for `is_a`-heavy schemas | Should Have | Slice 6 | ✅ Complete |
 | Slice 10: Compact multi-component packing | Should Have | Slices 4, 5 | ✅ Complete |
 | Slice 11: Variable edge length so FD clusters (LinLog / ForceAtlas2) | Could Have | Slice 2 | ❌ Won't Do (use SGD/Stress; picker reordered) |
+| Slice 12: Fit by rotation before stretch | Could Have | Slice 10 | Proposed |
 
 **Prerequisite (✓ cleared):** Feature 02 [slice 7](02-core-ontology-documentation.md#slice-7-improve-force-directed-default-so-the-graph-fills-its-viewport) — the force-directed default fills the viewport with legible labels at all 3 scales. The picker can now expose the existing force-directed implementation as the "Force-directed" option without that option spreading a bad reputation across the others.
 
