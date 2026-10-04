@@ -384,7 +384,10 @@ fn layout_by_components(
         row_height = row_height.max(ch);
     }
 
-    fit_to_aspect(&mut positions, aspect_w, aspect_h);
+    // Only a component the algorithm laid out has a shape the stretch could
+    // distort; singletons and lone edges are placed directly.
+    let laid_out_by_algorithm = laid.iter().any(|c| c.component.len() > 2);
+    fit_to_aspect(&mut positions, aspect_w, aspect_h, laid_out_by_algorithm);
     positions
 }
 
@@ -397,17 +400,26 @@ fn layout_by_components(
 /// than a wide canvas, leaving it mostly empty. Measuring the realized aspect
 /// lands single- and multi-component graphs on the target alike, and is a
 /// no-op when already there, so it cannot double-apply into a horizontal
-/// smear the way a blind `√(target)` stretch did. The stretch is capped per
-/// axis at [`stretch_cap`], so a layout far from the target, a chain above
-/// all, is fitted only as far as the cap allows rather than distorted onto
-/// the target. A degenerate bounding box or aspect is left alone.
-fn fit_to_aspect(positions: &mut [(f32, f32)], aspect_w: f32, aspect_h: f32) {
+/// smear the way a blind `√(target)` stretch did.
+///
+/// With `cap_stretch`, the stretch is capped per axis at [`stretch_cap`], so
+/// a layout far from the target, a chain above all, is fitted only as far as
+/// the cap allows rather than distorted onto the target. The cap protects
+/// what an algorithm laid out; a graph of only singletons and lone edges,
+/// placed directly, has no such shape, and the caller leaves it uncapped so
+/// a few isolated pairs still spread to fill the canvas. A degenerate
+/// bounding box or aspect is left alone.
+fn fit_to_aspect(positions: &mut [(f32, f32)], aspect_w: f32, aspect_h: f32, cap_stretch: bool) {
     let (min_x, max_x, min_y, max_y) = bounding_box(positions);
     let (bw, bh) = (max_x - min_x, max_y - min_y);
     if bw > f32::EPSILON && bh > f32::EPSILON && aspect_w > 0.0 && aspect_h > 0.0 {
         let realized = bw / bh;
         let target = aspect_w / aspect_h;
-        let cap = stretch_cap(target);
+        let cap = if cap_stretch {
+            stretch_cap(target)
+        } else {
+            f32::INFINITY
+        };
         let s = (target / realized).sqrt().clamp(cap.recip(), cap);
         for p in positions.iter_mut() {
             p.0 *= s;
@@ -1119,6 +1131,29 @@ mod tests {
         assert_eq!((bx - ax, by - ay), (1.0, 0.0), "a unit edge, lying flat");
         for (layout, run) in LAYOUTS {
             assert_eq!(run(&edge, 1.0, 1.0), reference, "{layout}");
+        }
+    }
+
+    // A small instance graph is often a few isolated pairs. Nothing in it was
+    // laid out by an algorithm, so there is no shape for the cap to protect,
+    // and the pairs are spread to fill the canvas exactly as before the cap.
+    #[test]
+    fn every_layout_fills_the_canvas_with_a_graph_of_lone_edges() {
+        let mut pairs = make_ring(4);
+        pairs.edges = [(0, 1), (2, 3)]
+            .map(|(s, t)| GraphEdge {
+                source: format!("n{s}"),
+                target: format!("n{t}"),
+                edge_type: EdgeType::SubclassOf,
+                label: None,
+            })
+            .to_vec();
+        for (layout, run) in LAYOUTS {
+            let fitted = aspect(&run(&pairs, 16.0, 8.0));
+            assert!(
+                (fitted - 2.0).abs() < 1e-3,
+                "{layout}: two lone edges came out with aspect {fitted} on a 2:1 canvas"
+            );
         }
     }
 
