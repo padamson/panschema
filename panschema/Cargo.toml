@@ -33,6 +33,7 @@ clap_complete = "4"
 
 # RDF/OWL parsing and serialization
 sophia = { version = "0.10", features = ["jsonld", "xml"] }
+url = "2"
 
 # Templating
 askama = "0.16"

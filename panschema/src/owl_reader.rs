@@ -11,6 +11,7 @@ use sophia::api::ns::{Namespace, rdf, rdfs};
 use sophia::api::prelude::*;
 use sophia::api::term::SimpleTerm;
 use sophia::inmem::graph::FastGraph;
+use sophia::iri::resolve::BaseIriRef;
 use sophia::turtle::parser::turtle;
 
 use crate::io::{IoError, IoResult, Reader};
@@ -142,6 +143,34 @@ pub fn extract_id_from_iri(iri: &str) -> String {
     iri.to_string()
 }
 
+/// The base a Turtle file's relative IRIs resolve against on the first pass,
+/// before the ontology IRI is known. Nothing real lives under `.invalid`, so
+/// an ontology IRI that starts with it was itself relative, which no base
+/// can be found for.
+const UNRESOLVED_BASE: &str = "http://relative.invalid/panschema/";
+
+/// Parse the Turtle at `path` into a graph, resolving relative IRIs against
+/// `base` unless the file declares its own.
+fn parse_graph(path: &Path, base: &str) -> anyhow::Result<FastGraph> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let base = BaseIriRef::new(base.to_owned().into_boxed_str())
+        .map_err(|e| anyhow::anyhow!("base IRI {base} is not valid: {e}"))?;
+    let parser = turtle::TurtleParser::default().with_base(Some(base));
+
+    // The dependency parser can panic on malformed input (fuzzing found
+    // a debug assertion in sophia_turtle 0.10 doing exactly that), and
+    // this reader's contract is that a malformed file is a returned
+    // error whoever's code chokes on it. The catch is confined to the
+    // parse of one just-opened file, so no shared state can be observed
+    // mid-panic.
+    let graph = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        parser.parse(reader).collect_triples()
+    }))
+    .map_err(|_| anyhow::anyhow!("Turtle parser crashed on malformed input"))??;
+    Ok(graph)
+}
+
 /// Reader for OWL ontologies in Turtle (.ttl) format
 pub struct OwlReader;
 
@@ -151,38 +180,44 @@ impl OwlReader {
         Self
     }
 
-    /// Parse a Turtle file and extract ontology metadata
+    /// Parse a Turtle file and extract ontology metadata.
+    ///
+    /// A file that declares no `@base` may still write relative IRIs;
+    /// published ontologies do (the LinkML metamodel's OWL export has
+    /// `bibo:status <testing>`). Turtle resolves them against the document's
+    /// location, and a published ontology lives at its own IRI, so that is
+    /// the base used here: the file is read once to find the ontology IRI,
+    /// then read with that IRI as the base. The result is the same wherever
+    /// the file sits on disk.
     pub fn parse_ontology(path: &Path) -> anyhow::Result<OntologyMetadata> {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-
-        // The dependency parser can panic on malformed input (fuzzing found
-        // a debug assertion in sophia_turtle 0.10 doing exactly that), and
-        // this reader's contract is that a malformed file is a returned
-        // error whoever's code chokes on it. The catch is confined to the
-        // parse of one just-opened file, so no shared state can be observed
-        // mid-panic.
-        let graph: FastGraph = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            turtle::parse_bufread(reader).collect_triples()
-        }))
-        .map_err(|_| anyhow::anyhow!("Turtle parser crashed on malformed input"))??;
-
         let owl = Namespace::new_unchecked(OWL_NS);
         let owl_ontology = owl.get("Ontology")?;
+        let find_ontology = |graph: &FastGraph| -> anyhow::Result<SimpleTerm> {
+            graph
+                .triples_matching(Any, [rdf::type_], [owl_ontology])
+                .filter_map(Result::ok)
+                .map(|t| t.s().into_term::<SimpleTerm>())
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("No owl:Ontology found in {}", path.display()))
+        };
+        let iri_of = |term: &SimpleTerm| -> anyhow::Result<String> {
+            Ok(term
+                .iri()
+                .ok_or_else(|| anyhow::anyhow!("Ontology subject is not an IRI"))?
+                .to_string())
+        };
 
-        // Find the ontology IRI (subject of rdf:type owl:Ontology)
-        let ontology_iri: SimpleTerm = graph
-            .triples_matching(Any, [rdf::type_], [owl_ontology])
-            .filter_map(Result::ok)
-            .map(|t| t.s().into_term::<SimpleTerm>())
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("No owl:Ontology found in {}", path.display()))?;
-
-        // Extract the IRI string
-        let iri = ontology_iri
-            .iri()
-            .ok_or_else(|| anyhow::anyhow!("Ontology subject is not an IRI"))?
-            .to_string();
+        let first_pass = parse_graph(path, UNRESOLVED_BASE)?;
+        let iri = iri_of(&find_ontology(&first_pass)?)?;
+        if iri.starts_with(UNRESOLVED_BASE) {
+            anyhow::bail!(
+                "{} gives its ontology a relative IRI and declares no @base to resolve it against",
+                path.display()
+            );
+        }
+        let graph = parse_graph(path, &iri)?;
+        let ontology_iri = find_ontology(&graph)?;
+        let iri = iri_of(&ontology_iri)?;
 
         // Helper to get a string literal for a predicate
         fn get_literal_value<T: Term>(
@@ -1027,6 +1062,43 @@ mod tests {
         let path = dir.path().join("schema.ttl");
         std::fs::write(&path, ttl).expect("write ttl");
         OwlReader::new().read(&path).expect("read ttl")
+    }
+
+    // Turtle resolves a relative IRI against the document's own location when
+    // the file declares no `@base`; published ontologies do write them (the
+    // LinkML metamodel's OWL export has `bibo:status <testing>`).
+    #[test]
+    fn a_relative_iri_without_a_base_resolves_against_the_file() {
+        let schema = read_ttl(
+            r#"@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix bibo: <http://purl.org/ontology/bibo/> .
+<http://example.org/onto/> a owl:Ontology ; bibo:status <testing> .
+<Person> a owl:Class .
+"#,
+        );
+        // Resolved against the ontology IRI, not the file's path on disk, so
+        // the output is the same on every machine and leaks no directory.
+        assert_eq!(
+            schema.classes["Person"].class_uri.as_deref(),
+            Some("http://example.org/onto/Person"),
+            "classes read: {:?}",
+            schema.classes.keys().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_relative_ontology_iri_without_a_base_is_an_error_that_says_so() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schema.ttl");
+        std::fs::write(
+            &path,
+            "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n<> a owl:Ontology .\n",
+        )
+        .expect("write ttl");
+        let err = OwlReader::new()
+            .read(&path)
+            .expect_err("no base to resolve <> against");
+        assert!(err.to_string().contains("@base"), "{err}");
     }
 
     /// An `rdfs:subPropertyOf` between two named properties reads back as

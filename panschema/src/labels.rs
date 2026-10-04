@@ -248,11 +248,20 @@ pub const BUILTIN_LABEL_SOURCES: &[(&str, &str)] = &[
 /// the full picture instead of an arbitrary single pick. The order
 /// puts the more definitional predicates first; `dc:description`
 /// trails because it's the one most often used for examples.
-pub fn extract_terms(rdf: &str) -> Result<BTreeMap<String, TermInfo>, LabelExtractError> {
-    use sophia::api::prelude::TripleSource;
+///
+/// `source_url` is where `rdf` was fetched from: relative IRIs in a Turtle
+/// body resolve against it, as they would in a browser.
+pub fn extract_terms(
+    rdf: &str,
+    source_url: &str,
+) -> Result<BTreeMap<String, TermInfo>, LabelExtractError> {
+    use sophia::api::prelude::{TripleParser, TripleSource};
     use sophia::inmem::graph::FastGraph;
+    use sophia::iri::resolve::BaseIriRef;
 
-    let graph: FastGraph = match sophia::turtle::parser::turtle::parse_str(rdf).collect_triples() {
+    let base = BaseIriRef::new(source_url.to_owned().into_boxed_str()).ok();
+    let turtle = sophia::turtle::parser::turtle::TurtleParser::default().with_base(base);
+    let graph: FastGraph = match turtle.parse_str(rdf).collect_triples() {
         Ok(graph) => graph,
         Err(ttl_err) => sophia::xml::parser::parse_str(rdf)
             .collect_triples()
@@ -427,7 +436,7 @@ pub fn ensure_labels(
         let labels = match source
             .fetch(url)
             .map_err(|e| e.to_string())
-            .and_then(|body| extract_terms(&body).map_err(|e| e.to_string()))
+            .and_then(|body| extract_terms(&body, url).map_err(|e| e.to_string()))
         {
             Ok(labels) => labels,
             Err(err) => {
@@ -576,6 +585,22 @@ mod tests {
         );
     }
 
+    // A fetched Turtle body may write relative IRIs; they resolve against the
+    // URL it came from, as a browser would resolve them.
+    #[test]
+    fn extract_terms_resolves_relative_iris_against_the_source_url() {
+        let ttl = "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n<Process> rdfs:label \"Process\" .\n";
+        let labels = extract_terms(ttl, "http://example.org/vocab/terms.ttl").unwrap();
+        assert_eq!(
+            labels
+                .get("http://example.org/vocab/Process")
+                .and_then(|t| t.label.as_deref()),
+            Some("Process"),
+            "keys: {:?}",
+            labels.keys().collect::<Vec<_>>()
+        );
+    }
+
     #[test]
     fn extract_terms_prefers_rdfs_label_and_falls_back_to_skos() {
         let ttl = r#"
@@ -588,7 +613,7 @@ ex:WithSkos skos:prefLabel "Material Entity" .
 ex:WithBoth rdfs:label "Primary" ; skos:prefLabel "Secondary" .
 ex:Unlabeled a ex:Thing .
 "#;
-        let labels = extract_terms(ttl).unwrap();
+        let labels = extract_terms(ttl, "http://example.org/labels.ttl").unwrap();
         assert_eq!(labels.len(), 3, "unlabeled subject must be absent");
         assert_eq!(
             labels
@@ -621,7 +646,7 @@ ex:GermanOnly rdfs:label "Prozess"@de .
 ex:EnglishTagged rdfs:label "Process"@en .
 ex:Untagged rdfs:label "Entity" .
 "#;
-        let labels = extract_terms(ttl).unwrap();
+        let labels = extract_terms(ttl, "http://example.org/labels.ttl").unwrap();
         assert!(
             !labels.contains_key("http://example.org/GermanOnly"),
             "non-English-only subject must be absent"
@@ -642,7 +667,7 @@ ex:Untagged rdfs:label "Entity" .
 
     #[test]
     fn extract_terms_errors_on_malformed_ttl() {
-        assert!(extract_terms("this is not turtle {{{").is_err());
+        assert!(extract_terms("this is not turtle {{{", "http://example.org/labels.ttl").is_err());
     }
 
     #[test]
@@ -664,7 +689,7 @@ ex:CitoStyle rdfs:label "disputes" ;
     rdfs:comment "The citing entity disputes the cited entity." .
 ex:DefinitionOnly skos:definition "Defined but unlabeled." .
 "#;
-        let terms = extract_terms(ttl).unwrap();
+        let terms = extract_terms(ttl, "http://example.org/labels.ttl").unwrap();
         let defs_of = |iri: &str| {
             terms
                 .get(iri)
@@ -716,7 +741,7 @@ ex:DefinitionOnly skos:definition "Defined but unlabeled." .
     <rdfs:label>process</rdfs:label>
   </rdf:Description>
 </rdf:RDF>"#;
-        let labels = extract_terms(rdf_xml).unwrap();
+        let labels = extract_terms(rdf_xml, "http://example.org/labels.owl").unwrap();
         assert_eq!(
             labels
                 .get("http://purl.obolibrary.org/obo/BFO_0000015")
