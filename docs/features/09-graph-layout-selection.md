@@ -377,7 +377,7 @@ Existing in-tree CPU force simulation (slice 7 work in [Feature 02](02-core-onto
 
 ### Slice 12: Fit a layout to the canvas by rotation before stretch
 
-**Status:** In Progress — code and tests landed; the screenshot review (last criterion) is pending
+**Status:** ✅ Complete
 
 **Priority:** Could Have
 
@@ -389,7 +389,7 @@ Existing in-tree CPU force simulation (slice 7 work in [Feature 02](02-core-onto
 - [x] A near-square layout is left unrotated (its principal axis is not meaningful), so compact graphs are laid out exactly as before.
 - [x] Multi-component graphs rotate each component before packing, so each cluster is oriented and the packer arranges the oriented clusters.
 - [x] The rotation is deterministic: republishing an unchanged schema produces identical pages.
-- [ ] The reference fixture and at least one chain-heavy fixture are checked by eye at phone, laptop and 4K sizes before the change ships, since every published layout of an elongated graph will change once.
+- [x] The reference fixture and at least one chain-heavy fixture are checked by eye at phone, laptop and 4K sizes before the change ships, since every published layout of an elongated graph will change once. Reviewed 2026-10-04 on before/after captures of a ten-step chain under SGD and Kamada-Kawai and of the reference fixture and the chain's default layered layout; the two controls were byte-identical at every size.
 
 **Notes:**
 - Measured on 2026-10-03: no layout leaves a chain straight (stress bows it by 3–10% of its length from the spiral start and 3–5% after a thousand iterations; SGD up to 5%; Kamada-Kawai 2–3% at its tightened threshold), and the uncapped aspect stretch magnified any bow by the chain's own aspect ratio, so every chain came out as an L. The cap stops the L; this slice is what would let a chain use the canvas.
@@ -439,7 +439,7 @@ Existing in-tree CPU force simulation (slice 7 work in [Feature 02](02-core-onto
 | Slice 9: Auto-default to Hierarchical for `is_a`-heavy schemas | Should Have | Slice 6 | ✅ Complete |
 | Slice 10: Compact multi-component packing | Should Have | Slices 4, 5 | ✅ Complete |
 | Slice 11: Variable edge length so FD clusters (LinLog / ForceAtlas2) | Could Have | Slice 2 | ❌ Won't Do (use SGD/Stress; picker reordered) |
-| Slice 12: Fit by rotation before stretch | Could Have | Slice 10 | In Progress (screenshot review pending) |
+| Slice 12: Fit by rotation before stretch | Could Have | Slice 10 | ✅ Complete |
 | Slice 13: Fold a long chain into switchbacks | Could Have | Slice 12 | Proposed |
 
 **Prerequisite (✓ cleared):** Feature 02 [slice 7](02-core-ontology-documentation.md#slice-7-improve-force-directed-default-so-the-graph-fills-its-viewport) — the force-directed default fills the viewport with legible labels at all 3 scales. The picker can now expose the existing force-directed implementation as the "Force-directed" option without that option spreading a bad reputation across the others.
