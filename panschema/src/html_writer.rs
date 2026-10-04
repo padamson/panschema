@@ -70,8 +70,8 @@ pub struct ClassData {
     /// links. Rendered as a "See also" row; empty renders nothing.
     pub see_also: Vec<ExternalLink>,
     /// Worked examples from `examples:`. Rendered as an "Examples"
-    /// section listing each value with its optional description; empty
-    /// renders nothing.
+    /// section listing each value, or object as YAML, with its optional
+    /// description; empty renders nothing.
     pub examples: Vec<Example>,
     /// Conditional constraints from `rules:`. Rendered as a "Rules"
     /// section; empty renders nothing.
@@ -3712,23 +3712,66 @@ mod tests {
         );
     }
 
+    // The card prints an object example as the YAML it is, lines intact (the
+    // stylesheet keeps them), and an example that only describes itself
+    // without a separator in front of nothing.
+    #[test]
+    fn an_object_example_renders_as_yaml_and_a_bare_description_alone() {
+        use crate::linkml::{ClassDefinition, Example, SchemaDefinition};
+        let mut schema = SchemaDefinition::new("editorial");
+        let mut person = ClassDefinition::new("Person");
+        person.examples = vec![
+            Example {
+                value: None,
+                object: Some(serde_norway::from_str("given: Ada\nfamily: Lovelace").unwrap()),
+                description: Some("a full name".to_string()),
+            },
+            Example {
+                value: None,
+                object: None,
+                description: Some("see the specification".to_string()),
+            },
+        ];
+        schema.classes.insert("Person".to_string(), person);
+        let html = render_index(&HtmlWriter::new(), &schema);
+        assert!(
+            html.contains("<code class=\"mono\">given: Ada\nfamily: Lovelace</code> — a full name"),
+            "object example not rendered as YAML: {}",
+            html.lines()
+                .filter(|l| l.contains("example"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        assert!(
+            html.contains("<li>see the specification</li>"),
+            "bare description rendered with a separator: {}",
+            html.lines()
+                .filter(|l| l.contains("specification"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+
     #[test]
     fn slot_card_shows_examples() {
         use crate::linkml::{ClassDefinition, Example, SchemaDefinition, SlotDefinition};
-        // A class or slot with `examples:` carries each `value` and its
-        // optional `description` through to the card-data `examples`
-        // list, ready for the "Examples" section. An element with no
-        // examples carries an empty list, so no section renders.
+        // A class or slot with `examples:` carries each entry, a `value` or
+        // an `object`, and its optional `description` through to the
+        // card-data `examples` list, ready for the "Examples" section. An
+        // element with no examples carries an empty list, so no section
+        // renders.
         let mut schema = SchemaDefinition::new("editorial");
 
         let mut region = ClassDefinition::new("Region");
         region.examples = vec![
             Example {
-                value: "us-east-1".to_string(),
+                value: Some("us-east-1".to_string()),
+                object: None,
                 description: Some("an AWS region".to_string()),
             },
             Example {
-                value: "eastus".to_string(),
+                value: None,
+                object: Some(serde_norway::from_str("zone: eastus-1").unwrap()),
                 description: None,
             },
         ];
@@ -3739,7 +3782,8 @@ mod tests {
 
         let mut code = SlotDefinition::new("region_code");
         code.examples = vec![Example {
-            value: "eu-west-2".to_string(),
+            value: Some("eu-west-2".to_string()),
+            object: None,
             description: None,
         }];
         schema.slots.insert("region_code".to_string(), code);
@@ -3751,12 +3795,18 @@ mod tests {
 
         let region_card = data.class_data.iter().find(|c| c.id == "Region").unwrap();
         assert_eq!(region_card.examples.len(), 2);
-        assert_eq!(region_card.examples[0].value, "us-east-1");
+        assert_eq!(
+            region_card.examples[0].shown().as_deref(),
+            Some("us-east-1")
+        );
         assert_eq!(
             region_card.examples[0].description.as_deref(),
             Some("an AWS region")
         );
-        assert_eq!(region_card.examples[1].value, "eastus");
+        assert_eq!(
+            region_card.examples[1].shown().as_deref(),
+            Some("zone: eastus-1")
+        );
         assert!(region_card.examples[1].description.is_none());
 
         let bare_card = data.class_data.iter().find(|c| c.id == "Bare").unwrap();
@@ -3771,7 +3821,7 @@ mod tests {
             .find(|s| s.id == "region_code")
             .unwrap();
         assert_eq!(code_card.examples.len(), 1);
-        assert_eq!(code_card.examples[0].value, "eu-west-2");
+        assert_eq!(code_card.examples[0].shown().as_deref(), Some("eu-west-2"));
         assert!(code_card.examples[0].description.is_none());
 
         let plain_card = data.slot_data.iter().find(|s| s.id == "plain").unwrap();

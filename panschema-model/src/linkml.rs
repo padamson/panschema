@@ -359,18 +359,38 @@ impl Contributor {
     }
 }
 
-/// A worked example value for an element.
+/// A worked example for an element.
 ///
-/// Corresponds to one entry in LinkML's `examples` metaslot (a list of
-/// structured `example` objects). Rendered as an item in the card's
-/// "Examples" section.
+/// Corresponds to one entry in LinkML's `examples` metaslot. An entry gives
+/// a `value`, a structured `object`, or neither, each with an optional
+/// `description`; the LinkML metamodel's own schema writes `object`
+/// examples. Rendered as an item in the card's "Examples" section.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Example {
     /// The example value, shown verbatim.
-    pub value: String,
-    /// Optional explanation of what the value illustrates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    /// A structured example, shown as YAML.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object: Option<serde_norway::Value>,
+    /// Optional explanation of what the example illustrates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+}
+
+impl Example {
+    /// What a card prints for this example: the value, or the object as
+    /// YAML without its trailing newline; nothing when it has neither. An
+    /// example that gives both is shown by its value, the form the author
+    /// chose to spell out.
+    pub fn shown(&self) -> Option<String> {
+        if let Some(value) = &self.value {
+            return Some(value.clone());
+        }
+        let object = self.object.as_ref()?;
+        let yaml = serde_norway::to_string(object).ok()?;
+        Some(yaml.trim_end().to_string())
+    }
 }
 
 /// The range LinkML's derivation rules give a schema that omits
@@ -1428,6 +1448,36 @@ see_also:
         assert!(!bare_out.contains("see_also:"), "got:\n{bare_out}");
     }
 
+    // LinkML's `example` has `value`, `description` and `object`, each
+    // optional; the metamodel's own schema uses `object` for structured
+    // examples. `shown` is what a card prints: the value, or the object as
+    // YAML.
+    #[test]
+    fn an_example_may_carry_an_object_instead_of_a_value() {
+        let yaml = "
+name: extra_slots
+examples:
+  - object:
+      allowed: true
+    description: Allow all additional data
+  - value: us-east-1
+  - description: nothing shown
+  - value: spelled out
+    object:
+      also: structured
+";
+        let slot: SlotDefinition = serde_norway::from_str(yaml).unwrap();
+        assert_eq!(slot.examples.len(), 4);
+        assert_eq!(slot.examples[3].shown().as_deref(), Some("spelled out"));
+        assert_eq!(slot.examples[0].shown().as_deref(), Some("allowed: true"));
+        assert_eq!(
+            slot.examples[0].description.as_deref(),
+            Some("Allow all additional data")
+        );
+        assert_eq!(slot.examples[1].shown().as_deref(), Some("us-east-1"));
+        assert_eq!(slot.examples[2].shown(), None);
+    }
+
     #[test]
     fn class_definition_deserializes_examples() {
         // The `examples` common-metadata list parses from LinkML YAML
@@ -1444,12 +1494,12 @@ examples:
 ";
         let class: ClassDefinition = serde_norway::from_str(yaml).unwrap();
         assert_eq!(class.examples.len(), 2);
-        assert_eq!(class.examples[0].value, "us-east-1");
+        assert_eq!(class.examples[0].value.as_deref(), Some("us-east-1"));
         assert_eq!(
             class.examples[0].description.as_deref(),
             Some("an AWS region")
         );
-        assert_eq!(class.examples[1].value, "eastus");
+        assert_eq!(class.examples[1].value.as_deref(), Some("eastus"));
         assert!(class.examples[1].description.is_none());
 
         let bare: ClassDefinition = serde_norway::from_str("name: Region").unwrap();

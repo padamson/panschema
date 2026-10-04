@@ -748,11 +748,13 @@ impl ComponentRenderer {
         }];
         let class_examples = vec![
             panschema::linkml::Example {
-                value: "Ada Lovelace".to_string(),
+                value: Some("Ada Lovelace".to_string()),
+                object: None,
                 description: Some("a person with a full name".to_string()),
             },
             panschema::linkml::Example {
-                value: "Anonymous".to_string(),
+                value: None,
+                object: Some(serde_norway::from_str("given: Ada\nfamily: Lovelace").unwrap()),
                 description: None,
             },
         ];
@@ -833,7 +835,8 @@ impl ComponentRenderer {
         let range2 = RangeSpec::datatype("xsd:string");
         let empty_characteristics: Vec<String> = vec![];
         let data_slot_examples = vec![panschema::linkml::Example {
-            value: "Ada Lovelace".to_string(),
+            value: Some("Ada Lovelace".to_string()),
+            object: None,
             description: None,
         }];
 
@@ -1143,11 +1146,13 @@ mod tests {
             // renders no such section.
             let examples = vec![
                 panschema::linkml::Example {
-                    value: "us-east-1".to_string(),
+                    value: Some("us-east-1".to_string()),
+                    object: None,
                     description: Some("an AWS region".to_string()),
                 },
                 panschema::linkml::Example {
-                    value: "eastus".to_string(),
+                    value: Some("eastus".to_string()),
+                    object: None,
                     description: None,
                 },
             ];

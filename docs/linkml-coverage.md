@@ -65,7 +65,7 @@ slot, enum, type, and permissible-value alike. panschema models only a few:
 | `exact_mappings` `close_mappings` `related_mappings` `narrow_mappings` `broad_mappings` | ● | ● | ○ | ● | ○ | ✗ | modeled on class + slot; HTML "Mappings" row; RDF `skos:*Match` (round-trips: OWL reader reads them back); graph/Rust/postgres ignore |
 | `deprecated` | ● | ● | — | ● | — | ✗ | modeled on schema/class/slot/enum/type; HTML "Deprecated" badge + note; `owl:deprecated true` on class/slot IRI (round-trips as a boolean — OWL reader reads it back into the flag; the note text is RDF-lossy); graph/Rust/postgres ignore |
 | `aliases` `see_also` | ● | ● | — | ● | — | ✗ | modeled on schema/class/slot/enum/type; HTML "Aliases" row + "See also" CURIE-expanded links; RDF `skos:altLabel` + `rdfs:seeAlso` on class/slot IRI (round-trips: OWL reader reads them back); graph/Rust/postgres ignore |
-| `examples` | ● | ● | — | n/a | — | ✗ | modeled on schema/class/slot/enum/type; HTML "Examples" section listing each `value` + optional `description`; no standard RDF predicate; graph/Rust/postgres ignore |
+| `examples` | ● | ● | — | n/a | — | ✗ | modeled on schema/class/slot/enum/type; HTML "Examples" section listing each `value`, or `object` as YAML, + optional `description`; no standard RDF predicate; graph/Rust/postgres ignore |
 | `comments` `notes` `todos` `in_subset` `rank` `status` `keywords` `categories` `created_by` `modified_by` `source` `structured_aliases` `alt_descriptions` `contributors` `created_on` `last_updated_on` … | ✗ | — | — | — | — | — | not modeled (except `contributors`/`created`/`modified` on schema, RDF-only — see below). Editorial/provenance long tail; biggest doc-completeness gap |
 
 ---
