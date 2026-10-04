@@ -30,7 +30,8 @@ panschema/viz-bundle/
 # Claude Code. The sandbox block is tracked in .claude/settings.json so every
 # clone gets the same one; personal permission allowlists and local state are
 # not, and must not be committed by a clone whose user-level ignore file
-# doesn't already cover them.
+# doesn't already cover them. The scratch directory appears beside whichever
+# file is being edited, at any depth, hence the leading `**/`.
 .claude/settings.local.json
-.claude/.cc-writes/
+**/.claude/.cc-writes/
 .claude/scheduled_tasks.lock
