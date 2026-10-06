@@ -72,3 +72,22 @@ updates:
       actions:
         patterns:
           - "*"
+
+  # The LinkML reference-implementation oracle under conformance/ is a
+  # Python project with its own lockfile. Without an entry here it moved
+  # only when a security advisory forced it, so its lock aged in place.
+  - package-ecosystem: "uv"
+    directory: "/conformance"
+    schedule:
+      interval: "weekly"
+      day: "saturday"
+      time: "04:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 10
+    cooldown:
+      default-days: 7
+    # One PR for the week's Python bumps; nothing in CI depends on them.
+    groups:
+      conformance:
+        patterns:
+          - "*"
