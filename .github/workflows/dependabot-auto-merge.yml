@@ -5,29 +5,44 @@ name: Dependabot auto-merge
 # Applies to all update types (major, minor, patch); the status checks are
 # the gate, so a bump that breaks the build simply won't merge.
 #
-# The gate is only as wide as main's ruleset, and it is the whole gate:
-# merges made with GITHUB_TOKEN do not trigger workflows, so the push run
-# on main never fires for these merge commits. Every job that should block
-# a bump must be in the ruleset's required checks (all of them are, as of
-# 2026-09-14), and the ruleset keeps "require up to date" off so green PRs
-# merge without rebasing onto each sibling that merged first.
+# Auto-merge is enabled with a GitHub App token, not GITHUB_TOKEN. A merge
+# made with GITHUB_TOKEN triggers no workflows, so main would get no push
+# run: the tree that results from two sibling bumps merging would never be
+# tested, and push-only jobs (the Pages deploy) would not run. The App's
+# merge triggers them like any other push. The ruleset keeps "require up to
+# date" off so green PRs merge without rebasing onto each sibling that
+# merged first; the push run on main is what tests the combination.
+#
+# The App needs Contents, Pull requests and Workflows (read and write) on
+# this repo; Workflows because Dependabot's actions bumps edit workflow
+# files. Its Client ID and private key are Dependabot secrets, the only
+# secrets a Dependabot-triggered run can read. It must not be on the
+# ruleset's bypass list, or its merges would skip the required checks.
 
 on: pull_request
 
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
 
 jobs:
   auto-merge:
     name: Enable auto-merge
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Only Dependabot's own PRs — never anyone else's.
+    # Only Dependabot's own PRs, never anyone else's.
     if: ${{ github.actor == 'dependabot[bot]' }}
     steps:
+      - name: Mint a token for the merge App
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.AUTOMERGE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AUTOMERGE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
+
       - name: Enable auto-merge (squash)
         run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}

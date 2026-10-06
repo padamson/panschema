@@ -88,28 +88,6 @@ jobs:
             echo "supply-chain/ not initialized; skipping. Run 'cargo vet init' to enable."
           fi
 
-  semver-checks:
-    name: Semver Compatibility
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
-        with:
-          toolchain: stable
-
-      - name: Install cargo-semver-checks
-        run: cargo install cargo-semver-checks --locked
-
-      # Scoped to the crates that have a published baseline to compare
-      # against. `panschema-model` joins the moment its first release is
-      # on crates.io; until then there is no previous version to check.
-      - name: Check semver compatibility
-        run: cargo semver-checks check-release -p panschema
-
   mutation-testing:
     name: Mutation Testing (full)
     runs-on: ubuntu-latest

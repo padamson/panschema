@@ -26,7 +26,7 @@ url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
 url = "https://raw.githubusercontent.com/zcash/rust-ecosystem/main/supply-chain/audits.toml"
 
 [policy.panschema]
-audit-as-crates-io = true
+audit-as-crates-io = false
 
 [policy.panschema-model]
 audit-as-crates-io = false

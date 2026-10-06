@@ -246,11 +246,6 @@ user-id = 6743
 user-login = "epage"
 user-name = "Ed Page"
 
-[[publisher.panschema]]
-version = "0.4.0"
-when = "2026-09-27"
-trusted-publisher = "github:padamson/panschema"
-
 [[publisher.parking_lot]]
 version = "0.12.5"
 when = "2025-10-03"

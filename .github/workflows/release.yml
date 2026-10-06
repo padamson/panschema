@@ -19,9 +19,54 @@ jobs:
     name: Test
     uses: ./.github/workflows/test.yml
 
+  # The tag's version against each crate's latest release on crates.io: a
+  # breaking change under a version that does not allow one fails here,
+  # before anything is built or published. On 0.x a minor bump (0.4 to
+  # 0.5) allows one. A crate not yet on crates.io has no baseline, so it
+  # is skipped by name; its first release is published by hand anyway (see
+  # the publish job), and the check starts with its second.
+  semver-checks:
+    name: Semver Compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+      with:
+        toolchain: stable
+
+    - name: Install cargo-semver-checks
+      uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+      with:
+        tool: cargo-semver-checks
+
+    # html_writer.rs include_bytes! the viz bundle at compile time; empty
+    # placeholders satisfy rustdoc without a wasm-pack run, and the bundle
+    # is no part of the API being compared.
+    - name: Stub WASM artifacts
+      run: |
+        mkdir -p panschema-viz/pkg
+        touch panschema-viz/pkg/panschema_viz.js panschema-viz/pkg/panschema_viz_bg.wasm
+
+    - name: Check semver compatibility
+      run: |
+        set -euo pipefail
+        for crate in $(cargo metadata --no-deps --format-version 1 \
+                       | jq -r '.packages[] | select(.publish != []) | .name'); do
+          if curl -sfo /dev/null \
+               -A "panschema release workflow (github.com/padamson/panschema)" \
+               "https://crates.io/api/v1/crates/$crate"; then
+            cargo semver-checks check-release -p "$crate"
+          else
+            echo "$crate is not on crates.io yet; nothing to compare against"
+          fi
+        done
+
   build:
     name: Build ${{ matrix.target }}
-    needs: test
+    needs: [test, semver-checks]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
