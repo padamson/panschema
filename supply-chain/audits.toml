@@ -60,6 +60,12 @@ criteria = "safe-to-run"
 delta = "0.56.0 -> 0.58.0"
 notes = "Canonicalization and discriminator changes. No new unsafe outside doc comments; network and fs code is pre-existing and feature-gated (we build with default-features = false)."
 
+[[audits.jsonschema]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.58.0 -> 0.58.5"
+notes = "Delta audit at safe-to-run, from a scan of every added line rather than a full read: 5770 lines added across src/keywords/ and src/canonical/, the rest of the diff is the vendored JSON-Schema-Test-Suite under tests/. No process, env, fs or net access, no include!, no unsafe, no new dependency in this repo's graph; the manifest bumps only its sibling crates to 0.58.5 and the dev-dependencies hegeltest and magnus. Dev-only here: the JSON Schema writer's oracle in tests."
+
 [[audits.jsonschema-regex]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-run"
@@ -147,6 +153,12 @@ who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "0.2.3 -> 0.2.4"
 notes = "Delta audit of the oxigraph 2026-09 patch bumps: dependency pins, clippy lint lists, edition-2024 attribute migration, and small parser/optimizer correctness fixes. No new dependencies, build scripts, unsafe, network, or filesystem code."
+
+[[audits.pg_query]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "6.2.0 -> 6.2.1"
+notes = "Delta audit at safe-to-run. Rust side: four generated prost location fields in src/protobuf.rs and a build.rs error message that now includes the bindgen error; no unsafe, process, env, fs or net additions. The bulk is the vendored libpg_query C (regenerated protobuf, deparser and normalizer fixes), compiled by the existing cc/bindgen build as before. Dev-only here: the Postgres writer's DDL oracle in tests."
 
 [[audits.playwright-rs]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
