@@ -126,7 +126,7 @@ pg_query = "6"
 # which asks the crate for the build its own driver expects; nothing names
 # a Playwright version, so a bump moves crate, driver, and browsers
 # together.
-playwright-rs = "0.18"
+playwright-rs = "0.19"
 
 # Spec-conformance validation of HtmlWriter output: the same HTML5 parser
 # Servo/Firefox use. A real browser silently repairs malformed markup, so
