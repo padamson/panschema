@@ -381,7 +381,15 @@ mod tests {
 
     #[test]
     fn class_becomes_a_closed_typed_object() {
-        let doc = build_json_schema(&wine_schema());
+        let mut schema = wine_schema();
+        let wine_class = schema.classes.get_mut("Wine").unwrap();
+        let mut id = SlotDefinition::new("id");
+        id.identifier = true;
+        wine_class.attributes.insert("id".to_string(), id);
+        let mut code = SlotDefinition::new("code");
+        code.key = true;
+        wine_class.attributes.insert("code".to_string(), code);
+        let doc = build_json_schema(&schema);
         let wine = &doc["$defs"]["Wine"];
 
         assert_eq!(wine["type"], "object");
@@ -391,8 +399,11 @@ mod tests {
         // Multivalued → array of the scalar type.
         assert_eq!(wine["properties"]["tags"]["type"], "array");
         assert_eq!(wine["properties"]["tags"]["items"]["type"], "string");
-        // Only the required slot is listed as required.
-        assert_eq!(wine["required"], serde_json::json!(["name"]));
+        assert_eq!(
+            wine["required"],
+            serde_json::json!(["code", "id", "name"]),
+            "the required slot plus the identifier and key, which LinkML makes required"
+        );
     }
 
     // Oracle 1: the emitted document is a usable JSON Schema — it compiles in

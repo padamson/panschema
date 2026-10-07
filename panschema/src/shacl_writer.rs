@@ -880,9 +880,26 @@ mod tests {
         tags.required = true;
         tags.minimum_cardinality = Some(2);
         thing.attributes.insert("tags".to_string(), tags);
+        // An identifier or key is required whatever its bounds say.
+        let mut id = SlotDefinition::new("id");
+        id.identifier = true;
+        id.minimum_cardinality = Some(0);
+        thing.attributes.insert("id".to_string(), id);
+        let mut code = SlotDefinition::new("code");
+        code.key = true;
+        thing.attributes.insert("code".to_string(), code);
         schema.classes.insert("Thing".to_string(), thing);
 
         let store = render_to_store(&schema);
+        for slot in ["id", "code"] {
+            assert!(
+                ask(
+                    &store,
+                    &format!("ASK {{ ?p <{SH}path> <{EX}#{slot}> ; <{SH}minCount> 1 }}")
+                ),
+                "the {slot} slot must carry sh:minCount 1"
+            );
+        }
         assert!(
             ask(
                 &store,

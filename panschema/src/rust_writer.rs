@@ -637,15 +637,21 @@ fn render_class<W: Write>(
         let ifabsent_default = resolve_ifabsent_default(slot, schema);
 
         // An `ifabsent` that's set but doesn't resolve to a known default
-        // falls back to the normal `Option<T>` rendering, flagged with a
-        // warning so the dropped default is visible rather than silent.
-        if ifabsent_default.is_none() && slot.ifabsent.is_some() && !slot.multivalued {
+        // falls back to the normal rendering — `Option<T>`, or a bare `T`
+        // when the slot is required — flagged with a warning so the
+        // dropped default is visible rather than silent.
+        if ifabsent_default.is_none() && slot.ifabsent.is_some() && !is_multivalued(slot) {
             let expr = slot.ifabsent.as_deref().unwrap_or("");
+            let fallback = if is_required(slot) {
+                "a required `T`"
+            } else {
+                "`Option<T>`"
+            };
             write!(
                 out,
                 "    // WARNING: slot `{slot_name}` declares `ifabsent: {expr}` which\n\
                  //          does not resolve to a known default; field falls\n\
-                 //          back to `Option<T>` with no default.\n"
+                 //          back to {fallback} with no default.\n"
             )?;
         }
 
@@ -670,10 +676,10 @@ fn render_class<W: Write>(
             let fn_name = ifabsent_default_fn_name(name, slot_name);
             serde_attrs.push(format!("default = \"{fn_name}\""));
             ifabsent_default_fns.push((fn_name, d.rust_type(), d.default_expr()));
-        } else if !slot.required && !slot.multivalued {
+        } else if !is_required(slot) && !is_multivalued(slot) {
             serde_attrs.push("default".to_string());
             serde_attrs.push("skip_serializing_if = \"Option::is_none\"".to_string());
-        } else if slot.multivalued {
+        } else if is_multivalued(slot) {
             serde_attrs.push("default".to_string());
             serde_attrs.push("skip_serializing_if = \"Vec::is_empty\"".to_string());
         }
@@ -750,17 +756,12 @@ fn render_constructor<W: Write>(
     // default), so it's neither a required constructor param nor an
     // `Option` set to `None` — the ctor initializes it from the generated
     // default fn.
-    let has_required = resolved.values().any(|slot| {
-        slot.required && !slot.multivalued && resolve_ifabsent_default(slot, schema).is_none()
-    });
-    if !has_required {
-        return Ok(());
-    }
-
     let params: Vec<(String, String)> = resolved
         .iter()
         .filter(|(_, slot)| {
-            slot.required && !slot.multivalued && resolve_ifabsent_default(slot, schema).is_none()
+            is_required(slot)
+                && !is_multivalued(slot)
+                && resolve_ifabsent_default(slot, schema).is_none()
         })
         .map(|(slot_name, slot)| {
             (
@@ -769,6 +770,9 @@ fn render_constructor<W: Write>(
             )
         })
         .collect();
+    if params.is_empty() {
+        return Ok(());
+    }
     let param_list = params
         .iter()
         .map(|(field, ty)| format!("{field}: {ty}"))
@@ -783,9 +787,9 @@ fn render_constructor<W: Write>(
         let field = raw_if_keyword(&snake);
         if let Some(d) = resolve_ifabsent_default(slot, schema) {
             writeln!(out, "            {field}: {},", d.default_expr())?;
-        } else if slot.multivalued {
+        } else if is_multivalued(slot) {
             writeln!(out, "            {field}: Vec::new(),")?;
-        } else if slot.required {
+        } else if is_required(slot) {
             writeln!(out, "            {field},")?;
         } else {
             writeln!(out, "            {field}: None,")?;
@@ -1320,8 +1324,23 @@ fn compute_struct_derives(
     derives.join(", ")
 }
 
+/// Whether a slot frames as a bare value rather than an `Option`: the
+/// effective cardinality every other writer reads, so an identifier or key
+/// is required here too without the explicit flag.
+fn is_required(slot: &SlotDefinition) -> bool {
+    crate::linkml_resolve::effective_cardinality(slot).required
+}
+
+/// Whether a slot frames as a `Vec`: an explicit `maximum_cardinality`
+/// above one makes a list without the `multivalued` flag, as it does in
+/// every other writer.
+fn is_multivalued(slot: &SlotDefinition) -> bool {
+    crate::linkml_resolve::effective_cardinality(slot).multivalued
+}
+
 /// Conservatively determines whether a slot's framed Rust type supports
-/// `Default`. The check looks at the framing first:
+/// `Default`. An identifier or key never does, whatever its framing;
+/// otherwise the check looks at the framing first:
 ///
 /// - `Vec<T>`: always defaults to `vec![]`, regardless of T
 /// - `Option<T>`: always defaults to `None`, regardless of T
@@ -1331,7 +1350,12 @@ fn compute_struct_derives(
 ///   datetime types, `Box<T>` for class T, class-typed bare refs, and
 ///   any_of enum bare types are *not* `Default` under this rule.
 fn supports_default(slot: &SlotDefinition) -> bool {
-    if slot.multivalued || !slot.required {
+    // A defaulted identifier or key would be empty, single or multivalued,
+    // and every defaulted record would share it.
+    if slot.identifies_records() {
+        return false;
+    }
+    if is_multivalued(slot) || !is_required(slot) {
         return true;
     }
     // Required + single. `any_of` ranges resolve to a generated enum;
@@ -1419,9 +1443,9 @@ fn field_type_for(
 /// Framing for a type that's sized on its own (primitive, enum, Kind
 /// enum, any_of enum, or a struct used inside a `Vec`).
 fn framed_sized(base: &str, slot: &SlotDefinition) -> String {
-    if slot.multivalued {
+    if is_multivalued(slot) {
         format!("Vec<{base}>")
-    } else if slot.required {
+    } else if is_required(slot) {
         base.to_string()
     } else {
         format!("Option<{base}>")
@@ -1432,9 +1456,9 @@ fn framed_sized(base: &str, slot: &SlotDefinition) -> String {
 /// `Vec<T>` is sized regardless of T's size; `Option<T>` and bare `T`
 /// must be `Box`ed to break layout cycles.
 fn framed_boxed(base: &str, slot: &SlotDefinition) -> String {
-    if slot.multivalued {
+    if is_multivalued(slot) {
         format!("Vec<{base}>")
-    } else if slot.required {
+    } else if is_required(slot) {
         format!("Box<{base}>")
     } else {
         format!("Option<Box<{base}>>")
@@ -1708,7 +1732,7 @@ fn resolve_ifabsent_default(
 /// Returns `None` for the multivalued case, an absent `ifabsent`, or any
 /// form whose argument doesn't parse as the declared type.
 fn resolve_ifabsent_scalar_default(slot: &SlotDefinition) -> Option<IfAbsentDefault> {
-    if slot.multivalued {
+    if is_multivalued(slot) {
         return None;
     }
     let ifabsent = slot.ifabsent.as_deref()?.trim();
@@ -1781,7 +1805,7 @@ fn resolve_ifabsent_enum_default(
     slot: &SlotDefinition,
     schema: &SchemaDefinition,
 ) -> Option<IfAbsentEnumDefault> {
-    if slot.multivalued {
+    if is_multivalued(slot) {
         return None;
     }
     let ifabsent = slot.ifabsent.as_deref()?.trim();
@@ -1881,7 +1905,8 @@ mod tests {
     /// through syn first, so output that does not parse fails here with the
     /// source attached.
     mod ast {
-        use syn::{Attribute, Block, File, Item, Signature, Type};
+        use std::collections::BTreeMap;
+        use syn::{Attribute, Block, Expr, File, Item, Signature, Type};
 
         pub fn parse(src: &str) -> File {
             syn::parse_file(src)
@@ -1985,6 +2010,16 @@ mod tests {
                 .clone()
         }
 
+        /// Outer attributes parsed from `src`, to compare a field's against.
+        pub fn attrs(src: &str) -> Vec<Attribute> {
+            syn::parse::Parser::parse_str(Attribute::parse_outer, src)
+                .unwrap_or_else(|e| panic!("bad expected attributes `{src}`: {e}"))
+        }
+
+        pub fn expr(src: &str) -> Expr {
+            syn::parse_str(src).unwrap_or_else(|e| panic!("bad expected expr `{src}`: {e}"))
+        }
+
         /// The serde attributes on `field`. Panics when the field is absent.
         pub fn field_serde_attrs(src: &str, strukt: &str, field: &str) -> Vec<Attribute> {
             field_attrs(src, strukt, field)
@@ -2049,16 +2084,45 @@ mod tests {
             })
         }
 
-        fn method_sig(file: &File, self_ty: &str, name: &str) -> Option<Signature> {
+        fn method(file: &File, self_ty: &str, name: &str) -> Option<syn::ImplItemFn> {
             file.items.iter().find_map(|i| match i {
                 Item::Impl(im) if im.trait_.is_none() && type_last(&im.self_ty) == self_ty => {
                     im.items.iter().find_map(|ii| match ii {
-                        syn::ImplItem::Fn(f) if f.sig.ident == name => Some(f.sig.clone()),
+                        syn::ImplItem::Fn(f) if f.sig.ident == name => Some(f.clone()),
                         _ => None,
                     })
                 }
                 _ => None,
             })
+        }
+
+        fn method_sig(file: &File, self_ty: &str, name: &str) -> Option<Signature> {
+            method(file, self_ty, name).map(|f| f.sig)
+        }
+
+        /// The fields of the struct literal `self_ty::name` returns, each
+        /// mapped to its initializer, or `None` for shorthand (`field,`).
+        /// `None` overall when the method is absent or ends otherwise.
+        pub fn method_struct_inits(
+            src: &str,
+            self_ty: &str,
+            name: &str,
+        ) -> Option<BTreeMap<String, Option<Expr>>> {
+            let body = method(&parse(src), self_ty, name)?.block;
+            let Some(syn::Stmt::Expr(Expr::Struct(lit), None)) = body.stmts.last() else {
+                return None;
+            };
+            Some(
+                lit.fields
+                    .iter()
+                    .filter_map(|fv| match &fv.member {
+                        syn::Member::Named(ident) => {
+                            Some((ident.to_string(), fv.colon_token.map(|_| fv.expr.clone())))
+                        }
+                        syn::Member::Unnamed(_) => None,
+                    })
+                    .collect(),
+            )
         }
 
         /// The named parameters of the inherent method `self_ty::name`, in
@@ -2684,6 +2748,26 @@ mod tests {
         )));
         assert!(!supports_default(&slot_shape(Some("date"), true, false)));
         assert!(!supports_default(&slot_shape(Some("time"), true, false)));
+    }
+
+    #[test]
+    fn supports_default_rejects_an_identifier_or_key_of_any_range() {
+        // A defaulted record would carry an empty id, present to `verify` and
+        // shared by every other defaulted record, so it gets no `Default`.
+        for range in ["string", "integer", "datetime"] {
+            let mut identifier = slot_shape(Some(range), false, false);
+            identifier.identifier = true;
+            let mut key = slot_shape(Some(range), false, false);
+            key.key = true;
+            let mut keys = slot_shape(Some(range), false, true);
+            keys.key = true;
+            assert!(
+                !supports_default(&identifier)
+                    && !supports_default(&key)
+                    && !supports_default(&keys),
+                "a {range} identifier or key, single or multivalued, must not be Default-able"
+            );
+        }
     }
 
     #[test]
@@ -3859,6 +3943,20 @@ mod tests {
             ast::fn_returns(&out, "default_placed_item_status").is_none(),
             "no default fn should be emitted for an unresolvable ifabsent; got:\n{out}"
         );
+        assert!(
+            out.contains("back to `Option<T>` with no default"),
+            "the warning names the Option fallback; got:\n{out}"
+        );
+
+        let (schema, mut def) = ifabsent_schema(Some("ItemStatus(shipped)"));
+        def.attributes.get_mut("status").unwrap().identifier = true;
+        let out = render_placed_item(&schema, &def);
+        assert!(
+            ast::field_type(&out, "PlacedItem", "status") == Some(ast::ty("ItemStatus"))
+                && out.contains("back to a required `T` with no default")
+                && !out.contains("Option<T>"),
+            "a required slot's warning names the bare fallback it gets; got:\n{out}"
+        );
     }
 
     #[test]
@@ -4495,21 +4593,35 @@ mod tests {
 
     #[test]
     fn render_class_emits_constructor_with_required_fields_only() {
-        // `Question` has one required field (`label`) plus two
-        // optional/multivalued ones. The generated constructor takes
-        // exactly one parameter and defaults the rest.
+        // Required means the effective lower bound, not the flag alone: an
+        // identifier, a key and `minimum_cardinality: 1` are required, and an
+        // explicit `minimum_cardinality: 0` waives `required: true`. Likewise
+        // a `maximum_cardinality` above one makes a list. The constructor
+        // takes the required single values and defaults the rest.
+        type Shape = fn(&mut SlotDefinition);
+        let shapes: [(&str, Shape); 8] = [
+            ("label", |s| s.required = true),
+            ("id", |s| s.identifier = true),
+            ("code", |s| s.key = true),
+            ("at_least_one", |s| s.minimum_cardinality = Some(1)),
+            ("maybe", |_| {}),
+            ("waived", |s| {
+                s.required = true;
+                s.minimum_cardinality = Some(0);
+            }),
+            ("many", |s| s.multivalued = true),
+            ("bounded", |s| {
+                s.minimum_cardinality = Some(2);
+                s.maximum_cardinality = Some(5);
+            }),
+        ];
         let mut def = ClassDefinition::new("Question");
-        let mut label = SlotDefinition::new("label");
-        label.range = Some("string".to_string());
-        label.required = true;
-        def.attributes.insert("label".to_string(), label);
-        let mut maybe = SlotDefinition::new("maybe");
-        maybe.range = Some("string".to_string());
-        def.attributes.insert("maybe".to_string(), maybe);
-        let mut many = SlotDefinition::new("many");
-        many.range = Some("string".to_string());
-        many.multivalued = true;
-        def.attributes.insert("many".to_string(), many);
+        for (name, shape) in shapes {
+            let mut slot = SlotDefinition::new(name);
+            slot.range = Some("string".to_string());
+            shape(&mut slot);
+            def.attributes.insert(name.to_string(), slot);
+        }
 
         let mut schema = SchemaDefinition::new("s");
         schema.classes.insert("Question".to_string(), def.clone());
@@ -4530,23 +4642,51 @@ mod tests {
             &mut any_of_enums,
         )
         .unwrap();
+
+        assert!(
+            !ast::derives(&out, "Question").contains(&"Default".to_string()),
+            "a struct with an identifier derives no Default; got:\n{out}"
+        );
+        let required = ["at_least_one", "code", "id", "label"];
         assert!(
             ast::method_params(&out, "Question", "new")
-                == Some(vec![("label".to_string(), ast::ty("String"))]),
-            "expected constructor to take only the required field; got:\n{out}"
+                == Some(
+                    required
+                        .iter()
+                        .map(|f| (f.to_string(), ast::ty("String")))
+                        .collect()
+                ),
+            "expected the constructor to take exactly the required single values; got:\n{out}"
         );
+        let shorthand = required.iter().map(|f| (f.to_string(), None));
+        let defaulted = [
+            ("maybe", "None"),
+            ("waived", "None"),
+            ("many", "Vec::new()"),
+            ("bounded", "Vec::new()"),
+        ]
+        .map(|(f, init)| (f.to_string(), Some(ast::expr(init))));
         assert!(
-            out.contains("label,"),
-            "expected `label` to use parameter shorthand; got:\n{out}"
+            ast::method_struct_inits(&out, "Question", "new")
+                == Some(shorthand.chain(defaulted).collect()),
+            "expected parameters as shorthand and the rest defaulted; got:\n{out}"
         );
-        assert!(
-            out.contains("maybe: None,"),
-            "expected `maybe` to default to None; got:\n{out}"
-        );
-        assert!(
-            out.contains("many: Vec::new(),"),
-            "expected `many` to default to Vec::new(); got:\n{out}"
-        );
+
+        let optional = ast::attrs(r#"#[serde(default, skip_serializing_if = "Option::is_none")]"#);
+        let list = ast::attrs(r#"#[serde(default, skip_serializing_if = "Vec::is_empty")]"#);
+        let fields = required.iter().map(|f| (*f, "String", vec![])).chain([
+            ("maybe", "Option<String>", optional.clone()),
+            ("waived", "Option<String>", optional),
+            ("many", "Vec<String>", list.clone()),
+            ("bounded", "Vec<String>", list),
+        ]);
+        for (field, ty, serde) in fields {
+            assert!(
+                ast::field_type(&out, "Question", field) == Some(ast::ty(ty))
+                    && ast::field_serde_attrs(&out, "Question", field) == serde,
+                "expected `{field}: {ty}` with its serde framing; got:\n{out}"
+            );
+        }
     }
 
     #[test]

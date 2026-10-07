@@ -723,16 +723,23 @@ pub struct Cardinality {
 /// Precedence per bound (highest wins): an explicit
 /// `minimum_cardinality` decides `required` (`min >= 1`); an explicit
 /// `maximum_cardinality` decides `multivalued` (`max > 1`); each flag
-/// is the fallback when its bound is absent.
+/// is the fallback when its bound is absent. An `identifier` or `key`
+/// slot is required whatever its bounds say, as in linkml-runtime's
+/// `induced_slot`, and an explicit lower bound below one is raised to one
+/// so `min` agrees with `required`.
 pub fn effective_cardinality(slot: &SlotDefinition) -> Cardinality {
+    let identifies = slot.identifies_records();
     Cardinality {
-        required: slot
-            .minimum_cardinality
-            .map_or(slot.required, |min| min >= 1),
+        required: identifies
+            || slot
+                .minimum_cardinality
+                .map_or(slot.required, |min| min >= 1),
         multivalued: slot
             .maximum_cardinality
             .map_or(slot.multivalued, |max| max > 1),
-        min: slot.minimum_cardinality,
+        min: slot
+            .minimum_cardinality
+            .map(|min| if identifies { min.max(1) } else { min }),
         max: slot.maximum_cardinality,
     }
 }
@@ -2009,6 +2016,33 @@ mod tests {
         assert!(!card.multivalued);
         assert_eq!(card.min, None);
         assert_eq!(card.max, None);
+    }
+
+    #[test]
+    fn effective_cardinality_identifier_and_key_slots_are_required() {
+        // linkml-runtime's induced_slot sets required on either flag, and
+        // keeps it over an explicit `minimum_cardinality: 0`.
+        let mut identifier = SlotDefinition::new("id");
+        identifier.identifier = true;
+        let mut key = SlotDefinition::new("code");
+        key.key = true;
+        let mut bounded_identifier = SlotDefinition::new("id");
+        bounded_identifier.identifier = true;
+        bounded_identifier.minimum_cardinality = Some(0);
+
+        for (what, slot, min) in [
+            ("identifier", identifier, None),
+            ("key", key, None),
+            ("identifier bounded 0..", bounded_identifier, Some(1)),
+        ] {
+            let card = effective_cardinality(&slot);
+            assert!(card.required, "{what} slot reads as required");
+            assert!(!card.multivalued, "{what} slot stays single-valued");
+            assert_eq!(
+                card.min, min,
+                "{what} slot's lower bound agrees with required"
+            );
+        }
     }
 
     #[test]

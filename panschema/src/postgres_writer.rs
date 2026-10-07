@@ -163,7 +163,7 @@ fn render_body(schema: &SchemaDefinition) -> String {
         // its container, and a table is the container here.
         let pk_slot = effective
             .iter()
-            .find(|(_, slot)| identifies_records(slot))
+            .find(|(_, slot)| slot.identifies_records())
             .map(|(name, _)| name.clone());
 
         writeln!(out, "CREATE TABLE {} (", quote_ident(&table)).ok();
@@ -224,11 +224,11 @@ fn render_body(schema: &SchemaDefinition) -> String {
                 // Its value constraints are per-element and have no CHECK
                 // form over an array, so they are dropped here and reported
                 // by `skipped_constraints`.
-                let sql_type = match slot.multivalued {
+                let sql_type = match is_multivalued(slot) {
                     true => format!("{}[]", sql_type_for_slot_range(range, schema)),
                     false => sql_type_for_slot_range(range, schema),
                 };
-                let checks = match slot.multivalued {
+                let checks = match is_multivalued(slot) {
                     true => String::new(),
                     false => column_checks(col, slot),
                 };
@@ -394,12 +394,10 @@ fn is_class_range(slot: &SlotDefinition, schema: &SchemaDefinition) -> bool {
         .is_some_and(|r| schema.classes.contains_key(r))
 }
 
-/// Whether this slot identifies its class's records — LinkML's globally
-/// unique `identifier` or its container-unique `key`. The one predicate the
-/// primary-key choice, the column map, and rendering all share, so they
-/// cannot disagree about which slot names a record.
-fn identifies_records(slot: &SlotDefinition) -> bool {
-    slot.identifier || slot.key
+/// Whether this slot holds a list: the flag, or a `maximum_cardinality`
+/// above one, as every other writer reads it.
+fn is_multivalued(slot: &SlotDefinition) -> bool {
+    crate::linkml_resolve::effective_cardinality(slot).multivalued
 }
 
 /// Every effective slot of `class` mapped to the column name it becomes:
@@ -413,7 +411,7 @@ fn slot_column_map(class: &ClassDefinition, schema: &SchemaDefinition) -> BTreeM
     let (pk_col, _) = class_primary_key(class, schema);
     let pk_slot = effective
         .iter()
-        .find(|(_, slot)| identifies_records(slot))
+        .find(|(_, slot)| slot.identifies_records())
         .map(|(name, _)| name.clone());
 
     let mut map = BTreeMap::new();
@@ -427,7 +425,7 @@ fn slot_column_map(class: &ClassDefinition, schema: &SchemaDefinition) -> BTreeM
         // A multivalued class range lives in its own linking table, so it
         // has no column on this table at all. Leaving it out is what keeps
         // `unique_keys` and `rules` from naming a column that isn't there.
-        if slot.multivalued && is_class_range(slot, schema) {
+        if is_multivalued(slot) && is_class_range(slot, schema) {
             continue;
         }
         let col = match slot.range.as_deref().and_then(|r| schema.classes.get(r)) {
@@ -469,7 +467,7 @@ fn linking_table_for(
     slot: &SlotDefinition,
     schema: &SchemaDefinition,
 ) -> Option<LinkingTable> {
-    if !slot.multivalued {
+    if !is_multivalued(slot) {
         return None;
     }
     let target_def = slot.range.as_deref().and_then(|r| schema.classes.get(r))?;
@@ -577,7 +575,7 @@ fn array_column_slots(
 ) -> std::collections::BTreeSet<String> {
     crate::linkml_resolve::resolve_effective_slots(class, schema)
         .into_iter()
-        .filter(|(_, slot)| slot.multivalued && !is_class_range(slot, schema))
+        .filter(|(_, slot)| is_multivalued(slot) && !is_class_range(slot, schema))
         .map(|(name, _)| name)
         .collect()
 }
@@ -638,7 +636,7 @@ pub fn skipped_constraints(schema: &SchemaDefinition) -> Vec<SkippedConstraint> 
         }
         let effective = crate::linkml_resolve::resolve_effective_slots(class, schema);
         for (slot_name, slot) in &effective {
-            if !slot.multivalued || is_class_range(slot, schema) {
+            if !is_multivalued(slot) || is_class_range(slot, schema) {
                 continue;
             }
             let dropped = [
@@ -799,7 +797,7 @@ fn compute_skips(schema: &SchemaDefinition) -> BTreeMap<String, String> {
 /// every table falls back to.
 fn class_primary_key(class: &ClassDefinition, schema: &SchemaDefinition) -> (String, String) {
     let effective = crate::linkml_resolve::resolve_effective_slots(class, schema);
-    match effective.iter().find(|(_, slot)| identifies_records(slot)) {
+    match effective.iter().find(|(_, slot)| slot.identifies_records()) {
         Some((name, slot)) => {
             let col = crate::casing::snake_case(name);
             let sql_type = sql_type_for_slot_range(slot.range.as_deref(), schema);
@@ -1245,6 +1243,10 @@ mod tests {
         sku.range = Some("string".to_string());
         sku.identifier = true;
         class.attributes.insert("sku".to_string(), sku);
+        let mut slug = SlotDefinition::new("slug");
+        slug.range = Some("string".to_string());
+        slug.key = true;
+        class.attributes.insert("slug".to_string(), slug);
         let schema = schema_with_class(class);
 
         let out = PostgresWriter::new().render(&schema);
@@ -1252,6 +1254,10 @@ mod tests {
         assert!(
             out.contains("\"sku\" text PRIMARY KEY"),
             "expected the identifier slot to become the primary key; got:\n{out}"
+        );
+        assert!(
+            out.contains("\"slug\" text NOT NULL"),
+            "a key beside the identifier is an ordinary column, required; got:\n{out}"
         );
         assert!(
             !out.contains("\"id\" uuid PRIMARY KEY"),
@@ -1482,6 +1488,10 @@ mod tests {
         tags.range = Some("string".to_string());
         tags.multivalued = true;
         class.attributes.insert("tags".to_string(), tags);
+        let mut bounded = SlotDefinition::new("bounded");
+        bounded.range = Some("string".to_string());
+        bounded.maximum_cardinality = Some(5);
+        class.attributes.insert("bounded".to_string(), bounded);
         let schema = schema_with_class(class);
 
         let out = PostgresWriter::new().render(&schema);
@@ -1489,6 +1499,10 @@ mod tests {
         assert!(
             out.contains(r#""tags" text[]"#),
             "a multivalued scalar slot should be an array column; got:\n{out}"
+        );
+        assert!(
+            out.contains(r#""bounded" text[]"#),
+            "a maximum_cardinality above one is a list without the flag; got:\n{out}"
         );
         assert!(
             skipped_classes(&schema).is_empty(),
@@ -1564,7 +1578,7 @@ mod tests {
         class.attributes.insert("codes".to_string(), codes);
         let mut counts = SlotDefinition::new("counts");
         counts.range = Some("integer".to_string());
-        counts.multivalued = true;
+        counts.maximum_cardinality = Some(10);
         counts.minimum_value = Some(0.0);
         class.attributes.insert("counts".to_string(), counts);
         let schema = schema_with_class(class);
@@ -1744,6 +1758,22 @@ mod tests {
         assert!(
             !out.contains(r#""images_id" uuid,"#),
             "the owner table must not also carry a scalar FK column; got:\n{out}"
+        );
+
+        let mut bounded = schema;
+        let images = bounded
+            .classes
+            .get_mut("Recipe")
+            .unwrap()
+            .attributes
+            .get_mut("images")
+            .unwrap();
+        images.multivalued = false;
+        images.maximum_cardinality = Some(5);
+        assert_eq!(
+            PostgresWriter::new().render(&bounded),
+            out,
+            "a maximum_cardinality above one links exactly as the flag does"
         );
     }
 

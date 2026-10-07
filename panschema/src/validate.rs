@@ -1985,19 +1985,34 @@ wineries:
 
     #[test]
     fn identifier_supplied_as_map_key_satisfies_the_identifier_slot() {
-        // wineries as an identifier-keyed mapping: the id isn't a field, but
-        // the required identifier slot is satisfied by the key.
-        let d = data(
-            "\
-wineries:
-  morgonEstate:
-    name: Morgon Estate
-",
-        );
-        assert!(
-            validate_instance_data(&schema(), &d).is_empty(),
-            "the map key supplies the identifier; name is present"
-        );
+        // An identifier or key is required without the flag. In an
+        // identifier-keyed mapping the key supplies it; a listed record must
+        // give it as a field.
+        let keyed = data("wineries:\n  morgonEstate:\n    name: Morgon Estate\n");
+        let listed = data("wineries:\n  - name: Morgon Estate\n");
+        for marks in ["identifier", "key"] {
+            let mut schema = schema();
+            let id = schema
+                .classes
+                .get_mut("Winery")
+                .unwrap()
+                .attributes
+                .get_mut("id")
+                .unwrap();
+            id.identifier = marks == "identifier";
+            id.key = marks == "key";
+
+            assert!(
+                validate_instance_data(&schema, &keyed).is_empty(),
+                "the map key supplies the {marks}; name is present"
+            );
+            let violations = validate_instance_data(&schema, &listed);
+            assert!(
+                matches!(violations.as_slice(), [v] if matches!(&v.kind,
+                    ViolationKind::RequiredSlotAbsent { class, slot } if class == "Winery" && slot == "id")),
+                "a listed record without its {marks} is missing a required slot; got: {violations:?}"
+            );
+        }
     }
 
     #[test]

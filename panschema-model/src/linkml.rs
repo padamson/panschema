@@ -966,6 +966,14 @@ impl SlotDefinition {
     pub fn display_label(&self) -> &str {
         self.annotations.label_or_ref(&self.name)
     }
+
+    /// Whether this slot identifies its class's records: LinkML's globally
+    /// unique `identifier` or its container-unique `key`. Either makes the
+    /// slot required, and outputs that key or default on a record's id
+    /// decide it here, so they cannot disagree about which slot names one.
+    pub fn identifies_records(&self) -> bool {
+        self.identifier || self.key
+    }
 }
 
 /// An enumeration definition in a LinkML schema

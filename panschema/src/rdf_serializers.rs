@@ -989,14 +989,15 @@ struct PropertyConstraints<'a> {
 
 impl<'a> PropertyConstraints<'a> {
     fn from_slot(slot: &'a SlotDefinition) -> Self {
+        let cardinality = crate::linkml_resolve::effective_cardinality(slot);
         Self {
             range: slot.range.as_deref(),
-            required: slot.required,
+            required: cardinality.required,
             pattern: slot.pattern.as_deref(),
             min_value: slot.minimum_value,
             max_value: slot.maximum_value,
-            min_cardinality: slot.minimum_cardinality,
-            max_cardinality: slot.maximum_cardinality,
+            min_cardinality: cardinality.min,
+            max_cardinality: cardinality.max,
             close_enum_range: true,
             ..Default::default()
         }
@@ -1294,8 +1295,10 @@ fn emit_constraint_fields(
     }
     // `required` and `minimum_cardinality` are two spellings of the same
     // lower bound; emitting a `sh:minCount` for each would contradict itself.
-    // Reconcile to one, with an explicit cardinality winning over the flag —
-    // the same precedence `effective_cardinality` gives the HTML view.
+    // A slot's pair arrives already reconciled by `effective_cardinality`
+    // (so an identifier's bound is at least one); a rule condition's arrives
+    // raw, and taking the explicit bound over the flag gives it the same
+    // precedence.
     // `value_presence` folds into the same bounds: PRESENT is a lower
     // bound of 1 ("at least one value"), ABSENT an upper bound of 0.
     let presence_min = u32::from(matches!(
