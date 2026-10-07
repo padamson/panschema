@@ -759,18 +759,28 @@ impl InstanceSet {
             && let Some(root_inst) = loader.instances.iter().find(|i| &i.id == root_id)
         {
             let scope = instance_iri_string(schema, root_inst);
-            let mut class_has_key: std::collections::BTreeMap<String, bool> =
-                std::collections::BTreeMap::new();
+            // Read from the same cached slots `build_record` named each
+            // record from, so a record is scoped by the slot that named it.
+            let classes: std::collections::BTreeSet<String> = loader
+                .instances
+                .iter()
+                .filter_map(|inst| inst.types.first().cloned())
+                .collect();
+            let named_by_key: std::collections::BTreeSet<String> = classes
+                .into_iter()
+                .filter(|class_name| {
+                    let slots = loader.resolved_slots(class_name);
+                    crate::linkml_resolve::record_id_slot(
+                        slots.iter().map(|(name, rs)| (name, &rs.definition)),
+                    )
+                    .is_some_and(|(_, slot)| !slot.identifier)
+                })
+                .collect();
             for inst in &mut loader.instances {
-                let keyed = inst.types.first().is_some_and(|class_name| {
-                    *class_has_key.entry(class_name.clone()).or_insert_with(|| {
-                        schema.classes.get(class_name).is_some_and(|class| {
-                            crate::linkml_resolve::resolve_effective_slots(class, schema)
-                                .values()
-                                .any(|slot| slot.key && !slot.identifier)
-                        })
-                    })
-                });
+                let keyed = inst
+                    .types
+                    .first()
+                    .is_some_and(|class_name| named_by_key.contains(class_name));
                 if keyed && &inst.id != root_id {
                     inst.scope = Some(scope.clone());
                 }
@@ -1820,11 +1830,10 @@ impl LinkmlLoader<'_> {
 
         // A record is identified by its `identifier` slot or, failing that,
         // its `key` slot — LinkML's globally- and container-unique forms.
-        let id_slot = resolved
-            .iter()
-            .find(|(_, rs)| rs.definition.identifier)
-            .or_else(|| resolved.iter().find(|(_, rs)| rs.definition.key))
-            .map(|(name, _)| name.clone());
+        let id_slot = crate::linkml_resolve::record_id_slot(
+            resolved.iter().map(|(name, rs)| (name, &rs.definition)),
+        )
+        .map(|(name, _)| name.clone());
         // A name/label/title slot supplies the display label, LinkML-conventionally.
         let label_slot = resolved
             .keys()
@@ -3874,11 +3883,16 @@ classes:
         let mut ident = SlotDefinition::new("id");
         ident.identifier = true;
         provider.attributes.insert("id".to_string(), ident);
-        // A plain slot alongside the identifier: only a `key` slot makes a
-        // class scope, not the mere presence of non-identifying slots.
+        // A plain slot alongside the identifier does not make the class
+        // scope: only records a `key` names do.
         provider
             .attributes
             .insert("name".to_string(), SlotDefinition::new("name"));
+        // Nor does a key beside the identifier: the identifier names the
+        // records, so they stay global.
+        let mut code = SlotDefinition::new("code");
+        code.key = true;
+        provider.attributes.insert("code".to_string(), code);
         schema.classes.insert("Provider".to_string(), provider);
         let read = |yaml: &str| {
             let data: serde_norway::Value = serde_norway::from_str(yaml).unwrap();

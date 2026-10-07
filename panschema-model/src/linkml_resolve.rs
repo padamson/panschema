@@ -630,9 +630,9 @@ fn merge_slot_override(target: &mut SlotDefinition, source: &SlotDefinition) {
     // LinkML's two uniqueness forms are mutually exclusive: `identifier` is
     // globally unique, `key` is unique within its container. So an override
     // that sets one clears the other. Without the clear, a class narrowing a
-    // shared `identifier` slot to a `key` ends up carrying both, and a
-    // consumer asking "are these records scoped to their dataset?" — which
-    // reads `key && !identifier` — sees neither form and scopes nothing.
+    // shared `identifier` slot to a `key` ends up carrying both, and
+    // [`record_id_slot`] — which takes an identifier first — names its
+    // records globally, so they are never scoped to their dataset.
     //
     // This is what lets a schema share one id slot across its record classes
     // and still split reference entities from scoped ones per class, which is
@@ -742,6 +742,24 @@ pub fn effective_cardinality(slot: &SlotDefinition) -> Cardinality {
             .map(|min| if identifies { min.max(1) } else { min }),
         max: slot.maximum_cardinality,
     }
+}
+
+/// The slot that names a class's records: its `identifier` if it has one,
+/// else a `key`, whatever their names. Instance record ids and the Postgres
+/// primary key both decide it here, so they name a record by the same slot.
+pub fn record_id_slot<'a>(
+    slots: impl IntoIterator<Item = (&'a String, &'a SlotDefinition)>,
+) -> Option<(&'a String, &'a SlotDefinition)> {
+    let mut first_key = None;
+    for (name, slot) in slots {
+        if slot.identifier {
+            return Some((name, slot));
+        }
+        if slot.key && first_key.is_none() {
+            first_key = Some((name, slot));
+        }
+    }
+    first_key
 }
 
 /// Resolve a slot's effective domain class names. LinkML lets the
@@ -2043,6 +2061,41 @@ mod tests {
                 "{what} slot's lower bound agrees with required"
             );
         }
+    }
+
+    #[test]
+    fn record_id_slot_prefers_the_identifier_then_a_key() {
+        let slot = |name: &str, identifier: bool, key: bool| {
+            let mut s = SlotDefinition::new(name);
+            s.identifier = identifier;
+            s.key = key;
+            (name.to_string(), s)
+        };
+        let pick = |slots: &[(String, SlotDefinition)]| {
+            let map: BTreeMap<String, SlotDefinition> = slots.iter().cloned().collect();
+            record_id_slot(&map).map(|(name, _)| name.clone())
+        };
+
+        assert_eq!(
+            pick(&[slot("code", false, true), slot("sku", true, false)]),
+            Some("sku".to_string()),
+            "the identifier wins over a key that sorts first"
+        );
+        assert_eq!(
+            pick(&[slot("code", false, true), slot("label", false, false)]),
+            Some("code".to_string()),
+            "a key names the records when there is no identifier"
+        );
+        assert_eq!(
+            pick(&[slot("alpha", false, true), slot("beta", false, true)]),
+            Some("alpha".to_string()),
+            "of two keys, the first in name order names the records"
+        );
+        assert_eq!(
+            pick(&[slot("label", false, false)]),
+            None,
+            "a class with neither has no record-id slot"
+        );
     }
 
     #[test]

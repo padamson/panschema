@@ -969,8 +969,8 @@ impl SlotDefinition {
 
     /// Whether this slot identifies its class's records: LinkML's globally
     /// unique `identifier` or its container-unique `key`. Either makes the
-    /// slot required, and outputs that key or default on a record's id
-    /// decide it here, so they cannot disagree about which slot names one.
+    /// slot required; which one names the record when a class has both is
+    /// [`record_id_slot`](crate::linkml_resolve::record_id_slot)'s choice.
     pub fn identifies_records(&self) -> bool {
         self.identifier || self.key
     }

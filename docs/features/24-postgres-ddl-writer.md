@@ -90,8 +90,10 @@ same schema language.
   already conventionally snake_case, so this is normalization, not
   translation, in practice).
 - **Primary keys**: the effective slot marked `identifier: true` becomes
-  the primary key column. A class with no `identifier` slot gets a
-  synthetic `id uuid PRIMARY KEY DEFAULT gen_random_uuid()`.
+  the primary key column; without one, a `key: true` slot does. A class
+  with neither gets a synthetic `id uuid PRIMARY KEY DEFAULT
+  gen_random_uuid()`. A key is unique only within its container, so as a
+  table-wide primary key it is held to more than LinkML requires.
 - **Scalar range → column type** (the common LinkML built-in types):
   `string`→`text`, `integer`→`integer`, `float`/`double`→`double
   precision`, `boolean`→`boolean`, `date`→`date`, `datetime`→`timestamptz`.

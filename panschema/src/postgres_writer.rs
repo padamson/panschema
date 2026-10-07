@@ -158,13 +158,13 @@ fn render_body(schema: &SchemaDefinition) -> String {
         let effective = crate::linkml_resolve::resolve_effective_slots(class, schema);
         let (pk_col, pk_type) = class_primary_key(class, schema);
 
-        // The identifier- or key-marked slot (if any) becomes the primary
-        // key column instead of a synthetic one — a `key` is unique within
-        // its container, and a table is the container here.
-        let pk_slot = effective
-            .iter()
-            .find(|(_, slot)| slot.identifies_records())
-            .map(|(name, _)| name.clone());
+        // The slot that names the class's records becomes the primary key
+        // instead of a synthetic one: the identifier, or else a key. A key
+        // is unique only within its container, which a table does not
+        // record, so the table-wide primary key holds it to more than LinkML
+        // does.
+        let pk_slot =
+            crate::linkml_resolve::record_id_slot(&effective).map(|(name, _)| name.clone());
 
         writeln!(out, "CREATE TABLE {} (", quote_ident(&table)).ok();
         let mut lines = vec![format!(
@@ -401,7 +401,8 @@ fn is_multivalued(slot: &SlotDefinition) -> bool {
 }
 
 /// Every effective slot of `class` mapped to the column name it becomes:
-/// the identifier slot to the primary-key column, a single-valued
+/// the slot that names its records (the identifier, else a key) to the
+/// primary-key column, a single-valued
 /// class-range slot to its `{slot}_{target_pk}` foreign-key column, and any
 /// other scalar slot to its bare `snake_case` name. The one place column
 /// naming is decided, so `render` (emission) and `skipped_rules`
@@ -409,10 +410,7 @@ fn is_multivalued(slot: &SlotDefinition) -> bool {
 fn slot_column_map(class: &ClassDefinition, schema: &SchemaDefinition) -> BTreeMap<String, String> {
     let effective = crate::linkml_resolve::resolve_effective_slots(class, schema);
     let (pk_col, _) = class_primary_key(class, schema);
-    let pk_slot = effective
-        .iter()
-        .find(|(_, slot)| slot.identifies_records())
-        .map(|(name, _)| name.clone());
+    let pk_slot = crate::linkml_resolve::record_id_slot(&effective).map(|(name, _)| name.clone());
 
     let mut map = BTreeMap::new();
     if let Some(pk) = &pk_slot {
@@ -792,12 +790,13 @@ fn compute_skips(schema: &SchemaDefinition) -> BTreeMap<String, String> {
     skips
 }
 
-/// The primary-key column name and SQL type for a class: its effective
-/// `identifier` slot if one exists, else the synthesized `id uuid` key
-/// every table falls back to.
+/// The primary-key column name and SQL type for a class: the slot that
+/// names its records
+/// ([`record_id_slot`](crate::linkml_resolve::record_id_slot)) if one
+/// exists, else the synthesized `id uuid` key every table falls back to.
 fn class_primary_key(class: &ClassDefinition, schema: &SchemaDefinition) -> (String, String) {
     let effective = crate::linkml_resolve::resolve_effective_slots(class, schema);
-    match effective.iter().find(|(_, slot)| slot.identifies_records()) {
+    match crate::linkml_resolve::record_id_slot(&effective) {
         Some((name, slot)) => {
             let col = crate::casing::snake_case(name);
             let sql_type = sql_type_for_slot_range(slot.range.as_deref(), schema);
@@ -1238,16 +1237,24 @@ mod tests {
 
     #[test]
     fn identifier_slot_becomes_the_primary_key() {
+        // `code` sorts before `sku`, so name order alone would pick the key;
+        // the identifier wins. The key is unique only within its container,
+        // which a table-wide UNIQUE would overstate, so it is a plain column.
         let mut class = ClassDefinition::new("Offering");
         let mut sku = SlotDefinition::new("sku");
         sku.range = Some("string".to_string());
         sku.identifier = true;
         class.attributes.insert("sku".to_string(), sku);
-        let mut slug = SlotDefinition::new("slug");
-        slug.range = Some("string".to_string());
-        slug.key = true;
-        class.attributes.insert("slug".to_string(), slug);
-        let schema = schema_with_class(class);
+        let mut code = SlotDefinition::new("code");
+        code.range = Some("string".to_string());
+        code.key = true;
+        class.attributes.insert("code".to_string(), code);
+        let mut schema = schema_with_class(class);
+        let mut listing = ClassDefinition::new("Listing");
+        let mut offering = SlotDefinition::new("offering");
+        offering.range = Some("Offering".to_string());
+        listing.attributes.insert("offering".to_string(), offering);
+        schema.classes.insert("Listing".to_string(), listing);
 
         let out = PostgresWriter::new().render(&schema);
         assert_valid_postgres_sql(&out);
@@ -1256,12 +1263,19 @@ mod tests {
             "expected the identifier slot to become the primary key; got:\n{out}"
         );
         assert!(
-            out.contains("\"slug\" text NOT NULL"),
-            "a key beside the identifier is an ordinary column, required; got:\n{out}"
+            out.lines()
+                .any(|line| line.trim_end_matches(',') == "    \"code\" text NOT NULL")
+                && !out.contains("UNIQUE"),
+            "a key beside the identifier is required but not table-unique; got:\n{out}"
         );
         assert!(
-            !out.contains("\"id\" uuid PRIMARY KEY"),
-            "must not also synthesize a uuid primary key; got:\n{out}"
+            out.contains("\"offering_sku\" text")
+                && out.contains("FOREIGN KEY (\"offering_sku\") REFERENCES \"offering\" (\"sku\")"),
+            "a reference to the class keys on its identifier; got:\n{out}"
+        );
+        assert!(
+            out.contains("CREATE TABLE \"offering\" (\n    \"sku\" text PRIMARY KEY,\n"),
+            "the offering table must not also synthesize a uuid primary key; got:\n{out}"
         );
     }
 
