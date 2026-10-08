@@ -745,8 +745,8 @@ pub fn effective_cardinality(slot: &SlotDefinition) -> Cardinality {
 }
 
 /// The slot that names a class's records: its `identifier` if it has one,
-/// else a `key`, whatever their names. Instance record ids and the Postgres
-/// primary key both decide it here, so they name a record by the same slot.
+/// else a `key`, whatever their names. Every output that names or scopes a
+/// record decides it here, so they agree on which slot that is.
 pub fn record_id_slot<'a>(
     slots: impl IntoIterator<Item = (&'a String, &'a SlotDefinition)>,
 ) -> Option<(&'a String, &'a SlotDefinition)> {

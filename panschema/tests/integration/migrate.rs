@@ -286,10 +286,11 @@ migrations = "db/migrations/"
 
 /// A schema sharing one `id` slot across its record classes splits
 /// reference entities from per-dataset records through `slot_usage`. Both
-/// halves must reach the emitted DDL: the scoped class keys on its own
-/// column, and the class that did not override keeps the shared identifier.
+/// halves must reach the emitted DDL: the class that narrowed `id` to a key
+/// is unique within the root holding it, and the class that did not
+/// override keeps the shared identifier as its primary key.
 #[test]
-fn a_slot_usage_key_becomes_the_primary_key_in_the_emitted_migration() {
+fn a_slot_usage_key_scopes_its_class_in_the_emitted_migration() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let migrations = tmp.path().join("migrations");
     // The command runs with its cwd in the tempdir, so the fixture needs an
@@ -315,13 +316,14 @@ fn a_slot_usage_key_becomes_the_primary_key_in_the_emitted_migration() {
 
     let (_, body) = sole_migration(&migrations);
     assert!(
-        body.contains(r#""id" text PRIMARY KEY"#),
-        "the class whose slot_usage sets `key: true` should key on that column, \
-         not on a synthetic surrogate; got:\n{body}"
+        body.contains(
+            r#"CONSTRAINT "vintage_assessment_record_key" UNIQUE NULLS NOT DISTINCT ("catalog_id", "id")"#
+        ),
+        "the class whose slot_usage sets `key: true` is unique within its root; got:\n{body}"
     );
     assert!(
-        !body.contains("gen_random_uuid"),
-        "no class here needs a surrogate key; got:\n{body}"
+        body.contains("CREATE TABLE \"grape\" (\n    \"id\" text PRIMARY KEY,"),
+        "the class that kept the shared identifier keys on it; got:\n{body}"
     );
 }
 

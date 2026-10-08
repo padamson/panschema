@@ -90,10 +90,10 @@ same schema language.
   already conventionally snake_case, so this is normalization, not
   translation, in practice).
 - **Primary keys**: the effective slot marked `identifier: true` becomes
-  the primary key column; without one, a `key: true` slot does. A class
-  with neither gets a synthetic `id uuid PRIMARY KEY DEFAULT
-  gen_random_uuid()`. A key is unique only within its container, so as a
-  table-wide primary key it is held to more than LinkML requires.
+  the primary key column. A class its `key` names keys on a synthetic
+  `uuid` and keeps the key unique within its scope (slice 8). A class with
+  neither gets a synthetic `id uuid PRIMARY KEY DEFAULT
+  gen_random_uuid()`.
 - **Scalar range → column type** (the common LinkML built-in types):
   `string`→`text`, `integer`→`integer`, `float`/`double`→`double
   precision`, `boolean`→`boolean`, `date`→`date`, `datetime`→`timestamptz`.
@@ -386,7 +386,7 @@ would be inventing a mechanism where the metamodel already has one.
 
 **Acceptance Criteria:**
 - [x] A multivalued class-range slot emits a linking table named for the owning table and the slot, with both foreign keys `NOT NULL` and a composite primary key.
-- [x] The foreign-key columns reference each side's real primary key, including a non-`id` key such as a `key: true` column.
+- [x] The foreign-key columns reference each side's real primary key, including an identifier column not named `id`, and a key-named class's synthetic `uuid` (slice 8).
 - [x] Two multivalued slots whose ranges are the same class produce two distinct linking tables.
 - [x] A class is no longer skipped for a multivalued class-range slot, and the classes that cascaded off it return too.
 - [x] The emitted script parses as valid Postgres and its foreign keys resolve to tables the same script creates.
@@ -411,6 +411,58 @@ against panschema's actual schemas' hierarchy shapes.
 
 **Priority:** Won't Have (until a real schema needs it) — no clean single
 SQL mapping exists; same deferral posture as feature 17 slice 4.
+
+---
+
+### Slice 8: Key-scoped classes — a synthetic key, a scope column, per-scope uniqueness
+
+**Status:** Complete
+
+**Priority:** Should Have. A `key` is unique within its container, but a
+key that becomes the table's primary key is unique across every
+container, so a multi-tenant database rejects the second tenant's record
+with the same key: valid data the instance model and `verify` accept.
+
+**Acceptance Criteria:**
+- [x] A class whose records a `key` names (it has no `identifier`) keys its table on a synthetic `"uuid" uuid PRIMARY KEY DEFAULT gen_random_uuid()`. The key slot becomes an ordinary `NOT NULL` column under its own name.
+- [x] A single-valued reference to such a class is a `<slot>_uuid` column referencing its `uuid`, and a linking table's side for it is a `uuid` column the same way.
+- [x] When exactly one `identifier`-named root holds the class, the table gains a scope column named for that root (`<root>_<root key column>`), a foreign key to the root's table, and `UNIQUE NULLS NOT DISTINCT (<scope>, <key>)`. The scope column is `NOT NULL` when only that root holds the class, and NULL-able when a root without an identifier also holds it, whose records have no scope.
+- [x] When no `identifier`-named root holds the class, the table has no scope column and the key column alone is `UNIQUE`.
+- [x] When two or more `identifier`-named roots hold the class, the class is not projected, and the diagnostic names the roots, since its records' scope is ambiguous.
+- [x] A class whose table would reference one that is not created — through a foreign key or its scope column, however many steps away — is not projected either, and its diagnostic names the missing class; so is a key-named class whose own column or constraint names would clash with the record key's.
+- [x] A class named by an `identifier`, and a class with neither an identifier nor a key, project as before.
+- [x] The emitted DDL for a schema with a shared root and a scoping root holding the same key-named class applies cleanly to a real Postgres database.
+
+**Notes:**
+- *Holds*: a root holds the classes its collection slots (multivalued
+  class-range slots on the root) range over, and, transitively, the classes
+  the root or a held class contains through an inlined slot. Inlining is
+  LinkML's own rule, as linkml-runtime's `is_inlined` decides it: a slot
+  declared `inlined` or `inlined_as_list` contains its value, and otherwise
+  does unless its range class has an identifier. A key does not make a
+  class referenceable, so every slot to a key-named class contains it; a
+  slot to an identifier-named class is a reference, and a book's
+  `publisher` kept under another root does not make the library hold that
+  publisher's imprints.
+- This mirrors the instance model: a record named by a key mints beneath
+  its dataset's root, a record in a dataset whose root has no identifier
+  mints unscoped, and `UNIQUE NULLS NOT DISTINCT` gives those unscoped rows
+  the same one-namespace uniqueness their IRIs have.
+- *Why a synthetic key rather than a composite `(scope, key)` primary key*:
+  a class held by both a shared root and a scoping root has rows with no
+  scope, and a primary-key column cannot be NULL. A reference that may
+  point at an unscoped row would be a composite foreign key with a NULL
+  part, which Postgres's default matching does not check. One `uuid`
+  foreign key is enforced whichever kind of row it points at.
+- *Not enforced here*: that a reference stays within its own scope. A
+  composite foreign key would enforce it, but only for references that
+  can never point at an unscoped row. Row-level security on the scope
+  column is the usual place for it.
+- Requires Postgres 15 or later (`NULLS NOT DISTINCT`).
+- *Left as is*: a root's collection is still a linking table
+  (`library_books`) beside the scope column, so the containment
+  is stated twice for a scoped class. Dropping the linking table when it
+  only restates the scope is a later decision, not a correctness issue.
 
 ---
 
@@ -457,6 +509,7 @@ computing the delta.
 | Slice 5: multivalued class-refs as linking tables | Should Have | Slice 1, 4 | Complete |
 | Slice 6: `is_a` inheritance strategy | Could Have | Slice 1 | Not Started |
 | Slice 7: `any_of` polymorphic ranges | Won't Have | Slice 1 | 📋 Deferred |
+| Slice 8: key-scoped classes | Should Have | Slice 1, 5 | Complete |
 
 ---
 

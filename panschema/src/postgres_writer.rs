@@ -141,7 +141,8 @@ fn render_body(schema: &SchemaDefinition) -> String {
     // classes) never matter — the script still applies in one pass.
     let mut fk_constraints = Vec::new();
     let mut linking_tables: Vec<LinkingTable> = Vec::new();
-    let skips = compute_skips(schema);
+    let holders = roots_holding(schema);
+    let skips = compute_skips_with(schema, &holders);
 
     for (class_name, class) in &schema.classes {
         if class.r#abstract {
@@ -149,33 +150,51 @@ fn render_body(schema: &SchemaDefinition) -> String {
             continue;
         }
         if skips.contains_key(class_name) {
-            // Not yet supported (is_a / multivalued / any_of / references
-            // a skipped class) — see `skipped_classes` for the diagnostic
-            // surfaced to the caller.
+            // Not projected (is_a, any_of, a key-named class with no single
+            // scope or a clashing name, or a dependency on a class with no
+            // table) — see `skipped_classes` for the diagnostic surfaced to
+            // the caller.
             continue;
         }
         let table = crate::casing::snake_case(class_name);
         let effective = crate::linkml_resolve::resolve_effective_slots(class, schema);
-        let (pk_col, pk_type) = class_primary_key(class, schema);
-
-        // The slot that names the class's records becomes the primary key
-        // instead of a synthetic one: the identifier, or else a key. A key
-        // is unique only within its container, which a table does not
-        // record, so the table-wide primary key holds it to more than LinkML
-        // does.
-        let pk_slot =
-            crate::linkml_resolve::record_id_slot(&effective).map(|(name, _)| name.clone());
+        let key = class_primary_key(class, schema);
+        let pk_slot = key.slot.clone();
 
         writeln!(out, "CREATE TABLE {} (", quote_ident(&table)).ok();
         let mut lines = vec![format!(
-            "    {} {pk_type} PRIMARY KEY{}",
-            quote_ident(&pk_col),
+            "    {} {} PRIMARY KEY{}",
+            quote_ident(&key.col),
+            key.sql_type,
             if pk_slot.is_none() {
                 " DEFAULT gen_random_uuid()"
             } else {
                 ""
             }
         )];
+        let scope = record_scope(class_name, class, schema, &holders);
+        if let Some(RecordScope::Scoped {
+            col,
+            sql_type,
+            root_table,
+            root_col,
+            nullable,
+            ..
+        }) = &scope
+        {
+            lines.push(format!(
+                "    {} {sql_type}{}",
+                quote_ident(col),
+                if *nullable { "" } else { " NOT NULL" }
+            ));
+            fk_constraints.push(FkConstraint {
+                from_table: table.clone(),
+                from_col: col.clone(),
+                to_table: root_table.clone(),
+                to_col: root_col.clone(),
+                constraint_name: format!("{table}_{col}_fkey"),
+            });
+        }
         // Slot name → the column name it actually resolves to, so the
         // table-level constraints below (`unique_keys`, `rules`) can name
         // the real columns. The single source of column naming, shared with
@@ -204,16 +223,17 @@ fn render_body(schema: &SchemaDefinition) -> String {
             let range = slot.range.as_deref();
             if let Some(target_class) = range.and_then(|r| schema.classes.get_key_value(r)) {
                 let (target_name, target_def) = target_class;
-                let (target_pk_col, target_pk_type) = class_primary_key(target_def, schema);
+                let target_key = class_primary_key(target_def, schema);
                 lines.push(format!(
-                    "    {} {target_pk_type}{not_null}",
-                    quote_ident(col)
+                    "    {} {}{not_null}",
+                    quote_ident(col),
+                    target_key.sql_type
                 ));
                 fk_constraints.push(FkConstraint {
                     from_table: table.clone(),
                     from_col: col.clone(),
                     to_table: crate::casing::snake_case(target_name),
-                    to_col: target_pk_col,
+                    to_col: target_key.col,
                     constraint_name: format!(
                         "{table}_{}_fkey",
                         crate::casing::snake_case(slot_name)
@@ -237,6 +257,23 @@ fn render_body(schema: &SchemaDefinition) -> String {
                     quote_ident(col)
                 ));
             }
+        }
+        // A key is unique within its scope: the root that holds the record,
+        // or every row when no root names one. NULLS NOT DISTINCT keeps the
+        // rows without a scope unique among themselves too.
+        match &scope {
+            Some(RecordScope::Scoped { key_col, col, .. }) => lines.push(format!(
+                "    CONSTRAINT {} UNIQUE NULLS NOT DISTINCT ({}, {})",
+                quote_ident(&format!("{table}_record_key")),
+                quote_ident(col),
+                quote_ident(key_col)
+            )),
+            Some(RecordScope::Unscoped { key_col }) => lines.push(format!(
+                "    CONSTRAINT {} UNIQUE ({})",
+                quote_ident(&format!("{table}_record_key")),
+                quote_ident(key_col)
+            )),
+            Some(RecordScope::Ambiguous(_)) | None => {}
         }
         // Table-level UNIQUE constraints from `unique_keys`. A key that
         // names a slot the class doesn't have is dropped entirely rather
@@ -401,20 +438,19 @@ fn is_multivalued(slot: &SlotDefinition) -> bool {
 }
 
 /// Every effective slot of `class` mapped to the column name it becomes:
-/// the slot that names its records (the identifier, else a key) to the
-/// primary-key column, a single-valued
-/// class-range slot to its `{slot}_{target_pk}` foreign-key column, and any
-/// other scalar slot to its bare `snake_case` name. The one place column
+/// an identifier to the primary-key column, a single-valued class-range
+/// slot to its `{slot}_{target_pk}` foreign-key column, and any other
+/// scalar slot, a key included, to its bare `snake_case` name. The one place column
 /// naming is decided, so `render` (emission) and `skipped_rules`
 /// (diagnostic) can't disagree about which columns exist.
 fn slot_column_map(class: &ClassDefinition, schema: &SchemaDefinition) -> BTreeMap<String, String> {
     let effective = crate::linkml_resolve::resolve_effective_slots(class, schema);
-    let (pk_col, _) = class_primary_key(class, schema);
-    let pk_slot = crate::linkml_resolve::record_id_slot(&effective).map(|(name, _)| name.clone());
+    let key = class_primary_key(class, schema);
+    let pk_slot = key.slot;
 
     let mut map = BTreeMap::new();
     if let Some(pk) = &pk_slot {
-        map.insert(pk.clone(), pk_col.clone());
+        map.insert(pk.clone(), key.col.clone());
     }
     for (slot_name, slot) in &effective {
         if pk_slot.as_deref() == Some(slot_name.as_str()) {
@@ -427,10 +463,11 @@ fn slot_column_map(class: &ClassDefinition, schema: &SchemaDefinition) -> BTreeM
             continue;
         }
         let col = match slot.range.as_deref().and_then(|r| schema.classes.get(r)) {
-            Some(target_def) => {
-                let (target_pk_col, _) = class_primary_key(target_def, schema);
-                format!("{}_{}", crate::casing::snake_case(slot_name), target_pk_col)
-            }
+            Some(target_def) => format!(
+                "{}_{}",
+                crate::casing::snake_case(slot_name),
+                class_primary_key(target_def, schema).col
+            ),
             None => crate::casing::snake_case(slot_name),
         };
         map.insert(slot_name.clone(), col);
@@ -471,21 +508,21 @@ fn linking_table_for(
     let target_def = slot.range.as_deref().and_then(|r| schema.classes.get(r))?;
     let owner_table = crate::casing::snake_case(class_name);
     let target_table = crate::casing::snake_case(slot.range.as_deref()?);
-    let (owner_pk, owner_type) = class_primary_key(class, schema);
-    let (target_pk, target_type) = class_primary_key(target_def, schema);
+    let owner_key = class_primary_key(class, schema);
+    let target_key = class_primary_key(target_def, schema);
     let slot_col = crate::casing::snake_case(slot_name);
     Some(LinkingTable {
         // Named for the slot rather than the target class, so two slots
         // onto one class stay two distinct relationships.
         name: format!("{owner_table}_{slot_col}"),
-        owner_col: format!("{owner_table}_{owner_pk}"),
-        owner_type,
+        owner_col: format!("{owner_table}_{}", owner_key.col),
+        owner_type: owner_key.sql_type,
         owner_table,
-        owner_pk,
-        target_col: format!("{slot_col}_{target_pk}"),
-        target_type,
+        owner_pk: owner_key.col,
+        target_col: format!("{slot_col}_{}", target_key.col),
+        target_type: target_key.sql_type,
         target_table,
-        target_pk,
+        target_pk: target_key.col,
     })
 }
 
@@ -594,12 +631,20 @@ pub struct SkippedClass {
     pub reason: String,
 }
 
-/// Classes [`render`] skips, with a diagnostic naming why — `is_a`,
-/// a multivalued slot, an `any_of` slot, or a class-range slot that
-/// targets one of those (which would otherwise emit a foreign key to a
-/// table that's never created), are all not yet supported. An abstract
-/// class isn't reported here — it's not a gap, it deliberately gets no
-/// table.
+/// Classes [`render`] skips, with a diagnostic naming why:
+///
+/// - `is_a`, or an `any_of` slot, which this writer does not yet support;
+/// - a class its key names that more than one root with an identifier
+///   holds, so its key has no single scope;
+/// - a key-named class with a column or constraint that would take a name
+///   its record key uses (`uuid`, the scope column, `<table>_record_key`,
+///   the scope column's foreign key);
+/// - a class whose table would reference one that is never created,
+///   through a class-range slot or its scope column, however many steps
+///   away.
+///
+/// An abstract class isn't reported here — it's not a gap, it deliberately
+/// gets no table.
 pub fn skipped_classes(schema: &SchemaDefinition) -> Vec<SkippedClass> {
     compute_skips(schema)
         .into_iter()
@@ -733,6 +778,14 @@ fn rule_skip_reason(
 /// The shared computation behind [`skipped_classes`] and [`render`]'s own
 /// exclusion of out-of-scope classes — one pass so the two can't drift.
 fn compute_skips(schema: &SchemaDefinition) -> BTreeMap<String, String> {
+    compute_skips_with(schema, &roots_holding(schema))
+}
+
+/// [`compute_skips`] over an already computed [`roots_holding`].
+fn compute_skips_with(
+    schema: &SchemaDefinition,
+    holders: &BTreeMap<String, std::collections::BTreeSet<String>>,
+) -> BTreeMap<String, String> {
     let mut skips = BTreeMap::new();
     for (name, class) in &schema.classes {
         if class.r#abstract {
@@ -753,57 +806,321 @@ fn compute_skips(schema: &SchemaDefinition) -> BTreeMap<String, String> {
                     "has polymorphic `any_of` slot `{slot_name}`, which this writer does not yet support"
                 ),
             );
+            continue;
+        }
+        if let Some(reason) = record_scope_conflict(name, class, schema, holders) {
+            skips.insert(name.clone(), reason);
         }
     }
 
-    // Second pass: a class-range slot targeting an abstract or
-    // already-skipped class would emit a foreign key to a table that's
-    // never created — skip the referencing class too, rather than emit
-    // broken DDL. Single pass (not a fixed point): a chain of skips more
-    // than one hop deep is an edge case this writer doesn't chase.
-    let is_includable = |name: &str| {
-        schema.classes.get(name).is_some_and(|c| !c.r#abstract) && !skips.contains_key(name)
-    };
-    let mut cascaded = Vec::new();
-    for (name, class) in &schema.classes {
-        if class.r#abstract || skips.contains_key(name) {
-            continue;
+    // A class whose table would reference one that is never created —
+    // through a class-range slot's foreign key, or its scope column's —
+    // is skipped too, rather than emit broken DDL. Repeated until nothing
+    // changes, so a chain of dependencies is followed to its end: a root
+    // is a hub, and dropping one reaches every class scoped to it and
+    // every class referencing those. A pass that skips nothing new ends it,
+    // so there are never more passes than classes.
+    for _ in 0..schema.classes.len() {
+        let cascaded: Vec<(String, String)> = schema
+            .classes
+            .iter()
+            .filter(|(name, class)| !class.r#abstract && !skips.contains_key(*name))
+            .filter_map(|(name, class)| {
+                missing_table_dependency(name, class, schema, holders, &skips)
+                    .map(|reason| (name.clone(), reason))
+            })
+            .collect();
+        let before = skips.len();
+        for (name, reason) in cascaded {
+            skips.entry(name).or_insert(reason);
         }
-        let effective = crate::linkml_resolve::resolve_effective_slots(class, schema);
-        for (slot_name, slot) in &effective {
-            if let Some(range) = &slot.range
-                && schema.classes.contains_key(range)
-                && !is_includable(range)
-            {
-                cascaded.push((
-                    name.clone(),
-                    format!(
-                        "references class `{range}` (via slot `{slot_name}`), which is unsupported or itself skipped"
-                    ),
-                ));
-                break;
-            }
+        if skips.len() == before {
+            break;
         }
     }
-    skips.extend(cascaded);
 
     skips
 }
 
-/// The primary-key column name and SQL type for a class: the slot that
-/// names its records
-/// ([`record_id_slot`](crate::linkml_resolve::record_id_slot)) if one
-/// exists, else the synthesized `id uuid` key every table falls back to.
-fn class_primary_key(class: &ClassDefinition, schema: &SchemaDefinition) -> (String, String) {
+/// Why `class`'s table would reference a table that is never created —
+/// an abstract or skipped class, through a class-range slot or the scope
+/// column — or `None` when every table it references exists.
+fn missing_table_dependency(
+    class_name: &str,
+    class: &ClassDefinition,
+    schema: &SchemaDefinition,
+    holders: &BTreeMap<String, std::collections::BTreeSet<String>>,
+    skips: &BTreeMap<String, String>,
+) -> Option<String> {
+    let has_table = |name: &str| {
+        schema.classes.get(name).is_some_and(|c| !c.r#abstract) && !skips.contains_key(name)
+    };
     let effective = crate::linkml_resolve::resolve_effective_slots(class, schema);
-    match crate::linkml_resolve::record_id_slot(&effective) {
-        Some((name, slot)) => {
-            let col = crate::casing::snake_case(name);
-            let sql_type = sql_type_for_slot_range(slot.range.as_deref(), schema);
-            (col, sql_type)
-        }
-        None => ("id".to_string(), "uuid".to_string()),
+    if let Some((slot_name, range)) = effective.iter().find_map(|(slot_name, slot)| {
+        slot.range
+            .as_deref()
+            .filter(|range| schema.classes.contains_key(*range) && !has_table(range))
+            .map(|range| (slot_name, range))
+    }) {
+        return Some(format!(
+            "references class `{range}` (via slot `{slot_name}`), which is unsupported or itself skipped"
+        ));
     }
+    match record_scope(class_name, class, schema, holders) {
+        Some(RecordScope::Scoped { root, .. }) if !has_table(&root) => Some(format!(
+            "its records are scoped to root `{root}`, which is unsupported or itself skipped"
+        )),
+        _ => None,
+    }
+}
+
+/// How a class's table is keyed: the primary-key column, its SQL type,
+/// and the slot whose values fill it (`None` when the key is synthetic).
+struct TableKey {
+    col: String,
+    sql_type: String,
+    slot: Option<String>,
+}
+
+/// The primary key for a class: its identifier, when the identifier names
+/// its records
+/// ([`record_id_slot`](crate::linkml_resolve::record_id_slot)); a
+/// synthetic `uuid` when a key does, since a key is unique only within
+/// its scope and so cannot key the table; and a synthetic `id` when
+/// nothing names them.
+fn class_primary_key(class: &ClassDefinition, schema: &SchemaDefinition) -> TableKey {
+    let effective = crate::linkml_resolve::resolve_effective_slots(class, schema);
+    let synthetic = |col: &str| TableKey {
+        col: col.to_string(),
+        sql_type: "uuid".to_string(),
+        slot: None,
+    };
+    match crate::linkml_resolve::record_id_slot(&effective) {
+        Some((name, slot)) if slot.identifier => TableKey {
+            col: crate::casing::snake_case(name),
+            sql_type: sql_type_for_slot_range(slot.range.as_deref(), schema),
+            slot: Some(name.clone()),
+        },
+        Some(_) => synthetic(KEYED_SURROGATE),
+        None => synthetic("id"),
+    }
+}
+
+/// The synthetic primary-key column of a class its key names. Not `id`,
+/// which the key slot itself is usually called.
+const KEYED_SURROGATE: &str = "uuid";
+
+/// Where the records of a class its key names are unique.
+enum RecordScope {
+    /// No identifier-named root holds the class: the key is unique among
+    /// all its rows.
+    Unscoped { key_col: String },
+    /// One identifier-named root holds the class — a root keyed on its
+    /// identifier, the one a dataset's records mint beneath: the key is
+    /// unique within each of that root's records, named by the scope column `col`. The
+    /// column is `nullable` when a root without an identifier also holds
+    /// the class, since those records have no scope.
+    Scoped {
+        key_col: String,
+        root: String,
+        col: String,
+        sql_type: String,
+        root_table: String,
+        root_col: String,
+        nullable: bool,
+    },
+    /// More than one identifier-named root holds the class.
+    Ambiguous(Vec<String>),
+}
+
+/// The scope of `class`'s records, or `None` when no key names them. The
+/// instance model mints a key-named record beneath the identifier of the
+/// dataset root holding it, and unscoped under a root without one; this is
+/// the same rule over the schema.
+fn record_scope(
+    class_name: &str,
+    class: &ClassDefinition,
+    schema: &SchemaDefinition,
+    holders: &BTreeMap<String, std::collections::BTreeSet<String>>,
+) -> Option<RecordScope> {
+    let effective = crate::linkml_resolve::resolve_effective_slots(class, schema);
+    let (key_name, _) =
+        crate::linkml_resolve::record_id_slot(&effective).filter(|(_, slot)| !slot.identifier)?;
+    // The column the key becomes, which a class-range key names after its
+    // target's key (`<key>_<target_pk>`).
+    let key_col = slot_column_map(class, schema)
+        .remove(key_name)
+        .unwrap_or_else(|| crate::casing::snake_case(key_name));
+    let (scoping, shared): (Vec<&String>, Vec<&String>) = holders
+        .get(class_name)
+        .into_iter()
+        .flatten()
+        .partition(|root| {
+            class_primary_key(&schema.classes[root.as_str()], schema)
+                .slot
+                .is_some()
+        });
+    Some(match scoping.as_slice() {
+        [] => RecordScope::Unscoped { key_col },
+        [root] => {
+            let root_key = class_primary_key(&schema.classes[root.as_str()], schema);
+            let root_table = crate::casing::snake_case(root);
+            RecordScope::Scoped {
+                key_col,
+                root: (*root).clone(),
+                col: format!("{root_table}_{}", root_key.col),
+                sql_type: root_key.sql_type,
+                root_table,
+                root_col: root_key.col,
+                nullable: !shared.is_empty(),
+            }
+        }
+        _ => RecordScope::Ambiguous(scoping.into_iter().cloned().collect()),
+    })
+}
+
+/// Why `class` cannot be projected because of its record scope: held by
+/// more than one scoping root, a slot column that takes the name of the
+/// synthetic key or the scope column, or a constraint that takes the name
+/// of the record key's (`<table>_record_key`, the scope column's
+/// `<table>_<scope>_fkey`).
+fn record_scope_conflict(
+    class_name: &str,
+    class: &ClassDefinition,
+    schema: &SchemaDefinition,
+    holders: &BTreeMap<String, std::collections::BTreeSet<String>>,
+) -> Option<String> {
+    let taken = match record_scope(class_name, class, schema, holders)? {
+        RecordScope::Ambiguous(roots) => {
+            let roots = roots
+                .iter()
+                .map(|r| format!("`{r}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Some(format!(
+                "its key is unique within the root holding its records, and more than one root \
+                 with an identifier holds them ({roots}), so the scope is ambiguous"
+            ));
+        }
+        RecordScope::Scoped { col, .. } => vec![KEYED_SURROGATE.to_string(), col],
+        RecordScope::Unscoped { .. } => vec![KEYED_SURROGATE.to_string()],
+    };
+    let columns = slot_column_map(class, schema);
+    let effective = crate::linkml_resolve::resolve_effective_slots(class, schema);
+    if let Some((key_name, _)) = crate::linkml_resolve::record_id_slot(&effective)
+        && !columns.contains_key(key_name)
+    {
+        return Some(format!(
+            "key slot `{key_name}` is multivalued, so it has no column to be unique"
+        ));
+    }
+    if let Some((slot, col)) = columns.into_iter().find(|(_, col)| taken.contains(col)) {
+        return Some(format!(
+            "slot `{slot}` becomes column `{col}`, which this writer uses for its record key"
+        ));
+    }
+
+    let table = crate::casing::snake_case(class_name);
+    let record_key = format!("{table}_record_key");
+    // The constraint's index shares one namespace with every table.
+    if relation_names(schema).contains(&record_key) {
+        return Some(format!(
+            "a table would be named `{record_key}`, which this writer uses for its record key"
+        ));
+    }
+    if let Some(name) = class
+        .unique_keys
+        .keys()
+        .find(|name| format!("{table}_{}_key", crate::casing::snake_case(name)) == record_key)
+    {
+        return Some(format!(
+            "unique key `{name}` would be named `{record_key}`, which this writer uses for its \
+             record key"
+        ));
+    }
+    let scope_fkey = taken.get(1).map(|scope| format!("{table}_{scope}_fkey"))?;
+    crate::linkml_resolve::resolve_effective_slots(class, schema)
+        .into_iter()
+        .find(|(slot_name, slot)| {
+            !is_multivalued(slot)
+                && is_class_range(slot, schema)
+                && format!("{table}_{}_fkey", crate::casing::snake_case(slot_name)) == scope_fkey
+        })
+        .map(|(slot_name, _)| {
+            format!(
+                "slot `{slot_name}`'s foreign key would be named `{scope_fkey}`, which this \
+                 writer uses for the scope column's"
+            )
+        })
+}
+
+/// Every class mapped to the `tree_root` classes that hold its records: the
+/// ranges of a root's collections (its multivalued class-range slots), and
+/// whatever the root or a class it holds contains through an inlined slot,
+/// transitively. A reference holds nothing.
+fn roots_holding(
+    schema: &SchemaDefinition,
+) -> BTreeMap<String, std::collections::BTreeSet<String>> {
+    let mut holders: BTreeMap<String, std::collections::BTreeSet<String>> = BTreeMap::new();
+    for (root_name, root) in schema.classes.iter().filter(|(_, c)| c.tree_root) {
+        let mut queue: Vec<String> = crate::linkml_resolve::resolve_effective_slots(root, schema)
+            .into_values()
+            .filter_map(|slot| {
+                let (target, target_def) = schema.classes.get_key_value(slot.range.as_deref()?)?;
+                (is_multivalued(&slot) || inlines(&slot, target_def, schema))
+                    .then(|| target.clone())
+            })
+            .collect();
+        let mut seen = std::collections::BTreeSet::new();
+        while let Some(held) = queue.pop() {
+            if !seen.insert(held.clone()) {
+                continue;
+            }
+            holders
+                .entry(held.clone())
+                .or_default()
+                .insert(root_name.clone());
+            let held_def = &schema.classes[&held];
+            for slot in crate::linkml_resolve::resolve_effective_slots(held_def, schema).values() {
+                if let Some((target, target_def)) = slot
+                    .range
+                    .as_deref()
+                    .and_then(|r| schema.classes.get_key_value(r))
+                    && inlines(slot, target_def, schema)
+                {
+                    queue.push(target.clone());
+                }
+            }
+        }
+    }
+    holders
+}
+
+/// Every table name the script could create: one per non-abstract class,
+/// and one per multivalued class-range slot's linking table.
+fn relation_names(schema: &SchemaDefinition) -> std::collections::BTreeSet<String> {
+    let mut names = std::collections::BTreeSet::new();
+    for (name, class) in schema.classes.iter().filter(|(_, c)| !c.r#abstract) {
+        let table = crate::casing::snake_case(name);
+        for (slot_name, slot) in crate::linkml_resolve::resolve_effective_slots(class, schema) {
+            if is_multivalued(&slot) && is_class_range(&slot, schema) {
+                names.insert(format!("{table}_{}", crate::casing::snake_case(&slot_name)));
+            }
+        }
+        names.insert(table);
+    }
+    names
+}
+
+/// Whether a class-range slot contains its value rather than referencing
+/// it, as linkml-runtime's `is_inlined` decides: declared `inlined` or
+/// `inlined_as_list`, or else unless the range class has an identifier. A
+/// key does not make a class referenceable, so a slot to a key-named class
+/// always contains its records, `inlined: false` or not.
+fn inlines(slot: &SlotDefinition, target: &ClassDefinition, schema: &SchemaDefinition) -> bool {
+    slot.inlined == Some(true)
+        || slot.inlined_as_list == Some(true)
+        || class_primary_key(target, schema).slot.is_none()
 }
 
 /// Every enum referenced by an effective slot of any class, in name-sorted
@@ -1206,32 +1523,402 @@ mod tests {
         );
     }
 
+    fn yaml_schema(src: &str) -> SchemaDefinition {
+        serde_norway::from_str(src).expect("test schema parses")
+    }
+
+    /// The column line for `col` in `table`'s `CREATE TABLE`, without its
+    /// trailing comma; `None` when the table or the column is absent.
+    fn column_line(out: &str, table: &str, col: &str) -> Option<String> {
+        let body = out.split(&format!("CREATE TABLE \"{table}\" (\n")).nth(1)?;
+        let body = &body[..body.find("\n);")?];
+        body.lines()
+            .map(|l| l.trim().trim_end_matches(','))
+            .find(|l| l.starts_with(&format!("\"{col}\" ")))
+            .map(str::to_string)
+    }
+
+    /// The reason `class` is skipped, or empty when it is projected.
+    fn skip_reason(schema: &SchemaDefinition, class: &str) -> String {
+        skipped_classes(schema)
+            .into_iter()
+            .find(|s| s.class == class)
+            .map(|s| s.reason)
+            .unwrap_or_default()
+    }
+
     #[test]
-    fn key_slot_becomes_the_primary_key_when_no_identifier_exists() {
-        // A `key` is unique within its container, and the table is the
-        // container — so it is the natural primary key.
-        let mut class = ClassDefinition::new("LineItem");
-        let mut line_no = SlotDefinition::new("line_no");
-        line_no.range = Some("string".to_string());
-        line_no.key = true;
-        class.attributes.insert("line_no".to_string(), line_no);
-        let schema = schema_with_class(class);
+    fn a_key_named_class_keys_on_a_synthetic_uuid() {
+        // A key is unique only within its container; with no root to name
+        // that container, the key is unique among all the class's rows. A
+        // key with a class range is unique under the column it becomes.
+        let schema = yaml_schema(
+            "\
+name: s
+classes:
+  Loan:
+    attributes:
+      code: {key: true}
+  Row:
+    attributes:
+      id: {identifier: true}
+  Seat:
+    attributes:
+      row: {key: true, range: Row}
+",
+        );
+
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert_eq!(
+            column_line(&out, "loan", "uuid").as_deref(),
+            Some("\"uuid\" uuid PRIMARY KEY DEFAULT gen_random_uuid()"),
+            "a key-named class keys on a synthetic uuid; got:\n{out}"
+        );
+        assert_eq!(
+            column_line(&out, "loan", "code").as_deref(),
+            Some("\"code\" text NOT NULL"),
+            "the key is an ordinary required column; got:\n{out}"
+        );
+        for expected in [
+            "CONSTRAINT \"loan_record_key\" UNIQUE (\"code\")",
+            "CONSTRAINT \"seat_record_key\" UNIQUE (\"row_id\")",
+        ] {
+            assert!(out.contains(expected), "expected `{expected}`; got:\n{out}");
+        }
+    }
+
+    #[test]
+    fn a_key_named_class_scopes_to_the_identifier_named_root_holding_it() {
+        let base = "\
+name: s
+classes:
+  Library:
+    tree_root: true
+    attributes:
+      id: {identifier: true}
+      books: {range: Book, multivalued: true}
+  Book:
+    attributes:
+      id: {key: true}
+      title: {}
+  Reader:
+    attributes:
+      name: {}
+      favorite: {range: Book}
+      wishlist: {range: Book, multivalued: true}
+";
+        let out = PostgresWriter::new().render(&yaml_schema(base));
+        assert_valid_postgres_sql(&out);
+        assert!(
+            out.contains(
+                "CREATE TABLE \"book\" (\n    \"uuid\" uuid PRIMARY KEY DEFAULT gen_random_uuid(),\n    \"library_id\" text NOT NULL,\n"
+            ),
+            "the scope column follows the key, required when only the scoping root holds the class; got:\n{out}"
+        );
+        assert_eq!(
+            column_line(&out, "book", "id").as_deref(),
+            Some("\"id\" text NOT NULL")
+        );
+        for expected in [
+            "CONSTRAINT \"book_record_key\" UNIQUE NULLS NOT DISTINCT (\"library_id\", \"id\")",
+            "FOREIGN KEY (\"library_id\") REFERENCES \"library\" (\"id\")",
+            "FOREIGN KEY (\"favorite_uuid\") REFERENCES \"book\" (\"uuid\")",
+            "FOREIGN KEY (\"wishlist_uuid\") REFERENCES \"book\" (\"uuid\")",
+        ] {
+            assert!(out.contains(expected), "expected `{expected}`; got:\n{out}");
+        }
+        assert_eq!(
+            column_line(&out, "reader", "favorite_uuid").as_deref(),
+            Some("\"favorite_uuid\" uuid"),
+            "a reference to a key-named class is one uuid column; got:\n{out}"
+        );
+
+        let shared = format!(
+            "{base}  Commons:\n    tree_root: true\n    attributes:\n      shared_books: {{range: Book, multivalued: true}}\n"
+        );
+        let out = PostgresWriter::new().render(&yaml_schema(&shared));
+        assert_valid_postgres_sql(&out);
+        assert_eq!(
+            column_line(&out, "book", "library_id").as_deref(),
+            Some("\"library_id\" text"),
+            "a root without an identifier also holds the class, so its rows have no scope; got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn only_containment_holds_a_class_for_scoping() {
+        // LinkML's inlining, as linkml-runtime's `is_inlined` has it: a slot
+        // contains its value when declared `inlined` or `inlined_as_list`,
+        // and otherwise unless the range class has an identifier. A key does
+        // not make a class referenceable, so every slot to a key-named class
+        // holds it; a slot to an identifier-named class is a reference.
+        let schema = yaml_schema(
+            "\
+name: s
+classes:
+  Library:
+    tree_root: true
+    attributes:
+      id: {identifier: true}
+      books: {range: Book, multivalued: true}
+      shelves: {range: Shelf, multivalued: true}
+      settings: {range: Settings}
+      patron: {range: Patron}
+  Archive:
+    tree_root: true
+    attributes:
+      id: {identifier: true}
+      publishers: {range: Publisher, multivalued: true}
+  Book:
+    attributes:
+      id: {key: true}
+      publisher: {range: Publisher}
+  Publisher:
+    attributes:
+      id: {identifier: true}
+      imprints: {range: Imprint, multivalued: true}
+  Imprint:
+    attributes:
+      id: {key: true}
+  Settings:
+    attributes:
+      rules: {range: Rule, multivalued: true}
+  Rule:
+    attributes:
+      id: {key: true}
+  Patron:
+    attributes:
+      id: {key: true}
+  Shelf:
+    attributes:
+      id: {key: true}
+      bins: {range: Bin, multivalued: true, inlined: false}
+      features: {range: Feature, multivalued: true, inlined: true}
+      series: {range: Series, multivalued: true, inlined_as_list: true}
+      editions: {range: Edition, multivalued: true, inlined_as_list: false}
+  Bin:
+    attributes:
+      id: {key: true}
+  Feature:
+    attributes:
+      id: {identifier: true}
+      marks: {range: Mark, multivalued: true}
+  Mark:
+    attributes:
+      id: {key: true}
+  Series:
+    attributes:
+      id: {identifier: true}
+      parts: {range: Part, multivalued: true}
+  Part:
+    attributes:
+      id: {key: true}
+  Edition:
+    attributes:
+      id: {identifier: true}
+      slips: {range: Slip, multivalued: true}
+  Slip:
+    attributes:
+      id: {key: true}
+",
+        );
 
         let out = PostgresWriter::new().render(&schema);
         assert_valid_postgres_sql(&out);
         assert!(
-            out.contains("\"line_no\" text PRIMARY KEY"),
-            "expected the key slot to become the primary key; got:\n{out}"
+            skipped_classes(&schema).is_empty(),
+            "a reference into the archive does not make the library hold its imprints; got: {:?}",
+            skipped_classes(&schema)
         );
+        for (table, scope) in [
+            ("imprint", "archive_id"),
+            ("book", "library_id"),
+            ("shelf", "library_id"),
+            ("rule", "library_id"),
+            ("patron", "library_id"),
+            ("bin", "library_id"),
+            ("mark", "library_id"),
+            ("part", "library_id"),
+        ] {
+            assert_eq!(
+                column_line(&out, table, scope),
+                Some(format!("\"{scope}\" text NOT NULL")),
+                "`{table}` is held by the root its scope names; got:\n{out}"
+            );
+        }
         assert!(
-            !out.contains("\"id\" uuid PRIMARY KEY"),
-            "must not also synthesize a uuid primary key; got:\n{out}"
+            column_line(&out, "slip", "library_id").is_none()
+                && out.contains("CONSTRAINT \"slip_record_key\" UNIQUE (\"id\")"),
+            "`inlined_as_list: false` alone references an identifier-named class, so no root holds its slips; got:\n{out}"
         );
-        assert_eq!(
-            out.matches("\"line_no\"").count(),
-            1,
-            "the key column appears once — as the PK, not again as a \
-             regular column; got:\n{out}"
+    }
+
+    #[test]
+    fn a_key_named_class_with_no_single_scope_is_not_projected() {
+        let schema = yaml_schema(
+            "\
+name: s
+classes:
+  Library:
+    tree_root: true
+    attributes:
+      id: {identifier: true}
+      books: {range: Book, multivalued: true}
+      copies: {range: Copy, multivalued: true}
+      tags: {range: Tag, multivalued: true}
+      cards: {range: Card, multivalued: true}
+      slips: {range: Slip, multivalued: true}
+  Archive:
+    tree_root: true
+    attributes:
+      id: {identifier: true}
+      books: {range: Book, multivalued: true}
+  Book:
+    attributes:
+      id: {key: true}
+  Copy:
+    attributes:
+      id: {key: true}
+      uuid: {}
+  Tag:
+    attributes:
+      id: {key: true}
+      library: {range: Library}
+  Card:
+    attributes:
+      id: {key: true}
+    unique_keys:
+      record: {unique_key_slots: [id]}
+  Slip:
+    attributes:
+      id: {key: true}
+      library_id: {range: Archive}
+  Row:
+    attributes:
+      id: {identifier: true}
+  Pew:
+    attributes:
+      rows: {key: true, range: Row, multivalued: true}
+  Stub:
+    attributes:
+      id: {key: true}
+  StubRecordKey:
+    attributes:
+      name: {}
+  Ticket:
+    attributes:
+      id: {key: true}
+      record_key: {range: Row, multivalued: true}
+  Desk:
+    attributes:
+      id: {key: true}
+      record_key: {range: Row}
+",
+        );
+
+        assert!(
+            skip_reason(&schema, "Book").contains("`Archive`")
+                && skip_reason(&schema, "Book").contains("`Library`"),
+            "two scoping roots make the scope ambiguous, and both are named; got: {:?}",
+            skipped_classes(&schema)
+        );
+        for (class, taken) in [
+            ("Copy", "`uuid`"),
+            ("Tag", "`library_id`"),
+            ("Card", "`card_record_key`"),
+            ("Slip", "`slip_library_id_fkey`"),
+            ("Pew", "`rows`"),
+            ("Stub", "`stub_record_key`"),
+            ("Ticket", "`ticket_record_key`"),
+        ] {
+            assert!(
+                skip_reason(&schema, class).contains(taken),
+                "`{class}` takes the name {taken} the record key uses; got: {:?}",
+                skipped_classes(&schema)
+            );
+        }
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            skip_reason(&schema, "Desk").is_empty() && out.contains("CREATE TABLE \"desk\""),
+            "a single-valued `record_key` is a column, not a table, so nothing clashes; got: {:?}",
+            skipped_classes(&schema)
+        );
+        for table in [
+            "book", "copy", "tag", "card", "slip", "pew", "stub", "ticket",
+        ] {
+            assert!(
+                !out.contains(&format!("CREATE TABLE \"{table}\"")),
+                "`{table}` gets no table; got:\n{out}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_class_whose_table_depends_on_one_never_created_is_not_projected() {
+        // An ambiguous class takes the library root's table with it, through
+        // the root's own collection; every class scoped to that root, and
+        // every class referencing a class so dropped, follows, however many
+        // steps away, so no foreign key names a missing table.
+        let schema = yaml_schema(
+            "\
+name: s
+classes:
+  Library:
+    tree_root: true
+    attributes:
+      id: {identifier: true}
+      books: {range: Book, multivalued: true}
+      notes: {range: Note, multivalued: true}
+  Archive:
+    tree_root: true
+    attributes:
+      id: {identifier: true}
+      books: {range: Book, multivalued: true}
+  Book:
+    attributes:
+      id: {key: true}
+  Note:
+    attributes:
+      id: {key: true}
+  Member:
+    attributes:
+      name: {}
+      home: {range: Library}
+  Badge:
+    attributes:
+      name: {}
+      worn_by: {range: Member}
+  Stamp:
+    abstract: true
+    attributes:
+      home: {range: Library}
+",
+        );
+
+        for (class, cause) in [
+            ("Library", "`Book`"),
+            ("Note", "`Library`"),
+            ("Member", "`Library`"),
+            ("Badge", "`Member`"),
+        ] {
+            assert!(
+                skip_reason(&schema, class).contains(cause),
+                "`{class}` is dropped because of {cause}; got: {:?}",
+                skipped_classes(&schema)
+            );
+        }
+        assert!(
+            skip_reason(&schema, "Stamp").is_empty(),
+            "an abstract class gets no table by design, so it is not reported; got: {:?}",
+            skipped_classes(&schema)
+        );
+        let out = PostgresWriter::new().render(&schema);
+        assert_valid_postgres_sql(&out);
+        assert!(
+            !out.contains("REFERENCES \"library\"") && !out.contains("REFERENCES \"member\""),
+            "no foreign key names a table that is not created; got:\n{out}"
         );
     }
 
@@ -1989,7 +2676,8 @@ mod tests {
 
     /// A representative multi-class fixture combining every construct this
     /// writer supports together — an enum, a synthesized uuid PK, an
-    /// identifier-derived PK, and an FK between them.
+    /// identifier-derived PK, an FK between them, and a key-named class
+    /// held by both a scoping root and a root without an identifier.
     fn whole_script_fixture_schema() -> SchemaDefinition {
         use crate::linkml::{EnumDefinition, PermissibleValue};
         let mut schema = SchemaDefinition::new("example");
@@ -2025,7 +2713,37 @@ mod tests {
         deployment
             .attributes
             .insert("on_provider".to_string(), on_provider);
+        let mut in_locale = SlotDefinition::new("in_locale");
+        in_locale.range = Some("Locale".to_string());
+        deployment
+            .attributes
+            .insert("in_locale".to_string(), in_locale);
         schema.classes.insert("Deployment".to_string(), deployment);
+
+        // Locale: named by a key, scoped to the library that holds it, and
+        // also held by a commons root with no identifier.
+        let mut locale = ClassDefinition::new("Locale");
+        let mut locale_id = SlotDefinition::new("id");
+        locale_id.key = true;
+        locale.attributes.insert("id".to_string(), locale_id);
+        schema.classes.insert("Locale".to_string(), locale);
+        for (root, identifier, collection) in [
+            ("Library", true, "locales"),
+            ("Commons", false, "shared_locales"),
+        ] {
+            let mut class = ClassDefinition::new(root);
+            class.tree_root = true;
+            if identifier {
+                let mut id = SlotDefinition::new("id");
+                id.identifier = true;
+                class.attributes.insert("id".to_string(), id);
+            }
+            let mut held = SlotDefinition::new(collection);
+            held.range = Some("Locale".to_string());
+            held.multivalued = true;
+            class.attributes.insert(collection.to_string(), held);
+            schema.classes.insert(root.to_string(), class);
+        }
 
         schema
     }
@@ -2047,6 +2765,10 @@ mod tests {
         assert!(out.contains("\"code\" text PRIMARY KEY"));
         assert!(out.contains("\"id\" uuid PRIMARY KEY DEFAULT gen_random_uuid()"));
         assert!(out.contains("ALTER TABLE \"deployment\" ADD CONSTRAINT"));
+        assert!(out.contains(
+            "CONSTRAINT \"locale_record_key\" UNIQUE NULLS NOT DISTINCT (\"library_id\", \"id\")"
+        ));
+        assert!(out.contains("FOREIGN KEY (\"in_locale_uuid\") REFERENCES \"locale\" (\"uuid\")"));
     }
 
     #[test]
