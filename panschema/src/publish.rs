@@ -3377,7 +3377,7 @@ exemplur = true
 
         let old_version = std::fs::read_to_string(out.path().join("v0.1.0/index.html")).unwrap();
         assert!(
-            old_version.contains("No individuals defined in this ontology."),
+            old_version.contains("No instances defined in this schema."),
             "a ref predating the data file publishes without that instance graph"
         );
         let new_version = std::fs::read_to_string(out.path().join("v0.2.0/index.html")).unwrap();

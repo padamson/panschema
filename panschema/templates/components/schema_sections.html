@@ -16,10 +16,10 @@
     {%- let title = "Classes" %}
     {%- let count = Some(classes.len()) %}
     {%- let count_id = None::<&str> %}
-    {%- let description = Some("Classes defined in this ontology.") %}
+    {%- let description = Some("Classes defined in this schema.") %}
     {% include "components/section_header.html" %}
 {%- if classes.is_empty() %}
-    <p class="placeholder-text">No classes defined in this ontology.</p>
+    <p class="placeholder-text">No classes defined in this schema.</p>
 {%- else %}
     <div class="entity-list">
 {%- for class in classes %}
@@ -97,10 +97,10 @@
     {%- let title = "Slots" %}
     {%- let count = Some(slots.len()) %}
     {%- let count_id = None::<&str> %}
-    {%- let description = Some("Slots defined in this ontology.") %}
+    {%- let description = Some("Slots defined in this schema.") %}
     {% include "components/section_header.html" %}
 {%- if slots.is_empty() %}
-    <p class="placeholder-text">No slots defined in this ontology.</p>
+    <p class="placeholder-text">No slots defined in this schema.</p>
 {%- else %}
     <div class="entity-list">
 {%- for slot in slots %}
@@ -140,7 +140,7 @@
     {%- let title = "Enumerations" %}
     {%- let count = Some(enums.len()) %}
     {%- let count_id = None::<&str> %}
-    {%- let description = Some("Enumerations defined in this ontology.") %}
+    {%- let description = Some("Enumerations defined in this schema.") %}
     {% include "components/section_header.html" %}
     <div class="entity-list">
 {%- for en in enums %}
@@ -169,7 +169,7 @@
     {%- let title = "Types" %}
     {%- let count = Some(types.len()) %}
     {%- let count_id = None::<&str> %}
-    {%- let description = Some("Types defined in this ontology.") %}
+    {%- let description = Some("Types defined in this schema.") %}
     {% include "components/section_header.html" %}
     <div class="entity-list">
 {%- for ty in types %}

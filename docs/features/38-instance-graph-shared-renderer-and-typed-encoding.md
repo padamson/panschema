@@ -1,5 +1,10 @@
 # Feature 38: Instance Graph — Shared Renderer, Typed Encoding, Consistent Badges
 
+**Page labels in this spec predate feature 51 and ADR-014.** The Instance
+Graph and Individuals sections are now the Instances block (Metadata,
+Graph, All instances), the graph sits above the cards, and the page says
+"instance" where this spec says "individual". The anchors are unchanged.
+
 **Feature:** Make the rendered instance graph a first-class view rather than a
 reduced one: give it the same interaction and legend the schema graph has, and
 serialize the A-box with a **typed** encoding in which each schema node type

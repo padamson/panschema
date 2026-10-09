@@ -9,8 +9,8 @@
 
 use crate::linkml::SchemaDefinition;
 
-/// A typed reference from one instance to another — an object-property
-/// assertion whose value is another instance's identifier (a graph edge).
+/// A typed reference from one instance to another — a slot assertion
+/// whose value is another instance's identifier (a graph edge).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Reference {
     pub property: String,

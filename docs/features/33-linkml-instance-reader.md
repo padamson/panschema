@@ -113,11 +113,10 @@ stays LinkML + JSON, and this is the dogfood for the Step-7 examples.
 - [x] The instance graph renders from the LinkML `InstanceSet` (no OWL needed); e2e paints it (`e2e_instance_graph_renders_from_linkml_data`) from a checked-in wine fixture (`wine_catalog.yaml` + `wine_instances.yaml`) — self-contained.
 - [x] Handles both inlined-as-dict and inlined-as-list collections (`from_linkml_data_handles_inlined_as_dict_collection` + the list-form fixture).
 
-**Deferred to a follow-up (Feature 18 continuation):** the Individuals *cards*
-(and the section count) still come from the OWL-annotation path, so a
-LinkML-data-only page shows the graph without per-record cards; unifying the
-card path onto the `InstanceSet` (and the graph's hover-card reuse) is the next
-increment.
+**Closed by feature 36, slice 3:** the instance *cards* (and the section
+count) came from the OWL-annotation path at first, so a LinkML-data-only page
+showed the graph without per-record cards; feature 36 unified the card path
+onto the `InstanceSet`.
 
 ### Slice 4: Instance reference-integrity diagnostic
 

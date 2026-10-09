@@ -1,5 +1,10 @@
 # Feature 36: Instance-Graph Publishing and Exports
 
+**Page labels in this spec predate feature 51 and ADR-014.** The Instance
+Graph and Individuals sections are now the Instances block (Metadata,
+Graph, All instances), the graph sits above the cards, and the page says
+"instance" where this spec says "individual". The anchors are unchanged.
+
 **Feature:** Finish wiring the instance model (`InstanceSet`) through
 navigation, publishing, and the machine exports, so an instance graph is a
 first-class, addressable artifact: the exemplar A-box appears in the schema

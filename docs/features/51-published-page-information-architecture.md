@@ -63,7 +63,7 @@ live somewhere that survives every composition.
         Metadata        source, what the records conform to, how many,
                         and the container's own declared fields
         Graph
-        Individuals
+        All instances
 
 The sidebar renders each group as a label with its links beneath. The
 body renders Overview at the top, then the Schema and Instances blocks
@@ -80,7 +80,7 @@ as a whole. The Instances group's children get new ids:
 `#instance-metadata`, `#instance-graph`, `#instance-individuals`.
 
 **Counts stay where the reader already finds them.** The graph entries
-keep their `nodes / edges` badge with its tooltip; the Individuals entry
+keep their `nodes / edges` badge with its tooltip; the All instances entry
 carries the record count. A visible legend for the badges is deferred
 with the open questions below.
 
@@ -145,7 +145,7 @@ holds, where today I read the dependency's IRI and a source line.
   benchmark's target schema, dataset and version, when authored); the
   card swaps with the dataset selector.
 - [x] The Instances group's Graph entry carries the dataset's
-  `nodes / edges` badge and its Individuals entry the record count; the
+  `nodes / edges` badge and its All instances entry the record count; the
   group label itself carries no count.
 - [x] A dataset embedded in the schema (OWL individuals) reads "embedded
   in the schema" as its source and still gets the card.

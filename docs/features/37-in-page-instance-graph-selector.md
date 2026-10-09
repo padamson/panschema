@@ -1,5 +1,10 @@
 # Feature 37: In-Page Selector for Curated Instance Graphs
 
+**Page labels in this spec predate feature 51 and ADR-014.** The Instance
+Graph and Individuals sections are now the Instances block (Metadata,
+Graph, All instances), the graph sits above the cards, and the page says
+"instance" where this spec says "individual". The anchors are unchanged.
+
 **Feature:** Let a schema page carry *several* curated instance graphs and
 let the reader switch between them in place. Feature 36 made an instance
 graph a first-class published artifact but embedded only the one entry

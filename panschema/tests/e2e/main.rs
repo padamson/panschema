@@ -608,9 +608,9 @@ fn e2e_slot_cards_show_domain_range_and_characteristics() {
     });
 }
 
-/// The individuals heading counts the graph, one individual and no
-/// assertions between individuals, so it reads like the schema graph's
-/// badge rather than a bare individual count.
+/// The Graph heading under Instances counts the graph, one instance and no
+/// assertions between instances, so it reads like the schema graph's
+/// badge rather than a bare instance count.
 #[test]
 fn e2e_individuals_section_counts_the_graph_and_renders_the_card() {
     in_every_browser(|browser_name, page| {
@@ -634,7 +634,7 @@ fn e2e_individuals_section_counts_the_graph_and_renders_the_card() {
                 .expect("Failed to get individuals section");
             assert!(
                 ind_section_html.contains("ind-fido"),
-                "[{}] Individuals section should render the individual's card, got: {}",
+                "[{}] Instances block should render the instance's card, got: {}",
                 browser_name,
                 ind_section_html
             );
@@ -665,8 +665,8 @@ fn e2e_individuals_section_counts_the_graph_and_renders_the_card() {
                 .await
                 .expect("Failed to get fido card");
             assert!(
-                fido_card_html.contains("Individual"),
-                "[{}] Fido card should show Individual badge",
+                fido_card_html.contains(r#"individual-badge">Instance</div>"#),
+                "[{}] Fido card should show the Instance badge",
                 browser_name
             );
             assert!(
@@ -697,7 +697,7 @@ fn e2e_individuals_section_counts_the_graph_and_renders_the_card() {
                 .expect("Failed to count individuals sidebar link");
             assert!(
                 ind_sidebar_count > 0,
-                "[{}] Individuals navigation link should exist in the sidebar's Instances group",
+                "[{}] All instances link should exist in the sidebar's Instances group",
                 browser_name
             );
         })
@@ -2150,13 +2150,13 @@ fn e2e_external_node_hover_shows_iri_and_definition_and_legend_documents_it() {
 }
 
 /// A schema with OWL individuals renders a separate instance (A-box) graph
-/// beneath the Individuals cards. Asserts the exporter emitted the right
+/// above the instance cards. Asserts the exporter emitted the right
 /// A-box (2 individuals, 1 assertion edge), that it embedded into the page,
 /// and that its own canvas actually paints the individual nodes (probed
 /// as the class-blue pixel band) — a
 /// distinct viz from the schema graph.
 #[test]
-fn e2e_instance_graph_renders_individuals_beneath_the_cards() {
+fn e2e_instance_graph_renders_individuals_above_the_cards() {
     in_chromium(
         generate_site("tests/fixtures/instance_graph.ttl", &[]),
         |page| {
@@ -2168,7 +2168,22 @@ fn e2e_instance_graph_renders_individuals_beneath_the_cards() {
                         .await
                         .expect("count"),
                     1,
-                    "the Individuals section should carry an instance-graph canvas"
+                    "the Instances block should carry an instance-graph canvas"
+                );
+                let graph_precedes_cards = page
+                    .evaluate_value(
+                        r#"(function(){
+                    var graph = document.getElementById('instance-graph');
+                    var cards = document.getElementById('instance-individuals');
+                    return !!(graph && cards) &&
+                        !!(graph.compareDocumentPosition(cards) & Node.DOCUMENT_POSITION_FOLLOWING);
+                })()"#,
+                    )
+                    .await
+                    .unwrap_or_default();
+                assert_eq!(
+                    graph_precedes_cards, "true",
+                    "the graph section comes before the cards section in the document"
                 );
 
                 // The embedded A-box is exactly what the exporter built.
@@ -2452,7 +2467,7 @@ fn e2e_instance_dataset_selector_switches_cards_and_graph() {
                     prov.contains("wine_instances.yaml") && !prov.contains("preview"),
                     "the visible panel names the selected dataset's source; got: {prov}"
                 );
-                // The record count follows the selection on the Individuals
+                // The record count follows the selection on the All instances
                 // heading and its sidebar entry: four records, not the
                 // preview's two.
                 for id in [
@@ -3073,7 +3088,7 @@ fn e2e_typed_instance_graph_renders_class_symbols_and_shared_values() {
                     .await
                     .unwrap_or_default();
                 assert!(
-                    summary.contains("Individual") && summary.contains("Enum value"),
+                    summary.contains(r#""Instance""#) && summary.contains(r#""Enum value""#),
                     "the key lists both typed kinds; got: {summary}"
                 );
 
@@ -3109,6 +3124,63 @@ fn e2e_typed_instance_graph_renders_class_symbols_and_shared_values() {
                     count_of("blue") > 0 && count_of("purple") > 0,
                     "class-coloured individuals and enum-coloured values should paint; got: {painted}"
                 );
+
+                // The hover card names each kind the way the legend does.
+                let hovered = page
+                    .evaluate_value(
+                        r#"(function(){
+                    var g = window.__PANSCHEMA_INSTANCE_GRAPHS__[0].data;
+                    var viz = window.__panschema_instance_viz;
+                    var canvas = document.getElementById('instance-graph-canvas');
+                    var card = document.getElementById('instance-graph-hover-card');
+                    var rect = canvas.getBoundingClientRect();
+                    var dpr = window.devicePixelRatio || 1;
+                    // Hover a node at its laid-out position and report which
+                    // node the viz resolved, so a layout that stacks two nodes
+                    // reads as a hit-test miss rather than a wrong label; the
+                    // card's rows come back as key=value pairs so markup
+                    // whitespace never reaches the assertions.
+                    function hover(id) {
+                        var idx = g.nodes.findIndex(function(n){ return n.id === id; });
+                        var pos = viz.node_canvas_pos(idx);
+                        canvas.dispatchEvent(new MouseEvent('mousemove',
+                            {clientX: rect.left + pos[0] / dpr, clientY: rect.top + pos[1] / dpr, bubbles: true}));
+                        var kind = card.querySelector('.graph-hover-kind');
+                        var rows = Array.prototype.map.call(card.querySelectorAll('.graph-hover-row'), function(r) {
+                            return r.querySelector('.graph-hover-key').textContent + '=' +
+                                r.querySelector('.graph-hover-value').textContent;
+                        });
+                        return {hit: viz.hovered_node_index() === idx,
+                                kind: kind ? kind.textContent : 'no-kind', rows: rows};
+                    }
+                    var red = g.nodes.find(function(n){ return n.node_type === 'enum_value' && n.label === 'red'; });
+                    return JSON.stringify({wine: hover('individual:morgon'), value: hover(red.id)});
+                })()"#,
+                    )
+                    .await
+                    .unwrap_or_default();
+                let hovered: serde_json::Value = serde_json::from_str(&hovered)
+                    .unwrap_or_else(|e| panic!("hover probe returned {hovered:?}: {e}"));
+                for (node, kind, row) in [
+                    ("wine", "INSTANCE", "Type=Wine"),
+                    ("value", "ENUM VALUE", "Used by=2 instances"),
+                ] {
+                    let probe = &hovered[node];
+                    assert_eq!(
+                        probe["hit"], true,
+                        "the layout put another node under the cursor at {node}'s position, so its card cannot be read; got: {probe}"
+                    );
+                    assert_eq!(
+                        probe["kind"], kind,
+                        "{node}'s hover card is tagged the way the legend names its kind; got: {probe}"
+                    );
+                    assert!(
+                        probe["rows"]
+                            .as_array()
+                            .is_some_and(|rows| rows.iter().any(|r| r == row)),
+                        "{node}'s hover card has the row {row}; got: {probe}"
+                    );
+                }
             })
         },
     );
@@ -3131,7 +3203,7 @@ fn e2e_legends_adapt_to_what_each_graph_contains() {
     rt.block_on(async {
         // wine_catalog declares classes and slots but no enums, so the
         // schema key must not advertise the enum diamond; the instance
-        // graph's key must describe individuals and assertions only.
+        // graph's key must describe instances and assertions only.
         let site = generate_site("tests/fixtures/wine_catalog.yaml", &["--instances", "tests/fixtures/wine_instances.yaml"]);
         let output_dir = site.path();
         let (listener, port) = bind_ephemeral();
@@ -3164,8 +3236,8 @@ fn e2e_legends_adapt_to_what_each_graph_contains() {
             .await
             .unwrap_or_default();
         assert!(
-            instance_summary.contains("Individual") && instance_summary.contains("assertion"),
-            "the instance key describes individuals and assertions; got: {instance_summary}"
+            instance_summary.contains(r#""Instance""#) && instance_summary.contains(r#""assertion""#),
+            "the instance key describes instances and assertions; got: {instance_summary}"
         );
         assert!(
             !instance_summary.contains("\"Class\"") && !instance_summary.contains("Enum"),

@@ -528,7 +528,7 @@ struct IndexTemplate<'a> {
     /// entry and the section heading. Every graph count reads nodes/edges.
     instance_node_count: usize,
     instance_edge_count: usize,
-    /// The default dataset's record count, on the Individuals entry and
+    /// The default dataset's record count, on the All instances entry and
     /// its section heading; the selector updates both.
     instance_individual_count: usize,
     /// Whether any A-box is on the page, gating the sidebar group.
@@ -5463,9 +5463,18 @@ mod tests {
             meta_at < graph_at && graph_at < cards_at,
             "order must be metadata ({meta_at}) → graph ({graph_at}) → individuals ({cards_at})"
         );
+        let cards_section = element(&html, "instance-individuals", "</section>");
+        let cards_title = cards_section
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(
-            element(&html, "instance-individuals", "</section>").contains("Individuals"),
-            "the cards sit in an Individuals section"
+            cards_title.contains(r#"<h2 class="section-title"> All instances <span"#),
+            "the cards section is titled All instances, not a second Instances under the Instances group; got: {cards_title}"
+        );
+        assert!(
+            cards_section.contains(r#"individual-badge">Instance</div>"#),
+            "each card is badged Instance, the page's one word for an A-box member"
         );
     }
 
@@ -5495,7 +5504,7 @@ mod tests {
         let html = render_index(&writer, &schema);
 
         assert!(
-            html.contains("No individuals defined in this ontology."),
+            html.contains("No instances defined in this schema."),
             "an empty A-box should render the placeholder"
         );
         assert!(
@@ -5532,7 +5541,7 @@ mod tests {
             "the sidebar still offers the Instances group"
         );
         assert!(
-            !html.contains("No individuals defined in this ontology."),
+            !html.contains("No instances defined in this schema."),
             "the placeholder is for an absent A-box, not an absent viz"
         );
     }
@@ -5550,7 +5559,7 @@ mod tests {
 
         let card = element(&html, "instance-metadata", "</section>");
         assert!(
-            card.contains("Source") && card.contains("individuals embedded in the schema"),
+            card.contains("Source") && card.contains(">embedded in the schema</dd>"),
             "the dataset's metadata card must attribute the A-box to the schema itself; got: {card}"
         );
     }
@@ -5768,7 +5777,7 @@ mod tests {
             instances < at(r##"href="#instance-metadata""##)
                 && at(r##"href="#instance-metadata""##) < at(r##"href="#instance-graph""##)
                 && at(r##"href="#instance-graph""##) < at(r##"href="#instance-individuals""##),
-            "the dataset's metadata, graph and individuals sit under Instances"
+            "the dataset's Metadata, Graph and All instances entries sit under Instances"
         );
         assert!(
             !html.contains(r##"href="#individuals""##),
@@ -5809,7 +5818,7 @@ mod tests {
     /// Each dataset has a metadata card under Instances naming its source
     /// file, the schema and version its records conform to, its record
     /// count, and the container's own declared scalar fields; the
-    /// Individuals entry in the sidebar carries the record count, and the
+    /// All instances entry in the sidebar carries the record count, and the
     /// Graph entry keeps its nodes/edges badge. A dataset embedded in the
     /// schema reads "embedded in the schema" as its source.
     #[test]
@@ -5839,7 +5848,7 @@ mod tests {
         for row in [
             "<dt>Source</dt> <dd class=\"instance-provenance\"><code class=\"mono\">data/cellar.yaml</code></dd>",
             "<dt>Conforms to</dt> <dd>cellar 2.1.0</dd>",
-            "<dt>Records</dt> <dd>2</dd>",
+            "<dt>Count</dt> <dd>2</dd>",
             "<dt>Declared</dt>",
             "<dt>title</dt> <dd>North wing</dd>",
         ] {
@@ -5864,9 +5873,9 @@ mod tests {
         let individuals_entry = sidebar_entry(r##"href="#instance-individuals""##);
         assert!(
             individuals_entry.contains(
-                r#"<span class="badge" id="instance-individuals-sidebar-count">2</span>"#
+                r#">All instances <span class="badge" id="instance-individuals-sidebar-count">2</span>"#
             ),
-            "the Individuals entry carries the record count; got: {individuals_entry}"
+            "the All instances entry carries the record count; got: {individuals_entry}"
         );
         let graph_entry = sidebar_entry(r##"href="#instance-graph""##);
         assert!(

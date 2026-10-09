@@ -93,8 +93,8 @@ pub enum EdgeType {
     Inverse,
     /// Type inheritance (typeof_)
     TypeOf,
-    /// An object-property assertion between two individuals in the
-    /// instance graph (labelled by the property).
+    /// A slot assertion between two instances in the instance graph
+    /// (labelled by the slot).
     Assertion,
 }
 

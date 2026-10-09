@@ -4,9 +4,9 @@
 {%- let schema_version = version %}
 <section id="individuals" class="page-group">
     <h2 class="page-group-title">Instances</h2>
-    <p class="page-group-description">Curated instance graph{% if instance_datasets.len() > 1 %}s{% endif %} (A-box): individuals conforming to this schema.</p>
+    <p class="page-group-description">Curated instance graph{% if instance_datasets.len() > 1 %}s{% endif %} (A-box): instances conforming to this schema.</p>
 {%- if !has_instances %}
-    <p class="placeholder-text">No individuals defined in this ontology.</p>
+    <p class="placeholder-text">No instances defined in this schema.</p>
 {%- else %}
 {# Several curated A-boxes share this block: the reader picks one and the
    metadata, graph and cards all follow. One needs no selector. #}
@@ -46,7 +46,7 @@
 {%- if let Some(src) = ds.provenance %}
                     <dd class="instance-provenance"><code class="mono">{{ src }}</code></dd>
 {%- else %}
-                    <dd class="instance-provenance">individuals embedded in the schema</dd>
+                    <dd class="instance-provenance">embedded in the schema</dd>
 {%- endif %}
                 </div>
                 <div class="metadata-item">
@@ -54,7 +54,7 @@
                     <dd>{{ schema_title }}{% if let Some(v) = schema_version %} {{ v }}{% endif %}</dd>
                 </div>
                 <div class="metadata-item">
-                    <dt>Records</dt>
+                    <dt>Count</dt>
                     <dd>{{ ds.individuals.len() }}</dd>
                 </div>
 {%- if !ds.metadata.is_empty() %}
@@ -88,7 +88,7 @@
                       aria-label="{{ instance_node_count }} node{% if instance_node_count != 1 %}s{% endif %}, {{ instance_edge_count }} edge{% if instance_edge_count != 1 %}s{% endif %}"
                       >{{ instance_node_count }} / {{ instance_edge_count }}</span>
             </h2>
-            <p class="section-description instance-graph-caption">The dataset as a connected A-box: nodes wear the same symbols their classes and enumerations have in the schema graph, and edges are the object-property assertions between them.</p>
+            <p class="section-description instance-graph-caption">The dataset as a connected A-box: nodes wear the same symbols their classes and enumerations have in the schema graph, and edges are the slot assertions that link one instance to another.</p>
         </div>
 {# The dataset as a connected instance graph — a distinct A-box viz, not
    the schema graph. Every declared dataset's payload rides in one array so
@@ -104,7 +104,7 @@
     </section>
     <section id="instance-individuals">
         {%- let id = "instance-individuals" %}
-        {%- let title = "Individuals" %}
+        {%- let title = "All instances" %}
         {# The default dataset's record count; the selector updates it. #}
         {%- let count = Some(instance_individual_count) %}
         {%- let count_id = Some("instance-individuals-count") %}

@@ -1,6 +1,6 @@
 {% import "components/graph_toolbar.html" as toolbar %}
 {% import "components/graph_hover_card.html" as card %}
-{# Instance (A-box) graph — the ontology's worked-example individuals as a
+{# Instance (A-box) graph — the schema's worked-example instances as a
    connected force graph, rendered by panschema-viz on its own canvas,
    distinct from the schema (T-box) graph. Every declared dataset's payload
    arrives via window.__PANSCHEMA_INSTANCE_GRAPHS__ (set by index.html); the
@@ -103,7 +103,7 @@
                     });
                 }
                 // The record count follows the selection the same way, on
-                // the Individuals heading and its sidebar entry.
+                // the All instances heading and its sidebar entry.
                 if (entry && typeof entry.records === 'number') {
                     ['instance-individuals-count', 'instance-individuals-sidebar-count'].forEach((id) => {
                         const el = document.getElementById(id);
@@ -226,7 +226,7 @@
             if (kind.kind === 'enum_value') {
                 const n = kind.usageCount ?? 0;
                 rows.push(['Enum', kind.enumName || '—']);
-                rows.push(['Used by', `${n} individual${n === 1 ? '' : 's'}`]);
+                rows.push(['Used by', `${n} instance${n === 1 ? '' : 's'}`]);
             } else {
                 if (Array.isArray(kind.types) && kind.types.length) {
                     rows.push(['Type', kind.types.join(', ')]);
@@ -236,7 +236,7 @@
                 }
                 if (node.uri) rows.push(['IRI', node.uri]);
             }
-            const kindTag = kind.kind === 'enum_value' ? 'ENUM VALUE' : 'INDIVIDUAL';
+            const kindTag = kind.kind === 'enum_value' ? 'ENUM VALUE' : 'INSTANCE';
             const body = rows
                 .map(
                     ([k, v]) =>

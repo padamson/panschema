@@ -1,7 +1,11 @@
 # ADR-009: Instance-Graph Publishing, Addressing, and Visualization
 
 ## Status
-Proposed
+Proposed. The page vocabulary below is superseded by ADR-014 (2026-10-09):
+the Instance Graph sidebar entry became an Instances group (Metadata, Graph,
+All instances), individuals read as instances on the page, object-property
+assertions as slot assertions, and instance cards render for every dataset
+since feature 36.
 
 ## Context
 

@@ -859,7 +859,7 @@ fn node_kind_label(
         Some(KindMetadata::Class { .. }) => "Class",
         Some(KindMetadata::Slot { .. }) => "Slot",
         Some(KindMetadata::Enum { .. }) => "Enum",
-        Some(KindMetadata::Individual { .. }) => "Individual",
+        Some(KindMetadata::Individual { .. }) => "Instance",
         Some(KindMetadata::EnumValue { .. }) => "Enum value",
         None => "Type",
     }

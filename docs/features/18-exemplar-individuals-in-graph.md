@@ -1,5 +1,12 @@
 # Feature 18: Exemplar individuals as a separate instance graph
 
+**Page labels in this spec predate feature 51 and ADR-014.** The Instance
+Graph and Individuals sections are now the Instances block (Metadata,
+Graph, All instances), the graph sits above the cards, and the page says
+"instance" where this spec says "individual". This feature shipped as the
+separate instance graph through features 33 and 36–38, which is where its
+slices are tracked.
+
 **Feature:** Render the OWL individuals panschema already ingests (today only as
 HTML cards) as a **separate instance graph** — a small force-directed A-box
 scenario embedded in the Individuals section of the HTML docs, distinct from the

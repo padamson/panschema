@@ -240,7 +240,7 @@
         <section class="component-section">
             <h2 class="component-name">Header</h2>
             <p class="component-description">
-                Site header with navigation. Displays the ontology title and main navigation links.
+                Site header with navigation. Displays the schema title and main navigation links.
             </p>
             <div class="component-preview">
                 <div class="preview-label">Preview</div>
@@ -257,7 +257,7 @@
         <section class="component-section">
             <h2 class="component-name">Hero</h2>
             <p class="component-description">
-                Large title section at the top of the page. Shows ontology name and description.
+                Large title section at the top of the page. Shows the schema name and description.
             </p>
             <div class="component-preview">
                 <div class="preview-label">Preview</div>
@@ -272,7 +272,7 @@
         <section class="component-section">
             <h2 class="component-name">Metadata Card</h2>
             <p class="component-description">
-                Displays ontology metadata in a structured card format. Shows IRI, version, and description.
+                Displays schema metadata in a structured card format. Shows IRI, version, and description.
             </p>
             <div class="component-preview">
                 <div class="preview-label">Preview</div>
@@ -287,7 +287,7 @@
         <section class="component-section">
             <h2 class="component-name">Sidebar Navigation</h2>
             <p class="component-description">
-                Collapsible navigation tree showing ontology structure. Displays classes and slots with counts.
+                Collapsible navigation tree showing schema structure. Displays classes and slots with counts.
             </p>
             <div class="component-preview">
                 <div class="preview-label">Preview</div>
@@ -334,7 +334,7 @@
                     {%- let title = "Classes" %}
                     {%- let count = Some(3) %}
                     {%- let count_id = None::<&str> %}
-                    {%- let description = Some("All classes defined in this ontology.") %}
+                    {%- let description = Some("All classes defined in this schema.") %}
                     {% include "components/section_header.html" %}
                 </div>
             </div>
@@ -434,11 +434,11 @@
             <p class="component-file">Template: <code>templates/components/slot_card.html</code></p>
         </section>
 
-        <!-- Individual Card Component -->
+        <!-- Instance Card Component -->
         <section class="component-section">
-            <h2 class="component-name">Individual Card</h2>
+            <h2 class="component-name">Instance Card</h2>
             <p class="component-description">
-                Displays a named individual with its IRI, type(s), and property values.
+                Displays an instance with its IRI, its class, and its slot values.
             </p>
             <div class="component-preview">
                 <div class="preview-label">Preview</div>
@@ -494,7 +494,7 @@
                     </div>
                     <div>
                         <div style="width: 100%; height: 48px; background-color: var(--color-individual); border-radius: var(--radius-sm);"></div>
-                        <p style="margin: 0.5rem 0 0; font-size: var(--text-sm);">Individual</p>
+                        <p style="margin: 0.5rem 0 0; font-size: var(--text-sm);">Instance</p>
                         <code style="font-size: var(--text-xs); color: var(--color-text-muted);">--color-individual</code>
                     </div>
                     <div>

@@ -218,7 +218,7 @@ pub(crate) fn node_legend_rows() -> [(NodeRowKind, NodeShape, [f32; 4], &'static
             NodeRowKind::Individual,
             NodeShape::Circle,
             colors::CLASS,
-            "Individual",
+            "Instance",
             false,
         ),
         (
@@ -1427,7 +1427,7 @@ mod tests {
                 "Slot",
                 "Enum",
                 "Type",
-                "Individual",
+                "Instance",
                 "Enum value",
                 "Abstract class",
                 "Outside this graph"
@@ -1437,7 +1437,7 @@ mod tests {
 
         // The A-box realizes the T-box: the individual row wears its
         // class's circle and colour; the value row its enum's diamond.
-        let individual = rows.iter().find(|r| r.3 == "Individual").unwrap();
+        let individual = rows.iter().find(|r| r.3 == "Instance").unwrap();
         assert_eq!(
             individual.1,
             NodeShape::Circle,
@@ -1476,7 +1476,7 @@ mod tests {
         spec.enum_ = false;
         spec.individual = false;
         let labels: Vec<&str> = node_rows_for(&spec).iter().map(|r| r.3).collect();
-        assert!(!labels.contains(&"Enum") && !labels.contains(&"Individual"));
+        assert!(!labels.contains(&"Enum") && !labels.contains(&"Instance"));
         assert!(labels.contains(&"Class") && labels.contains(&"Outside this graph"));
 
         spec.edges = vec![EdgeType::Assertion];

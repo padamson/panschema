@@ -176,7 +176,7 @@ The visualization features:
 
 ### Instance graph (A-box)
 
-Beneath the schema graph, the docs can also draw an **instance graph** — the
+In their Instances block, the docs can also draw an **instance graph** — the
 records that populate the schema (its A-box), as a distinct force-directed viz.
 It comes from either the schema's embedded OWL individuals, or a separate
 **LinkML instance-data file** passed with `--instances`:
@@ -211,7 +211,7 @@ html_schema_sections = false           # default: true — keep the class/slot/e
 The page is three blocks, and the sidebar shows them as three groups:
 **Overview** (the page's metadata and its namespace table), **Schema** (the
 graph, classes, slots, enumerations and types) and **Instances** (each
-dataset's metadata, graph and individuals). `instances-first` swaps the
+dataset's metadata, graph and instances). `instances-first` swaps the
 Schema and Instances blocks whole; `schema_sections = false` drops the
 Schema block, so a data-only page keeps its Overview — the instance cards'
 CURIEs expand through the namespace table — and warns if it would
@@ -311,7 +311,7 @@ with no identifier is always inlined. A `tree_root`'s collections hold their
 records, so they declare it. A record authored inline where the slot holds
 references still loads, and `verify` reports it.
 
-Whether the container itself becomes an individual is your call, made by
+Whether the container itself becomes an instance is your call, made by
 giving it an identifier. A `tree_root` class that declares an `identifier`
 slot emits as a record like any other — RDF individual, graph node, card —
 with references to what it contains; one that declares none emits nothing,

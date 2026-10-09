@@ -30,7 +30,7 @@ templates/
     ├── header.html              # Fixed site header with navigation
     ├── footer.html              # Site footer with attribution
     ├── hero.html                # Page hero section
-    ├── metadata_card.html       # Ontology metadata display
+    ├── metadata_card.html       # Schema metadata display
     ├── sidebar.html             # Fixed sidebar navigation
     ├── namespace_table.html     # Namespace prefix/IRI table
     ├── section_header.html      # Section title with count badge
@@ -62,7 +62,7 @@ CSS custom properties defined in `base.html` for consistent styling.
 |-------|-------|
 | `--color-class` | Class labels and links |
 | `--color-property` | Property labels and links |
-| `--color-individual` | Individual labels |
+| `--color-individual` | Instance labels |
 | `--color-datatype` | Datatype labels |
 
 ### Layout
@@ -91,7 +91,7 @@ Automatically enabled via `prefers-color-scheme: dark`.
 | `header.html` | Fixed site header with navigation |
 | `footer.html` | Site footer with attribution |
 | `hero.html` | Page title and description |
-| `metadata_card.html` | Ontology IRI, version, description |
+| `metadata_card.html` | Schema IRI, version, description |
 | `sidebar.html` | Navigation with class/property links |
 | `namespace_table.html` | Prefix/IRI mappings |
 | `section_header.html` | Section title with count badge |

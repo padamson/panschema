@@ -373,7 +373,7 @@ mod tests {
                     expected_nodes.insert("Enum");
                 }
                 Some(KindMetadata::Individual { .. }) => {
-                    expected_nodes.insert("Individual");
+                    expected_nodes.insert("Instance");
                 }
                 Some(KindMetadata::EnumValue { .. }) => {
                     expected_nodes.insert("Enum value");

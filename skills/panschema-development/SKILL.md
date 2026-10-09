@@ -3,7 +3,7 @@ name: panschema-development
 description: Use when working with LinkML or OWL schemas — generating schema documentation or a schema graph, converting a schema to RDF/Turtle, JSON Schema, OpenAPI, SHACL shapes, Rust types or Postgres DDL, verifying instance data against a schema, wiring a `panschema.toml` manifest, or publishing versioned schema docs. Also use when a repo contains `panschema.toml`, `panschema-publish.toml`, or `panschema.lock`.
 license: Apache-2.0
 metadata:
-  version: "0.5.6"
+  version: "0.5.7"
 ---
 
 # panschema
@@ -71,9 +71,9 @@ records rather than referencing them, `inlined_as_list: true` for a list or
 `inlined: true` for a dict keyed by id, since a slot ranged on an
 identifier-bearing class holds id strings otherwise and `verify` reports a
 record authored inline there. Then `--instances <file>` (repeatable for `html`)
-draws an instance graph beneath the docs, folds individuals into the RDF
-output, and runs the same conformance check `verify` runs — so nothing
-ships violations.
+draws the instance graph and cards in the page's Instances block, folds the
+instances into the RDF output, and runs the same conformance check `verify`
+runs — so nothing ships violations.
 
 **Identity follows LinkML's two uniqueness forms.** Mark a class's id slot
 `key: true` when its records are unique **within their dataset** — they mint
@@ -93,9 +93,9 @@ whose slots its own top-level keys name, so the roots need distinct
 collections; a file matching none of them, or two equally, is a verification
 error naming the candidates rather than a silently empty dataset.
 
-**Whether the root itself becomes an individual is your decision, made by
+**Whether the root itself becomes an instance is your decision, made by
 giving it an identifier.** A `tree_root` class that declares an
-`identifier: true` slot emits as an individual like any other record — RDF,
+`identifier: true` slot emits as an instance like any other record — RDF,
 graph node, card — and its collection slots draw references to what it
 holds. One that declares none emits nothing, and its scalars surface only as
 dataset metadata. So a bare vessel that exists because a file needs a root

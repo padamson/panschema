@@ -1,5 +1,10 @@
 # Feature: Core Ontology Documentation
 
+**Page labels in this spec predate feature 51 and ADR-014.** The Instance
+Graph and Individuals sections are now the Instances block (Metadata,
+Graph, All instances), the graph sits above the cards, and the page says
+"instance" where this spec says "individual". The anchors are unchanged.
+
 **Feature:** MVP Ontology Content Extraction & Display
 
 **User Story:** As an ontology developer, I want to generate documentation that shows my classes, properties, and individuals, so that others can understand and use my ontology.
