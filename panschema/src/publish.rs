@@ -43,7 +43,10 @@ pub enum PublishError {
         edge: Option<String>,
     },
     #[error(
-        "the following git refs failed to resolve in `{}`: {}",
+        "the following git refs failed to resolve in `{}`: {} \
+         (each name is tried as a local ref, then as the remote-tracking branch \
+         `<remote>/<name>` of exactly one remote; a tag checkout needs the \
+         branch fetched, and a name two remotes carry is ambiguous)",
         repo_root.display(),
         refs.join(", ")
     )]
@@ -643,23 +646,34 @@ pub fn bump_version(path: &Path, level: BumpLevel) -> Result<(String, String), P
     Ok((old_str, new_str))
 }
 
-/// Resolve a list of git refs in `repo_root` via `git rev-parse`,
-/// returning the resolved commit IDs in the same order as the input.
-/// On any failure, collects *every* unresolved ref into a single
-/// [`PublishError::RefsUnresolvable`] rather than failing fast — the
-/// caller usually wants to know the full damage before retrying.
+/// Resolve every git ref name in `refs` to its commit ID, keyed by the
+/// name as given. On any failure, collects *every* unresolved name into
+/// a single [`PublishError::RefsUnresolvable`] rather than failing fast
+/// — the caller usually wants to know the full damage before retrying.
 ///
-/// Uses `--verify` plus `^{commit}` to force resolution to a commit
-/// object specifically (catches the case where a name resolves but
-/// points at a tag object or tree rather than a commit).
-pub fn resolve_refs(repo_root: &Path, refs: &[&str]) -> Result<Vec<String>, PublishError> {
-    let mut resolved = Vec::with_capacity(refs.len());
+/// A name resolves locally first, via `git rev-parse --verify` with
+/// `^{commit}` so that a name pointing at a tag object or a tree is not
+/// taken for a commit. A name with no local ref is then looked up as a
+/// remote-tracking branch, `refs/remotes/<remote>/<name>`: a CI checkout
+/// of a tag is detached, and a full fetch brings the other branches in
+/// only as remote-tracking refs, so the edge branch exists there as
+/// `origin/main` and nowhere else, and the same manifest has to publish
+/// from that checkout as from a branch checkout. The substitution is
+/// noted on stderr, since a remote-tracking ref is only as fresh as the
+/// last fetch; a name that more than one remote carries is reported as
+/// unresolved rather than guessed at.
+pub fn resolve_refs(
+    repo_root: &Path,
+    refs: &[&str],
+) -> Result<std::collections::BTreeMap<String, String>, PublishError> {
+    let mut resolved = std::collections::BTreeMap::new();
     let mut failed: Vec<String> = Vec::new();
     for r in refs {
-        let arg = format!("{r}^{{commit}}");
-        match run_git_capture(repo_root, &["rev-parse", "--verify", "--quiet", &arg]) {
-            Ok(out) => resolved.push(out.trim().to_string()),
-            Err(_) => failed.push((*r).to_string()),
+        match resolve_ref(repo_root, r) {
+            Some(commit) => {
+                resolved.insert((*r).to_string(), commit);
+            }
+            None => failed.push((*r).to_string()),
         }
     }
     if !failed.is_empty() {
@@ -669,6 +683,56 @@ pub fn resolve_refs(repo_root: &Path, refs: &[&str]) -> Result<Vec<String>, Publ
         });
     }
     Ok(resolved)
+}
+
+/// One name's commit: the local ref if there is one, else the one
+/// remote-tracking branch of that name. See [`resolve_refs`].
+fn resolve_ref(repo_root: &Path, name: &str) -> Option<String> {
+    let local = format!("{name}^{{commit}}");
+    if let Ok(out) = run_git_capture(repo_root, &["rev-parse", "--verify", "--quiet", &local]) {
+        return Some(out.trim().to_string());
+    }
+    // `for-each-ref` globs across path separators, so the listing is
+    // narrowed here to refs exactly one remote deep.
+    let listing = run_git_capture(
+        repo_root,
+        &[
+            "for-each-ref",
+            "--format=%(refname) %(objectname)",
+            "refs/remotes/",
+        ],
+    )
+    .ok()?;
+    let mut hits = listing.lines().filter_map(|line| {
+        let (refname, commit) = line.split_once(' ')?;
+        let (remote, branch) = refname.strip_prefix("refs/remotes/")?.split_once('/')?;
+        (branch == name).then(|| (format!("{remote}/{branch}"), commit.to_string()))
+    });
+    let (spelling, commit) = hits.next()?;
+    if hits.next().is_some() {
+        return None;
+    }
+    eprintln!("note: `{name}` is not a local ref; publishing it from `{spelling}`");
+    Some(commit)
+}
+
+/// An extraction error naming the manifest's label for a ref, where
+/// the read itself used the commit the label resolved to.
+fn labelled(err: PublishError, label: &str) -> PublishError {
+    match err {
+        PublishError::ExtractFailed {
+            repo_root,
+            path,
+            stderr,
+            ..
+        } => PublishError::ExtractFailed {
+            repo_root,
+            ref_: label.to_string(),
+            path,
+            stderr,
+        },
+        other => other,
+    }
 }
 
 /// Extract the contents of `path_in_repo` at git ref `ref_` into a
@@ -736,7 +800,13 @@ pub fn extract_main_at_ref(
 /// where the dev wants to see uncommitted edits.
 #[derive(Debug, Clone, Copy)]
 enum BuildSource<'a> {
-    GitRef(&'a str),
+    /// `label` is the manifest's spelling, for messages; `commit` is
+    /// what it resolved to, which every git read uses, so a label that
+    /// resolved only through its remote-tracking ref still reads.
+    GitRef {
+        label: &'a str,
+        commit: &'a str,
+    },
     WorkingTree,
 }
 
@@ -762,7 +832,7 @@ pub fn publish_versioned(
     {
         all_refs.push(edge.as_str());
     }
-    resolve_refs(repo_root, &all_refs)?;
+    let commits = resolve_refs(repo_root, &all_refs)?;
 
     // The build order for every page: edge first (it heads the version
     // dropdown), then released versions in manifest order.
@@ -771,7 +841,10 @@ pub fn publish_versioned(
         let source = if edge_from_worktree {
             BuildSource::WorkingTree
         } else {
-            BuildSource::GitRef(edge)
+            BuildSource::GitRef {
+                label: edge,
+                commit: &commits[edge.as_str()],
+            }
         };
         refs.push((edge.clone(), source));
     }
@@ -783,7 +856,13 @@ pub fn publish_versioned(
             .versions
             .iter()
             .filter(|v| Some(v.as_str()) != publishing.edge.as_deref())
-            .map(|v| (v.clone(), BuildSource::GitRef(v))),
+            .map(|v| {
+                let source = BuildSource::GitRef {
+                    label: v,
+                    commit: &commits[v.as_str()],
+                };
+                (v.clone(), source)
+            }),
     );
 
     let pages = plan_pages(repo_root, publish_cfg, publishing, output_dir)?;
@@ -999,14 +1078,16 @@ fn plan_page<'a>(
             .copied()
             .filter(|entry| {
                 let present = match source {
-                    BuildSource::GitRef(ref_) => exists_at_ref(repo_root, ref_, &entry.data),
+                    BuildSource::GitRef { commit, .. } => {
+                        exists_at_ref(repo_root, commit, &entry.data)
+                    }
                     BuildSource::WorkingTree => repo_root.join(&entry.data).is_file(),
                 };
                 if present {
                     return true;
                 }
                 let place = match source {
-                    BuildSource::GitRef(ref_) => format!("at `{ref_}`"),
+                    BuildSource::GitRef { label, .. } => format!("at `{label}`"),
                     BuildSource::WorkingTree => "in the working tree".to_string(),
                 };
                 eprintln!(
@@ -1115,11 +1196,10 @@ fn render_page(
         let schema = match &rp.dep_schema {
             Some(path) => Materialized::OnDisk(path.clone()),
             None => match rp.source {
-                BuildSource::GitRef(ref_) => Materialized::Extracted(extract_main_at_ref(
-                    repo_root,
-                    ref_,
-                    &publish_cfg.files.main,
-                )?),
+                BuildSource::GitRef { label, commit } => Materialized::Extracted(
+                    extract_main_at_ref(repo_root, commit, &publish_cfg.files.main)
+                        .map_err(|e| labelled(e, label))?,
+                ),
                 // The manifest's `files.main` is documented as relative
                 // to the publish-spec's location; in the supported v1
                 // layout that's the repo root. Resolve there.
@@ -1133,9 +1213,11 @@ fn render_page(
             .iter()
             .filter_map(|entry| {
                 let materialized = match rp.source {
-                    BuildSource::GitRef(ref_) => extract_main_at_ref(repo_root, ref_, &entry.data)
-                        .ok()
-                        .map(Materialized::Extracted),
+                    BuildSource::GitRef { commit, .. } => {
+                        extract_main_at_ref(repo_root, commit, &entry.data)
+                            .ok()
+                            .map(Materialized::Extracted)
+                    }
                     BuildSource::WorkingTree => {
                         let path = repo_root.join(&entry.data);
                         path.is_file().then(|| Materialized::OnDisk(path))
@@ -1299,11 +1381,11 @@ enum ContentAt {
 
 fn content_at(repo_root: &Path, source: BuildSource<'_>, rel: &Path) -> ContentAt {
     match source {
-        BuildSource::GitRef(ref_) => {
-            if !exists_at_ref(repo_root, ref_, rel) {
+        BuildSource::GitRef { commit, .. } => {
+            if !exists_at_ref(repo_root, commit, rel) {
                 return ContentAt::Absent;
             }
-            let spec = format!("{ref_}:{}", rel.display());
+            let spec = format!("{commit}:{}", rel.display());
             match run_git_capture(repo_root, &["show", &spec]) {
                 Ok(content) => ContentAt::Content(content),
                 Err(e) => ContentAt::Unreadable(e.to_string()),
@@ -2534,19 +2616,83 @@ versions = ["v0.1.0"]
         assert!(status.success(), "git {args:?} failed");
     }
 
+    /// Leave the repo the way a CI checkout of a tag leaves it: HEAD
+    /// detached at `v0.2.0`, no local `main`, and the branch reachable
+    /// only as the remote-tracking ref `origin/main`.
+    fn detach_at_tag_keeping_main_remote_only(path: &std::path::Path) {
+        run(
+            path,
+            &["update-ref", "refs/remotes/origin/main", "refs/heads/main"],
+        );
+        run(path, &["checkout", "--detach", "v0.2.0", "--quiet"]);
+        run(path, &["branch", "-D", "main", "--quiet"]);
+    }
+
+    fn commit_of(path: &std::path::Path, spelling: &str) -> String {
+        run_git_capture(path, &["rev-parse", spelling])
+            .unwrap()
+            .trim()
+            .to_string()
+    }
+
     #[test]
-    fn resolve_refs_returns_commits_in_input_order() {
+    fn resolve_refs_falls_back_to_the_remote_tracking_branch() {
+        let repo = make_versioned_fixture_repo();
+        detach_at_tag_keeping_main_remote_only(repo.path());
+
+        let resolved = resolve_refs(repo.path(), &["v0.1.0", "main"])
+            .expect("a branch present only as <remote>/<branch> resolves");
+
+        assert_eq!(resolved["main"], commit_of(repo.path(), "origin/main"));
+        assert_ne!(resolved["v0.1.0"], resolved["main"]);
+    }
+
+    #[test]
+    fn resolve_refs_prefers_a_local_ref_over_a_divergent_remote_one() {
+        let repo = make_versioned_fixture_repo();
+        // origin/main lags local main by one commit, as after a fetch
+        // that predates the latest local work.
+        run(
+            repo.path(),
+            &["update-ref", "refs/remotes/origin/main", "v0.2.0"],
+        );
+
+        let resolved = resolve_refs(repo.path(), &["main"]).expect("local main resolves");
+
+        assert_eq!(resolved["main"], commit_of(repo.path(), "main"));
+        assert_ne!(resolved["main"], commit_of(repo.path(), "origin/main"));
+    }
+
+    #[test]
+    fn resolve_refs_refuses_a_name_two_remotes_carry() {
+        let repo = make_versioned_fixture_repo();
+        detach_at_tag_keeping_main_remote_only(repo.path());
+        run(
+            repo.path(),
+            &["update-ref", "refs/remotes/upstream/main", "v0.1.0"],
+        );
+
+        let err = resolve_refs(repo.path(), &["main"]).expect_err("two candidates is no answer");
+
+        match err {
+            PublishError::RefsUnresolvable { refs, .. } => assert_eq!(refs, vec!["main"]),
+            other => panic!("expected RefsUnresolvable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_refs_returns_a_commit_per_name() {
         let repo = make_versioned_fixture_repo();
         let resolved =
             resolve_refs(repo.path(), &["v0.1.0", "v0.2.0", "main"]).expect("all refs resolve");
         assert_eq!(resolved.len(), 3);
         // Each entry is a 40-char hex commit ID and all three are distinct.
-        for sha in &resolved {
+        for sha in resolved.values() {
             assert_eq!(sha.len(), 40);
             assert!(sha.chars().all(|c| c.is_ascii_hexdigit()));
         }
-        assert!(resolved[0] != resolved[1]);
-        assert!(resolved[1] != resolved[2]);
+        assert!(resolved["v0.1.0"] != resolved["v0.2.0"]);
+        assert!(resolved["v0.2.0"] != resolved["main"]);
     }
 
     #[test]
@@ -3346,6 +3492,47 @@ exemplur = true
         let current = std::fs::read(out.path().join("current/index.html")).unwrap();
         let edge = std::fs::read(out.path().join("main/index.html")).unwrap();
         assert_eq!(current, edge);
+    }
+
+    /// A CI build of a tag checks the tag out detached, with the edge
+    /// branch present only as `origin/<edge>`; the edge page still
+    /// builds, from that branch's content.
+    #[test]
+    fn publish_versioned_builds_the_edge_from_a_remote_tracking_branch() {
+        let repo = make_versioned_linkml_repo();
+        detach_at_tag_keeping_main_remote_only(repo.path());
+        let cfg = make_publish_cfg_with_versions(vec!["v0.1.0", "v0.2.0"], Some("main"), "v0.2.0");
+        let out = tempfile::tempdir().unwrap();
+
+        publish_versioned(repo.path(), &cfg, out.path(), false)
+            .expect("the edge resolves through its remote-tracking ref");
+
+        let edge = std::fs::read_to_string(out.path().join("main/index.html")).unwrap();
+        assert!(
+            edge.contains("EdgeOnly"),
+            "the edge page is built from origin/main's schema, not a tag's"
+        );
+    }
+
+    /// A schema file missing at a version is reported against the
+    /// manifest's name for that version, not the commit it resolved to.
+    #[test]
+    fn publish_versioned_names_the_version_whose_schema_file_is_missing() {
+        let repo = make_versioned_linkml_repo();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.1.0"], None, "v0.1.0");
+        cfg.files.main = PathBuf::from("renamed.yaml");
+        let out = tempfile::tempdir().unwrap();
+
+        let err = publish_versioned(repo.path(), &cfg, out.path(), false)
+            .expect_err("no version carries renamed.yaml");
+
+        match err {
+            PublishError::ExtractFailed { ref_, path, .. } => {
+                assert_eq!(ref_, "v0.1.0");
+                assert_eq!(path, "renamed.yaml");
+            }
+            other => panic!("expected ExtractFailed, got {other:?}"),
+        }
     }
 
     #[test]
