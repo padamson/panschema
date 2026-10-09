@@ -9,6 +9,7 @@ classes:
       shelves:
         range: Shelf
         multivalued: true
+        inlined_as_list: true
       main_shelf:
         range: Shelf
   Shelf:

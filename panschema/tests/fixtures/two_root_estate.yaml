@@ -16,14 +16,14 @@ classes:
     attributes:
       id: {identifier: true}
       name: {}
-      deployments: {range: Deployment, multivalued: true}
+      deployments: {range: Deployment, multivalued: true, inlined_as_list: true}
   ProviderCatalog:
     tree_root: true
     description: Provider vocabulary shared across enterprises.
     attributes:
       id: {identifier: true}
       name: {}
-      providers: {range: Provider, multivalued: true}
+      providers: {range: Provider, multivalued: true, inlined_as_list: true}
   Deployment:
     attributes:
       id: {key: true}

@@ -3,7 +3,7 @@ name: panschema-development
 description: Use when working with LinkML or OWL schemas — generating schema documentation or a schema graph, converting a schema to RDF/Turtle, JSON Schema, OpenAPI, SHACL shapes, Rust types or Postgres DDL, verifying instance data against a schema, wiring a `panschema.toml` manifest, or publishing versioned schema docs. Also use when a repo contains `panschema.toml`, `panschema-publish.toml`, or `panschema.lock`.
 license: Apache-2.0
 metadata:
-  version: "0.5.5"
+  version: "0.5.6"
 ---
 
 # panschema
@@ -66,7 +66,11 @@ worth more than skimming everything else.
 
 To render or verify instance data, the schema needs a class marked
 `tree_root: true` whose class-ranged slots hold the records; records need an
-`identifier: true` slot. Then `--instances <file>` (repeatable for `html`)
+`identifier: true` slot. Each such collection declares that it holds its
+records rather than referencing them, `inlined_as_list: true` for a list or
+`inlined: true` for a dict keyed by id, since a slot ranged on an
+identifier-bearing class holds id strings otherwise and `verify` reports a
+record authored inline there. Then `--instances <file>` (repeatable for `html`)
 draws an instance graph beneath the docs, folds individuals into the RDF
 output, and runs the same conformance check `verify` runs — so nothing
 ships violations.

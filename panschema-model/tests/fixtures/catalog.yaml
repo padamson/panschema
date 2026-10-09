@@ -20,6 +20,7 @@ classes:
         description: The wines in this catalog.
         range: Wine
         multivalued: true
+        inlined_as_list: true
   Wine:
     description: A wine in the catalog.
     slots: [id, name]

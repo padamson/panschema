@@ -348,6 +348,32 @@ generated shapes — real, but not a single-tool check.
 
 ---
 
+### Slice 8: Declared inlining ✅ Complete
+
+**User story:** As a schema author gating a curated dataset with `verify`,
+I want a record authored inline where my schema declares references to be
+reported, so the file the gate accepts is one LinkML's own validator
+accepts too.
+
+**Acceptance criteria:**
+- [x] A record authored inline at a slot whose range classes all carry an
+  `identifier` and that declares neither `inlined` nor `inlined_as_list`
+  is a violation naming the slot, its range and how many records are
+  affected, whether the slot is a `tree_root` collection or a record's
+  own, and in list, dict or single spellings.
+- [x] A slot that declares `inlined: true` or `inlined_as_list: true`, a
+  slot ranged on a class with no identifier, and a slot ranged on a
+  key-only class accept inline records without a finding.
+- [x] The records still load; the finding is a report, not a refusal, and
+  the message names the declaration that makes the shape legal.
+- [x] A reference by id at the same slot is not a finding.
+
+**Notes:** the rule is the reference validator's, measured with the
+conformance oracle (`conformance/probe_inlining.py`). The reverse
+direction, an id string at a slot that declares inlining, and the
+list-versus-dict spelling are deliberately not enforced; see
+[linkml-coverage.md](../linkml-coverage.md) item 4.
+
 ## Slice Priority and Dependencies
 
 | Slice | Priority | Depends On | Status |
@@ -362,6 +388,7 @@ generated shapes — real, but not a single-tool check.
 | Slice 5: conformance check on the way into an output | Must Have | Slice 1 | Complete |
 | Slice 6: undeclared fields are violations | Must Have | Slice 5 | Complete |
 | Slice 7: class-level `rules` enforced | Should Have | Slice 5 | Complete |
+| Slice 8: declared inlining | Should Have | Slice 2b | Complete |
 
 ## Definition of Done
 

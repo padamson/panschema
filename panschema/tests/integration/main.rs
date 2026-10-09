@@ -1912,7 +1912,7 @@ fn manifest_resolve_against_checks_cross_graph_references() {
         "catalog",
         "1.0.0",
         "catalog.yaml",
-        "id: https://example.org/catalog\nname: catalog\ndefault_prefix: cat\nprefixes:\n  cat: https://example.org/catalog/\nclasses:\n  Estate:\n    tree_root: true\n    slots: [id, providers]\n  Provider:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  providers: {range: Provider, multivalued: true}\n",
+        "id: https://example.org/catalog\nname: catalog\ndefault_prefix: cat\nprefixes:\n  cat: https://example.org/catalog/\nclasses:\n  Estate:\n    tree_root: true\n    slots: [id, providers]\n  Provider:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  providers: {range: Provider, multivalued: true, inlined_as_list: true}\n",
     );
 
     let bench_pkg = consumer.join("bench-pkg");
@@ -1921,7 +1921,7 @@ fn manifest_resolve_against_checks_cross_graph_references() {
         "bench",
         "1.0.0",
         "bench.yaml",
-        "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, anchors]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  anchors: {range: DomainRecord, multivalued: true}\n",
+        "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, anchors]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  anchors: {range: DomainRecord, multivalued: true, inlined_as_list: true}\n",
     );
 
     fs::write(
@@ -2098,9 +2098,9 @@ resolve_against = ["ghost"]
     );
 }
 
-const UNION_CATALOG_SCHEMA: &str = "id: https://example.org/catalog\nname: catalog\ndefault_prefix: cat\nprefixes:\n  cat: https://example.org/catalog/\nclasses:\n  Estate:\n    tree_root: true\n    slots: [id, providers]\n  Provider:\n    slots: [id, weight]\nslots:\n  id: {identifier: true}\n  weight: {range: integer}\n  providers: {range: Provider, multivalued: true}\n";
+const UNION_CATALOG_SCHEMA: &str = "id: https://example.org/catalog\nname: catalog\ndefault_prefix: cat\nprefixes:\n  cat: https://example.org/catalog/\nclasses:\n  Estate:\n    tree_root: true\n    slots: [id, providers]\n  Provider:\n    slots: [id, weight]\nslots:\n  id: {identifier: true}\n  weight: {range: integer}\n  providers: {range: Provider, multivalued: true, inlined_as_list: true}\n";
 
-const UNION_BENCH_SCHEMA: &str = "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, anchors]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  anchors: {range: DomainRecord, multivalued: true}\n";
+const UNION_BENCH_SCHEMA: &str = "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, anchors]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  anchors: {range: DomainRecord, multivalued: true, inlined_as_list: true}\n";
 
 fn run_in(consumer: &Path, args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_panschema"))
@@ -2518,7 +2518,7 @@ fn bare_verify_checks_the_whole_manifest() {
         "catalog",
         "1.0.0",
         "catalog.yaml",
-        "id: https://example.org/catalog\nname: catalog\ndefault_prefix: cat\nprefixes:\n  cat: https://example.org/catalog/\nclasses:\n  Estate:\n    tree_root: true\n    slots: [id, providers]\n  Provider:\n    slots: [id, weight, sponsor]\nslots:\n  id: {identifier: true}\n  weight: {range: integer}\n  sponsor: {range: Provider}\n  providers: {range: Provider, multivalued: true}\n",
+        "id: https://example.org/catalog\nname: catalog\ndefault_prefix: cat\nprefixes:\n  cat: https://example.org/catalog/\nclasses:\n  Estate:\n    tree_root: true\n    slots: [id, providers]\n  Provider:\n    slots: [id, weight, sponsor]\nslots:\n  id: {identifier: true}\n  weight: {range: integer}\n  sponsor: {range: Provider}\n  providers: {range: Provider, multivalued: true, inlined_as_list: true}\n",
     );
 
     let bench_pkg = consumer.join("bench-pkg");
@@ -2610,14 +2610,14 @@ fn namespace_coverage_flags_references_outside_every_sibling() {
         "catalog",
         "1.0.0",
         "catalog.yaml",
-        "id: https://example.org/catalog\nname: catalog\ndefault_prefix: cat\nprefixes:\n  cat: https://example.org/catalog/\nclasses:\n  Estate:\n    tree_root: true\n    slots: [id, providers]\n  Provider:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  providers: {range: Provider, multivalued: true}\n",
+        "id: https://example.org/catalog\nname: catalog\ndefault_prefix: cat\nprefixes:\n  cat: https://example.org/catalog/\nclasses:\n  Estate:\n    tree_root: true\n    slots: [id, providers]\n  Provider:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  providers: {range: Provider, multivalued: true, inlined_as_list: true}\n",
     );
     write_pkg(
         &consumer.join("bench-pkg"),
         "bench",
         "1.0.0",
         "bench.yaml",
-        "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, anchors]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  anchors: {range: DomainRecord, multivalued: true}\n",
+        "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, anchors]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  anchors: {range: DomainRecord, multivalued: true, inlined_as_list: true}\n",
     );
     fs::write(
         consumer.join("catalog-data.yaml"),
@@ -2723,7 +2723,7 @@ fn manifest_declines_checks_against_a_collided_sibling() {
         "catalog",
         "1.0.0",
         "catalog.yaml",
-        "id: https://example.org/catalog\nname: catalog\ndefault_prefix: cat\nprefixes:\n  cat: https://example.org/catalog/\nclasses:\n  Estate:\n    tree_root: true\n    slots: [id, providers]\n  Provider:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  providers: {range: Provider, multivalued: true}\n",
+        "id: https://example.org/catalog\nname: catalog\ndefault_prefix: cat\nprefixes:\n  cat: https://example.org/catalog/\nclasses:\n  Estate:\n    tree_root: true\n    slots: [id, providers]\n  Provider:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  providers: {range: Provider, multivalued: true, inlined_as_list: true}\n",
     );
 
     let bench_pkg = consumer.join("bench-pkg");
@@ -2799,7 +2799,7 @@ fn schema_declared_absence_claims_are_checked() {
         "catalog",
         "1.0.0",
         "catalog.yaml",
-        "id: https://example.org/catalog\nname: catalog\ndefault_prefix: cat\nprefixes:\n  cat: https://example.org/catalog/\nclasses:\n  Estate:\n    tree_root: true\n    slots: [id, providers, pairings]\n  Provider:\n    slots: [id]\n  Pairing:\n    slots: [id, a, b]\nslots:\n  id: {identifier: true}\n  providers: {range: Provider, multivalued: true}\n  pairings: {range: Pairing, multivalued: true}\n  a: {range: Provider}\n  b: {range: Provider}\n",
+        "id: https://example.org/catalog\nname: catalog\ndefault_prefix: cat\nprefixes:\n  cat: https://example.org/catalog/\nclasses:\n  Estate:\n    tree_root: true\n    slots: [id, providers, pairings]\n  Provider:\n    slots: [id]\n  Pairing:\n    slots: [id, a, b]\nslots:\n  id: {identifier: true}\n  providers: {range: Provider, multivalued: true, inlined_as_list: true}\n  pairings: {range: Pairing, multivalued: true, inlined_as_list: true}\n  a: {range: Provider}\n  b: {range: Provider}\n",
     );
 
     let bench_pkg = consumer.join("bench-pkg");
@@ -2808,7 +2808,7 @@ fn schema_declared_absence_claims_are_checked() {
         "bench",
         "1.0.0",
         "bench.yaml",
-        "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, target, target_version, questions]\n  Question:\n    slots: [id, unconnected, unreferenced]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  target: {range: string}\n  target_version:\n    range: string\n    annotations:\n      records_version_of:\n        value:\n          sibling_slot: target\n  questions: {range: Question, multivalued: true}\n  unconnected:\n    range: DomainRecord\n    multivalued: true\n    annotations:\n      asserts_absence:\n        value: null\n  unreferenced:\n    range: uri\n    multivalued: true\n    annotations:\n      asserts_absence:\n        value: null\n",
+        "id: https://example.org/bench\nname: bench\ndefault_prefix: bench\nprefixes:\n  bench: https://example.org/bench/\n  cat: https://example.org/catalog/\nclasses:\n  Bench:\n    tree_root: true\n    slots: [id, target, target_version, questions]\n  Question:\n    slots: [id, unconnected, unreferenced]\n  DomainRecord:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  target: {range: string}\n  target_version:\n    range: string\n    annotations:\n      records_version_of:\n        value:\n          sibling_slot: target\n  questions: {range: Question, multivalued: true, inlined_as_list: true}\n  unconnected:\n    range: DomainRecord\n    multivalued: true\n    annotations:\n      asserts_absence:\n        value: null\n  unreferenced:\n    range: uri\n    multivalued: true\n    annotations:\n      asserts_absence:\n        value: null\n",
     );
 
     fs::write(
@@ -3029,7 +3029,7 @@ fn bare_anchors_expand_and_verify_like_absolute_iris() {
         "catalog",
         "1.0.0",
         "catalog.yaml",
-        "id: https://example.org/catalog\nname: catalog\ndefault_prefix: cat\nprefixes:\n  cat: https://example.org/catalog/\nclasses:\n  Estate:\n    tree_root: true\n    slots: [id, providers]\n  Provider:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  providers: {range: Provider, multivalued: true}\n",
+        "id: https://example.org/catalog\nname: catalog\ndefault_prefix: cat\nprefixes:\n  cat: https://example.org/catalog/\nclasses:\n  Estate:\n    tree_root: true\n    slots: [id, providers]\n  Provider:\n    slots: [id]\nslots:\n  id: {identifier: true}\n  providers: {range: Provider, multivalued: true, inlined_as_list: true}\n",
     );
     write_pkg(
         &consumer.join("bench-pkg"),
@@ -3397,7 +3397,7 @@ fn cli_verify_kind_checks_a_rangeless_slot_via_the_implicit_string_default() {
     let schema_path = tmp.join("schema.yaml");
     fs::write(
         &schema_path,
-        "id: https://example.org/implicit\nname: implicit\nclasses:\n  Event:\n    tree_root: true\n    slots: [events]\n  Item:\n    slots: [id, note]\nslots:\n  id: {identifier: true}\n  events: {range: Item, multivalued: true}\n  note: {}\n",
+        "id: https://example.org/implicit\nname: implicit\nclasses:\n  Event:\n    tree_root: true\n    slots: [events]\n  Item:\n    slots: [id, note]\nslots:\n  id: {identifier: true}\n  events: {range: Item, multivalued: true, inlined_as_list: true}\n  note: {}\n",
     )
     .unwrap();
     let data_path = tmp.join("data.yaml");
@@ -5690,7 +5690,7 @@ fn publish_reports_collisions_across_its_declared_instances_entries() {
          default_range: string\n\
          classes:\n\
         \x20 Catalog:\n    tree_root: true\n    attributes:\n\
-        \x20     things: {range: Thing, multivalued: true}\n\
+        \x20     things: {range: Thing, multivalued: true, inlined_as_list: true}\n\
         \x20 Thing:\n    attributes:\n      id: {identifier: true}\n",
     )
     .unwrap();
@@ -5793,7 +5793,7 @@ fn contract_cache_pkg(cache_root: &Path, version: &str, marker_class: Option<&st
              prefixes:\n  contract: https://example.org/contract/\n\
              default_prefix: contract\ndefault_range: string\n\
              classes:\n  Ledger:\n    tree_root: true\n    attributes:\n\
-            \x20     records: {{range: Record, multivalued: true}}\n\
+            \x20     records: {{range: Record, multivalued: true, inlined_as_list: true}}\n\
             \x20 Record:\n    attributes:\n      id: {{identifier: true}}\n{marker}"
         ),
     )

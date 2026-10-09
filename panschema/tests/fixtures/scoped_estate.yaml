@@ -13,8 +13,8 @@ classes:
     attributes:
       id: {identifier: true}
       name: {}
-      deployments: {range: Deployment, multivalued: true}
-      providers: {range: Provider, multivalued: true}
+      deployments: {range: Deployment, multivalued: true, inlined_as_list: true}
+      providers: {range: Provider, multivalued: true, inlined_as_list: true}
   Deployment:
     attributes:
       id: {key: true}

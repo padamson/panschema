@@ -187,6 +187,8 @@ pub enum ViolationKind {
     DuplicateIdentifier { id: String },
     /// A collection entry that loaded nothing.
     UnusableCollectionEntry(crate::instances::UnusableCollectionEntry),
+    /// Records authored inline at a slot the schema declares as references.
+    UndeclaredInlining(crate::instances::UndeclaredInlining),
     /// The dataset container's id is also a record's id.
     RootIdCollidesWithRecord { id: String },
     /// The data is not a mapping, so it cannot be a `tree_root` container.
@@ -406,6 +408,28 @@ impl ViolationKind {
                     None => format!("a {place} entry {}", u.reason),
                 }
             }
+            Self::UndeclaredInlining(u) => format!(
+                "slot `{}` declares references to `{}` ({}), but {} record{} authored inline \
+                 there; {}, or author the id{} and define the record{} in {} own collection",
+                u.slot,
+                u.ranges.join("`, `"),
+                if u.inlined == Some(false) {
+                    "`inlined: false`"
+                } else {
+                    "neither `inlined` nor `inlined_as_list`"
+                },
+                u.count,
+                if u.count == 1 { " is" } else { "s are" },
+                if u.multivalued {
+                    "declare `inlined_as_list: true` for a list of records or `inlined: true` \
+                     for a dict keyed by id"
+                } else {
+                    "declare `inlined: true`"
+                },
+                if u.count == 1 { "" } else { "s" },
+                if u.count == 1 { "" } else { "s" },
+                if u.count == 1 { "its" } else { "their" },
+            ),
             Self::RootIdCollidesWithRecord { id } => format!(
                 "the dataset container's id `{id}` is already a record's id; no container \
                  is emitted and key-scoped records mint unscoped until the collision is \
@@ -931,6 +955,16 @@ pub fn validate_instances(schema: &SchemaDefinition, set: &InstanceSet) -> Vec<V
         });
     }
 
+    // Records authored inline where the schema declares references: the
+    // reader built them, so the dataset reads; the reference implementation
+    // rejects the shape, so the gate says so.
+    for u in &set.undeclared_inlinings {
+        out.push(Violation {
+            record: u.record.clone().unwrap_or_else(|| "(root)".to_string()),
+            kind: ViolationKind::UndeclaredInlining(u.clone()),
+        });
+    }
+
     for u in &set.unusable_collection_entries {
         out.push(Violation {
             record: u
@@ -1212,9 +1246,11 @@ classes:
       wines:
         range: Wine
         multivalued: true
+        inlined_as_list: true
       wineries:
         range: Winery
         multivalued: true
+        inlined_as_list: true
   Wine:
     attributes:
       id:
@@ -1261,6 +1297,7 @@ classes:
       pets:
         range: Animal
         multivalued: true
+        inlined_as_list: true
   Animal:
     attributes:
       id:
@@ -1346,7 +1383,7 @@ pets:
     #[test]
     fn a_container_id_collision_names_its_consequence() {
         let schema: crate::linkml::SchemaDefinition = serde_norway::from_str(
-            "name: s\nclasses:\n  Root:\n    tree_root: true\n    attributes:\n      id:\n        identifier: true\n      items:\n        range: Item\n        multivalued: true\n  Item:\n    attributes:\n      id:\n        identifier: true\n",
+            "name: s\nclasses:\n  Root:\n    tree_root: true\n    attributes:\n      id:\n        identifier: true\n      items:\n        range: Item\n        multivalued: true\n        inlined_as_list: true\n  Item:\n    attributes:\n      id:\n        identifier: true\n",
         )
         .expect("parse schema");
         let data: serde_norway::Value =
@@ -1549,6 +1586,7 @@ classes:
       answers:
         range: Answer
         multivalued: true
+        inlined_as_list: true
   Answer:
     attributes:
       id:
@@ -1614,6 +1652,7 @@ classes:
       items:
         range: Item
         multivalued: true
+        inlined_as_list: true
   Item:
     attributes:
       id:
@@ -1659,6 +1698,7 @@ classes:
       items:
         range: Item
         multivalued: true
+        inlined_as_list: true
   Item:
     attributes:
       id:
@@ -1725,10 +1765,12 @@ slots:
   anchors:
     range: Rec
     multivalued: true
+    inlined_as_list: true
   citations:
     is_a: anchors
     range: Rec
     multivalued: true
+    inlined_as_list: true
 ";
         let schema: crate::linkml::SchemaDefinition =
             serde_norway::from_str(CLASSY).expect("parse schema");
@@ -1775,9 +1817,11 @@ classes:
       recs:
         range: Rec
         multivalued: true
+        inlined_as_list: true
       answers:
         range: Answer
         multivalued: true
+        inlined_as_list: true
   Rec:
     attributes:
       id:
@@ -1921,6 +1965,16 @@ wineries:
     fn an_inlined_object_sharing_a_top_level_records_id_is_not_a_duplicate() {
         // The same winery is inlined in a wine and listed as a top-level record;
         // that's one entity referenced two ways, not two records — no violation.
+        // The slot declares inlining, so the inline spelling itself is legal.
+        let mut schema = schema();
+        schema
+            .classes
+            .get_mut("Wine")
+            .unwrap()
+            .attributes
+            .get_mut("produced_by")
+            .unwrap()
+            .inlined = Some(true);
         let d = data(
             "\
 wines:
@@ -1934,7 +1988,7 @@ wineries:
     name: Morgon Estate
 ",
         );
-        assert!(validate_instance_data(&schema(), &d).is_empty());
+        assert!(validate_instance_data(&schema, &d).is_empty());
     }
 
     #[test]
@@ -2058,6 +2112,7 @@ classes:
       items:
         range: Item
         multivalued: true
+        inlined_as_list: true
   Item:
     attributes:
       id:
@@ -2136,6 +2191,7 @@ classes:
       items:
         range: Item
         multivalued: true
+        inlined_as_list: true
   Item:
     attributes:
       id:
@@ -2253,12 +2309,177 @@ enums:
         );
     }
 
+    /// A class-ranged slot whose range has an identifier and that declares
+    /// neither `inlined` nor `inlined_as_list` holds references, so a record
+    /// authored inline there is a violation naming the slot. A slot that
+    /// declares inlining, and a slot ranged on a class with no identifier
+    /// (always inlined), accept inline records.
+    #[test]
+    fn an_inline_record_where_references_are_declared_is_a_violation() {
+        let schema: SchemaDefinition = serde_norway::from_str(
+            "\
+name: Library
+default_range: string
+classes:
+  Library:
+    tree_root: true
+    attributes:
+      books: {range: Book, multivalued: true}
+      shelved: {range: Book, multivalued: true, inlined_as_list: true}
+  Book:
+    attributes:
+      id: {identifier: true}
+      title: {}
+      sequel: {range: Book}
+      notes: {range: Note, multivalued: true, inlined_as_list: true}
+  Note:
+    attributes:
+      text: {}
+",
+        )
+        .expect("parse schema");
+        let d = data(
+            "\
+books:
+  - {id: b1, title: One, sequel: {id: b2, title: Two}}
+  - b3
+shelved:
+  - {id: b3, title: Three, notes: [{text: fine}]}
+",
+        );
+
+        let mut v = validate_instance_data(&schema, &d);
+        v.sort_by(|a, b| a.record.cmp(&b.record));
+
+        assert_eq!(
+            v.len(),
+            2,
+            "one finding per undeclared inline site; got: {:?}",
+            v.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+        );
+        assert!(
+            v[0].record == "(root)"
+                && matches!(
+                    &v[0].kind,
+                    ViolationKind::UndeclaredInlining(u)
+                        if u.slot == "books" && u.ranges == ["Book"] && u.count == 1
+                ),
+            "the container's `books` collection inlines b1 (b3 is a reference); got: {}",
+            v[0]
+        );
+        assert!(
+            v[1].record == "b1"
+                && matches!(
+                    &v[1].kind,
+                    ViolationKind::UndeclaredInlining(u) if u.slot == "sequel" && u.count == 1
+                ),
+            "b1's `sequel` inlines b2; got: {}",
+            v[1]
+        );
+        assert!(
+            v[0].detail().contains("`inlined_as_list: true`"),
+            "the message names the declaration that makes the shape legal; got: {}",
+            v[0].detail()
+        );
+        assert!(
+            v[1].detail().contains("declare `inlined: true`, or")
+                && !v[1].detail().contains("`inlined_as_list: true`"),
+            "a single-valued slot is offered only `inlined: true`; got: {}",
+            v[1].detail()
+        );
+    }
+
+    /// A slot that wrote `inlined: false` is told so, rather than told it
+    /// declared nothing.
+    #[test]
+    fn the_inlining_message_quotes_an_explicit_inlined_false() {
+        let schema: SchemaDefinition = serde_norway::from_str(
+            "\
+name: Shed
+default_range: string
+classes:
+  Shed:
+    tree_root: true
+    attributes:
+      things: {range: Thing, multivalued: true, inlined: false}
+  Thing:
+    attributes:
+      id: {identifier: true}
+",
+        )
+        .expect("parse schema");
+
+        let v = validate_instance_data(&schema, &data("things:\n  - {id: t1}\n"));
+
+        assert_eq!(v.len(), 1, "got: {v:?}");
+        assert!(
+            v[0].detail().contains("(`inlined: false`)"),
+            "got: {}",
+            v[0].detail()
+        );
+    }
+
+    /// A container that carries an identifier is named by it, as every
+    /// other finding on it is, not by the `(root)` placeholder.
+    #[test]
+    fn an_identified_containers_inlining_finding_names_it_by_its_id() {
+        let schema: SchemaDefinition = serde_norway::from_str(
+            "\
+name: Shed
+default_range: string
+classes:
+  Shed:
+    tree_root: true
+    attributes:
+      id: {identifier: true}
+      things: {range: Thing, multivalued: true}
+  Thing:
+    attributes:
+      id: {identifier: true}
+",
+        )
+        .expect("parse schema");
+
+        let v = validate_instance_data(&schema, &data("id: shed1\nthings:\n  - {id: t1}\n"));
+
+        assert_eq!(v.len(), 1, "got: {v:?}");
+        assert_eq!(v[0].record, "shed1", "got: {}", v[0]);
+    }
+
+    /// Inlining declared through `slot_usage` on a shared slot counts
+    /// exactly as it would declared on an attribute.
+    #[test]
+    fn inlining_declared_through_slot_usage_is_honored() {
+        let schema: SchemaDefinition = serde_norway::from_str(
+            "\
+name: Shed
+default_range: string
+slots:
+  things: {range: Thing, multivalued: true}
+classes:
+  Shed:
+    tree_root: true
+    slots: [things]
+    slot_usage:
+      things: {inlined_as_list: true}
+  Thing:
+    attributes:
+      id: {identifier: true}
+",
+        )
+        .expect("parse schema");
+
+        let v = validate_instance_data(&schema, &data("things:\n  - {id: t1}\n"));
+
+        assert!(v.is_empty(), "got: {v:?}");
+    }
+
     #[test]
     fn invalid_pattern_in_the_schema_is_reported_not_panicked() {
         // `[` is an unterminated character class — the validator reports it
         // rather than crashing when compiling the regex.
         let schema: SchemaDefinition = serde_norway::from_str(
-            "name: P\ndefault_range: string\nclasses:\n  Root:\n    tree_root: true\n    attributes:\n      items:\n        range: Item\n        multivalued: true\n  Item:\n    attributes:\n      id:\n        identifier: true\n      code:\n        range: string\n        pattern: \"[\"\n",
+            "name: P\ndefault_range: string\nclasses:\n  Root:\n    tree_root: true\n    attributes:\n      items:\n        range: Item\n        multivalued: true\n        inlined_as_list: true\n  Item:\n    attributes:\n      id:\n        identifier: true\n      code:\n        range: string\n        pattern: \"[\"\n",
         )
         .expect("parse schema");
         let v = validate_instance_data(&schema, &data("items:\n  - id: a\n    code: x\n"));
@@ -2349,13 +2570,15 @@ classes:
       deployments:
         range: Deployment
         multivalued: true
+        inlined_as_list: true
       reviews:
         range: Review
         multivalued: true
-      shipments: {range: Shipment, multivalued: true}
-      batches: {range: Batch, multivalued: true}
-      tickets: {range: Ticket, multivalued: true}
-      questions: {range: Question, multivalued: true}
+        inlined_as_list: true
+      shipments: {range: Shipment, multivalued: true, inlined_as_list: true}
+      batches: {range: Batch, multivalued: true, inlined_as_list: true}
+      tickets: {range: Ticket, multivalued: true, inlined_as_list: true}
+      questions: {range: Question, multivalued: true, inlined_as_list: true}
   Deployment:
     attributes:
       id:
@@ -2535,13 +2758,13 @@ classes:
   Root:
     tree_root: true
     attributes:
-      states: {range: State, multivalued: true}
-      claims: {range: Claim, multivalued: true}
-      hypotheses: {range: Hypothesis, multivalued: true}
-      methods: {range: Method, multivalued: true}
-      questions: {range: Question, multivalued: true}
-      notes: {range: Note, multivalued: true}
-      loops: {range: Loop, multivalued: true}
+      states: {range: State, multivalued: true, inlined_as_list: true}
+      claims: {range: Claim, multivalued: true, inlined_as_list: true}
+      hypotheses: {range: Hypothesis, multivalued: true, inlined_as_list: true}
+      methods: {range: Method, multivalued: true, inlined_as_list: true}
+      questions: {range: Question, multivalued: true, inlined_as_list: true}
+      notes: {range: Note, multivalued: true, inlined_as_list: true}
+      loops: {range: Loop, multivalued: true, inlined_as_list: true}
   State:
     attributes:
       id: {identifier: true}
@@ -2640,6 +2863,7 @@ classes:
             let mut slot = SlotDefinition::new(slot_name);
             slot.range = Some("Thing".to_string());
             slot.multivalued = true;
+            slot.inlined_as_list = Some(true);
             root.attributes.insert(slot_name.to_string(), slot);
             schema.classes.insert(name.to_string(), root);
         }
@@ -3197,7 +3421,7 @@ classes:
              Bench:\n    tree_root: true\n    slots: [id, target_schema, questions]\n  \
              Question:\n    slots: [id, expected_anchors]\n  DomainRecord:\n    slots: \
              [id]\nslots:\n  id: {identifier: true}\n  target_schema: {range: uri}\n  \
-             questions: {range: Question, multivalued: true}\n  expected_anchors:\n    range: \
+             questions: {range: Question, multivalued: true, inlined_as_list: true}\n  expected_anchors:\n    range: \
              DomainRecord\n    multivalued: true\n    annotations:\n      expand_against: \
              target_schema\n",
         )

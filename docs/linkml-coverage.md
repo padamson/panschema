@@ -292,12 +292,23 @@ URIs-and-mappings), not against this file's own claims. Ranked by impact.
    should expect friction there.
 
 4. ~~**Inlining is inferred from data shape; the spec's flags are not
-   modeled.**~~ **Half-addressed 2026-08-04:** `inlined`/`inlined_as_list`
-   are modeled (tri-state, as declared), and the SimpleDict form is read —
+   modeled.**~~ **Addressed 2026-08-04 and 2026-10-09:** `inlined`/`inlined_as_list`
+   are modeled (tri-state, as declared), the SimpleDict form is read —
    a scalar dict entry expands into the class's one non-identifying slot,
-   closing the silent-data-loss hole. **Still open, deliberately:**
-   enforcing the flags in `verify` (data that inlines without declaring
-   `inlined: true` would newly flag), and reading remains shape-inferred.
+   closing the silent-data-loss hole — and `verify` enforces the one
+   direction the reference validator is strict about that data in the
+   wild gets wrong: a record authored inline at a slot that declares
+   references (identifier-bearing range, neither flag) is a violation
+   naming the slot. Measured against `linkml.validator`
+   (`conformance/probe_inlining.py`): a class with no identifier, or with
+   only a `key`, is always inlined, so slots ranged on those are never
+   flagged; a union mixing the two kinds is left alone. **Still lenient,
+   deliberately:** reading stays shape-inferred, so the records load
+   either way; an id string at a slot that declares inlining is read as a
+   reference and not reported; and the list-versus-dict spelling
+   (`inlined_as_list`) is not enforced. The reference direction is tied
+   to how references to key-only classes should work and waits on a
+   consumer settling that.
    Original finding: LinkML: a class-ranged slot whose range has no identifier is
    *always* inlined; with one, it defaults to a reference unless `inlined:
    true`; `inlined_as_list` selects list vs identifier-keyed dict; and a

@@ -182,7 +182,9 @@ It comes from either the schema's embedded OWL individuals, or a separate
 **LinkML instance-data file** passed with `--instances`:
 
 ```bash
-# Render a LinkML data file (a tree_root container of records) as the instance graph
+# Render a LinkML data file (a tree_root container of records) as the instance graph.
+# Each collection slot on the root declares how it holds its records:
+# `inlined_as_list: true` for a list, `inlined: true` for a dict keyed by id.
 panschema generate --schema schema.yaml --instances data.yaml --output docs/
 
 # Several curated graphs on one page — a small teaching preview and the full
@@ -295,6 +297,14 @@ becomes an edge to the referenced record, and scalar values ride along as node
 metadata — so the JSON an LLM emits against a class's JSON Schema (see
 `generate --format json-schema`) is a LinkML instance you can read straight
 back and visualize, no OWL detour.
+
+A class-valued slot holds either references (id strings) or the records
+themselves, and the schema says which, as LinkML does: a slot whose range
+carries an `identifier` holds references unless it declares `inlined: true`
+(a dict keyed by id) or `inlined_as_list: true` (a list of records); a range
+with no identifier is always inlined. A `tree_root`'s collections hold their
+records, so they declare it. A record authored inline where the slot holds
+references still loads, and `verify` reports it.
 
 Whether the container itself becomes an individual is your call, made by
 giving it an identifier. A `tree_root` class that declares an `identifier`

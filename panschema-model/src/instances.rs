@@ -250,6 +250,34 @@ pub struct UnusableCollectionEntry {
     pub reason: String,
 }
 
+/// Records authored inline at a slot LinkML reads as references only:
+/// every class in its range carries an `identifier`, and the slot
+/// declares neither `inlined` nor `inlined_as_list`
+/// ([`is_inlined`](crate::linkml_resolve::is_inlined)). The records are
+/// built all the same, so nothing is lost; validation reports the
+/// mismatch once per record and slot, so a collection of inline records
+/// is one finding rather than one per entry. A class with no identifier,
+/// or with only a `key`, can be held nowhere but inline, so a slot ranged
+/// on one never appears here.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct UndeclaredInlining {
+    /// The record whose slot holds the inline records: the dataset
+    /// container's authored id when the slot is one of its collections,
+    /// or `None` for a container with no id of its own.
+    pub record: Option<String>,
+    pub slot: String,
+    /// The slot's declared class range(s), as the message names them.
+    pub ranges: Vec<String>,
+    /// How many records were authored inline at this slot.
+    pub count: usize,
+    /// Whether the slot is multivalued, which decides which declaration
+    /// would make the shape legal.
+    pub multivalued: bool,
+    /// The slot's own `inlined` declaration, so a message can say
+    /// `inlined: false` when that is what was written.
+    pub inlined: Option<bool>,
+}
+
 /// A flat, id-keyed A-box. Deterministic: instances are sorted by `id`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct InstanceSet {
@@ -293,6 +321,11 @@ pub struct InstanceSet {
     /// container record exists to carry them. Empty for readers that
     /// don't track it (e.g. OWL).
     pub unusable_collection_entries: Vec<UnusableCollectionEntry>,
+    /// Slots whose records were authored inline where the schema declares
+    /// references — reported by validation; the records themselves load.
+    /// Sorted, one per record and slot. Empty for readers without
+    /// authored shapes to judge (e.g. OWL).
+    pub undeclared_inlinings: Vec<UndeclaredInlining>,
     /// The container's authored id when it collides with a record's id.
     /// No container is emitted then — attaching its edges to that record
     /// would mislabel an ordinary record as the container — and without a
@@ -464,6 +497,7 @@ impl InstanceSet {
             duplicate_ids: Vec::new(),
             expansion_gaps: Vec::new(),
             undeclared_fields: Vec::new(),
+            undeclared_inlinings: Vec::new(),
             metadata: Vec::new(),
             external_references: Vec::new(),
             root: None,
@@ -527,6 +561,7 @@ impl InstanceSet {
             expand_scope: Vec::new(),
             effective_slots_by_class: std::collections::BTreeMap::new(),
             unusable_entries: Vec::new(),
+            undeclared_inlinings: std::collections::BTreeMap::new(),
             current_holder: None,
             family_by_class: std::collections::BTreeMap::new(),
         };
@@ -636,7 +671,13 @@ impl InstanceSet {
                     }
                     None => value,
                 };
-                let ids = loader.collect_collection(slot_name, &class_targets, value);
+                let ids = loader.collect_collection(
+                    slot_name,
+                    slot,
+                    &authored_root_id,
+                    &class_targets,
+                    value,
+                );
                 contained.push((slot_name.to_string(), ids));
             } else if class_targets.len() == 1 {
                 // Single-valued: the collection arm above took every
@@ -661,7 +702,7 @@ impl InstanceSet {
                 };
                 contained.push((
                     slot_name.to_string(),
-                    loader.collect_single(slot_name, &range, value),
+                    loader.collect_single(slot_name, slot, &authored_root_id, &range, value),
                 ));
             } else if !class_targets.is_empty() {
                 if authored_identifier {
@@ -822,6 +863,7 @@ impl InstanceSet {
             root_record: emitted_root_id,
             root_collision,
             unusable_collection_entries: loader.unusable_entries,
+            undeclared_inlinings: loader.undeclared_inlinings.into_values().collect(),
             root_candidates: None,
         }
     }
@@ -981,6 +1023,9 @@ struct LinkmlLoader<'a> {
     >,
     /// Collection entries that loaded no record, carried to the set.
     unusable_entries: Vec<UnusableCollectionEntry>,
+    /// Inline records at reference-declared slots, keyed by record and
+    /// slot with a running count, carried to the set in key order.
+    undeclared_inlinings: std::collections::BTreeMap<(Option<String>, String), UndeclaredInlining>,
     /// The id of the record whose fields are being ingested, so a finding
     /// raised below it can name its holder; `None` between records — a
     /// collection on the dataset container or a vessel root.
@@ -1438,6 +1483,51 @@ impl LinkmlLoader<'_> {
         });
     }
 
+    /// Whether LinkML reads this slot's class-ranged values as references
+    /// only: no class in its range is inlined under the model's one rule
+    /// ([`is_inlined`](crate::linkml_resolve::is_inlined)). A union mixing
+    /// referenced and inlined members is left alone rather than judged by
+    /// one of them.
+    fn declares_references_only(
+        &mut self,
+        slot: &crate::linkml::SlotDefinition,
+        class_targets: &[&String],
+    ) -> bool {
+        !class_targets.is_empty()
+            && class_targets.iter().all(|class| {
+                let resolved = self.resolved_slots(class);
+                !crate::linkml_resolve::is_inlined(slot, resolved.values().map(|rs| &rs.definition))
+            })
+    }
+
+    /// Count `count` records authored inline at `slot` on `holder` (the
+    /// record being built, or the container's own id between records),
+    /// when the slot declares references; a slot that inlines by
+    /// declaration or by its range records nothing.
+    fn note_inline_records(
+        &mut self,
+        holder: Option<String>,
+        slot_def: &crate::linkml::SlotDefinition,
+        slot: &str,
+        class_targets: &[&String],
+        count: usize,
+    ) {
+        if count == 0 || !self.declares_references_only(slot_def, class_targets) {
+            return;
+        }
+        self.undeclared_inlinings
+            .entry((holder.clone(), slot.to_string()))
+            .and_modify(|u| u.count += count)
+            .or_insert_with(|| UndeclaredInlining {
+                record: holder,
+                slot: slot.to_string(),
+                ranges: class_targets.iter().map(|r| (*r).clone()).collect(),
+                count,
+                multivalued: crate::linkml_resolve::effective_cardinality(slot_def).multivalued,
+                inlined: slot_def.inlined,
+            });
+    }
+
     /// The union member the authored keys name. Candidates arrive
     /// deduplicated. LinkML's type designator decides first: every
     /// designator key any member declares is consulted; a string value
@@ -1563,6 +1653,8 @@ impl LinkmlLoader<'_> {
     fn collect_collection(
         &mut self,
         slot: &str,
+        slot_def: &crate::linkml::SlotDefinition,
+        holder: &Option<String>,
         candidates: &[&String],
         value: &serde_norway::Value,
     ) -> Vec<(String, bool)> {
@@ -1578,7 +1670,9 @@ impl LinkmlLoader<'_> {
                         // An authored arity mistake stays loadable rather
                         // than vanishing behind its extra brackets.
                         serde_norway::Value::Sequence(_) => {
-                            ids.extend(self.collect_collection(slot, candidates, item));
+                            ids.extend(
+                                self.collect_collection(slot, slot_def, holder, candidates, item),
+                            );
                         }
                         serde_norway::Value::Mapping(map) => {
                             match self.disambiguate_class(candidates, map) {
@@ -1586,6 +1680,13 @@ impl LinkmlLoader<'_> {
                                     if let Some((id, _)) = self.build_record(&class, None, item) {
                                         self.note_top_level_id(id.clone());
                                         ids.push((id, true));
+                                        self.note_inline_records(
+                                            holder.clone(),
+                                            slot_def,
+                                            slot,
+                                            candidates,
+                                            1,
+                                        );
                                     }
                                 }
                                 ClassChoice::Ambiguous => self.note_unusable(
@@ -1618,7 +1719,9 @@ impl LinkmlLoader<'_> {
                 // Container entries join top-level duplicate accounting and
                 // are held by role; a record's own dict collection follows
                 // record-level restatement rules instead.
-                for (id, _) in self.collect_dict_entries(slot, candidates, map) {
+                let entries = self.collect_dict_entries(slot, candidates, map);
+                self.note_inline_records(holder.clone(), slot_def, slot, candidates, entries.len());
+                for (id, _) in entries {
                     self.note_top_level_id(id.clone());
                     ids.push((id, true));
                 }
@@ -1769,13 +1872,15 @@ impl LinkmlLoader<'_> {
     fn collect_single(
         &mut self,
         slot: &str,
+        slot_def: &crate::linkml::SlotDefinition,
+        holder: &Option<String>,
         class_name: &str,
         value: &serde_norway::Value,
     ) -> Vec<(String, bool)> {
         match value {
             serde_norway::Value::Sequence(items) => items
                 .iter()
-                .flat_map(|item| self.collect_single(slot, class_name, item))
+                .flat_map(|item| self.collect_single(slot, slot_def, holder, class_name, item))
                 .collect(),
             serde_norway::Value::Mapping(map) => {
                 // The class is fixed, but the shape still chooses: a
@@ -1787,6 +1892,13 @@ impl LinkmlLoader<'_> {
                         .build_record(&class, None, value)
                         .map(|(id, materialized)| {
                             self.note_top_level_id(id.clone());
+                            self.note_inline_records(
+                                holder.clone(),
+                                slot_def,
+                                slot,
+                                &[&class_string],
+                                1,
+                            );
                             vec![(id, materialized)]
                         })
                         .unwrap_or_default(),
@@ -1942,6 +2054,7 @@ impl LinkmlLoader<'_> {
                 field_value,
                 display,
                 expand,
+                slot,
                 &mut literals,
                 &mut references,
                 &mut slot_values,
@@ -2039,6 +2152,7 @@ impl LinkmlLoader<'_> {
         value: &serde_norway::Value,
         display: bool,
         expand: Option<ExpandBase>,
+        slot_def: Option<&crate::linkml::SlotDefinition>,
         literals: &mut Vec<(String, String)>,
         references: &mut Vec<Reference>,
         slot_values: &mut Vec<SlotValue>,
@@ -2057,6 +2171,7 @@ impl LinkmlLoader<'_> {
                     item,
                     display,
                     expand,
+                    slot_def,
                     literals,
                     references,
                     slot_values,
@@ -2113,6 +2228,10 @@ impl LinkmlLoader<'_> {
                 if is_record_collection(multivalued, &class_targets, all_classes) =>
             {
                 let entries = self.collect_dict_entries(slot, &class_targets, map);
+                if let Some(def) = slot_def {
+                    let holder = self.current_holder.clone();
+                    self.note_inline_records(holder, def, slot, &class_targets, entries.len());
+                }
                 // Each entry authored an inline record at a slot whose
                 // declaration expects external references — a finding,
                 // once per record, whatever the spelling.
@@ -2150,6 +2269,10 @@ impl LinkmlLoader<'_> {
                     ClassChoice::One(class) => {
                         if let Some((target, materialized)) = self.build_record(&class, None, value)
                         {
+                            if let Some(def) = slot_def {
+                                let holder = self.current_holder.clone();
+                                self.note_inline_records(holder, def, slot, &class_targets, 1);
+                            }
                             if let Some(expand_base) = expand {
                                 let record = self.current_holder.clone().unwrap_or_default();
                                 self.note_expansion_gap(
@@ -4327,6 +4450,90 @@ classes:
             !set.instances.iter().any(|i| i.id == "x1"),
             "nor is a record invented for it"
         );
+    }
+
+    /// Records authored inline at a slot that declares references are
+    /// still built, and counted once per record and slot, in whichever
+    /// spelling: list entries, an id-keyed dict, or a single mapping. A
+    /// slot that declares inlining, one ranged on a class with no
+    /// identifier, and a slot ranged on a key-only class are never counted.
+    #[test]
+    fn inline_records_at_a_reference_declared_slot_are_counted_per_slot() {
+        let schema: SchemaDefinition = serde_norway::from_str(
+            "\
+name: Library
+default_range: string
+classes:
+  Library:
+    tree_root: true
+    attributes:
+      books: {range: Book, multivalued: true}
+      archived: {range: Book, multivalued: true}
+      shelved: {range: Book, multivalued: true, inlined_as_list: true}
+      stamps: {range: Stamp, multivalued: true}
+  Book:
+    attributes:
+      id: {identifier: true}
+      sequel: {range: Book}
+      notes: {range: Note, multivalued: true}
+  Note:
+    attributes:
+      text: {}
+  Stamp:
+    attributes:
+      code: {key: true}
+",
+        )
+        .unwrap();
+        let data: serde_norway::Value = serde_norway::from_str(
+            "\
+books:
+  - {id: b1, sequel: {id: b2}, notes: [{text: x}, {text: y}]}
+  - {id: b3}
+  - b4
+archived:
+  b5: {}
+  b6: {}
+shelved:
+  - {id: b4}
+stamps:
+  - {code: s1}
+",
+        )
+        .unwrap();
+
+        let set = InstanceSet::from_linkml_data(&schema, &data);
+
+        let found: Vec<(Option<&str>, &str, &[String], usize)> = set
+            .undeclared_inlinings
+            .iter()
+            .map(|u| {
+                (
+                    u.record.as_deref(),
+                    u.slot.as_str(),
+                    u.ranges.as_slice(),
+                    u.count,
+                )
+            })
+            .collect();
+        assert_eq!(
+            found,
+            vec![
+                (None, "archived", &["Book".to_string()][..], 2),
+                (None, "books", &["Book".to_string()][..], 2),
+                (Some("b1"), "sequel", &["Book".to_string()][..], 1),
+            ],
+            "list entries and dict entries count per slot; b4 is a reference; \
+             shelved declares inlining; notes and stamps range on classes that \
+             are always inlined"
+        );
+        let ids: Vec<&str> = set.instances.iter().map(|i| i.id.as_str()).collect();
+        for id in ["b1", "b2", "b3", "b4", "b5", "b6"] {
+            assert!(
+                ids.contains(&id),
+                "the finding is a report, not a refusal: {id} loads"
+            );
+        }
     }
 
     #[test]

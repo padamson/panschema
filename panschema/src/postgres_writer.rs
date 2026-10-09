@@ -1113,14 +1113,12 @@ fn relation_names(schema: &SchemaDefinition) -> std::collections::BTreeSet<Strin
 }
 
 /// Whether a class-range slot contains its value rather than referencing
-/// it, as linkml-runtime's `is_inlined` decides: declared `inlined` or
-/// `inlined_as_list`, or else unless the range class has an identifier. A
-/// key does not make a class referenceable, so a slot to a key-named class
-/// always contains its records, `inlined: false` or not.
+/// it: the model's one inlining rule
+/// ([`is_inlined`](crate::linkml_resolve::is_inlined)), read against the
+/// target's effective slots.
 fn inlines(slot: &SlotDefinition, target: &ClassDefinition, schema: &SchemaDefinition) -> bool {
-    slot.inlined == Some(true)
-        || slot.inlined_as_list == Some(true)
-        || class_primary_key(target, schema).slot.is_none()
+    let effective = crate::linkml_resolve::resolve_effective_slots(target, schema);
+    crate::linkml_resolve::is_inlined(slot, effective.values())
 }
 
 /// Every enum referenced by an effective slot of any class, in name-sorted

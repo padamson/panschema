@@ -12,6 +12,7 @@ classes:
       wines:
         range: Wine
         multivalued: true
+        inlined_as_list: true
   Wine:
     attributes:
       id:

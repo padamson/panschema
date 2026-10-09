@@ -614,6 +614,8 @@ fn merge_slot_override(target: &mut SlotDefinition, source: &SlotDefinition) {
     merge_opt!(is_a);
     merge_opt_copy!(minimum_cardinality);
     merge_opt_copy!(maximum_cardinality);
+    merge_opt_copy!(inlined);
+    merge_opt_copy!(inlined_as_list);
 
     if !source.any_of.is_empty() {
         target.any_of = source.any_of.clone();
@@ -760,6 +762,23 @@ pub fn record_id_slot<'a>(
         }
     }
     first_key
+}
+
+/// Whether a class-ranged slot holds its records rather than referencing
+/// them, as linkml-runtime's `is_inlined` decides: declared `inlined` or
+/// `inlined_as_list`, else inlined unless the range class names its
+/// records with an `identifier`. `range_slots` are the range class's
+/// effective slots. A `key` does not make a class referenceable from
+/// outside its container, so a slot ranged on a key-only class always
+/// holds its records, `inlined: false` or not. The one rule the reader,
+/// the verifier and the Postgres writer all read inlining from.
+pub fn is_inlined<'a>(
+    slot: &SlotDefinition,
+    range_slots: impl IntoIterator<Item = &'a SlotDefinition>,
+) -> bool {
+    slot.inlined == Some(true)
+        || slot.inlined_as_list == Some(true)
+        || !range_slots.into_iter().any(|s| s.identifier)
 }
 
 /// Resolve a slot's effective domain class names. LinkML lets the
@@ -1716,6 +1735,77 @@ mod tests {
             resolved["id"].identifier && !resolved["id"].key,
             "promoting a key to an identifier must clear `key`; got: {:?}",
             resolved["id"]
+        );
+    }
+
+    /// A `slot_usage` entry carries the inlining declarations onto the
+    /// class's view of a shared slot, the standard way a class says how it
+    /// holds a shared collection.
+    #[test]
+    fn slot_usage_carries_inlining_onto_the_shared_slot() {
+        let mut schema = SchemaDefinition::new("s");
+        let mut shared = SlotDefinition::new("things");
+        shared.range = Some("Thing".into());
+        shared.multivalued = true;
+        schema.slots.insert("things".into(), shared);
+
+        let mut root = ClassDefinition::new("Root");
+        root.slots.push("things".into());
+        let mut usage = SlotDefinition::new("things");
+        usage.inlined_as_list = Some(true);
+        root.slot_usage.insert("things".into(), usage);
+        schema.classes.insert("Root".into(), root);
+        let mut other = ClassDefinition::new("Other");
+        other.slots.push("things".into());
+        let mut usage = SlotDefinition::new("things");
+        usage.inlined = Some(false);
+        other.slot_usage.insert("things".into(), usage);
+        schema.classes.insert("Other".into(), other);
+
+        let root = resolve_effective_slots(&schema.classes["Root"], &schema);
+        assert_eq!(root["things"].inlined_as_list, Some(true));
+        assert_eq!(root["things"].inlined, None, "an unset flag stays unset");
+        let other = resolve_effective_slots(&schema.classes["Other"], &schema);
+        assert_eq!(other["things"].inlined, Some(false));
+        assert_eq!(other["things"].inlined_as_list, None);
+    }
+
+    /// The one inlining rule: a declaration wins, else the range decides —
+    /// an identifier makes the records referenceable, a key alone does not.
+    #[test]
+    fn is_inlined_follows_the_declaration_then_the_ranges_identifier() {
+        let mut id = SlotDefinition::new("id");
+        id.identifier = true;
+        let mut code = SlotDefinition::new("code");
+        code.key = true;
+        let plain = SlotDefinition::new("label");
+
+        let bare = SlotDefinition::new("s");
+        assert!(
+            !is_inlined(&bare, [&id, &plain]),
+            "an identifier range references"
+        );
+        assert!(
+            is_inlined(&bare, [&code, &plain]),
+            "a key-only range inlines"
+        );
+        assert!(is_inlined(&bare, [&plain]), "a range with no id inlines");
+
+        let mut listed = SlotDefinition::new("s");
+        listed.inlined_as_list = Some(true);
+        assert!(is_inlined(&listed, [&id]));
+        let mut dict = SlotDefinition::new("s");
+        dict.inlined = Some(true);
+        assert!(is_inlined(&dict, [&id]));
+        let mut refused = SlotDefinition::new("s");
+        refused.inlined = Some(false);
+        assert!(
+            !is_inlined(&refused, [&id]),
+            "`inlined: false` with an identifier references"
+        );
+        assert!(
+            is_inlined(&refused, [&code]),
+            "`inlined: false` cannot make a key-only range referenceable"
         );
     }
 

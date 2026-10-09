@@ -26,9 +26,11 @@ classes:
       grapes:
         range: Grape
         multivalued: true
+        inlined_as_list: true
       assessments:
         range: VintageAssessment
         multivalued: true
+        inlined_as_list: true
 
   Grape:
     slots: [id, name]

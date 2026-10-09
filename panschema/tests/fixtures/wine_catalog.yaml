@@ -24,10 +24,12 @@ classes:
         description: The wines in this catalog.
         range: Wine
         multivalued: true
+        inlined_as_list: true
       wineries:
         description: The wineries in this catalog.
         range: Winery
         multivalued: true
+        inlined_as_list: true
   Wine:
     description: A wine produced by a winery.
     slots: [id, name]
