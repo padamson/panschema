@@ -15,6 +15,7 @@
     {%- let id = "classes" %}
     {%- let title = "Classes" %}
     {%- let count = Some(classes.len()) %}
+    {%- let count_id = None::<&str> %}
     {%- let description = Some("Classes defined in this ontology.") %}
     {% include "components/section_header.html" %}
 {%- if classes.is_empty() %}
@@ -95,6 +96,7 @@
     {%- let id = "slots" %}
     {%- let title = "Slots" %}
     {%- let count = Some(slots.len()) %}
+    {%- let count_id = None::<&str> %}
     {%- let description = Some("Slots defined in this ontology.") %}
     {% include "components/section_header.html" %}
 {%- if slots.is_empty() %}
@@ -137,6 +139,7 @@
     {%- let id = "enums" %}
     {%- let title = "Enumerations" %}
     {%- let count = Some(enums.len()) %}
+    {%- let count_id = None::<&str> %}
     {%- let description = Some("Enumerations defined in this ontology.") %}
     {% include "components/section_header.html" %}
     <div class="entity-list">
@@ -165,6 +168,7 @@
     {%- let id = "types" %}
     {%- let title = "Types" %}
     {%- let count = Some(types.len()) %}
+    {%- let count_id = None::<&str> %}
     {%- let description = Some("Types defined in this ontology.") %}
     {% include "components/section_header.html" %}
     <div class="entity-list">

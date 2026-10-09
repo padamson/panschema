@@ -288,8 +288,9 @@ standing as its current (the first released ref present, in the
 manifest's version order) — so they never point at a directory that
 was not built. A single-page site keeps today's header untouched.
 
-Repeat `--instances` to carry more than one curated graph. Each is labelled by
-its file stem and gets its own cards, provenance line, and node/edge counts;
+Repeat `--instances` to carry more than one curated graph. Each is labeled by
+its file stem and gets its own metadata card (source, what it conforms to,
+record count, and the data file's own declared fields), cards, and counts;
 the first is shown until the reader picks another, and switching happens in the
 page with no navigation. Curated graphs are teaching artifacts, so keep them
 small — panschema warns per graph past a few hundred nodes. Formats that emit a

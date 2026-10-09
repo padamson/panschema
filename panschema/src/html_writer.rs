@@ -528,6 +528,9 @@ struct IndexTemplate<'a> {
     /// entry and the section heading. Every graph count reads nodes/edges.
     instance_node_count: usize,
     instance_edge_count: usize,
+    /// The default dataset's record count, on the Individuals entry and
+    /// its section heading; the selector updates both.
+    instance_individual_count: usize,
     /// Whether any A-box is on the page, gating the sidebar group.
     has_instances: bool,
     /// Number of nodes in the graph (for sidebar badge)
@@ -1738,11 +1741,13 @@ impl Writer for HtmlWriter {
         }
         let dataset_views = dataset_views;
 
-        // The sidebar badge describes the dataset the reader sees first.
-        let (instance_node_count, instance_edge_count) = dataset_views
+        // The sidebar badges describe the dataset the reader sees first.
+        let (instance_node_count, instance_edge_count, instance_individual_count) = dataset_views
             .iter()
             .find(|v| v.is_default)
-            .map_or((0, 0), |v| (v.node_count, v.edge_count));
+            .map_or((0, 0, 0), |v| {
+                (v.node_count, v.edge_count, v.individuals.len())
+            });
 
         let template = IndexTemplate {
             title: &data.title,
@@ -1765,6 +1770,7 @@ impl Writer for HtmlWriter {
             instance_datasets: &dataset_views,
             instance_node_count,
             instance_edge_count,
+            instance_individual_count,
             has_instances: !dataset_views.is_empty(),
             graph_node_count,
             graph_edge_count,
@@ -5542,9 +5548,10 @@ mod tests {
         let writer = HtmlWriter::new();
         let html = render_index(&writer, &schema);
 
+        let card = element(&html, "instance-metadata", "</section>");
         assert!(
-            html.contains("Source: individuals embedded in the schema"),
-            "the section must attribute the A-box to the schema itself"
+            card.contains("Source") && card.contains("individuals embedded in the schema"),
+            "the dataset's metadata card must attribute the A-box to the schema itself; got: {card}"
         );
     }
 
@@ -5796,6 +5803,89 @@ mod tests {
                 && at(r#"<section id="instance-graph""#)
                     < at(r#"<section id="instance-individuals""#),
             "the Instances block holds its three sections in nav order"
+        );
+    }
+
+    /// Each dataset has a metadata card under Instances naming its source
+    /// file, the schema and version its records conform to, its record
+    /// count, and the container's own declared scalar fields; the
+    /// Individuals entry in the sidebar carries the record count, and the
+    /// Graph entry keeps its nodes/edges badge. A dataset embedded in the
+    /// schema reads "embedded in the schema" as its source.
+    #[test]
+    fn the_instances_metadata_card_names_source_conformance_and_count() {
+        use crate::linkml::SlotDefinition;
+        let mut schema = bottle_rack_schema();
+        schema.version = Some("2.1.0".to_string());
+        let container = schema.classes.get_mut("Cellar").unwrap();
+        let mut title = SlotDefinition::new("title");
+        title.range = Some("string".to_string());
+        container.attributes.insert("title".to_string(), title);
+        let set = instance_set_from_yaml(
+            &schema,
+            "title: North wing\nbottles:\n  - id: b1\n    name: Morgon\n  - id: b2\n    name: Fleurie\n",
+        );
+        let writer = HtmlWriter::new().with_instance_dataset(
+            InstanceDataset::new("cellar", set).with_provenance("data/cellar.yaml"),
+        );
+        let html = render_index(&writer, &schema);
+
+        // Each row is pinned as a label-value pair in order, whitespace
+        // collapsed, so a value cannot satisfy another row's label.
+        let card = element(&html, "instance-metadata", "</section>")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        for row in [
+            "<dt>Source</dt> <dd class=\"instance-provenance\"><code class=\"mono\">data/cellar.yaml</code></dd>",
+            "<dt>Conforms to</dt> <dd>cellar 2.1.0</dd>",
+            "<dt>Records</dt> <dd>2</dd>",
+            "<dt>Declared</dt>",
+            "<dt>title</dt> <dd>North wing</dd>",
+        ] {
+            assert!(
+                card.contains(row),
+                "the metadata card has the row {row}; got: {card}"
+            );
+        }
+        assert!(
+            card.find("<dt>Declared</dt>") < card.find("<dt>title</dt>"),
+            "the data file's own fields sit under the Declared row"
+        );
+        let sidebar_entry = |href: &str| {
+            let at = html
+                .find(href)
+                .unwrap_or_else(|| panic!("the sidebar entry {href}"));
+            html[at..at + html[at..].find("</a>").unwrap()]
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let individuals_entry = sidebar_entry(r##"href="#instance-individuals""##);
+        assert!(
+            individuals_entry.contains(
+                r#"<span class="badge" id="instance-individuals-sidebar-count">2</span>"#
+            ),
+            "the Individuals entry carries the record count; got: {individuals_entry}"
+        );
+        let graph_entry = sidebar_entry(r##"href="#instance-graph""##);
+        assert!(
+            graph_entry.contains(r#"id="instance-graph-sidebar-count""#)
+                && graph_entry.contains(">2 / 0</span>"),
+            "the Graph entry keeps its nodes / edges badge; got: {graph_entry}"
+        );
+        assert!(
+            html.contains(r#""records": 2,"#),
+            "the dataset payload carries its record count for the selector to show"
+        );
+
+        let reader = OwlReader::new();
+        let schema = reader.read(&reference_ontology_path()).unwrap();
+        let html = render_index(&HtmlWriter::new(), &schema);
+        let card = element(&html, "instance-metadata", "</section>");
+        assert!(
+            card.contains("embedded in the schema") && card.contains("Conforms to"),
+            "an embedded A-box still gets the card; got: {card}"
         );
     }
 

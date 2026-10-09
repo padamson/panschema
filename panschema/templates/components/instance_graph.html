@@ -102,6 +102,14 @@
                         );
                     });
                 }
+                // The record count follows the selection the same way, on
+                // the Individuals heading and its sidebar entry.
+                if (entry && typeof entry.records === 'number') {
+                    ['instance-individuals-count', 'instance-individuals-sidebar-count'].forEach((id) => {
+                        const el = document.getElementById(id);
+                        if (el) el.textContent = String(entry.records);
+                    });
+                }
                 if (typeof window.__panschemaShowInstanceGraph === 'function') {
                     window.__panschemaShowInstanceGraph(index);
                 }

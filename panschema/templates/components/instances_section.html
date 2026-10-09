@@ -1,3 +1,7 @@
+{# The schema title and version, captured before any section header include
+   binds its own `title` and shadows them. #}
+{%- let schema_title = title %}
+{%- let schema_version = version %}
 <section id="individuals" class="page-group">
     <h2 class="page-group-title">Instances</h2>
     <p class="page-group-description">Curated instance graph{% if instance_datasets.len() > 1 %}s{% endif %} (A-box): individuals conforming to this schema.</p>
@@ -26,22 +30,55 @@
         {%- let id = "instance-metadata" %}
         {%- let title = "Metadata" %}
         {%- let count = None::<usize> %}
+        {%- let count_id = None::<&str> %}
         {%- let description = None::<&str> %}
         {% include "components/section_header.html" %}
+{# One card per dataset, in the schema metadata card's own shape: where the
+   records came from, what they conform to, how many there are, then the
+   container's own declared fields (a benchmark's target schema and
+   version, a catalog's title) set apart under one label, so a field that
+   happens to be called `source` cannot read as the provenance row. #}
 {%- for ds in instance_datasets %}
-        <div class="instance-dataset-panel instance-dataset-meta" data-instance-dataset="{{ loop.index0 }}"{% if !ds.is_default %} hidden{% endif %}>
-{%- for entry in ds.metadata %}
-            <div class="instance-meta-row"><span class="instance-meta-key">{{ entry.0 }}</span><span class="instance-meta-val">{{ entry.1 }}</span></div>
-{%- endfor %}
+        <div class="metadata-card instance-dataset-panel" data-instance-dataset="{{ loop.index0 }}"{% if !ds.is_default %} hidden{% endif %}>
+            <dl class="metadata-list">
+                <div class="metadata-item">
+                    <dt>Source</dt>
 {%- if let Some(src) = ds.provenance %}
-            <p class="instance-provenance">Source: <code class="mono">{{ src }}</code></p>
+                    <dd class="instance-provenance"><code class="mono">{{ src }}</code></dd>
 {%- else %}
-            <p class="instance-provenance">Source: individuals embedded in the schema</p>
+                    <dd class="instance-provenance">individuals embedded in the schema</dd>
 {%- endif %}
+                </div>
+                <div class="metadata-item">
+                    <dt>Conforms to</dt>
+                    <dd>{{ schema_title }}{% if let Some(v) = schema_version %} {{ v }}{% endif %}</dd>
+                </div>
+                <div class="metadata-item">
+                    <dt>Records</dt>
+                    <dd>{{ ds.individuals.len() }}</dd>
+                </div>
+{%- if !ds.metadata.is_empty() %}
+                <div class="metadata-item">
+                    <dt>Declared</dt>
+                    <dd>
+                        <dl class="metadata-list metadata-declared">
+{%- for entry in ds.metadata %}
+                            <div class="metadata-item">
+                                <dt>{{ entry.0 }}</dt>
+                                <dd>{{ entry.1 }}</dd>
+                            </div>
+{%- endfor %}
+                        </dl>
+                    </dd>
+                </div>
+{%- endif %}
+            </dl>
         </div>
 {%- endfor %}
     </section>
     <section id="instance-graph">
+        {# Written out rather than included: this count is nodes / edges
+           with a tooltip, not the include's plain integer. #}
         <div class="section-header">
             <h2 class="section-title">
                 Graph
@@ -59,7 +96,7 @@
         <script>
             window.__PANSCHEMA_INSTANCE_GRAPHS__ = [
 {%- for ds in instance_datasets %}
-                {"name": {{ ds.name_json|safe }}, "data": {% match ds.graph_json %}{% when Some with (json) %}{{ json|safe }}{% when None %}null{% endmatch %}}{% if !loop.last %},{% endif %}
+                {"name": {{ ds.name_json|safe }}, "records": {{ ds.individuals.len() }}, "data": {% match ds.graph_json %}{% when Some with (json) %}{{ json|safe }}{% when None %}null{% endmatch %}}{% if !loop.last %},{% endif %}
 {%- endfor %}
             ];
         </script>
@@ -68,7 +105,9 @@
     <section id="instance-individuals">
         {%- let id = "instance-individuals" %}
         {%- let title = "Individuals" %}
-        {%- let count = None::<usize> %}
+        {# The default dataset's record count; the selector updates it. #}
+        {%- let count = Some(instance_individual_count) %}
+        {%- let count_id = Some("instance-individuals-count") %}
         {%- let description = None::<&str> %}
         {% include "components/section_header.html" %}
 {%- for ds in instance_datasets %}
@@ -99,3 +138,9 @@
     </section>
 {%- endif %}
 </section>
+<style>
+    /* The data file's own fields nest under one row of the card. */
+    .metadata-declared {
+        gap: var(--space-2);
+    }
+</style>

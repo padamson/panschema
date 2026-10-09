@@ -2452,6 +2452,23 @@ fn e2e_instance_dataset_selector_switches_cards_and_graph() {
                     prov.contains("wine_instances.yaml") && !prov.contains("preview"),
                     "the visible panel names the selected dataset's source; got: {prov}"
                 );
+                // The record count follows the selection on the Individuals
+                // heading and its sidebar entry: four records, not the
+                // preview's two.
+                for id in [
+                    "#instance-individuals-count",
+                    "#instance-individuals-sidebar-count",
+                ] {
+                    assert_eq!(
+                        page.locator(id)
+                            .inner_text()
+                            .await
+                            .expect("record count")
+                            .trim(),
+                        "4",
+                        "{id} should show the selected dataset's record count"
+                    );
+                }
 
                 // The canvas is re-initialized over the newly selected A-box. The viz
                 // may still have been loading when the tab was clicked; whenever it

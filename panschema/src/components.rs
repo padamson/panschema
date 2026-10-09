@@ -215,6 +215,8 @@ pub struct SidebarComponent<'a> {
     pub instance_graph_json: Option<&'a str>,
     pub instance_node_count: usize,
     pub instance_edge_count: usize,
+    /// Matches IndexTemplate: the default dataset's record count.
+    pub instance_individual_count: usize,
     /// Matches IndexTemplate: whether an A-box is on the page, gating
     /// the sidebar's Instances group.
     pub has_instances: bool,
@@ -236,6 +238,8 @@ pub struct SectionHeaderComponent<'a> {
     pub id: &'a str,
     pub title: &'a str,
     pub count: Option<usize>,
+    /// An element id for the count badge, when a script updates it.
+    pub count_id: Option<&'a str>,
     pub description: Option<&'a str>,
 }
 
@@ -435,6 +439,8 @@ pub struct StyleGuideTemplate<'a> {
     pub instance_graph_json: Option<&'a str>,
     pub instance_node_count: usize,
     pub instance_edge_count: usize,
+    /// Matches IndexTemplate: the default dataset's record count.
+    pub instance_individual_count: usize,
     pub instance_provenance: Option<&'a str>,
     /// Matches IndexTemplate: whether an A-box is on the page, gating
     /// the sidebar's Instances group.
@@ -507,6 +513,7 @@ impl ComponentRenderer {
             instance_graph_json: None,
             instance_node_count: 0,
             instance_edge_count: 0,
+            instance_individual_count: individuals.len(),
             has_instances: !individuals.is_empty(),
             instances_first: false,
             show_schema_sections: true,
@@ -531,6 +538,7 @@ impl ComponentRenderer {
             id,
             title,
             count,
+            count_id: None,
             description,
         };
         Ok(template.render()?)
@@ -896,6 +904,8 @@ impl ComponentRenderer {
             instance_graph_json: None,
             instance_node_count: 0,
             instance_edge_count: 0,
+            // One previewed individual card, so the badge says one.
+            instance_individual_count: 1,
             instance_provenance: None,
             // The styleguide previews an individual card, so the sidebar
             // should show its Instances group.

@@ -132,22 +132,22 @@ two halves trading places.
 - [x] Clicking a grouped entry navigates to its section and the scroll
   spy marks it active, in every browser the e2e tier runs.
 
-### Slice 2: The instances metadata card
+### Slice 2: The instances metadata card ✅ Complete
 
 **User story:** As a reader of a dependency page, I want to read which
 dataset I am looking at, what it conforms to and how many records it
 holds, where today I read the dependency's IRI and a source line.
 
 **Acceptance criteria:**
-- [ ] Each dataset has a metadata card under Instances listing its
+- [x] Each dataset has a metadata card under Instances listing its
   source file, the schema and version its records conform to, its
   record count, and the container's own declared scalar fields (a
   benchmark's target schema, dataset and version, when authored); the
   card swaps with the dataset selector.
-- [ ] The Instances group's Graph entry carries the dataset's
+- [x] The Instances group's Graph entry carries the dataset's
   `nodes / edges` badge and its Individuals entry the record count; the
   group label itself carries no count.
-- [ ] A dataset embedded in the schema (OWL individuals) reads "embedded
+- [x] A dataset embedded in the schema (OWL individuals) reads "embedded
   in the schema" as its source and still gets the card.
 
 ### Slice 3: Datasets in the navigation — proposed
@@ -160,15 +160,15 @@ body. Not scheduled; see the open questions.
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | Slice 1: three groups | Must Have | — | Complete |
-| Slice 2: instances metadata card | Should Have | Slice 1 | Not Started |
+| Slice 2: instances metadata card | Should Have | Slice 1 | Complete |
 | Slice 3: datasets in the navigation | Could Have | Slice 1 | Proposed |
 
 ## Definition of Done
 
-- [ ] Slices 1 and 2 acceptance criteria met
-- [ ] `cargo nextest run` green, including the e2e tier; `cargo fmt --check`; `cargo clippy --all-targets --all-features -- -D warnings`; `cargo doc`
-- [x] Screenshots of the reference page and a data-first page, before and after, reviewed (slice 1, 2026-10-09)
-- [ ] CHANGELOG.md and README.md updated; the changelog names the new section ids and states that existing ones are kept
+- [x] Slices 1 and 2 acceptance criteria met
+- [x] `cargo nextest run` green, including the e2e tier; `cargo fmt --check`; `cargo clippy --all-targets --all-features -- -D warnings`; `cargo doc`
+- [x] Screenshots of the reference page and a data-first page, before and after, reviewed (slices 1 and 2, 2026-10-09)
+- [x] CHANGELOG.md and README.md updated; the changelog names the new section ids and states that existing ones are kept
 
 ## Notes / Things to Watch
 

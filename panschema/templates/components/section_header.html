@@ -2,7 +2,7 @@
     <h2 class="section-title">
         {{ title }}
 {%- if let Some(count) = count %}
-        <span class="section-count">{{ count }}</span>
+        <span class="section-count"{% if let Some(cid) = count_id %} id="{{ cid }}"{% endif %}>{{ count }}</span>
 {%- endif %}
     </h2>
 {%- if let Some(desc) = description %}
