@@ -208,10 +208,14 @@ html_page_layout = "instances-first"   # default: "schema-first"
 html_schema_sections = false           # default: true — keep the class/slot/enum cards
 ```
 
-The defaults reproduce today's page exactly; the sidebar follows whatever
-order and sections the page renders. A page without the schema sections
-keeps its metadata card and the namespace table — the instance cards'
-CURIEs expand through it — and warns if it would otherwise be empty.
+The page is three blocks, and the sidebar shows them as three groups:
+**Overview** (the page's metadata and its namespace table), **Schema** (the
+graph, classes, slots, enumerations and types) and **Instances** (each
+dataset's metadata, graph and individuals). `instances-first` swaps the
+Schema and Instances blocks whole; `schema_sections = false` drops the
+Schema block, so a data-only page keeps its Overview — the instance cards'
+CURIEs expand through the namespace table — and warns if it would
+otherwise be empty.
 (`panschema serve` does not yet apply composition keys; preview composed
 pages with `generate`.)
 

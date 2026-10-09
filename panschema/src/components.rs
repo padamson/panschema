@@ -211,14 +211,13 @@ pub struct SidebarComponent<'a> {
     /// Number of edges in the graph (for sidebar badge)
     pub graph_edge_count: usize,
     /// Instance (A-box) graph JSON presence + counts for the
-    /// Instance Graph sidebar entry.
+    /// Instances group's Graph entry.
     pub instance_graph_json: Option<&'a str>,
     pub instance_node_count: usize,
     pub instance_edge_count: usize,
-    /// Matches IndexTemplate: whether an A-box is on the page.
+    /// Matches IndexTemplate: whether an A-box is on the page, gating
+    /// the sidebar's Instances group.
     pub has_instances: bool,
-    /// Matches IndexTemplate: dataset count for the plural label.
-    pub instance_dataset_count: usize,
     pub instances_first: bool,
     pub show_schema_sections: bool,
 }
@@ -437,10 +436,9 @@ pub struct StyleGuideTemplate<'a> {
     pub instance_node_count: usize,
     pub instance_edge_count: usize,
     pub instance_provenance: Option<&'a str>,
-    /// Matches IndexTemplate: whether an A-box is on the page.
+    /// Matches IndexTemplate: whether an A-box is on the page, gating
+    /// the sidebar's Instances group.
     pub has_instances: bool,
-    /// Matches IndexTemplate: dataset count for the plural label.
-    pub instance_dataset_count: usize,
     pub instances_first: bool,
     pub show_schema_sections: bool,
 }
@@ -510,7 +508,6 @@ impl ComponentRenderer {
             instance_node_count: 0,
             instance_edge_count: 0,
             has_instances: !individuals.is_empty(),
-            instance_dataset_count: usize::from(!individuals.is_empty()),
             instances_first: false,
             show_schema_sections: true,
         };
@@ -901,9 +898,8 @@ impl ComponentRenderer {
             instance_edge_count: 0,
             instance_provenance: None,
             // The styleguide previews an individual card, so the sidebar
-            // should show its Instance Graph entry.
+            // should show its Instances group.
             has_instances: true,
-            instance_dataset_count: 1,
             instances_first: false,
             show_schema_sections: true,
             sample_class,

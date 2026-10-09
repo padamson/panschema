@@ -691,13 +691,13 @@ fn e2e_individuals_section_counts_the_graph_and_renders_the_card() {
             );
 
             let ind_sidebar_count = page
-                .locator(".sidebar-link[href='#individuals']")
+                .locator(".sidebar-link[href='#instance-individuals']")
                 .count()
                 .await
                 .expect("Failed to count individuals sidebar link");
             assert!(
                 ind_sidebar_count > 0,
-                "[{}] Individuals navigation link should exist in sidebar",
+                "[{}] Individuals navigation link should exist in the sidebar's Instances group",
                 browser_name
             );
         })
@@ -1267,13 +1267,13 @@ fn e2e_schema_graph_sidebar_link_navigates_to_the_section() {
                     .await
                     .expect("Failed to count graph sidebar link")
                     > 0,
-                "[{}] Schema Graph navigation link should exist in sidebar",
+                "[{}] the Schema group's Graph entry should exist in the sidebar",
                 browser_name
             );
             graph_sidebar_link
                 .click(None)
                 .await
-                .expect("Failed to click Schema Graph sidebar link");
+                .expect("Failed to click the Schema group's Graph entry");
             wait_until_ready(page, "location.hash === '#graph-visualization'")
                 .await
                 .unwrap_or_else(|e| panic!("[{browser_name}] URL hash should be #graph-visualization after clicking sidebar link: {e}"));
@@ -3473,33 +3473,42 @@ fn e2e_instance_graph_renders_from_linkml_data() {
                     "the LinkML instance data should render an instance-graph canvas"
                 );
 
-                // The sidebar carries an Instance Graph entry with node/edge badges
-                // that navigates to the section.
-                let sidebar_link = page.locator("a.sidebar-link[href='#individuals']");
+                // The sidebar's Instances group carries a Graph entry with
+                // node/edge badges that navigates to the graph section.
+                let sidebar_link = page.locator("a.sidebar-link[href='#instance-graph']");
                 assert_eq!(
                     sidebar_link.count().await.expect("count"),
                     1,
-                    "sidebar should carry an Instance Graph entry"
+                    "the sidebar's Instances group should carry a Graph entry"
                 );
                 let link_text = sidebar_link.inner_text().await.expect("link text");
                 assert!(
-                    link_text.contains("Instance Graph"),
-                    "sidebar entry should be named Instance Graph; got: {link_text}"
+                    link_text.contains("Graph"),
+                    "the entry should be named Graph; got: {link_text}"
                 );
                 assert!(
                     link_text.contains("4 / 2"),
                     "badge should show node/edge counts; got: {link_text}"
                 );
                 // Text asserted above, hash asserted below.
-                dom_click(page, "a.sidebar-link[href='#individuals']").await;
+                dom_click(page, "a.sidebar-link[href='#instance-graph']").await;
                 let hash = page
                     .evaluate_value("window.location.hash")
                     .await
                     .unwrap_or_default();
                 assert!(
-                    hash.contains("#individuals"),
+                    hash.contains("#instance-graph"),
                     "clicking the entry should navigate to the section; hash = {hash}"
                 );
+                // The scroll spy follows a grouped entry as it does a
+                // top-level one: the block wrapper around the section
+                // must not clear the highlight on its way past.
+                wait_until_ready(
+                    page,
+                    "document.querySelector('a.sidebar-link[href=\"#instance-graph\"]')?.classList.contains('active') ?? false",
+                )
+                .await
+                .unwrap_or_else(|e| panic!("the scroll spy should mark the Instances group's Graph entry active after navigating to it: {e}"));
 
                 // The section states where the A-box came from.
                 let prov = page
@@ -3652,7 +3661,7 @@ fn e2e_renders_enum_and_type_sections() {
                 );
 
                 // Sidebar gained the two nav entries.
-                let nav = page.locator(".sidebar-nav");
+                let nav = page.locator(".sidebar-groups");
                 let nav_html = nav.inner_html().await.expect("sidebar nav present");
                 assert!(
                     nav_html.contains("Enumerations") && nav_html.contains("Types"),

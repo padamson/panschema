@@ -1,23 +1,11 @@
-
-<section id="individuals">
-    <div class="section-header">
-        <h2 class="section-title">
-            Instance Graph{% if instance_datasets.len() > 1 %}s{% endif %}
-{%- if !instance_datasets.is_empty() %}
-            {# The default dataset's counts; the selector updates these. #}
-            <span class="section-count" id="instance-graph-count"
-                  title="{{ instance_node_count }} node{% if instance_node_count != 1 %}s{% endif %}, {{ instance_edge_count }} edge{% if instance_edge_count != 1 %}s{% endif %}"
-                  aria-label="{{ instance_node_count }} node{% if instance_node_count != 1 %}s{% endif %}, {{ instance_edge_count }} edge{% if instance_edge_count != 1 %}s{% endif %}"
-                  >{{ instance_node_count }} / {{ instance_edge_count }}</span>
-{%- endif %}
-        </h2>
-        <p class="section-description">Curated instance graph{% if instance_datasets.len() > 1 %}s{% endif %} (A-box): individuals conforming to this schema.</p>
-    </div>
-{%- if instance_datasets.is_empty() %}
+<section id="individuals" class="page-group">
+    <h2 class="page-group-title">Instances</h2>
+    <p class="page-group-description">Curated instance graph{% if instance_datasets.len() > 1 %}s{% endif %} (A-box): individuals conforming to this schema.</p>
+{%- if !has_instances %}
     <p class="placeholder-text">No individuals defined in this ontology.</p>
 {%- else %}
-{# Several curated A-boxes share this section: the reader picks one and the
-   cards, provenance, and viz all follow. One needs no selector. #}
+{# Several curated A-boxes share this block: the reader picks one and the
+   metadata, graph and cards all follow. One needs no selector. #}
 {%- if instance_datasets.len() > 1 %}
     <div class="instance-dataset-selector" role="tablist" aria-label="Instance graphs">
 {%- for ds in instance_datasets %}
@@ -31,59 +19,83 @@
 {%- endfor %}
     </div>
 {%- endif %}
-{# Within a dataset the graph comes first — the overview — then the
-   individuals, matching how the schema side reads. The metadata block
-   describes the dataset itself: the container's own scalar values and the
-   source file. Both per-dataset groups share the data-instance-dataset
-   index, so the selector swaps them together. #}
+{# The block's three sections mirror the schema block: what the dataset
+   is, its graph, then its records. Every per-dataset panel carries the
+   data-instance-dataset index, so the selector swaps them together. #}
+    <section id="instance-metadata">
+        {%- let id = "instance-metadata" %}
+        {%- let title = "Metadata" %}
+        {%- let count = None::<usize> %}
+        {%- let description = None::<&str> %}
+        {% include "components/section_header.html" %}
 {%- for ds in instance_datasets %}
-    <div class="instance-dataset-panel instance-dataset-meta" data-instance-dataset="{{ loop.index0 }}"{% if !ds.is_default %} hidden{% endif %}>
+        <div class="instance-dataset-panel instance-dataset-meta" data-instance-dataset="{{ loop.index0 }}"{% if !ds.is_default %} hidden{% endif %}>
 {%- for entry in ds.metadata %}
-        <div class="instance-meta-row"><span class="instance-meta-key">{{ entry.0 }}</span><span class="instance-meta-val">{{ entry.1 }}</span></div>
+            <div class="instance-meta-row"><span class="instance-meta-key">{{ entry.0 }}</span><span class="instance-meta-val">{{ entry.1 }}</span></div>
 {%- endfor %}
 {%- if let Some(src) = ds.provenance %}
-        <p class="instance-provenance">Source: <code class="mono">{{ src }}</code></p>
+            <p class="instance-provenance">Source: <code class="mono">{{ src }}</code></p>
 {%- else %}
-        <p class="instance-provenance">Source: individuals embedded in the schema</p>
+            <p class="instance-provenance">Source: individuals embedded in the schema</p>
 {%- endif %}
-    </div>
+        </div>
 {%- endfor %}
+    </section>
+    <section id="instance-graph">
+        <div class="section-header">
+            <h2 class="section-title">
+                Graph
+                {# The default dataset's counts; the selector updates these. #}
+                <span class="section-count" id="instance-graph-count"
+                      title="{{ instance_node_count }} node{% if instance_node_count != 1 %}s{% endif %}, {{ instance_edge_count }} edge{% if instance_edge_count != 1 %}s{% endif %}"
+                      aria-label="{{ instance_node_count }} node{% if instance_node_count != 1 %}s{% endif %}, {{ instance_edge_count }} edge{% if instance_edge_count != 1 %}s{% endif %}"
+                      >{{ instance_node_count }} / {{ instance_edge_count }}</span>
+            </h2>
+            <p class="section-description instance-graph-caption">The dataset as a connected A-box: nodes wear the same symbols their classes and enumerations have in the schema graph, and edges are the object-property assertions between them.</p>
+        </div>
 {# The dataset as a connected instance graph — a distinct A-box viz, not
    the schema graph. Every declared dataset's payload rides in one array so
    switching is client-side; the viz renders the selected entry. #}
-    <script>
-        window.__PANSCHEMA_INSTANCE_GRAPHS__ = [
+        <script>
+            window.__PANSCHEMA_INSTANCE_GRAPHS__ = [
 {%- for ds in instance_datasets %}
-            {"name": {{ ds.name_json|safe }}, "data": {% match ds.graph_json %}{% when Some with (json) %}{{ json|safe }}{% when None %}null{% endmatch %}}{% if !loop.last %},{% endif %}
+                {"name": {{ ds.name_json|safe }}, "data": {% match ds.graph_json %}{% when Some with (json) %}{{ json|safe }}{% when None %}null{% endmatch %}}{% if !loop.last %},{% endif %}
 {%- endfor %}
-        ];
-    </script>
-    {% include "components/instance_graph.html" %}
+            ];
+        </script>
+        {% include "components/instance_graph.html" %}
+    </section>
+    <section id="instance-individuals">
+        {%- let id = "instance-individuals" %}
+        {%- let title = "Individuals" %}
+        {%- let count = None::<usize> %}
+        {%- let description = None::<&str> %}
+        {% include "components/section_header.html" %}
 {%- for ds in instance_datasets %}
-    <div class="instance-dataset-panel" data-instance-dataset="{{ loop.index0 }}"{% if !ds.is_default %} hidden{% endif %}>
+        <div class="instance-dataset-panel" data-instance-dataset="{{ loop.index0 }}"{% if !ds.is_default %} hidden{% endif %}>
 {%- if !ds.individuals.is_empty() %}
-        <h3 class="instance-subheading">Individuals</h3>
-        <div class="entity-list">
+            <div class="entity-list">
 {#- The class tag disambiguates individuals of different classes that
     share a display name (a region and a wine can both be `Bordeaux`). #}
 {%- for ind in ds.individual_data %}
-            <a href="#{{ ds.anchor_prefix }}ind-{{ ind.id }}" class="entity-link individual-link">{{ ind.label }}{% if let Some(t) = ind.types.first() %}<span class="entity-class-tag">{{ t.label }}</span>{% endif %}</a>
+                <a href="#{{ ds.anchor_prefix }}ind-{{ ind.id }}" class="entity-link individual-link">{{ ind.label }}{% if let Some(t) = ind.types.first() %}<span class="entity-class-tag">{{ t.label }}</span>{% endif %}</a>
 {%- endfor %}
-        </div>
-        <div class="individual-cards">
+            </div>
+            <div class="individual-cards">
 {%- for ind in ds.individual_data %}
-            {%- let id = ind.id.as_str() %}
-            {%- let label = ind.label.as_str() %}
-            {%- let iri = ind.iri.as_str() %}
-            {%- let description = ind.description.as_deref() %}
-            {%- let types = ind.types.as_slice() %}
-            {%- let property_values = ind.property_values.as_slice() %}
-            {%- let anchor_prefix = ds.anchor_prefix.as_str() %}
-            {% include "components/individual_card.html" %}
+                {%- let id = ind.id.as_str() %}
+                {%- let label = ind.label.as_str() %}
+                {%- let iri = ind.iri.as_str() %}
+                {%- let description = ind.description.as_deref() %}
+                {%- let types = ind.types.as_slice() %}
+                {%- let property_values = ind.property_values.as_slice() %}
+                {%- let anchor_prefix = ds.anchor_prefix.as_str() %}
+                {% include "components/individual_card.html" %}
 {%- endfor %}
-        </div>
+            </div>
 {%- endif %}
-    </div>
+        </div>
 {%- endfor %}
+    </section>
 {%- endif %}
 </section>

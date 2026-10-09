@@ -6,21 +6,14 @@
 {% endblock %}
 
 {% block main_content %}
+{# The page in three blocks. Overview is the page's own: its metadata,
+   the prefix map both halves resolve against, and the shell every graph
+   canvas shares. Then the schema block and the instances block, in the
+   configured order; either may be absent, and neither needs the other. #}
 {% include "components/metadata_card.html" %}
-{# Page composition: the schema reference and the instance section are
-   one include each, so a page can lead with either and can omit the
-   schema reference entirely. Three flat conditionals, one whitespace
-   convention. #}
-{%- if !show_schema_sections %}
-{# The graph shell script normally rides in the schema sections; every
-   graph canvas needs it, so a data-only page carries it itself — and
-   keeps the namespace table, which expands the CURIEs its own instance
-   cards use. #}
-{%- if !instance_datasets.is_empty() %}
-{% include "components/graph_shell.html" %}
-{%- endif %}
-
 {% include "components/namespaces_section.html" %}
+{%- if graph_json.is_some() || has_instances %}
+{% include "components/graph_shell.html" %}
 {%- endif %}
 {%- if instances_first %}
 {% include "components/instances_section.html" %}
@@ -35,6 +28,24 @@
 
 {% block page_styles %}
 <style>
+    /* The Schema and Instances blocks each open with a title that reads
+       as a block boundary: a rule above, larger than a section title. */
+    .page-group-title {
+        margin: var(--space-10, 3rem) 0 var(--space-2);
+        padding-top: var(--space-6);
+        border-top: 1px solid var(--color-border);
+        font-size: var(--text-3xl, 1.875rem);
+        font-weight: 700;
+        color: var(--color-text);
+    }
+
+    .page-group-description {
+        margin: 0 0 var(--space-6);
+        font-size: var(--text-base);
+        color: var(--color-text-muted);
+        max-width: 65ch;
+    }
+
     .placeholder-text {
         color: var(--color-text-muted);
         font-style: italic;
@@ -62,11 +73,6 @@
         color: var(--color-text-muted);
         min-width: 88px;
     }
-    .instance-subheading {
-        margin: var(--space-5) 0 var(--space-2);
-        font-size: var(--font-size-lg);
-    }
-
     .entity-class-tag {
         margin-left: 6px;
         font-size: var(--font-size-xs, 11px);

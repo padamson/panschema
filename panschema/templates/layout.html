@@ -214,7 +214,10 @@
 
     // Scroll spy: highlight sidebar link for the visible section
     (function() {
-        const sections = document.querySelectorAll('section[id], .metadata-card[id]');
+        // A block wrapper (`.page-group`) has an id for deep links but no
+        // sidebar entry of its own; observing it would clear every
+        // highlight as it scrolled into the band.
+        const sections = document.querySelectorAll('section[id]:not(.page-group), .metadata-card[id]');
         const sidebarLinks = document.querySelectorAll('.sidebar-link');
 
         const observer = new IntersectionObserver((entries) => {

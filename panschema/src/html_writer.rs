@@ -520,7 +520,7 @@ struct IndexTemplate<'a> {
     /// Empty slice for class cards that don't have slots yet
     /// Graph data JSON for visualization (None = no graph)
     graph_json: Option<&'a str>,
-    /// The curated A-boxes rendered in the Instance Graph section, in
+    /// The curated A-boxes rendered in the Instances block, in
     /// declaration order. Empty when the schema declares no individuals;
     /// the first is the one shown before the reader picks another.
     instance_datasets: &'a [InstanceDatasetView<'a>],
@@ -528,10 +528,8 @@ struct IndexTemplate<'a> {
     /// entry and the section heading. Every graph count reads nodes/edges.
     instance_node_count: usize,
     instance_edge_count: usize,
-    /// Whether any A-box is on the page, gating the sidebar entry.
+    /// Whether any A-box is on the page, gating the sidebar group.
     has_instances: bool,
-    /// How many datasets, for the sidebar's singular/plural label.
-    instance_dataset_count: usize,
     /// Number of nodes in the graph (for sidebar badge)
     graph_node_count: usize,
     /// Number of edges in the graph (for sidebar badge)
@@ -689,14 +687,14 @@ pub struct HtmlWriter {
     /// CURIEs (the historical behavior); the CLI generate path wires
     /// a populated store so they render as upstream labels.
     pub label_store: Option<crate::labels::LabelStore>,
-    /// Curated A-boxes to render in the Instance Graph section, in
+    /// Curated A-boxes to render in the Instances block, in
     /// declaration order. Empty falls back to the OWL worked-example
     /// individuals embedded in the schema. More than one renders a
     /// selector; the first is shown by default.
     pub instance_datasets: Vec<InstanceDataset>,
 }
 
-/// One curated A-box rendered in the Instance Graph section.
+/// One curated A-box rendered in the Instances block.
 ///
 /// A schema page carries a few of these — a small teaching preview, a full
 /// worked example — and the reader switches between them in place. The
@@ -1768,7 +1766,6 @@ impl Writer for HtmlWriter {
             instance_node_count,
             instance_edge_count,
             has_instances: !dataset_views.is_empty(),
-            instance_dataset_count: dataset_views.len(),
             graph_node_count,
             graph_edge_count,
             graph_aspect_w: self.graph_aspect.0,
@@ -4847,7 +4844,9 @@ mod tests {
             individuals < classes,
             "instances-first puts the instance section before the schema reference"
         );
-        let sidebar_individuals = html.find(r##"href="#individuals""##).expect("sidebar link");
+        let sidebar_individuals = html
+            .find(r##"href="#instance-graph""##)
+            .expect("sidebar link");
         let sidebar_classes = html.find(r##"href="#classes""##).expect("sidebar link");
         assert!(
             sidebar_individuals < sidebar_classes,
@@ -5232,7 +5231,7 @@ mod tests {
             })
         }
 
-        let caption = between(&html, r#"class="instance-graph-caption""#, "</p>")
+        let caption = between(&html, r#"instance-graph-caption">"#, "</p>")
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");
@@ -5433,13 +5432,13 @@ mod tests {
             .with_instance_dataset(InstanceDataset::new("only", only).with_provenance("only.yaml"));
         let html = render_index(&writer, &schema);
 
-        // Singular heading for one dataset.
+        // Singular description for one dataset.
         assert!(
-            element(&html, "individuals", "</section>").contains("Instance Graph"),
-            "the instances section heading reads singular for one dataset"
+            element(&html, "individuals", "</section>").contains("Curated instance graph (A-box)"),
+            "the Instances block reads singular for one dataset"
         );
         assert!(
-            !html.contains("Instance Graphs"),
+            !html.contains("instance graphs (A-box)"),
             "no plural for one dataset"
         );
 
@@ -5459,8 +5458,8 @@ mod tests {
             "order must be metadata ({meta_at}) → graph ({graph_at}) → individuals ({cards_at})"
         );
         assert!(
-            html.contains(">Individuals<"),
-            "the cards sit under an Individuals subheading"
+            element(&html, "instance-individuals", "</section>").contains("Individuals"),
+            "the cards sit in an Individuals section"
         );
     }
 
@@ -5474,7 +5473,7 @@ mod tests {
             .with_instance_dataset(InstanceDataset::new("b", b));
         let html = render_index(&writer, &schema);
         assert!(
-            html.contains("Instance Graphs"),
+            html.contains("Curated instance graphs (A-box)"),
             "several datasets read plural"
         );
     }
@@ -5498,8 +5497,8 @@ mod tests {
             "an empty A-box gets no content panel"
         );
         assert!(
-            !html.contains("href=\"#individuals\""),
-            "the sidebar should not link to an empty Instance Graph section"
+            !html.contains("href=\"#instance-graph\""),
+            "the sidebar should not offer an Instances group for an empty A-box"
         );
     }
 
@@ -5523,8 +5522,8 @@ mod tests {
             "the panel still names its source"
         );
         assert!(
-            html.contains("href=\"#individuals\""),
-            "the sidebar still offers the Instance Graph entry"
+            html.contains("href=\"#instance-graph\""),
+            "the sidebar still offers the Instances group"
         );
         assert!(
             !html.contains("No individuals defined in this ontology."),
@@ -5728,6 +5727,143 @@ mod tests {
         );
     }
 
+    /// The sidebar names three groups in page order, each entry beneath
+    /// its group: Overview holds the page's metadata and namespaces,
+    /// Schema the reference sections, Instances the dataset's own
+    /// sections. The body renders the same blocks in the same order, with
+    /// the namespace table in the Overview block ahead of the schema
+    /// graph, and every section id that existed before still present.
+    #[test]
+    fn the_page_groups_into_overview_schema_and_instances() {
+        let schema = bottle_rack_schema();
+        let set = instance_set_from_yaml(&schema, "bottles:\n  - id: b1\n    name: Morgon\n");
+        let writer = HtmlWriter::new().with_instance_dataset(InstanceDataset::new("cellar", set));
+        let html = render_index(&writer, &schema);
+        let at = |needle: &str| {
+            html.find(needle)
+                .unwrap_or_else(|| panic!("the page lacks `{needle}`"))
+        };
+
+        let overview = at(r#"class="sidebar-group-title">Overview<"#);
+        let schema_group = at(r#"class="sidebar-group-title">Schema<"#);
+        let instances = at(r#"class="sidebar-group-title">Instances<"#);
+        assert!(overview < schema_group && schema_group < instances);
+        assert!(
+            overview < at(r##"href="#metadata""##) && at(r##"href="#namespaces""##) < schema_group,
+            "Metadata and Namespaces sit under Overview"
+        );
+        assert!(
+            schema_group < at(r##"href="#graph-visualization""##)
+                && at(r##"href="#classes""##) < instances,
+            "the schema reference entries sit under Schema"
+        );
+        assert!(
+            instances < at(r##"href="#instance-metadata""##)
+                && at(r##"href="#instance-metadata""##) < at(r##"href="#instance-graph""##)
+                && at(r##"href="#instance-graph""##) < at(r##"href="#instance-individuals""##),
+            "the dataset's metadata, graph and individuals sit under Instances"
+        );
+        assert!(
+            !html.contains(r##"href="#individuals""##),
+            "the Instances group label is not a link; its entries are"
+        );
+
+        let namespaces = at(r#"<section id="namespaces""#);
+        let schema_block = at(r#"class="page-group-title">Schema<"#);
+        let instances_block = at(r#"<section id="individuals""#);
+        assert!(
+            namespaces < schema_block && schema_block < at(r#"id="graph-visualization""#),
+            "the namespace table renders in the Overview block, before the schema graph"
+        );
+        assert!(
+            at(r#"<section id="classes""#) < instances_block,
+            "schema-first puts the Schema block before the Instances block"
+        );
+        for kept in [
+            r#"id="metadata""#,
+            r#"<section id="graph-visualization""#,
+            r#"<section id="slots""#,
+            r#"<section id="individuals""#,
+            r#"<section id="instance-metadata""#,
+            r#"<section id="instance-graph""#,
+            r#"<section id="instance-individuals""#,
+        ] {
+            at(kept);
+        }
+        assert!(
+            instances_block < at(r#"<section id="instance-metadata""#)
+                && at(r#"<section id="instance-metadata""#) < at(r#"<section id="instance-graph""#)
+                && at(r#"<section id="instance-graph""#)
+                    < at(r#"<section id="instance-individuals""#),
+            "the Instances block holds its three sections in nav order"
+        );
+    }
+
+    /// `instances-first` swaps the Schema and Instances blocks and their
+    /// sidebar groups whole; Overview stays first either way.
+    #[test]
+    fn instances_first_swaps_the_two_content_groups_whole() {
+        let schema = bottle_rack_schema();
+        let set = instance_set_from_yaml(&schema, "bottles:\n  - id: b1\n    name: Morgon\n");
+        let writer = HtmlWriter::new()
+            .with_instance_dataset(InstanceDataset::new("cellar", set))
+            .with_instances_first(true);
+        let html = render_index(&writer, &schema);
+        let at = |needle: &str| {
+            html.find(needle)
+                .unwrap_or_else(|| panic!("the page lacks `{needle}`"))
+        };
+
+        let overview = at(r#"class="sidebar-group-title">Overview<"#);
+        let instances = at(r#"class="sidebar-group-title">Instances<"#);
+        let schema_group = at(r#"class="sidebar-group-title">Schema<"#);
+        assert!(
+            overview < instances && instances < schema_group,
+            "the sidebar lists Instances before Schema"
+        );
+        assert!(
+            at(r##"href="#namespaces""##) < instances,
+            "Overview's entries stay ahead of both groups"
+        );
+        assert!(
+            at(r#"<section id="namespaces""#) < at(r#"<section id="individuals""#)
+                && at(r#"<section id="individuals""#) < at(r#"class="page-group-title">Schema<"#)
+                && at(r#"class="page-group-title">Schema<"#) < at(r#"<section id="classes""#),
+            "the body renders Overview, then the Instances block, then the Schema block"
+        );
+    }
+
+    /// With the schema sections off, the Schema group is simply absent:
+    /// Overview still carries the namespace table and the graph shell the
+    /// instance canvas needs, with no hoisting special case.
+    #[test]
+    fn a_data_only_page_keeps_overview_and_instances_and_has_no_schema_group() {
+        let schema = bottle_rack_schema();
+        let set = instance_set_from_yaml(&schema, "bottles:\n  - id: b1\n    name: Morgon\n");
+        let writer = HtmlWriter::new()
+            .with_instance_dataset(InstanceDataset::new("cellar", set))
+            .with_schema_sections(false);
+        let html = render_index(&writer, &schema);
+
+        assert!(
+            !html.contains(r#"class="sidebar-group-title">Schema<"#)
+                && !html.contains(r#"class="page-group-title">Schema<"#),
+            "no Schema group in the sidebar or the body"
+        );
+        for present in [
+            r#"class="sidebar-group-title">Overview<"#,
+            r#"class="sidebar-group-title">Instances<"#,
+            r#"<section id="namespaces""#,
+            r#"<section id="individuals""#,
+            "window.PanschemaGraphShell",
+        ] {
+            assert!(
+                html.contains(present),
+                "the data-only page lacks `{present}`"
+            );
+        }
+    }
+
     #[test]
     fn html_writer_includes_schema_graph_sidebar_with_counts() {
         let reader = OwlReader::new();
@@ -5736,14 +5872,14 @@ mod tests {
         let writer = HtmlWriter::new();
         let html = render_index(&writer, &schema);
 
-        // Verify Schema Graph link is in sidebar
+        // The Schema group carries the graph entry.
         assert!(
             html.contains("href=\"#graph-visualization\""),
-            "Sidebar should contain Schema Graph link"
+            "the sidebar should carry the Schema group's Graph entry"
         );
         assert!(
-            html.contains("Schema Graph"),
-            "Sidebar should contain 'Schema Graph' text"
+            html.contains(r##"href="#graph-visualization" class="sidebar-link">Graph "##),
+            "the Schema group's entry reads Graph; the group label says whose"
         );
 
         // Verify the badge contains node/edge counts (format: "X / Y")
@@ -5754,24 +5890,20 @@ mod tests {
             "Sidebar should contain badge with counts"
         );
 
-        // Schema Graph link should appear between Metadata and Namespaces
+        // The graph entry opens the Schema group, after Overview's two.
         let metadata_pos = html
             .find("href=\"#metadata\"")
             .expect("Metadata link not found");
-        let graph_pos = html
-            .find("href=\"#graph-visualization\"")
-            .expect("Graph link not found");
         let namespaces_pos = html
             .find("href=\"#namespaces\"")
             .expect("Namespaces link not found");
+        let graph_pos = html
+            .find("href=\"#graph-visualization\"")
+            .expect("Graph link not found");
 
         assert!(
-            metadata_pos < graph_pos,
-            "Schema Graph should appear after Metadata"
-        );
-        assert!(
-            graph_pos < namespaces_pos,
-            "Schema Graph should appear before Namespaces"
+            metadata_pos < namespaces_pos && namespaces_pos < graph_pos,
+            "the schema graph entry follows Overview's Metadata and Namespaces"
         );
     }
 
@@ -5783,10 +5915,10 @@ mod tests {
         let writer = HtmlWriter::with_options(false); // No graph
         let html = render_index(&writer, &schema);
 
-        // Schema Graph link should NOT be present when graph is disabled
+        // No graph entry when the graph is disabled.
         assert!(
             !html.contains("href=\"#graph-visualization\""),
-            "Sidebar should not contain Schema Graph link when graph is disabled"
+            "the sidebar should not offer a Graph entry when the graph is disabled"
         );
     }
 

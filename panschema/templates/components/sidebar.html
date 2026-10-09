@@ -1,27 +1,42 @@
 <nav class="sidebar-section">
     <h2 class="sidebar-title">Navigation</h2>
-    <ul class="sidebar-nav">
-        <li><a href="#metadata" class="sidebar-link{% if active_section == "metadata" %} active{% endif %}">Metadata</a></li>
-{%- if instances_first %}{% include "components/sidebar_instances_link.html" %}{% endif %}
+{# Three groups, in page order: the page's own overview, then the schema
+   and the instances in whichever order the layout puts them. A group
+   label is a label, not a link — a link would compete with its entries
+   for the scroll spy's highlight. A group with nothing to list is absent
+   rather than empty. #}
+    <ul class="sidebar-nav sidebar-groups">
+        <li class="sidebar-group">
+            <span class="sidebar-group-title">Overview</span>
+            <ul class="sidebar-nav">
+                <li><a href="#metadata" class="sidebar-link{% if active_section == "metadata" %} active{% endif %}">Metadata</a></li>
+                <li><a href="#namespaces" class="sidebar-link{% if active_section == "namespaces" %} active{% endif %}">Namespaces <span class="badge">{{ namespaces.len() }}</span></a></li>
+            </ul>
+        </li>
+{%- if instances_first %}{% include "components/sidebar_instances_group.html" %}{% endif %}
 {%- if show_schema_sections %}
+        <li class="sidebar-group">
+            <span class="sidebar-group-title">Schema</span>
+            <ul class="sidebar-nav">
 {%- if graph_json.is_some() %}
-        <li><a href="#graph-visualization" class="sidebar-link{% if active_section == "graph-visualization" %} active{% endif %}">Schema Graph <span class="badge" title="{{ graph_node_count }} node{% if graph_node_count != 1 %}s{% endif %}, {{ graph_edge_count }} edge{% if graph_edge_count != 1 %}s{% endif %}" aria-label="{{ graph_node_count }} node{% if graph_node_count != 1 %}s{% endif %}, {{ graph_edge_count }} edge{% if graph_edge_count != 1 %}s{% endif %}">{{ graph_node_count }} / {{ graph_edge_count }}</span></a></li>
+                <li><a href="#graph-visualization" class="sidebar-link{% if active_section == "graph-visualization" %} active{% endif %}">Graph <span class="badge" title="{{ graph_node_count }} node{% if graph_node_count != 1 %}s{% endif %}, {{ graph_edge_count }} edge{% if graph_edge_count != 1 %}s{% endif %}" aria-label="{{ graph_node_count }} node{% if graph_node_count != 1 %}s{% endif %}, {{ graph_edge_count }} edge{% if graph_edge_count != 1 %}s{% endif %}">{{ graph_node_count }} / {{ graph_edge_count }}</span></a></li>
 {%- endif %}
-        <li><a href="#namespaces" class="sidebar-link{% if active_section == "namespaces" %} active{% endif %}">Namespaces <span class="badge">{{ namespaces.len() }}</span></a></li>
 {%- if !classes.is_empty() %}
-        <li><a href="#classes" class="sidebar-link{% if active_section == "classes" %} active{% endif %}">Classes <span class="badge">{{ classes.len() }}</span></a></li>
+                <li><a href="#classes" class="sidebar-link{% if active_section == "classes" %} active{% endif %}">Classes <span class="badge">{{ classes.len() }}</span></a></li>
 {%- endif %}
 {%- if !slots.is_empty() %}
-        <li><a href="#slots" class="sidebar-link{% if active_section == "slots" %} active{% endif %}">Slots <span class="badge">{{ slots.len() }}</span></a></li>
+                <li><a href="#slots" class="sidebar-link{% if active_section == "slots" %} active{% endif %}">Slots <span class="badge">{{ slots.len() }}</span></a></li>
 {%- endif %}
 {%- if !enums.is_empty() %}
-        <li><a href="#enums" class="sidebar-link{% if active_section == "enums" %} active{% endif %}">Enumerations <span class="badge">{{ enums.len() }}</span></a></li>
+                <li><a href="#enums" class="sidebar-link{% if active_section == "enums" %} active{% endif %}">Enumerations <span class="badge">{{ enums.len() }}</span></a></li>
 {%- endif %}
 {%- if !types.is_empty() %}
-        <li><a href="#types" class="sidebar-link{% if active_section == "types" %} active{% endif %}">Types <span class="badge">{{ types.len() }}</span></a></li>
+                <li><a href="#types" class="sidebar-link{% if active_section == "types" %} active{% endif %}">Types <span class="badge">{{ types.len() }}</span></a></li>
 {%- endif %}
+            </ul>
+        </li>
 {%- endif %}
-{%- if !instances_first %}{% include "components/sidebar_instances_link.html" %}{% endif %}
+{%- if !instances_first %}{% include "components/sidebar_instances_group.html" %}{% endif %}
     </ul>
 </nav>
 <style>
@@ -61,6 +76,31 @@
 
     .sidebar-nav li {
         margin: 0;
+    }
+
+    /* A group is a label and its indented entries; groups are spaced
+       apart so the three blocks read as three. The child combinator
+       outranks the `.sidebar-nav li` reset that would zero the margin. */
+    .sidebar-groups > .sidebar-group {
+        margin-bottom: var(--space-4);
+    }
+
+    .sidebar-groups > .sidebar-group:last-child {
+        margin-bottom: 0;
+    }
+
+    .sidebar-group-title {
+        display: block;
+        padding: var(--space-1) var(--space-2);
+        font-size: var(--text-sm);
+        font-weight: 600;
+        color: var(--color-text);
+    }
+
+    .sidebar-group > .sidebar-nav {
+        margin-left: var(--space-3);
+        padding-left: var(--space-2);
+        border-left: 1px solid var(--color-border);
     }
 
     .sidebar-link {

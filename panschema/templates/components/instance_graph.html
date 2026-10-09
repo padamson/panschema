@@ -5,13 +5,9 @@
    distinct from the schema (T-box) graph. Every declared dataset's payload
    arrives via window.__PANSCHEMA_INSTANCE_GRAPHS__ (set by index.html); the
    selector swaps which one this canvas shows. #}
+{# The heading and caption belong to the Instances block's Graph section,
+   which includes this component beneath them. #}
 <div class="instance-graph-block">
-    <h3 class="instance-graph-title">Graph</h3>
-    <p class="instance-graph-caption">
-        The individuals above as a connected A-box: nodes wear the same
-        symbols their classes and enumerations have in the schema graph,
-        and edges are the object-property assertions between them.
-    </p>
     <div class="instance-graph-container">
         <canvas id="instance-graph-canvas"></canvas>
         {# Layout picker, top-left overlay. No 2D/3D toggle here (an A-box
@@ -42,18 +38,6 @@
 </div>
 
 <style>
-    .instance-graph-block {
-        margin-top: var(--space-6, 24px);
-    }
-    .instance-graph-title {
-        margin: 0 0 var(--space-1, 4px);
-        font-size: var(--font-size-lg, 18px);
-    }
-    .instance-graph-caption {
-        margin: 0 0 var(--space-2, 8px);
-        color: var(--color-text-muted, #9ca3af);
-        font-size: var(--font-size-sm, 13px);
-    }
     .instance-graph-container {
         position: relative;
         width: 100%;

@@ -3222,7 +3222,7 @@ exemplur = true
         let dep_page =
             std::fs::read_to_string(out.path().join("contracts/v0.2.0/index.html")).unwrap();
         let instances_at = dep_page
-            .find(r#"<section id="individuals">"#)
+            .find(r#"<section id="individuals""#)
             .expect("instance section renders");
         let classes_at = dep_page
             .find(r#"<section id="classes">"#)
@@ -3426,7 +3426,10 @@ exemplur = true
         // v0.2.0's ref carries the data file → the page embeds the exemplar
         // (sidebar entry + individual card) with its provenance.
         let v02 = std::fs::read_to_string(out.path().join("v0.2.0/index.html")).unwrap();
-        assert!(v02.contains("Instance Graph"), "sidebar entry present");
+        assert!(
+            v02.contains(r##"href="#instance-graph""##),
+            "the sidebar's Instances group is present"
+        );
         assert!(v02.contains("ind-morgon"), "individual card present");
         assert!(v02.contains("instances.yaml"), "provenance names the file");
 

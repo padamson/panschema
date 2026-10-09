@@ -1,13 +1,15 @@
 
-{# Graph Visualization - only if graph_json is provided #}
+<div class="page-group" id="schema-group">
+<h2 class="page-group-title">Schema</h2>
+<p class="page-group-description">The schema (T-box): its graph, classes, slots, enumerations and types.</p>
+{# Graph Visualization - only if graph_json is provided. The shell it
+   rides on is in the Overview block, ahead of every canvas. #}
 {% if let Some(json) = graph_json %}
 <script>
     window.__PANSCHEMA_GRAPH_DATA__ = {{ json|safe }};
 </script>
-{% include "components/graph_shell.html" %}
 {% include "components/graph_viz.html" %}
 {% endif %}
-{% include "components/namespaces_section.html" %}
 
 <section id="classes">
     {%- let id = "classes" %}
@@ -187,3 +189,4 @@
     </div>
 </section>
 {%- endif %}
+</div>
