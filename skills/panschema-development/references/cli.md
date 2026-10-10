@@ -26,6 +26,10 @@ bare no-subcommand form.
   its own, then the set is checked for ids that mint to the same IRI across
   files. That overlap is **reported, not an error** — a preview that is a
   subset of a worked example shares records on purpose.
+- `--verbose` (`generate`, `verify`) — references that leave a dataset
+  (CURIEs or IRIs into another graph) are noted, not checked: by default
+  the note gives the count and names five, in referrer-id order. `--verbose` names
+  every one, which is what you want when chasing a specific anchor.
 - `--strict` — **narrower than it sounds.** It fails on unmodeled
   constructs, dangling references, colliding slot definitions (the same
   slot name defined at several sites, which would mint one RDF property

@@ -868,13 +868,16 @@ impl InstanceSet {
         }
     }
 
-    /// A human-readable account of every reference that leaves this dataset,
-    /// or `None` when none do.
+    /// A human-readable account of the references that leave this dataset,
+    /// naming at most `listed` of them in referrer-id order and counting
+    /// the rest, or `None` when none leave.
     ///
     /// These edges cannot be resolved here — their targets are records of
-    /// another graph — so naming them is the only way an unresolvable one
-    /// stays visible rather than passing as a silently unchecked link.
-    pub fn external_reference_summary(&self) -> Option<String> {
+    /// another graph — so the count is what keeps an unresolvable one from
+    /// passing as a silently unchecked link. A dataset written ahead of
+    /// its target graph can carry dozens, where the full list is noise
+    /// until something resolves them, hence the limit.
+    pub fn external_reference_summary(&self, listed: usize) -> Option<String> {
         if self.external_references.is_empty() {
             return None;
         }
@@ -882,11 +885,15 @@ impl InstanceSet {
             "{} cross-graph reference(s) leave this dataset and are not checked here:",
             self.external_references.len()
         );
-        for r in &self.external_references {
+        for r in self.external_references.iter().take(listed) {
             out.push_str(&format!(
                 "\n  `{}` references `{}` via `{}`",
                 r.referrer, r.target, r.property
             ));
+        }
+        let unlisted = self.external_references.len().saturating_sub(listed);
+        if unlisted > 0 {
+            out.push_str(&format!("\n  … and {unlisted} more"));
         }
         Some(out)
     }
@@ -3673,11 +3680,16 @@ classes:
              - {id: d2, on_provider: 'https://other.example/gcp'}\n",
         );
         let summary = set
-            .external_reference_summary()
+            .external_reference_summary(usize::MAX)
             .expect("references leave the dataset, so there is a summary");
         assert!(
             summary.starts_with("2 cross-graph reference(s)"),
             "it leads with how many edges go unchecked; got: {summary}"
+        );
+        assert_eq!(
+            summary.lines().count(),
+            3,
+            "a heading and one line per reference, nothing counted as unlisted; got: {summary}"
         );
         for expected in [
             "`d1` references `catalog:aws` via `on_provider`",
@@ -3691,11 +3703,41 @@ classes:
     }
 
     #[test]
+    fn a_limited_summary_names_the_first_references_and_counts_the_rest() {
+        let set = xref_set(
+            "deployments:\n  - {id: d1, on_provider: 'catalog:aws'}\n  \
+             - {id: d2, on_provider: 'catalog:gcp'}\n  \
+             - {id: d3, on_provider: 'catalog:azure'}\n",
+        );
+        let summary = set
+            .external_reference_summary(1)
+            .expect("references leave the dataset, so there is a summary");
+        let lines: Vec<&str> = summary.lines().collect();
+        assert_eq!(
+            lines.len(),
+            3,
+            "heading, one listed, one count; got: {summary}"
+        );
+        assert!(
+            lines[0].starts_with("3 cross-graph reference(s)"),
+            "the heading counts every reference, listed or not; got: {summary}"
+        );
+        assert!(
+            lines[1].contains("`d1`") && lines[1].contains("`catalog:aws`"),
+            "the listed reference is the first in referrer order; got: {summary}"
+        );
+        assert!(
+            lines[2].contains(" 2 more"),
+            "the unlisted ones are counted; got: {summary}"
+        );
+    }
+
+    #[test]
     fn a_dataset_with_no_cross_graph_edges_has_no_summary() {
         let set =
             xref_set("providers:\n  - {id: aws}\ndeployments:\n  - {id: d1, on_provider: aws}\n");
         assert!(
-            set.external_reference_summary().is_none(),
+            set.external_reference_summary(usize::MAX).is_none(),
             "silence is right when nothing leaves the dataset"
         );
     }

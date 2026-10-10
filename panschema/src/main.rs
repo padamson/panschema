@@ -109,6 +109,11 @@ enum Commands {
         /// at several sites that would collide at one RDF property IRI.
         #[arg(long)]
         strict: bool,
+
+        /// List every cross-graph reference a dataset makes, not only the
+        /// first five.
+        #[arg(long)]
+        verbose: bool,
     },
     /// Scaffold `panschema-publish.toml` in the current directory.
     ///
@@ -241,6 +246,11 @@ enum Commands {
         /// Manifest mode only: treat findings as errors.
         #[arg(long, conflicts_with = "schema")]
         strict: bool,
+
+        /// List every cross-graph reference a dataset makes, not only the
+        /// first five.
+        #[arg(long)]
+        verbose: bool,
     },
     /// Write the schema's Postgres DDL as a versioned migration file.
     ///
@@ -682,6 +692,33 @@ fn read_instance_set(
     ))
 }
 
+/// How many outbound references a note names before counting the rest;
+/// `--verbose` names them all.
+const OUTBOUND_LISTED: usize = 5;
+
+/// How many of `total` outbound references a note names, and whether it
+/// points at `--verbose` for the ones it only counts.
+fn outbound_listing(total: usize, verbose: bool) -> (usize, bool) {
+    if verbose {
+        (total, false)
+    } else {
+        (OUTBOUND_LISTED, total > OUTBOUND_LISTED)
+    }
+}
+
+/// Print the note on references that leave `set`, if any do.
+fn print_external_references(set: &panschema::instances::InstanceSet, verbose: bool) {
+    let (listed, hint) = outbound_listing(set.external_references.len(), verbose);
+    if let Some(summary) = set.external_reference_summary(listed) {
+        let hint = if hint {
+            " (--verbose lists them all)"
+        } else {
+            ""
+        };
+        eprintln!("note: {summary}{hint}");
+    }
+}
+
 /// Read a LinkML instance-data file into the instance model, surfacing each
 /// dangling instance reference (the A-box analog of a dangling schema ref —
 /// the feedback signal an authoring loop uses to self-correct). Fatal under
@@ -690,6 +727,7 @@ fn load_instance_set(
     schema: &panschema::linkml::SchemaDefinition,
     inst_path: &Path,
     strict: bool,
+    verbose: bool,
 ) -> anyhow::Result<panschema::instances::InstanceSet> {
     // Each curated graph is judged on its own size: a teaching preview and a
     // worked example sit side by side, and either can outgrow the guideline.
@@ -713,9 +751,7 @@ fn load_instance_set(
     for v in &violations {
         eprintln!("warning: {v}");
     }
-    if let Some(summary) = set.external_reference_summary() {
-        eprintln!("note: {summary}");
-    }
+    print_external_references(&set, verbose);
     // With several roots in play, which one a dataset was read against is a
     // real choice — show it rather than leaving it to be inferred from output.
     if schema.classes.values().filter(|c| c.tree_root).count() > 1
@@ -748,6 +784,8 @@ struct GenerateOptions<'a> {
     rust_time: Option<&'a str>,
     /// Promote load-time diagnostics to hard errors.
     strict: bool,
+    /// Name every outbound reference in a dataset's note.
+    verbose: bool,
     /// Compare a fresh generation against the declared output instead of
     /// writing it; the drifted path is returned rather than printed.
     check: bool,
@@ -770,6 +808,7 @@ fn generate(
         html_schema_sections,
         rust_time,
         strict,
+        verbose,
         check,
     } = *opts;
     // Check mode renders to a scratch path and byte-compares against the
@@ -868,7 +907,7 @@ fn generate(
         // A LinkML instance-data file overrides the schema's embedded OWL
         // individuals as the source for the instance graph.
         for inst_path in instances {
-            let set = load_instance_set(&schema, inst_path, strict)?;
+            let set = load_instance_set(&schema, inst_path, strict, verbose)?;
             // The file's stem labels the selector; publish names entries
             // explicitly instead.
             let label = inst_path
@@ -916,7 +955,7 @@ fn generate(
             );
         }
         use panschema::io::Writer;
-        let set = load_instance_set(&schema, inst_path, strict)?;
+        let set = load_instance_set(&schema, inst_path, strict, verbose)?;
         let writer: Box<dyn Writer> = match format.to_lowercase().as_str() {
             "ttl" => Box::new(panschema::owl_writer::OwlWriter::new().with_instances(set)),
             "instance-graph-json" => {
@@ -1156,6 +1195,7 @@ fn generate_from_manifest(
     offline: bool,
     refresh_labels: bool,
     strict: bool,
+    verbose: bool,
     check: bool,
 ) -> anyhow::Result<()> {
     let mut drifted: Vec<PathBuf> = Vec::new();
@@ -1238,7 +1278,7 @@ fn generate_from_manifest(
             .with_context(|| format!("schema `{name}`, check"))?;
             if !check_only.is_empty() {
                 let (violations, _) =
-                    verify_datasets(&check_schema, &check_only, true, "warning: ")?;
+                    verify_datasets(&check_schema, &check_only, true, "warning: ", verbose)?;
                 if strict && violations > 0 {
                     anyhow::bail!(
                         "schema `{name}`, check: {violations} instance-data violation(s) \
@@ -1268,6 +1308,7 @@ fn generate_from_manifest(
                     html_schema_sections: gen_cfg.html_schema_sections,
                     rust_time: None,
                     strict,
+                    verbose,
                     check,
                 },
                 &labels,
@@ -1305,6 +1346,7 @@ fn generate_from_manifest(
                     &GenerateOptions {
                         rust_time: gen_cfg.rust_time.as_deref(),
                         strict,
+                        verbose,
                         check,
                         ..Default::default()
                     },
@@ -1966,7 +2008,7 @@ fn fetch_from_manifest() -> anyhow::Result<()> {
 /// with the cross-dataset overlap notes, and the `[check.<name>]`
 /// policy. Findings warn as they stream; `--strict` fails once at the
 /// end, after every entry has reported.
-fn verify_manifest(strict: bool) -> anyhow::Result<()> {
+fn verify_manifest(strict: bool, verbose: bool) -> anyhow::Result<()> {
     use anyhow::Context as _;
     let (manifest, manifest_dir) = load_manifest()?;
     if manifest.schemas.is_empty() {
@@ -2000,7 +2042,7 @@ fn verify_manifest(strict: bool) -> anyhow::Result<()> {
             .map(|p| manifest_dir.join(p))
             .collect();
         if !instances.is_empty() {
-            let (count, _) = verify_datasets(&schema, &instances, true, "warning: ")?;
+            let (count, _) = verify_datasets(&schema, &instances, true, "warning: ", verbose)?;
             findings += count;
         }
         problems.extend(
@@ -2035,6 +2077,7 @@ fn verify_datasets(
     data_paths: &[PathBuf],
     label_lines: bool,
     prefix: &str,
+    verbose: bool,
 ) -> anyhow::Result<(usize, Vec<(String, panschema::instances::InstanceSet)>)> {
     let mut violation_count = 0usize;
     let mut sets: Vec<(String, panschema::instances::InstanceSet)> = Vec::new();
@@ -2047,9 +2090,7 @@ fn verify_datasets(
 
         let violations = match panschema::validate::instance_set_for(schema, &value) {
             Ok(set) => {
-                if let Some(summary) = set.external_reference_summary() {
-                    eprintln!("note: {summary}");
-                }
+                print_external_references(&set, verbose);
                 let violations = panschema::validate::validate_instances(schema, &set);
                 sets.push((data_path.display().to_string(), set));
                 violations
@@ -2088,7 +2129,7 @@ fn verify_datasets(
 /// violation and exiting non-zero when the data does not conform. Given more
 /// than one file, each is verified on its own and the set is then checked for
 /// ids that mint to the same IRI across files.
-fn verify_data(schema_path: &Path, data_paths: &[PathBuf]) -> anyhow::Result<()> {
+fn verify_data(schema_path: &Path, data_paths: &[PathBuf], verbose: bool) -> anyhow::Result<()> {
     let registry = FormatRegistry::with_defaults();
     // Load through the shared path so `imports:` merge and `is_a`/mixin slots
     // resolve, matching what every other command reads.
@@ -2098,7 +2139,7 @@ fn verify_data(schema_path: &Path, data_paths: &[PathBuf]) -> anyhow::Result<()>
     // One file's violations read as its own list; several need labelling, or a
     // reader cannot tell which dataset each line came from.
     let label_lines = data_paths.len() > 1;
-    let (violation_count, sets) = verify_datasets(&schema, data_paths, label_lines, "")?;
+    let (violation_count, sets) = verify_datasets(&schema, data_paths, label_lines, "", verbose)?;
 
     if violation_count == 0 {
         // With several roots in play, "conforms" alone is ambiguous: a file
@@ -2370,6 +2411,7 @@ async fn main() -> anyhow::Result<()> {
             offline,
             refresh_labels,
             strict,
+            verbose,
         } => match schema {
             Some(schema_path) => {
                 if !instances.is_empty()
@@ -2410,6 +2452,7 @@ async fn main() -> anyhow::Result<()> {
                         include_graph: !no_graph,
                         rust_time: rust_time.as_deref(),
                         strict,
+                        verbose,
                         check,
                         ..Default::default()
                     },
@@ -2428,7 +2471,7 @@ async fn main() -> anyhow::Result<()> {
                     );
                 }
             }
-            None => generate_from_manifest(offline, refresh_labels, strict, check)?,
+            None => generate_from_manifest(offline, refresh_labels, strict, verbose, check)?,
         },
         Commands::Init {
             name,
@@ -2467,9 +2510,10 @@ async fn main() -> anyhow::Result<()> {
             schema,
             data,
             strict,
+            verbose,
         } => match schema {
-            Some(schema) => verify_data(&schema, &data)?,
-            None => verify_manifest(strict)?,
+            Some(schema) => verify_data(&schema, &data, verbose)?,
+            None => verify_manifest(strict, verbose)?,
         },
         Commands::Migrate { schema, migrations } => match (schema, migrations) {
             (Some(schema_path), Some(dir)) => {
@@ -2560,6 +2604,25 @@ mod tests {
     }
 
     #[test]
+    fn outbound_notes_name_five_and_point_at_verbose_for_the_rest() {
+        assert_eq!(
+            outbound_listing(7, false),
+            (5, true),
+            "seven: five named, flag hinted"
+        );
+        assert_eq!(
+            outbound_listing(5, false),
+            (5, false),
+            "exactly five: all named, nothing to hint at"
+        );
+        assert_eq!(
+            outbound_listing(7, true),
+            (7, false),
+            "verbose names every one"
+        );
+    }
+
+    #[test]
     fn cli_parses_generate_subcommand() {
         let cli = Cli::try_parse_from([
             "panschema",
@@ -2582,6 +2645,7 @@ mod tests {
                 offline,
                 refresh_labels,
                 strict,
+                verbose,
             } => {
                 assert_eq!(schema, Some(PathBuf::from("test.ttl")));
                 assert_eq!(rust_time, None, "rust_time defaults to unset");
@@ -2593,6 +2657,7 @@ mod tests {
                 assert!(!offline); // default false (labels fetched)
                 assert!(!refresh_labels); // default false (cache reused)
                 assert!(!strict); // default false (warn, don't fail)
+                assert!(!verbose, "outbound references are summarized by default");
             }
             _ => panic!("Expected Generate command"),
         }

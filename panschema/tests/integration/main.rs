@@ -1301,6 +1301,85 @@ fn cross_graph_reference_verifies_clean_and_is_summarized() {
 }
 
 #[test]
+fn the_outbound_note_lists_five_references_unless_verbose() {
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let data = scratch.path().join("many-outbound.yaml");
+    let wines: String = (0..7)
+        .map(|i| {
+            format!("  - {{id: w{i}, name: W{i}, color: red, produced_by: 'wine:estate{i}'}}\n")
+        })
+        .collect();
+    fs::write(&data, format!("wines:\n{wines}")).unwrap();
+    let data = data.to_str().unwrap();
+    let ttl = scratch.path().join("out.ttl");
+    let ttl = ttl.to_str().unwrap();
+    let schema = "tests/fixtures/wine_catalog.yaml";
+    let runs: [(&str, Vec<&str>); 2] = [
+        ("verify", vec!["verify", "--schema", schema, "--data", data]),
+        (
+            "generate",
+            vec![
+                "generate",
+                "-s",
+                schema,
+                "--instances",
+                data,
+                "-f",
+                "ttl",
+                "-o",
+                ttl,
+            ],
+        ),
+    ];
+    for (command, args) in runs {
+        let brief = Command::new(env!("CARGO_BIN_EXE_panschema"))
+            .args(&args)
+            .output()
+            .expect("run panschema");
+        let stderr = String::from_utf8_lossy(&brief.stderr);
+        assert!(brief.status.success(), "{command}: {stderr}");
+        assert!(
+            stderr.contains("7 cross-graph reference(s)"),
+            "{command} counts every outbound reference; got:\n{stderr}"
+        );
+        for listed in 0..5 {
+            assert!(
+                stderr.contains(&format!("`wine:estate{listed}`")),
+                "{command} lists the first five; estate{listed} missing from:\n{stderr}"
+            );
+        }
+        for unlisted in 5..7 {
+            assert!(
+                !stderr.contains(&format!("`wine:estate{unlisted}`")),
+                "{command} lists only five by default; estate{unlisted} in:\n{stderr}"
+            );
+        }
+        assert!(
+            stderr.contains("… and 2 more") && stderr.contains("--verbose"),
+            "{command} counts the rest and names the flag that lists them; got:\n{stderr}"
+        );
+
+        let verbose = Command::new(env!("CARGO_BIN_EXE_panschema"))
+            .args(&args)
+            .arg("--verbose")
+            .output()
+            .expect("run panschema");
+        let stderr = String::from_utf8_lossy(&verbose.stderr);
+        assert!(verbose.status.success(), "{command} --verbose: {stderr}");
+        for every in 0..7 {
+            assert!(
+                stderr.contains(&format!("`wine:estate{every}`")),
+                "{command} --verbose lists every reference; estate{every} missing from:\n{stderr}"
+            );
+        }
+        assert!(
+            !stderr.contains("… and"),
+            "{command} --verbose leaves nothing to count; got:\n{stderr}"
+        );
+    }
+}
+
+#[test]
 fn dangling_instance_reference_warns_and_fails_under_strict() {
     let scratch = tempfile::tempdir().expect("tempdir");
     let dir = scratch.path();
