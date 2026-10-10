@@ -10,12 +10,12 @@
 
 **panschema** aims to be a universal tool for data modeling workflows:
 
-- **Convert** between schema languages (LinkML, OWL/TTL, JSON Schema, SHACL, SQL DDL)
+- **Convert** between modeling languages (LinkML, OWL/TTL, JSON Schema, SHACL, SQL DDL)
 - **Generate documentation** from any supported format
-- **Validate** schemas and check compatibility
+- **Verify** instance data against its schema (what other tools call validation) and check compatibility between schema versions
 - **Compare** schemas and track changes
 
-Think of it as **pandoc for data modeling** — a single tool that speaks all schema languages.
+Think of it as **pandoc for data modeling** — a single tool that speaks all modeling languages.
 
 ## Current Features
 
@@ -414,7 +414,7 @@ atlas migrate diff --to file://schema.sql --dev-url "docker://postgres/16"
 
 Read our [WHY.md](WHY.md) to understand the full vision.
 
-**TL;DR:** Data modeling is fragmented across many schema languages. panschema provides a unified interface — fast, CI-native, and extensible.
+**TL;DR:** Data modeling is fragmented across many modeling languages. panschema reads any of them into one model and writes any other from it — one static binary, built for CI.
 
 ## Development
 

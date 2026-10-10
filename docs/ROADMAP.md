@@ -5,7 +5,7 @@
 ## Vision
 
 **Panschema** aims to be the universal tool for data modeling workflows:
-- Convert between schema languages (LinkML, OWL/TTL, JSON Schema, SHACL, SQL DDL)
+- Convert between modeling languages (LinkML, OWL/TTL, JSON Schema, SHACL, SQL DDL)
 - Generate documentation, language-native types (Rust, …), and machine-readable schemas from any supported format
 - Manage schemas as versioned, pinned packages (Cargo-style)
 - Validate schemas and check compatibility
