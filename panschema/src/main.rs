@@ -719,56 +719,59 @@ fn print_external_references(set: &panschema::instances::InstanceSet, verbose: b
     }
 }
 
-/// Read a LinkML instance-data file into the instance model, surfacing each
-/// dangling instance reference (the A-box analog of a dangling schema ref —
-/// the feedback signal an authoring loop uses to self-correct). Fatal under
-/// `--strict`.
-fn load_instance_set(
+/// What is worth saying about rendering a dataset whole: its size against
+/// the curated-dataset guideline, and which `tree_root` it was read against
+/// when the schema has several.
+fn print_rendering_notes(
     schema: &panschema::linkml::SchemaDefinition,
-    inst_path: &Path,
-    strict: bool,
-    verbose: bool,
-) -> anyhow::Result<panschema::instances::InstanceSet> {
-    // Each curated graph is judged on its own size: a teaching preview and a
-    // worked example sit side by side, and either can outgrow the guideline.
-    let set = read_instance_set(schema, inst_path)?;
+    label: &str,
+    set: &panschema::instances::InstanceSet,
+) {
     // ADR-009's role boundary: a declared dataset is a curated teaching
     // artifact, rendered whole. A large A-box still renders, but loudly —
     // the query-driven path (subgraph extraction) is the intended tool at
-    // scale.
+    // scale. Each dataset is judged on its own size: a teaching preview and
+    // a worked example sit side by side, and either can outgrow it.
     const CURATED_DATASET_SOFT_LIMIT: usize = 500;
     if set.instances.len() > CURATED_DATASET_SOFT_LIMIT {
         eprintln!(
-            "warning: {} instances exceed the ~{CURATED_DATASET_SOFT_LIMIT}-node guideline for a \
-             curated dataset; a declared dataset is a teaching artifact rendered whole — consider a subset",
+            "warning: {label}: {} instances exceed the ~{CURATED_DATASET_SOFT_LIMIT}-node \
+             guideline for a curated dataset; a declared dataset is a teaching artifact \
+             rendered whole — consider a subset",
             set.instances.len()
         );
     }
-    // The same conformance check `verify --data` runs, so embedding an A-box
-    // into an output can't ship violations the standalone command would have
-    // caught. Supersedes the reference-integrity diagnostic, which it includes.
-    let violations = panschema::validate::validate_instances(schema, &set);
-    for v in &violations {
-        eprintln!("warning: {v}");
-    }
-    print_external_references(&set, verbose);
     // With several roots in play, which one a dataset was read against is a
     // real choice — show it rather than leaving it to be inferred from output.
     if schema.classes.values().filter(|c| c.tree_root).count() > 1
         && let Some(root) = &set.root
     {
-        eprintln!(
-            "note: {} read against `tree_root` class `{root}`",
-            inst_path.display()
-        );
+        eprintln!("note: {label} read against `tree_root` class `{root}`");
     }
-    if strict && !violations.is_empty() {
-        anyhow::bail!(
-            "{} instance-data violation(s) present; failing because --strict is set",
-            violations.len()
-        );
-    }
-    Ok(set)
+}
+
+/// Whether `format` carries instance data: HTML holds several datasets
+/// behind a selector, the RDF formats and `instance-graph-json` one.
+fn format_reads_instances(format: &str) -> bool {
+    matches!(
+        format.to_lowercase().as_str(),
+        "html" | "ttl" | "jsonld" | "rdfxml" | "ntriples" | "instance-graph-json"
+    )
+}
+
+/// The schema-level findings `--strict` refuses, as one clause.
+fn strict_blocking_summary(blocking: &panschema::diagnostics::StrictBlocking) -> String {
+    format!(
+        "{} unmodeled LinkML construct(s), {} dangling reference(s), {} colliding slot \
+         definition(s), {} untyped slot(s), {} rule constant(s) outside their enum's \
+         values, and {} slot-semantics declaration issue(s) present",
+        blocking.unmodeled,
+        blocking.dangling,
+        blocking.colliding,
+        blocking.untyped,
+        blocking.impossible,
+        blocking.slot_semantics
+    )
 }
 
 /// Per-format options a `generate` run carries — HTML's viz knobs and the
@@ -784,7 +787,11 @@ struct GenerateOptions<'a> {
     rust_time: Option<&'a str>,
     /// Promote load-time diagnostics to hard errors.
     strict: bool,
-    /// Name every outbound reference in a dataset's note.
+    /// Verify the instance data and report on it before writing. A manifest
+    /// entry leaves this off: it verified its datasets once, for all its
+    /// writers, before calling.
+    verify_instances: bool,
+    /// Name every outbound reference when this run verifies instances.
     verbose: bool,
     /// Compare a fresh generation against the declared output instead of
     /// writing it; the drifted path is returned rather than printed.
@@ -808,6 +815,7 @@ fn generate(
         html_schema_sections,
         rust_time,
         strict,
+        verify_instances,
         verbose,
         check,
     } = *opts;
@@ -855,16 +863,29 @@ fn generate(
         let blocking = panschema::diagnostics::strict_blocking(&schema);
         if panschema::diagnostics::should_fail_strict(strict, blocking.total()) {
             anyhow::bail!(
-                "{} unmodeled LinkML construct(s), {} dangling reference(s), \
-                 {} colliding slot definition(s), {} untyped slot(s), {} rule \
-                 constant(s) outside their enum's values, and {} slot-semantics \
-                 declaration issue(s) present; failing because --strict is set",
-                blocking.unmodeled,
-                blocking.dangling,
-                blocking.colliding,
-                blocking.untyped,
-                blocking.impossible,
-                blocking.slot_semantics
+                "{}; failing because --strict is set",
+                strict_blocking_summary(&blocking)
+            );
+        }
+    }
+
+    // The same conformance check `verify --data` runs, once, before the
+    // writer, so embedding an A-box into an output can't ship violations
+    // the standalone command would have caught.
+    if verify_instances && !instances.is_empty() && format_reads_instances(format) {
+        let (violations, datasets) = verify_datasets(
+            &schema,
+            instances,
+            instances.len() > 1,
+            "warning: ",
+            verbose,
+        )?;
+        for (label, set) in &datasets {
+            print_rendering_notes(&schema, label, set);
+        }
+        if strict && violations > 0 {
+            anyhow::bail!(
+                "{violations} instance-data violation(s) present; failing because --strict is set"
             );
         }
     }
@@ -907,7 +928,7 @@ fn generate(
         // A LinkML instance-data file overrides the schema's embedded OWL
         // individuals as the source for the instance graph.
         for inst_path in instances {
-            let set = load_instance_set(&schema, inst_path, strict, verbose)?;
+            let set = read_instance_set(&schema, inst_path)?;
             // The file's stem labels the selector; publish names entries
             // explicitly instead.
             let label = inst_path
@@ -955,7 +976,7 @@ fn generate(
             );
         }
         use panschema::io::Writer;
-        let set = load_instance_set(&schema, inst_path, strict, verbose)?;
+        let set = read_instance_set(&schema, inst_path)?;
         let writer: Box<dyn Writer> = match format.to_lowercase().as_str() {
             "ttl" => Box::new(panschema::owl_writer::OwlWriter::new().with_instances(set)),
             "instance-graph-json" => {
@@ -1248,49 +1269,43 @@ fn generate_from_manifest(
             .iter()
             .map(|p| manifest_dir.join(p))
             .collect();
-        // Datasets listed only under [check.<name>] ship nowhere, but
-        // `generate --strict` refuses what `verify --strict` would, so they
-        // are checked here; the shipped ones are checked as each writer
-        // loads them.
-        let check_only: Vec<PathBuf> = manifest
-            .declared_instances(name, &resolved)?
-            .iter()
-            .map(|p| manifest_dir.join(p))
-            .filter(|p| !instances.contains(p))
-            .collect();
-        // Cross-graph resolution runs once per entry, before any writer:
-        // it reads both graphs and writes nothing, so `--check` runs it too.
-        // Called even without a [check.<name>] table — the check fn owns
-        // the early return, and it is where a schema that declares
-        // absence claims nothing verifies gets its note.
+        // The entry is verified once here, by the pass `verify` runs, before
+        // any writer: so a dataset is checked whatever outputs the entry
+        // declares, reported once however many writers read it, and
+        // `generate --strict` refuses what `verify --strict` would. The
+        // writers then read the shipped datasets without reporting again.
+        // It writes nothing, so `--check` runs it too.
         {
             let check_schema =
                 panschema::load::load_schema_with_deps(schema_path, &registry, &deps)
                     .map_err(|e| anyhow::anyhow!("{e}"))?;
-            let problems = check_resolve_against(
+            let entry = verify_entry(
                 name,
                 &manifest,
                 &manifest_dir,
                 &resolved,
                 &check_schema,
                 &registry,
-            )
-            .with_context(|| format!("schema `{name}`, check"))?;
-            if !check_only.is_empty() {
-                let (violations, _) =
-                    verify_datasets(&check_schema, &check_only, true, "warning: ", verbose)?;
-                if strict && violations > 0 {
+                verbose,
+            )?;
+            for (label, set) in &entry.datasets {
+                print_rendering_notes(&check_schema, label, set);
+            }
+            if strict {
+                let mut parts = Vec::new();
+                if entry.schema.total() > 0 {
+                    parts.push(strict_blocking_summary(&entry.schema));
+                }
+                if entry.violations > 0 {
+                    parts.push(format!("{} instance-data violation(s)", entry.violations));
+                }
+                parts.extend(entry.problems);
+                if !parts.is_empty() {
                     anyhow::bail!(
-                        "schema `{name}`, check: {violations} instance-data violation(s) \
-                         present; failing because --strict is set"
+                        "schema `{name}`, check: {}; failing because --strict is set",
+                        parts.join("; ")
                     );
                 }
-            }
-            if strict && !problems.is_empty() {
-                anyhow::bail!(
-                    "schema `{name}`, check: {}; failing because --strict is set",
-                    problems.join("; ")
-                );
             }
         }
         if let Some(html_out) = &gen_cfg.html {
@@ -1308,8 +1323,8 @@ fn generate_from_manifest(
                     html_schema_sections: gen_cfg.html_schema_sections,
                     rust_time: None,
                     strict,
-                    verbose,
                     check,
+                    ..Default::default()
                 },
                 &labels,
                 &deps,
@@ -1346,7 +1361,6 @@ fn generate_from_manifest(
                     &GenerateOptions {
                         rust_time: gen_cfg.rust_time.as_deref(),
                         strict,
-                        verbose,
                         check,
                         ..Default::default()
                     },
@@ -2002,6 +2016,49 @@ fn fetch_from_manifest() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// What checking one manifest entry found: the schema-level diagnostics
+/// `--strict` refuses (the shared load path already printed them), the
+/// instance-data violations across every dataset the entry declares, and
+/// its `[check.<name>]` policy problems. `verify` and `generate` both run
+/// this, so the build verb refuses what the check verb would.
+struct EntryFindings {
+    schema: panschema::diagnostics::StrictBlocking,
+    violations: usize,
+    problems: Vec<String>,
+    datasets: Vec<(String, panschema::instances::InstanceSet)>,
+}
+
+/// Check one manifest entry, printing each finding as it goes. The
+/// `[check.<name>]` pass runs even without a table: it owns the early
+/// return, and it is where a schema that declares absence claims nothing
+/// verifies gets its note.
+fn verify_entry(
+    name: &str,
+    manifest: &panschema::manifest::Manifest,
+    manifest_dir: &Path,
+    resolved: &std::collections::BTreeMap<String, panschema::source::Resolved>,
+    schema: &panschema::linkml::SchemaDefinition,
+    registry: &FormatRegistry,
+    verbose: bool,
+) -> anyhow::Result<EntryFindings> {
+    use anyhow::Context as _;
+    let declared: Vec<PathBuf> = manifest
+        .declared_instances(name, resolved)?
+        .iter()
+        .map(|p| manifest_dir.join(p))
+        .collect();
+    let (violations, datasets) = verify_datasets(schema, &declared, true, "warning: ", verbose)
+        .with_context(|| format!("schema `{name}`, check"))?;
+    let problems = check_resolve_against(name, manifest, manifest_dir, resolved, schema, registry)
+        .with_context(|| format!("schema `{name}`, check"))?;
+    Ok(EntryFindings {
+        schema: panschema::diagnostics::strict_blocking(schema),
+        violations,
+        problems,
+        datasets,
+    })
+}
+
 /// Bare `verify`: read the manifest and check everything it declares,
 /// writing nothing — each schema's own diagnostics (the same ones
 /// `generate --strict` refuses), every declared dataset's conformance
@@ -2009,7 +2066,6 @@ fn fetch_from_manifest() -> anyhow::Result<()> {
 /// policy. Findings warn as they stream; `--strict` fails once at the
 /// end, after every entry has reported.
 fn verify_manifest(strict: bool, verbose: bool) -> anyhow::Result<()> {
-    use anyhow::Context as _;
     let (manifest, manifest_dir) = load_manifest()?;
     if manifest.schemas.is_empty() {
         eprintln!("Manifest has no `[schemas]` entries; nothing to check.");
@@ -2031,31 +2087,17 @@ fn verify_manifest(strict: bool, verbose: bool) -> anyhow::Result<()> {
     for name in manifest.schemas.keys() {
         let schema = panschema::load::load_schema_with_deps(&deps[name], &registry, &deps)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
-        // The shared load path already printed these as warnings; they
-        // count toward the strict gate exactly as `generate --strict`
-        // refuses them, so the check verb covers what the build verb
-        // would reject.
-        findings += panschema::diagnostics::strict_blocking(&schema).total();
-        let instances: Vec<PathBuf> = manifest
-            .declared_instances(name, &resolved)?
-            .iter()
-            .map(|p| manifest_dir.join(p))
-            .collect();
-        if !instances.is_empty() {
-            let (count, _) = verify_datasets(&schema, &instances, true, "warning: ", verbose)?;
-            findings += count;
-        }
-        problems.extend(
-            check_resolve_against(
-                name,
-                &manifest,
-                &manifest_dir,
-                &resolved,
-                &schema,
-                &registry,
-            )
-            .with_context(|| format!("schema `{name}`, check"))?,
-        );
+        let entry = verify_entry(
+            name,
+            &manifest,
+            &manifest_dir,
+            &resolved,
+            &schema,
+            &registry,
+            verbose,
+        )?;
+        findings += entry.schema.total() + entry.violations;
+        problems.extend(entry.problems);
     }
     if strict && (findings > 0 || !problems.is_empty()) {
         let mut parts = problems;
@@ -2414,12 +2456,7 @@ async fn main() -> anyhow::Result<()> {
             verbose,
         } => match schema {
             Some(schema_path) => {
-                if !instances.is_empty()
-                    && !matches!(
-                        format.to_lowercase().as_str(),
-                        "html" | "ttl" | "jsonld" | "rdfxml" | "ntriples" | "instance-graph-json"
-                    )
-                {
+                if !instances.is_empty() && !format_reads_instances(&format) {
                     eprintln!(
                         "warning: --instances only affects the HTML, RDF, and \
                          instance-graph-json outputs; ignored for format `{}`",
@@ -2452,6 +2489,7 @@ async fn main() -> anyhow::Result<()> {
                         include_graph: !no_graph,
                         rust_time: rust_time.as_deref(),
                         strict,
+                        verify_instances: true,
                         verbose,
                         check,
                         ..Default::default()

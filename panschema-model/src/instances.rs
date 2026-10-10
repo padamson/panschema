@@ -869,8 +869,9 @@ impl InstanceSet {
     }
 
     /// A human-readable account of the references that leave this dataset,
-    /// naming at most `listed` of them in referrer-id order and counting
-    /// the rest, or `None` when none leave.
+    /// naming at most `listed` of them, sorted by referrer id as text (so
+    /// `d10` precedes `d2`), and counting the rest, or `None` when none
+    /// leave.
     ///
     /// These edges cannot be resolved here — their targets are records of
     /// another graph — so the count is what keeps an unresolvable one from

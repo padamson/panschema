@@ -2405,6 +2405,196 @@ instances = ["checked.yaml"]
     );
 }
 
+/// `generate --strict` refuses the schema-level findings `verify --strict`
+/// does, even for an entry no writer would load the schema for.
+#[test]
+fn generate_strict_refuses_schema_findings_for_an_entry_without_writers() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    write_pkg(
+        &consumer.join("orders-pkg"),
+        "orders",
+        "1.0.0",
+        "orders.yaml",
+        "id: https://example.org/orders\nname: orders\ndefault_prefix: ord\nprefixes:\n  ord: https://example.org/orders/\nclasses:\n  Book:\n    tree_root: true\n    slots: [id, orders]\n  Order:\n    slots: [id, customer]\nslots:\n  id: {identifier: true}\n  orders: {range: Order, multivalued: true, inlined_as_list: true}\n  customer: {range: Customer}\n",
+    );
+    fs::write(consumer.join("orders.yaml"), "id: book1\n").unwrap();
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+orders = { path = "./orders-pkg" }
+
+[generate.orders]
+instances = ["orders.yaml"]
+"#,
+    )
+    .unwrap();
+    let verified = run_in(consumer, &["verify", "--strict"]);
+    assert!(
+        !verified.status.success(),
+        "the dangling range fails verify --strict; got:\n{}",
+        String::from_utf8_lossy(&verified.stderr)
+    );
+    let generated = run_in(consumer, &["generate", "--strict"]);
+    let stderr = String::from_utf8_lossy(&generated.stderr);
+    assert!(
+        !generated.status.success() && stderr.contains("1 dangling reference(s)"),
+        "and generate --strict refuses it too; got:\n{stderr}"
+    );
+}
+
+/// Whether a dataset is checked cannot depend on which outputs the entry
+/// declares: one with only a Rust target reads no instance data, and its
+/// datasets are verified all the same.
+#[test]
+fn generate_checks_datasets_an_entry_declares_whatever_its_outputs() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    write_pkg(
+        &consumer.join("catalog-pkg"),
+        "catalog",
+        "1.0.0",
+        "catalog.yaml",
+        UNION_CATALOG_SCHEMA,
+    );
+    fs::write(
+        consumer.join("data.yaml"),
+        "id: est1\nproviders:\n  - {id: aws, weight: heavy}\n",
+    )
+    .unwrap();
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+catalog = { path = "./catalog-pkg" }
+
+[generate.catalog]
+rust = "catalog.rs"
+instances = ["data.yaml"]
+"#,
+    )
+    .unwrap();
+    let lax = run_in(consumer, &["generate"]);
+    let stderr = String::from_utf8_lossy(&lax.stderr);
+    assert!(
+        lax.status.success() && stderr.contains("expects an integer"),
+        "generate warns on the dataset though no writer reads it; got:\n{stderr}"
+    );
+    let strict = run_in(consumer, &["generate", "--strict"]);
+    let stderr = String::from_utf8_lossy(&strict.stderr);
+    assert!(
+        !strict.status.success() && stderr.contains("instance-data violation"),
+        "and generate --strict refuses it, as verify --strict does; got:\n{stderr}"
+    );
+}
+
+/// A dataset is reported once per run, not once per writer that reads it.
+#[test]
+fn generate_reports_each_dataset_once_however_many_writers_read_it() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    write_pkg(
+        &consumer.join("catalog-pkg"),
+        "catalog",
+        "1.0.0",
+        "catalog.yaml",
+        UNION_CATALOG_SCHEMA,
+    );
+    fs::write(
+        consumer.join("data.yaml"),
+        "id: est1\nproviders:\n  - {id: aws, weight: heavy}\n",
+    )
+    .unwrap();
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+catalog = { path = "./catalog-pkg" }
+
+[generate.catalog]
+html = "docs"
+ttl = "catalog.ttl"
+jsonld = "catalog.jsonld"
+instances = ["data.yaml"]
+"#,
+    )
+    .unwrap();
+    let out = run_in(consumer, &["generate"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "got:\n{stderr}");
+    assert_eq!(
+        stderr.matches("expects an integer").count(),
+        1,
+        "three writers read the dataset, one report of it; got:\n{stderr}"
+    );
+}
+
+/// `generate --strict` names every finding of an entry in one failure, as
+/// `verify --strict` does, rather than stopping at the first kind.
+#[test]
+fn generate_strict_reports_violations_and_unresolved_references_together() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    write_pkg(
+        &consumer.join("catalog-pkg"),
+        "catalog",
+        "1.0.0",
+        "catalog.yaml",
+        UNION_CATALOG_SCHEMA,
+    );
+    write_pkg(
+        &consumer.join("bench-pkg"),
+        "bench",
+        "1.0.0",
+        "bench.yaml",
+        UNION_BENCH_SCHEMA,
+    );
+    fs::write(
+        consumer.join("catalog-data.yaml"),
+        "id: est1\nproviders:\n  - {id: aws}\n",
+    )
+    .unwrap();
+    fs::write(
+        consumer.join("ship.yaml"),
+        "id: b1\nanchors:\n  - cat:ghost\n",
+    )
+    .unwrap();
+    // A top-level list is not a tree_root container, so it reads as a
+    // violation rather than as data.
+    fs::write(consumer.join("curated.yaml"), "- id: b2\n").unwrap();
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+catalog = { path = "./catalog-pkg" }
+bench = { path = "./bench-pkg" }
+
+[generate.catalog]
+instances = ["catalog-data.yaml"]
+
+[generate.bench]
+ttl = "bench.ttl"
+instances = ["ship.yaml"]
+
+[check.bench]
+instances = ["curated.yaml"]
+resolve_against = ["catalog"]
+"#,
+    )
+    .unwrap();
+    let out = run_in(consumer, &["generate", "--strict"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let failure = stderr
+        .lines()
+        .find(|l| l.contains("failing because --strict is set"))
+        .unwrap_or_else(|| panic!("generate --strict fails; got:\n{stderr}"));
+    assert!(
+        failure.contains("instance-data violation") && failure.contains("do not resolve"),
+        "one failure names both kinds of finding; got: {failure}"
+    );
+}
+
 /// A dataset that ingests nothing is a reported finding, not a vacuous
 /// pass: manifest mode matches flag mode's refusal of non-mapping data.
 #[test]

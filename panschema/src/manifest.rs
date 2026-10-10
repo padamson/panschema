@@ -270,8 +270,8 @@ pub struct CheckConfig {
     /// Datasets to check, unioned with the `[generate.<name>]` entry's
     /// `instances` list — a checked-and-generated schema declares its
     /// datasets once, and this list can add to them but never hide them.
-    /// What it adds is verified, by `verify` and `generate --strict`
-    /// alike, and shipped by no writer.
+    /// What it adds is checked by `verify` and by `generate` alike (a
+    /// warning, refused under `--strict`) and shipped by no writer.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub instances: Vec<PathBuf>,
     /// Sibling entries whose datasets this entry's external references
