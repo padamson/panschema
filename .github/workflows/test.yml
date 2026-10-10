@@ -273,6 +273,69 @@ jobs:
       env:
         BROWSER: all
 
+  # The release ships these two Linux builds, and only a tag runs the
+  # release workflow. Building them here means a dependency that breaks the
+  # static link or raises the glibc floor fails a PR, not a release. Debug
+  # builds link the same libraries a release build does.
+  linux-binaries:
+    name: Linux binary (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Name the runner image
+        id: image
+        uses: ./.github/actions/runner-image
+
+      - name: Cache Cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ steps.image.outputs.os }}-${{ matrix.target }}-cargo-linux-binary-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ steps.image.outputs.os }}-${{ matrix.target }}-cargo-linux-binary-
+
+      - name: Stub WASM artifacts
+        run: |
+          mkdir -p panschema-viz/pkg
+          touch panschema-viz/pkg/panschema_viz.js panschema-viz/pkg/panschema_viz_bg.wasm
+
+      - name: Install musl tools
+        if: endsWith(matrix.target, '-musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build
+        run: cargo build -p panschema --target ${{ matrix.target }}
+
+      - name: Check how the binaries link
+        run: |
+          scripts/check-linux-binary.sh ${{ matrix.target }} \
+            target/${{ matrix.target }}/debug/panschema \
+            target/${{ matrix.target }}/debug/mdbook-panschema
+
+      - name: Smoke-test panschema
+        run: scripts/smoke-test-binary.sh target/${{ matrix.target }}/debug/panschema
+
   postgres-apply:
     name: Postgres Apply (real database)
     runs-on: ubuntu-latest

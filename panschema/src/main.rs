@@ -9,6 +9,11 @@ mod server;
 
 use panschema::io::FormatRegistry;
 
+// musl's allocator is markedly slower than glibc's; see Cargo.toml.
+#[cfg(target_env = "musl")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// `panschema release --level <X>` choices.
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum ReleaseLevel {

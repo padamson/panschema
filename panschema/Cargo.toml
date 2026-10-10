@@ -91,6 +91,11 @@ tempfile = "3.24.0"
 # brittle line-number exclude in scripts/mutants.sh.
 mutants = "0.0.4"
 
+# musl's own allocator is markedly slower than glibc's, and the musl build
+# is the one meant to run anywhere, so it carries a faster one.
+[target.'cfg(target_env = "musl")'.dependencies]
+mimalloc = "0.1"
+
 
 [features]
 # Enable development tools (styleguide command, component preview)
