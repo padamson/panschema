@@ -58,12 +58,12 @@ data = "data/preview.yaml"
 [[instances]]
 name = "catalog"
 data = "data/catalog-instances.yaml"
-exemplar = true                  # this one opens first
+default = true                   # this one opens first
 ```
 
 Every entry is built per published version and embedded in that
 version's schema page, behind an in-page selector — declaration order
-drives the selector order. `exemplar = true` marks which dataset the
+drives the selector order. `default = true` marks which dataset the
 page **opens on**; at most one entry may set it, and with none set the
 first declared entry opens. A version whose git ref predates a data
 file simply publishes without that graph (a note, not an error), so

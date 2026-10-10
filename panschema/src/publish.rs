@@ -31,8 +31,8 @@ pub enum PublishError {
     MissingVersionField,
     #[error("`{value}` is not a valid semver version")]
     InvalidVersion { value: String },
-    #[error("at most one `[[instances]]` entry may set `exemplar = true`; found: {names}")]
-    MultipleExemplars { names: String },
+    #[error("at most one `[[instances]]` entry may set `default = true`; found: {names}")]
+    MultipleDefaults { names: String },
 
     #[error(
         "[publishing].current = `{current}` must appear in [publishing].versions = {versions:?} or equal [publishing].edge = {edge:?}"
@@ -148,8 +148,9 @@ pub struct PublishConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub book_link: Option<BookLinkConfig>,
     /// Zero-or-more instance graphs published alongside the schema
-    /// (`[[instances]]`). The one marked `exemplar` embeds in the schema
-    /// page (ADR-009); each version renders its own ref's data file.
+    /// (`[[instances]]`). Every entry embeds in the schema page behind the
+    /// dataset selector, and the one marked `default` opens first
+    /// (ADR-009); each version renders its own ref's data file.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub instances: Vec<InstanceEntry>,
 }
@@ -166,10 +167,10 @@ pub struct InstanceEntry {
     /// Path to the LinkML instance-data file, relative to the publish
     /// spec's location.
     pub data: PathBuf,
-    /// Embed this dataset in the schema page as the exemplar. At most
-    /// one entry may set it.
+    /// Open the page on this dataset. At most one entry may set it; with
+    /// none set, the first declared entry opens.
     #[serde(default)]
-    pub exemplar: bool,
+    pub default: bool,
     /// Names a `[schemas.<dep>]` dependency from the repo's manifest.
     /// The dataset then publishes on that dependency's page instead of
     /// the own-schema page; entries naming the same dependency share
@@ -487,15 +488,15 @@ impl FromStr for PublishConfig {
             publishing.validate()?;
             cfg.validate_pages(publishing)?;
         }
-        let exemplars: Vec<&str> = cfg
+        let defaults: Vec<&str> = cfg
             .instances
             .iter()
-            .filter(|e| e.exemplar)
+            .filter(|e| e.default)
             .map(|e| e.name.as_str())
             .collect();
-        if exemplars.len() > 1 {
-            return Err(PublishError::MultipleExemplars {
-                names: exemplars.join(", "),
+        if defaults.len() > 1 {
+            return Err(PublishError::MultipleDefaults {
+                names: defaults.join(", "),
             });
         }
         Ok(cfg)
@@ -1710,7 +1711,7 @@ fn generate_html_for_version(
         eprintln!("note: {version}: {}", split.message());
     }
 
-    // Declaration order drives the selector; `exemplar` decides which opens.
+    // Declaration order drives the selector; `default` decides which opens.
     for (declared, set, entry) in loaded {
         let mut dataset = crate::html_writer::InstanceDataset::new(entry.name.clone(), set);
         if let Some(name) = std::path::Path::new(&declared)
@@ -1719,7 +1720,7 @@ fn generate_html_for_version(
         {
             dataset = dataset.with_provenance(name);
         }
-        if entry.exemplar {
+        if entry.default {
             dataset = dataset.as_default();
         }
         writer = writer.with_instance_dataset(dataset);
@@ -2908,7 +2909,7 @@ main = "schema.yaml"
 [[instances]]
 name = "catalog"
 data = "data/instances.yaml"
-exemplar = true
+default = true
 
 [[instances]]
 name = "extra"
@@ -2916,14 +2917,17 @@ data = "data/extra.yaml"
 "#;
         let cfg: PublishConfig = toml.parse().expect("parses");
         assert_eq!(cfg.instances.len(), 2);
-        assert!(cfg.instances[0].exemplar);
+        assert!(cfg.instances[0].default);
         assert_eq!(cfg.instances[0].name, "catalog");
         assert_eq!(cfg.instances[1].data, PathBuf::from("data/extra.yaml"));
-        assert!(!cfg.instances[1].exemplar);
+        assert!(!cfg.instances[1].default);
     }
 
+    /// The retired `exemplar` is the unknown key a stale manifest carries;
+    /// the error names it and lists the accepted keys, `default` among
+    /// them, which is the hint a producer migrates by.
     #[test]
-    fn rejects_two_exemplar_instances() {
+    fn rejects_an_unknown_instances_key_naming_it_and_the_accepted_keys() {
         let toml = r#"
 [schema]
 name = "fixture"
@@ -2937,21 +2941,16 @@ main = "schema.yaml"
 name = "a"
 data = "a.yaml"
 exemplar = true
-
-[[instances]]
-name = "b"
-data = "b.yaml"
-exemplar = true
 "#;
-        let err = toml.parse::<PublishConfig>().unwrap_err();
+        let err = toml.parse::<PublishConfig>().unwrap_err().to_string();
         assert!(
-            err.to_string().contains("exemplar"),
-            "two exemplars must fail naming the conflict; got: {err}"
+            err.contains("`exemplar`") && err.contains("`default`"),
+            "the unknown key is refused by name and the accepted keys are listed; got: {err}"
         );
     }
 
     #[test]
-    fn rejects_unknown_instances_key() {
+    fn rejects_two_default_instances() {
         let toml = r#"
 [schema]
 name = "fixture"
@@ -2964,9 +2963,18 @@ main = "schema.yaml"
 [[instances]]
 name = "a"
 data = "a.yaml"
-exemplur = true
+default = true
+
+[[instances]]
+name = "b"
+data = "b.yaml"
+default = true
 "#;
-        assert!(toml.parse::<PublishConfig>().is_err());
+        let err = toml.parse::<PublishConfig>().unwrap_err();
+        assert!(
+            err.to_string().contains("default"),
+            "two defaults must fail naming the conflict; got: {err}"
+        );
     }
 
     /// A repo whose schema has a `tree_root` container: v0.1.0 predates the
@@ -3104,7 +3112,7 @@ exemplur = true
         InstanceEntry {
             name: "assessments".into(),
             data: PathBuf::from("data/assessments.yaml"),
-            exemplar: false,
+            default: false,
             schema: Some("cqa".into()),
         }
     }
@@ -3116,14 +3124,14 @@ exemplur = true
         cfg.instances.push(InstanceEntry {
             name: "catalog".into(),
             data: PathBuf::from("data/instances.yaml"),
-            exemplar: true,
+            default: true,
             schema: None,
         });
         cfg.instances.push(dep_entry());
         cfg.instances.push(InstanceEntry {
             name: "extra-assessments".into(),
             data: PathBuf::from("data/extra-assessments.yaml"),
-            exemplar: false,
+            default: false,
             schema: Some("cqa".into()),
         });
         let out = tempfile::tempdir().unwrap();
@@ -3276,7 +3284,7 @@ exemplur = true
         cfg.instances.push(InstanceEntry {
             name: "catalog".into(),
             data: PathBuf::from("data/instances.yaml"),
-            exemplar: true,
+            default: true,
             schema: None,
         });
         let out = tempfile::tempdir().unwrap();
@@ -3303,7 +3311,7 @@ exemplur = true
         cfg.instances.push(InstanceEntry {
             name: "catalog".into(),
             data: PathBuf::from("data/instances.yaml"),
-            exemplar: true,
+            default: true,
             schema: None,
         });
         let out = tempfile::tempdir().unwrap();
@@ -3317,21 +3325,21 @@ exemplur = true
     }
 
     #[test]
-    fn publish_embeds_every_declared_instance_graph_with_the_exemplar_open() {
-        // Two curated datasets declared, the second marked exemplar: both
-        // must reach the published page, with the exemplar the one that opens.
+    fn publish_embeds_every_declared_instance_graph_with_the_default_open() {
+        // Two curated datasets declared, the second marked default: both
+        // must reach the published page, with the default the one that opens.
         let repo = make_repo_with_instance_data();
         let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], None, "v0.2.0");
         cfg.instances.push(InstanceEntry {
             name: "preview".into(),
             data: PathBuf::from("data/preview.yaml"),
-            exemplar: false,
+            default: false,
             schema: None,
         });
         cfg.instances.push(InstanceEntry {
             name: "catalog".into(),
             data: PathBuf::from("data/instances.yaml"),
-            exemplar: true,
+            default: true,
             schema: None,
         });
         let out = tempfile::tempdir().unwrap();
@@ -3348,11 +3356,11 @@ exemplur = true
         );
         assert!(
             html.contains(r#"data-instance-dataset="0" hidden>"#),
-            "the non-exemplar dataset's panel starts hidden"
+            "the non-default dataset's panel starts hidden"
         );
         assert!(
             html.contains(r#"data-instance-dataset="1">"#),
-            "the exemplar is the dataset that opens"
+            "the default is the dataset that opens"
         );
         assert!(
             !html.contains("declared but not published"),
@@ -3369,7 +3377,7 @@ exemplur = true
         cfg.instances.push(InstanceEntry {
             name: "preview".into(),
             data: PathBuf::from("data/preview.yaml"),
-            exemplar: false,
+            default: false,
             schema: None,
         });
         let out = tempfile::tempdir().unwrap();
@@ -3388,7 +3396,7 @@ exemplur = true
     }
 
     #[test]
-    fn worktree_build_without_the_data_file_publishes_without_the_exemplar() {
+    fn worktree_build_without_the_data_file_publishes_without_that_dataset() {
         // The data file is committed for the tags but deleted from the
         // working tree: the edge/worktree build must note-and-skip, not
         // fail trying to read a missing file.
@@ -3398,7 +3406,7 @@ exemplur = true
         cfg.instances.push(InstanceEntry {
             name: "catalog".into(),
             data: PathBuf::from("data/instances.yaml"),
-            exemplar: true,
+            default: true,
             schema: None,
         });
         let out = tempfile::tempdir().unwrap();
@@ -3406,24 +3414,24 @@ exemplur = true
         let edge = std::fs::read_to_string(out.path().join("main/index.html")).unwrap();
         assert!(
             !edge.contains("ind-morgon"),
-            "a missing working-tree data file publishes without the exemplar"
+            "a missing working-tree data file publishes without that dataset"
         );
     }
 
     #[test]
-    fn publish_carries_the_exemplar_per_version() {
+    fn publish_carries_the_default_dataset_per_version() {
         let repo = make_repo_with_instance_data();
         let mut cfg = make_publish_cfg_with_versions(vec!["v0.1.0", "v0.2.0"], None, "v0.2.0");
         cfg.instances.push(InstanceEntry {
             name: "catalog".into(),
             data: PathBuf::from("data/instances.yaml"),
-            exemplar: true,
+            default: true,
             schema: None,
         });
         let out = tempfile::tempdir().unwrap();
         publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
 
-        // v0.2.0's ref carries the data file → the page embeds the exemplar
+        // v0.2.0's ref carries the data file → the page embeds the dataset
         // (sidebar entry + individual card) with its provenance.
         let v02 = std::fs::read_to_string(out.path().join("v0.2.0/index.html")).unwrap();
         assert!(
@@ -3438,7 +3446,7 @@ exemplur = true
         let v01 = std::fs::read_to_string(out.path().join("v0.1.0/index.html")).unwrap();
         assert!(
             !v01.contains("ind-morgon"),
-            "a ref without the data file publishes without the exemplar"
+            "a ref without the data file publishes without that dataset"
         );
     }
 
@@ -4060,7 +4068,7 @@ current = "v0.1.0"
         cfg.instances.push(InstanceEntry {
             name: "catalog".into(),
             data: PathBuf::from("data/instances.yaml"),
-            exemplar: true,
+            default: true,
             schema: None,
         });
         let out = tempfile::tempdir().unwrap();
@@ -4117,7 +4125,7 @@ current = "v0.1.0"
         cfg.instances.push(InstanceEntry {
             name: "catalog".into(),
             data: PathBuf::from("data/instances.yaml"),
-            exemplar: true,
+            default: true,
             schema: None,
         });
         let out = tempfile::tempdir().unwrap();
@@ -4196,7 +4204,7 @@ current = "v0.1.0"
         cfg.instances.push(InstanceEntry {
             name: "catalog".into(),
             data: PathBuf::from("data/instances.yaml"),
-            exemplar: true,
+            default: true,
             schema: None,
         });
         cfg.instances.push(dep_entry());
@@ -4244,7 +4252,7 @@ current = "v0.1.0"
         cfg.instances.push(InstanceEntry {
             name: "catalog".into(),
             data: PathBuf::from("data/instances.yaml"),
-            exemplar: true,
+            default: true,
             schema: None,
         });
         let out = tempfile::tempdir().unwrap();

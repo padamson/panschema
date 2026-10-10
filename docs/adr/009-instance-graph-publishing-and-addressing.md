@@ -5,7 +5,9 @@ Proposed. The page vocabulary below is superseded by ADR-014 (2026-10-09):
 the Instance Graph sidebar entry became an Instances group (Metadata, Graph,
 All instances), individuals read as instances on the page, object-property
 assertions as slot assertions, and instance cards render for every dataset
-since feature 36.
+since feature 36. The `[[instances]]` flag written below as `exemplar =
+true` is `default = true` since v0.4.0's successor: every declared dataset
+embeds, and the flag only chooses which opens.
 
 ## Context
 
@@ -80,7 +82,7 @@ about instance graphs are decision 6.
 [[instances]]
 name = "catalog"                 # dataset identity (dir name for sub-pages)
 data = "data/catalog-instances.yaml"
-exemplar = true                  # at most one; embeds in the schema page
+default = true                   # at most one; the page opens on it
 ```
 
 Zero-or-more entries; each is built per published version *if the file
@@ -200,7 +202,7 @@ So the split becomes **in-page selector for curated graphs vs. sibling pages
 for arbitrary ones**:
 
 - The schema page's Instance Graph section holds every declared curated
-  graph. Declaration order drives the selector; `exemplar = true` picks
+  graph. Declaration order drives the selector; `default = true` picks
   which one opens (at most one; the first declared wins when none is set).
   Each carries its own cards, provenance, and node/edge counts, and all
   payloads ride in the page so switching is client-side.

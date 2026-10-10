@@ -689,14 +689,15 @@ fn load_instance_set(
     // Each curated graph is judged on its own size: a teaching preview and a
     // worked example sit side by side, and either can outgrow the guideline.
     let set = read_instance_set(schema, inst_path)?;
-    // ADR-009's role boundary: an exemplar is a curated teaching artifact,
-    // rendered whole. A large A-box still renders, but loudly — the
-    // query-driven path (subgraph extraction) is the intended tool at scale.
-    const EXEMPLAR_SOFT_LIMIT: usize = 500;
-    if set.instances.len() > EXEMPLAR_SOFT_LIMIT {
+    // ADR-009's role boundary: a declared dataset is a curated teaching
+    // artifact, rendered whole. A large A-box still renders, but loudly —
+    // the query-driven path (subgraph extraction) is the intended tool at
+    // scale.
+    const CURATED_DATASET_SOFT_LIMIT: usize = 500;
+    if set.instances.len() > CURATED_DATASET_SOFT_LIMIT {
         eprintln!(
-            "warning: {} instances exceed the ~{EXEMPLAR_SOFT_LIMIT}-node exemplar guideline; \
-             exemplar instance graphs are curated teaching artifacts — consider a subset",
+            "warning: {} instances exceed the ~{CURATED_DATASET_SOFT_LIMIT}-node guideline for a \
+             curated dataset; a declared dataset is a teaching artifact rendered whole — consider a subset",
             set.instances.len()
         );
     }

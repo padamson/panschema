@@ -727,7 +727,7 @@ impl InstanceDataset {
         }
     }
 
-    /// Open this dataset first — the `exemplar = true` role.
+    /// Open this dataset first — the `default = true` role.
     #[must_use]
     pub fn as_default(mut self) -> Self {
         self.default_selected = true;
@@ -4974,7 +4974,7 @@ mod tests {
 
     #[test]
     fn the_dataset_marked_default_is_the_one_shown_first() {
-        // `exemplar = true` on a later entry must not have to be reordered to
+        // `default = true` on a later entry must not have to be reordered to
         // be the default: declaration order drives the selector, the flag
         // drives which panel opens.
         let schema = bottle_rack_schema();

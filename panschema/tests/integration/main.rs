@@ -840,7 +840,7 @@ fn generate_reports_conformance_violations_in_the_instance_data() {
     // A duplicate identifier is a conformance violation that the
     // reference-integrity check can't see. Embedding an A-box into an output
     // must report it, not just dangling references — otherwise a broken
-    // exemplar publishes onto a docs site silently.
+    // dataset publishes onto a docs site silently.
     let scratch = tempfile::tempdir().expect("tempdir");
     let dir = scratch.path();
 
@@ -5718,7 +5718,7 @@ data = "preview.yaml"
 [[instances]]
 name = "Worked example"
 data = "full.yaml"
-exemplar = true
+default = true
 
 [publishing]
 versions = ["v0.1.0"]

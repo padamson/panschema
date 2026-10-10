@@ -4,6 +4,8 @@
 Graph and Individuals sections are now the Instances block (Metadata,
 Graph, All instances), the graph sits above the cards, and the page says
 "instance" where this spec says "individual". The anchors are unchanged.
+The manifest flag this spec calls `exemplar = true` is `default = true`
+since the release after v0.4.0; the semantics are the ones Slice 1 set.
 
 **Feature:** Let a schema page carry *several* curated instance graphs and
 let the reader switch between them in place. Feature 36 made an instance
