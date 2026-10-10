@@ -1,0 +1,20 @@
+name: Name the runner image
+description: >-
+  Outputs the runner image (ubuntu24, macos15, win25, ...) for cache keys.
+  `runner.os` cannot tell one image from the next, so a cache keyed on it
+  alone hands one image's build to another: a WebKit built for a different
+  OS release, or a build script linked against a newer glibc than the
+  runner has. `env` does not carry runner variables, hence a step output.
+  A runner that sets no ImageOS (self-hosted) falls back to RUNNER_OS.
+
+outputs:
+  os:
+    description: The runner image, or the OS name where no image is set
+    value: ${{ steps.image.outputs.os }}
+
+runs:
+  using: composite
+  steps:
+    - id: image
+      shell: bash
+      run: echo "os=${ImageOS:-$RUNNER_OS}" >> "$GITHUB_OUTPUT"

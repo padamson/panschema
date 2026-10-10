@@ -106,6 +106,10 @@ jobs:
     - name: Build WASM package
       run: wasm-pack build panschema-viz --target web
 
+    - name: Name the runner image
+      id: image
+      uses: ./.github/actions/runner-image
+
     - name: Cache Cargo
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
@@ -115,9 +119,9 @@ jobs:
           ~/.cargo/registry/cache/
           ~/.cargo/git/db/
           target/
-        key: ${{ runner.os }}-${{ matrix.target }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+        key: ${{ steps.image.outputs.os }}-${{ matrix.target }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: |
-          ${{ runner.os }}-${{ matrix.target }}-cargo-release-
+          ${{ steps.image.outputs.os }}-${{ matrix.target }}-cargo-release-
 
     - name: Build Release
       run: cargo build -p panschema --release --target ${{ matrix.target }}

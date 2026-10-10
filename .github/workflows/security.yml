@@ -108,6 +108,10 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Name the runner image
+        id: image
+        uses: ./.github/actions/runner-image
+
       - name: Cache Cargo
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -117,9 +121,9 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-mutants-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ steps.image.outputs.os }}-cargo-mutants-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-mutants-
+            ${{ steps.image.outputs.os }}-cargo-mutants-
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7 # v2.87.23
@@ -187,6 +191,10 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Name the runner image
+        id: image
+        uses: ./.github/actions/runner-image
+
       - name: Cache Cargo
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -196,10 +204,10 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-mutants-diff-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ steps.image.outputs.os }}-cargo-mutants-diff-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-mutants-diff-
-            ${{ runner.os }}-cargo-mutants-
+            ${{ steps.image.outputs.os }}-cargo-mutants-diff-
+            ${{ steps.image.outputs.os }}-cargo-mutants-
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7 # v2.87.23

@@ -90,6 +90,10 @@ jobs:
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown
 
+      - name: Name the runner image
+        id: image
+        uses: ./.github/actions/runner-image
+
       - name: Cache Cargo
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -99,9 +103,9 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-lint-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ steps.image.outputs.os }}-cargo-lint-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-lint-
+            ${{ steps.image.outputs.os }}-cargo-lint-
 
       - name: Stub WASM artifacts
         run: |
@@ -167,6 +171,10 @@ jobs:
       with:
         tool: wasm-pack
 
+    - name: Name the runner image
+      id: image
+      uses: ./.github/actions/runner-image
+
     - name: Cache Cargo
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
@@ -176,9 +184,9 @@ jobs:
           ~/.cargo/registry/cache/
           ~/.cargo/git/db/
           target/
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        key: ${{ steps.image.outputs.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: |
-          ${{ runner.os }}-cargo-
+          ${{ steps.image.outputs.os }}-cargo-
 
     - name: Cache WASM build
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -206,6 +214,11 @@ jobs:
     # two downloads. Relocated out of `target/` into `drivers/` — the
     # crate's own knob for CI — so it lives on this key beside the browsers
     # it must match, rather than riding the cargo cache by accident.
+    #
+    # WebKit builds are per OS release, so this key carries the runner image
+    # too: a job on a new image would otherwise restore the old image's
+    # WebKit, the installer would see the revision present and skip the
+    # download, and WebKit would fail to load.
     - name: Cache Playwright browsers and driver
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
@@ -217,9 +230,9 @@ jobs:
           ~/Library/Caches/playwright-rust
           ~/AppData/Local/ms-playwright
           ~/AppData/Local/playwright-rust
-        key: playwright-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+        key: playwright-${{ steps.image.outputs.os }}-${{ hashFiles('Cargo.lock') }}
         restore-keys: |
-          playwright-${{ runner.os }}-
+          playwright-${{ steps.image.outputs.os }}-
 
     # The driver is assembled by playwright-rs's build script, so a cargo
     # cache hit skips it — and the two caches can come apart, because the
@@ -277,6 +290,10 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Name the runner image
+        id: image
+        uses: ./.github/actions/runner-image
+
       - name: Cache Cargo
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -286,9 +303,9 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-postgres-apply-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ steps.image.outputs.os }}-cargo-postgres-apply-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-postgres-apply-
+            ${{ steps.image.outputs.os }}-cargo-postgres-apply-
 
       # html_writer.rs include_bytes!/include_str! these at compile time;
       # empty placeholders satisfy type-checking without a wasm-pack run.
