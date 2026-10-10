@@ -47,13 +47,44 @@ pub struct Manifest {
 }
 
 impl Manifest {
-    /// The datasets declared for `name`: the `[generate.<name>]` and
-    /// `[check.<name>]` path lists and the datasets `[generate.<name>]`
-    /// names, generate's first, each once. Every command consumes this
-    /// union — conformance and cross-graph checks cover everything
-    /// declared, so a check list can only add datasets, never hide the
-    /// ones `generate` ships, and a dataset named rather than pathed is
-    /// still one of them.
+    /// The datasets `generate` ships for `name`: the `[generate.<name>]`
+    /// path list, then the datasets it names, each once. Writers take only
+    /// these. A `[check.<name>]` list adds datasets to verification, never
+    /// to an output, so a single-graph format still receives one and a
+    /// published page carries nothing listed only to be checked.
+    pub fn generated_instances(
+        &self,
+        name: &str,
+        resolved: &BTreeMap<String, crate::source::Resolved>,
+    ) -> Result<Vec<PathBuf>, Box<crate::source::DatasetError>> {
+        let Some(gen_cfg) = self.generate.get(name) else {
+            return Ok(Vec::new());
+        };
+        let mut out: Vec<PathBuf> = Vec::new();
+        for path in &gen_cfg.instances {
+            if !out.contains(path) {
+                out.push(path.clone());
+            }
+        }
+        // No guard on this entry's own dependency: a name may qualify another
+        // package, and a bare name with no dependency to resolve against is
+        // the resolver's error to report, not a reason to skip silently.
+        if !gen_cfg.datasets.is_empty() {
+            for path in crate::source::resolve_named_datasets(name, resolved, &gen_cfg.datasets)? {
+                if !out.contains(&path) {
+                    out.push(path);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// The datasets declared for `name`: what [`Self::generated_instances`]
+    /// ships, then the `[check.<name>]` path list's additions, each once.
+    /// Verification consumes this union — conformance and cross-graph
+    /// checks cover everything declared, so a check list can only add
+    /// datasets, never hide the ones `generate` ships, and a dataset named
+    /// rather than pathed is still one of them.
     ///
     /// Named datasets resolve to absolute paths inside the dependency's
     /// package; the path lists stay manifest-relative, as authored.
@@ -62,26 +93,10 @@ impl Manifest {
         name: &str,
         resolved: &BTreeMap<String, crate::source::Resolved>,
     ) -> Result<Vec<PathBuf>, Box<crate::source::DatasetError>> {
-        let mut out: Vec<PathBuf> = Vec::new();
-        let lists = [
-            self.generate.get(name).map(|g| &g.instances),
-            self.check.get(name).map(|c| &c.instances),
-        ];
-        for path in lists.into_iter().flatten().flatten() {
+        let mut out = self.generated_instances(name, resolved)?;
+        for path in self.check.get(name).into_iter().flat_map(|c| &c.instances) {
             if !out.contains(path) {
                 out.push(path.clone());
-            }
-        }
-        // No guard on this entry's own dependency: a name may qualify another
-        // package, and a bare name with no dependency to resolve against is
-        // the resolver's error to report, not a reason to skip silently.
-        if let Some(gen_cfg) = self.generate.get(name)
-            && !gen_cfg.datasets.is_empty()
-        {
-            for path in crate::source::resolve_named_datasets(name, resolved, &gen_cfg.datasets)? {
-                if !out.contains(&path) {
-                    out.push(path);
-                }
             }
         }
         Ok(out)
@@ -255,6 +270,8 @@ pub struct CheckConfig {
     /// Datasets to check, unioned with the `[generate.<name>]` entry's
     /// `instances` list — a checked-and-generated schema declares its
     /// datasets once, and this list can add to them but never hide them.
+    /// What it adds is verified, by `verify` and `generate --strict`
+    /// alike, and shipped by no writer.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub instances: Vec<PathBuf>,
     /// Sibling entries whose datasets this entry's external references
@@ -1419,13 +1436,20 @@ x = { path = "./x-pkg" }
 x = { path = "./x" }
 
 [generate.x]
-instances = ["a.yaml", "b.yaml"]
+instances = ["a.yaml", "b.yaml", "a.yaml"]
 
 [check.x]
 instances = ["b.yaml", "c.yaml"]
 "#,
         )
         .expect("parse");
+        assert_eq!(
+            manifest
+                .generated_instances("x", &BTreeMap::new())
+                .expect("resolves"),
+            vec![PathBuf::from("a.yaml"), PathBuf::from("b.yaml")],
+            "writers ship generate's list once each, and none of check's additions"
+        );
         assert_eq!(
             manifest
                 .declared_instances("x", &BTreeMap::new())
@@ -1481,6 +1505,16 @@ instances = ["b.yaml", "c.yaml"]
             ],
             "the authored path first, then the named dataset's own file"
         );
+        assert_eq!(
+            manifest
+                .generated_instances("wine", &resolved)
+                .expect("resolves"),
+            vec![
+                PathBuf::from("local.yaml"),
+                PathBuf::from("/pkg/wine/data/wine-instances.yaml"),
+            ],
+            "a named dataset ships, not only gets checked"
+        );
     }
 
     #[test]
@@ -1494,6 +1528,13 @@ instances = ["b.yaml", "c.yaml"]
                 .declared_instances("x", &BTreeMap::new())
                 .expect("resolves"),
             vec![PathBuf::from("c.yaml")]
+        );
+        assert_eq!(
+            manifest
+                .generated_instances("x", &BTreeMap::new())
+                .expect("resolves"),
+            Vec::<PathBuf>::new(),
+            "a check-only entry ships nothing"
         );
     }
 

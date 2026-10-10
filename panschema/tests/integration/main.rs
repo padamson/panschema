@@ -2237,10 +2237,92 @@ resolve_against = ["catalog"]
     )
     .unwrap();
     let out = run_in(consumer, &["generate", "--strict"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        !out.status.success(),
-        "the shipped dataset's dangling cross-graph reference must fail the gate; got:\n{}",
-        String::from_utf8_lossy(&out.stderr)
+        !out.status.success() && stderr.contains("cat:ghost"),
+        "the shipped dataset's dangling cross-graph reference must fail the gate; got:\n{stderr}"
+    );
+}
+
+/// A `[check]`-only dataset is verified, never shipped. `generate` hands
+/// every writer only the datasets `[generate]` declares, so a single-graph
+/// format still takes one and the published page carries no dataset the
+/// author listed only to check. It still checks the rest: a violation
+/// there warns, `generate --strict` refuses it as `verify --strict` does,
+/// and `verify` reports it.
+#[test]
+fn a_check_only_dataset_is_verified_but_not_shipped() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    write_pkg(
+        &consumer.join("catalog-pkg"),
+        "catalog",
+        "1.0.0",
+        "catalog.yaml",
+        UNION_CATALOG_SCHEMA,
+    );
+    fs::write(
+        consumer.join("shipped.yaml"),
+        "id: est-shipped\nproviders:\n  - {id: prov-shipped, weight: 1}\n",
+    )
+    .unwrap();
+    fs::write(
+        consumer.join("checked.yaml"),
+        "id: est-checked\nproviders:\n  - {id: prov-checked, weight: heavy}\n",
+    )
+    .unwrap();
+    fs::write(
+        consumer.join("panschema.toml"),
+        r#"
+[schemas]
+catalog = { path = "./catalog-pkg" }
+
+[generate.catalog]
+ttl = "catalog.ttl"
+html = "docs"
+instances = ["shipped.yaml"]
+
+[check.catalog]
+instances = ["checked.yaml"]
+"#,
+    )
+    .unwrap();
+
+    let generated = run_in(consumer, &["generate"]);
+    let stderr = String::from_utf8_lossy(&generated.stderr);
+    assert!(
+        generated.status.success(),
+        "a check-only dataset does not reach the single-graph writer; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("prov-checked") && stderr.contains("expects an integer"),
+        "generate still checks the check-only dataset and warns; got:\n{stderr}"
+    );
+    let ttl = fs::read_to_string(consumer.join("catalog.ttl")).expect("catalog.ttl written");
+    let html = fs::read_to_string(consumer.join("docs/index.html")).expect("page written");
+    for (output, body) in [("Turtle", &ttl), ("HTML", &html)] {
+        assert!(
+            body.contains("prov-shipped"),
+            "{output} carries the generate-listed dataset"
+        );
+        assert!(
+            !body.contains("prov-checked"),
+            "{output} carries no record from the check-only dataset"
+        );
+    }
+
+    let strict = run_in(consumer, &["generate", "--strict"]);
+    let stderr = String::from_utf8_lossy(&strict.stderr);
+    assert!(
+        !strict.status.success() && stderr.contains("instance-data violation"),
+        "generate --strict refuses what verify --strict would; got:\n{stderr}"
+    );
+
+    let verified = run_in(consumer, &["verify"]);
+    let stderr = String::from_utf8_lossy(&verified.stderr);
+    assert!(
+        stderr.contains("prov-checked") && stderr.contains("expects an integer"),
+        "verify still checks the check-only dataset; got:\n{stderr}"
     );
 }
 

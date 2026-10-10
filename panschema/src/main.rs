@@ -1198,16 +1198,25 @@ fn generate_from_manifest(
             }
             continue;
         };
-        // The declared set: manifest-relative paths, then the datasets this
-        // entry names, resolved inside the dependency's own package. One
-        // list, so `generate`, `verify` and the cross-graph pass cannot
-        // disagree about what this entry declares. Joining the manifest
-        // directory leaves the named datasets' absolute paths untouched.
-        // No added context on the error: it already names its block.
+        // What the writers ship: this entry's manifest-relative paths, then
+        // the datasets it names, resolved inside the dependency's own
+        // package. Joining the manifest directory leaves the named datasets'
+        // absolute paths untouched. No added context on the error: it
+        // already names its block.
         let instances: Vec<PathBuf> = manifest
+            .generated_instances(name, &resolved)?
+            .iter()
+            .map(|p| manifest_dir.join(p))
+            .collect();
+        // Datasets listed only under [check.<name>] ship nowhere, but
+        // `generate --strict` refuses what `verify --strict` would, so they
+        // are checked here; the shipped ones are checked as each writer
+        // loads them.
+        let check_only: Vec<PathBuf> = manifest
             .declared_instances(name, &resolved)?
             .iter()
             .map(|p| manifest_dir.join(p))
+            .filter(|p| !instances.contains(p))
             .collect();
         // Cross-graph resolution runs once per entry, before any writer:
         // it reads both graphs and writes nothing, so `--check` runs it too.
@@ -1227,6 +1236,16 @@ fn generate_from_manifest(
                 &registry,
             )
             .with_context(|| format!("schema `{name}`, check"))?;
+            if !check_only.is_empty() {
+                let (violations, _) =
+                    verify_datasets(&check_schema, &check_only, true, "warning: ")?;
+                if strict && violations > 0 {
+                    anyhow::bail!(
+                        "schema `{name}`, check: {violations} instance-data violation(s) \
+                         present; failing because --strict is set"
+                    );
+                }
+            }
             if strict && !problems.is_empty() {
                 anyhow::bail!(
                     "schema `{name}`, check: {}; failing because --strict is set",
