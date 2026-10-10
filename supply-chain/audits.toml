@@ -66,6 +66,12 @@ criteria = "safe-to-run"
 delta = "0.58.0 -> 0.58.5"
 notes = "Delta audit at safe-to-run, from a scan of every added line rather than a full read: 5770 lines added across src/keywords/ and src/canonical/, the rest of the diff is the vendored JSON-Schema-Test-Suite under tests/. No process, env, fs or net access, no include!, no unsafe, no new dependency in this repo's graph; the manifest bumps only its sibling crates to 0.58.5 and the dev-dependencies hegeltest and magnus. Dev-only here: the JSON Schema writer's oracle in tests."
 
+[[audits.jsonschema]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.58.5 -> 0.58.6"
+notes = "Test-only release: new pattern and format test cases for ECMAScript class-set syntax and Unicode whitespace, sibling-crate and hegeltest version bumps, and the vendored JSON-Schema-Test-Suite dropped from the package. No library source change. Dev-only here: the JSON Schema writer's oracle in tests."
+
 [[audits.jsonschema-regex]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-run"
@@ -83,6 +89,12 @@ criteria = "safe-to-run"
 delta = "0.56.0 -> 0.58.5"
 notes = "One parser rule widened (identity escapes outside the u flag) plus tests. No unsafe, no I/O."
 
+[[audits.jsonschema-regex]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.58.5 -> 0.58.6"
+notes = '''Escapes ECMAScript class-set operators (&&, --, ~~, nested [) that Rust's regex syntax would read as set operations, and widens the \s translation to the full ECMA-262 whitespace table. Pure string rewriting plus tests; no unsafe, no I/O, no dependency change.'''
+
 [[audits.jsonschema-value]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-run"
@@ -99,6 +111,12 @@ who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-run"
 delta = "0.56.0 -> 0.58.5"
 notes = "New jsonb reader (no unsafe) and pyo3/magnus FFI changes behind features we do not enable. New build.rs is a no-op without the pyo3 feature."
+
+[[audits.jsonschema-value]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.58.5 -> 0.58.6"
+notes = "Version bump and a dev-dependency bump (hegeltest 0.48); no source change."
 
 [[audits.ndarray]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
@@ -211,6 +229,12 @@ who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-run"
 delta = "0.56.0 -> 0.58.5"
 notes = "Dynamic-anchor base URI fix and $schema lookup order. Pure logic, no unsafe, no I/O."
+
+[[audits.referencing]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.58.5 -> 0.58.6"
+notes = "Version bump only; no source change."
 
 [[audits.sparesults]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
