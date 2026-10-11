@@ -374,7 +374,7 @@ fn main() {
     // jiff wire contract: RFC 3339 timestamps with a trailing Z, ISO
     // 8601 dates — byte-compatible with what the chrono mapping emits.
     let event = codegen_jiff::Event {
-        id: "e1".to_string(),
+        id: codegen_jiff::EventId("e1".to_string()),
         at: "2026-01-02T03:04:05Z".parse().expect("parse timestamp"),
         day: "2026-01-02".parse().expect("parse date"),
     };
@@ -394,7 +394,7 @@ fn main() {
     // Keyword-escaped fields construct via their raw idents and rename to
     // the original wire names under serde.
     let kw = codegen::Keyworded {
-        id: "k1".to_string(),
+        id: codegen::KeywordedId("k1".to_string()),
         r#type: Some("scalar".to_string()),
         r#move: Some("castle".to_string()),
         r#virtual: None,
@@ -613,13 +613,31 @@ fn main() {
     // `Keyworded.noted` -> `Option<Box<r#move>>`. Construct through that
     // reference site to prove the escaped ident matches the definition.
     let kw2 = codegen::Keyworded {
-        id: "k2".to_string(),
+        id: codegen::KeywordedId("k2".to_string()),
         r#type: None,
         r#move: None,
         r#virtual: None,
         noted: Some(Box::new(m)),
     };
     assert!(kw2.noted.is_some(), "keyword-named class usable as a field range");
+
+    // A reference holds the target's id type, and a descendant's id
+    // converts into an ancestor's to fill a reference to the ancestor.
+    let person = codegen::PersonId("p1".to_string());
+    let assignment = codegen::Assignment {
+        ticket: codegen::TicketId(42),
+        assignee: Some(person.clone().into()),
+        reviewers: vec![person],
+    };
+    let assignment_json = serde_json::to_value(&assignment).expect("serialize Assignment");
+    assert_eq!(
+        assignment_json,
+        serde_json::json!({"ticket": 42, "assignee": "p1", "reviewers": ["p1"]}),
+        "references serialize as bare ids"
+    );
+    let assignment_back: codegen::Assignment =
+        serde_json::from_value(assignment_json).expect("deserialize Assignment");
+    assert_eq!(assignment_back, assignment, "references round-trip");
 }
 "##;
 

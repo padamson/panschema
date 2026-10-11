@@ -82,9 +82,11 @@ Fan-out lives in `generate_from_manifest` ([panschema/src/main.rs](../../pansche
 | `range: boolean` | `bool` |
 | `range: float` / `double` | `f64` |
 | `range: datetime` | `chrono::DateTime<Utc>` (`jiff::Timestamp` under `rust_time = "jiff"`) |
-| `range: <classname>` / `<enumname>` | `T = ClassName` / `EnumName` |
+| `range: <enumname>` | `T = EnumName` |
+| `range: <classname>`, a reference | `T = ClassNameId`: a slot ranged on a class with an `identifier`, declaring neither `inlined` nor `inlined_as_list`, holds the target's id (the inlining rule is `holding` in `panschema-model`) |
+| `range: <classname>`, inlined | `T = ClassName` (or its `<Name>Kind` enum): a class with no identifier, or a slot declaring `inlined` / `inlined_as_list` |
 | `description:` | `///` doc-comment, wrapped at ~80 chars |
-| `identifier: true` slot | No special treatment in v0.1 — a regular field |
+| `identifier: true` slot | A per-class id type, `#[serde(transparent)] pub struct ClassNameId(pub T)` over the identifier's own type, as LinkML's Python generator emits `ClassNameId`. The class's identifier field and every reference to it take that type. An identifier inherited through `is_a` adds `impl From<ChildId> for ParentId`, the Rust form of LinkML's id subclassing. |
 | `class_uri: <prefix>:<term>` | Schema-local name wins for the Rust type name; URI prefix is LinkML metadata, not part of the Rust shape |
 
 ### Field-name mangling
@@ -150,7 +152,7 @@ LinkML uses lowerCamelCase (`wasGeneratedBy`); Rust idiom is snake_case. Slot na
 - [x] `slot_usage` resolution applied per-class: walks `is_a` chain + mixins, collects slot definitions, applies `slot_usage` as a merge-overlay (only fields the override actually sets — preserves unmentioned inherited fields)
 - [x] `any_of` per-slot enum unions with `#[serde(untagged)]` and `Box<T>` variants
 - [x] Trait-only-class slot ranges (e.g. `hasUncertainty: UncertaintyModel`) map to a `<Name>Kind` closed enum that wraps all concrete descendants — keeps fields sized without trait objects
-- [x] Class-typed single-valued fields are wrapped in `Box` to break layout cycles (`Result.refines: Option<Box<Result>>`); `Vec<T>` already provides indirection so it stays bare
+- [x] Class-typed single-valued fields that hold their record are wrapped in `Box` to break layout cycles (`Result.refines: Option<Box<Result>>`); `Vec<T>` already provides indirection so it stays bare. A reference holds the target's `<Class>Id` and needs no `Box`
 - [x] 16 new unit tests cover `compute_class_roles`, `resolve_slots` (inheritance + mixin + slot_usage merge cases), `is_descendant_of`, `type_for_range`, `render_trait` (supertrait chain), `render_class` (impl block emission), `render_kind_enum`, `render_any_of_enum`, `pascal_case`
 - [x] Integration ladder is fully green: scimantic-schema v0.1.0 renders cleanly, `Question.was_generated_by` resolves to `Option<Box<QuestionFormation>>`, `impl UncertaintyModel for Vagueness {}` is emitted, untagged unions appear for `any_of` ranges, and the generated module compiles via `cargo build` against `serde` + `chrono`
 
@@ -398,13 +400,13 @@ The two green tests over-deliver against the slice's stated scope. `scimantic_ou
 - `slot_usage` is resolved per-class via merge-overlay: `Option`/`Vec` fields are overwritten only when the override actually sets them; bool fields are copied only when the override sets them to `true` (compromise documented in `merge_slot_override` — distinguishing "absent" from "explicit false" would need an IR refactor to `Option<bool>`).
 - `any_of` ranges emit a per-(class, slot) `pub enum <Class><PascalSlot>` with `#[serde(untagged)]` and `Box<Member>` variants. The slot field uses the enum as its (sized) type.
 - Trait-only-class slot ranges (e.g. `hasUncertainty: UncertaintyModel`) map to a `<Name>Kind` closed enum auto-generated from the schema's concrete descendants.
-- Class-typed single-valued fields get a `Box` wrapper to prevent layout cycles (`Result.refines: Option<Box<Result>>`). `Vec<T>` for class T stays bare since `Vec` already provides heap indirection.
+- Class-typed single-valued fields that hold their record get a `Box` wrapper to prevent layout cycles (`Result.refines: Option<Box<Result>>`). `Vec<T>` for class T stays bare since `Vec` already provides heap indirection. A reference (a range with an `identifier`, not declared inlined) is the target's `<Class>Id` instead.
 - 16 new unit tests + the integration ladder going fully green against scimantic v0.1.0 (including the `cargo build` compile check).
 
 **Design decisions captured here for the record:**
 - **Marker traits over method-bearing traits.** Method-bearing trait getters would conflict with `slot_usage` type refinement: a subclass field narrowed via `slot_usage` cannot satisfy a parent trait's method signature in Rust's type system (no covariant return types). Marker traits give `T: Entity`-style polymorphism, preserve type-level slot_usage refinement, and emit cleanly.
 - **Trait-only emission for `is_a` parents and mixins.** Avoids the `pub trait Foo` / `pub struct Foo` namespace collision. Trade-off: LinkML schemas that need to construct a "bare" parent instance would require a future suffix variant. Documented limitation.
-- **`<Name>Kind` closed enum** for slot ranges that reference a trait-only class. Keeps fields sized without requiring `Box<dyn Trait>` machinery and `typetag`. Open-world dispatch (a slot whose subclasses are not known at codegen time) would need a different writer mode.
+- **`<Name>Kind` closed enum** for slots that hold a record of a trait-only class (a reference to one is its `<Name>Id`). Keeps fields sized without requiring `Box<dyn Trait>` machinery and `typetag`. Open-world dispatch (a slot whose subclasses are not known at codegen time) would need a different writer mode.
 
 ### Slice 6.4 — scimantic end-to-end + idempotency
 

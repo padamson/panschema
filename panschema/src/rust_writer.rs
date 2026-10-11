@@ -51,11 +51,40 @@ impl TimeCrate {
     }
 }
 
+/// Each class's effective slots, resolved once per render.
+type EffectiveSlots = BTreeMap<String, BTreeMap<String, SlotDefinition>>;
+
+fn effective_slots_by_class(schema: &SchemaDefinition) -> EffectiveSlots {
+    schema
+        .classes
+        .iter()
+        .map(|(name, class)| {
+            let slots = crate::linkml_resolve::resolve_effective_slots(class, schema);
+            (name.clone(), slots)
+        })
+        .collect()
+}
+
+/// The identifier a reference slot holds: `Some` when `slot` references its
+/// range's records rather than holding them, as the model's inlining rule
+/// ([`holding`](crate::linkml_resolve::holding)) decides.
+fn referenced_id<'e>(
+    slot: &SlotDefinition,
+    effective: &'e EffectiveSlots,
+) -> Option<&'e SlotDefinition> {
+    let range_slots = effective.get(slot.range.as_deref()?)?;
+    match crate::linkml_resolve::holding(slot, range_slots) {
+        crate::linkml_resolve::Holding::Reference(id) => Some(id),
+        _ => None,
+    }
+}
+
 /// Everything the per-class render functions read but never mutate —
 /// bundled so a writer-wide knob extends this struct instead of growing
 /// four signatures and their call sites.
 struct RenderCtx<'a> {
     schema: &'a SchemaDefinition,
+    effective: &'a EffectiveSlots,
     roles: &'a BTreeMap<String, ClassRole>,
     eq_hash_support: &'a BTreeMap<String, bool>,
     time: TimeCrate,
@@ -94,9 +123,11 @@ impl RustWriter {
     /// write directly to a file, buffer, or formatter.
     pub fn render_into<W: Write>(&self, out: &mut W, schema: &SchemaDefinition) -> fmt::Result {
         let roles = compute_class_roles(schema);
-        let eq_hash_support = compute_eq_hash_support(schema, &roles);
+        let effective = effective_slots_by_class(schema);
+        let eq_hash_support = compute_eq_hash_support(schema, &roles, &effective);
         let ctx = RenderCtx {
             schema,
+            effective: &effective,
             roles: &roles,
             eq_hash_support: &eq_hash_support,
             time: self.time_crate,
@@ -110,6 +141,9 @@ impl RustWriter {
 
         for (name, def) in &schema.enums {
             render_enum(&mut body, name, def)?;
+        }
+        for (name, def) in &schema.classes {
+            render_id_type(&mut body, name, def, &ctx)?;
         }
 
         // Emission order is load-bearing: traits → structs → Kind enums
@@ -126,7 +160,7 @@ impl RustWriter {
                 render_class(&mut body, name, def, &ctx, &mut any_of_enums)?;
             }
         }
-        let designator_by_class = designators_by_class(schema);
+        let designator_by_class = designators_by_class(&effective);
         for name in schema.classes.keys() {
             if roles.get(name) == Some(&ClassRole::Trait) {
                 designated |= render_kind_enum(
@@ -161,6 +195,7 @@ impl RustWriter {
 impl Writer for RustWriter {
     fn write(&self, schema: &SchemaDefinition, output: &Path) -> IoResult<()> {
         validate_identifiers(schema)?;
+        validate_id_type_names(schema)?;
         crate::io::ensure_output_parent(output)?;
         std::fs::write(output, self.render(schema)).map_err(IoError::Io)?;
         Ok(())
@@ -229,6 +264,51 @@ fn validate_identifiers(schema: &SchemaDefinition) -> IoResult<()> {
     Ok(())
 }
 
+/// Refuse a schema that already uses the name of an id type the module
+/// would define: a class or enum named `<Class>Id`, or the union enum of an
+/// `any_of` slot named `id` on that class. Two items of one name would not
+/// compile, and renaming either generated type would break the convention
+/// a reader relies on.
+fn validate_id_type_names(schema: &SchemaDefinition) -> IoResult<()> {
+    let effective = effective_slots_by_class(schema);
+    let unions: BTreeMap<String, String> = effective
+        .iter()
+        .flat_map(|(class, slots)| {
+            slots
+                .iter()
+                .filter(|(_, def)| !def.any_of.is_empty())
+                .map(move |(slot, _)| {
+                    (
+                        format!("{class}{}", pascal_case(slot)),
+                        format!("{class}.{slot}"),
+                    )
+                })
+        })
+        .collect();
+    for name in effective.keys() {
+        if identifier_of(name, &effective).is_none() {
+            continue;
+        }
+        let id_type = format!("{name}Id");
+        let clash = if schema.classes.contains_key(&id_type) {
+            Some(format!("class `{id_type}`"))
+        } else if schema.enums.contains_key(&id_type) {
+            Some(format!("enum `{id_type}`"))
+        } else {
+            unions
+                .get(&id_type)
+                .map(|slot| format!("the union type of `{slot}`"))
+        };
+        if let Some(clash) = clash {
+            return Err(IoError::Write(format!(
+                "{clash} takes the name `{id_type}`, the id type generated for class \
+                 `{name}`; rename one of them in the schema"
+            )));
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Class roles
 // ---------------------------------------------------------------------------
@@ -287,6 +367,7 @@ fn compute_class_roles(schema: &SchemaDefinition) -> BTreeMap<String, ClassRole>
 fn compute_eq_hash_support(
     schema: &SchemaDefinition,
     roles: &BTreeMap<String, ClassRole>,
+    effective: &EffectiveSlots,
 ) -> BTreeMap<String, bool> {
     let mut support: BTreeMap<String, bool> =
         schema.classes.keys().map(|n| (n.clone(), true)).collect();
@@ -298,18 +379,15 @@ fn compute_eq_hash_support(
     // mutation can produce an infinite loop on a happy-path schema.
     for _ in 0..=schema.classes.len() {
         let mut changed = false;
-        for (name, class) in &schema.classes {
+        for name in schema.classes.keys() {
             if !support.get(name).copied().unwrap_or(true) {
                 continue;
             }
             let still_ok = match roles.get(name) {
                 Some(ClassRole::Trait) => trait_descendants_support(name, schema, roles, &support),
-                Some(ClassRole::Struct) => {
-                    let resolved = resolve_slots(class, schema);
-                    resolved
-                        .values()
-                        .all(|slot| field_supports_eq_hash(slot, schema, roles, &support))
-                }
+                Some(ClassRole::Struct) => effective[name]
+                    .values()
+                    .all(|slot| field_supports_eq_hash(slot, schema, roles, effective, &support)),
                 None => true,
             };
             if !still_ok {
@@ -351,6 +429,7 @@ fn field_supports_eq_hash(
     slot: &SlotDefinition,
     schema: &SchemaDefinition,
     roles: &BTreeMap<String, ClassRole>,
+    effective: &EffectiveSlots,
     support: &BTreeMap<String, bool>,
 ) -> bool {
     if !slot.any_of.is_empty() {
@@ -362,7 +441,13 @@ fn field_supports_eq_hash(
                 .is_some_and(|r| type_supports_eq_hash(r, schema, roles, support))
         });
     }
-    let range = slot.range.as_deref().unwrap_or("string");
+    // A reference is its target's id, so the id's type decides, not the
+    // target's fields.
+    let range = referenced_id(slot, effective)
+        .unwrap_or(slot)
+        .range
+        .as_deref()
+        .unwrap_or("string");
     type_supports_eq_hash(range, schema, roles, support)
 }
 
@@ -394,12 +479,6 @@ fn type_supports_eq_hash(
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Slot resolution
-// ---------------------------------------------------------------------------
-
-pub(crate) use crate::linkml_resolve::resolve_effective_slots as resolve_slots;
 
 /// Walk this class's `is_a` chain bottom-up (excluding the class itself).
 /// Returns ancestors in inheritance order (immediate parent first, root
@@ -542,6 +621,72 @@ fn render_enum<W: Write>(out: &mut W, name: &str, def: &EnumDefinition) -> fmt::
     out.write_str("}\n\n")
 }
 
+/// The class's `identifier` slot, when the slot that names its records
+/// is an identifier rather than a key.
+fn identifier_of<'e>(
+    class_name: &str,
+    effective: &'e EffectiveSlots,
+) -> Option<&'e SlotDefinition> {
+    crate::linkml_resolve::record_id_slot(effective.get(class_name)?)
+        .map(|(_, slot)| slot)
+        .filter(|slot| slot.identifier)
+}
+
+/// The type a class's identifier takes, and every reference to the class.
+fn id_type_name(class_name: &str) -> String {
+    type_ident(&format!("{class_name}Id")).into_owned()
+}
+
+/// Emit `<Class>Id` for a class with an identifier: a transparent newtype
+/// over the identifier's own type, the Rust spelling of the per-class id
+/// type LinkML's Python generator emits. It is ordered when the
+/// identifier's type is a primitive (an enum or class is not). Where the
+/// identifier comes down `is_a` to a class from an ancestor whose id type
+/// wraps the same Rust type, a `From` conversion into the ancestor's id
+/// type stands in for LinkML's id subclassing, so a descendant's id can
+/// fill a reference to the ancestor.
+fn render_id_type<W: Write>(
+    out: &mut W,
+    name: &str,
+    def: &ClassDefinition,
+    ctx: &RenderCtx<'_>,
+) -> fmt::Result {
+    let Some(id) = identifier_of(name, ctx.effective) else {
+        return Ok(());
+    };
+    let inner_of =
+        |id: &SlotDefinition| type_for_range(id.range.as_deref().unwrap_or("string"), ctx);
+    let range = id.range.as_deref().unwrap_or("string");
+    let eq_hash = type_supports_eq_hash(range, ctx.schema, ctx.roles, ctx.eq_hash_support);
+    let primitive = crate::primitives::effective_primitive(ctx.schema, range).is_some();
+    let derives = match (eq_hash, primitive) {
+        (true, true) => "Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord",
+        (true, false) => "Debug, Clone, PartialEq, Eq, Hash",
+        (false, true) => "Debug, Clone, PartialEq, PartialOrd",
+        (false, false) => "Debug, Clone, PartialEq",
+    };
+    let ty = id_type_name(name);
+    let inner = inner_of(id);
+    writeln!(out, "/// Identifier of a `{name}` record.")?;
+    writeln!(
+        out,
+        "#[derive({derives}, serde::Serialize, serde::Deserialize)]"
+    )?;
+    out.write_str("#[serde(transparent)]\n")?;
+    writeln!(out, "pub struct {ty}(pub {inner});\n")?;
+
+    for ancestor in is_a_ancestors(def, ctx.schema) {
+        if identifier_of(&ancestor, ctx.effective).is_some_and(|a| inner_of(a) == inner) {
+            writeln!(
+                out,
+                "impl From<{ty}> for {} {{\n    fn from(id: {ty}) -> Self {{\n        Self(id.0)\n    }}\n}}\n",
+                id_type_name(&ancestor)
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// Emit a marker trait for a class that's used as an `is_a` parent or
 /// mixin. Supertrait bounds combine the class's own `is_a` parent and
 /// any mixins that themselves resolve to traits in this schema.
@@ -634,7 +779,7 @@ fn render_class<W: Write>(
     for (slot_name, slot) in &resolved {
         let snake = snake_case(slot_name);
         let rust_field = raw_if_keyword(&snake);
-        let ifabsent_default = resolve_ifabsent_default(slot, schema);
+        let ifabsent_default = field_default(slot, ctx);
 
         // An `ifabsent` that's set but doesn't resolve to a known default
         // falls back to the normal rendering — `Option<T>`, or a bare `T`
@@ -642,6 +787,13 @@ fn render_class<W: Write>(
         // dropped default is visible rather than silent.
         if ifabsent_default.is_none() && slot.ifabsent.is_some() && !is_multivalued(slot) {
             let expr = slot.ifabsent.as_deref().unwrap_or("");
+            let why = if slot.identifier {
+                "an identifier takes no default"
+            } else if referenced_id(slot, ctx.effective).is_some() {
+                "a reference takes no default"
+            } else {
+                "it does not resolve to a known default"
+            };
             let fallback = if is_required(slot) {
                 "a required `T`"
             } else {
@@ -649,9 +801,8 @@ fn render_class<W: Write>(
             };
             write!(
                 out,
-                "    // WARNING: slot `{slot_name}` declares `ifabsent: {expr}` which\n\
-                 //          does not resolve to a known default; field falls\n\
-                 //          back to {fallback} with no default.\n"
+                "    // WARNING: slot `{slot_name}` declares `ifabsent: {expr}`, but\n\
+                 //          {why}; field falls back to {fallback} with no default.\n"
             )?;
         }
 
@@ -751,7 +902,6 @@ fn render_constructor<W: Write>(
     ctx: &RenderCtx<'_>,
     any_of_enums: &mut BTreeMap<String, Vec<String>>,
 ) -> fmt::Result {
-    let schema = ctx.schema;
     // A slot with a resolvable `ifabsent` default always has a value (the
     // default), so it's neither a required constructor param nor an
     // `Option` set to `None` — the ctor initializes it from the generated
@@ -759,9 +909,7 @@ fn render_constructor<W: Write>(
     let params: Vec<(String, String)> = resolved
         .iter()
         .filter(|(_, slot)| {
-            is_required(slot)
-                && !is_multivalued(slot)
-                && resolve_ifabsent_default(slot, schema).is_none()
+            is_required(slot) && !is_multivalued(slot) && field_default(slot, ctx).is_none()
         })
         .map(|(slot_name, slot)| {
             (
@@ -785,7 +933,7 @@ fn render_constructor<W: Write>(
     for (slot_name, slot) in resolved {
         let snake = snake_case(slot_name);
         let field = raw_if_keyword(&snake);
-        if let Some(d) = resolve_ifabsent_default(slot, schema) {
+        if let Some(d) = field_default(slot, ctx) {
             writeln!(out, "            {field}: {},", d.default_expr())?;
         } else if is_multivalued(slot) {
             writeln!(out, "            {field}: Vec::new(),")?;
@@ -1045,16 +1193,10 @@ fn class_reference_type(
 /// Each class's effective designator slot, resolved once per render —
 /// both enum emitters consult it, and the full slot resolution is too
 /// costly to repeat per union member.
-fn designators_by_class(schema: &SchemaDefinition) -> BTreeMap<String, Option<String>> {
-    schema
-        .classes
+fn designators_by_class(effective: &EffectiveSlots) -> BTreeMap<String, Option<String>> {
+    effective
         .iter()
-        .map(|(name, class)| {
-            (
-                name.clone(),
-                crate::linkml_resolve::designator_slot_of(class, schema),
-            )
-        })
+        .map(|(name, slots)| (name.clone(), crate::linkml_resolve::designator_in(slots)))
         .collect()
 }
 
@@ -1426,9 +1568,15 @@ fn field_type_for(
         return framed_sized(&type_ident(&enum_name), slot);
     }
 
+    if slot.identifier {
+        return framed_sized(&id_type_name(class_name), slot);
+    }
     let Some(range) = &slot.range else {
         return framed_sized("String", slot);
     };
+    if referenced_id(slot, ctx.effective).is_some() {
+        return framed_sized(&id_type_name(range), slot);
+    }
 
     let needs_box = matches!(roles.get(range.as_str()), Some(ClassRole::Struct));
     let base = type_for_range(range, ctx);
@@ -1704,6 +1852,16 @@ impl IfAbsentDefault {
     }
 }
 
+/// The `ifabsent` default a field takes, which an identifier or a
+/// reference never does: a defaulted identifier would give every record
+/// that leaves it out the same id, and either field keeps its id type.
+fn field_default(slot: &SlotDefinition, ctx: &RenderCtx<'_>) -> Option<IfAbsentDefault> {
+    if slot.identifier || referenced_id(slot, ctx.effective).is_some() {
+        return None;
+    }
+    resolve_ifabsent_default(slot, ctx.schema)
+}
+
 /// Resolve a non-multivalued slot's `ifabsent` to a renderable default —
 /// the enum form (delegated to [`resolve_ifabsent_enum_default`]) or one of
 /// the scalar forms (`int`, `float`/`double`, `string`, boolean). Returns
@@ -1881,6 +2039,7 @@ fn variant_ident_for(text: &str) -> String {
 mod tests {
     use super::*;
     use crate::linkml::{ClassDefinition, EnumDefinition, PermissibleValue, SlotDefinition};
+    use crate::linkml_resolve::resolve_effective_slots as resolve_slots;
     use crate::linkml_resolve::{
         InheritancePath, Provenance, resolve_effective_slots_with_provenance,
     };
@@ -1892,8 +2051,10 @@ mod tests {
         roles: &'a BTreeMap<String, ClassRole>,
     ) -> RenderCtx<'a> {
         static EMPTY: BTreeMap<String, bool> = BTreeMap::new();
+        static NO_SLOTS: EffectiveSlots = BTreeMap::new();
         RenderCtx {
             schema,
+            effective: &NO_SLOTS,
             roles,
             eq_hash_support: &EMPTY,
             time: TimeCrate::Chrono,
@@ -1986,6 +2147,35 @@ mod tests {
             })
         }
 
+        /// Each `T` with an `impl From<T> for <for_type>`, sorted.
+        pub fn impls_from(src: &str, for_type: &str) -> Vec<Type> {
+            let mut from: Vec<Type> = parse(src)
+                .items
+                .iter()
+                .filter_map(|i| match i {
+                    Item::Impl(im) if type_last(&im.self_ty) == for_type => im.trait_.as_ref(),
+                    _ => None,
+                })
+                .filter_map(|(path, _)| {
+                    let last = path.segments.last()?;
+                    if last.ident != "From" {
+                        return None;
+                    }
+                    match &last.arguments {
+                        syn::PathArguments::AngleBracketed(args) => {
+                            args.args.iter().find_map(|a| match a {
+                                syn::GenericArgument::Type(t) => Some(t.clone()),
+                                _ => None,
+                            })
+                        }
+                        _ => None,
+                    }
+                })
+                .collect();
+            from.sort_by_key(|t| format!("{t:?}"));
+            from
+        }
+
         fn struct_field<'a>(file: &'a File, strukt: &str, field: &str) -> Option<&'a syn::Field> {
             file.items.iter().find_map(|i| match i {
                 Item::Struct(s) if s.ident == strukt => s
@@ -2068,6 +2258,35 @@ mod tests {
                     .into_iter()
                     .map(|p| path_last(&p))
                 })
+                .collect()
+        }
+
+        /// The one field type of tuple struct `name`, or `None` when it is
+        /// absent or not a one-field tuple struct.
+        pub fn newtype_inner(src: &str, name: &str) -> Option<Type> {
+            parse(src).items.iter().find_map(|i| match i {
+                Item::Struct(s) if s.ident == name => match &s.fields {
+                    syn::Fields::Unnamed(f) if f.unnamed.len() == 1 => {
+                        Some(f.unnamed[0].ty.clone())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+        }
+
+        /// The `serde` attributes on struct `name`. Panics when absent.
+        pub fn struct_serde_attrs(src: &str, name: &str) -> Vec<Attribute> {
+            parse(src)
+                .items
+                .iter()
+                .find_map(|i| match i {
+                    Item::Struct(s) if s.ident == name => Some(s.attrs.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("no struct `{name}` in:\n{src}"))
+                .into_iter()
+                .filter(|a| a.path().is_ident("serde"))
                 .collect()
         }
 
@@ -3507,7 +3726,7 @@ mod tests {
             &schema,
             &roles,
             &BTreeMap::new(),
-            &designators_by_class(&schema),
+            &designators_by_class(&effective_slots_by_class(&schema)),
         )
         .unwrap();
         assert!(ast::has_enum(&out, "AnimalKind"));
@@ -3553,7 +3772,7 @@ mod tests {
             &schema,
             &roles,
             &BTreeMap::new(),
-            &designators_by_class(&schema),
+            &designators_by_class(&effective_slots_by_class(&schema)),
         )
         .unwrap();
         assert!(
@@ -3583,7 +3802,7 @@ mod tests {
             &schema,
             &roles,
             &BTreeMap::new(),
-            &designators_by_class(&schema),
+            &designators_by_class(&effective_slots_by_class(&schema)),
         )
         .unwrap();
         assert!(
@@ -3729,7 +3948,7 @@ mod tests {
             &schema,
             &roles,
             &BTreeMap::new(),
-            &designators_by_class(&schema),
+            &designators_by_class(&effective_slots_by_class(&schema)),
         )
         .unwrap();
         assert!(
@@ -3949,7 +4168,7 @@ mod tests {
         );
 
         let (schema, mut def) = ifabsent_schema(Some("ItemStatus(shipped)"));
-        def.attributes.get_mut("status").unwrap().identifier = true;
+        def.attributes.get_mut("status").unwrap().required = true;
         let out = render_placed_item(&schema, &def);
         assert!(
             ast::field_type(&out, "PlacedItem", "status") == Some(ast::ty("ItemStatus"))
@@ -4137,7 +4356,7 @@ mod tests {
             "QuestionWasDerivedFrom",
             &["Question".to_string(), "Annotation".to_string()],
             &chrono_ctx(&schema, &compute_class_roles(&schema)),
-            &designators_by_class(&schema),
+            &designators_by_class(&effective_slots_by_class(&schema)),
             true,
         )
         .unwrap();
@@ -4184,7 +4403,7 @@ mod tests {
             "Fixture",
             &["Lamp".to_string(), "Sink".to_string()],
             &chrono_ctx(&schema, &compute_class_roles(&schema)),
-            &designators_by_class(&schema),
+            &designators_by_class(&effective_slots_by_class(&schema)),
             true,
         )
         .unwrap();
@@ -4206,7 +4425,7 @@ mod tests {
             "Fixture",
             &["string".to_string(), "Lamp".to_string()],
             &chrono_ctx(&schema, &compute_class_roles(&schema)),
-            &designators_by_class(&schema),
+            &designators_by_class(&effective_slots_by_class(&schema)),
             true,
         )
         .unwrap();
@@ -4248,7 +4467,7 @@ mod tests {
             "Fixture",
             &["Lamp".to_string(), "Sink".to_string()],
             &chrono_ctx(&schema, &compute_class_roles(&schema)),
-            &designators_by_class(&schema),
+            &designators_by_class(&effective_slots_by_class(&schema)),
             true,
         )
         .unwrap();
@@ -4307,7 +4526,7 @@ mod tests {
             "Fixture",
             &["Lamp".to_string(), "Sink".to_string()],
             &chrono_ctx(&schema, &compute_class_roles(&schema)),
-            &designators_by_class(&schema),
+            &designators_by_class(&effective_slots_by_class(&schema)),
             true,
         )
         .unwrap();
@@ -4371,7 +4590,7 @@ mod tests {
         let mut schema = SchemaDefinition::new("s");
         schema.classes.insert(class_name.to_string(), def);
         let roles = compute_class_roles(&schema);
-        compute_eq_hash_support(&schema, &roles)
+        compute_eq_hash_support(&schema, &roles, &effective_slots_by_class(&schema))
             .get(class_name)
             .copied()
             .unwrap_or(false)
@@ -4413,7 +4632,8 @@ mod tests {
             schema.classes.insert(cls.to_string(), def);
         }
         let roles = compute_class_roles(&schema);
-        let support = compute_eq_hash_support(&schema, &roles);
+        let effective = effective_slots_by_class(&schema);
+        let support = compute_eq_hash_support(&schema, &roles, &effective);
         assert_eq!(support.get("A"), Some(&false));
         assert_eq!(support.get("B"), Some(&false));
         assert_eq!(support.get("C"), Some(&false));
@@ -4438,7 +4658,8 @@ mod tests {
         let mut schema = SchemaDefinition::new("s");
         schema.classes.insert("Node".to_string(), def);
         let roles = compute_class_roles(&schema);
-        let support = compute_eq_hash_support(&schema, &roles);
+        let effective = effective_slots_by_class(&schema);
+        let support = compute_eq_hash_support(&schema, &roles, &effective);
         assert_eq!(support.get("Node"), Some(&true));
     }
 
@@ -4472,7 +4693,8 @@ mod tests {
         schema.classes.insert("Unrelated".to_string(), unrelated);
 
         let roles = compute_class_roles(&schema);
-        let support = compute_eq_hash_support(&schema, &roles);
+        let effective = effective_slots_by_class(&schema);
+        let support = compute_eq_hash_support(&schema, &roles, &effective);
         assert_eq!(support.get("Shape"), Some(&true));
         assert_eq!(support.get("Square"), Some(&true));
         assert_eq!(support.get("Unrelated"), Some(&false));
@@ -4505,7 +4727,8 @@ mod tests {
         schema.classes.insert("Circle".to_string(), circle);
 
         let roles = compute_class_roles(&schema);
-        let support = compute_eq_hash_support(&schema, &roles);
+        let effective = effective_slots_by_class(&schema);
+        let support = compute_eq_hash_support(&schema, &roles, &effective);
         assert_eq!(support.get("Shape"), Some(&false));
         assert_eq!(support.get("Square"), Some(&true));
         assert_eq!(support.get("Circle"), Some(&false));
@@ -4529,7 +4752,8 @@ mod tests {
         schema.classes.insert("Item".to_string(), def.clone());
 
         let roles = compute_class_roles(&schema);
-        let support = compute_eq_hash_support(&schema, &roles);
+        let effective = effective_slots_by_class(&schema);
+        let support = compute_eq_hash_support(&schema, &roles, &effective);
         let mut any_of_enums = BTreeMap::new();
         let mut out = String::new();
         render_class(
@@ -4538,6 +4762,7 @@ mod tests {
             &def,
             &RenderCtx {
                 schema: &schema,
+                effective: &effective,
                 roles: &roles,
                 eq_hash_support: &support,
                 time: TimeCrate::Chrono,
@@ -4565,7 +4790,8 @@ mod tests {
         schema.classes.insert("Measure".to_string(), def.clone());
 
         let roles = compute_class_roles(&schema);
-        let support = compute_eq_hash_support(&schema, &roles);
+        let effective = effective_slots_by_class(&schema);
+        let support = compute_eq_hash_support(&schema, &roles, &effective);
         let mut any_of_enums = BTreeMap::new();
         let mut out = String::new();
         render_class(
@@ -4574,6 +4800,7 @@ mod tests {
             &def,
             &RenderCtx {
                 schema: &schema,
+                effective: &effective,
                 roles: &roles,
                 eq_hash_support: &support,
                 time: TimeCrate::Chrono,
@@ -4626,7 +4853,8 @@ mod tests {
         let mut schema = SchemaDefinition::new("s");
         schema.classes.insert("Question".to_string(), def.clone());
         let roles = compute_class_roles(&schema);
-        let support = compute_eq_hash_support(&schema, &roles);
+        let effective = effective_slots_by_class(&schema);
+        let support = compute_eq_hash_support(&schema, &roles, &effective);
         let mut any_of_enums = BTreeMap::new();
         let mut out = String::new();
         render_class(
@@ -4635,6 +4863,7 @@ mod tests {
             &def,
             &RenderCtx {
                 schema: &schema,
+                effective: &effective,
                 roles: &roles,
                 eq_hash_support: &support,
                 time: TimeCrate::Chrono,
@@ -4648,12 +4877,13 @@ mod tests {
             "a struct with an identifier derives no Default; got:\n{out}"
         );
         let required = ["at_least_one", "code", "id", "label"];
+        let required_type = |f: &str| if f == "id" { "QuestionId" } else { "String" };
         assert!(
             ast::method_params(&out, "Question", "new")
                 == Some(
                     required
                         .iter()
-                        .map(|f| (f.to_string(), ast::ty("String")))
+                        .map(|f| (f.to_string(), ast::ty(required_type(f))))
                         .collect()
                 ),
             "expected the constructor to take exactly the required single values; got:\n{out}"
@@ -4674,12 +4904,15 @@ mod tests {
 
         let optional = ast::attrs(r#"#[serde(default, skip_serializing_if = "Option::is_none")]"#);
         let list = ast::attrs(r#"#[serde(default, skip_serializing_if = "Vec::is_empty")]"#);
-        let fields = required.iter().map(|f| (*f, "String", vec![])).chain([
-            ("maybe", "Option<String>", optional.clone()),
-            ("waived", "Option<String>", optional),
-            ("many", "Vec<String>", list.clone()),
-            ("bounded", "Vec<String>", list),
-        ]);
+        let fields = required
+            .iter()
+            .map(|f| (*f, required_type(f), vec![]))
+            .chain([
+                ("maybe", "Option<String>", optional.clone()),
+                ("waived", "Option<String>", optional),
+                ("many", "Vec<String>", list.clone()),
+                ("bounded", "Vec<String>", list),
+            ]);
         for (field, ty, serde) in fields {
             assert!(
                 ast::field_type(&out, "Question", field) == Some(ast::ty(ty))
@@ -4701,7 +4934,8 @@ mod tests {
         let mut schema = SchemaDefinition::new("s");
         schema.classes.insert("Loose".to_string(), def.clone());
         let roles = compute_class_roles(&schema);
-        let support = compute_eq_hash_support(&schema, &roles);
+        let effective = effective_slots_by_class(&schema);
+        let support = compute_eq_hash_support(&schema, &roles, &effective);
         let mut any_of_enums = BTreeMap::new();
         let mut out = String::new();
         render_class(
@@ -4710,6 +4944,7 @@ mod tests {
             &def,
             &RenderCtx {
                 schema: &schema,
+                effective: &effective,
                 roles: &roles,
                 eq_hash_support: &support,
                 time: TimeCrate::Chrono,
@@ -4742,7 +4977,8 @@ mod tests {
         let mut schema = SchemaDefinition::new("s");
         schema.classes.insert("Holder".to_string(), def.clone());
         let roles = compute_class_roles(&schema);
-        let support = compute_eq_hash_support(&schema, &roles);
+        let effective = effective_slots_by_class(&schema);
+        let support = compute_eq_hash_support(&schema, &roles, &effective);
         let mut any_of_enums = BTreeMap::new();
         let mut out = String::new();
         render_class(
@@ -4751,6 +4987,7 @@ mod tests {
             &def,
             &RenderCtx {
                 schema: &schema,
+                effective: &effective,
                 roles: &roles,
                 eq_hash_support: &support,
                 time: TimeCrate::Chrono,
@@ -5024,5 +5261,326 @@ mod tests {
         // carries identical content otherwise.
         assert!(sink.bytes > 0);
         assert_eq!(sink.buf.trim_end(), via_string.trim_end());
+    }
+
+    // ----- identifiers and references ---------------------------------
+
+    fn schema_from_yaml(yaml: &str) -> SchemaDefinition {
+        let mut schema: SchemaDefinition = serde_norway::from_str(yaml).expect("parse schema");
+        for (name, class) in schema.classes.iter_mut() {
+            class.name = name.clone();
+        }
+        schema
+    }
+
+    const CELLAR: &str = "\
+name: cellar
+classes:
+  Winery:
+    attributes:
+      id: {identifier: true}
+      name: {}
+  Bottle:
+    attributes:
+      serial: {identifier: true, range: integer}
+  Note:
+    attributes:
+      text: {}
+  Wine:
+    attributes:
+      made_by: {range: Winery}
+      bottled_by: {range: Winery, required: true}
+      sourced_from: {range: Winery, multivalued: true}
+      bottle: {range: Bottle}
+      winery_inline: {range: Winery, inlined: true}
+      wineries_listed: {range: Winery, multivalued: true, inlined_as_list: true}
+      note: {range: Note}
+";
+
+    #[test]
+    fn a_class_with_an_identifier_gets_a_transparent_id_type() {
+        let out = RustWriter::new().render(&schema_from_yaml(CELLAR));
+        assert_eq!(
+            ast::newtype_inner(&out, "WineryId"),
+            Some(ast::ty("String"))
+        );
+        assert_eq!(ast::newtype_inner(&out, "BottleId"), Some(ast::ty("i64")));
+        assert!(
+            !ast::has_struct(&out, "NoteId"),
+            "a class with no identifier has no id type"
+        );
+        for derived in ["Eq", "Hash", "Ord", "Serialize", "Deserialize"] {
+            assert!(
+                ast::derives(&out, "WineryId").iter().any(|d| d == derived),
+                "an id type derives {derived}; got: {:?}",
+                ast::derives(&out, "WineryId")
+            );
+        }
+        assert_eq!(
+            ast::struct_serde_attrs(&out, "WineryId"),
+            ast::attrs("#[serde(transparent)]"),
+            "an id serializes as the bare value"
+        );
+        assert_eq!(
+            ast::field_type(&out, "Winery", "id"),
+            Some(ast::ty("WineryId")),
+            "the class's own identifier field takes its id type"
+        );
+    }
+
+    #[test]
+    fn a_reference_is_its_targets_id_and_an_inlined_slot_holds_the_record() {
+        let out = RustWriter::new().render(&schema_from_yaml(CELLAR));
+        let field = |name: &str| ast::field_type(&out, "Wine", name);
+        assert_eq!(field("made_by"), Some(ast::ty("Option<WineryId>")));
+        assert_eq!(field("bottled_by"), Some(ast::ty("WineryId")));
+        assert_eq!(field("sourced_from"), Some(ast::ty("Vec<WineryId>")));
+        assert_eq!(field("bottle"), Some(ast::ty("Option<BottleId>")));
+        assert_eq!(field("winery_inline"), Some(ast::ty("Option<Box<Winery>>")));
+        assert_eq!(field("wineries_listed"), Some(ast::ty("Vec<Winery>")));
+        assert_eq!(
+            field("note"),
+            Some(ast::ty("Option<Box<Note>>")),
+            "a class with no identifier is always held inline"
+        );
+    }
+
+    #[test]
+    fn an_inherited_identifier_converts_to_each_ancestors_id_type() {
+        let out = RustWriter::new().render(&schema_from_yaml(
+            "\
+name: agents
+classes:
+  Agent:
+    attributes:
+      id: {identifier: true}
+  Person:
+    is_a: Agent
+  Employee:
+    is_a: Person
+  Credit:
+    attributes:
+      credited_to: {range: Agent, required: true}
+",
+        ));
+        assert_eq!(
+            ast::field_type(&out, "Employee", "id"),
+            Some(ast::ty("EmployeeId"))
+        );
+        assert!(
+            ast::impls(&out, "From", "PersonId"),
+            "EmployeeId converts to PersonId"
+        );
+        assert_eq!(
+            ast::impls_from(&out, "AgentId"),
+            vec![ast::ty("EmployeeId"), ast::ty("PersonId")],
+            "every descendant's id converts to an ancestor's"
+        );
+        assert_eq!(
+            ast::field_type(&out, "Credit", "credited_to"),
+            Some(ast::ty("AgentId")),
+            "a reference to a class with subclasses is still an id, not the record enum"
+        );
+    }
+
+    #[test]
+    fn a_reference_derives_by_its_id_not_its_targets_fields() {
+        let out = RustWriter::new().render(&schema_from_yaml(
+            "\
+name: lab
+classes:
+  Instrument:
+    attributes:
+      id: {identifier: true}
+      tolerance: {range: float}
+  Reading:
+    attributes:
+      taken_with: {range: Instrument, required: true}
+  Calibration:
+    attributes:
+      instrument: {range: Instrument, inlined: true, required: true}
+",
+        ));
+        assert!(
+            ast::derives(&out, "Reading").iter().any(|d| d == "Hash"),
+            "an id is hashable whatever the record holds; got: {:?}",
+            ast::derives(&out, "Reading")
+        );
+        assert!(
+            !ast::derives(&out, "Calibration")
+                .iter()
+                .any(|d| d == "Hash"),
+            "an inlined record with a float is not; got: {:?}",
+            ast::derives(&out, "Calibration")
+        );
+    }
+
+    #[test]
+    fn an_id_type_is_ordered_only_over_a_primitive() {
+        let out = RustWriter::new().render(&schema_from_yaml(
+            "\
+name: regions
+enums:
+  RegionCode:
+    permissible_values: {north: {}, south: {}}
+classes:
+  Region:
+    attributes:
+      code: {identifier: true, range: RegionCode}
+",
+        ));
+        assert_eq!(
+            ast::newtype_inner(&out, "RegionId"),
+            Some(ast::ty("RegionCode"))
+        );
+        let derives = ast::derives(&out, "RegionId");
+        assert!(
+            derives.iter().any(|d| d == "Hash") && !derives.iter().any(|d| d.ends_with("Ord")),
+            "an enum id hashes but does not order, as the enum does not; got: {derives:?}"
+        );
+    }
+
+    #[test]
+    fn an_id_converts_to_an_ancestors_by_rust_type_not_by_range_name() {
+        let out = RustWriter::new().render(&schema_from_yaml(
+            "\
+name: agents
+classes:
+  Agent:
+    attributes:
+      id: {identifier: true, range: uriorcurie}
+  Person:
+    is_a: Agent
+    slot_usage:
+      id: {range: uri}
+  Badge:
+    attributes:
+      serial: {identifier: true, range: integer}
+  Visitor:
+    is_a: Badge
+    slot_usage:
+      serial: {range: string}
+",
+        ));
+        assert_eq!(
+            ast::impls_from(&out, "AgentId"),
+            vec![ast::ty("PersonId")],
+            "`uri` and `uriorcurie` are both `String`"
+        );
+        assert!(
+            ast::impls_from(&out, "BadgeId").is_empty(),
+            "a `String` id cannot become an `i64` one"
+        );
+    }
+
+    #[test]
+    fn an_is_a_cycle_converts_no_id_into_itself() {
+        let out = RustWriter::new().render(&schema_from_yaml(
+            "\
+name: loop
+classes:
+  A:
+    is_a: B
+    attributes:
+      id: {identifier: true}
+  B:
+    is_a: A
+    attributes:
+      id: {identifier: true}
+",
+        ));
+        assert_eq!(ast::impls_from(&out, "AId"), vec![ast::ty("BId")]);
+        assert_eq!(ast::impls_from(&out, "BId"), vec![ast::ty("AId")]);
+    }
+
+    #[test]
+    fn an_identifier_or_reference_ignores_ifabsent_and_keeps_its_id_type() {
+        let out = RustWriter::new().render(&schema_from_yaml(
+            "\
+name: cellar
+classes:
+  Winery:
+    attributes:
+      id: {identifier: true, ifabsent: string(unnamed)}
+  Wine:
+    attributes:
+      made_by: {range: Winery, ifabsent: string(acme)}
+",
+        ));
+        assert_eq!(
+            ast::field_type(&out, "Winery", "id"),
+            Some(ast::ty("WineryId"))
+        );
+        assert_eq!(
+            ast::field_type(&out, "Wine", "made_by"),
+            Some(ast::ty("Option<WineryId>"))
+        );
+        assert!(
+            ast::fn_returns(&out, "default_winery_id").is_none()
+                && ast::fn_returns(&out, "default_wine_made_by").is_none()
+                && out.contains("an identifier takes no default")
+                && out.contains("a reference takes no default"),
+            "no default fn, and each warning says why; got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn a_name_an_id_type_would_take_is_refused() {
+        let clash = |yaml: &str| match validate_id_type_names(&schema_from_yaml(yaml)) {
+            Err(IoError::Write(m)) => m,
+            other => panic!("expected a refusal, got {other:?}"),
+        };
+        let class = clash(
+            "\
+name: s
+classes:
+  Order:
+    attributes:
+      id: {identifier: true}
+  OrderId:
+    attributes:
+      text: {}
+",
+        );
+        assert!(
+            class.contains("class `OrderId`") && class.contains("class `Order`"),
+            "names both classes; got: {class}"
+        );
+        let union = clash(
+            "\
+name: s
+classes:
+  Person:
+    attributes:
+      ref: {identifier: true}
+      id:
+        any_of: [{range: string}, {range: integer}]
+",
+        );
+        assert!(
+            union.contains("`Person.id`"),
+            "names the slot; got: {union}"
+        );
+        let other_class = clash(
+            "\
+name: s
+classes:
+  PersonRecord:
+    attributes:
+      ref: {identifier: true}
+  Person:
+    attributes:
+      record_id:
+        any_of: [{range: string}, {range: integer}]
+",
+        );
+        assert!(
+            other_class.contains("`Person.record_id`") && other_class.contains("`PersonRecordId`"),
+            "a union on another class can take the name too; got: {other_class}"
+        );
+        assert!(
+            validate_id_type_names(&schema_from_yaml(CELLAR)).is_ok(),
+            "a schema with no clash is accepted"
+        );
     }
 }

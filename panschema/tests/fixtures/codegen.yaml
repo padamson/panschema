@@ -386,6 +386,58 @@ classes:
         name: cartridge
         description: Cartridge style.
 
+  # Identified classes. `Agent` has a subclass, so it renders as a trait,
+  # and its id type `AgentId(String)` still exists to be referenced;
+  # `Person` inherits the identifier, so `PersonId` converts into
+  # `AgentId`; `Ticket`'s integer identifier gives `TicketId(i64)`.
+  # `Assignment` references each one, so its fields hold the id types
+  # rather than the records.
+  Agent:
+    name: Agent
+    description: Something that can act.
+    attributes:
+      agentId:
+        name: agentId
+        description: The agent's identifier.
+        identifier: true
+        range: string
+  Person:
+    name: Person
+    description: A human agent.
+    is_a: Agent
+    attributes:
+      givenName:
+        name: givenName
+        description: Given name.
+        range: string
+  Ticket:
+    name: Ticket
+    description: A numbered work item.
+    attributes:
+      number:
+        name: number
+        description: The ticket number.
+        identifier: true
+        range: integer
+  Assignment:
+    name: Assignment
+    description: Work assigned to agents.
+    attributes:
+      ticket:
+        name: ticket
+        description: The ticket assigned.
+        range: Ticket
+        required: true
+      assignee:
+        name: assignee
+        description: Who holds it.
+        range: Agent
+      reviewers:
+        name: reviewers
+        description: Who reviews it.
+        range: Person
+        multivalued: true
+
 slots:
   label:
     name: label
