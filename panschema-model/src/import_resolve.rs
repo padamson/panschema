@@ -106,6 +106,28 @@ impl From<IoError> for LoadFailure {
     }
 }
 
+/// [`load_schema`] for a version already released, such as a tag being
+/// republished. A rule added since the release reports the schema rather
+/// than refusing it, and the schema resolves as panschema read it when the
+/// version shipped: a slot made both `identifier` and `key` keeps the flag
+/// its `slot_usage` set. A released version cannot be edited, so refusing
+/// it would leave nothing to publish.
+pub fn load_released_schema(
+    input: &Path,
+    registry: &dyn ReaderLookup,
+) -> Result<LoadedSchema, LoadFailure> {
+    load_with(input, registry, &BTreeMap::new(), Rules::AsReleased)
+}
+
+/// Whether a schema is held to today's rules or to the ones its release
+/// shipped under. A refusal added to the load must honor it, or released
+/// versions that predate the refusal stop publishing.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Rules {
+    Current,
+    AsReleased,
+}
+
 /// Like [`load_schema`], but also resolves `imports:` entries that name a
 /// manifest `[schemas]` dependency. `deps` maps each declared dependency
 /// name to the resolved main-schema file for that dependency (in its own
@@ -118,6 +140,15 @@ pub fn load_schema_with_deps(
     input: &Path,
     registry: &dyn ReaderLookup,
     deps: &BTreeMap<String, PathBuf>,
+) -> Result<LoadedSchema, LoadFailure> {
+    load_with(input, registry, deps, Rules::Current)
+}
+
+fn load_with(
+    input: &Path,
+    registry: &dyn ReaderLookup,
+    deps: &BTreeMap<String, PathBuf>,
+    rules: Rules,
 ) -> Result<LoadedSchema, LoadFailure> {
     let reader = registry.reader_for_path(input)?;
     let (mut schema, reader_warnings) = reader.read_with_warnings(input)?;
@@ -190,7 +221,9 @@ pub fn load_schema_with_deps(
 
     // After the merge, because the two flags can come from different files.
     let conflicts = crate::diagnostics::identifier_key_conflicts(&schema);
-    if !conflicts.is_empty() {
+    if rules == Rules::AsReleased {
+        warnings.extend(conflicts.iter().map(|c| c.released_message()));
+    } else if !conflicts.is_empty() {
         return Err(LoadFailure {
             warnings,
             error: IoError::Parse(
@@ -777,6 +810,52 @@ mod tests {
             error.contains("slot `id` in class `Scoped`"),
             "the error names the slot and the class; got: {error}"
         );
+    }
+
+    /// A released version keeps the rule it was released under: the
+    /// `slot_usage` flag replaces the shared slot's, in either direction,
+    /// and each pair is reported rather than refused.
+    #[test]
+    fn a_released_load_reports_the_pair_and_lets_the_slot_usage_flag_win() {
+        for (base, narrowed, expected) in [
+            ("identifier", "key", (false, true)),
+            ("key", "identifier", (true, false)),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path().join("root.yaml");
+            std::fs::write(
+                &root,
+                format!(
+                    "name: root\nid: https://example.org/root\nslots:\n  id:\n    {base}: true\n\
+                     classes:\n  Shared:\n    slots: [id]\n  \
+                     Narrowed:\n    slots: [id]\n    slot_usage:\n      id:\n        {narrowed}: true\n"
+                ),
+            )
+            .unwrap();
+            let loaded = super::load_released_schema(&root, &YamlReader::new())
+                .unwrap_or_else(|f| panic!("{base} narrowed to {narrowed} loads as released: {f}"));
+            assert!(
+                loaded
+                    .warnings
+                    .iter()
+                    .any(|w| w.contains("slot `id` in class `Narrowed`")),
+                "the pair is reported; got: {:?}",
+                loaded.warnings
+            );
+            let flags = |class: &str| {
+                let id = &crate::linkml_resolve::resolve_effective_slots(
+                    &loaded.schema.classes[class],
+                    &loaded.schema,
+                )["id"];
+                (id.identifier, id.key)
+            };
+            assert_eq!(flags("Narrowed"), expected, "{base} narrowed to {narrowed}");
+            assert_eq!(
+                flags("Shared"),
+                (base == "identifier", base == "key"),
+                "a class that does not narrow keeps the slot's flag"
+            );
+        }
     }
 
     fn fixtures_dir() -> PathBuf {

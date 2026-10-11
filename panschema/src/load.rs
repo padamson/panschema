@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::import_resolve::{LoadFailure, LoadedSchema};
 use crate::io::{IoResult, ReaderLookup};
 use crate::linkml::SchemaDefinition;
 
@@ -22,13 +23,24 @@ pub fn load_schema_with_deps(
     registry: &dyn ReaderLookup,
     deps: &BTreeMap<String, PathBuf>,
 ) -> IoResult<SchemaDefinition> {
-    let (warnings, outcome) =
-        match crate::import_resolve::load_schema_with_deps(input, registry, deps) {
-            Ok(loaded) => (loaded.warnings, Ok(loaded.schema)),
-            Err(failure) => (failure.warnings, Err(failure.error)),
-        };
+    report(
+        crate::import_resolve::load_schema_with_deps(input, registry, deps),
+        "",
+    )
+}
+
+/// Print a load's warnings, each after `prefix`, and return its schema or
+/// its error.
+pub(crate) fn report(
+    loaded: Result<LoadedSchema, LoadFailure>,
+    prefix: &str,
+) -> IoResult<SchemaDefinition> {
+    let (warnings, outcome) = match loaded {
+        Ok(loaded) => (loaded.warnings, Ok(loaded.schema)),
+        Err(failure) => (failure.warnings, Err(failure.error)),
+    };
     for warning in &warnings {
-        eprintln!("warning: {warning}");
+        eprintln!("warning: {prefix}{warning}");
     }
     outcome
 }

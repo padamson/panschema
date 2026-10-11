@@ -1656,13 +1656,20 @@ fn generate_html_for_version(
     use crate::io::{FormatRegistry, Writer};
 
     let registry = FormatRegistry::with_defaults();
-    // Read + resolve local `imports:` through the shared load path, so a
-    // published version renders the same merged schema as `generate`/`serve`.
-    let schema =
-        crate::load::load_schema(input, &registry).map_err(|e| PublishError::GenerateFailed {
+    // Read + resolve local `imports:` through the model's loader, as
+    // `generate`/`serve` do, so a published version renders the same merged
+    // schema. Only the edge is held to rules added since a version was released.
+    let loaded = if cohort.edge.as_deref() == Some(version) {
+        crate::import_resolve::load_schema(input, &registry)
+    } else {
+        crate::import_resolve::load_released_schema(input, &registry)
+    };
+    let schema = crate::load::report(loaded, &format!("{version}: ")).map_err(|e| {
+        PublishError::GenerateFailed {
             version: version.to_string(),
             message: e.to_string(),
-        })?;
+        }
+    })?;
     let mut writer = HtmlWriter::with_options(true)
         .with_version_context(cohort.context_for(version))
         .with_site_root_href(cohort.site_root_href.clone())
@@ -2579,16 +2586,8 @@ versions = ["v0.1.0"]
     /// a per-version marker line so extraction can be verified
     /// byte-exactly.
     fn make_versioned_fixture_repo() -> tempfile::TempDir {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = init_repo();
         let path = tmp.path();
-
-        // Init repo with deterministic identity so commits hash stably
-        // across runs (not strictly required for these tests, but
-        // avoids depending on the runner's git config).
-        run(path, &["init", "--initial-branch=main", "--quiet"]);
-        run(path, &["config", "user.email", "test@example.com"]);
-        run(path, &["config", "user.name", "Test"]);
-        run(path, &["config", "commit.gpgsign", "false"]);
 
         for (version, marker) in [("v0.1.0", "v0.1.0"), ("v0.2.0", "v0.2.0")] {
             std::fs::write(path.join("schema.yaml"), format!("version: {marker}\n")).unwrap();
@@ -2604,6 +2603,18 @@ versions = ["v0.1.0"]
         run(path, &["add", "schema.yaml"]);
         run(path, &["commit", "-m", "WIP", "--quiet"]);
 
+        tmp
+    }
+
+    /// An empty repo on `main` with its own identity, so commits never
+    /// depend on the runner's git config.
+    fn init_repo() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path();
+        run(path, &["init", "--initial-branch=main", "--quiet"]);
+        run(path, &["config", "user.email", "test@example.com"]);
+        run(path, &["config", "user.name", "Test"]);
+        run(path, &["config", "commit.gpgsign", "false"]);
         tmp
     }
 
@@ -2777,12 +2788,8 @@ versions = ["v0.1.0"]
     /// (minimal) LinkML schema at each tag — enough that the HTML
     /// writer can run end-to-end against the extracted content.
     fn make_versioned_linkml_repo() -> tempfile::TempDir {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = init_repo();
         let path = tmp.path();
-        run(path, &["init", "--initial-branch=main", "--quiet"]);
-        run(path, &["config", "user.email", "test@example.com"]);
-        run(path, &["config", "user.name", "Test"]);
-        run(path, &["config", "commit.gpgsign", "false"]);
         for (tag, version_marker) in [("v0.1.0", "0.1.0"), ("v0.2.0", "0.2.0")] {
             let schema = format!(
                 "id: https://example.org/{tag}\n\
@@ -2844,6 +2851,62 @@ versions = ["v0.1.0"]
             label_sources: std::collections::BTreeMap::new(),
             book_link: None,
         }
+    }
+
+    /// A repo whose `v0.1.0` tag shares an `identifier` slot and narrows one
+    /// class to a `key` through `slot_usage`, the form a load now refuses,
+    /// and whose `main` holds `main_schema`.
+    fn make_repo_released_before_the_identifier_key_refusal(
+        main_schema: &str,
+    ) -> tempfile::TempDir {
+        let tmp = init_repo();
+        let path = tmp.path();
+        for (schema, tag) in [(OLD_FORM_SCHEMA, Some("v0.1.0")), (main_schema, None)] {
+            std::fs::write(path.join("schema.yaml"), schema).unwrap();
+            run(path, &["add", "schema.yaml"]);
+            run(
+                path,
+                &["commit", "-m", "schema", "--quiet", "--allow-empty"],
+            );
+            if let Some(tag) = tag {
+                run(path, &["tag", tag]);
+            }
+        }
+        tmp
+    }
+
+    const OLD_FORM_SCHEMA: &str = "id: https://example.org/s\nname: s\ndefault_range: string\n\
+         slots:\n  id:\n    identifier: true\n\
+         classes:\n  Shared:\n    slots: [id]\n  \
+         Scoped:\n    slots: [id]\n    slot_usage:\n      id:\n        key: true\n";
+
+    #[test]
+    fn a_released_version_the_identifier_key_refusal_rejects_still_publishes() {
+        let settled = "id: https://example.org/s\nname: s\ndefault_range: string\n\
+             slots:\n  id:\n    required: true\n\
+             classes:\n  Shared:\n    slots: [id]\n    slot_usage:\n      id:\n        identifier: true\n  \
+             Scoped:\n    slots: [id]\n    slot_usage:\n      id:\n        key: true\n";
+        let repo = make_repo_released_before_the_identifier_key_refusal(settled);
+        let cfg = make_publish_cfg_with_versions(vec!["v0.1.0"], Some("main"), "v0.1.0");
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), false)
+            .expect("a released version renders under the rule it was released with");
+        assert!(out.path().join("v0.1.0/index.html").exists());
+        assert!(out.path().join("main/index.html").exists());
+    }
+
+    #[test]
+    fn an_edge_build_the_identifier_key_refusal_rejects_fails_the_publish() {
+        let repo = make_repo_released_before_the_identifier_key_refusal(OLD_FORM_SCHEMA);
+        let cfg = make_publish_cfg_with_versions(vec!["v0.1.0"], Some("main"), "v0.1.0");
+        let out = tempfile::tempdir().unwrap();
+        let err = publish_versioned(repo.path(), &cfg, out.path(), false)
+            .expect_err("the edge is held to the current rule");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("`main`") && msg.contains("cannot be both"),
+            "the error names the edge build and the rule; got: {msg}"
+        );
     }
 
     #[test]
@@ -2980,12 +3043,8 @@ default = true
     /// A repo whose schema has a `tree_root` container: v0.1.0 predates the
     /// data file, v0.2.0 (and the worktree) carry it.
     fn make_repo_with_instance_data() -> tempfile::TempDir {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = init_repo();
         let path = tmp.path();
-        run(path, &["init", "--initial-branch=main", "--quiet"]);
-        run(path, &["config", "user.email", "test@example.com"]);
-        run(path, &["config", "user.name", "Test"]);
-        run(path, &["config", "commit.gpgsign", "false"]);
         let schema = concat!(
             "id: https://example.org/wine\n",
             "name: fixture_wine\n",

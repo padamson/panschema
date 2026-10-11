@@ -265,10 +265,25 @@ pub struct IdentifierKeyConflict {
 impl IdentifierKeyConflict {
     pub fn message(&self) -> String {
         format!(
-            "slot `{}` in class `{}` is declared `identifier` ({}) and `key` ({}), \
-             and a slot cannot be both — declare neither on a shared slot and set \
+            "{}, and a slot cannot be both — declare neither on a shared slot and set \
              exactly one per class, through `slot_usage` or an abstract parent or \
              mixin",
+            self.declared(),
+        )
+    }
+
+    /// The report for a released version, which cannot take the fix: it
+    /// renders as it shipped.
+    pub fn released_message(&self) -> String {
+        format!(
+            "{}, which a load now refuses; this released version renders as it shipped",
+            self.declared(),
+        )
+    }
+
+    fn declared(&self) -> String {
+        format!(
+            "slot `{}` in class `{}` is declared `identifier` ({}) and `key` ({})",
             self.slot,
             self.class,
             self.identifier_at.join(", "),

@@ -693,13 +693,17 @@ fn merge_slot_override(target: &mut SlotDefinition, source: &SlotDefinition) {
     if source.designates_type {
         target.designates_type = true;
     }
-    // `identifier` and `key` refine like every other flag, as in LinkML, so
-    // a declaration chain setting both leaves both; the load refuses that.
+    // A schema the load accepts never sets both `identifier` and `key` along
+    // one chain, so this clear acts only on one loaded as released, or
+    // resolved without the load: the `slot_usage` flag replaces the slot's,
+    // as it did before the load refused the pair.
     if source.identifier {
         target.identifier = true;
+        target.key = false;
     }
     if source.key {
         target.key = true;
+        target.identifier = false;
     }
 }
 
