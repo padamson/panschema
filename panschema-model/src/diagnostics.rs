@@ -1184,10 +1184,11 @@ pub enum AbsenceVia {
 /// declaration binds every class carrying the slot; a class's own
 /// declaration (attribute, or `slot_usage` — which overrides the
 /// attribute, as `slot_usage` does for every slot property) binds that
-/// class's records and wins over the schema-wide one. Class-scoped
-/// declarations do not yet propagate to subclasses: the resolved slot
-/// view deliberately drops `slot_usage` annotations, so inheritance
-/// here would drift from it.
+/// class's records and those of classes inheriting it, and wins over the
+/// schema-wide one. `by_class` therefore holds an entry for every class a
+/// declaration governs, inherited ones included, not only the classes
+/// that declare. `expand_against` is the exception: a class's declaration
+/// binds that class alone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scoped<T> {
     pub schema_wide: Option<T>,
@@ -1233,7 +1234,8 @@ impl<T> ScopedBindings<T> {
     }
 
     /// The declaration governing `slot` for a record of `types`: the
-    /// record's own class declaration wins over the schema-wide one;
+    /// declaration bound to the record's class (its own, or one it
+    /// inherits) wins over the schema-wide one;
     /// `None` when no declaration applies to this record at all.
     pub fn governing(&self, types: &[String], slot: &str) -> Option<&T> {
         let declarations = self.by_slot.get(slot)?;
@@ -1365,8 +1367,8 @@ fn parse_absence_declaration(
 
 /// Every `asserts_absence` declaration and every defect in one, from a
 /// single walk: top-level `slots:` bind schema-wide; a class's
-/// `attributes:` bind that class; its `slot_usage:` overrides both for
-/// that class. Consumed whole by the check and split by the two
+/// `attributes:` bind that class and the classes inheriting it; its
+/// `slot_usage:` overrides both for them. Consumed whole by the check and split by the two
 /// wrappers below.
 pub fn absence_declarations(
     schema: &SchemaDefinition,
@@ -1499,12 +1501,38 @@ fn parse_version_declaration(
     }
 }
 
+/// `class_name`'s ancestors in the order the slot resolver lets them
+/// supply a slot: the `is_a` parent and its whole lineage first, nearest
+/// first, then each mixin with its own. The first ancestor that declares
+/// something is the one that governs.
+fn ancestors_in_resolver_order<'a>(schema: &'a SchemaDefinition, class_name: &str) -> Vec<&'a str> {
+    fn walk<'a>(schema: &'a SchemaDefinition, name: &str, order: &mut Vec<&'a str>) {
+        let Some(class) = schema.classes.get(name) else {
+            return;
+        };
+        for parent in class.is_a.iter().chain(&class.mixins) {
+            // A malformed `is_a` cycle or a diamond revisits a class; skip it.
+            if !order.contains(&parent.as_str()) {
+                order.push(parent);
+                walk(schema, parent, order);
+            }
+        }
+    }
+    let mut order = Vec::new();
+    walk(schema, class_name, &mut order);
+    order.retain(|ancestor| *ancestor != class_name);
+    order
+}
+
 /// The one walk every schema-declared slot semantic shares: top-level
 /// `slots:` bind schema-wide; a class's `attributes:` bind that class;
 /// its `slot_usage:` overrides both for that class (attributes first,
 /// `slot_usage` second, so a plain map insert makes `slot_usage` win —
-/// the direction it overrides everywhere else in LinkML). `parse` sees
-/// every site carrying `annotation` and decides what it binds.
+/// the direction it overrides everywhere else in LinkML). A class that
+/// declares nothing itself takes the first class-scoped declaration among
+/// its ancestors ([`ancestors_in_resolver_order`]), so a subclass's
+/// records are governed as its parent's are. `parse` sees every site carrying
+/// `annotation` once and decides what it binds.
 fn scoped_declarations<T: Clone>(
     schema: &SchemaDefinition,
     annotation: &str,
@@ -1522,6 +1550,31 @@ fn scoped_declarations<T: Clone>(
                 bindings.insert_class(class_name, name, parse(name, value));
             }
         }
+    }
+    for (slot, scoped) in &mut bindings.by_slot {
+        let inherited: Vec<(String, T)> = schema
+            .classes
+            .keys()
+            .filter(|class_name| !scoped.by_class.contains_key(*class_name))
+            .filter_map(|class_name| {
+                // An attribute redeclaring the slot is a fresh definition,
+                // in the class itself or between it and the declaring
+                // ancestor, so nothing above it is inherited.
+                std::iter::once(class_name.as_str())
+                    .chain(ancestors_in_resolver_order(schema, class_name))
+                    .find_map(|ancestor| match scoped.by_class.get(ancestor) {
+                        Some(value) => Some(Some(value)),
+                        None => schema
+                            .classes
+                            .get(ancestor)
+                            .is_some_and(|class| class.attributes.contains_key(slot))
+                            .then_some(None),
+                    })
+                    .flatten()
+                    .map(|value| (class_name.clone(), value.clone()))
+            })
+            .collect();
+        scoped.by_class.extend(inherited);
     }
     bindings
 }
@@ -4524,6 +4577,104 @@ mod tests {
         schema
     }
 
+    #[test]
+    fn a_class_scoped_declaration_governs_its_subclasses_records() {
+        let schema = parse(
+            "id: https://example.org/t\nname: t\nclasses:\n  Bench:\n    attributes:\n      \
+             lone:\n        range: uri\n        annotations:\n          asserts_absence:\n            \
+             value: null\n  SubBench:\n    is_a: Bench\n",
+        );
+        assert_eq!(
+            absence_bindings(&schema).governing(&["SubBench".to_string()], "lone"),
+            Some(&AbsenceVia::Unnarrowed),
+            "a SubBench is a Bench, and carries Bench's declared slot"
+        );
+    }
+
+    #[test]
+    fn the_nearest_declaring_ancestor_governs_a_subclass() {
+        let schema = parse(
+            "id: https://example.org/t\nname: t\nclasses:\n  Bench:\n    attributes:\n      \
+             lone:\n        range: uri\n        annotations:\n          asserts_absence:\n            \
+             value: null\n  SubBench:\n    is_a: Bench\n    slot_usage:\n      lone:\n        \
+             annotations:\n          asserts_absence:\n            value:\n              \
+             via_slot: kind\n  LeafBench:\n    is_a: SubBench\n",
+        );
+        let bindings = absence_bindings(&schema);
+        let narrowed = AbsenceVia::Slot("kind".to_string());
+        assert_eq!(
+            bindings.governing(&["SubBench".to_string()], "lone"),
+            Some(&narrowed),
+            "a class's own declaration wins over the one it would inherit"
+        );
+        assert_eq!(
+            bindings.governing(&["LeafBench".to_string()], "lone"),
+            Some(&narrowed),
+            "LeafBench takes SubBench's declaration, the nearer of its two ancestors'"
+        );
+    }
+
+    #[test]
+    fn an_is_a_lineages_declaration_wins_over_a_mixins() {
+        let schema = parse(
+            "id: https://example.org/t\nname: t\nclasses:\n  Grand:\n    attributes:\n      \
+             lone:\n        range: uri\n        annotations:\n          asserts_absence:\n            \
+             value:\n              via_slot: from_lineage\n  Parent:\n    is_a: Grand\n  \
+             Mix:\n    mixin: true\n    \
+             attributes:\n      lone:\n        range: uri\n        annotations:\n          \
+             asserts_absence:\n            value:\n              via_slot: from_mixin\n  \
+             Child:\n    is_a: Parent\n    mixins: [Mix]\n  MixedOnly:\n    mixins: [Mix]\n",
+        );
+        let bindings = absence_bindings(&schema);
+        assert_eq!(
+            bindings.governing(&["Child".to_string()], "lone"),
+            Some(&AbsenceVia::Slot("from_lineage".to_string())),
+            "the whole is_a lineage is consulted before the mixin, though Mix is nearer than Grand"
+        );
+        assert_eq!(
+            bindings.governing(&["MixedOnly".to_string()], "lone"),
+            Some(&AbsenceVia::Slot("from_mixin".to_string())),
+            "a mixin's declaration governs a class that inherits only through it"
+        );
+    }
+
+    #[test]
+    fn a_class_scoped_version_pin_governs_its_subclasses_records() {
+        let schema = parse(
+            "id: https://example.org/t\nname: t\nclasses:\n  Bench:\n    attributes:\n      \
+             pinned:\n        range: string\n        annotations:\n          records_version_of:\n            \
+             value:\n              sibling_slot: target\n      target:\n        range: uri\n  \
+             SubBench:\n    is_a: Bench\n",
+        );
+        let (bindings, _) = version_declarations(&schema);
+        assert_eq!(
+            bindings.governing(&["SubBench".to_string()], "pinned"),
+            Some(&VersionPin::Of {
+                sibling_slot: "target".to_string()
+            }),
+            "a SubBench's pin is read as a Bench's"
+        );
+    }
+
+    #[test]
+    fn a_redeclared_attribute_inherits_no_declaration() {
+        let schema = parse(
+            "id: https://example.org/t\nname: t\nclasses:\n  Bench:\n    attributes:\n      \
+             lone:\n        range: uri\n        annotations:\n          asserts_absence:\n            \
+             value: null\n  Plain:\n    is_a: Bench\n    attributes:\n      lone:\n        \
+             range: uri\n  BelowPlain:\n    is_a: Plain\n",
+        );
+        let bindings = absence_bindings(&schema);
+        for class in ["Plain", "BelowPlain"] {
+            assert_eq!(
+                bindings.governing(&[class.to_string()], "lone"),
+                None,
+                "Plain's attribute is a fresh `lone` without the annotation, so {class} \
+                 states no claim"
+            );
+        }
+    }
+
     /// A schema states which slots carry absence claims by annotating
     /// them: a top-level declaration binds schema-wide, a class
     /// attribute's binds that class, and both surface in the bindings.
@@ -4556,7 +4707,7 @@ mod tests {
         assert_eq!(
             bindings.governing(&["Other".to_string()], "lone"),
             None,
-            "a class-scoped declaration does not govern other classes"
+            "a class-scoped declaration does not govern an unrelated class"
         );
         assert!(issues.is_empty(), "well-formed declarations raise no issue");
         assert!(

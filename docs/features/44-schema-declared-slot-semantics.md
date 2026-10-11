@@ -43,11 +43,12 @@ claims no single sibling record joins (two or more anchors claimed
 unjoined; a single anchor claimed unreferenced — the joint-vs-single
 reading stays derived from the anchor count, as today). `via_slot`
 optionally narrows the claim to records of the class a sibling slot
-names. Declaration scope follows LinkML: a top-level `slots:`
-declaration binds every class carrying the slot; a class's own
-declaration (an attribute, or `slot_usage` — which overrides, as
-`slot_usage` does everywhere) binds that class's records and wins over
-the schema-wide one. The manifest keeps only enablement:
+names, or of its `is_a` descendants. Declaration scope follows LinkML: a
+top-level `slots:` declaration binds every class carrying the slot; a
+class's own declaration (an attribute, or `slot_usage` — which
+overrides, as `slot_usage` does everywhere) binds that class's records
+and those of the classes inheriting it, and wins over the schema-wide
+one. The manifest keeps only enablement:
 `resolve_against` says which sibling entries' datasets claims are
 verified against, exactly as it already scopes reference resolution.
 The `verify_absences` manifest key (unreleased) is removed; several
@@ -142,8 +143,8 @@ RDF must carry them (see Open Questions for the vocabulary).
       references exactly as today, with no absence pass and no new
       output.
 - [x] A class-scoped declaration (attribute or `slot_usage`) governs
-      only that class's records; another class's same-named slot holds
-      ordinary data.
+      that class's records and those of classes inheriting it; another
+      class's same-named slot holds ordinary data.
 - [x] A `slot_usage` declaration overrides the top-level one for its
       class, the direction `slot_usage` overrides everywhere in LinkML.
 - [x] A declaration whose `via_slot` is not a string binds with its
@@ -296,10 +297,16 @@ RDF must carry them (see Open Questions for the vocabulary).
   until Slice 5's projection round-trips them through the OWL reader —
   and the manifest fallback is gone — so absence checking is
   LinkML-YAML-only until then.
-- Class-scoped declarations do not yet propagate to subclasses: the
-  resolved slot view deliberately drops `slot_usage` annotations, so
-  inheritance here would drift from it. Revisit alongside resolution
-  support.
+- Class-scoped `asserts_absence` and `records_version_of` declarations
+  propagate to subclasses: a class that declares nothing takes the
+  first declaration among its ancestors, nearest first and its whole
+  `is_a` lineage before any mixin, the order in which the slot resolver
+  lets them supply the slot. An attribute redeclaring the slot is a
+  fresh definition, so it and the classes below it inherit nothing from
+  above it. The resolved slot view itself drops `slot_usage` annotations,
+  so it is not consulted; no writer renders these annotations from it,
+  so the two do not drift on any output. `expand_against` does not
+  propagate; see the bullet on parent-declared annotations below.
 - Class-ranged expansion implements the issue's not-inlinable rule as
   *local declarability*: refused while any site could still hold a local
   record of the range class or its `is_a`/mixin family — an unannotated
@@ -321,7 +328,8 @@ RDF must carry them (see Open Questions for the vocabulary).
   bases refuse because frames carry raw authored values — a governed
   base's own expansion would otherwise read differently by path.
 - A parent-declared class-scoped annotation is blocked by its
-  subclasses' sites (governance does not propagate to subclasses yet) —
+  subclasses' sites (an `expand_against` declaration does not propagate
+  to subclasses) —
   conservative by intent: it fails closed.
 - "Scheme-less" is spelled `contains(':')`: any colon-bearing value —
   an undeclared-prefix CURIE included — stays as authored, and a typo'd
