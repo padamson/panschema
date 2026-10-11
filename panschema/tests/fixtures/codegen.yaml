@@ -438,6 +438,45 @@ classes:
         range: Person
         multivalued: true
 
+  # Dict-held collections. `Roster.members` declares `inlined: true` over
+  # the identified `Person`, so it is a map keyed by `PersonId` with a
+  # `person_dict` serde helper; `Person` has one slot besides its id, so a
+  # bare entry fills it. `Roster.shelves` ranges the key-only `Shelf`, so
+  # it is a map keyed by the key's own `String`.
+  Shelf:
+    name: Shelf
+    description: A shelf, named by a code unique within its roster.
+    attributes:
+      code:
+        name: code
+        description: The shelf's code.
+        key: true
+        range: string
+      label:
+        name: label
+        description: What the shelf holds.
+        range: string
+  Roster:
+    name: Roster
+    description: People and shelves held by id.
+    attributes:
+      rosterId:
+        name: rosterId
+        description: The roster's identifier; its constructor starts each map empty.
+        identifier: true
+        range: string
+      members:
+        name: members
+        description: People on the roster, keyed by id.
+        range: Person
+        multivalued: true
+        inlined: true
+      shelves:
+        name: shelves
+        description: Shelves, keyed by code.
+        range: Shelf
+        multivalued: true
+
 slots:
   label:
     name: label

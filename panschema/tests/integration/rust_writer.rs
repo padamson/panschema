@@ -638,6 +638,32 @@ fn main() {
     let assignment_back: codegen::Assignment =
         serde_json::from_value(assignment_json).expect("deserialize Assignment");
     assert_eq!(assignment_back, assignment, "references round-trip");
+
+    // A dict-held collection reads LinkML's keyed mapping into whole
+    // records: the key fills each record's id, a bare value its one other
+    // slot, and a null an empty record.
+    let empty = codegen::Roster::new(codegen::RosterId("r0".to_string()));
+    assert!(empty.members.is_empty() && empty.shelves.is_empty(), "the constructor starts maps empty");
+    let roster: codegen::Roster = serde_json::from_value(serde_json::json!({
+        "rosterId": "r1",
+        "members": {"p1": {"givenName": "Ada"}, "p2": "Grace", "p3": null},
+        "shelves": {"s1": {"label": "Top"}}
+    }))
+    .expect("deserialize Roster");
+    let p2 = &roster.members[&codegen::PersonId("p2".to_string())];
+    assert_eq!(p2.agent_id, codegen::PersonId("p2".to_string()), "the key fills the id");
+    assert_eq!(p2.given_name.as_deref(), Some("Grace"), "a bare value fills the open slot");
+    assert_eq!(roster.members.len(), 3, "a null entry is an empty record");
+    assert_eq!(roster.shelves["s1"].code, "s1", "a key-only class is keyed by its key");
+    let roster_json = serde_json::to_value(&roster).expect("serialize Roster");
+    assert_eq!(
+        roster_json["members"]["p1"],
+        serde_json::json!({"givenName": "Ada"}),
+        "the id stays in the key"
+    );
+    let roster_back: codegen::Roster =
+        serde_json::from_value(roster_json).expect("deserialize serialized Roster");
+    assert_eq!(roster_back, roster, "dict collections round-trip");
 }
 "##;
 

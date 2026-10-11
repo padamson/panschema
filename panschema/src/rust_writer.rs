@@ -72,11 +72,97 @@ fn referenced_id<'e>(
     slot: &SlotDefinition,
     effective: &'e EffectiveSlots,
 ) -> Option<&'e SlotDefinition> {
-    let range_slots = effective.get(slot.range.as_deref()?)?;
-    match crate::linkml_resolve::holding(slot, range_slots) {
-        crate::linkml_resolve::Holding::Reference(id) => Some(id),
+    match slot_holding(slot, effective)? {
+        (_, crate::linkml_resolve::Holding::Reference(id)) => Some(id),
         _ => None,
     }
+}
+
+/// How a slot ranged on one class holds its records, with that class's
+/// name; `None` for a union, a scalar, or a range the schema lacks.
+fn slot_holding<'s, 'e>(
+    slot: &'s SlotDefinition,
+    effective: &'e EffectiveSlots,
+) -> Option<(&'s str, crate::linkml_resolve::Holding<'e>)> {
+    if !slot.any_of.is_empty() {
+        return None;
+    }
+    let range = slot.range.as_deref()?;
+    let range_slots = effective.get(range)?;
+    Some((range, crate::linkml_resolve::holding(slot, range_slots)))
+}
+
+/// How a slot the model's inlining rule holds as a dict renders.
+enum DictShape {
+    /// A `BTreeMap` from each record's key to the whole record.
+    Map(DictMap),
+    /// A list, because the key's type cannot key a map.
+    List,
+}
+
+/// A dict-held slot's map.
+struct DictMap {
+    /// The class the map holds.
+    class: String,
+    /// The key slot's name, as the data writes it.
+    key: String,
+    /// The key's Rust type: the range's id type when the key is its
+    /// identifier, else the key slot's own type.
+    key_type: String,
+    /// The record type: the range's struct, or its `<Name>Kind` enum.
+    value_type: String,
+}
+
+impl DictMap {
+    fn field_type(&self) -> String {
+        format!(
+            "std::collections::BTreeMap<{}, {}>",
+            self.key_type, self.value_type
+        )
+    }
+
+    /// The module holding the map's serde helper.
+    fn module(&self) -> String {
+        format!("{}_dict", snake_case(&self.class))
+    }
+}
+
+/// Whether a range's Rust type is totally ordered: a primitive with `Eq`,
+/// which an id type then derives `Ord` over and a map can be keyed by.
+fn orders(range: &str, ctx: &RenderCtx<'_>) -> bool {
+    crate::primitives::effective_primitive(ctx.schema, range).is_some()
+        && type_supports_eq_hash(range, ctx.schema, ctx.roles, ctx.eq_hash_support)
+}
+
+/// How `slot` renders if the model's inlining rule holds it as a dict;
+/// `None` when it does not, or when its range has no generated record type
+/// to hold (a union, or a trait with no concrete descendant).
+fn dict_shape(slot: &SlotDefinition, ctx: &RenderCtx<'_>) -> Option<DictShape> {
+    let (range, crate::linkml_resolve::Holding::Dict(key)) = slot_holding(slot, ctx.effective)?
+    else {
+        return None;
+    };
+    let renders = ctx.roles.get(range) == Some(&ClassRole::Struct)
+        || has_concrete_descendants(range, ctx.schema, ctx.roles);
+    if !renders {
+        return None;
+    }
+    let key_slot = &ctx.effective[range][key];
+    let key_range = key_slot.range.as_deref().unwrap_or("string");
+    if !orders(key_range, ctx) {
+        return Some(DictShape::List);
+    }
+    let key_type = if key_slot.identifier {
+        id_type_name(range)
+    } else {
+        type_for_range(key_range, ctx)
+    };
+    Some(DictShape::Map(DictMap {
+        class: range.to_string(),
+        key: key.clone(),
+        key_type,
+        value_type: type_for_range(range, ctx),
+    }))
 }
 
 /// Everything the per-class render functions read but never mutate —
@@ -187,7 +273,28 @@ impl RustWriter {
             )?;
         }
 
-        render_header(out, schema, self.time_crate, designated)?;
+        // Each class some struct holds as a dict, with the slot it is keyed by.
+        let mut dict_held: BTreeMap<String, DictMap> = BTreeMap::new();
+        for (name, slots) in &effective {
+            if roles.get(name) != Some(&ClassRole::Struct) {
+                continue;
+            }
+            for slot in slots.values() {
+                if let Some(DictShape::Map(map)) = dict_shape(slot, &ctx) {
+                    dict_held.insert(map.class.clone(), map);
+                }
+            }
+        }
+        for map in dict_held.values() {
+            render_dict_helper(&mut body, map, &ctx)?;
+        }
+
+        render_header(
+            out,
+            schema,
+            self.time_crate,
+            designated || !dict_held.is_empty(),
+        )?;
         out.write_str(&body)
     }
 }
@@ -195,7 +302,7 @@ impl RustWriter {
 impl Writer for RustWriter {
     fn write(&self, schema: &SchemaDefinition, output: &Path) -> IoResult<()> {
         validate_identifiers(schema)?;
-        validate_id_type_names(schema)?;
+        validate_generated_names(schema)?;
         crate::io::ensure_output_parent(output)?;
         std::fs::write(output, self.render(schema)).map_err(IoError::Io)?;
         Ok(())
@@ -264,12 +371,13 @@ fn validate_identifiers(schema: &SchemaDefinition) -> IoResult<()> {
     Ok(())
 }
 
-/// Refuse a schema that already uses the name of an id type the module
-/// would define: a class or enum named `<Class>Id`, or the union enum of an
-/// `any_of` slot named `id` on that class. Two items of one name would not
-/// compile, and renaming either generated type would break the convention
-/// a reader relies on.
-fn validate_id_type_names(schema: &SchemaDefinition) -> IoResult<()> {
+/// Refuse a schema whose names collide with items the module would
+/// generate: a class, an enum or an `any_of` union enum named `<Class>Id`
+/// for an identified class, or two dict-held classes whose helper modules
+/// fold to one name. Two items of one name would not compile, and
+/// renaming a generated one would break the convention a reader relies
+/// on.
+fn validate_generated_names(schema: &SchemaDefinition) -> IoResult<()> {
     let effective = effective_slots_by_class(schema);
     let unions: BTreeMap<String, String> = effective
         .iter()
@@ -303,6 +411,26 @@ fn validate_id_type_names(schema: &SchemaDefinition) -> IoResult<()> {
             return Err(IoError::Write(format!(
                 "{clash} takes the name `{id_type}`, the id type generated for class \
                  `{name}`; rename one of them in the schema"
+            )));
+        }
+    }
+    // A dict-held class's serde helper is named from its snake_case name,
+    // so two such classes whose names fold together would collide.
+    let mut modules: BTreeMap<String, &str> = BTreeMap::new();
+    for slot in effective.values().flat_map(|slots| slots.values()) {
+        let Some((range, crate::linkml_resolve::Holding::Dict(_))) = slot_holding(slot, &effective)
+        else {
+            continue;
+        };
+        let module = format!("{}_dict", snake_case(range));
+        if let Some(other) = modules
+            .insert(module.clone(), range)
+            .filter(|o| *o != range)
+        {
+            return Err(IoError::Write(format!(
+                "classes `{other}` and `{range}` are both held as dicts, and their \
+                 serde helpers would share the module name `{module}`; rename one \
+                 of them in the schema"
             )));
         }
     }
@@ -461,22 +589,17 @@ fn type_supports_eq_hash(
     roles: &BTreeMap<String, ClassRole>,
     support: &BTreeMap<String, bool>,
 ) -> bool {
-    match range {
-        "string" | "str" | "uri" | "uriorcurie" | "curie" | "ncname" | "objectidentifier"
-        | "nodeidentifier" | "integer" | "int" | "boolean" | "bool" | "datetime" | "date"
-        | "time" => true,
-        "float" | "double" | "decimal" => false,
-        other => {
-            if schema.classes.contains_key(other) {
-                let _ = roles;
-                support.get(other).copied().unwrap_or(true)
-            } else if schema.enums.contains_key(other) {
-                true
-            } else {
-                // Unknown ref (e.g. imported schema) — be conservative.
-                false
-            }
-        }
+    // A built-in, an alias or a custom type is its primitive's.
+    if let Some(primitive) = crate::primitives::effective_primitive(schema, range) {
+        return !matches!(primitive, "float" | "double" | "decimal");
+    }
+    if schema.classes.contains_key(range) {
+        let _ = roles;
+        support.get(range).copied().unwrap_or(true)
+    } else {
+        // An enum's derives include both; an unknown ref (e.g. imported
+        // schema) is taken conservatively.
+        schema.enums.contains_key(range)
     }
 }
 
@@ -559,7 +682,7 @@ fn render_header<W: Write>(
     out: &mut W,
     schema: &SchemaDefinition,
     time: TimeCrate,
-    designated: bool,
+    needs_json: bool,
 ) -> fmt::Result {
     let version = env!("CARGO_PKG_VERSION");
     writeln!(out, "// @generated by panschema v{version}")?;
@@ -575,9 +698,9 @@ fn render_header<W: Write>(
         TimeCrate::Jiff => "jiff = { version = \"0.2\", features = [\"serde\"] }",
     };
     // A designated enum's generated deserializer buffers through
-    // `serde_json::Value` to peek the designator, so those modules need
-    // serde_json too.
-    let json_dep = if designated {
+    // `serde_json::Value` to peek the designator, and a dict helper to put
+    // each key into its record, so those modules need serde_json too.
+    let json_dep = if needs_json {
         ", serde_json = \"1\""
     } else {
         ""
@@ -659,6 +782,7 @@ fn render_id_type<W: Write>(
     let range = id.range.as_deref().unwrap_or("string");
     let eq_hash = type_supports_eq_hash(range, ctx.schema, ctx.roles, ctx.eq_hash_support);
     let primitive = crate::primitives::effective_primitive(ctx.schema, range).is_some();
+    // `(true, true)` is `orders`, the predicate a map key is checked by.
     let derives = match (eq_hash, primitive) {
         (true, true) => "Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord",
         (true, false) => "Debug, Clone, PartialEq, Eq, Hash",
@@ -685,6 +809,79 @@ fn render_id_type<W: Write>(
         }
     }
     Ok(())
+}
+
+/// Emit `<class>_dict`, the `#[serde(with)]` helper for a slot holding
+/// `class_name` records as a mapping keyed by `key`, the form LinkML gives
+/// a multivalued `inlined` slot. In memory each record is whole, as
+/// LinkML's runtime normalizes a dict: reading puts each key into its
+/// record, takes a bare value as the class's one other slot where it has
+/// one, and takes a null as an empty record. Writing keys each record by
+/// the map key and leaves that slot out of the value, so the key is what
+/// the data says even if a record's own field has drifted from it.
+fn render_dict_helper<W: Write>(out: &mut W, dict: &DictMap, ctx: &RenderCtx<'_>) -> fmt::Result {
+    let class_name = &dict.class;
+    let range_slots = &ctx.effective[class_name.as_str()];
+    let map = dict.field_type();
+    let key_type = &dict.key_type;
+    let key = escape_str(&dict.key);
+    let bare = match crate::linkml_resolve::compact_dict_slot(range_slots) {
+        Some(open) => format!(
+            "bare => serde_json::Map::from_iter([(\"{}\".to_string(), bare)]),",
+            escape_str(open)
+        ),
+        None => format!(
+            "bare => return Err(D::Error::custom(format!(\"a `{class_name}` entry must be a mapping, got {{bare}}\"))),"
+        ),
+    };
+    writeln!(
+        out,
+        "/// Reads and writes `{class_name}` records held as a mapping keyed by `{key}`.
+pub mod {module} {{
+    use super::*;
+
+    pub fn serialize<S: serde::Serializer>(
+        map: &{map},
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {{
+        use serde::ser::{{Error as _, SerializeMap as _}};
+        let mut entries = serializer.serialize_map(Some(map.len()))?;
+        for (key, record) in map {{
+            let mut value = serde_json::to_value(record).map_err(S::Error::custom)?;
+            if let Some(fields) = value.as_object_mut() {{
+                fields.remove(\"{key}\");
+            }}
+            entries.serialize_entry(key, &value)?;
+        }}
+        entries.end()
+    }}
+
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<{map}, D::Error> {{
+        use serde::de::Error as _;
+        let entries: std::collections::BTreeMap<{key_type}, serde_json::Value> =
+            serde::Deserialize::deserialize(deserializer)?;
+        entries
+            .into_iter()
+            .map(|(key, value)| {{
+                let mut fields = match value {{
+                    serde_json::Value::Object(fields) => fields,
+                    serde_json::Value::Null => serde_json::Map::new(),
+                    {bare}
+                }};
+                let id = serde_json::to_value(&key).map_err(D::Error::custom)?;
+                fields.insert(\"{key}\".to_string(), id);
+                let record = serde_json::from_value(serde_json::Value::Object(fields))
+                    .map_err(D::Error::custom)?;
+                Ok((key, record))
+            }})
+            .collect()
+    }}
+}}
+",
+        module = dict.module(),
+    )
 }
 
 /// Emit a marker trait for a class that's used as an `is_a` parent or
@@ -806,11 +1003,23 @@ fn render_class<W: Write>(
             )?;
         }
 
+        let dict = dict_shape(slot, ctx);
+        if matches!(dict, Some(DictShape::List)) {
+            write!(
+                out,
+                "    // WARNING: slot `{slot_name}` holds its records keyed by a slot whose\n\
+                 //          type cannot key a map; field falls back to a list.\n"
+            )?;
+        }
+
         let rust_type = match &ifabsent_default {
             // A resolved default is always present, so the faithful shape
             // is the bare type, not `Option<T>`.
             Some(d) => d.rust_type(),
-            None => field_type_for(name, slot_name, slot, ctx, any_of_enums),
+            None => match &dict {
+                Some(DictShape::Map(map)) => map.field_type(),
+                _ => field_type_for(name, slot_name, slot, ctx, any_of_enums),
+            },
         };
         render_doc_comment(out, "    ", slot.description.as_deref())?;
         if let Some(origin) = resolved_p[slot_name].provenance.origin_label(name) {
@@ -830,6 +1039,11 @@ fn render_class<W: Write>(
         } else if !is_required(slot) && !is_multivalued(slot) {
             serde_attrs.push("default".to_string());
             serde_attrs.push("skip_serializing_if = \"Option::is_none\"".to_string());
+        } else if let Some(DictShape::Map(map)) = &dict {
+            serde_attrs.push("default".to_string());
+            serde_attrs
+                .push("skip_serializing_if = \"std::collections::BTreeMap::is_empty\"".to_string());
+            serde_attrs.push(format!("with = \"{}\"", map.module()));
         } else if is_multivalued(slot) {
             serde_attrs.push("default".to_string());
             serde_attrs.push("skip_serializing_if = \"Vec::is_empty\"".to_string());
@@ -935,6 +1149,11 @@ fn render_constructor<W: Write>(
         let field = raw_if_keyword(&snake);
         if let Some(d) = field_default(slot, ctx) {
             writeln!(out, "            {field}: {},", d.default_expr())?;
+        } else if let Some(DictShape::Map(_)) = dict_shape(slot, ctx) {
+            writeln!(
+                out,
+                "            {field}: std::collections::BTreeMap::new(),"
+            )?;
         } else if is_multivalued(slot) {
             writeln!(out, "            {field}: Vec::new(),")?;
         } else if is_required(slot) {
@@ -2273,6 +2492,10 @@ mod tests {
                 },
                 _ => None,
             })
+        }
+
+        pub fn has_module(src: &str, name: &str) -> bool {
+            has_item(src, |i| matches!(i, Item::Mod(m) if m.ident == name))
         }
 
         /// The `serde` attributes on struct `name`. Panics when absent.
@@ -5525,8 +5748,8 @@ classes:
     }
 
     #[test]
-    fn a_name_an_id_type_would_take_is_refused() {
-        let clash = |yaml: &str| match validate_id_type_names(&schema_from_yaml(yaml)) {
+    fn a_name_a_generated_item_would_take_is_refused() {
+        let clash = |yaml: &str| match validate_generated_names(&schema_from_yaml(yaml)) {
             Err(IoError::Write(m)) => m,
             other => panic!("expected a refusal, got {other:?}"),
         };
@@ -5578,9 +5801,177 @@ classes:
             other_class.contains("`Person.record_id`") && other_class.contains("`PersonRecordId`"),
             "a union on another class can take the name too; got: {other_class}"
         );
+        let modules = clash(
+            "\
+name: s
+classes:
+  HTTPServer:
+    attributes:
+      code: {key: true}
+  HttpServer:
+    attributes:
+      code: {key: true}
+  Fleet:
+    attributes:
+      a: {range: HTTPServer, multivalued: true}
+      b: {range: HttpServer, multivalued: true}
+",
+        );
         assert!(
-            validate_id_type_names(&schema_from_yaml(CELLAR)).is_ok(),
+            modules.contains("`HTTPServer`") && modules.contains("`HttpServer`"),
+            "two dict helpers that fold to one module name are refused; got: {modules}"
+        );
+        assert!(
+            validate_generated_names(&schema_from_yaml(CELLAR)).is_ok(),
             "a schema with no clash is accepted"
+        );
+    }
+
+    #[test]
+    fn a_dict_held_slot_is_a_map_keyed_by_id_or_key() {
+        let out = RustWriter::new().render(&schema_from_yaml(
+            "\
+name: cellar
+classes:
+  Winery:
+    attributes:
+      id: {identifier: true}
+      name: {}
+  Shelf:
+    attributes:
+      code: {key: true}
+      label: {}
+  Cellar:
+    attributes:
+      id: {identifier: true}
+      wineries: {range: Winery, multivalued: true, inlined: true}
+      shelves: {range: Shelf, multivalued: true}
+",
+        ));
+        assert_eq!(
+            ast::field_type(&out, "Cellar", "wineries"),
+            Some(ast::ty("std::collections::BTreeMap<WineryId, Winery>"))
+        );
+        assert_eq!(
+            ast::field_type(&out, "Cellar", "shelves"),
+            Some(ast::ty("std::collections::BTreeMap<String, Shelf>")),
+            "a key-only class is keyed by its key's own type"
+        );
+        assert_eq!(
+            ast::field_serde_attrs(&out, "Cellar", "wineries"),
+            ast::attrs(
+                r#"#[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty", with = "winery_dict")]"#
+            )
+        );
+        assert!(
+            ast::has_module(&out, "winery_dict") && ast::has_module(&out, "shelf_dict"),
+            "each dict-held class gets its serde helper; got:\n{out}"
+        );
+        assert!(
+            out.contains("serde_json = \"1\""),
+            "the helpers buffer through serde_json, so the header names it"
+        );
+        assert_eq!(
+            ast::method_struct_inits(&out, "Cellar", "new"),
+            Some(BTreeMap::from([
+                ("id".to_string(), None),
+                (
+                    "wineries".to_string(),
+                    Some(ast::expr("std::collections::BTreeMap::new()"))
+                ),
+                (
+                    "shelves".to_string(),
+                    Some(ast::expr("std::collections::BTreeMap::new()"))
+                ),
+            ])),
+            "the constructor starts each map empty"
+        );
+    }
+
+    #[test]
+    fn a_dict_keyed_by_a_type_that_cannot_order_falls_back_to_a_list_and_says_so() {
+        let out = RustWriter::new().render(&schema_from_yaml(
+            "\
+name: lab
+classes:
+  Reading:
+    attributes:
+      at: {key: true, range: float}
+      value: {range: float}
+  Log:
+    attributes:
+      readings: {range: Reading, multivalued: true}
+",
+        ));
+        assert_eq!(
+            ast::field_type(&out, "Log", "readings"),
+            Some(ast::ty("Vec<Reading>"))
+        );
+        assert!(
+            out.contains("cannot key a map"),
+            "the fallback is flagged; got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn a_custom_typed_identifier_orders_and_keys_a_map() {
+        let out = RustWriter::new().render(&schema_from_yaml(
+            "\
+name: cellar
+types:
+  Code: {typeof: string}
+classes:
+  Winery:
+    attributes:
+      id: {identifier: true, range: Code}
+  Cellar:
+    attributes:
+      wineries: {range: Winery, multivalued: true, inlined: true}
+",
+        ));
+        assert!(
+            ast::derives(&out, "WineryId").iter().any(|d| d == "Ord"),
+            "a custom type over a string orders; got: {:?}",
+            ast::derives(&out, "WineryId")
+        );
+        assert_eq!(
+            ast::field_type(&out, "Cellar", "wineries"),
+            Some(ast::ty("std::collections::BTreeMap<WineryId, Winery>"))
+        );
+    }
+
+    #[test]
+    fn a_union_slot_keeps_its_union_list_even_where_its_range_is_dict_held() {
+        let out = RustWriter::new().render(&schema_from_yaml(
+            "\
+name: cellar
+classes:
+  Winery:
+    attributes:
+      id: {identifier: true}
+  Vineyard:
+    attributes:
+      id: {identifier: true}
+  Cellar:
+    attributes:
+      items:
+        range: Winery
+        multivalued: true
+        inlined: true
+        any_of: [{range: Winery}, {range: Vineyard}]
+",
+        ));
+        assert_eq!(
+            ast::field_type(&out, "Cellar", "items"),
+            Some(ast::ty("Vec<CellarItems>"))
+        );
+        assert_eq!(
+            ast::field_serde_attrs(&out, "Cellar", "items"),
+            ast::attrs(r#"#[serde(default, skip_serializing_if = "Vec::is_empty")]"#)
+        );
+        assert!(
+            !ast::has_module(&out, "winery_dict"),
+            "no helper for a union"
         );
     }
 }
