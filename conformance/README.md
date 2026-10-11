@@ -21,6 +21,16 @@ The inlining probe crosses every slot declaration (`inlined`,
 ranges) with every authored form and prints the validator's verdict on
 each; it is the evidence behind `verify`'s inlining check.
 
+```bash
+uv run --project conformance conformance/probe_key_scoping.py
+```
+
+The key-scoping probe spells a per-class `identifier`/`key` split on one
+shared `id` slot several ways and reports which ones LinkML's loader,
+generators, and validator accept; it is the evidence behind the load
+refusal of a slot that is both. `gen-rdf` fetches from `w3id.org`, so run
+it with network access.
+
 Load an arbitrary schema through the reference implementation:
 
 ```bash

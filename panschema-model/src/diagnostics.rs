@@ -23,6 +23,8 @@
 //!
 //! [`ClassDefinition`]: crate::linkml::ClassDefinition
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use crate::linkml::{SchemaDefinition, SlotDefinition};
 
 /// Class-level LinkML keys panschema parses but deliberately does NOT
@@ -243,6 +245,98 @@ pub fn colliding_slot_definitions(schema: &SchemaDefinition) -> Vec<CollidingSlo
             CollidingSlot { name, sites }
         })
         .collect()
+}
+
+/// A class whose slot is both `identifier` and `key`: one declaration in
+/// the class's chain sets one, another sets the other. `slot_usage` refines
+/// rather than replaces, so the slot carries both, and the LinkML metamodel
+/// forbids that. The load refuses such a schema, as LinkML's `SchemaLoader`
+/// does whenever the class's own `slot_usage` completes the pair.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdentifierKeyConflict {
+    pub class: String,
+    pub slot: String,
+    /// Where `identifier: true` is declared, in chain order.
+    pub identifier_at: Vec<String>,
+    /// Where `key: true` is declared, in chain order.
+    pub key_at: Vec<String>,
+}
+
+impl IdentifierKeyConflict {
+    pub fn message(&self) -> String {
+        format!(
+            "slot `{}` in class `{}` is declared `identifier` ({}) and `key` ({}), \
+             and a slot cannot be both — declare neither on a shared slot and set \
+             exactly one per class, through `slot_usage` or an abstract parent or \
+             mixin",
+            self.slot,
+            self.class,
+            self.identifier_at.join(", "),
+            self.key_at.join(", "),
+        )
+    }
+}
+
+/// Every class at which a slot first becomes both `identifier` and `key`
+/// ([`crate::linkml_resolve::linkml_slot_declarations`]).
+/// A class inheriting the conflict unchanged from its `is_a` parent or a
+/// mixin is not reported again: the fix belongs there.
+pub fn identifier_key_conflicts(schema: &SchemaDefinition) -> Vec<IdentifierKeyConflict> {
+    // Only a slot name that some declaration marks `identifier` and some
+    // marks `key` can conflict, so the chain walks run for those alone.
+    let declarations = schema.slots.iter().chain(
+        schema
+            .classes
+            .values()
+            .flat_map(|c| c.attributes.iter().chain(&c.slot_usage)),
+    );
+    let (mut identifiers, mut keys) = (BTreeSet::new(), BTreeSet::new());
+    for (name, def) in declarations {
+        if def.identifier {
+            identifiers.insert(name.as_str());
+        }
+        if def.key {
+            keys.insert(name.as_str());
+        }
+    }
+
+    let mut out = Vec::new();
+    for slot in identifiers.intersection(&keys) {
+        let conflicts: BTreeMap<&str, (Vec<String>, Vec<String>)> = schema
+            .classes
+            .keys()
+            .filter_map(|class| {
+                let sites = crate::linkml_resolve::linkml_slot_declarations(schema, class, slot);
+                let flagged = |flag: fn(&SlotDefinition) -> bool| -> Vec<String> {
+                    sites
+                        .iter()
+                        .filter(|(_, def)| flag(def))
+                        .map(|(site, _)| site.clone())
+                        .collect()
+                };
+                let (identifier_at, key_at) = (flagged(|d| d.identifier), flagged(|d| d.key));
+                (!identifier_at.is_empty() && !key_at.is_empty())
+                    .then_some((class.as_str(), (identifier_at, key_at)))
+            })
+            .collect();
+        for (class_name, (identifier_at, key_at)) in &conflicts {
+            let class = &schema.classes[*class_name];
+            let inherited = class
+                .is_a
+                .iter()
+                .chain(&class.mixins)
+                .any(|ancestor| conflicts.contains_key(ancestor.as_str()));
+            if !inherited {
+                out.push(IdentifierKeyConflict {
+                    class: class_name.to_string(),
+                    slot: slot.to_string(),
+                    identifier_at: identifier_at.clone(),
+                    key_at: key_at.clone(),
+                });
+            }
+        }
+    }
+    out
 }
 
 /// An annotation whose authored body carried nested `annotations` or
@@ -3153,6 +3247,174 @@ mod tests {
             "name: s\nprefixes:\n  ex: https://example.org/\nclasses:\n  Recipe:\n    attributes:\n      id:\n        slot_uri: ex:recipeId\n        range: string\n  Image:\n    attributes:\n      id:\n        range: string\n",
         );
         assert_eq!(super::colliding_slot_definitions(&schema), vec![]);
+    }
+
+    /// A schema sharing one `id` slot across its classes; `body` holds the
+    /// `slots:` and `classes:` sections.
+    fn parse_shared(body: &str) -> SchemaDefinition {
+        parse(&format!(
+            "id: https://example.org/t\nname: t\ndefault_range: string\n{body}"
+        ))
+    }
+
+    fn scoped_id_conflict(identifier_at: &str, key_at: &str) -> IdentifierKeyConflict {
+        IdentifierKeyConflict {
+            class: "Scoped".into(),
+            slot: "id".into(),
+            identifier_at: vec![identifier_at.into()],
+            key_at: vec![key_at.into()],
+        }
+    }
+
+    /// The scoping split spelled the way LinkML's loader accepts it: the
+    /// shared `id` carries neither flag and each class sets exactly one.
+    /// `conformance/probe_key_scoping.py` loads all three.
+    const NEUTRAL_SPELLINGS: [(&str, &str); 3] = [
+        (
+            "per class",
+            "slots:\n  id: {required: true}\nclasses:\n  \
+             Shared:\n    slots: [id]\n    slot_usage:\n      id: {identifier: true}\n  \
+             Scoped:\n    slots: [id]\n    slot_usage:\n      id: {key: true}\n",
+        ),
+        (
+            "abstract parent",
+            "slots:\n  id: {required: true}\nclasses:\n  \
+             Entity:\n    abstract: true\n    slots: [id]\n    slot_usage:\n      id: {identifier: true}\n  \
+             ScopedRecord:\n    abstract: true\n    slots: [id]\n    slot_usage:\n      id: {key: true}\n  \
+             Shared:\n    is_a: Entity\n  Scoped:\n    is_a: ScopedRecord\n",
+        ),
+        (
+            "mixin",
+            "slots:\n  id: {required: true}\nclasses:\n  \
+             Identified:\n    mixin: true\n    slots: [id]\n    slot_usage:\n      id: {identifier: true}\n  \
+             Keyed:\n    mixin: true\n    slots: [id]\n    slot_usage:\n      id: {key: true}\n  \
+             Shared:\n    mixins: [Identified]\n  Scoped:\n    mixins: [Keyed]\n",
+        ),
+    ];
+
+    #[test]
+    fn a_key_narrowing_a_shared_identifier_conflicts_naming_both_sites() {
+        let schema = parse_shared(
+            "slots:\n  id: {identifier: true}\nclasses:\n  \
+             Shared:\n    slots: [id]\n  \
+             Scoped:\n    slots: [id]\n    slot_usage:\n      id: {key: true}\n",
+        );
+        assert_eq!(
+            identifier_key_conflicts(&schema),
+            vec![scoped_id_conflict(
+                "top-level `slots:`",
+                "slot_usage in class `Scoped`",
+            )]
+        );
+    }
+
+    /// A subclass inheriting the conflict is fixed by fixing its parent,
+    /// so only the class where the second flag arrives is reported.
+    #[test]
+    fn a_child_narrowing_its_parents_identifier_conflicts_at_the_child_only() {
+        let schema = parse_shared(
+            "slots:\n  id: {required: true}\nclasses:\n  \
+             Entity:\n    abstract: true\n    slots: [id]\n    slot_usage:\n      id: {identifier: true}\n  \
+             Scoped:\n    is_a: Entity\n    slot_usage:\n      id: {key: true}\n  \
+             Narrower:\n    is_a: Scoped\n",
+        );
+        assert_eq!(
+            identifier_key_conflicts(&schema),
+            vec![scoped_id_conflict(
+                "slot_usage in class `Entity`",
+                "slot_usage in class `Scoped`",
+            )]
+        );
+    }
+
+    /// LinkML's `SchemaView` folds in the mixin's `key` beside the `is_a`
+    /// parent's `identifier`, though panschema's resolver keeps the parent's.
+    #[test]
+    fn a_mixin_key_beside_an_inherited_identifier_conflicts() {
+        let schema = parse_shared(
+            "slots:\n  id: {required: true}\nclasses:\n  \
+             Entity:\n    abstract: true\n    slots: [id]\n    slot_usage:\n      id: {identifier: true}\n  \
+             Keyed:\n    mixin: true\n    slots: [id]\n    slot_usage:\n      id: {key: true}\n  \
+             Scoped:\n    is_a: Entity\n    mixins: [Keyed]\n",
+        );
+        assert_eq!(
+            identifier_key_conflicts(&schema),
+            vec![scoped_id_conflict(
+                "slot_usage in class `Entity`",
+                "slot_usage in class `Keyed`",
+            )]
+        );
+    }
+
+    #[test]
+    fn a_slot_declaring_both_flags_at_once_conflicts() {
+        let schema = parse_shared(
+            "slots:\n  id: {identifier: true, key: true}\nclasses:\n  \
+             Scoped:\n    slots: [id]\n",
+        );
+        assert_eq!(
+            identifier_key_conflicts(&schema),
+            vec![scoped_id_conflict(
+                "top-level `slots:`",
+                "top-level `slots:`",
+            )]
+        );
+    }
+
+    /// A mixin carrying the conflict is fixed in the mixin, so the classes
+    /// mixing it in are not reported again.
+    #[test]
+    fn a_conflicting_mixin_is_reported_once_not_per_class_mixing_it_in() {
+        let schema = parse_shared(
+            "slots:\n  id: {identifier: true}\nclasses:\n  \
+             Keyed:\n    mixin: true\n    slots: [id]\n    slot_usage:\n      id: {key: true}\n  \
+             A:\n    mixins: [Keyed]\n  B:\n    mixins: [Keyed]\n",
+        );
+        let classes: Vec<String> = identifier_key_conflicts(&schema)
+            .into_iter()
+            .map(|c| c.class)
+            .collect();
+        assert_eq!(classes, vec!["Keyed".to_string()]);
+    }
+
+    /// LinkML and panschema both take an attribute redeclaring the slot as
+    /// a fresh base, so the parent's top-level `identifier` does not reach it.
+    #[test]
+    fn an_attribute_redeclaring_the_slot_drops_the_inherited_identifier() {
+        let schema = parse_shared(
+            "slots:\n  id: {identifier: true}\nclasses:\n  \
+             Entity:\n    slots: [id]\n  \
+             Scoped:\n    is_a: Entity\n    attributes:\n      id: {key: true}\n",
+        );
+        assert_eq!(identifier_key_conflicts(&schema), vec![]);
+    }
+
+    #[test]
+    fn one_flag_per_class_on_a_neutral_slot_is_no_conflict() {
+        for (spelling, body) in NEUTRAL_SPELLINGS {
+            let schema = parse_shared(body);
+            assert_eq!(
+                identifier_key_conflicts(&schema),
+                vec![],
+                "the {spelling} spelling"
+            );
+        }
+    }
+
+    #[test]
+    fn the_neutral_spellings_keep_one_class_global_and_scope_the_other() {
+        for (spelling, body) in NEUTRAL_SPELLINGS {
+            let schema = parse_shared(body);
+            let flags = |class: &str| {
+                let slots =
+                    crate::linkml_resolve::resolve_effective_slots(&schema.classes[class], &schema);
+                let (_, id) = crate::linkml_resolve::record_id_slot(&slots)
+                    .unwrap_or_else(|| panic!("{class} has an id slot ({spelling})"));
+                (id.identifier, id.key)
+            };
+            assert_eq!(flags("Shared"), (true, false), "Shared, {spelling}");
+            assert_eq!(flags("Scoped"), (false, true), "Scoped, {spelling}");
+        }
     }
 
     use super::*;

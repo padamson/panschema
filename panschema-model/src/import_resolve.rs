@@ -188,6 +188,21 @@ pub fn load_schema_with_deps(
     crate::linkml_resolve::resolve_slot_inheritance(&mut schema);
     crate::linkml_resolve::materialize_deferred_default_range(&mut schema);
 
+    // After the merge, because the two flags can come from different files.
+    let conflicts = crate::diagnostics::identifier_key_conflicts(&schema);
+    if !conflicts.is_empty() {
+        return Err(LoadFailure {
+            warnings,
+            error: IoError::Parse(
+                conflicts
+                    .iter()
+                    .map(|c| c.message())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+        });
+    }
+
     // Schema-level diagnostics that don't depend on the output format, so every
     // command surfaces them. `--strict` enforcement and format-specific
     // warnings stay at the `generate` site.
@@ -735,6 +750,32 @@ mod tests {
                 ),
             ],
             "the root's and the read import's warnings survive the failure"
+        );
+    }
+
+    /// The imported file declares the shared slot an `identifier` and the
+    /// root narrows it to a `key`, so only the merged schema shows the pair.
+    #[test]
+    fn a_load_refuses_a_slot_made_both_identifier_and_key_across_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("ids.yaml"),
+            "name: ids\nid: https://example.org/ids\nslots:\n  id:\n    identifier: true\n",
+        )
+        .unwrap();
+        let root = tmp.path().join("root.yaml");
+        std::fs::write(
+            &root,
+            "name: root\nid: https://example.org/root\nimports:\n  - ids\nclasses:\n  \
+             Scoped:\n    slots: [id]\n    slot_usage:\n      id:\n        key: true\n",
+        )
+        .unwrap();
+        let failure =
+            super::load_schema(&root, &YamlReader::new()).expect_err("the pair fails the load");
+        let error = failure.error.to_string();
+        assert!(
+            error.contains("slot `id` in class `Scoped`"),
+            "the error names the slot and the class; got: {error}"
         );
     }
 

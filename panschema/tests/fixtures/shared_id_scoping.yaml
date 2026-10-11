@@ -1,7 +1,9 @@
 # Wine's identity shape: one `id` slot shared across record classes,
 # with `slot_usage` splitting reference entities (global) from records that
-# belong to their dataset (scoped per container). Expressing that split per
-# class is only possible through `slot_usage` on a shared slot.
+# belong to their dataset (scoped per container). The shared slot carries
+# neither flag: `slot_usage` refines rather than replaces, so a class
+# narrowing a shared `identifier` to a `key` would carry both, which
+# LinkML's loader and panschema refuse.
 
 name: shared_id_scoping
 id: https://example.org/scope-test
@@ -13,7 +15,6 @@ default_range: string
 
 slots:
   id:
-    identifier: true
     range: string
   name:
     range: string
@@ -22,6 +23,9 @@ classes:
   Catalog:
     tree_root: true
     slots: [id, name]
+    slot_usage:
+      id:
+        identifier: true
     attributes:
       grapes:
         range: Grape
@@ -34,6 +38,9 @@ classes:
 
   Grape:
     slots: [id, name]
+    slot_usage:
+      id:
+        identifier: true
 
   VintageAssessment:
     slots: [id, name]

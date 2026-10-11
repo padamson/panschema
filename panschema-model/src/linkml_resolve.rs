@@ -484,6 +484,70 @@ fn resolve_slots_walk(
     slots
 }
 
+/// Every declaration of `slot` that LinkML folds into `class_name`'s
+/// induced slot, each with the site it sits at: the top-level definition
+/// when the chain lists the slot in `slots:`, then each attribute and
+/// `slot_usage` entry along the `is_a` and mixin chain, in that order. An
+/// attribute redeclaring the slot is a fresh base, so what came before it
+/// drops.
+///
+/// This is LinkML's reading, which differs from [`resolve_effective_slots`]
+/// in one way: LinkML folds in a mixin's declarations even when `is_a`
+/// already supplies the slot, where the resolver keeps the `is_a` parent's.
+/// Checks on what the LinkML metamodel allows read this view.
+pub fn linkml_slot_declarations<'a>(
+    schema: &'a SchemaDefinition,
+    class_name: &'a str,
+    slot: &str,
+) -> Vec<(String, &'a SlotDefinition)> {
+    #[derive(Default)]
+    struct Chain<'a> {
+        uses_top_level: bool,
+        sites: Vec<(String, &'a SlotDefinition)>,
+    }
+
+    fn walk<'a>(
+        schema: &'a SchemaDefinition,
+        class_name: &'a str,
+        slot: &str,
+        visited: &mut BTreeSet<&'a str>,
+        chain: &mut Chain<'a>,
+    ) {
+        let Some(class) = schema.classes.get(class_name) else {
+            return;
+        };
+        if !visited.insert(class_name) {
+            return;
+        }
+        for ancestor in class.is_a.iter().chain(&class.mixins) {
+            walk(schema, ancestor, slot, visited, chain);
+        }
+        if let Some(def) = class.attributes.get(slot) {
+            *chain = Chain::default();
+            chain
+                .sites
+                .push((format!("attribute in class `{class_name}`"), def));
+        }
+        chain.uses_top_level |= class.slots.iter().any(|s| s == slot);
+        if let Some(def) = class.slot_usage.get(slot) {
+            chain
+                .sites
+                .push((format!("slot_usage in class `{class_name}`"), def));
+        }
+    }
+
+    let mut chain = Chain::default();
+    walk(schema, class_name, slot, &mut BTreeSet::new(), &mut chain);
+    if chain.uses_top_level
+        && let Some(def) = schema.slots.get(slot)
+    {
+        chain
+            .sites
+            .insert(0, ("top-level `slots:`".to_string(), def));
+    }
+    chain.sites
+}
+
 /// The defining class a provenance points back to, with `here` as
 /// the answer for slots that originate at the current class.
 fn origin_of(provenance: &Provenance, here: &str) -> String {
@@ -629,23 +693,13 @@ fn merge_slot_override(target: &mut SlotDefinition, source: &SlotDefinition) {
     if source.designates_type {
         target.designates_type = true;
     }
-    // LinkML's two uniqueness forms are mutually exclusive: `identifier` is
-    // globally unique, `key` is unique within its container. So an override
-    // that sets one clears the other. Without the clear, a class narrowing a
-    // shared `identifier` slot to a `key` ends up carrying both, and
-    // [`record_id_slot`] — which takes an identifier first — names its
-    // records globally, so they are never scoped to their dataset.
-    //
-    // This is what lets a schema share one id slot across its record classes
-    // and still split reference entities from scoped ones per class, which is
-    // the only way to express that split short of splitting the slot in two.
+    // `identifier` and `key` refine like every other flag, as in LinkML, so
+    // a declaration chain setting both leaves both; the load refuses that.
     if source.identifier {
         target.identifier = true;
-        target.key = false;
     }
     if source.key {
         target.key = true;
-        target.identifier = false;
     }
 }
 
@@ -1662,79 +1716,6 @@ mod tests {
             build(None),
             build(Some("string")),
             "declaring a default the slot never uses must not alter its induced view"
-        );
-    }
-
-    /// A schema that shares one id slot across its record classes can only
-    /// say "this class's records belong to their dataset" per class — i.e.
-    /// through `slot_usage`. Dropping `key` there leaves such a schema no
-    /// way to split reference entities from scoped ones without splitting
-    /// the slot, which is a modeling change forced by the tool.
-    #[test]
-    fn slot_usage_can_mark_a_shared_id_slot_as_a_key_for_one_class() {
-        let mut schema = SchemaDefinition::new("s");
-        let mut shared = SlotDefinition::new("id");
-        shared.identifier = true;
-        schema.slots.insert("id".into(), shared);
-
-        // Reference entity: stays on the shared identifier, global.
-        let mut grape = ClassDefinition::new("Grape");
-        grape.slots.push("id".into());
-        schema.classes.insert("Grape".into(), grape);
-
-        // Scoped record: the same slot, narrowed to a per-container key.
-        let mut assessment = ClassDefinition::new("VintageAssessment");
-        assessment.slots.push("id".into());
-        let mut scoped = SlotDefinition::new("id");
-        scoped.key = true;
-        assessment.slot_usage.insert("id".into(), scoped);
-        schema
-            .classes
-            .insert("VintageAssessment".into(), assessment);
-
-        let resolved = resolve_effective_slots(&schema.classes["VintageAssessment"], &schema);
-        assert!(
-            resolved["id"].key,
-            "`key: true` set through slot_usage must survive resolution; got: {:?}",
-            resolved["id"]
-        );
-        assert!(
-            !resolved["id"].identifier,
-            "narrowing a global identifier to a per-container key must clear \
-             `identifier` — the two are LinkML's mutually exclusive uniqueness \
-             forms, and a slot carrying both scopes as neither; got: {:?}",
-            resolved["id"]
-        );
-
-        let reference = resolve_effective_slots(&schema.classes["Grape"], &schema);
-        assert!(
-            reference["id"].identifier && !reference["id"].key,
-            "a class that did not override must keep the base slot's identity; got: {:?}",
-            reference["id"]
-        );
-    }
-
-    /// The mirror of the case above: a base `key` narrowed to a global
-    /// `identifier` must clear `key`, or the slot again carries both.
-    #[test]
-    fn slot_usage_promoting_a_key_to_an_identifier_clears_the_key() {
-        let mut schema = SchemaDefinition::new("s");
-        let mut shared = SlotDefinition::new("id");
-        shared.key = true;
-        schema.slots.insert("id".into(), shared);
-
-        let mut global = ClassDefinition::new("Grape");
-        global.slots.push("id".into());
-        let mut promote = SlotDefinition::new("id");
-        promote.identifier = true;
-        global.slot_usage.insert("id".into(), promote);
-        schema.classes.insert("Grape".into(), global);
-
-        let resolved = resolve_effective_slots(&schema.classes["Grape"], &schema);
-        assert!(
-            resolved["id"].identifier && !resolved["id"].key,
-            "promoting a key to an identifier must clear `key`; got: {:?}",
-            resolved["id"]
         );
     }
 
