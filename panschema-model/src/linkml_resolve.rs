@@ -829,14 +829,70 @@ pub fn record_id_slot<'a>(
 /// effective slots. A `key` does not make a class referenceable from
 /// outside its container, so a slot ranged on a key-only class always
 /// holds its records, `inlined: false` or not. The one rule the reader,
-/// the verifier and the Postgres writer all read inlining from.
+/// the verifier and every writer read inlining from.
 pub fn is_inlined<'a>(
     slot: &SlotDefinition,
-    range_slots: impl IntoIterator<Item = &'a SlotDefinition>,
+    range_slots: impl IntoIterator<Item = (&'a String, &'a SlotDefinition)>,
 ) -> bool {
-    slot.inlined == Some(true)
-        || slot.inlined_as_list == Some(true)
-        || !range_slots.into_iter().any(|s| s.identifier)
+    !matches!(holding(slot, range_slots), Holding::Reference(_))
+}
+
+/// How a class-ranged slot holds the records it names.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Holding<'a> {
+    /// Each value is a record's identifier: the range's `identifier` slot,
+    /// whose range types the value.
+    Reference(&'a SlotDefinition),
+    /// A single-valued slot holds one record inline.
+    Record,
+    /// A multivalued slot holds its records as a list.
+    List,
+    /// A multivalued slot holds its records as a mapping keyed by the
+    /// named slot, the range's identifier or key, whose value is the rest
+    /// of the record.
+    Dict(&'a String),
+}
+
+/// The [`Holding`] LinkML's generators give a class-ranged slot, measured
+/// against `linkml.validator` by `conformance/probe_inlining.py`. A slot
+/// ranged on a class with an `identifier` references it unless it
+/// declares `inlined` or `inlined_as_list`. An inlined single-valued slot
+/// holds one record. A multivalued one holds a list when it declares
+/// `inlined_as_list` or the range has no slot to index by, and a dict
+/// keyed by the range's [`record_id_slot`] otherwise. `range_slots` are
+/// the range class's effective slots.
+pub fn holding<'a>(
+    slot: &SlotDefinition,
+    range_slots: impl IntoIterator<Item = (&'a String, &'a SlotDefinition)>,
+) -> Holding<'a> {
+    let names = record_id_slot(range_slots);
+    let listed = slot.inlined_as_list == Some(true);
+    match names {
+        Some((_, id)) if id.identifier && !listed && slot.inlined != Some(true) => {
+            Holding::Reference(id)
+        }
+        _ if !effective_cardinality(slot).multivalued => Holding::Record,
+        Some((key, _)) if !listed => Holding::Dict(key),
+        _ => Holding::List,
+    }
+}
+
+/// The slot a compact dict entry fills: LinkML lets a dict value be a
+/// bare scalar when the class has **one** effective slot beyond its
+/// identifier or key, and beyond any type designator, which carries the
+/// class rather than the payload. `None` with zero or several candidates,
+/// since nothing then says which slot the scalar fills.
+pub fn compact_dict_slot<'a>(
+    slots: impl IntoIterator<Item = (&'a String, &'a SlotDefinition)>,
+) -> Option<&'a String> {
+    let mut open = slots
+        .into_iter()
+        .filter(|(_, s)| !s.identifier && !s.key && !s.designates_type)
+        .map(|(name, _)| name);
+    match (open.next(), open.next()) {
+        (Some(name), None) => Some(name),
+        _ => None,
+    }
 }
 
 /// Resolve a slot's effective domain class names. LinkML lets the
@@ -1755,43 +1811,109 @@ mod tests {
         assert_eq!(other["things"].inlined_as_list, None);
     }
 
-    /// The one inlining rule: a declaration wins, else the range decides —
-    /// an identifier makes the records referenceable, a key alone does not.
+    /// The one inlining rule, measured against LinkML: a declaration wins,
+    /// else the range decides. An identifier makes the records
+    /// referenceable and a key alone does not; a multivalued inline slot
+    /// keys a dict by whichever the range has.
     #[test]
-    fn is_inlined_follows_the_declaration_then_the_ranges_identifier() {
-        let mut id = SlotDefinition::new("id");
-        id.identifier = true;
-        let mut code = SlotDefinition::new("code");
-        code.key = true;
-        let plain = SlotDefinition::new("label");
+    fn holding_follows_the_declaration_then_the_ranges_identity() {
+        let slot = |name: &str, identifier: bool, key: bool| {
+            let mut s = SlotDefinition::new(name);
+            s.identifier = identifier;
+            s.key = key;
+            (name.to_string(), s)
+        };
+        let (id, code, label) = (
+            slot("id", true, false),
+            slot("code", false, true),
+            slot("label", false, false),
+        );
+        let identified: &[&(String, SlotDefinition)] = &[&id, &label];
+        let keyed: &[&(String, SlotDefinition)] = &[&code, &label];
+        let neither: &[&(String, SlotDefinition)] = &[&label];
+        let declared = |multivalued: bool, inlined: Option<bool>, listed: Option<bool>| {
+            let mut s = SlotDefinition::new("s");
+            s.multivalued = multivalued;
+            s.inlined = inlined;
+            s.inlined_as_list = listed;
+            s
+        };
+        let reference = Holding::Reference(&id.1);
+        let cases = [
+            (declared(true, None, None), identified, reference),
+            (declared(true, Some(false), None), identified, reference),
+            (
+                declared(true, Some(true), None),
+                identified,
+                Holding::Dict(&id.0),
+            ),
+            (declared(true, None, Some(true)), identified, Holding::List),
+            (declared(false, None, None), identified, reference),
+            (
+                declared(false, Some(true), None),
+                identified,
+                Holding::Record,
+            ),
+            (declared(true, None, None), keyed, Holding::Dict(&code.0)),
+            (
+                declared(true, Some(false), None),
+                keyed,
+                Holding::Dict(&code.0),
+            ),
+            (declared(true, None, Some(true)), keyed, Holding::List),
+            (declared(false, None, None), keyed, Holding::Record),
+            (declared(true, None, None), neither, Holding::List),
+            (declared(true, Some(true), None), neither, Holding::List),
+            (declared(false, None, None), neither, Holding::Record),
+        ];
+        for (s, range, expected) in cases {
+            let range_names: Vec<&String> = range.iter().map(|(n, _)| n).collect();
+            assert_eq!(
+                holding(&s, range.iter().map(|(n, d)| (n, d))),
+                expected,
+                "multivalued {}, inlined {:?}, inlined_as_list {:?}, range {range_names:?}",
+                s.multivalued,
+                s.inlined,
+                s.inlined_as_list,
+            );
+        }
+        let mut bounded = declared(false, Some(true), None);
+        bounded.maximum_cardinality = Some(3);
+        assert_eq!(
+            holding(&bounded, identified.iter().map(|(n, d)| (n, d))),
+            Holding::Dict(&id.0),
+            "a maximum above one makes the slot multivalued"
+        );
 
-        let bare = SlotDefinition::new("s");
-        assert!(
-            !is_inlined(&bare, [&id, &plain]),
-            "an identifier range references"
-        );
-        assert!(
-            is_inlined(&bare, [&code, &plain]),
-            "a key-only range inlines"
-        );
-        assert!(is_inlined(&bare, [&plain]), "a range with no id inlines");
+        assert!(!is_inlined(
+            &declared(true, None, None),
+            identified.iter().map(|(n, d)| (n, d))
+        ));
+        assert!(is_inlined(
+            &declared(true, None, None),
+            keyed.iter().map(|(n, d)| (n, d))
+        ));
+    }
 
-        let mut listed = SlotDefinition::new("s");
-        listed.inlined_as_list = Some(true);
-        assert!(is_inlined(&listed, [&id]));
-        let mut dict = SlotDefinition::new("s");
-        dict.inlined = Some(true);
-        assert!(is_inlined(&dict, [&id]));
-        let mut refused = SlotDefinition::new("s");
-        refused.inlined = Some(false);
-        assert!(
-            !is_inlined(&refused, [&id]),
-            "`inlined: false` with an identifier references"
-        );
-        assert!(
-            is_inlined(&refused, [&code]),
-            "`inlined: false` cannot make a key-only range referenceable"
-        );
+    #[test]
+    fn a_compact_dict_entry_fills_the_one_open_slot() {
+        let named = |name: &str, f: fn(&mut SlotDefinition)| {
+            let mut s = SlotDefinition::new(name);
+            f(&mut s);
+            (name.to_string(), s)
+        };
+        let id = named("id", |s| s.identifier = true);
+        let code = named("code", |s| s.key = true);
+        let kind = named("kind", |s| s.designates_type = true);
+        let label = named("label", |_| {});
+        let note = named("note", |_| {});
+        let pick = |slots: &[&(String, SlotDefinition)]| {
+            compact_dict_slot(slots.iter().map(|(n, s)| (n, s))).cloned()
+        };
+        assert_eq!(pick(&[&id, &kind, &label]), Some("label".to_string()));
+        assert_eq!(pick(&[&code, &label]), Some("label".to_string()));
+        assert_eq!(pick(&[&id, &label, &note]), None, "two open slots");
+        assert_eq!(pick(&[&id, &kind]), None, "no open slot");
     }
 
     #[test]

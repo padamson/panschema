@@ -1069,23 +1069,14 @@ impl LinkmlLoader<'_> {
         std::rc::Rc::clone(&self.effective_slots_by_class[class_name])
     }
 
-    /// The slot a compact SimpleDict entry fills for `class_name`: the
-    /// class's **one** effective slot beyond its key/identifier — and
-    /// beyond any type designator, which carries the class, not the
-    /// payload. With zero or several candidates there is no fact about
-    /// which slot the scalar fills, so `None` — nothing is invented.
+    /// The slot a compact SimpleDict entry fills for `class_name`
+    /// ([`compact_dict_slot`](crate::linkml_resolve::compact_dict_slot)).
     fn simple_dict_slot(&mut self, class_name: &str) -> Option<String> {
         let slots = self.resolved_slots(class_name);
-        let mut open = slots
-            .iter()
-            .filter(|(_, rs)| {
-                !rs.definition.identifier && !rs.definition.key && !rs.definition.designates_type
-            })
-            .map(|(name, _)| name);
-        match (open.next(), open.next()) {
-            (Some(name), None) => Some(name.clone()),
-            _ => None,
-        }
+        crate::linkml_resolve::compact_dict_slot(
+            slots.iter().map(|(name, rs)| (name, &rs.definition)),
+        )
+        .cloned()
     }
 
     /// The `designates_type` slot among `class_name`'s effective slots —
@@ -1504,7 +1495,10 @@ impl LinkmlLoader<'_> {
         !class_targets.is_empty()
             && class_targets.iter().all(|class| {
                 let resolved = self.resolved_slots(class);
-                !crate::linkml_resolve::is_inlined(slot, resolved.values().map(|rs| &rs.definition))
+                !crate::linkml_resolve::is_inlined(
+                    slot,
+                    resolved.iter().map(|(n, rs)| (n, &rs.definition)),
+                )
             })
     }
 

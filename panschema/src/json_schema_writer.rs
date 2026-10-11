@@ -9,13 +9,19 @@
 //!
 //! A scalar range projects to its typed property (with `pattern` / numeric
 //! bounds applied), an enum range to a JSON `enum` of its permissible values, a
-//! class range to a `$ref` to that class's `$def`, a custom `types:` range to
-//! its resolved base scalar + facets (following the `typeof` chain or the
-//! type's `uri` datatype), and an `any_of` range to `anyOf` over its branches.
+//! class range to the shape its inlining gives it (see [`slot_property`]), a
+//! custom `types:` range to its resolved base scalar + facets (following the
+//! `typeof` chain or the type's `uri` datatype), and an `any_of` range to
+//! `anyOf` over its branches, a class branch as a `$ref` to its `$def`.
 //! Inherited/mixed-in slots flatten onto each subclass. A range that resolves
 //! to none of these is emitted permissively (`true`) so
 //! `additionalProperties: false` never rejects an otherwise-valid instance.
+//!
+//! A slot holding its records as a dict is an open `object` keyed by id,
+//! which strict structured output (every object closed) rejects; a slot an
+//! LLM fills under strict mode declares `inlined_as_list`.
 
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
@@ -23,7 +29,8 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use crate::io::{IoError, IoResult, Writer};
-use crate::linkml::{SchemaDefinition, SlotDefinition};
+use crate::linkml::{ClassDefinition, SchemaDefinition, SlotDefinition};
+use crate::linkml_resolve::Holding;
 
 /// The JSON Schema dialect the emitted documents declare.
 const DIALECT_2020_12: &str = "https://json-schema.org/draft/2020-12/schema";
@@ -100,6 +107,7 @@ pub fn build_json_schema(schema: &SchemaDefinition) -> Value {
 /// (`serde_json::Map` and the resolver's slot order are both sorted).
 pub(crate) fn build_class_defs(schema: &SchemaDefinition) -> serde_json::Map<String, Value> {
     let mut defs = serde_json::Map::new();
+    let mut dict_held = BTreeMap::new();
 
     for (class_name, class_def) in &schema.classes {
         let mut properties = serde_json::Map::new();
@@ -114,7 +122,7 @@ pub(crate) fn build_class_defs(schema: &SchemaDefinition) -> serde_json::Map<Str
             let cardinality = crate::linkml_resolve::effective_cardinality(&resolved.definition);
             properties.insert(
                 slot_name.clone(),
-                slot_property(&resolved.definition, schema),
+                slot_property(&resolved.definition, schema, &mut dict_held),
             );
             if cardinality.required {
                 required.push(Value::String(slot_name));
@@ -137,17 +145,89 @@ pub(crate) fn build_class_defs(schema: &SchemaDefinition) -> serde_json::Map<Str
         defs.insert(class_name.clone(), Value::Object(obj));
     }
 
+    // A dict entry's key carries the slot it is keyed by, so the value may
+    // leave that slot out.
+    for (class_name, key) in dict_held {
+        let mut def = defs[&class_name].clone();
+        if let Some(required) = def.get_mut("required").and_then(Value::as_array_mut) {
+            required.retain(|r| r.as_str() != Some(key.as_str()));
+        }
+        defs.insert(id_optional_def(&class_name), def);
+    }
+
     defs
 }
 
-/// The JSON Schema for a single slot: its value schema (see
-/// [`slot_value_schema`]), wrapped in an `array` when the slot is multivalued.
-fn slot_property(slot: &SlotDefinition, schema: &SchemaDefinition) -> Value {
-    let base = slot_value_schema(slot, schema);
-    if crate::linkml_resolve::effective_cardinality(slot).multivalued {
-        json!({ "type": "array", "items": base })
-    } else {
-        base
+/// The `$defs` name of a class's variant whose identifier is optional, the
+/// value schema of a dict entry; LinkML's own generator names it this way.
+fn id_optional_def(class_name: &str) -> String {
+    format!("{class_name}__identifier_optional")
+}
+
+/// The JSON Schema for a single slot. A class-ranged slot takes the shape
+/// its [`Holding`] gives it: the range's identifier for a reference, the
+/// record for one held inline, an `array` of records for a list, and an
+/// `object` keyed by id for a dict, whose range `dict_held` collects with
+/// the slot it is keyed by. Any
+/// other slot is its value schema (see [`slot_value_schema`]), wrapped in
+/// an `array` when multivalued.
+fn slot_property(
+    slot: &SlotDefinition,
+    schema: &SchemaDefinition,
+    dict_held: &mut BTreeMap<String, String>,
+) -> Value {
+    let multivalued = crate::linkml_resolve::effective_cardinality(slot).multivalued;
+    let wrap = |base: Value| {
+        if multivalued {
+            json!({ "type": "array", "items": base })
+        } else {
+            base
+        }
+    };
+    let Some((range, range_class)) = class_range(slot, schema) else {
+        return wrap(slot_value_schema(slot, schema));
+    };
+    let range_slots = crate::linkml_resolve::resolve_effective_slots(range_class, schema);
+    match crate::linkml_resolve::holding(slot, &range_slots) {
+        Holding::Reference(id) => wrap(slot_value_schema(id, schema)),
+        Holding::Record | Holding::List => wrap(slot_value_schema(slot, schema)),
+        Holding::Dict(key) => {
+            dict_held.insert(range.clone(), key.clone());
+            let entry = json!({ "$ref": format!("#/$defs/{}", id_optional_def(range)) });
+            let bare = crate::linkml_resolve::compact_dict_slot(&range_slots)
+                .and_then(|open| bare_value_schema(&range_slots[open], schema));
+            let value = match bare {
+                Some(bare) => json!({ "anyOf": [entry, bare] }),
+                None => entry,
+            };
+            json!({ "type": "object", "additionalProperties": value })
+        }
+    }
+}
+
+/// The class a slot's single `range` names, when it names one.
+fn class_range<'s>(
+    slot: &SlotDefinition,
+    schema: &'s SchemaDefinition,
+) -> Option<(&'s String, &'s ClassDefinition)> {
+    slot.range
+        .as_deref()
+        .filter(|_| slot.any_of.is_empty())
+        .and_then(|range| schema.classes.get_key_value(range))
+}
+
+/// The schema of one bare scalar standing for `slot`'s value, as a compact
+/// dict entry is read: the slot's own value schema, or the range's
+/// identifier for a reference. `None` when the slot holds records inline,
+/// since no scalar stands for a record.
+fn bare_value_schema(slot: &SlotDefinition, schema: &SchemaDefinition) -> Option<Value> {
+    let Some((_, range_class)) = class_range(slot, schema) else {
+        return Some(slot_value_schema(slot, schema));
+    };
+    let range_slots = crate::linkml_resolve::resolve_effective_slots(range_class, schema);
+    match crate::linkml_resolve::holding(slot, &range_slots) {
+        Holding::Reference(id) => Some(slot_value_schema(id, schema)),
+        Holding::Record | Holding::List | Holding::Dict(_) => None,
     }
 }
 
@@ -748,6 +828,204 @@ classes:
         assert!(
             !v.is_valid(&json!({ "origin": 42 })),
             "a value matching neither branch should fail"
+        );
+    }
+
+    /// Each inlining declaration with the authored forms LinkML's validator
+    /// (linkml-runtime 1.12.0) accepts for it; it rejects every other form.
+    /// `conformance/probe_inlining.py` prints the grid this is read from.
+    const LINKML_ACCEPTS: &[(&str, &[&str])] = &[
+        ("{range: Item, multivalued: true}", &["list of ids"]),
+        (
+            "{range: Item, multivalued: true, inlined: true}",
+            &[
+                "dict keyed by id",
+                "one object",
+                "one note object",
+                "dict keyed by code",
+            ],
+        ),
+        (
+            "{range: Item, multivalued: true, inlined_as_list: true}",
+            &["list of objects"],
+        ),
+        (
+            "{range: Item, multivalued: true, inlined: false}",
+            &["list of ids"],
+        ),
+        ("{range: Item}", &["one id"]),
+        ("{range: Item, inlined: true}", &["one object"]),
+        ("{range: Numbered}", &["one integer"]),
+        (
+            "{range: Note, multivalued: true}",
+            &["list of note objects"],
+        ),
+        (
+            "{range: Note, multivalued: true, inlined: false}",
+            &["list of note objects"],
+        ),
+        (
+            "{range: Note, multivalued: true, inlined: true}",
+            &["list of note objects"],
+        ),
+        ("{range: Note}", &["one note object"]),
+        (
+            "{range: Keyed, multivalued: true}",
+            &[
+                "dict keyed by id",
+                "one object",
+                "one note object",
+                "dict keyed by code",
+            ],
+        ),
+        (
+            "{range: Keyed, multivalued: true, inlined: true}",
+            &[
+                "dict keyed by id",
+                "one object",
+                "one note object",
+                "dict keyed by code",
+            ],
+        ),
+        (
+            "{range: Keyed, multivalued: true, inlined: false}",
+            &[
+                "dict keyed by id",
+                "one object",
+                "one note object",
+                "dict keyed by code",
+            ],
+        ),
+        (
+            "{range: Keyed, multivalued: true, inlined_as_list: true}",
+            &["list of keyed objects"],
+        ),
+    ];
+
+    #[test]
+    fn instance_data_validates_as_linkml_validates_it_for_every_inlining() {
+        let forms = [
+            ("list of ids", json!({ "items": ["a", "b"] })),
+            (
+                "list of objects",
+                json!({ "items": [{ "id": "a", "label": "A" }, { "id": "b" }] }),
+            ),
+            (
+                "dict keyed by id",
+                json!({ "items": { "a": { "label": "A" }, "b": {} } }),
+            ),
+            ("one id", json!({ "items": "a" })),
+            ("one integer", json!({ "items": 5 })),
+            (
+                "one object",
+                json!({ "items": { "id": "a", "label": "A" } }),
+            ),
+            (
+                "list of note objects",
+                json!({ "items": [{ "text": "x" }] }),
+            ),
+            ("one note object", json!({ "items": { "text": "x" } })),
+            (
+                "list of keyed objects",
+                json!({ "items": [{ "code": "a", "label": "A" }] }),
+            ),
+            (
+                "dict keyed by code",
+                json!({ "items": { "a": { "label": "A" } } }),
+            ),
+        ];
+        let mut disagreements = Vec::new();
+        for (slot, accepted) in LINKML_ACCEPTS {
+            let schema: SchemaDefinition = serde_norway::from_str(&format!(
+                "\
+name: t
+classes:
+  Container:
+    tree_root: true
+    attributes:
+      items: {slot}
+  Item:
+    attributes:
+      id: {{identifier: true}}
+      label: {{}}
+  Note:
+    attributes:
+      text: {{}}
+  Keyed:
+    attributes:
+      code: {{key: true}}
+      label: {{}}
+  Numbered:
+    attributes:
+      n: {{identifier: true, range: integer}}
+"
+            ))
+            .expect("parse schema");
+            let doc = build_json_schema(&schema);
+            let v = jsonschema::validator_for(&doc)
+                .unwrap_or_else(|e| panic!("{slot}: the document compiles: {e}"));
+            for (form, data) in &forms {
+                let linkml = accepted.contains(form);
+                if v.is_valid(data) != linkml {
+                    disagreements.push(format!(
+                        "{slot} | {form}: LinkML {}, panschema {}",
+                        if linkml { "accepts" } else { "rejects" },
+                        if linkml { "rejects" } else { "accepts" },
+                    ));
+                }
+            }
+        }
+        assert!(
+            disagreements.is_empty(),
+            "panschema's JSON Schema disagrees with LinkML on:\n{}",
+            disagreements.join("\n")
+        );
+    }
+
+    #[test]
+    fn a_bare_dict_entry_is_the_scalar_its_one_open_slot_takes() {
+        let schema: SchemaDefinition = serde_norway::from_str(
+            "\
+name: t
+classes:
+  Library:
+    tree_root: true
+    attributes:
+      shelves: {range: Shelf, multivalued: true}
+      bins: {range: Bin, multivalued: true}
+  Shelf:
+    attributes:
+      code: {key: true}
+      holds: {range: Book}
+  Book:
+    attributes:
+      isbn: {identifier: true}
+  Bin:
+    attributes:
+      code: {key: true}
+      note: {range: Note}
+  Note:
+    attributes:
+      text: {}
+",
+        )
+        .expect("parse schema");
+        let v = jsonschema::validator_for(&build_json_schema(&schema)).expect("compiles");
+        assert!(
+            v.is_valid(&json!({ "shelves": { "s1": "978-0" } })),
+            "an open slot that references takes the referenced id"
+        );
+        assert!(
+            !v.is_valid(&json!({ "shelves": { "s1": { "isbn": "978-0" } } })),
+            "a bare entry does not embed the referenced record"
+        );
+        assert!(
+            !v.is_valid(&json!({ "bins": { "b1": "loose" } })),
+            "no scalar stands for an open slot that holds its record inline"
+        );
+        assert!(
+            v.is_valid(&json!({ "bins": { "b1": { "note": { "text": "loose" } } } })),
+            "the full entry still validates"
         );
     }
 }

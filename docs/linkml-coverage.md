@@ -24,7 +24,7 @@ Two different kinds of "support" are tracked separately:
    - **Rust** — [rust_writer.rs](../panschema/src/rust_writer.rs) codegen
    - **Postgres** — [postgres_writer.rs](../panschema/src/postgres_writer.rs) DDL ([feature 24](features/24-postgres-ddl-writer.md))
    - **SHACL** — [shacl_writer.rs](../panschema/src/shacl_writer.rs) validation shapes ([feature 17 slice 4](features/17-class-validation-constructs.md)); a cross-cutting constraints projection (one `sh:NodeShape` per class with property shapes for slot value-constraints), not tracked as a per-construct column in the table below
-   - **JSON Schema** — [json_schema_writer.rs](../panschema/src/json_schema_writer.rs) draft-2020-12 structured-output/validation contract ([feature 32](features/32-json-schema-writer.md)); a cross-cutting projection (one closed `object` per class under `$defs`), not tracked as a per-construct column in the table below
+   - **JSON Schema** — [json_schema_writer.rs](../panschema/src/json_schema_writer.rs) draft-2020-12 structured-output/validation contract ([feature 32](features/32-json-schema-writer.md)); a cross-cutting projection (one closed `object` per class under `$defs`), not tracked as a per-construct column in the table below. A class-ranged slot takes the shape LinkML's own generator gives its inlining: a reference is the range's identifier, typed as that slot is, a list holds `$ref`s to the record, and a dict is an `object` whose values are a `<Class>__identifier_optional` variant, or a bare scalar only where the class has one slot for it, the compact form the reader accepts (LinkML admits any string). The OpenAPI writer reuses these definitions. A slot with an `any_of` range keeps a `$ref` per class branch, whatever its inlining
 
 Legend: ● full · ◐ partial / indirect · ○ modeled but inert (silent-drop
 risk) · — not applicable to this writer · ✗ not modeled in the IR.
@@ -309,6 +309,10 @@ URIs-and-mappings), not against this file's own claims. Ranked by impact.
    (`inlined_as_list`) is not enforced. The reference direction is tied
    to how references to key-only classes should work and waits on a
    consumer settling that.
+   The JSON Schema and OpenAPI writers follow the declarations exactly
+   (see the writer list above), so their contract is stricter than the
+   reader: a document they describe validates as `linkml.validator`
+   validates it, measured over the probe's grid.
    Original finding: LinkML: a class-ranged slot whose range has no identifier is
    *always* inlined; with one, it defaults to a reference unless `inlined:
    true`; `inlined_as_list` selects list vs identifier-keyed dict; and a

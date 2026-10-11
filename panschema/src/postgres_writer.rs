@@ -1118,7 +1118,7 @@ fn relation_names(schema: &SchemaDefinition) -> std::collections::BTreeSet<Strin
 /// target's effective slots.
 fn inlines(slot: &SlotDefinition, target: &ClassDefinition, schema: &SchemaDefinition) -> bool {
     let effective = crate::linkml_resolve::resolve_effective_slots(target, schema);
-    crate::linkml_resolve::is_inlined(slot, effective.values())
+    crate::linkml_resolve::is_inlined(slot, &effective)
 }
 
 /// Every enum referenced by an effective slot of any class, in name-sorted

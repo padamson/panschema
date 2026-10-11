@@ -19,7 +19,8 @@ uv run --project conformance conformance/probe_inlining.py
 The inlining probe crosses every slot declaration (`inlined`,
 `inlined_as_list`, neither; identifier, key-only and no-identifier
 ranges) with every authored form and prints the validator's verdict on
-each; it is the evidence behind `verify`'s inlining check.
+each; it is the evidence behind `verify`'s inlining check and the
+shape the JSON Schema and OpenAPI writers give each inlining.
 
 ```bash
 uv run --project conformance conformance/probe_key_scoping.py

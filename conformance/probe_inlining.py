@@ -4,7 +4,9 @@ Run with `uv run --project conformance conformance/probe_inlining.py`.
 Each case is one slot declaration crossed with one authored form; the
 output is the reference implementation's verdict. panschema's `verify`
 reports the same mismatches as range-kind violations (see
-`panschema/src/validate.rs`), and reads inlined records by shape.
+`panschema/src/validate.rs`), and reads inlined records by shape. The
+JSON Schema writer's tests freeze the accepted pairs (`LINKML_ACCEPTS` in
+`panschema/src/json_schema_writer.rs`); refresh them when this grid grows.
 """
 
 from linkml.validator import validate
@@ -32,6 +34,9 @@ classes:
     attributes:
       code: {{key: true}}
       label: {{}}
+  Numbered:
+    attributes:
+      n: {{identifier: true, range: integer}}
 """
 
 SLOTS = {
@@ -41,11 +46,15 @@ SLOTS = {
     "multi, id range, inlined: false": "items: {range: Item, multivalued: true, inlined: false}",
     "single, id range, unflagged": "items: {range: Item}",
     "single, id range, inlined": "items: {range: Item, inlined: true}",
+    "single, integer id range, unflagged": "items: {range: Numbered}",
     "multi, no-id range, unflagged": "items: {range: Note, multivalued: true}",
     "multi, no-id range, inlined: false": "items: {range: Note, multivalued: true, inlined: false}",
+    "multi, no-id range, inlined": "items: {range: Note, multivalued: true, inlined: true}",
     "single, no-id range, unflagged": "items: {range: Note}",
     "multi, key range, unflagged": "items: {range: Keyed, multivalued: true}",
     "multi, key range, inlined": "items: {range: Keyed, multivalued: true, inlined: true}",
+    "multi, key range, inlined: false": "items: {range: Keyed, multivalued: true, inlined: false}",
+    "multi, key range, inlined_as_list": "items: {range: Keyed, multivalued: true, inlined_as_list: true}",
 }
 
 FORMS = {
@@ -53,6 +62,7 @@ FORMS = {
     "list of objects": {"items": [{"id": "a", "label": "A"}, {"id": "b"}]},
     "dict keyed by id": {"items": {"a": {"label": "A"}, "b": {}}},
     "one id": {"items": "a"},
+    "one integer": {"items": 5},
     "one object": {"items": {"id": "a", "label": "A"}},
     "list of note objects": {"items": [{"text": "x"}]},
     "one note object": {"items": {"text": "x"}},

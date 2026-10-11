@@ -116,11 +116,25 @@ classes:
         any_of:
           - range: Region
           - range: string
+      made_by:
+        range: Winery
+      neighbors:
+        range: Winery
+        multivalued: true
+        inlined: true
   Region:
     attributes:
       id:
         range: string
         required: true
+  Winery:
+    attributes:
+      id:
+        identifier: true
+      name:
+        range: string
+      founded:
+        range: integer
 ",
         )
         .expect("parse schema");
@@ -198,6 +212,20 @@ classes:
         assert!(
             !v.is_valid(&json!({ "name": "x", "region": "not-an-object" })),
             "a scalar where a class ref is declared fails"
+        );
+        assert!(
+            v.is_valid(&json!({ "name": "x", "made_by": "foillard" })),
+            "a reference to an identified class is its id"
+        );
+        assert!(
+            !v.is_valid(&json!({ "name": "x", "made_by": { "id": "foillard" } })),
+            "a reference does not embed the record"
+        );
+        assert!(
+            v.is_valid(
+                &json!({ "name": "x", "neighbors": { "lapierre": { "name": "Lapierre" } } })
+            ),
+            "a dict entry leaves out the id its key carries"
         );
     }
 }
