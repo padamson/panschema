@@ -74,7 +74,7 @@ tower-http = { version = "0.7", features = ["fs"] }
 tower-livereload = "0.10"
 
 # Schema manager — github: source fetch + cache
-ureq = { version = "2", default-features = false, features = ["tls"] }
+ureq = { version = "2", default-features = false, features = ["tls", "proxy-from-env"] }
 flate2 = "1"
 tar = "0.4"
 directories = "6"

@@ -4704,6 +4704,58 @@ fn run_with_cache(consumer: &Path, cache_root: &Path, args: &[&str]) -> std::pro
         .expect("run panschema")
 }
 
+/// A sandbox or corporate network reaches GitHub only through the proxy
+/// named in `HTTPS_PROXY`; a fetch that resolves the host itself fails
+/// there at DNS.
+#[test]
+fn fetch_tunnels_through_the_https_proxy_from_the_environment() {
+    use std::io::{BufRead, BufReader, Write};
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path().join("consumer");
+    fs::create_dir_all(&consumer).expect("mkdir consumer");
+    fs::write(
+        consumer.join("panschema.toml"),
+        "[schemas]\nx = { source = \"github:proxy-probe/x\", version = \"1.0.0\" }\n",
+    )
+    .expect("write manifest");
+
+    let proxy = std::net::TcpListener::bind("127.0.0.1:0").expect("bind proxy");
+    let proxy_url = format!("http://{}", proxy.local_addr().expect("proxy addr"));
+    let (seen, request_line) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let (stream, _) = proxy.accept().expect("accept");
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("read request line");
+        // Sent before replying: fetch waits for the reply, so by the time
+        // the child exits the line is already in the channel.
+        seen.send(line.trim_end().to_string()).expect("send");
+        reader
+            .get_mut()
+            .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+            .expect("reply");
+    });
+
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("fetch")
+        .current_dir(&consumer)
+        .env("PANSCHEMA_CACHE_ROOT", tmp.path().join("cache"))
+        // Read ahead of `HTTPS_PROXY`, so an inherited one would win.
+        .env_remove("ALL_PROXY")
+        .env_remove("all_proxy")
+        .env("HTTPS_PROXY", &proxy_url)
+        .output()
+        .expect("run panschema");
+
+    assert_eq!(
+        request_line.try_recv().ok().as_deref(),
+        Some("CONNECT codeload.github.com:443 HTTP/1.1"),
+        "fetch should open its tunnel through {proxy_url}; stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 const CONTRACT_PIN: &str =
     "contract = { source = \"github:test-owner/contract\", version = \"1.0.0\" }";
 const OTHER_PIN: &str = "other = { source = \"github:test-owner/other\", version = \"2.0.0\" }";
