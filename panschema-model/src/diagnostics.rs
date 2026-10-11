@@ -1172,7 +1172,7 @@ pub enum AbsenceVia {
     /// No narrowing: no record of any kind may join the anchors.
     Unnarrowed,
     /// Narrowed to joining records of the class the named slot's value
-    /// designates on each claiming record.
+    /// designates on each claiming record, or of an `is_a` descendant.
     Slot(String),
     /// The declaration's `via_slot` was not a string, so the narrowing
     /// is unreadable: the claims it governs are uncheckable — never
@@ -2227,7 +2227,7 @@ pub fn expansion_declaration_issues(schema: &SchemaDefinition) -> Vec<ExpansionD
 /// cite them, while restating an already-declared record inline is a
 /// citation. The `via` slot's value — expanded against the referring
 /// schema exactly like the anchors — narrows the claim to joining
-/// records of that class. Anchors and joins resolve through the
+/// records of that class or an `is_a` descendant of it. Anchors and joins resolve through the
 /// sibling's own minting (its whole dataset list at once, so a join in
 /// one file reaches records declared in another). A claim that cannot
 /// be evaluated — a null or malformed anchor, anchors collapsing to
@@ -2468,7 +2468,9 @@ pub fn unverified_absences(
                 }
                 for record in &index.records {
                     if let Some(allowed) = allowed
-                        && !record.types.iter().any(|t| t == allowed)
+                        && !record.types.iter().any(|t| {
+                            crate::linkml_resolve::class_satisfies(index.schema, t, allowed)
+                        })
                     {
                         continue;
                     }
@@ -5595,6 +5597,58 @@ mod tests {
             .len(),
             1,
             "a bare class name narrows like the designator's matcher: name first, IRI second"
+        );
+    }
+
+    /// A record of an `is_a` descendant belongs to the narrowed class,
+    /// so it joins the anchors as that class: a claim narrowed to `Link`
+    /// is broken by a `Pairing` without a second record naming `Pairing`.
+    #[test]
+    fn via_narrowing_counts_a_joining_record_of_a_subclass() {
+        let mut sibling_schema = linked_sibling_schema();
+        let mut pairing = crate::linkml::ClassDefinition::new("Pairing");
+        pairing.is_a = Some("Link".to_string());
+        sibling_schema
+            .classes
+            .insert("Pairing".to_string(), pairing);
+        let mut pairings = crate::linkml::SlotDefinition::new("pairings");
+        pairings.range = Some("Pairing".to_string());
+        pairings.multivalued = true;
+        sibling_schema
+            .classes
+            .get_mut("Root")
+            .unwrap()
+            .attributes
+            .insert("pairings".to_string(), pairings);
+        let sibling = scoped_set(
+            &sibling_schema,
+            "id: est\nitems:\n  - {id: w1}\n  - {id: f1}\npairings:\n  - {id: p1, a: w1, b: f1}\n",
+        );
+        let schema = claiming_schema();
+        let joined_by = |claim: &str, via: Option<&str>| {
+            unverified_absences(
+                &schema,
+                &scoped_set(&schema, claim),
+                &AbsenceBindings::schema_wide("anchors", via),
+                &[(&sibling_schema, std::slice::from_ref(&sibling))],
+            )
+            .unverified
+            .into_iter()
+            .map(|u| u.joined_by)
+            .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            joined_by("id: b1\nanchors:\n  - cellar:w1\n  - cellar:f1\n", None),
+            ["p1"],
+            "the pairing references both anchors"
+        );
+        assert_eq!(
+            joined_by(
+                "id: b1\nanchors:\n  - cellar:w1\n  - cellar:f1\nvia: Link\n",
+                Some("via")
+            ),
+            ["p1"],
+            "a Pairing is a Link, so it breaks a claim narrowed to Link"
         );
     }
 
