@@ -24,6 +24,12 @@ test_tool = "nextest"
 # rejects.)
 additional_cargo_args = ["--lib"]
 
+# The auto-set test timeout scales with the unmutated baseline, which is
+# about a second when the diff touches only `panschema-model`; its 20 s
+# floor is then shorter than a mutant's test run on a 4-core CI runner
+# building four mutants at once, and every mutant times out.
+minimum_test_timeout = 90
+
 # Examine `panschema`, `panschema-model`, and the host-testable parts of
 # `panschema-viz`.
 # `panschema-viz` is a wasm-targeted crate, but `simulation.rs`,
