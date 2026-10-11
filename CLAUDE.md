@@ -87,6 +87,22 @@ JSON-LD, RDF/XML, N-Triples), graph JSON, Rust, Postgres DDL, and SHACL. One
 concrete path — OWL/Turtle in, HTML out — is `OwlReader → SchemaDefinition →
 HtmlWriter`; any reader pairs with any writer.
 
+## Design principle
+
+Pick the option most idiomatic for both LinkML and the format being written.
+
+- **LinkML decides what a construct means.** panschema reads and projects a
+  construct the way LinkML's reference implementation does. Settle a
+  question by measuring that implementation with a probe in `conformance/`,
+  not by arguing from the docs.
+- **The target decides how the meaning is spelled.** Generated Rust is what a
+  Rust author would write by hand for that meaning, generated DDL what a
+  Postgres author would, and so on. LinkML's own generators are the first
+  place to look, since they have already made most of these calls.
+- **Size is not the tiebreaker.** A smaller diff or a cheaper slice is no
+  reason to ship a less idiomatic shape. When the idiomatic one is bigger,
+  slice it.
+
 ## Reference Ontology
 
 The reference ontology at `panschema/tests/fixtures/reference.ttl` is used for testing and serves as the canonical example.

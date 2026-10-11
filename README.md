@@ -119,6 +119,14 @@ This design enables:
 - Adding new output formats by implementing the `Writer` trait
 - Format-agnostic documentation and conversion
 
+### Faithful to LinkML, idiomatic in the target
+
+panschema reads a schema the way LinkML's reference implementation does,
+and checks that against it with probes (`conformance/`). Each writer then
+spells that meaning the way the target's own authors would. A validator, an
+LLM, or a generated client gets the contract LinkML's tools would give it,
+in the form a user of that language expects.
+
 ### The model as a library
 
 The LinkML IR ships on its own as
