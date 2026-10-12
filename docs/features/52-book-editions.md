@@ -79,9 +79,9 @@ name branch tips, so the dogfood loop survives. A tag cut before the file
 existed gets its toolchain from an override in `panschema-publish.toml`.
 
 **Idempotent, from tags.** Every edition is rebuilt from its tag on every
-run, with the working tree untouched (the tree is read with
-`git archive`), and two runs produce byte-identical output. Nothing built
-is stored on a release.
+run, with the working tree untouched (the tag's tree is checked out
+through a scratch index), and two runs produce byte-identical output.
+Nothing built is stored on a release.
 
 ### Configuration
 
@@ -167,36 +167,62 @@ anything is built.
 
 ### Slice 2: `mdbook-panschema editions` builds every edition
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** One command publishes every edition at its stable path and
 the current edition at the site root, from tags, without touching the
 working tree.
 
 **Acceptance Criteria:**
-- [ ] `mdbook-panschema editions` writes each released edition to
+- [x] `mdbook-panschema editions` writes each released edition to
   `<output_dir>/book/<edition>/`, built from its tag's tree, and the
   unreleased edition to `<output_dir>/book/<edge>/`.
-- [ ] The site root holds a copy of the current edition, and anything else
+- [x] The site root holds a copy of the current edition, and anything else
   already in `<output_dir>` (the schema docs) survives.
-- [ ] Re-running with a different `current` leaves no page of the previous
+- [x] Re-running with a different `current` leaves no page of the previous
   current edition at the root.
-- [ ] A built book whose top level would collide with `book/` or the
+- [x] A built book whose top level would collide with `book/` or the
   schema docs' directory is refused before anything is written.
-- [ ] The working tree is untouched: no file changes, no file appears, and
+- [x] The working tree is untouched: no file changes, no file appears, and
   no worktree is registered.
-- [ ] Each plugin the tag's `toolchain.toml` lists has its `install`
+- [x] Each plugin the tag's `toolchain.toml` lists has its `install`
   arguments run in that edition's book directory before the build; a tag
   without the file builds with no plugin installs.
-- [ ] A failed edition build names the edition and the tag, and carries
+- [x] A failed edition build names the edition and the tag, and carries
   the tool's output.
-- [ ] Two runs over the same tags produce byte-identical output.
+- [x] Two runs over the same tags produce byte-identical output.
 
 **Notes:**
 - Tools come from `PATH` in this slice; Slice 5 installs pinned versions.
-- Tests drive the orchestration through an in-process builder, so they
-  need no mdbook install; one test builds with the real `mdbook` when it
-  is present.
+- Tests drive the orchestration through an in-process toolchain, so they
+  need no mdbook install; one ignored test builds with the real `mdbook`
+  (`cargo nextest run --run-ignored only -E 'test(real_mdbook)'`).
+- A tag's tree is checked out with `git read-tree` and `git
+  checkout-index` against a scratch index file, from the repo's top level
+  so a book can include files from outside its own directory. `git
+  archive` was the first choice and was dropped: it drops every path
+  `.gitattributes` marks `export-ignore`, which repos do to keep their
+  docs out of source tarballs, and it holds the whole tree in memory
+  before unpacking.
+- A book that declares more than one `[output.*]` backend renders its
+  HTML into `html/` under mdbook's destination, so the HTML root is read
+  from the tag's `book.toml`, not assumed.
+- `[editions].book` may not lie inside `[editions].output_dir`: the
+  build replaces `<output_dir>/book/` and writes the current edition over
+  `<output_dir>/`, so a book source in there (the GitHub Pages `docs/`
+  layout with the source in `docs/book`) would be deleted.
+- The site root keeps a ledger, `.panschema-editions-root`, of the entries
+  the root copy wrote, so the next run removes exactly those and nothing
+  else at the root. It is written with the old and the new entries before
+  the copy starts, so an interrupted copy is still recorded, and a ledger
+  line that is not a fresh single name at the root (`..`, `book`, the
+  schema docs' directory) is refused rather than removed, since a ledger
+  something else wrote is not a record of this tool's work.
+- Smoke-tested on a real schema book with two preprocessors: `main` built
+  and its root copy matched its stable path. A tag cut before
+  `toolchain.toml` fails naming the edition and the tag, with mdbook's
+  error about the missing preprocessor asset; Slice 5's override is the
+  fix.
 
 ---
 
@@ -312,7 +338,7 @@ publishes both books, verified on a real site.
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | Slice 1: Edition planning | Must Have | None | Completed |
-| Slice 2: Build every edition | Must Have | Slice 1 | Not Started |
+| Slice 2: Build every edition | Must Have | Slice 1 | Completed |
 | Slice 3: Edition-aware toolbar | Must Have | Slice 2 | Not Started |
 | Slice 4: Schema pages link back | Must Have | Slice 1 | Not Started |
 | Slice 5: Per-edition toolchain | Must Have | Slice 2 | Not Started |
@@ -329,8 +355,9 @@ publishes both books, verified on a real site.
   `[editions]` and the toolchain overrides are still read from the
   checkout, so a consumer's workflow should publish from `main` with tags
   fetched.
-- **Submodules.** `git archive` omits submodule contents; a book that
-  includes files from a submodule is out of scope.
+- **Submodules.** The scratch-index checkout leaves a submodule's
+  directory empty; a book that includes files from a submodule is out of
+  scope.
 - **Switching editions lands on the first page.** As with the schema
   version dropdown, chapters are not assumed to exist under the same path
   in every edition.

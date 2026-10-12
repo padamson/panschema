@@ -111,6 +111,12 @@ pub enum PublishError {
         site.display()
     )]
     SchemaOutsideSite { schema: PathBuf, site: PathBuf },
+    #[error(
+        "[editions].book `{}` lies inside [editions].output_dir `{}`, which the editions build writes over",
+        book.display(),
+        site.display()
+    )]
+    BookInsideSite { book: PathBuf, site: PathBuf },
 }
 
 /// Whether a configured value may become one directory name in the
@@ -118,7 +124,7 @@ pub enum PublishError {
 /// `.`/`..` traversal names. Version labels, the edge label, and page
 /// directories all pass through this — one rule for every path segment
 /// the publish tree writes.
-fn is_single_path_segment(s: &str) -> bool {
+pub(crate) fn is_single_path_segment(s: &str) -> bool {
     !s.is_empty() && s != "." && s != ".." && !s.contains(['/', '\\'])
 }
 
@@ -204,17 +210,30 @@ pub struct EditionsConfig {
 impl EditionsConfig {
     /// Refuse a release list that cannot be grouped into editions, and a
     /// schema-docs directory the book cannot reach by relative path.
-    fn validate(&self, publishing: &PublishingConfig) -> Result<(), PublishError> {
+    pub(crate) fn validate(&self, publishing: &PublishingConfig) -> Result<(), PublishError> {
+        use std::path::Component;
         let site = lexical_components(&self.output_dir);
         let schema = lexical_components(&publishing.output_dir);
         // `book` matches in any case: on a case-insensitive filesystem
         // `Book/` is the editions' directory.
-        let inside = schema.len() > site.len()
+        let schema_inside = schema.len() > site.len()
             && schema.starts_with(&site)
+            && schema[site.len()] != Component::ParentDir
             && !schema[site.len()].as_os_str().eq_ignore_ascii_case("book");
-        if !inside {
+        if !schema_inside {
             return Err(PublishError::SchemaOutsideSite {
                 schema: publishing.output_dir.clone(),
+                site: self.output_dir.clone(),
+            });
+        }
+        // The build replaces `<site>/book/` and writes the current edition
+        // over `<site>/`, so a book source anywhere in there is lost.
+        let book = lexical_components(&self.book);
+        let book_inside =
+            book.starts_with(&site) && book.get(site.len()) != Some(&Component::ParentDir);
+        if book_inside {
+            return Err(PublishError::BookInsideSite {
+                book: self.book.clone(),
                 site: self.output_dir.clone(),
             });
         }
@@ -227,7 +246,7 @@ impl EditionsConfig {
 /// directory before it, so `./site/` and `site`, or `site/x/../schema` and
 /// `site/schema`, compare equal. A leading `..` has nothing to cancel and
 /// stays.
-fn lexical_components(path: &Path) -> Vec<std::path::Component<'_>> {
+pub(crate) fn lexical_components(path: &Path) -> Vec<std::path::Component<'_>> {
     use std::path::Component;
     let mut out: Vec<Component<'_>> = Vec::new();
     for component in path.components() {
@@ -1851,7 +1870,7 @@ fn generate_html_for_version(
 /// Recursive directory copy. `std::fs` only ships single-file copy;
 /// the `current/` alias is a small tree so a hand-rolled walker is
 /// fine. Errors propagate via `std::io::Error` → `PublishError::Io`.
-fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+pub(crate) fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
@@ -1883,10 +1902,21 @@ fn classify_git_spawn_error(e: std::io::Error) -> PublishError {
 
 /// Run `git <args>` in `repo_root`, returning captured stdout on
 /// success or a generic `io::Error` carrying stderr otherwise.
-fn run_git_capture(repo_root: &Path, args: &[&str]) -> Result<String, std::io::Error> {
+pub(crate) fn run_git_capture(repo_root: &Path, args: &[&str]) -> Result<String, std::io::Error> {
+    run_git_capture_env(repo_root, &[], args)
+}
+
+/// [`run_git_capture`] with environment variables set for the one
+/// process, which is how a scratch index is handed to git.
+pub(crate) fn run_git_capture_env(
+    repo_root: &Path,
+    envs: &[(&str, &std::ffi::OsStr)],
+    args: &[&str],
+) -> Result<String, std::io::Error> {
     let output = Command::new("git")
         .arg("-C")
         .arg(repo_root)
+        .envs(envs.iter().copied())
         .args(args)
         .output()?;
     if !output.status.success() {
@@ -1925,7 +1955,7 @@ pub fn set_version(path: &Path, new: &str) -> Result<String, PublishError> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -2731,12 +2761,14 @@ versions = ["v0.1.0"]
             ("site/../schema", "site", false),
             ("site/book/../../x", "site", false),
             ("../site/schema", "site", false),
+            ("schema", ".", true),
+            ("../schema", ".", false),
         ] {
             let result = spec_with_editions(
                 &format!(
                     "versions = [\"v0.1.0\"]\ncurrent = \"v0.1.0\"\noutput_dir = \"{schema_dir}\""
                 ),
-                &format!("output_dir = \"{site_dir}\""),
+                &format!("book = \"../book\"\noutput_dir = \"{site_dir}\""),
             )
             .parse::<PublishConfig>();
 
@@ -2748,6 +2780,48 @@ versions = ["v0.1.0"]
                 }
                 (accepted, other) => panic!(
                     "schema `{schema_dir}` in site `{site_dir}`: expected accepted = {accepted}, got {other:?}"
+                ),
+            }
+        }
+    }
+
+    /// The editions build replaces `<output_dir>/book/` and writes the
+    /// current edition over `<output_dir>/`, so a book source in there
+    /// would be deleted.
+    #[test]
+    fn the_book_source_must_lie_outside_the_site_root() {
+        for (book, site, accepted) in [
+            ("book", "site", true),
+            ("../book", "site", true),
+            ("../book", ".", true),
+            ("book", "book/build", true),
+            ("docs/book", "docs", false),
+            ("docs/./book", "docs", false),
+            ("book", ".", false),
+            ("docs", "docs", false),
+        ] {
+            let result = spec_with_editions(
+                &format!(
+                    "versions = [\"v0.1.0\"]\ncurrent = \"v0.1.0\"\noutput_dir = \"{site}/schema\""
+                ),
+                &format!("book = \"{book}\"\noutput_dir = \"{site}\""),
+            )
+            .parse::<PublishConfig>();
+
+            match (accepted, result) {
+                (true, Ok(_)) => {}
+                (
+                    false,
+                    Err(PublishError::BookInsideSite {
+                        book: got,
+                        site: got_site,
+                    }),
+                ) => {
+                    assert_eq!(got, PathBuf::from(book));
+                    assert_eq!(got_site, PathBuf::from(site));
+                }
+                (accepted, other) => panic!(
+                    "book `{book}` in site `{site}`: expected accepted = {accepted}, got {other:?}"
                 ),
             }
         }
@@ -2826,7 +2900,7 @@ versions = ["v0.1.0"]
 
     /// An empty repo on `main` with its own identity, so commits never
     /// depend on the runner's git config.
-    fn init_repo() -> tempfile::TempDir {
+    pub(crate) fn init_repo() -> tempfile::TempDir {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path();
         run(path, &["init", "--initial-branch=main", "--quiet"]);
@@ -2836,7 +2910,7 @@ versions = ["v0.1.0"]
         tmp
     }
 
-    fn run(cwd: &std::path::Path, args: &[&str]) {
+    pub(crate) fn run(cwd: &std::path::Path, args: &[&str]) {
         let status = std::process::Command::new("git")
             .arg("-C")
             .arg(cwd)
