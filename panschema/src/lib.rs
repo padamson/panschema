@@ -5,6 +5,7 @@
 
 pub mod cache;
 pub mod casing;
+pub mod editions;
 pub mod graph_writer;
 pub mod html_writer;
 pub mod io;

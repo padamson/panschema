@@ -88,6 +88,29 @@ pub enum PublishError {
         value: String,
         problem: String,
     },
+    #[error(
+        "[editions] reads its release list from [publishing], which {} does not have",
+        PUBLISH_FILENAME
+    )]
+    EditionsWithoutPublishing,
+    #[error(
+        "[publishing].versions entry `{version}` is not a semver version, so its book edition cannot be known"
+    )]
+    EditionVersionNotSemver { version: String },
+    #[error(
+        "[publishing].versions spells its tags two ways (`{first}` and `{second}`), so book editions cannot be named consistently"
+    )]
+    MixedTagSpelling { first: String, second: String },
+    #[error("[publishing].versions lists `{version}` twice")]
+    DuplicateVersion { version: String },
+    #[error("[publishing].edge `{edge}` has the same name as a book edition built from a release")]
+    EdgeShadowsEdition { edge: String },
+    #[error(
+        "[publishing].output_dir `{}` must lie inside [editions].output_dir `{}` and outside its `book/` directory, since the book and the schema docs link to each other by relative path",
+        schema.display(),
+        site.display()
+    )]
+    SchemaOutsideSite { schema: PathBuf, site: PathBuf },
 }
 
 /// Whether a configured value may become one directory name in the
@@ -153,6 +176,78 @@ pub struct PublishConfig {
     /// (ADR-009); each version renders its own ref's data file.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub instances: Vec<InstanceEntry>,
+    /// Optional book-editions config, consumed by `mdbook-panschema
+    /// editions`. Requires `[publishing]`, whose release list it reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editions: Option<EditionsConfig>,
+}
+
+/// `[editions]` — where the book lives and where its editions land.
+///
+/// The editions themselves come from `[publishing]`: one per release line
+/// of `versions`, plus `edge`, with the line holding `current` served at
+/// the site root. Unknown keys are rejected so a typo'd setting fails
+/// loudly instead of silently reverting to its default.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EditionsConfig {
+    /// The directory holding `book.toml`, relative to the publish spec.
+    #[serde(default = "default_editions_book")]
+    pub book: PathBuf,
+    /// The site root, relative to the publish spec. Editions land in
+    /// `<output_dir>/book/<edition>/` and the current edition is copied
+    /// to `<output_dir>/`. `[publishing].output_dir` must lie inside it.
+    #[serde(default = "default_editions_output_dir")]
+    pub output_dir: PathBuf,
+}
+
+impl EditionsConfig {
+    /// Refuse a release list that cannot be grouped into editions, and a
+    /// schema-docs directory the book cannot reach by relative path.
+    fn validate(&self, publishing: &PublishingConfig) -> Result<(), PublishError> {
+        let site = lexical_components(&self.output_dir);
+        let schema = lexical_components(&publishing.output_dir);
+        // `book` matches in any case: on a case-insensitive filesystem
+        // `Book/` is the editions' directory.
+        let inside = schema.len() > site.len()
+            && schema.starts_with(&site)
+            && !schema[site.len()].as_os_str().eq_ignore_ascii_case("book");
+        if !inside {
+            return Err(PublishError::SchemaOutsideSite {
+                schema: publishing.output_dir.clone(),
+                site: self.output_dir.clone(),
+            });
+        }
+        crate::editions::plan(publishing)?;
+        Ok(())
+    }
+}
+
+/// `path`'s components with `.` dropped and each `..` cancelling the
+/// directory before it, so `./site/` and `site`, or `site/x/../schema` and
+/// `site/schema`, compare equal. A leading `..` has nothing to cancel and
+/// stays.
+fn lexical_components(path: &Path) -> Vec<std::path::Component<'_>> {
+    use std::path::Component;
+    let mut out: Vec<Component<'_>> = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir if matches!(out.last(), Some(Component::Normal(_))) => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+fn default_editions_book() -> PathBuf {
+    PathBuf::from("book")
+}
+
+fn default_editions_output_dir() -> PathBuf {
+    PathBuf::from("site")
 }
 
 /// One `[[instances]]` entry: a named instance-data file published with
@@ -358,7 +453,7 @@ pub struct PublishingConfig {
     /// site (a book) fronts the pages and the brand should name it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub site_title: Option<String>,
-    /// Where per-version subdirs land, relative to repo root.
+    /// Where per-version subdirs land, relative to the publish spec.
     #[serde(default = "default_output_dir")]
     pub output_dir: PathBuf,
     /// Output format — reserved for future writer fan-out.
@@ -487,6 +582,13 @@ impl FromStr for PublishConfig {
         if let Some(publishing) = &cfg.publishing {
             publishing.validate()?;
             cfg.validate_pages(publishing)?;
+        }
+        if let Some(editions) = &cfg.editions {
+            let publishing = cfg
+                .publishing
+                .as_ref()
+                .ok_or(PublishError::EditionsWithoutPublishing)?;
+            editions.validate(publishing)?;
         }
         let defaults: Vec<&str> = cfg
             .instances
@@ -2550,6 +2652,122 @@ versions = ["v0.1.0"]
         assert!(err.to_string().contains("current"));
     }
 
+    /// A publish spec with `[publishing]` and the given `[editions]` body.
+    fn spec_with_editions(publishing: &str, editions: &str) -> String {
+        format!(
+            "[schema]\nname = \"x\"\nversion = \"0.1.1\"\nlinkml = \"1.7.0\"\n\
+             [files]\nmain = \"schema.yaml\"\n\
+             [publishing]\n{publishing}\n\
+             [editions]\n{editions}\n"
+        )
+    }
+
+    #[test]
+    fn an_empty_editions_section_takes_the_documented_defaults() {
+        let cfg: PublishConfig = spec_with_editions(
+            "versions = [\"v0.1.0\", \"v0.1.1\"]\ncurrent = \"v0.1.1\"",
+            "",
+        )
+        .parse()
+        .expect("should parse");
+
+        let editions = cfg.editions.expect("[editions] should be present");
+        assert_eq!(editions.book, PathBuf::from("book"));
+        assert_eq!(editions.output_dir, PathBuf::from("site"));
+    }
+
+    #[test]
+    fn editions_without_publishing_are_refused() {
+        let toml = "[schema]\nname = \"x\"\nversion = \"0.1.0\"\nlinkml = \"1.7.0\"\n\
+                    [files]\nmain = \"schema.yaml\"\n[editions]\n";
+        let err = toml.parse::<PublishConfig>().unwrap_err();
+
+        assert!(
+            matches!(err, PublishError::EditionsWithoutPublishing),
+            "expected EditionsWithoutPublishing, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_release_list_that_cannot_form_editions_is_refused_at_parse() {
+        let err = spec_with_editions(
+            "versions = [\"v0.1.0\", \"nightly\"]\ncurrent = \"v0.1.0\"",
+            "",
+        )
+        .parse::<PublishConfig>()
+        .unwrap_err();
+
+        match err {
+            PublishError::EditionVersionNotSemver { version } => assert_eq!(version, "nightly"),
+            other => panic!("expected EditionVersionNotSemver, got {other:?}"),
+        }
+    }
+
+    /// Without `[editions]`, a version label need not be semver: schema
+    /// docs alone never ask which line a version belongs to.
+    #[test]
+    fn a_non_semver_version_is_fine_without_editions() {
+        let toml = "[schema]\nname = \"x\"\nversion = \"0.1.0\"\nlinkml = \"1.7.0\"\n\
+                    [files]\nmain = \"schema.yaml\"\n\
+                    [publishing]\nversions = [\"nightly\"]\ncurrent = \"nightly\"\n";
+
+        toml.parse::<PublishConfig>()
+            .expect("schema-only publishing should accept any version label");
+    }
+
+    #[test]
+    fn schema_docs_must_land_inside_the_site_and_outside_its_book_dir() {
+        for (schema_dir, site_dir, accepted) in [
+            ("site/schema", "site", true),
+            ("./site/schema/", "site", true),
+            ("site/nested/schema", "site", true),
+            ("site/x/../schema", "site", true),
+            ("../site/schema", "../site", true),
+            ("schema", "site", false),
+            ("site", "site", false),
+            ("site/book/schema", "site", false),
+            ("site/Book/schema", "site", false),
+            ("sitex/schema", "site", false),
+            ("site/../schema", "site", false),
+            ("site/book/../../x", "site", false),
+            ("../site/schema", "site", false),
+        ] {
+            let result = spec_with_editions(
+                &format!(
+                    "versions = [\"v0.1.0\"]\ncurrent = \"v0.1.0\"\noutput_dir = \"{schema_dir}\""
+                ),
+                &format!("output_dir = \"{site_dir}\""),
+            )
+            .parse::<PublishConfig>();
+
+            match (accepted, result) {
+                (true, Ok(_)) => {}
+                (false, Err(PublishError::SchemaOutsideSite { schema, site })) => {
+                    assert_eq!(schema, PathBuf::from(schema_dir));
+                    assert_eq!(site, PathBuf::from(site_dir));
+                }
+                (accepted, other) => panic!(
+                    "schema `{schema_dir}` in site `{site_dir}`: expected accepted = {accepted}, got {other:?}"
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn an_unknown_editions_key_is_refused_by_name() {
+        let err = spec_with_editions(
+            "versions = [\"v0.1.0\"]\ncurrent = \"v0.1.0\"",
+            "book_dir = \"book\"",
+        )
+        .parse::<PublishConfig>()
+        .unwrap_err();
+
+        assert!(
+            matches!(err, PublishError::Parse(_)) && err.to_string().contains("book_dir"),
+            "expected a parse error naming `book_dir`; got {err}"
+        );
+    }
+
     #[test]
     fn init_writes_stable_key_order() {
         // The key order is part of the user-facing layout — schema fields
@@ -2827,6 +3045,7 @@ versions = ["v0.1.0"]
     ) -> PublishConfig {
         PublishConfig {
             instances: Vec::new(),
+            editions: None,
             schema: SchemaInfo {
                 name: "fixture".into(),
                 version: "0.2.0".into(),
@@ -2940,6 +3159,7 @@ versions = ["v0.1.0"]
         let repo = make_versioned_linkml_repo();
         let cfg = PublishConfig {
             instances: Vec::new(),
+            editions: None,
             schema: SchemaInfo {
                 name: "x".into(),
                 version: "0.1.0".into(),

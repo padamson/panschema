@@ -66,3 +66,15 @@ after the fold it never will be, so nothing stops a third party from
 claiming the name. Accepted: every install instruction points at
 `cargo install panschema`, and a preprocessor would ship from the same
 crate.
+
+## Addendum — 2026-10-12: editions are a subcommand here
+
+Book editions ([feature 52](../features/52-book-editions.md)) ship as
+`mdbook-panschema editions`, beside `install`, not as a separate
+`mdbook-editions` binary. The edition switcher and each edition's schema
+link share the toolbar asset `install` already writes, and must agree on
+which edition a page belongs to; both read the release list in
+`panschema-publish.toml`; and a generic name on a tool bound to
+panschema's manifest would mislead. If a book with no schema behind it
+ever wants editions, that is a standalone tool reading tags, not another
+subcommand here.
