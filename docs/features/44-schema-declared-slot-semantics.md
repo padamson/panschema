@@ -298,12 +298,12 @@ RDF must carry them (see Open Questions for the vocabulary).
   and the manifest fallback is gone — so absence checking is
   LinkML-YAML-only until then.
 - Class-scoped `asserts_absence` and `records_version_of` declarations
-  propagate to subclasses: a class that declares nothing takes the
-  first declaration among its ancestors, nearest first and its whole
-  `is_a` lineage before any mixin, the order in which the slot resolver
-  lets them supply the slot. An attribute redeclaring the slot is a
-  fresh definition, so it and the classes below it inherit nothing from
-  above it. The resolved slot view itself drops `slot_usage` annotations,
+  propagate to subclasses: a class is bound by the declaration LinkML's
+  `induced_slot` would carry for it, its own `slot_usage` first, then
+  each ancestor's `slot_usage` in `class_ancestors` order (a class's
+  mixins before its `is_a` parent), then the attribute that defines the
+  slot for it. An attribute redeclaring the slot replaces what ancestors'
+  attributes stated, but not their `slot_usage`. The resolved slot view itself drops `slot_usage` annotations,
   so it is not consulted; no writer renders these annotations from it,
   so the two do not drift on any output. `expand_against` does not
   propagate; see the bullet on parent-declared annotations below.

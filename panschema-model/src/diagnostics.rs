@@ -1501,38 +1501,14 @@ fn parse_version_declaration(
     }
 }
 
-/// `class_name`'s ancestors in the order the slot resolver lets them
-/// supply a slot: the `is_a` parent and its whole lineage first, nearest
-/// first, then each mixin with its own. The first ancestor that declares
-/// something is the one that governs.
-fn ancestors_in_resolver_order<'a>(schema: &'a SchemaDefinition, class_name: &str) -> Vec<&'a str> {
-    fn walk<'a>(schema: &'a SchemaDefinition, name: &str, order: &mut Vec<&'a str>) {
-        let Some(class) = schema.classes.get(name) else {
-            return;
-        };
-        for parent in class.is_a.iter().chain(&class.mixins) {
-            // A malformed `is_a` cycle or a diamond revisits a class; skip it.
-            if !order.contains(&parent.as_str()) {
-                order.push(parent);
-                walk(schema, parent, order);
-            }
-        }
-    }
-    let mut order = Vec::new();
-    walk(schema, class_name, &mut order);
-    order.retain(|ancestor| *ancestor != class_name);
-    order
-}
-
 /// The one walk every schema-declared slot semantic shares: top-level
-/// `slots:` bind schema-wide; a class's `attributes:` bind that class;
-/// its `slot_usage:` overrides both for that class (attributes first,
-/// `slot_usage` second, so a plain map insert makes `slot_usage` win —
-/// the direction it overrides everywhere else in LinkML). A class that
-/// declares nothing itself takes the first class-scoped declaration among
-/// its ancestors ([`ancestors_in_resolver_order`]), so a subclass's
-/// records are governed as its parent's are. `parse` sees every site carrying
-/// `annotation` once and decides what it binds.
+/// `slots:` bind schema-wide, and each class is bound by the declaration
+/// LinkML's `induced_slot` would carry for it, the last of
+/// [`crate::linkml_resolve::declarations_in`] to state `annotation`. That
+/// makes a class's own `slot_usage` win over everything, any ancestor's
+/// `slot_usage` win over an attribute, and an attribute that redeclares the
+/// slot without the annotation drop what ancestors' attributes stated. `parse`
+/// sees every site carrying `annotation` once and decides what it binds.
 fn scoped_declarations<T: Clone>(
     schema: &SchemaDefinition,
     annotation: &str,
@@ -1544,37 +1520,41 @@ fn scoped_declarations<T: Clone>(
             bindings.insert_schema_wide(name, parse(name, value));
         }
     }
+    // Each class's own declaration per slot, `slot_usage` over attribute.
+    let mut declared: BTreeMap<&str, BTreeMap<&str, T>> = BTreeMap::new();
     for (class_name, class) in &schema.classes {
         for (name, slot) in class.attributes.iter().chain(class.slot_usage.iter()) {
             if let Some(value) = slot.annotations.get(annotation) {
-                bindings.insert_class(class_name, name, parse(name, value));
+                declared
+                    .entry(name)
+                    .or_default()
+                    .insert(class_name, parse(name, value));
             }
         }
     }
-    for (slot, scoped) in &mut bindings.by_slot {
-        let inherited: Vec<(String, T)> = schema
-            .classes
-            .keys()
-            .filter(|class_name| !scoped.by_class.contains_key(*class_name))
-            .filter_map(|class_name| {
-                // An attribute redeclaring the slot is a fresh definition,
-                // in the class itself or between it and the declaring
-                // ancestor, so nothing above it is inherited.
-                std::iter::once(class_name.as_str())
-                    .chain(ancestors_in_resolver_order(schema, class_name))
-                    .find_map(|ancestor| match scoped.by_class.get(ancestor) {
-                        Some(value) => Some(Some(value)),
-                        None => schema
-                            .classes
-                            .get(ancestor)
-                            .is_some_and(|class| class.attributes.contains_key(slot))
-                            .then_some(None),
-                    })
-                    .flatten()
-                    .map(|value| (class_name.clone(), value.clone()))
-            })
-            .collect();
-        scoped.by_class.extend(inherited);
+    if declared.is_empty() {
+        return bindings;
+    }
+    let ancestors: Vec<_> = schema
+        .classes
+        .keys()
+        .map(|class_name| {
+            (
+                class_name,
+                crate::linkml_resolve::class_ancestors(schema, class_name),
+            )
+        })
+        .collect();
+    for (slot, by_class) in &declared {
+        for (class_name, chain) in &ancestors {
+            let governing = crate::linkml_resolve::declarations_in(chain, schema, slot)
+                .rev()
+                .find(|(_, def)| def.annotations.get(annotation).is_some())
+                .and_then(|(site, _)| by_class.get(site.class()?));
+            if let Some(value) = governing {
+                bindings.insert_class(class_name, slot, value.clone());
+            }
+        }
     }
     bindings
 }
@@ -3398,7 +3378,7 @@ mod tests {
     }
 
     /// LinkML's `SchemaView` folds in the mixin's `key` beside the `is_a`
-    /// parent's `identifier`, though panschema's resolver keeps the parent's.
+    /// parent's `identifier`.
     #[test]
     fn a_mixin_key_beside_an_inherited_identifier_conflicts() {
         let schema = parse_shared(
@@ -3457,6 +3437,24 @@ mod tests {
              Scoped:\n    is_a: Entity\n    attributes:\n      id: {key: true}\n",
         );
         assert_eq!(identifier_key_conflicts(&schema), vec![]);
+    }
+
+    /// The attribute replaces only the top-level base: LinkML still applies
+    /// every ancestor's `slot_usage` over it.
+    #[test]
+    fn an_ancestors_slot_usage_identifier_reaches_a_redeclaring_attribute() {
+        let schema = parse_shared(
+            "slots:\n  id: {required: true}\nclasses:\n  \
+             Entity:\n    slots: [id]\n    slot_usage:\n      id: {identifier: true}\n  \
+             Scoped:\n    is_a: Entity\n    attributes:\n      id: {key: true}\n",
+        );
+        assert_eq!(
+            identifier_key_conflicts(&schema),
+            vec![scoped_id_conflict(
+                "slot_usage in class `Entity`",
+                "attribute in class `Scoped`",
+            )]
+        );
     }
 
     #[test]
@@ -4614,8 +4612,42 @@ mod tests {
         );
     }
 
+    /// LinkML applies every ancestor's `slot_usage` over the base attribute,
+    /// whichever ancestor declares that attribute.
     #[test]
-    fn an_is_a_lineages_declaration_wins_over_a_mixins() {
+    fn an_ancestors_slot_usage_declaration_applies_over_a_mixins_attribute() {
+        let classes = |mixin_annotations: &str| {
+            parse(&format!(
+                "id: https://example.org/t\nname: t\nslots:\n  lone: {{range: uri}}\nclasses:\n  \
+                 Entity:\n    slots: [lone]\n    slot_usage:\n      lone:\n        \
+                 annotations:\n          asserts_absence:\n            value:\n              \
+                 via_slot: from_parent\n  \
+                 Named:\n    attributes:\n      lone:\n        range: uri\n{mixin_annotations}  \
+                 Thing:\n    is_a: Entity\n    mixins: [Named]\n"
+            ))
+        };
+        let cases = [
+            ("the mixin's attribute carries no declaration", ""),
+            (
+                "the mixin's attribute carries its own",
+                "        annotations:\n          asserts_absence:\n            value:\n              \
+                 via_slot: from_mixin\n",
+            ),
+        ];
+        for (case, mixin_annotations) in cases {
+            let bindings = absence_bindings(&classes(mixin_annotations));
+            assert_eq!(
+                bindings.governing(&["Thing".to_string()], "lone"),
+                Some(&AbsenceVia::Slot("from_parent".to_string())),
+                "{case}"
+            );
+        }
+    }
+
+    /// LinkML lists a class's mixins before its `is_a` parent, so `Mix`
+    /// governs `Child` ahead of `Grand` (`conformance/probe_mixin_merge.py`).
+    #[test]
+    fn a_mixins_declaration_wins_over_its_is_a_lineages() {
         let schema = parse(
             "id: https://example.org/t\nname: t\nclasses:\n  Grand:\n    attributes:\n      \
              lone:\n        range: uri\n        annotations:\n          asserts_absence:\n            \
@@ -4628,8 +4660,8 @@ mod tests {
         let bindings = absence_bindings(&schema);
         assert_eq!(
             bindings.governing(&["Child".to_string()], "lone"),
-            Some(&AbsenceVia::Slot("from_lineage".to_string())),
-            "the whole is_a lineage is consulted before the mixin, though Mix is nearer than Grand"
+            Some(&AbsenceVia::Slot("from_mixin".to_string())),
+            "Child's mixin is consulted before its is_a lineage"
         );
         assert_eq!(
             bindings.governing(&["MixedOnly".to_string()], "lone"),

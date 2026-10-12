@@ -11,12 +11,9 @@
 //! [`resolve_effective_slots`] and consume the result; no writer
 //! should walk `is_a` / `mixins` / `slot_usage` directly anymore.
 //!
-//! The implementation is lifted verbatim from the original
-//! `rust_writer::resolve_slots`, which was the most complete walker
-//! among the three (covered `slot_usage` merge-overlay; the others
-//! ignored it). Behaviour is preserved exactly — the 16 unit tests
-//! in the Rust writer continue to validate the same code via
-//! the new path.
+//! Resolution follows LinkML's reference implementation: the ancestor
+//! order of `SchemaView.class_ancestors` and the field-by-field fold of
+//! `induced_slot`, measured by the probes in `conformance/`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -122,24 +119,23 @@ impl ResolvedSlot {
     }
 }
 
-/// Walk a class's `is_a` chain and `mixins`, then apply the class's own
-/// `attributes`, global `slots:` refs, and `slot_usage` overrides to
-/// produce the effective set of slots that show up as fields on the
-/// generated struct / HTML class card / graph hover card.
-///
-/// Precedence (lowest to highest):
-/// 1. `is_a` ancestor's slots (recursive)
-/// 2. Mixin slots (don't overwrite is_a-inherited slots with same name)
-/// 3. This class's inline `attributes`
-/// 4. This class's global `slots:` references (don't overwrite #1–3)
-/// 5. This class's `slot_usage` overrides (merge-overlay)
+/// The effective set of slots that show up as fields on the generated
+/// struct / HTML class card / graph hover card: every slot the class or an
+/// ancestor (through `is_a` or a mixin) lists in `slots:`, declares as an
+/// attribute, or refines in `slot_usage`, each resolved as LinkML's
+/// `induced_slot` resolves it. The base is the first attribute in
+/// [`class_ancestors`] order, else the top-level definition, and each
+/// field takes the value of the first ancestor in that order whose
+/// `slot_usage` sets it, so a mixin's refinement outranks the `is_a`
+/// parent's.
 pub fn resolve_effective_slots(
     class: &ClassDefinition,
     schema: &SchemaDefinition,
 ) -> BTreeMap<String, SlotDefinition> {
-    resolve_effective_slots_with_provenance(class, schema)
+    let ancestors = ancestors_of(&class.name, class, schema);
+    slot_names(&ancestors, schema)
         .into_iter()
-        .map(|(name, rs)| (name, rs.definition))
+        .map(|name| (name.to_string(), induced_slot(&ancestors, schema, name).0))
         .collect()
 }
 
@@ -183,18 +179,189 @@ pub fn class_satisfies(schema: &SchemaDefinition, class: &str, target: &str) -> 
     }
 }
 
-/// [`resolve_effective_slots`] plus per-slot [`Provenance`]. Same
-/// walk, same precedence; the provenance is rebased at each hop so
-/// every entry answers "where did this come from?" relative to the
-/// class passed in. Diamond shapes (a slot reachable via both the
-/// `is_a` chain and a mixin) deterministically report the `is_a`
-/// path — it is processed first and mixins never overwrite.
+/// [`resolve_effective_slots`] plus per-slot [`Provenance`], answering
+/// "where did this come from?" relative to the class passed in
+/// ([`provenance_of`]).
 pub fn resolve_effective_slots_with_provenance(
     class: &ClassDefinition,
     schema: &SchemaDefinition,
 ) -> BTreeMap<String, ResolvedSlot> {
-    let mut visited = BTreeSet::new();
-    resolve_slots_walk(class, schema, &mut visited)
+    let ancestors = ancestors_of(&class.name, class, schema);
+    slot_names(&ancestors, schema)
+        .into_iter()
+        .map(|name| {
+            let (definition, induced) = induced_slot(&ancestors, schema, name);
+            (
+                name.to_string(),
+                ResolvedSlot {
+                    definition,
+                    provenance: provenance_of(&ancestors, schema, name),
+                    induced,
+                },
+            )
+        })
+        .collect()
+}
+
+/// `class_name` and its ancestors in the order LinkML's
+/// `SchemaView.class_ancestors` lists them: each class's mixins, in the
+/// order declared, before its `is_a` parent, every ancestor listed when
+/// it is first reached and the last one reached expanded next. This is
+/// the precedence of slot refinement: a field takes its value from the
+/// first ancestor here that sets it. Empty when `class_name` is not a
+/// class of the schema.
+pub fn class_ancestors<'a>(
+    schema: &'a SchemaDefinition,
+    class_name: &'a str,
+) -> Vec<(&'a str, &'a ClassDefinition)> {
+    schema
+        .classes
+        .get(class_name)
+        .map(|class| ancestors_of(class_name, class, schema))
+        .unwrap_or_default()
+}
+
+/// [`class_ancestors`] from a class already in hand. A cycle or a diamond
+/// lists each class once.
+///
+/// Classes are identified by address rather than by `name`, because a name
+/// is not reliably unique: a schema deserialized without the reader's
+/// name back-fill leaves every name empty, which under name-keying made
+/// each class look like a repeat of the last and silently truncated the
+/// `is_a` chain — inherited slots, identifiers included, went missing. The
+/// map owns its classes for the whole resolution, so their addresses are
+/// stable and distinguish them whatever their names say.
+fn ancestors_of<'a>(
+    name: &'a str,
+    class: &'a ClassDefinition,
+    schema: &'a SchemaDefinition,
+) -> Vec<(&'a str, &'a ClassDefinition)> {
+    let mut order = vec![(name, class)];
+    let mut seen = BTreeSet::from([std::ptr::from_ref(class) as usize]);
+    let mut todo = vec![class];
+    while let Some(current) = todo.pop() {
+        for parent_name in current.mixins.iter().chain(&current.is_a) {
+            if let Some(parent) = schema.classes.get(parent_name)
+                && seen.insert(std::ptr::from_ref(parent) as usize)
+            {
+                todo.push(parent);
+                order.push((parent_name, parent));
+            }
+        }
+    }
+    order
+}
+
+/// Where a declaration folded into an induced slot sits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeclarationSite<'a> {
+    TopLevel,
+    Attribute(&'a str),
+    SlotUsage(&'a str),
+}
+
+impl<'a> DeclarationSite<'a> {
+    /// The class the declaration sits on; `None` for the top level.
+    pub(crate) fn class(self) -> Option<&'a str> {
+        match self {
+            DeclarationSite::TopLevel => None,
+            DeclarationSite::Attribute(class) | DeclarationSite::SlotUsage(class) => Some(class),
+        }
+    }
+}
+
+impl std::fmt::Display for DeclarationSite<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DeclarationSite::TopLevel => write!(f, "top-level `slots:`"),
+            DeclarationSite::Attribute(class) => write!(f, "attribute in class `{class}`"),
+            DeclarationSite::SlotUsage(class) => write!(f, "slot_usage in class `{class}`"),
+        }
+    }
+}
+
+/// The declarations LinkML's `induced_slot` folds into `slot`, in the
+/// order it applies them: the base (the first ancestor's attribute, else
+/// the top-level definition), then every ancestor's `slot_usage` from the
+/// last in [`class_ancestors`] order to the class itself, so a nearer one
+/// overrides a farther one.
+pub(crate) fn declarations_in<'a>(
+    ancestors: &[(&'a str, &'a ClassDefinition)],
+    schema: &'a SchemaDefinition,
+    slot: &str,
+) -> impl DoubleEndedIterator<Item = (DeclarationSite<'a>, &'a SlotDefinition)> {
+    let base = ancestors
+        .iter()
+        .find_map(|(name, class)| {
+            class
+                .attributes
+                .get(slot)
+                .map(|def| (DeclarationSite::Attribute(name), def))
+        })
+        .or_else(|| {
+            schema
+                .slots
+                .get(slot)
+                .map(|def| (DeclarationSite::TopLevel, def))
+        });
+    let usages = ancestors.iter().rev().filter_map(|(name, class)| {
+        class
+            .slot_usage
+            .get(slot)
+            .map(|def| (DeclarationSite::SlotUsage(name), def))
+    });
+    base.into_iter().chain(usages)
+}
+
+/// `slot`'s definition and induced range as `induced_slot` folds its
+/// declarations ([`declarations_in`]); with no base, the farthest
+/// `slot_usage` introduces the slot. Every slot in [`slot_names`] has a
+/// declaration to start from.
+///
+/// The induced range is the nearest declaration's that names one, per
+/// LinkML's induced-slot semantics: an `any_of` union's member ranges, else
+/// the single `range`. So a `slot_usage` naming a scalar `range` narrows an
+/// inherited union to that member (the wide union, still on the merged
+/// definition, no longer applies), and one that names neither (only
+/// tightening `required`, say) leaves a farther narrowing standing.
+/// `maximum_cardinality: 0` suppresses it: the class permits no value.
+fn induced_slot(
+    ancestors: &[(&str, &ClassDefinition)],
+    schema: &SchemaDefinition,
+    slot: &str,
+) -> (SlotDefinition, InducedRange) {
+    let mut declarations = declarations_in(ancestors, schema, slot);
+    let (_, base) = declarations
+        .next()
+        .expect("every slot in `slot_names` has a declaration");
+    let mut definition = base.clone();
+    let mut ranges = declared_ranges(base);
+    for (_, usage) in declarations {
+        merge_slot_override(&mut definition, usage);
+        if let Some(narrowed) = declared_ranges(usage) {
+            ranges = Some(narrowed);
+        }
+    }
+    let suppressed = definition.maximum_cardinality == Some(0);
+    let induced = InducedRange {
+        ranges: if suppressed {
+            Vec::new()
+        } else {
+            ranges.unwrap_or_default()
+        },
+        suppressed,
+    };
+    (definition, induced)
+}
+
+/// The ranges one declaration names: its `any_of` members when it has a
+/// union, else its `range`; `None` when it names neither.
+fn declared_ranges(def: &SlotDefinition) -> Option<Vec<String>> {
+    if !def.any_of.is_empty() {
+        Some(def.any_of.iter().filter_map(|m| m.range.clone()).collect())
+    } else {
+        def.range.clone().map(|range| vec![range])
+    }
 }
 
 /// Fill each specializing slot's unset fields from its `is_a` parent
@@ -365,237 +532,140 @@ pub fn default_range_would_fill(slot: &SlotDefinition) -> bool {
         && slot.maximum_cardinality != Some(0)
 }
 
-/// Recursive worker for [`resolve_effective_slots`]. `visited` holds the
-/// classes currently on the recursion stack so a circular `is_a` or `mixin`
-/// chain terminates (silently dropping the would-be-cyclic contribution)
-/// rather than overflowing.
-///
-/// Classes are identified by address rather than by `name`, because a name
-/// is not reliably unique: a schema deserialized without the reader's
-/// name back-fill leaves every name empty, which under name-keying made
-/// each class look like a repeat of the last and silently truncated the
-/// `is_a` chain — inherited slots, identifiers included, went missing. The
-/// map owns its classes for the whole walk, so their addresses are stable
-/// and distinguish them whatever their names say.
-fn resolve_slots_walk(
-    class: &ClassDefinition,
+/// Every slot the first class in `ancestors` has: those it or an ancestor
+/// lists in `slots:` (with a top-level definition), declares as an
+/// attribute, or refines in `slot_usage`.
+fn slot_names<'a>(
+    ancestors: &[(&str, &'a ClassDefinition)],
     schema: &SchemaDefinition,
-    visited: &mut BTreeSet<usize>,
-) -> BTreeMap<String, ResolvedSlot> {
-    let mut slots: BTreeMap<String, ResolvedSlot> = BTreeMap::new();
+) -> BTreeSet<&'a str> {
+    ancestors
+        .iter()
+        .flat_map(|(_, class)| {
+            class
+                .attributes
+                .keys()
+                .chain(class.slot_usage.keys())
+                .chain(class.slots.iter().filter(|s| schema.slots.contains_key(*s)))
+        })
+        .map(String::as_str)
+        .collect()
+}
 
-    // Mark this class as in-progress. If insert returns false, we've
-    // already visited this class along the current path — stop.
-    if !visited.insert(std::ptr::from_ref(class) as usize) {
-        return slots;
+/// Whether `class` declares `slot` as an attribute or refines it in
+/// `slot_usage`.
+fn declares(class: &ClassDefinition, slot: &str) -> bool {
+    class.attributes.contains_key(slot) || class.slot_usage.contains_key(slot)
+}
+
+/// Whether `class` lists `slot` in `slots:` and the schema defines it.
+fn lists(class: &ClassDefinition, schema: &SchemaDefinition, slot: &str) -> bool {
+    schema.slots.contains_key(slot) && class.slots.iter().any(|s| s == slot)
+}
+
+/// Where `slot` comes from for the first class in `ancestors`. The origin
+/// is the first ancestor, in [`class_ancestors`] order, that declares the
+/// slot as an attribute or refines it in `slot_usage`, else the first that
+/// lists it in `slots:`. A class that declares or refines an inherited slot
+/// itself is [`Provenance::Refined`] from that origin; one that only
+/// inherits it is [`Provenance::Inherited`] along [`inheritance_path`].
+fn provenance_of(
+    ancestors: &[(&str, &ClassDefinition)],
+    schema: &SchemaDefinition,
+    slot: &str,
+) -> Provenance {
+    let ((here, class), inherited) = ancestors
+        .split_first()
+        .expect("ancestors_of lists the class first");
+    let origin = inherited
+        .iter()
+        .find(|(_, c)| declares(c, slot))
+        .or_else(|| inherited.iter().find(|(_, c)| lists(c, schema, slot)));
+    let refines = class.slot_usage.contains_key(slot);
+    match origin {
+        Some((from, _)) if declares(class, slot) => Provenance::Refined {
+            from: from.to_string(),
+            by_slot_usage: refines,
+        },
+        Some((from, origin)) => Provenance::Inherited {
+            from: from.to_string(),
+            via: inheritance_path(class, origin, schema),
+        },
+        // A class refining a slot it declares or lists itself.
+        None if refines && (class.attributes.contains_key(slot) || lists(class, schema, slot)) => {
+            Provenance::Refined {
+                from: here.to_string(),
+                by_slot_usage: true,
+            }
+        }
+        // A `slot_usage` with nothing beneath it introduces the slot here.
+        None => Provenance::Direct,
     }
+}
 
-    if let Some(parent_name) = &class.is_a
+/// How `class` reaches its ancestor `origin`: the `is_a` chain from the
+/// parent up to `origin` when it is on the class's own `is_a` lineage,
+/// else the first mixin listed along that lineage whose ancestors include
+/// it. The mixin is the hop worth naming, so a mixin reached from an `is_a`
+/// parent is still reported as a mixin path.
+fn inheritance_path(
+    class: &ClassDefinition,
+    origin: &ClassDefinition,
+    schema: &SchemaDefinition,
+) -> InheritancePath {
+    let mut chain = Vec::new();
+    let mut lineage = vec![class];
+    let mut current = class;
+    while let Some(parent_name) = &current.is_a
         && let Some(parent) = schema.classes.get(parent_name)
+        && !lineage.iter().any(|c| std::ptr::eq(*c, parent))
     {
-        for (name, rs) in resolve_slots_walk(parent, schema, visited) {
-            slots.insert(
-                name,
-                ResolvedSlot {
-                    provenance: rebase_through_is_a(parent_name, rs.provenance),
-                    // The parent's induced range carries through — a
-                    // narrowing the parent applied via `slot_usage` is
-                    // what the child inherits; recomputing from the
-                    // definition would resurrect the lingering union.
-                    induced: rs.induced,
-                    definition: rs.definition,
-                },
-            );
+        chain.push(parent_name.clone());
+        if std::ptr::eq(parent, origin) {
+            return InheritancePath::IsA(chain);
         }
+        lineage.push(parent);
+        current = parent;
     }
-
-    for mixin_name in &class.mixins {
-        if let Some(mixin) = schema.classes.get(mixin_name) {
-            for (name, rs) in resolve_slots_walk(mixin, schema, visited) {
-                slots.entry(name).or_insert_with(|| ResolvedSlot {
-                    provenance: rebase_through_mixin(mixin_name, rs.provenance),
-                    induced: rs.induced,
-                    definition: rs.definition,
-                });
-            }
-        }
-    }
-
-    for (name, def) in &class.attributes {
-        // An inline attribute shadowing an inherited slot is a
-        // refinement-by-redefinition; a fresh name is a direct slot.
-        let provenance = match slots.get(name) {
-            Some(prev) => Provenance::Refined {
-                from: origin_of(&prev.provenance, &class.name),
-                by_slot_usage: false,
-            },
-            None => Provenance::Direct,
-        };
-        slots.insert(
-            name.clone(),
-            ResolvedSlot {
-                induced: base_induced(def),
-                definition: def.clone(),
-                provenance,
-            },
-        );
-    }
-
-    for slot_name in &class.slots {
-        if let Some(def) = schema.slots.get(slot_name) {
-            slots
-                .entry(slot_name.clone())
-                .or_insert_with(|| ResolvedSlot {
-                    induced: base_induced(def),
-                    definition: def.clone(),
-                    provenance: Provenance::Direct,
-                });
-        }
-    }
-
-    for (name, override_def) in &class.slot_usage {
-        match slots.get_mut(name) {
-            Some(target) => {
-                target.provenance = Provenance::Refined {
-                    from: origin_of(&target.provenance, &class.name),
-                    by_slot_usage: true,
-                };
-                merge_slot_override(&mut target.definition, override_def);
-                target.induced = induced_after_override(&target.definition, override_def);
-            }
-            // A `slot_usage` with no inherited base acts as the
-            // slot's introduction at this class.
-            None => {
-                slots.insert(
-                    name.clone(),
-                    ResolvedSlot {
-                        induced: base_induced(override_def),
-                        definition: override_def.clone(),
-                        provenance: Provenance::Direct,
-                    },
-                );
-            }
-        }
-    }
-
-    // Pop this class on the way out — sibling/cousin paths to it
-    // through different ancestors are NOT cycles.
-    visited.remove(&(std::ptr::from_ref(class) as usize));
-    slots
+    lineage
+        .iter()
+        .flat_map(|c| &c.mixins)
+        .find(|name| {
+            schema.classes.get(*name).is_some_and(|mixin| {
+                ancestors_of(name, mixin, schema)
+                    .iter()
+                    .any(|(_, a)| std::ptr::eq(*a, origin))
+            })
+        })
+        .map_or(InheritancePath::IsA(chain), |name| {
+            InheritancePath::Mixin(name.clone())
+        })
 }
 
 /// Every declaration of `slot` that LinkML folds into `class_name`'s
-/// induced slot, each with the site it sits at: the top-level definition
-/// when the chain lists the slot in `slots:`, then each attribute and
-/// `slot_usage` entry along the `is_a` and mixin chain, in that order. An
-/// attribute redeclaring the slot is a fresh base, so what came before it
-/// drops.
-///
-/// This is LinkML's reading, which differs from [`resolve_effective_slots`]
-/// in one way: LinkML folds in a mixin's declarations even when `is_a`
-/// already supplies the slot, where the resolver keeps the `is_a` parent's.
-/// Checks on what the LinkML metamodel allows read this view.
+/// induced slot, each with the site it sits at, in the order they apply:
+/// the base (the first attribute in [`class_ancestors`] order, else the
+/// top-level definition), then each ancestor's `slot_usage`, farthest
+/// first. An attribute replaces only the top-level base; every
+/// `slot_usage` still applies over it. Empty when the class does not have the
+/// slot. [`resolve_effective_slots`] folds
+/// the same declarations, and checks on what the LinkML metamodel allows
+/// read them site by site.
 pub fn linkml_slot_declarations<'a>(
     schema: &'a SchemaDefinition,
     class_name: &'a str,
     slot: &str,
 ) -> Vec<(String, &'a SlotDefinition)> {
-    #[derive(Default)]
-    struct Chain<'a> {
-        uses_top_level: bool,
-        sites: Vec<(String, &'a SlotDefinition)>,
+    let ancestors = class_ancestors(schema, class_name);
+    let has_slot = ancestors
+        .iter()
+        .any(|(_, class)| declares(class, slot) || lists(class, schema, slot));
+    if !has_slot {
+        return Vec::new();
     }
-
-    fn walk<'a>(
-        schema: &'a SchemaDefinition,
-        class_name: &'a str,
-        slot: &str,
-        visited: &mut BTreeSet<&'a str>,
-        chain: &mut Chain<'a>,
-    ) {
-        let Some(class) = schema.classes.get(class_name) else {
-            return;
-        };
-        if !visited.insert(class_name) {
-            return;
-        }
-        for ancestor in class.is_a.iter().chain(&class.mixins) {
-            walk(schema, ancestor, slot, visited, chain);
-        }
-        if let Some(def) = class.attributes.get(slot) {
-            *chain = Chain::default();
-            chain
-                .sites
-                .push((format!("attribute in class `{class_name}`"), def));
-        }
-        chain.uses_top_level |= class.slots.iter().any(|s| s == slot);
-        if let Some(def) = class.slot_usage.get(slot) {
-            chain
-                .sites
-                .push((format!("slot_usage in class `{class_name}`"), def));
-        }
-    }
-
-    let mut chain = Chain::default();
-    walk(schema, class_name, slot, &mut BTreeSet::new(), &mut chain);
-    if chain.uses_top_level
-        && let Some(def) = schema.slots.get(slot)
-    {
-        chain
-            .sites
-            .insert(0, ("top-level `slots:`".to_string(), def));
-    }
-    chain.sites
-}
-
-/// The defining class a provenance points back to, with `here` as
-/// the answer for slots that originate at the current class.
-fn origin_of(provenance: &Provenance, here: &str) -> String {
-    match provenance {
-        Provenance::Direct => here.to_string(),
-        Provenance::Inherited { from, .. } | Provenance::Refined { from, .. } => from.clone(),
-    }
-}
-
-/// Rebase a parent-relative provenance to the child inheriting
-/// through `is_a`: the parent's direct (or refined) slots are what
-/// the child inherits from the parent, and deeper `is_a` chains grow
-/// by the parent hop. A mixin path observed at the parent stays a
-/// mixin path — the mixin relationship is the fact worth surfacing.
-fn rebase_through_is_a(parent: &str, provenance: Provenance) -> Provenance {
-    match provenance {
-        Provenance::Direct | Provenance::Refined { .. } => Provenance::Inherited {
-            from: parent.to_string(),
-            via: InheritancePath::IsA(vec![parent.to_string()]),
-        },
-        Provenance::Inherited {
-            from,
-            via: InheritancePath::IsA(chain),
-        } => {
-            let mut full = vec![parent.to_string()];
-            full.extend(chain);
-            Provenance::Inherited {
-                from,
-                via: InheritancePath::IsA(full),
-            }
-        }
-        inherited_via_mixin => inherited_via_mixin,
-    }
-}
-
-/// Rebase a mixin-relative provenance to the consuming class: the
-/// hop is always the mixin named in the class's `mixins:` list, and
-/// `from` stays on the defining class when the mixin itself
-/// inherited the slot.
-fn rebase_through_mixin(mixin: &str, provenance: Provenance) -> Provenance {
-    let from = match provenance {
-        Provenance::Inherited { from, .. } => from,
-        Provenance::Direct | Provenance::Refined { .. } => mixin.to_string(),
-    };
-    Provenance::Inherited {
-        from,
-        via: InheritancePath::Mixin(mixin.to_string()),
-    }
+    declarations_in(&ancestors, schema, slot)
+        .map(|(site, def)| (site.to_string(), def))
+        .collect()
 }
 
 /// Merge a `slot_usage` override into an inherited/base slot definition.
@@ -704,62 +774,6 @@ fn merge_slot_override(target: &mut SlotDefinition, source: &SlotDefinition) {
     if source.key {
         target.key = true;
         target.identifier = false;
-    }
-}
-
-/// The induced range of a slot from its own definition, before any
-/// `slot_usage` narrowing — an `any_of` union's member ranges, or the
-/// single `range`. `maximum_cardinality: 0` suppresses it (the class
-/// permits no value), which empties `ranges`.
-fn base_induced(def: &SlotDefinition) -> InducedRange {
-    if def.maximum_cardinality == Some(0) {
-        return InducedRange {
-            ranges: Vec::new(),
-            suppressed: true,
-        };
-    }
-    let ranges = if !def.any_of.is_empty() {
-        def.any_of.iter().filter_map(|m| m.range.clone()).collect()
-    } else {
-        def.range.iter().cloned().collect()
-    };
-    InducedRange {
-        ranges,
-        suppressed: false,
-    }
-}
-
-/// The induced range after a class refines a slot via `slot_usage`,
-/// per LinkML induced-slot semantics. The decision keys off the
-/// *override* (not the merged definition), so the inherited union
-/// can't leak through:
-/// - `maximum_cardinality: 0` → suppressed, no ranges.
-/// - override `any_of` → replaces the inherited union with its members.
-/// - override scalar `range` → intersects the inherited union down to
-///   that single range (the wide union no longer applies).
-/// - override touches neither (e.g. only tightens `required`) → the
-///   merged definition's base induced range stands.
-fn induced_after_override(merged: &SlotDefinition, override_def: &SlotDefinition) -> InducedRange {
-    if merged.maximum_cardinality == Some(0) {
-        return InducedRange {
-            ranges: Vec::new(),
-            suppressed: true,
-        };
-    }
-    let ranges = if !override_def.any_of.is_empty() {
-        override_def
-            .any_of
-            .iter()
-            .filter_map(|m| m.range.clone())
-            .collect()
-    } else if let Some(range) = &override_def.range {
-        vec![range.clone()]
-    } else {
-        return base_induced(merged);
-    };
-    InducedRange {
-        ranges,
-        suppressed: false,
     }
 }
 
@@ -1403,6 +1417,36 @@ mod tests {
                 .as_deref(),
             Some("Identifiable via mixin Auditable")
         );
+    }
+
+    #[test]
+    fn provenance_names_the_mixin_that_declares_a_slot_the_parent_also_supplies() {
+        let cases = [
+            (
+                "the mixin's attribute is the base",
+                "  Named:\n    attributes:\n      name: {pattern: '^attr'}\n",
+            ),
+            (
+                "the mixin's slot_usage refines it",
+                "  Named:\n    slot_usage:\n      name: {required: true}\n",
+            ),
+        ];
+        for (case, named) in cases {
+            let schema = parse(&format!(
+                "slots:\n  name: {{}}\nclasses:\n  Entity: {{slots: [name]}}\n{named}  \
+                 Thing: {{is_a: Entity, mixins: [Named]}}\n"
+            ));
+            let resolved =
+                resolve_effective_slots_with_provenance(&schema.classes["Thing"], &schema);
+            assert_eq!(
+                resolved["name"].provenance,
+                Provenance::Inherited {
+                    from: "Named".into(),
+                    via: InheritancePath::Mixin("Named".into()),
+                },
+                "{case}"
+            );
+        }
     }
 
     #[test]
@@ -2109,6 +2153,58 @@ mod tests {
     }
 
     #[test]
+    fn a_nearer_slot_usage_naming_no_range_keeps_a_farther_narrowing() {
+        let mut schema = act_facets_schema();
+        let mut required = SlotDefinition::new("hasInput");
+        required.required = true;
+        let mut req = ClassDefinition::new("Req");
+        req.slot_usage.insert("hasInput".into(), required.clone());
+        schema.classes.insert("Req".into(), req);
+        let mut through_mixin = ClassDefinition::new("ThroughMixin");
+        through_mixin.is_a = Some("Analysis".into());
+        through_mixin.mixins = vec!["Req".into()];
+        schema.classes.insert("ThroughMixin".into(), through_mixin);
+        let mut own = ClassDefinition::new("Own");
+        own.is_a = Some("Analysis".into());
+        own.slot_usage.insert("hasInput".into(), required);
+        schema.classes.insert("Own".into(), own);
+
+        for class in ["ThroughMixin", "Own"] {
+            assert_eq!(
+                induced_of(&schema, class, "hasInput").ranges,
+                ["Dataset"],
+                "{class}"
+            );
+        }
+    }
+
+    #[test]
+    fn lifting_a_suppression_keeps_a_farther_narrowing() {
+        let mut schema = act_facets_schema();
+        let mut no_input = ClassDefinition::new("NoInput");
+        no_input.is_a = Some("Analysis".into());
+        let mut suppress = SlotDefinition::new("hasInput");
+        suppress.maximum_cardinality = Some(0);
+        no_input.slot_usage.insert("hasInput".into(), suppress);
+        schema.classes.insert("NoInput".into(), no_input);
+        let mut lifted = ClassDefinition::new("Lifted");
+        lifted.is_a = Some("NoInput".into());
+        let mut lift = SlotDefinition::new("hasInput");
+        lift.maximum_cardinality = Some(1);
+        lifted.slot_usage.insert("hasInput".into(), lift);
+        schema.classes.insert("Lifted".into(), lifted);
+
+        assert!(induced_of(&schema, "NoInput", "hasInput").suppressed);
+        assert_eq!(
+            induced_of(&schema, "Lifted", "hasInput"),
+            InducedRange {
+                ranges: vec!["Dataset".into()],
+                suppressed: false,
+            }
+        );
+    }
+
+    #[test]
     fn induced_slot_usage_any_of_replaces_inherited_union() {
         let schema = act_facets_schema();
         assert_eq!(
@@ -2558,6 +2654,155 @@ mod tests {
             expand_curie_or_verbatim(&schema, "undeclared:thing"),
             "undeclared:thing"
         );
+    }
+
+    fn parse(body: &str) -> SchemaDefinition {
+        serde_norway::from_str(&format!("id: https://example.org/t\nname: t\n{body}"))
+            .expect("parse schema")
+    }
+
+    /// The order `conformance/probe_mixin_merge.py` reads from LinkML's
+    /// `SchemaView.class_ancestors`.
+    #[test]
+    fn class_ancestors_list_mixins_before_is_a_in_linkmls_discovery_order() {
+        let schema = parse(
+            "classes:\n  Entity: {}\n  FirstBase: {mixin: true}\n  \
+             First: {mixin: true, is_a: FirstBase}\n  SecondBase: {mixin: true}\n  \
+             Second: {mixin: true, is_a: SecondBase}\n  \
+             Thing: {is_a: Entity, mixins: [First, Second]}\n",
+        );
+        let order: Vec<&str> = class_ancestors(&schema, "Thing")
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(
+            order,
+            [
+                "Thing",
+                "First",
+                "Second",
+                "Entity",
+                "SecondBase",
+                "FirstBase"
+            ]
+        );
+    }
+
+    #[test]
+    fn class_ancestors_stop_at_an_is_a_cycle() {
+        let schema = parse("classes:\n  A: {is_a: B}\n  B: {is_a: A}\n");
+        let order: Vec<&str> = class_ancestors(&schema, "A")
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(order, ["A", "B"]);
+    }
+
+    /// Each expected `pattern` is what LinkML's `induced_slot` reports for
+    /// the same shape in `conformance/probe_mixin_merge.py`.
+    #[test]
+    fn a_field_takes_the_first_value_in_linkml_ancestor_order() {
+        let cases = [
+            (
+                "the mixin refines, the parent is silent",
+                "  Entity: {slots: [name]}\n  \
+                 Named:\n    mixin: true\n    slot_usage:\n      name: {pattern: '^mixin'}\n  \
+                 Thing: {is_a: Entity, mixins: [Named]}\n",
+                "^mixin",
+            ),
+            (
+                "the mixin outranks the parent",
+                "  Entity:\n    slots: [name]\n    slot_usage:\n      name: {pattern: '^parent'}\n  \
+                 Named:\n    mixin: true\n    slot_usage:\n      name: {pattern: '^mixin'}\n  \
+                 Thing: {is_a: Entity, mixins: [Named]}\n",
+                "^mixin",
+            ),
+            (
+                "the parent outranks the mixin's own ancestor",
+                "  Entity:\n    slots: [name]\n    slot_usage:\n      name: {pattern: '^parent'}\n  \
+                 NamedBase:\n    mixin: true\n    slot_usage:\n      name: {pattern: '^mixin-base'}\n  \
+                 Named: {mixin: true, is_a: NamedBase}\n  \
+                 Thing: {is_a: Entity, mixins: [Named]}\n",
+                "^parent",
+            ),
+            (
+                "the first mixin outranks the second",
+                "  Entity: {slots: [name]}\n  \
+                 First:\n    mixin: true\n    slot_usage:\n      name: {pattern: '^first'}\n  \
+                 Second:\n    mixin: true\n    slot_usage:\n      name: {pattern: '^second'}\n  \
+                 Thing: {is_a: Entity, mixins: [First, Second]}\n",
+                "^first",
+            ),
+            (
+                "the second mixin's ancestor outranks the first's",
+                "  Entity: {slots: [name]}\n  \
+                 FirstBase:\n    mixin: true\n    slot_usage:\n      name: {pattern: '^first-base'}\n  \
+                 First: {mixin: true, is_a: FirstBase}\n  \
+                 SecondBase:\n    mixin: true\n    slot_usage:\n      name: {pattern: '^second-base'}\n  \
+                 Second: {mixin: true, is_a: SecondBase}\n  \
+                 Thing: {is_a: Entity, mixins: [First, Second]}\n",
+                "^second-base",
+            ),
+            (
+                "the class's own slot_usage outranks every ancestor",
+                "  Entity:\n    slots: [name]\n    slot_usage:\n      name: {pattern: '^parent'}\n  \
+                 Named:\n    mixin: true\n    slot_usage:\n      name: {pattern: '^mixin'}\n  \
+                 Thing:\n    is_a: Entity\n    mixins: [Named]\n    \
+                 slot_usage:\n      name: {pattern: '^own'}\n",
+                "^own",
+            ),
+            (
+                "a mixin's attribute is the base over the parent's top-level slot",
+                "  Entity: {slots: [name]}\n  \
+                 Named:\n    mixin: true\n    attributes:\n      name: {pattern: '^attr'}\n  \
+                 Thing: {is_a: Entity, mixins: [Named]}\n",
+                "^attr",
+            ),
+            (
+                "a parent's slot_usage applies over the child's redeclaring attribute",
+                "  Entity:\n    slots: [name]\n    slot_usage:\n      name: {pattern: '^parent'}\n  \
+                 Thing:\n    is_a: Entity\n    attributes:\n      name: {pattern: '^attr'}\n",
+                "^parent",
+            ),
+        ];
+        for (case, classes, expected) in cases {
+            let schema = parse(&format!("slots:\n  name: {{}}\nclasses:\n{classes}"));
+            let slots = resolve_effective_slots(&schema.classes["Thing"], &schema);
+            assert_eq!(
+                slots.get("name").and_then(|s| s.pattern.as_deref()),
+                Some(expected),
+                "{case}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_mixins_slot_usage_requires_and_narrows_a_slot_the_parent_supplies() {
+        let schema = parse(
+            "slots:\n  name: {range: string}\nclasses:\n  Entity: {slots: [name]}\n  \
+             Named:\n    mixin: true\n    slot_usage:\n      name: {required: true, range: integer}\n  \
+             Thing: {is_a: Entity, mixins: [Named]}\n",
+        );
+        let slots = resolve_effective_slots_with_provenance(&schema.classes["Thing"], &schema);
+        let name = &slots["name"];
+        assert!(name.definition.required, "required: {:?}", name.definition);
+        assert_eq!(name.definition.range.as_deref(), Some("integer"));
+        assert_eq!(name.induced.ranges, ["integer"]);
+    }
+
+    #[test]
+    fn a_slot_usage_on_an_unlisted_slot_refines_the_top_level_definition() {
+        let schema = parse(
+            "slots:\n  title: {required: true}\nclasses:\n  \
+             Thing:\n    slot_usage:\n      title: {pattern: '^usage'}\n",
+        );
+        let slots = resolve_effective_slots(&schema.classes["Thing"], &schema);
+        let title = &slots["title"];
+        assert!(
+            title.required,
+            "required from the top-level slot: {title:?}"
+        );
+        assert_eq!(title.pattern.as_deref(), Some("^usage"));
     }
 
     fn schema_with_prefixes() -> SchemaDefinition {

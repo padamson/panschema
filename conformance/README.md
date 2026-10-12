@@ -32,6 +32,17 @@ generators, and validator accept; it is the evidence behind the load
 refusal of a slot that is both. `gen-rdf` fetches from `w3id.org`, so run
 it with network access.
 
+```bash
+uv run --project conformance conformance/probe_mixin_merge.py
+```
+
+The mixin-merge probe gives a class one slot from several ancestors
+(an `is_a` parent, mixins, their own parents, a redeclaring attribute)
+and prints the fields `induced_slot` settles on beside the
+`class_ancestors` order; it is the evidence behind the resolver's
+precedence, which takes each field from the first ancestor in that order
+that sets it.
+
 Load an arbitrary schema through the reference implementation:
 
 ```bash
