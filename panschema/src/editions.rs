@@ -528,9 +528,22 @@ fn extract_tree(repo: &Path, commit: &str, dest: &Path) -> Result<(), String> {
         crate::publish::run_git_capture_env(repo, &env, args).map_err(|e| e.to_string())
     };
     git(&["read-tree", commit])?;
-    // The prefix must end in a separator or git treats it as a filename
-    // prefix.
-    let prefix = format!("--prefix={}/", dest.display());
+    // git creates each file's leading directories by walking the `/`
+    // separators in its path, so the checkout directory has to exist
+    // first and the prefix has to be spelled with `/`: on Windows the
+    // path's own separators are `\`, and git's first `mkdir` would be the
+    // whole prefix at once, under a parent that is not there. The prefix
+    // must also end in a separator, or git takes it as a filename prefix.
+    std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+    let dest = dest.to_string_lossy();
+    let prefix = format!(
+        "--prefix={}/",
+        if cfg!(windows) {
+            dest.replace('\\', "/")
+        } else {
+            dest.into_owned()
+        }
+    );
     git(&["checkout-index", "--all", &prefix])?;
     Ok(())
 }
