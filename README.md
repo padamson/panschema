@@ -389,6 +389,51 @@ label = "CQA contract"
 
 Writing an entry is itself the opt-in, so the list form has no `enabled` switch; an empty list means off.
 
+### Publishing the book in editions
+
+A schema's book is edited in place as the schema moves on, so the day `main`'s book describes the next version, readers pinned to the last release lose the book that describes theirs. `mdbook-panschema editions` publishes one book per release line, each built from the line's newest tag the way `panschema publish` builds the schema docs, with the current one at the site root:
+
+| Path | Serves |
+|---|---|
+| `/` | the current edition, as a copy |
+| `book/v0.1/`, `book/v0.2/` | one edition per minor line during 0.x (each 0.0.z on its own), per major line after 1.0 |
+| `book/main/` | the unreleased edition, from `[publishing].edge` |
+
+The editions come from the same release list the schema docs use, so the two agree on which edition a version belongs to. Declare where the book and the site are:
+
+```toml
+[publishing]
+versions = ["v0.1.0", "v0.1.1", "v0.2.0"]
+edge = "main"
+current = "v0.2.0"
+output_dir = "site/schema"   # must lie inside the editions' output_dir
+
+[editions]
+book = "book"                # the directory holding book.toml
+output_dir = "site"          # the site root; editions land in site/book/
+```
+
+Then, from anywhere in the repo:
+
+```bash
+mdbook-panschema editions
+```
+
+Each tag's tree is checked out through a scratch index, so the working tree is never touched, and every edition builds before anything is written. Every page gets the toolbar asset from the running binary, a tag from before it existed included: an edition switcher, a note on every page of an edition that is not the current one, the `[book_link]` button pointed at the schema docs of the release the edition was built from (`schema/v0.1.1/` rather than `schema/current/`), and a `<link rel="canonical">` to the page at its edition's stable path.
+
+A tag's book builds with the tools on `PATH`. To have mdbook and its plugins generate their gitignored assets before the build, list them in `<book>/toolchain.toml` at that tag:
+
+```toml
+mdbook = "0.5.2"
+
+[[plugin]]
+name = "mdbook-listings"
+version = "0.2.2"
+install = ["install"]        # run in the book directory before building
+```
+
+Anything the current edition's book has at its top level that the site reserves (`book/`, the schema docs' directory) is refused before anything is written, and the site root keeps a record of what the copy wrote so the next run removes exactly that.
+
 ## Generating a Postgres schema
 
 If your application is backed by Postgres, `generate --format postgres` emits the `CREATE TABLE` / `CREATE TYPE` DDL for the same LinkML schema your Rust structs come from, so the two never drift apart by hand:

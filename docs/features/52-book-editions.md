@@ -228,27 +228,57 @@ working tree.
 
 ### Slice 3: The edition-aware toolbar
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** A reader can see which edition they are reading, switch
 editions, and reach the schema docs for exactly that edition.
 
 **Acceptance Criteria:**
-- [ ] Every page of every edition, and of the root copy, has a switcher
+- [x] Every page of every edition, and of the root copy, has a switcher
   listing the released editions newest first and then the unreleased one,
   with the page's own edition selected.
-- [ ] Choosing an edition opens that edition's first page, at any page
+- [x] Choosing an edition opens that edition's first page, at any page
   depth and under a project-path prefix.
-- [ ] A page of a non-current edition says which edition it is and links
+- [x] A page of a non-current edition says which edition it is and links
   to the current one; a page of the unreleased edition says it is
   unreleased; the current edition's pages say neither.
-- [ ] Every page carries `<link rel="canonical">` to the same page at its
+- [x] Every page carries `<link rel="canonical">` to the same page at its
   edition's stable path, including the root copy's pages.
-- [ ] A `[book_link]` entry whose `schema_path` ends in `current/` links
+- [x] A `[book_link]` entry whose `schema_path` ends in `current/` links
   to the version the edition was built from (`schema/v0.1.1/`), or to the
   edge label for the unreleased edition; other entries keep their path.
-- [ ] All of the above holds for a tag whose `book.toml` predates editions
+- [x] All of the above holds for a tag whose `book.toml` predates editions
   and does not wire the toolbar asset.
+
+---
+
+**Notes:**
+- One asset, `schema-link.js`, carries the schema button, the switcher
+  and the banner, so they agree on which edition a page is. The editions
+  build bakes the edition context in; `mdbook-panschema install`, run in
+  a working tree with one edition, bakes `null` and renders no switcher.
+- The canonical link is injected into each built page after its `<head>`
+  tag, relative to the page so it resolves under a project-path prefix,
+  with every path segment percent-encoded the way `encodeURIComponent`
+  spells it (`#` is legal in a git ref and starts a URL fragment). The
+  copy at the site root is two directories shallower, so it is taken
+  from the build before the stable copy gets its canonicals and given
+  its own; the canonicals are the one place the two copies differ. The
+  top-level `404.html` gets none: GitHub Pages serves it at whatever
+  depth the missing URL had, where a page-relative link points somewhere
+  different on every miss.
+- The asset reads the canonical to find the site root, and under editions
+  resolves the schema links against it too: the book sits at
+  `book/<edition>/` and the schema docs beside it, so `path_to_root`,
+  which reaches only the edition root, would put the schema button
+  inside the edition. A page without a `<head>` (or the 404 page) gets no
+  switcher and keeps `path_to_root` links.
+- Only a `[book_link]` path that is `current/` or ends in `/current/` is
+  an alias and rewritten; `docs/concurrent/` is kept.
+- Browser tests load a stand-in page over `file://` carrying mdbook
+  0.5's toolbar and content markup and the injected canonical, the way
+  the toolbar-link tests already do; the real markup was checked against
+  a book built by mdbook 0.5.2.
 
 ---
 
@@ -339,7 +369,7 @@ publishes both books, verified on a real site.
 |-------|----------|------------|--------|
 | Slice 1: Edition planning | Must Have | None | Completed |
 | Slice 2: Build every edition | Must Have | Slice 1 | Completed |
-| Slice 3: Edition-aware toolbar | Must Have | Slice 2 | Not Started |
+| Slice 3: Edition-aware toolbar | Must Have | Slice 2 | Completed |
 | Slice 4: Schema pages link back | Must Have | Slice 1 | Not Started |
 | Slice 5: Per-edition toolchain | Must Have | Slice 2 | Not Started |
 | Slice 6: Versions derived from tags | Should Have | None | Not Started |
@@ -361,6 +391,10 @@ publishes both books, verified on a real site.
 - **Switching editions lands on the first page.** As with the schema
   version dropdown, chapters are not assumed to exist under the same path
   in every edition.
+- **Canonical links are relative.** The site's absolute URL is not known
+  to panschema, and a relative canonical resolves per the HTML spec. If a
+  search engine turns out to want absolute ones, an optional site URL in
+  `[editions]` is the place for it.
 - **A dependency page absent at a tag.** A `book_link` entry rewritten to
   a version whose dependency page was never published links to nothing;
   publish already skips such pages, and the toolbar should agree with it.

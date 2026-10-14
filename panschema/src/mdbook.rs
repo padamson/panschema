@@ -8,12 +8,13 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::publish::{BookLinkConfig, PUBLISH_FILENAME, PublishConfig};
+use crate::publish::{BookLinkConfig, BookLinkEntry, PUBLISH_FILENAME, PublishConfig};
 use anyhow::Context;
+use serde::Serialize;
 use toml_edit::{Array, DocumentMut, Item, Table, value};
 
-/// The button asset. `__PANSCHEMA_SCHEMA_PATH__` / `__PANSCHEMA_LABEL__`
-/// are replaced at install time with JSON string literals.
+/// The toolbar asset. `__PANSCHEMA_LINKS__` and `__PANSCHEMA_EDITIONS__`
+/// are replaced at install time with JSON.
 const SCHEMA_LINK_JS: &str = include_str!("mdbook_assets/schema-link.js");
 const SCHEMA_LINK_CSS: &str = include_str!("mdbook_assets/schema-link.css");
 
@@ -27,8 +28,31 @@ const CSS_ENTRY: &str = "./schema-link.css";
 pub enum InstallOutcome {
     /// Assets written and `book.toml` wired.
     Installed,
-    /// `[book_link]` was absent or `enabled = false` — nothing changed.
+    /// Nothing to show — no links and no editions — so nothing changed.
     Disabled,
+}
+
+/// The editions a page belongs among, baked into the asset by the
+/// editions build so the switcher and the banner know which edition the
+/// page is and which is current. `mdbook-panschema install`, run in a
+/// working tree, has none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EditionsContext {
+    /// Released editions newest first, then the unreleased one.
+    pub editions: Vec<EditionOption>,
+    /// The edition the site root serves.
+    pub current: String,
+    /// The edition the page belongs to.
+    pub own: String,
+}
+
+/// One entry of the switcher.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EditionOption {
+    /// The edition's directory under `book/`.
+    pub label: String,
+    /// Built from the edge ref rather than a release.
+    pub unreleased: bool,
 }
 
 /// Install (or refresh) the toolbar-link assets in `book_dir` per `cfg`.
@@ -41,16 +65,35 @@ pub fn install(book_dir: &Path, cfg: &BookLinkConfig) -> anyhow::Result<InstallO
     if !cfg.enabled() {
         return Ok(InstallOutcome::Disabled);
     }
+    install_toolbar(book_dir, &cfg.entries(), None)
+}
+
+/// Install the toolbar asset with `links` to the schema docs and, for an
+/// edition's build, the `editions` the switcher offers. Nothing to show
+/// means nothing is written.
+pub fn install_toolbar(
+    book_dir: &Path,
+    links: &[BookLinkEntry],
+    editions: Option<&EditionsContext>,
+) -> anyhow::Result<InstallOutcome> {
+    if links.is_empty() && editions.is_none() {
+        return Ok(InstallOutcome::Disabled);
+    }
 
     // One array drives both renderings: the asset draws a plain link for a
     // single entry and a drop-down for several, so a book that grows a
     // second schema needs no change here.
-    let entries: Vec<serde_json::Value> = cfg
-        .entries()
+    let entries: Vec<serde_json::Value> = links
         .iter()
         .map(|e| serde_json::json!({ "schemaPath": e.schema_path, "label": e.label }))
         .collect();
-    let js = SCHEMA_LINK_JS.replace("__PANSCHEMA_LINKS__", &serde_json::to_string(&entries)?);
+    let editions = match editions {
+        Some(context) => serde_json::to_string(context)?,
+        None => "null".to_string(),
+    };
+    let js = SCHEMA_LINK_JS
+        .replace("__PANSCHEMA_LINKS__", &serde_json::to_string(&entries)?)
+        .replace("__PANSCHEMA_EDITIONS__", &editions);
 
     std::fs::write(book_dir.join(JS_FILENAME), js)
         .with_context(|| format!("writing {JS_FILENAME} to {}", book_dir.display()))?;
@@ -235,20 +278,22 @@ mod tests {
         );
     }
 
-    /// Every href is built from `path_to_root`, so the links resolve under
-    /// a GitHub Pages project prefix rather than only at a domain root.
+    /// Every href is built from the page's root (`path_to_root`, or the
+    /// site root under editions), so the links resolve under a GitHub
+    /// Pages project prefix rather than only at a domain root. The
+    /// browser tests prove the resolution; this guards the wiring.
     #[test]
-    fn menu_links_are_relative_to_path_to_root() {
+    fn menu_links_are_relative_to_the_pages_root() {
         let dir = book_dir();
         install(dir.path(), &list_cfg(&[("a/", "A"), ("b/", "B")])).unwrap();
         let js = std::fs::read_to_string(dir.path().join("schema-link.js")).unwrap();
 
         assert!(
-            js.contains("root + entry.schemaPath"),
+            js.contains("base + entry.schemaPath"),
             "menu entries should be root-relative; got:\n{js}"
         );
         assert!(
-            js.contains("root + links[0].schemaPath"),
+            js.contains("base + links[0].schemaPath"),
             "the single-link form should be root-relative too; got:\n{js}"
         );
     }
@@ -311,6 +356,80 @@ mod tests {
             before,
             "disabled install must not touch book.toml"
         );
+    }
+
+    fn ctx(own: &str) -> EditionsContext {
+        EditionsContext {
+            editions: vec![
+                EditionOption {
+                    label: "v0.2".to_string(),
+                    unreleased: false,
+                },
+                EditionOption {
+                    label: "main".to_string(),
+                    unreleased: true,
+                },
+            ],
+            current: "v0.2".to_string(),
+            own: own.to_string(),
+        }
+    }
+
+    #[test]
+    fn the_editions_context_is_baked_in_as_json() {
+        let dir = book_dir();
+        install_toolbar(dir.path(), &[], Some(&ctx("main"))).unwrap();
+        let js = std::fs::read_to_string(dir.path().join("schema-link.js")).unwrap();
+
+        assert!(
+            js.contains(r#""own":"main""#)
+                && js.contains(r#""current":"v0.2""#)
+                && js.contains(r#"{"label":"main","unreleased":true}"#),
+            "got:\n{js}"
+        );
+        assert!(
+            !js.contains("__PANSCHEMA_EDITIONS__"),
+            "the placeholder must be substituted; got:\n{js}"
+        );
+    }
+
+    /// `mdbook-panschema install` runs in a working tree with one edition
+    /// and no release list, so it bakes no context and the asset renders
+    /// no switcher.
+    #[test]
+    fn install_bakes_no_editions() {
+        let dir = book_dir();
+        install(dir.path(), &cfg(true)).unwrap();
+        let js = std::fs::read_to_string(dir.path().join("schema-link.js")).unwrap();
+
+        assert!(
+            !js.contains("__PANSCHEMA_EDITIONS__") && !js.contains(r#""own":"#),
+            "got:\n{js}"
+        );
+    }
+
+    #[test]
+    fn editions_alone_install_the_asset_and_wire_the_book() {
+        let dir = book_dir();
+
+        let outcome = install_toolbar(dir.path(), &[], Some(&ctx("v0.2"))).unwrap();
+
+        assert_eq!(outcome, InstallOutcome::Installed);
+        let book_toml = std::fs::read_to_string(dir.path().join("book.toml")).unwrap();
+        assert!(
+            book_toml.contains("./schema-link.js"),
+            "book.toml should be wired; got:\n{book_toml}"
+        );
+    }
+
+    #[test]
+    fn no_links_and_no_editions_installs_nothing() {
+        let dir = book_dir();
+
+        let outcome = install_toolbar(dir.path(), &[], None).unwrap();
+
+        assert_eq!(outcome, InstallOutcome::Disabled);
+        assert!(!dir.path().join("schema-link.js").exists());
     }
 
     #[test]

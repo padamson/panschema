@@ -16,7 +16,9 @@ use std::process::Command;
 use semver::Version;
 use serde::Deserialize;
 
-use crate::publish::{PUBLISH_FILENAME, PublishConfig, PublishError, PublishingConfig};
+use crate::publish::{
+    BookLinkEntry, PUBLISH_FILENAME, PublishConfig, PublishError, PublishingConfig,
+};
 
 /// One edition of the book.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +39,25 @@ impl Edition {
     /// edge ref.
     pub fn is_released(&self) -> bool {
         !self.versions.is_empty()
+    }
+}
+
+impl EditionPlan {
+    /// What the toolbar asset of edition `own` is told: every edition in
+    /// switcher order, the current one, and itself.
+    pub fn toolbar_context(&self, own: &str) -> crate::mdbook::EditionsContext {
+        crate::mdbook::EditionsContext {
+            editions: self
+                .editions
+                .iter()
+                .map(|e| crate::mdbook::EditionOption {
+                    label: e.label.clone(),
+                    unreleased: !e.is_released(),
+                })
+                .collect(),
+            current: self.current.clone(),
+            own: own.to_string(),
+        }
     }
 }
 
@@ -418,6 +439,7 @@ pub fn build_editions(
         let book_dir = tree.join(&prefix).join(&editions_cfg.book);
         let html = build_one(
             edition,
+            &plan,
             &book_dir,
             cfg,
             editions_cfg,
@@ -435,7 +457,16 @@ pub fn build_editions(
         .expect("the plan's current edition was built")
         .1;
     let entries = root_entries(current, &plan.current, &schema_dir)?;
-    write_site(&site, &built, current, &entries, &schema_dir)?;
+    // The copy at the site root is two directories shallower than the
+    // stable path, so its canonicals differ: it is taken from the build
+    // before the stable copy gets its own.
+    let root_copy = scratch.path().join("root");
+    crate::publish::copy_dir_recursive(current, &root_copy).map_err(EditionsError::Scratch)?;
+    inject_canonicals(&root_copy, &root_copy, &plan.current, 0).map_err(EditionsError::Scratch)?;
+    for (label, html) in &built {
+        inject_canonicals(html, html, label, 2).map_err(EditionsError::Scratch)?;
+    }
+    write_site(&site, &built, &root_copy, &entries, &schema_dir)?;
     Ok(EditionsReport { plan, site })
 }
 
@@ -458,6 +489,7 @@ pub fn run(dir: &Path, toolchain: &dyn Toolchain) -> anyhow::Result<EditionsRepo
 /// into `dest`, returning the directory holding the rendered HTML.
 fn build_one(
     edition: &Edition,
+    plan: &EditionPlan,
     book_dir: &Path,
     cfg: &PublishConfig,
     editions_cfg: &crate::publish::EditionsConfig,
@@ -489,15 +521,36 @@ fn build_one(
             })?;
     }
     // The toolbar asset always comes from the running binary, never from
-    // the tag: a tag's own copy, if it had one, is gitignored anyway.
-    if let Some(link) = &cfg.book_link {
-        crate::mdbook::install(book_dir, link).map_err(|e| EditionsError::Install {
+    // the tag: a tag's own copy, if it had one, is gitignored anyway, and
+    // a tag from before the asset existed gets it wired here. An entry
+    // aliasing `current/` is pointed at the release this edition was
+    // built from, so a reader reaches the schema docs of the version the
+    // book describes.
+    let links: Vec<BookLinkEntry> = cfg
+        .book_link
+        .as_ref()
+        .filter(|link| link.enabled())
+        .map(|link| link.entries())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|mut entry| {
+            let alias = entry.schema_path == "current/" || entry.schema_path.ends_with("/current/");
+            if alias {
+                let base = &entry.schema_path[..entry.schema_path.len() - "current/".len()];
+                entry.schema_path = format!("{base}{}/", edition.source);
+            }
+            entry
+        })
+        .collect();
+    let context = plan.toolbar_context(&edition.label);
+    crate::mdbook::install_toolbar(book_dir, &links, Some(&context)).map_err(|e| {
+        EditionsError::Install {
             edition: label(),
             tag: tag(),
             command: "mdbook-panschema install".to_string(),
             output: format!("{e:#}"),
-        })?;
-    }
+        }
+    })?;
     toolchain
         .build(book_dir, dest)
         .map_err(|output| EditionsError::Build {
@@ -545,6 +598,108 @@ fn extract_tree(repo: &Path, commit: &str, dest: &Path) -> Result<(), String> {
         }
     );
     git(&["checkout-index", "--all", &prefix])?;
+    Ok(())
+}
+
+/// Percent-encode one URL path segment, leaving raw exactly the
+/// characters `encodeURIComponent` leaves raw, so the toolbar asset can
+/// spell an edition's label the way its canonical does.
+fn encode_segment(segment: &str) -> String {
+    let mut out = String::with_capacity(segment.len());
+    for byte in segment.bytes() {
+        match byte {
+            b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'_'
+            | b'.'
+            | b'!'
+            | b'~'
+            | b'*'
+            | b'\''
+            | b'('
+            | b')' => out.push(byte as char),
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+/// The canonical URL of the page at `rel` (its path inside the edition,
+/// one segment per component) in `edition`, relative to a copy of the
+/// page whose edition root sits `dirs_above` directories below the site
+/// root: 2 at the stable path `book/<edition>/`, 0 for the copy at the
+/// site root. Relative, so it resolves under any site prefix; every
+/// segment percent-encoded, which also keeps `"` and `&` out of the
+/// attribute.
+fn canonical_href(edition: &str, rel: &[String], dirs_above: usize) -> String {
+    let climb = "../".repeat(dirs_above + rel.len().saturating_sub(1));
+    let page = rel
+        .iter()
+        .map(|segment| encode_segment(segment))
+        .collect::<Vec<_>>()
+        .join("/");
+    format!("{climb}book/{}/{page}", encode_segment(edition))
+}
+
+/// Where a page's `<head>` tag ends, if it has one. `<header>` is not it.
+fn head_end(html: &str) -> Option<usize> {
+    html.match_indices("<head").find_map(|(start, _)| {
+        let after = html[start + "<head".len()..].chars().next()?;
+        if after != '>' && !after.is_whitespace() {
+            return None;
+        }
+        html[start..].find('>').map(|close| start + close + 1)
+    })
+}
+
+/// Give every page under `dir`, a copy of `edition` whose root is `root`,
+/// a canonical link to itself at the edition's stable path. A file with
+/// no `<head>` is left alone, and so is the top-level `404.html`: GitHub
+/// Pages serves it at whatever depth the missing URL had, where a
+/// page-relative link points somewhere different on every miss.
+fn inject_canonicals(
+    root: &Path,
+    dir: &Path,
+    edition: &str,
+    dirs_above: usize,
+) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            inject_canonicals(root, &path, edition, dirs_above)?;
+            continue;
+        }
+        if path.extension().is_none_or(|ext| ext != "html") {
+            continue;
+        }
+        let rel: Vec<String> = path
+            .strip_prefix(root)
+            .expect("a page lies under its edition root")
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        if rel == ["404.html"] {
+            continue;
+        }
+        let Ok(html) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Some(at) = head_end(&html) else {
+            continue;
+        };
+        let href = canonical_href(edition, &rel, dirs_above);
+        std::fs::write(
+            &path,
+            format!(
+                r#"{}
+<link rel="canonical" href="{href}">{}"#,
+                &html[..at],
+                &html[at..]
+            ),
+        )?;
+    }
     Ok(())
 }
 
@@ -643,7 +798,7 @@ fn write_ledger(site: &Path, entries: &[String]) -> Result<(), EditionsError> {
 fn write_site(
     site: &Path,
     built: &[(String, PathBuf)],
-    current: &Path,
+    root_copy: &Path,
     entries: &[String],
     schema_dir: &std::ffi::OsStr,
 ) -> Result<(), EditionsError> {
@@ -663,7 +818,7 @@ fn write_site(
         remove_entry(&site.join(name)).map_err(EditionsError::Write)?;
     }
     for name in entries {
-        let from = current.join(name);
+        let from = root_copy.join(name);
         let to = site.join(name);
         remove_entry(&to).map_err(EditionsError::Write)?;
         if from.is_dir() {
@@ -699,6 +854,39 @@ mod tests {
             .iter()
             .map(|e| (e.label.as_str(), e.source.as_str()))
             .collect()
+    }
+
+    #[test]
+    fn head_end_is_the_index_after_the_head_tag_and_never_a_header() {
+        for (html, end) in [
+            ("<html><head></head>", Some(12)),
+            ("<html><head lang=\"en\">x", Some(22)),
+            ("<html>\n    <head>\n", Some(17)),
+            ("<header>x</header><head>", Some(24)),
+            ("<header>only</header>", None),
+            ("<p>no head</p>", None),
+            ("<head", None),
+        ] {
+            assert_eq!(head_end(html), end, "html: {html:?}");
+        }
+    }
+
+    /// The asset rebuilds the same spelling with `encodeURIComponent`
+    /// to find the page's edition in its canonical, so the two sets of
+    /// characters left raw must agree.
+    #[test]
+    fn encode_segment_spells_as_encodeuricomponent_does() {
+        for (raw, encoded) in [
+            ("v0.1", "v0.1"),
+            ("release candidate", "release%20candidate"),
+            ("faq & tips.html", "faq%20%26%20tips.html"),
+            ("what?.html", "what%3F.html"),
+            ("a-b_c.d!e~f*g'h(i)", "a-b_c.d!e~f*g'h(i)"),
+            ("caf\u{e9}", "caf%C3%A9"),
+            ("x\"y#z", "x%22y%23z"),
+        ] {
+            assert_eq!(encode_segment(raw), encoded, "raw: {raw:?}");
+        }
     }
 
     #[test]
@@ -989,6 +1177,16 @@ mod build_tests {
         fn build(&self, book_dir: &Path, dest: &Path) -> Result<PathBuf, String> {
             *self.builds.borrow_mut() += 1;
             render(&book_dir.join("src"), dest)?;
+            // As mdbook does, the additional assets land beside the pages.
+            for entry in fs::read_dir(book_dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path
+                    .extension()
+                    .is_some_and(|ext| ext == "js" || ext == "css")
+                {
+                    fs::copy(&path, dest.join(path.file_name().unwrap())).unwrap();
+                }
+            }
             let mut entries: Vec<String> = fs::read_dir(book_dir)
                 .unwrap()
                 .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
@@ -1017,9 +1215,31 @@ mod build_tests {
             if text.contains("BROKEN") {
                 return Err(format!("mdbook: cannot render {}", name.to_string_lossy()));
             }
-            fs::write(dest.join(Path::new(name).with_extension("html")), text).unwrap();
+            fs::write(
+                dest.join(Path::new(name).with_extension("html")),
+                page(&text),
+            )
+            .unwrap();
         }
         Ok(())
+    }
+
+    /// A page shaped the way mdbook writes one: `<head>` on its own line,
+    /// the chapter inside `<body>`.
+    fn page(body: &str) -> String {
+        format!(
+            "<!DOCTYPE HTML>\n<html>\n    <head>\n    </head>\n    <body>{body}</body>\n</html>\n"
+        )
+    }
+
+    /// The chapter text of a page [`page`] wrote.
+    fn body(path: impl AsRef<Path>) -> String {
+        let text = read(path);
+        let start = text.find("<body>").expect("a rendered page has a body") + "<body>".len();
+        let end = text
+            .find("</body>")
+            .expect("a rendered page closes its body");
+        text[start..end].to_string()
     }
 
     /// Write `files` into `repo`, commit them, and tag the commit.
@@ -1115,9 +1335,9 @@ mod build_tests {
         build_editions(repo.path(), &spec("v0.2.0", ""), &FakeToolchain::default()).unwrap();
 
         let book = repo.path().join("site/book");
-        assert_eq!(read(book.join("v0.1/chapter.html")), "v0.1.1");
-        assert_eq!(read(book.join("v0.2/chapter.html")), "v0.2.0");
-        assert_eq!(read(book.join("main/chapter.html")), "main");
+        assert_eq!(body(book.join("v0.1/chapter.html")), "v0.1.1");
+        assert_eq!(body(book.join("v0.2/chapter.html")), "v0.2.0");
+        assert_eq!(body(book.join("main/chapter.html")), "main");
     }
 
     #[test]
@@ -1125,7 +1345,7 @@ mod build_tests {
         let repo = book_repo();
         build_editions(repo.path(), &spec("v0.1.0", ""), &FakeToolchain::default()).unwrap();
 
-        assert_eq!(read(repo.path().join("site/chapter.html")), "v0.1.1");
+        assert_eq!(body(repo.path().join("site/chapter.html")), "v0.1.1");
     }
 
     #[test]
@@ -1160,7 +1380,7 @@ mod build_tests {
             !repo.path().join("site/part").exists(),
             "v0.2's directory must leave the root when v0.1 becomes current"
         );
-        assert_eq!(read(repo.path().join("site/chapter.html")), "v0.1.1");
+        assert_eq!(body(repo.path().join("site/chapter.html")), "v0.1.1");
     }
 
     #[test]
@@ -1257,15 +1477,13 @@ mod build_tests {
         );
     }
 
+    /// The switcher needs the asset whether or not the book links to a
+    /// schema, and a tag whose `book.toml` never wired it gets it wired in
+    /// the checkout.
     #[test]
     fn the_toolbar_asset_installs_into_every_edition() {
         let repo = book_repo();
-        build_editions(
-            repo.path(),
-            &spec("v0.2.0", "[book_link]\nenabled = true\n"),
-            &FakeToolchain::default(),
-        )
-        .unwrap();
+        build_editions(repo.path(), &spec("v0.2.0", ""), &FakeToolchain::default()).unwrap();
 
         for edition in ["v0.1", "v0.2", "main"] {
             let assets = read(repo.path().join(format!("site/book/{edition}/assets.txt")));
@@ -1404,7 +1622,7 @@ mod build_tests {
         build_editions(&repo.path().join("sub"), &cfg, &FakeToolchain::default()).unwrap();
 
         assert_eq!(
-            read(repo.path().join("sub/site/book/v0.1/chapter.html")),
+            body(repo.path().join("sub/site/book/v0.1/chapter.html")),
             "beside"
         );
     }
@@ -1448,7 +1666,7 @@ mod build_tests {
         build_editions(&repo.path().join("sub"), &cfg, &FakeToolchain::default()).unwrap();
 
         assert_eq!(
-            read(repo.path().join("sub/site/book/v0.1/chapter.html")),
+            body(repo.path().join("sub/site/book/v0.1/chapter.html")),
             "nested"
         );
     }
@@ -1489,7 +1707,7 @@ mod build_tests {
         let report = run(&repo.path().join("book/src"), &FakeToolchain::default()).unwrap();
 
         assert_eq!(report.plan.current, "v0.1");
-        assert_eq!(read(repo.path().join("site/chapter.html")), "v0.1.1");
+        assert_eq!(body(repo.path().join("site/chapter.html")), "v0.1.1");
     }
 
     /// A ledger line is trusted with a `remove_dir_all`, so a ledger that
@@ -1592,7 +1810,7 @@ mod build_tests {
         build_editions(repo.path(), &spec("v0.2.0", ""), &FakeToolchain::default()).unwrap();
 
         assert_eq!(
-            read(repo.path().join("site/book/main/extra.html")),
+            body(repo.path().join("site/book/main/extra.html")),
             "only in v0.2"
         );
     }
@@ -1661,7 +1879,7 @@ mod build_tests {
         build_editions(repo.path(), &spec("v0.2.0", ""), &FakeToolchain::default()).unwrap();
 
         assert_eq!(
-            read(repo.path().join("site/book/v0.2/chapter.html")),
+            body(repo.path().join("site/book/v0.2/chapter.html")),
             "v0.2.0"
         );
     }
@@ -1739,6 +1957,181 @@ mod build_tests {
 
         assert_eq!(root, dir.path().join("out/html"));
         assert!(root.join("chapter.html").is_file());
+    }
+
+    fn canonical(path: impl AsRef<Path>) -> String {
+        let text = read(path);
+        let start = text
+            .find(r#"<link rel="canonical" href=""#)
+            .expect("a page carries a canonical link")
+            + r#"<link rel="canonical" href=""#.len();
+        let end = text[start..].find('"').unwrap() + start;
+        text[start..end].to_string()
+    }
+
+    #[test]
+    fn every_page_carries_a_canonical_to_its_stable_path() {
+        let repo = book_repo();
+        build_editions(repo.path(), &spec("v0.2.0", ""), &FakeToolchain::default()).unwrap();
+
+        let book = repo.path().join("site/book");
+        assert_eq!(
+            canonical(book.join("v0.1/chapter.html")),
+            "../../book/v0.1/chapter.html"
+        );
+        assert_eq!(
+            canonical(book.join("v0.2/part/page.html")),
+            "../../../book/v0.2/part/page.html"
+        );
+        assert_eq!(
+            canonical(book.join("main/chapter.html")),
+            "../../book/main/chapter.html"
+        );
+    }
+
+    /// The root copy is two directories shallower, so its canonicals are
+    /// the one place its bytes differ from the stable copy's.
+    #[test]
+    fn the_root_copys_canonicals_point_at_the_stable_path() {
+        let repo = book_repo();
+        build_editions(repo.path(), &spec("v0.2.0", ""), &FakeToolchain::default()).unwrap();
+
+        let site = repo.path().join("site");
+        assert_eq!(
+            canonical(site.join("chapter.html")),
+            "book/v0.2/chapter.html"
+        );
+        assert_eq!(
+            canonical(site.join("part/page.html")),
+            "../book/v0.2/part/page.html"
+        );
+    }
+
+    #[test]
+    fn a_page_without_a_head_is_copied_as_it_is() {
+        let repo = book_repo();
+        commit(
+            repo.path(),
+            &[("book/src/raw.html", "<p>no head here</p>")],
+            None,
+        );
+
+        build_editions(repo.path(), &spec("main", ""), &FakeToolchain::default()).unwrap();
+
+        assert_eq!(
+            read(repo.path().join("site/book/main/raw.html")),
+            "<p>no head here</p>"
+        );
+        assert_eq!(
+            read(repo.path().join("site/raw.html")),
+            "<p>no head here</p>"
+        );
+    }
+
+    /// The reader of an edition reaches the schema docs for the release
+    /// that edition was built from, not whatever `current/` aliases today.
+    #[test]
+    fn the_schema_link_points_at_the_editions_own_version() {
+        let repo = book_repo();
+        let links = "[[book_link]]\nschema_path = \"schema/current/\"\nlabel = \"Schema\"\n\
+                     [[book_link]]\nschema_path = \"schema/cqa/current/\"\nlabel = \"CQ&A\"\n\
+                     [[book_link]]\nschema_path = \"docs/model/\"\nlabel = \"Model\"\n\
+                     [[book_link]]\nschema_path = \"docs/concurrent/\"\nlabel = \"Not an alias\"\n";
+        build_editions(
+            repo.path(),
+            &spec("v0.2.0", links),
+            &FakeToolchain::default(),
+        )
+        .unwrap();
+
+        let book = repo.path().join("site/book");
+        let v01 = read(book.join("v0.1/schema-link.js"));
+        assert!(
+            v01.contains(r#""schemaPath":"schema/v0.1.1/""#)
+                && v01.contains(r#""schemaPath":"schema/cqa/v0.1.1/""#)
+                && v01.contains(r#""schemaPath":"docs/model/""#)
+                && v01.contains(r#""schemaPath":"docs/concurrent/""#),
+            "v0.1 links its own version, and keeps a path that is not an alias; got:\n{v01}"
+        );
+        assert!(
+            !v01.contains(r#""schemaPath":"schema/current/""#)
+                && !v01.contains(r#""schemaPath":"schema/cqa/current/""#),
+            "no alias may survive into an edition's links; got:\n{v01}"
+        );
+        let main = read(book.join("main/schema-link.js"));
+        assert!(
+            main.contains(r#""schemaPath":"schema/main/""#),
+            "the unreleased edition links the edge build; got:\n{main}"
+        );
+    }
+
+    #[test]
+    fn the_baked_editions_name_the_pages_own_edition_and_the_current_one() {
+        let repo = book_repo();
+        build_editions(repo.path(), &spec("v0.2.0", ""), &FakeToolchain::default()).unwrap();
+
+        let book = repo.path().join("site/book");
+        let v01 = read(book.join("v0.1/schema-link.js"));
+        assert!(
+            v01.contains(r#""own":"v0.1""#) && v01.contains(r#""current":"v0.2""#),
+            "got:\n{v01}"
+        );
+        let main = read(book.join("main/schema-link.js"));
+        assert!(main.contains(r#""own":"main""#), "got:\n{main}");
+        let expected = r#"[{"label":"v0.2","unreleased":false},{"label":"v0.1","unreleased":false},{"label":"main","unreleased":true}]"#;
+        assert!(
+            main.contains(expected),
+            "editions list newest first, then the unreleased one; got:\n{main}"
+        );
+    }
+
+    /// A chapter's file name and an edition's label both land in a URL,
+    /// so each segment is percent-encoded, which also keeps `"` and `&`
+    /// out of the attribute. `#` is legal in a git ref and starts a URL
+    /// fragment, which is exactly the case.
+    #[test]
+    fn a_canonical_percent_encodes_the_page_and_the_edition() {
+        let repo = book_repo();
+        commit(repo.path(), &[("book/src/faq & tips.md", "spaced")], None);
+        git(repo.path(), &["branch", "rc#2"]);
+        let cfg: PublishConfig =
+            "[schema]\nname = \"x\"\nversion = \"0.2.0\"\nlinkml = \"1.7.0\"\n\
+                                  [files]\nmain = \"schema.yaml\"\n\
+                                  [publishing]\nversions = [\"v0.2.0\"]\nedge = \"rc#2\"\n\
+                                  current = \"v0.2.0\"\n[editions]\n"
+                .parse()
+                .unwrap();
+
+        build_editions(repo.path(), &cfg, &FakeToolchain::default()).unwrap();
+
+        assert_eq!(
+            canonical(repo.path().join("site/book/rc#2/faq & tips.html")),
+            "../../book/rc%232/faq%20%26%20tips.html"
+        );
+    }
+
+    /// GitHub Pages serves the root copy's `404.html` at whatever depth the
+    /// missing URL had, so a page-relative canonical would point somewhere
+    /// different on every miss.
+    #[test]
+    fn the_404_page_gets_no_canonical() {
+        let repo = book_repo();
+        commit(repo.path(), &[("book/src/404.md", "missing")], None);
+
+        build_editions(repo.path(), &spec("main", ""), &FakeToolchain::default()).unwrap();
+
+        for page in ["site/book/main/404.html", "site/404.html"] {
+            let text = read(repo.path().join(page));
+            assert!(
+                !text.contains("canonical"),
+                "{page} must carry no canonical; got:\n{text}"
+            );
+        }
+        assert_eq!(
+            canonical(repo.path().join("site/chapter.html")),
+            "book/main/chapter.html",
+            "the other pages still get theirs"
+        );
     }
 
     #[test]

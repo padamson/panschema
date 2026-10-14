@@ -48,3 +48,27 @@
 .schema-docs-menu-list a:focus {
   background: var(--theme-hover, rgba(0, 0, 0, 0.08));
 }
+
+/* Editions only: the switcher sits in the toolbar beside the schema
+   button, drawn in the reader's theme. */
+.edition-switcher {
+  margin-left: 0.5rem;
+  padding: 0.1rem 0.3rem;
+  font: inherit;
+  font-size: 0.9rem;
+  vertical-align: middle;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--theme-popup-border, var(--sidebar-non-existant, #ccc));
+  border-radius: 4px;
+}
+
+/* The note at the top of every page of an edition that is not the
+   current one. */
+.edition-banner {
+  margin: 0 0 1rem 0;
+  padding: 0.5rem 0.75rem;
+  border-left: 4px solid var(--links);
+  background: var(--quote-bg, rgba(0, 0, 0, 0.05));
+  color: var(--fg);
+}
