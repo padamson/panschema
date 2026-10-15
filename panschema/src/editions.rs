@@ -11,13 +11,16 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use semver::Version;
-use serde::Deserialize;
 
 use crate::publish::{
     BookLinkEntry, PUBLISH_FILENAME, PublishConfig, PublishError, PublishingConfig,
+};
+
+pub mod toolchain;
+pub use toolchain::{
+    InstalledToolchain, PluginPin, TOOLCHAIN_FILENAME, ToolError, Toolchain, ToolchainFile,
 };
 
 /// One edition of the book.
@@ -186,9 +189,6 @@ impl Line {
     }
 }
 
-/// The file in a book directory naming the tools that build it.
-pub const TOOLCHAIN_FILENAME: &str = "toolchain.toml";
-
 /// The site-root file recording which top-level entries the root copy of
 /// the current edition wrote, so the next run removes exactly those.
 pub const ROOT_LEDGER_FILENAME: &str = ".panschema-editions-root";
@@ -217,6 +217,25 @@ pub enum EditionsError {
         edition: String,
         tag: String,
         message: String,
+    },
+    #[error(
+        "edition `{edition}`: `{tag}` has no toolchain; add {TOOLCHAIN_FILENAME} to the book at a later release, or `[editions.toolchain.\"{tag}\"]` to {PUBLISH_FILENAME}"
+    )]
+    ToolchainMissing { edition: String, tag: String },
+    #[error("edition `{edition}`: the toolchain for `{tag}` {problem}")]
+    ToolchainNotExact {
+        edition: String,
+        tag: String,
+        tool: String,
+        problem: String,
+    },
+    #[error("edition `{edition}`: could not install `{tool}` {pin} for `{tag}`:\n{output}")]
+    ToolchainInstall {
+        edition: String,
+        tag: String,
+        tool: String,
+        pin: String,
+        output: String,
     },
     #[error("edition `{edition}`: `{command}` failed at `{tag}`:\n{output}")]
     Install {
@@ -255,124 +274,6 @@ pub enum EditionsError {
     LedgerUnreadable(std::io::Error),
     #[error("failed to write the site: {0}")]
     Write(std::io::Error),
-}
-
-/// `<book>/toolchain.toml`: the mdbook and plugin versions a tag's book
-/// builds with.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ToolchainFile {
-    /// The mdbook version.
-    #[serde(default)]
-    pub mdbook: Option<String>,
-    /// The preprocessors and other plugins, in the order their assets
-    /// are installed.
-    #[serde(default, rename = "plugin")]
-    pub plugins: Vec<PluginPin>,
-}
-
-/// One `[[plugin]]` in `toolchain.toml`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PluginPin {
-    /// The binary's name, which is also how it is run.
-    pub name: String,
-    /// A crates.io version.
-    #[serde(default)]
-    pub version: Option<String>,
-    /// A git repository to install from, with `rev` or `branch`.
-    #[serde(default)]
-    pub git: Option<String>,
-    /// An exact commit in `git`.
-    #[serde(default)]
-    pub rev: Option<String>,
-    /// A branch in `git`; only the unreleased edition may build from one.
-    #[serde(default)]
-    pub branch: Option<String>,
-    /// The arguments that generate the plugin's book assets, run in the
-    /// book directory before the build. Empty means nothing to install.
-    #[serde(default)]
-    pub install: Vec<String>,
-}
-
-/// The tools an edition builds with. [`PathToolchain`] runs them from
-/// `PATH`; tests substitute one that runs in-process.
-pub trait Toolchain {
-    /// Run `plugin` with `args` in `book_dir`. An error carries the
-    /// tool's output.
-    fn install_assets(&self, plugin: &str, args: &[String], book_dir: &Path) -> Result<(), String>;
-    /// Build the book in `book_dir` into `dest`, returning the directory
-    /// holding the rendered HTML: `dest` itself, or a subdirectory of it
-    /// when the book renders through more than one backend. An error
-    /// carries the tool's output.
-    fn build(&self, book_dir: &Path, dest: &Path) -> Result<PathBuf, String>;
-}
-
-/// Runs mdbook and every plugin as whatever `PATH` resolves them to.
-#[derive(Debug, Clone)]
-pub struct PathToolchain {
-    mdbook: PathBuf,
-}
-
-impl Default for PathToolchain {
-    fn default() -> Self {
-        PathToolchain {
-            mdbook: PathBuf::from("mdbook"),
-        }
-    }
-}
-
-impl Toolchain for PathToolchain {
-    fn install_assets(&self, plugin: &str, args: &[String], book_dir: &Path) -> Result<(), String> {
-        let mut command = Command::new(plugin);
-        command.args(args).current_dir(book_dir);
-        run_tool(command, plugin)
-    }
-
-    fn build(&self, book_dir: &Path, dest: &Path) -> Result<PathBuf, String> {
-        let mut command = Command::new(&self.mdbook);
-        command
-            .arg("build")
-            .arg(book_dir)
-            .arg("--dest-dir")
-            .arg(dest);
-        run_tool(command, &self.mdbook.to_string_lossy())?;
-        // mdbook just read this file, so it is there and parses.
-        let book_toml = std::fs::read_to_string(book_dir.join("book.toml")).unwrap_or_default();
-        Ok(html_root(&book_toml, dest))
-    }
-}
-
-/// Where mdbook put the HTML for a book configured by `book_toml`:
-/// `html/` under the destination when several `[output.*]` tables
-/// declare several backends, the destination itself otherwise (one
-/// table, or none, which means the HTML backend alone).
-fn html_root(book_toml: &str, dest: &Path) -> PathBuf {
-    let backends = toml::from_str::<toml::Value>(book_toml)
-        .ok()
-        .and_then(|book| book.get("output")?.as_table().map(|outputs| outputs.len()))
-        .unwrap_or(0);
-    if backends > 1 {
-        dest.join("html")
-    } else {
-        dest.to_path_buf()
-    }
-}
-
-/// Run `command`, returning its combined output as the error when it
-/// cannot start or exits non-zero.
-fn run_tool(mut command: Command, name: &str) -> Result<(), String> {
-    let output = command
-        .output()
-        .map_err(|e| format!("could not run `{name}`: {e}"))?;
-    if output.status.success() {
-        return Ok(());
-    }
-    Err(format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    ))
 }
 
 /// What [`build_editions`] published.
@@ -505,19 +406,27 @@ fn build_one(
             book: editions_cfg.book.clone(),
         });
     }
-    let pins = read_toolchain(book_dir).map_err(|message| EditionsError::Toolchain {
-        edition: label(),
-        tag: tag(),
-        message,
-    })?;
+    // The publish spec's override covers a tag cut before the toolchain
+    // file existed, and wins over the file where both exist.
+    let pins = match editions_cfg.toolchain.get(&edition.source) {
+        Some(pins) => Some(pins.clone()),
+        None => read_toolchain(book_dir).map_err(|message| EditionsError::Toolchain {
+            edition: label(),
+            tag: tag(),
+            message,
+        })?,
+    };
+    let pins = check_pins(edition, pins)?;
     for plugin in pins.plugins.iter().filter(|p| !p.install.is_empty()) {
         toolchain
-            .install_assets(&plugin.name, &plugin.install, book_dir)
-            .map_err(|output| EditionsError::Install {
-                edition: label(),
-                tag: tag(),
-                command: format!("{} {}", plugin.name, plugin.install.join(" ")),
-                output,
+            .install_assets(&pins, &plugin.name, &plugin.install, book_dir)
+            .map_err(|e| {
+                tool_error(edition, e, |output| EditionsError::Install {
+                    edition: label(),
+                    tag: tag(),
+                    command: format!("{} {}", plugin.name, plugin.install.join(" ")),
+                    output,
+                })
             })?;
     }
     // The toolbar asset always comes from the running binary, never from
@@ -551,22 +460,138 @@ fn build_one(
             output: format!("{e:#}"),
         }
     })?;
-    toolchain
-        .build(book_dir, dest)
-        .map_err(|output| EditionsError::Build {
+    toolchain.build(&pins, book_dir, dest).map_err(|e| {
+        tool_error(edition, e, |output| EditionsError::Build {
             edition: label(),
             tag: tag(),
             output,
         })
+    })
 }
 
-/// `<book>/toolchain.toml`, or the empty toolchain when the tag has none.
-fn read_toolchain(book_dir: &Path) -> Result<ToolchainFile, String> {
+/// A tool's failure as the edition's: an install failure names the tool
+/// and its pin; a run failure is whatever the caller makes of its output.
+fn tool_error(
+    edition: &Edition,
+    error: ToolError,
+    on_run: impl FnOnce(String) -> EditionsError,
+) -> EditionsError {
+    match error {
+        ToolError::Install { tool, pin, output } => EditionsError::ToolchainInstall {
+            edition: edition.label.clone(),
+            tag: edition.source.clone(),
+            tool,
+            pin,
+            output,
+        },
+        ToolError::Run { output } => on_run(output),
+    }
+}
+
+/// `<book>/toolchain.toml`, or `None` when the tag has none.
+fn read_toolchain(book_dir: &Path) -> Result<Option<ToolchainFile>, String> {
     match std::fs::read_to_string(book_dir.join(TOOLCHAIN_FILENAME)) {
-        Ok(text) => toml::from_str(&text).map_err(|e| e.to_string()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(ToolchainFile::default()),
+        Ok(text) => toml::from_str(&text).map(Some).map_err(|e| e.to_string()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e.to_string()),
     }
+}
+
+/// The pins an edition may build with. A pin that says two things is
+/// refused for every edition. A released edition renders the way it did
+/// when it shipped, so it also needs a toolchain with every pin exact:
+/// an mdbook version, and each plugin at one crates.io version or a git
+/// commit id. The unreleased edition may name a branch tip, so the
+/// dogfood loop survives, or nothing, in which case the tools come from
+/// `PATH`.
+fn check_pins(
+    edition: &Edition,
+    pins: Option<ToolchainFile>,
+) -> Result<ToolchainFile, EditionsError> {
+    let released = edition.is_released();
+    let pins = match pins {
+        Some(pins) => pins,
+        None if released => {
+            return Err(EditionsError::ToolchainMissing {
+                edition: edition.label.clone(),
+                tag: edition.source.clone(),
+            });
+        }
+        None => return Ok(ToolchainFile::default()),
+    };
+    let not_exact = |tool: &str, problem: String| EditionsError::ToolchainNotExact {
+        edition: edition.label.clone(),
+        tag: edition.source.clone(),
+        tool: tool.to_string(),
+        problem,
+    };
+    match &pins.mdbook {
+        None if released => {
+            return Err(not_exact(
+                "mdbook",
+                "names no mdbook version, which a released edition needs".to_string(),
+            ));
+        }
+        Some(version) if Version::parse(version).is_err() => {
+            return Err(not_exact(
+                "mdbook",
+                format!("pins mdbook to `{version}`, which is not one version"),
+            ));
+        }
+        _ => {}
+    }
+    for plugin in &pins.plugins {
+        let name = &plugin.name;
+        let pin = (&plugin.version, &plugin.git, &plugin.rev, &plugin.branch);
+        let contradiction = match pin {
+            (Some(_), Some(_), _, _) => Some(format!(
+                "pins `{name}` to both a version and a git repository"
+            )),
+            (Some(_), None, Some(_), _) | (Some(_), None, _, Some(_)) => Some(format!(
+                "pins `{name}` to a version beside a `rev` or `branch` that nothing uses"
+            )),
+            (None, None, Some(_), _) | (None, None, _, Some(_)) => Some(format!(
+                "names a `rev` or `branch` for `{name}` without a `git` repository"
+            )),
+            (None, Some(_), Some(_), Some(_)) => {
+                Some(format!("pins `{name}` to both a `rev` and a `branch`"))
+            }
+            _ => None,
+        };
+        if let Some(problem) = contradiction {
+            return Err(not_exact(name, problem));
+        }
+        if let Some(version) = &plugin.version
+            && Version::parse(version).is_err()
+        {
+            return Err(not_exact(
+                name,
+                format!("pins `{name}` to `{version}`, which is not one version"),
+            ));
+        }
+        if !released {
+            continue;
+        }
+        let loose = match pin {
+            (None, None, None, None) => Some(format!(
+                "pins `{name}` to nothing, which a released edition cannot build from"
+            )),
+            (None, Some(_), None, Some(_)) => Some(format!(
+                "pins `{name}` to a branch, which only the unreleased edition may"
+            )),
+            (None, Some(_), None, None) => {
+                Some(format!("pins `{name}` to a git repository without a rev"))
+            }
+            (None, Some(_), Some(rev), None) if !toolchain::is_commit_id(rev) => Some(format!(
+                "pins `{name}` to `{rev}`, which is not a commit id"
+            )),
+            _ => None,
+        };
+        if let Some(problem) = loose {
+            return Err(not_exact(name, problem));
+        }
+    }
+    Ok(pins)
 }
 
 /// Check the tree of `commit` out under `dest` through a scratch index,
@@ -1154,29 +1179,48 @@ mod build_tests {
     #[derive(Default)]
     struct FakeToolchain {
         installs: RefCell<Vec<(String, Vec<String>)>>,
-        builds: RefCell<usize>,
+        /// The pins each build was given, in build order.
+        builds: RefCell<Vec<ToolchainFile>>,
     }
 
     impl Toolchain for FakeToolchain {
         fn install_assets(
             &self,
+            _pins: &ToolchainFile,
             plugin: &str,
             args: &[String],
             book_dir: &Path,
-        ) -> Result<(), String> {
+        ) -> Result<(), ToolError> {
             self.installs
                 .borrow_mut()
                 .push((plugin.to_string(), args.to_vec()));
             if plugin == "broken-plugin" {
-                return Err("broken-plugin: no such asset".to_string());
+                return Err(ToolError::Run {
+                    output: "broken-plugin: no such asset".to_string(),
+                });
             }
-            fs::write(book_dir.join(format!("{plugin}.css")), args.join(" "))
-                .map_err(|e| e.to_string())
+            if plugin == "uninstallable" {
+                return Err(ToolError::Install {
+                    tool: plugin.to_string(),
+                    pin: "9.9.9".to_string(),
+                    output: "error: no such crate".to_string(),
+                });
+            }
+            fs::write(book_dir.join(format!("{plugin}.css")), args.join(" ")).map_err(|e| {
+                ToolError::Run {
+                    output: e.to_string(),
+                }
+            })
         }
 
-        fn build(&self, book_dir: &Path, dest: &Path) -> Result<PathBuf, String> {
-            *self.builds.borrow_mut() += 1;
-            render(&book_dir.join("src"), dest)?;
+        fn build(
+            &self,
+            pins: &ToolchainFile,
+            book_dir: &Path,
+            dest: &Path,
+        ) -> Result<PathBuf, ToolError> {
+            self.builds.borrow_mut().push(pins.clone());
+            render(&book_dir.join("src"), dest).map_err(|output| ToolError::Run { output })?;
             // As mdbook does, the additional assets land beside the pages.
             for entry in fs::read_dir(book_dir).unwrap() {
                 let path = entry.unwrap().path();
@@ -1258,8 +1302,8 @@ mod build_tests {
 
     /// A repo whose book's chapter names the release it was written at:
     /// `v0.1.0`, `v0.1.1`, `v0.2.0` (which adds a second chapter and a
-    /// directory), then `main` past them. `site/` is ignored, as a
-    /// consumer's would be.
+    /// directory), then `main` past them. Every tag pins mdbook 0.5.2 in
+    /// its toolchain file. `site/` is ignored, as a consumer's would be.
     fn book_repo() -> tempfile::TempDir {
         let repo = init_repo();
         let p = repo.path();
@@ -1268,6 +1312,7 @@ mod build_tests {
             &[
                 (".gitignore", "site/\n"),
                 ("book/book.toml", "[book]\ntitle = \"T\"\n"),
+                ("book/toolchain.toml", "mdbook = \"0.5.2\"\n"),
                 ("book/src/chapter.md", "v0.1.0"),
             ],
             Some("v0.1.0"),
@@ -1466,7 +1511,7 @@ mod build_tests {
         );
         assert!(
             !read(book.join("v0.2/assets.txt")).contains("mdbook-fake"),
-            "v0.2 has no toolchain file, so nothing installs there"
+            "v0.2's toolchain file lists no plugin, so nothing installs there"
         );
         assert_eq!(
             *toolchain.installs.borrow(),
@@ -1582,6 +1627,7 @@ mod build_tests {
     #[test]
     fn a_toolchain_path_that_cannot_be_read_is_refused_not_ignored() {
         let repo = book_repo();
+        fs::remove_file(repo.path().join("book/toolchain.toml")).unwrap();
         commit(
             repo.path(),
             &[("book/toolchain.toml/README", "a directory")],
@@ -1607,6 +1653,7 @@ mod build_tests {
             &[
                 ("sub/schema.yaml", "id: x"),
                 ("book/book.toml", "[book]\n"),
+                ("book/toolchain.toml", "mdbook = \"0.5.2\"\n"),
                 ("book/src/chapter.md", "beside"),
             ],
             Some("v0.1.0"),
@@ -1651,6 +1698,7 @@ mod build_tests {
             repo.path(),
             &[
                 ("sub/book/book.toml", "[book]\n"),
+                ("sub/book/toolchain.toml", "mdbook = \"0.5.2\"\n"),
                 ("sub/book/src/chapter.md", "nested"),
             ],
             Some("v0.1.0"),
@@ -1839,7 +1887,10 @@ mod build_tests {
             ),
             "expected SchemaOutsideSite, got {err:?}"
         );
-        assert_eq!(*toolchain.builds.borrow(), 0, "nothing may build first");
+        assert!(
+            toolchain.builds.borrow().is_empty(),
+            "nothing may build first"
+        );
     }
 
     /// A name the site cannot serve is refused rather than recorded in
@@ -1898,28 +1949,6 @@ mod build_tests {
     }
 
     #[test]
-    fn the_html_root_is_a_subdirectory_only_with_several_backends() {
-        let dest = Path::new("out");
-        for (book_toml, root) in [
-            ("[book]\ntitle = \"T\"\n", "out"),
-            ("[output]\n", "out"),
-            ("[output.html]\n", "out"),
-            ("[output.markdown]\n", "out"),
-            ("[output.html]\n[output.markdown]\n", "out/html"),
-            (
-                "[output.html]\n[output.markdown]\n[output.linkcheck]\n",
-                "out/html",
-            ),
-        ] {
-            assert_eq!(
-                html_root(book_toml, dest),
-                Path::new(root),
-                "book.toml:\n{book_toml}"
-            );
-        }
-    }
-
-    #[test]
     fn a_ledger_that_cannot_be_read_is_refused_not_ignored() {
         let repo = book_repo();
         fs::create_dir_all(repo.path().join("site").join(ROOT_LEDGER_FILENAME)).unwrap();
@@ -1931,32 +1960,6 @@ mod build_tests {
             matches!(err, EditionsError::LedgerUnreadable(_)),
             "a directory where the ledger should be is an error, not an absent ledger; got {err:?}"
         );
-    }
-
-    #[test]
-    #[ignore = "needs mdbook 0.5 on PATH; run with cargo nextest run --run-ignored only -E 'test(real_mdbook)'"]
-    fn real_mdbook_with_two_backends_reports_the_html_root() {
-        let dir = tempfile::tempdir().unwrap();
-        let book = dir.path().join("book");
-        fs::create_dir_all(book.join("src")).unwrap();
-        fs::write(
-            book.join("book.toml"),
-            "[book]\ntitle = \"T\"\n[output.html]\n[output.markdown]\n",
-        )
-        .unwrap();
-        fs::write(
-            book.join("src/SUMMARY.md"),
-            "# Summary\n\n- [Chapter](chapter.md)\n",
-        )
-        .unwrap();
-        fs::write(book.join("src/chapter.md"), "# Chapter\n").unwrap();
-
-        let root = PathToolchain::default()
-            .build(&book, &dir.path().join("out"))
-            .unwrap();
-
-        assert_eq!(root, dir.path().join("out/html"));
-        assert!(root.join("chapter.html").is_file());
     }
 
     fn canonical(path: impl AsRef<Path>) -> String {
@@ -2134,6 +2137,344 @@ mod build_tests {
         );
     }
 
+    fn pins_of(toolchain: &FakeToolchain, index: usize) -> ToolchainFile {
+        toolchain.builds.borrow()[index].clone()
+    }
+
+    /// A released edition renders the way it did when it shipped, which
+    /// needs the tools it shipped with; the unreleased edition is the
+    /// working tree's and may use whatever is on `PATH`.
+    #[test]
+    fn a_released_edition_without_a_toolchain_is_refused_and_the_unreleased_one_is_not() {
+        let repo = init_repo();
+        commit(
+            repo.path(),
+            &[
+                ("book/book.toml", "[book]\n"),
+                ("book/src/chapter.md", "no toolchain"),
+            ],
+            Some("v0.1.0"),
+        );
+        let cfg = |versions: &str, current: &str| -> PublishConfig {
+            format!(
+                "[schema]\nname = \"x\"\nversion = \"0.1.0\"\nlinkml = \"1.7.0\"\n\
+                 [files]\nmain = \"schema.yaml\"\n\
+                 [publishing]\nversions = [{versions}]\nedge = \"main\"\ncurrent = \"{current}\"\n\
+                 [editions]\n"
+            )
+            .parse()
+            .unwrap()
+        };
+
+        let err = build_editions(
+            repo.path(),
+            &cfg("\"v0.1.0\"", "v0.1.0"),
+            &FakeToolchain::default(),
+        )
+        .unwrap_err();
+        match err {
+            EditionsError::ToolchainMissing { edition, tag } => {
+                assert_eq!((edition.as_str(), tag.as_str()), ("v0.1", "v0.1.0"))
+            }
+            other => panic!("expected ToolchainMissing, got {other:?}"),
+        }
+
+        let toolchain = FakeToolchain::default();
+        build_editions(repo.path(), &cfg("", "main"), &toolchain).unwrap();
+        assert_eq!(
+            pins_of(&toolchain, 0),
+            ToolchainFile::default(),
+            "the unreleased edition builds with PATH's tools"
+        );
+    }
+
+    #[test]
+    fn each_edition_builds_with_the_pins_its_tag_names() {
+        let repo = book_repo();
+        commit(
+            repo.path(),
+            &[("book/toolchain.toml", "mdbook = \"0.5.3\"\n")],
+            None,
+        );
+        let toolchain = FakeToolchain::default();
+
+        build_editions(repo.path(), &spec("v0.2.0", ""), &toolchain).unwrap();
+
+        let mdbooks: Vec<Option<String>> = toolchain
+            .builds
+            .borrow()
+            .iter()
+            .map(|pins| pins.mdbook.clone())
+            .collect();
+        assert_eq!(
+            mdbooks,
+            vec![
+                Some("0.5.2".into()),
+                Some("0.5.2".into()),
+                Some("0.5.3".into())
+            ],
+            "v0.2, v0.1, then main, each with its own tag's mdbook"
+        );
+    }
+
+    #[test]
+    fn the_override_in_the_publish_spec_wins_over_the_tags_file() {
+        let repo = book_repo();
+        let toolchain = FakeToolchain::default();
+        let cfg = spec(
+            "v0.2.0",
+            "[editions.toolchain.\"v0.1.1\"]\nmdbook = \"0.4.40\"\n\
+             [[editions.toolchain.\"v0.1.1\".plugin]]\nname = \"mdbook-override\"\nversion = \"1.0.0\"\ninstall = [\"install\"]\n",
+        );
+
+        build_editions(repo.path(), &cfg, &toolchain).unwrap();
+
+        assert_eq!(
+            pins_of(&toolchain, 1).mdbook.as_deref(),
+            Some("0.4.40"),
+            "v0.1 builds with the override"
+        );
+        assert_eq!(
+            pins_of(&toolchain, 0).mdbook.as_deref(),
+            Some("0.5.2"),
+            "v0.2 keeps its tag's file"
+        );
+        let assets = read(repo.path().join("site/book/v0.1/assets.txt"));
+        assert!(
+            assets.lines().any(|l| l == "mdbook-override.css"),
+            "the override's plugin installed its assets into v0.1; got {assets}"
+        );
+    }
+
+    #[test]
+    fn a_tag_cut_before_the_toolchain_file_builds_from_the_override() {
+        let repo = init_repo();
+        commit(
+            repo.path(),
+            &[
+                ("book/book.toml", "[book]\n"),
+                ("book/src/chapter.md", "old"),
+            ],
+            Some("v0.1.0"),
+        );
+        let cfg: PublishConfig = "[schema]\nname = \"x\"\nversion = \"0.1.0\"\nlinkml = \"1.7.0\"\n\
+                                  [files]\nmain = \"schema.yaml\"\n\
+                                  [publishing]\nversions = [\"v0.1.0\"]\ncurrent = \"v0.1.0\"\n\
+                                  [editions]\n[editions.toolchain.\"v0.1.0\"]\nmdbook = \"0.4.40\"\n"
+            .parse()
+            .unwrap();
+        let toolchain = FakeToolchain::default();
+
+        build_editions(repo.path(), &cfg, &toolchain).unwrap();
+
+        assert_eq!(pins_of(&toolchain, 0).mdbook.as_deref(), Some("0.4.40"));
+        assert_eq!(body(repo.path().join("site/chapter.html")), "old");
+    }
+
+    #[test]
+    fn a_released_edition_whose_pins_are_not_exact_is_refused_by_tool() {
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        for (toolchain_toml, tool, problem_word) in [
+            (
+                "[[plugin]]\nname = \"mdbook-x\"\nversion = \"1.0.0\"\n".to_string(),
+                "mdbook",
+                "no mdbook version",
+            ),
+            // A range installs whatever is newest on the day, which is the
+            // drift a released edition exists to prevent.
+            ("mdbook = \"0.5\"\n".to_string(), "mdbook", "not one version"),
+            (
+                "mdbook = \"0.5.2\"\n[[plugin]]\nname = \"mdbook-x\"\nversion = \"^1.0\"\n".to_string(),
+                "mdbook-x",
+                "not one version",
+            ),
+            (
+                "mdbook = \"0.5.2\"\n[[plugin]]\nname = \"mdbook-x\"\ngit = \"https://example.com/r\"\nbranch = \"main\"\n".to_string(),
+                "mdbook-x",
+                "branch",
+            ),
+            // `rev = "main"` is a branch by another name, and a short or
+            // tag-like rev moves too.
+            (
+                "mdbook = \"0.5.2\"\n[[plugin]]\nname = \"mdbook-x\"\ngit = \"https://example.com/r\"\nrev = \"main\"\n".to_string(),
+                "mdbook-x",
+                "not a commit id",
+            ),
+            (
+                "mdbook = \"0.5.2\"\n[[plugin]]\nname = \"mdbook-x\"\n".to_string(),
+                "mdbook-x",
+                "nothing",
+            ),
+            (
+                "mdbook = \"0.5.2\"\n[[plugin]]\nname = \"mdbook-x\"\ngit = \"https://example.com/r\"\n".to_string(),
+                "mdbook-x",
+                "without a rev",
+            ),
+            (
+                format!("mdbook = \"0.5.2\"\n[[plugin]]\nname = \"mdbook-x\"\nversion = \"1.0.0\"\ngit = \"https://example.com/r\"\nrev = \"{sha}\"\n"),
+                "mdbook-x",
+                "both a version and a git repository",
+            ),
+            (
+                format!("mdbook = \"0.5.2\"\n[[plugin]]\nname = \"mdbook-x\"\nversion = \"1.0.0\"\nrev = \"{sha}\"\n"),
+                "mdbook-x",
+                "nothing uses",
+            ),
+            (
+                format!("mdbook = \"0.5.2\"\n[[plugin]]\nname = \"mdbook-x\"\nrev = \"{sha}\"\n"),
+                "mdbook-x",
+                "without a `git`",
+            ),
+            (
+                format!("mdbook = \"0.5.2\"\n[[plugin]]\nname = \"mdbook-x\"\ngit = \"https://example.com/r\"\nrev = \"{sha}\"\nbranch = \"main\"\n"),
+                "mdbook-x",
+                "both a `rev` and a `branch`",
+            ),
+        ] {
+            let toolchain_toml = toolchain_toml.as_str();
+            let repo = book_repo();
+            commit(
+                repo.path(),
+                &[("book/toolchain.toml", toolchain_toml)],
+                Some("v0.3.0"),
+            );
+            let cfg: PublishConfig = "[schema]\nname = \"x\"\nversion = \"0.3.0\"\nlinkml = \"1.7.0\"\n\
+                                      [files]\nmain = \"schema.yaml\"\n\
+                                      [publishing]\nversions = [\"v0.3.0\"]\ncurrent = \"v0.3.0\"\n[editions]\n"
+                .parse()
+                .unwrap();
+
+            let err = build_editions(repo.path(), &cfg, &FakeToolchain::default()).unwrap_err();
+
+            match err {
+                EditionsError::ToolchainNotExact {
+                    edition,
+                    tag,
+                    tool: got,
+                    problem,
+                } => {
+                    assert_eq!(
+                        (edition.as_str(), tag.as_str(), got.as_str()),
+                        ("v0.3", "v0.3.0", tool),
+                        "toolchain:\n{toolchain_toml}"
+                    );
+                    assert!(
+                        problem.contains(problem_word),
+                        "toolchain:\n{toolchain_toml}\nthe problem should mention {problem_word}; got {problem}"
+                    );
+                }
+                other => panic!(
+                    "toolchain:\n{toolchain_toml}\nexpected ToolchainNotExact, got {other:?}"
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn a_released_edition_may_pin_a_plugin_to_a_git_commit() {
+        let repo = book_repo();
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        commit(
+            repo.path(),
+            &[(
+                "book/toolchain.toml",
+                &format!(
+                    "mdbook = \"0.5.2\"\n[[plugin]]\nname = \"mdbook-x\"\ngit = \"https://example.com/r\"\nrev = \"{sha}\"\ninstall = [\"install\"]\n"
+                ),
+            )],
+            Some("v0.3.0"),
+        );
+        let cfg: PublishConfig = "[schema]\nname = \"x\"\nversion = \"0.3.0\"\nlinkml = \"1.7.0\"\n\
+                                  [files]\nmain = \"schema.yaml\"\n\
+                                  [publishing]\nversions = [\"v0.3.0\"]\ncurrent = \"v0.3.0\"\n[editions]\n"
+            .parse()
+            .unwrap();
+        let toolchain = FakeToolchain::default();
+
+        build_editions(repo.path(), &cfg, &toolchain).unwrap();
+
+        assert_eq!(pins_of(&toolchain, 0).plugins[0].rev.as_deref(), Some(sha));
+    }
+
+    /// The unreleased edition may be loose, not contradictory: a pin that
+    /// says two things is refused there too, before a tool is installed
+    /// under the wrong one.
+    #[test]
+    fn the_unreleased_edition_still_refuses_a_contradictory_pin() {
+        let repo = book_repo();
+        commit(
+            repo.path(),
+            &[(
+                "book/toolchain.toml",
+                "[[plugin]]\nname = \"mdbook-x\"\nversion = \"1.0.0\"\nbranch = \"main\"\n",
+            )],
+            None,
+        );
+
+        let err = build_editions(repo.path(), &spec("v0.2.0", ""), &FakeToolchain::default())
+            .unwrap_err();
+
+        match err {
+            EditionsError::ToolchainNotExact { edition, tool, .. } => {
+                assert_eq!((edition.as_str(), tool.as_str()), ("main", "mdbook-x"))
+            }
+            other => panic!("expected ToolchainNotExact, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_unreleased_edition_may_pin_a_branch() {
+        let repo = book_repo();
+        commit(
+            repo.path(),
+            &[(
+                "book/toolchain.toml",
+                "[[plugin]]\nname = \"mdbook-x\"\ngit = \"https://example.com/r\"\nbranch = \"main\"\ninstall = [\"install\"]\n",
+            )],
+            None,
+        );
+        let toolchain = FakeToolchain::default();
+
+        build_editions(repo.path(), &spec("v0.2.0", ""), &toolchain).unwrap();
+
+        let main = pins_of(&toolchain, 2);
+        assert_eq!(main.plugins[0].branch.as_deref(), Some("main"));
+        assert_eq!(main.mdbook, None, "and may leave mdbook to PATH");
+    }
+
+    #[test]
+    fn a_tool_that_cannot_be_installed_names_the_edition_tag_tool_and_pin() {
+        let repo = book_repo();
+        commit(
+            repo.path(),
+            &[(
+                "book/toolchain.toml",
+                "[[plugin]]\nname = \"uninstallable\"\nversion = \"9.9.9\"\ninstall = [\"install\"]\n",
+            )],
+            None,
+        );
+
+        let err = build_editions(repo.path(), &spec("v0.2.0", ""), &FakeToolchain::default())
+            .unwrap_err();
+
+        match err {
+            EditionsError::ToolchainInstall {
+                edition,
+                tag,
+                tool,
+                pin,
+                output,
+            } => {
+                assert_eq!(
+                    (edition.as_str(), tag.as_str(), tool.as_str(), pin.as_str()),
+                    ("main", "main", "uninstallable", "9.9.9")
+                );
+                assert!(output.contains("no such crate"), "got {output}");
+            }
+            other => panic!("expected ToolchainInstall, got {other:?}"),
+        }
+    }
+
     #[test]
     fn a_spec_without_editions_is_refused() {
         let repo = book_repo();
@@ -2150,59 +2491,5 @@ mod build_tests {
             matches!(err, EditionsError::MissingEditions),
             "expected MissingEditions, got {err:?}"
         );
-    }
-
-    #[test]
-    fn the_path_toolchain_reports_a_failing_tools_output() {
-        let dir = tempfile::tempdir().unwrap();
-        let toolchain = PathToolchain {
-            mdbook: PathBuf::from("git"),
-        };
-
-        PathToolchain::default()
-            .install_assets("git", &["--version".to_string()], dir.path())
-            .expect("a tool that succeeds is Ok");
-        let install = PathToolchain::default()
-            .install_assets("git", &["no-such-subcommand".to_string()], dir.path())
-            .unwrap_err();
-        let build = toolchain
-            .build(dir.path(), &dir.path().join("out"))
-            .unwrap_err();
-
-        assert!(install.contains("no-such-subcommand"), "got {install}");
-        assert!(build.contains("build"), "got {build}");
-    }
-
-    #[test]
-    fn the_path_toolchain_names_a_tool_it_cannot_find() {
-        let dir = tempfile::tempdir().unwrap();
-
-        let err = PathToolchain::default()
-            .install_assets("panschema-no-such-tool", &[], dir.path())
-            .unwrap_err();
-
-        assert!(err.contains("panschema-no-such-tool"), "got {err}");
-    }
-
-    #[test]
-    #[ignore = "needs mdbook 0.5 on PATH; run with cargo nextest run --run-ignored only -E 'test(real_mdbook)'"]
-    fn real_mdbook_builds_into_the_destination() {
-        let dir = tempfile::tempdir().unwrap();
-        let book = dir.path().join("book");
-        fs::create_dir_all(book.join("src")).unwrap();
-        fs::write(book.join("book.toml"), "[book]\ntitle = \"T\"\n").unwrap();
-        fs::write(
-            book.join("src/SUMMARY.md"),
-            "# Summary\n\n- [Chapter](chapter.md)\n",
-        )
-        .unwrap();
-        fs::write(book.join("src/chapter.md"), "# Chapter\n").unwrap();
-
-        let root = PathToolchain::default()
-            .build(&book, &dir.path().join("out"))
-            .unwrap();
-
-        assert_eq!(root, dir.path().join("out"));
-        assert!(root.join("chapter.html").is_file());
     }
 }

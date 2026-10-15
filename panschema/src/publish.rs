@@ -117,6 +117,11 @@ pub enum PublishError {
         site.display()
     )]
     BookInsideSite { book: PathBuf, site: PathBuf },
+    #[error(
+        "[editions.toolchain] names `{key}`, which no edition builds from; the editions build from {}",
+        sources.iter().map(|s| format!("`{s}`")).collect::<Vec<_>>().join(", ")
+    )]
+    UnknownToolchainKey { key: String, sources: Vec<String> },
 }
 
 /// Whether a configured value may become one directory name in the
@@ -205,6 +210,11 @@ pub struct EditionsConfig {
     /// to `<output_dir>/`. `[publishing].output_dir` must lie inside it.
     #[serde(default = "default_editions_output_dir")]
     pub output_dir: PathBuf,
+    /// Toolchains for tags cut before the book carried its own
+    /// `toolchain.toml`, keyed by tag (`[editions.toolchain."v0.1.1"]`).
+    /// One here wins over the tag's own file.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub toolchain: std::collections::BTreeMap<String, crate::editions::ToolchainFile>,
 }
 
 impl EditionsConfig {
@@ -237,7 +247,16 @@ impl EditionsConfig {
                 site: self.output_dir.clone(),
             });
         }
-        crate::editions::plan(publishing)?;
+        // An override is keyed by the ref its edition builds from; a key
+        // naming anything else would be a silently ignored override.
+        let plan = crate::editions::plan(publishing)?;
+        let sources: Vec<String> = plan.editions.iter().map(|e| e.source.clone()).collect();
+        if let Some(key) = self.toolchain.keys().find(|key| !sources.contains(key)) {
+            return Err(PublishError::UnknownToolchainKey {
+                key: key.clone(),
+                sources,
+            });
+        }
         Ok(())
     }
 }
@@ -2825,6 +2844,61 @@ versions = ["v0.1.0"]
                 ),
             }
         }
+    }
+
+    #[test]
+    fn a_toolchain_override_parses_per_tag_and_refuses_an_unknown_key() {
+        let cfg: PublishConfig = spec_with_editions(
+            "versions = [\"v0.1.0\", \"v0.1.1\"]\ncurrent = \"v0.1.1\"",
+            "[editions.toolchain.\"v0.1.1\"]\nmdbook = \"0.5.2\"\n\
+             [[editions.toolchain.\"v0.1.1\".plugin]]\nname = \"mdbook-listings\"\nversion = \"0.2.2\"\ninstall = [\"install\"]\n",
+        )
+        .parse()
+        .expect("should parse");
+        let editions = cfg.editions.unwrap();
+        let pins = &editions.toolchain["v0.1.1"];
+        assert_eq!(pins.mdbook.as_deref(), Some("0.5.2"));
+        assert_eq!(pins.plugins[0].name, "mdbook-listings");
+        assert_eq!(pins.plugins[0].install, vec!["install"]);
+
+        let err = spec_with_editions(
+            "versions = [\"v0.1.0\"]\ncurrent = \"v0.1.0\"",
+            "[editions.toolchain.\"v0.1.0\"]\nmdbok = \"0.5.2\"\n",
+        )
+        .parse::<PublishConfig>()
+        .unwrap_err();
+        assert!(
+            matches!(err, PublishError::Parse(_)) && err.to_string().contains("mdbok"),
+            "expected a parse error naming `mdbok`; got {err}"
+        );
+    }
+
+    /// A key the plan never builds from (the wrong tag in a line, an
+    /// edition label, a typo) would be a silently ignored override.
+    #[test]
+    fn a_toolchain_override_must_name_a_ref_the_editions_build_from() {
+        for key in ["v0.1.0", "v0.1", "0.1.1", "v0.1.1 "] {
+            let err = spec_with_editions(
+                "versions = [\"v0.1.0\", \"v0.1.1\"]\nedge = \"main\"\ncurrent = \"v0.1.1\"",
+                &format!("[editions.toolchain.\"{key}\"]\nmdbook = \"0.5.2\"\n"),
+            )
+            .parse::<PublishConfig>()
+            .unwrap_err();
+
+            match err {
+                PublishError::UnknownToolchainKey { key: got, sources } => {
+                    assert_eq!(got, key);
+                    assert_eq!(sources, vec!["v0.1.1", "main"], "key {key}");
+                }
+                other => panic!("key {key}: expected UnknownToolchainKey, got {other:?}"),
+            }
+        }
+        spec_with_editions(
+            "versions = [\"v0.1.0\", \"v0.1.1\"]\nedge = \"main\"\ncurrent = \"v0.1.1\"",
+            "[editions.toolchain.\"v0.1.1\"]\nmdbook = \"0.5.2\"\n[editions.toolchain.main]\nmdbook = \"0.5.2\"\n",
+        )
+        .parse::<PublishConfig>()
+        .expect("the newest tag of a line and the edge are what the editions build from");
     }
 
     #[test]

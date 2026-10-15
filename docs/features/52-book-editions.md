@@ -218,11 +218,10 @@ working tree.
   line that is not a fresh single name at the root (`..`, `book`, the
   schema docs' directory) is refused rather than removed, since a ledger
   something else wrote is not a record of this tool's work.
-- Smoke-tested on a real schema book with two preprocessors: `main` built
-  and its root copy matched its stable path. A tag cut before
-  `toolchain.toml` fails naming the edition and the tag, with mdbook's
-  error about the missing preprocessor asset; Slice 5's override is the
-  fix.
+- With tools from `PATH`, a tag whose preprocessors predate the
+  installed ones fails naming the edition and the tag, with mdbook's
+  error about the missing preprocessor asset; Slice 5's toolchain
+  override is what builds such a tag.
 
 ---
 
@@ -302,24 +301,55 @@ to the book that describes that version, not the newest one.
 
 ### Slice 5: Each edition builds with its own toolchain
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** An old edition renders the way it did when it was
 released, even after the repo's toolchain moves on.
 
 **Acceptance Criteria:**
-- [ ] Each edition builds with the mdbook and plugin versions its tag's
+- [x] Each edition builds with the mdbook and plugin versions its tag's
   `toolchain.toml` names, whatever is on `PATH`.
-- [ ] A toolchain is installed once and reused by every later edition and
+- [x] A toolchain is installed once and reused by every later edition and
   run that names the same versions.
-- [ ] `[editions.toolchain."<tag>"]` in `panschema-publish.toml` supplies
+- [x] `[editions.toolchain."<tag>"]` in `panschema-publish.toml` supplies
   the toolchain for a tag cut before `toolchain.toml` existed, and wins
   over the tag's own file.
-- [ ] A released edition whose toolchain names a branch instead of a
+- [x] A released edition whose toolchain names a branch instead of a
   version or an exact rev is refused, naming the tag and the plugin; the
   unreleased edition may name a branch.
-- [ ] A released edition with no toolchain from either source is refused,
+- [x] A released edition with no toolchain from either source is refused,
   naming the tag and both places a toolchain can come from.
+
+---
+
+**Notes:**
+- Each pin installs with `cargo install --locked` into
+  `<cache>/toolchains/<tool>-<pin>/` (the cache root is panschema's,
+  so `PANSCHEMA_CACHE_ROOT` moves it) and is reused whenever its binary
+  is already there. A crates.io pin's directory is named by version, a
+  git pin's by commit; a branch is resolved to its tip with `git
+  ls-remote` once per run, so the dogfood loop builds today's tip and a
+  tip already installed is not built again.
+- mdbook finds each preprocessor by name, so the pinned plugins' `bin/`
+  directories lead `PATH` for the `mdbook build` process only; nothing
+  else in the environment changes.
+- A plugin pinned to neither a version nor a repository, and an mdbook
+  left unpinned, come from `PATH`; a released edition refuses both, since
+  it has to render the way it did when it shipped.
+- A consumer's CI will want to cache the toolchains directory, keyed on
+  the pins, or every run rebuilds mdbook from source; that is the
+  scaffold's call (`ontology-authoring-template`).
+- A version pin is one version (`0.5.2`, not `0.5` or `^0.5`), and a
+  released edition's git pin is a full commit id: a range installs
+  whatever is newest on the day of the first install, and `rev =
+  "main"` is a branch by another name. The unreleased edition may name
+  a branch, or a rev that is not a commit id, and both are resolved to
+  the commit at their tip. A pin that says two things (`version` with
+  `rev`, `rev` without `git`, `rev` with `branch`) is refused for every
+  edition. An override keyed by a ref no edition builds from (the wrong
+  tag in a line, an edition label) is refused rather than ignored.
+- A tag cut before `toolchain.toml` existed builds from its override, and
+  a tag that names the same pin as another installs nothing new.
 
 ---
 
@@ -371,7 +401,7 @@ publishes both books, verified on a real site.
 | Slice 2: Build every edition | Must Have | Slice 1 | Completed |
 | Slice 3: Edition-aware toolbar | Must Have | Slice 2 | Completed |
 | Slice 4: Schema pages link back | Must Have | Slice 1 | Not Started |
-| Slice 5: Per-edition toolchain | Must Have | Slice 2 | Not Started |
+| Slice 5: Per-edition toolchain | Must Have | Slice 2 | Completed |
 | Slice 6: Versions derived from tags | Should Have | None | Not Started |
 | Slice 7: Dogfood and docs | Must Have | Slices 3, 4, 5 | Not Started |
 

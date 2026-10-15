@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use panschema::editions::{self, PathToolchain};
+use panschema::editions::{self, InstalledToolchain};
 use panschema::mdbook::{InstallReport, run};
 
 /// mdbook plugin for panschema: install a toolbar link from an mdbook
@@ -59,7 +59,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Command::Editions { dir } => {
-            let report = editions::run(&dir, &PathToolchain::default())?;
+            let report = editions::run(&dir, &InstalledToolchain::in_cache()?)?;
             for edition in &report.plan.editions {
                 println!(
                     "{}/book/{}/  from {}",

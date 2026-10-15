@@ -41,10 +41,11 @@ pub enum CacheError {
 /// Returns the panschema cache root, e.g.
 /// `~/.cache/panschema` on Linux, `~/Library/Caches/panschema` on macOS.
 ///
-/// The `PANSCHEMA_CACHE_ROOT` environment variable overrides this for
-/// testing — integration tests pre-populate a tempdir with fixture
-/// tarballs and point the CLI at it to exercise github-source flows
-/// without hitting the network.
+/// The `PANSCHEMA_CACHE_ROOT` environment variable overrides it. A CI
+/// job sets it to keep the cache (fetched schemas, installed book
+/// toolchains) between runs, and integration tests pre-populate a
+/// tempdir with fixture tarballs and point the CLI at it to exercise
+/// github-source flows without hitting the network.
 pub fn cache_root() -> Result<PathBuf, CacheError> {
     if let Ok(override_path) = std::env::var("PANSCHEMA_CACHE_ROOT")
         && !override_path.is_empty()

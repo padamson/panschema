@@ -421,7 +421,7 @@ mdbook-panschema editions
 
 Each tag's tree is checked out through a scratch index, so the working tree is never touched, and every edition builds before anything is written. Every page gets the toolbar asset from the running binary, a tag from before it existed included: an edition switcher, a note on every page of an edition that is not the current one, the `[book_link]` button pointed at the schema docs of the release the edition was built from (`schema/v0.1.1/` rather than `schema/current/`), and a `<link rel="canonical">` to the page at its edition's stable path.
 
-A tag's book builds with the tools on `PATH`. To have mdbook and its plugins generate their gitignored assets before the build, list them in `<book>/toolchain.toml` at that tag:
+A released edition builds with the tools its tag names in `<book>/toolchain.toml`, so it renders the way it did when it shipped however the repo's tools have moved on since. Each pin is installed once with `cargo install --locked` under panschema's cache directory and reused by every later edition and run that names it; `PANSCHEMA_CACHE_ROOT` moves the cache, which a CI job will want to keep between runs.
 
 ```toml
 mdbook = "0.5.2"
@@ -430,6 +430,24 @@ mdbook = "0.5.2"
 name = "mdbook-listings"
 version = "0.2.2"
 install = ["install"]        # run in the book directory before building
+
+[[plugin]]
+name = "mdbook-admonish"
+git = "https://github.com/padamson/mdbook-admonish"
+rev = "f67dc47c24bc48dada3ae4decf055fdd6ba4a4ed"
+install = ["install", "."]
+```
+
+A released edition's pins have to be exact: an mdbook version, and each plugin at one crates.io `version` (`0.2.2`, not `0.2` or `^0.2`) or a full git commit id in `rev`. The unreleased edition may name a `branch` instead, or a `rev` that is a tag or branch name, each resolved to the commit at its tip, or leave a tool unpinned to take it from `PATH`. A pin that says two things (`version` beside `rev`, `rev` without `git`) is refused for every edition, and so is an override keyed by a ref no edition builds from. A tag cut before the file existed gets its toolchain from the publish spec, which also wins over the tag's own file:
+
+```toml
+[editions.toolchain."v0.1.1"]
+mdbook = "0.5.2"
+
+[[editions.toolchain."v0.1.1".plugin]]
+name = "mdbook-listings"
+version = "0.2.2"
+install = ["install"]
 ```
 
 Anything the current edition's book has at its top level that the site reserves (`book/`, the schema docs' directory) is refused before anything is written, and the site root keeps a record of what the copy wrote so the next run removes exactly that.
