@@ -236,6 +236,12 @@ criteria = "safe-to-run"
 delta = "0.58.5 -> 0.58.6"
 notes = "Version bump only; no source change."
 
+[[audits.rustls]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.23.45 -> 0.23.46"
+notes = "Four advisories, RUSTSEC-2026-0346 through 0349: secrets left out of session Debug impls, no application data sent to the outer server after ECH rejection, brotli certificate decompression bounded by the output buffer, the KX hint stored only after the server is authenticated. Also key updates before sequence exhaustion, LimitedCache eviction on an explicit max, and protected change_cipher_spec rejected. No unsafe, no dependency changes."
+
 [[audits.sparesults]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-deploy"
