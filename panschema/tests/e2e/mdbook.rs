@@ -427,20 +427,23 @@ fn e2e_the_current_edition_shows_no_banner() {
 fn e2e_a_nested_page_resolves_links_and_editions_from_the_site_root() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
-        let (dir, url) = edition_site("v0.1", true, &[("schema/v0.1.1/", "Schema")]);
+        let (_dir, url) = edition_site("v0.1", true, &[("schema/v0.1.1/", "Schema")]);
         let playwright = Playwright::launch().await.expect("playwright");
         let browser = playwright.chromium().launch().await.expect("chromium");
         let page = browser.new_page().await.expect("page");
         page.goto(&url, None).await.expect("goto");
 
+        // The tail, not the whole URL: the browser spells the tempdir's
+        // path its own way (`file:///C:/…` for a Windows `C:\…`). Resolved
+        // inside the edition instead, it would end in
+        // `/book/v0.1/schema/v0.1.1/`.
         let href = page
             .evaluate_value("document.querySelector('a.schema-docs-button').href")
             .await
             .expect("href");
-        assert_eq!(
-            href,
-            format!("file://{}/prefix/schema/v0.1.1/", dir.path().display()),
-            "the schema button resolves against the site root"
+        assert!(
+            href.ends_with("/prefix/schema/v0.1.1/"),
+            "the schema button resolves against the site root; got {href}"
         );
 
         page.locator("select.edition-switcher")
