@@ -283,19 +283,36 @@ editions, and reach the schema docs for exactly that edition.
 
 ### Slice 4: Schema pages link back to their edition
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** A reader who arrives at a version's schema docs gets back
 to the book that describes that version, not the newest one.
 
 **Acceptance Criteria:**
-- [ ] With `[editions]` configured, `panschema publish` points each
+- [x] With `[editions]` configured, `panschema publish` points each
   version page's header brand at its edition (`schema/v0.1.0/` and
   `schema/v0.1.1/` at `book/v0.1/`; the edge page at `book/main/`).
-- [ ] `schema/current/` stays a byte copy of its version, so its brand
+- [x] `schema/current/` stays a byte copy of its version, so its brand
   points at that version's edition.
-- [ ] Without `[editions]`, `site_root_url` behaves exactly as before.
-- [ ] Dependency pages, one directory deeper, reach the same edition.
+- [x] Without `[editions]`, `site_root_url` behaves exactly as before.
+- [x] Dependency pages, one directory deeper, reach the same edition.
+
+---
+
+**Notes:**
+- The brand is per version, not per page: a version directory sits
+  below the site root by the docs' directory, itself, and a dependency
+  page's directory, and its edition is `book/<label>/` under the site
+  root, with the label spelled the way the book's canonical spells it.
+  The climb is measured from where the docs actually land, which
+  `--output-dir` can move; an output directory outside the site root, at
+  it, or under its `book/` is refused, since the links could not reach
+  the editions from there. `[publishing].site_root_url` is refused beside
+  `[editions]`, where it would be ignored. `publish` validates
+  `[editions]` before writing anything, as the editions build does, so a
+  config that bypassed the spec's parse is checked too.
+- The `current/` alias is a byte copy of its version, so it carries that
+  version's edition link without any special case.
 
 ---
 
@@ -400,7 +417,7 @@ publishes both books, verified on a real site.
 | Slice 1: Edition planning | Must Have | None | Completed |
 | Slice 2: Build every edition | Must Have | Slice 1 | Completed |
 | Slice 3: Edition-aware toolbar | Must Have | Slice 2 | Completed |
-| Slice 4: Schema pages link back | Must Have | Slice 1 | Not Started |
+| Slice 4: Schema pages link back | Must Have | Slice 1 | Completed |
 | Slice 5: Per-edition toolchain | Must Have | Slice 2 | Completed |
 | Slice 6: Versions derived from tags | Should Have | None | Not Started |
 | Slice 7: Dogfood and docs | Must Have | Slices 3, 4, 5 | Not Started |

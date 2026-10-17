@@ -46,6 +46,13 @@ impl Edition {
 }
 
 impl EditionPlan {
+    /// The edition holding `version`: the line a release belongs to, or
+    /// the unreleased edition when `version` is the edge ref. The book's
+    /// toolbar and the schema page's brand both ask this, so they agree.
+    pub fn edition_of(&self, version: &str) -> Option<&Edition> {
+        holding(&self.editions, version)
+    }
+
     /// What the toolbar asset of edition `own` is told: every edition in
     /// switcher order, the current one, and itself.
     pub fn toolbar_context(&self, own: &str) -> crate::mdbook::EditionsContext {
@@ -148,9 +155,7 @@ pub fn plan(publishing: &PublishingConfig) -> Result<EditionPlan, PublishError> 
         });
     }
 
-    let current = editions
-        .iter()
-        .find(|e| e.versions.contains(&publishing.current) || e.source == publishing.current)
+    let current = holding(&editions, &publishing.current)
         .map(|e| e.label.clone())
         .ok_or_else(|| PublishError::InvalidCurrent {
             current: publishing.current.clone(),
@@ -159,6 +164,13 @@ pub fn plan(publishing: &PublishingConfig) -> Result<EditionPlan, PublishError> 
         })?;
 
     Ok(EditionPlan { editions, current })
+}
+
+/// The edition among `editions` that holds `version`.
+fn holding<'a>(editions: &'a [Edition], version: &str) -> Option<&'a Edition> {
+    editions
+        .iter()
+        .find(|e| e.versions.iter().any(|v| v == version) || e.source == version)
 }
 
 /// A release line: what a Cargo-style caret pin moves within. Each 0.0.z
@@ -629,7 +641,7 @@ fn extract_tree(repo: &Path, commit: &str, dest: &Path) -> Result<(), String> {
 /// Percent-encode one URL path segment, leaving raw exactly the
 /// characters `encodeURIComponent` leaves raw, so the toolbar asset can
 /// spell an edition's label the way its canonical does.
-fn encode_segment(segment: &str) -> String {
+pub(crate) fn encode_segment(segment: &str) -> String {
     let mut out = String::with_capacity(segment.len());
     for byte in segment.bytes() {
         match byte {
@@ -1090,6 +1102,30 @@ mod tests {
             "a tagged edition is released; got {:?}",
             plan.editions[0]
         );
+    }
+
+    #[test]
+    fn edition_of_finds_the_line_holding_a_version_or_the_edge() {
+        let plan = plan(&publishing(
+            r#"versions = ["v0.1.0", "v0.1.1", "v0.2.0"]
+               edge = "main"
+               current = "v0.2.0""#,
+        ))
+        .unwrap();
+
+        assert_eq!(
+            plan.edition_of("v0.1.0").map(|e| e.label.as_str()),
+            Some("v0.1")
+        );
+        assert_eq!(
+            plan.edition_of("v0.1.1").map(|e| e.label.as_str()),
+            Some("v0.1")
+        );
+        assert_eq!(
+            plan.edition_of("main").map(|e| e.label.as_str()),
+            Some("main")
+        );
+        assert_eq!(plan.edition_of("v0.3.0"), None);
     }
 
     #[test]

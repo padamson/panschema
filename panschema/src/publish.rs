@@ -122,6 +122,16 @@ pub enum PublishError {
         sources.iter().map(|s| format!("`{s}`")).collect::<Vec<_>>().join(", ")
     )]
     UnknownToolchainKey { key: String, sources: Vec<String> },
+    #[error(
+        "[publishing].site_root_url = `{value}` is set, but with [editions] each version's brand links to its edition; remove it"
+    )]
+    SiteRootUrlWithEditions { value: String },
+    #[error(
+        "the schema docs' output directory `{}` must lie inside [editions].output_dir `{}` and outside its `book/`, or the edition brand links cannot reach the book",
+        output.display(),
+        site.display()
+    )]
+    OutputOutsideSite { output: PathBuf, site: PathBuf },
 }
 
 /// Whether a configured value may become one directory name in the
@@ -234,6 +244,13 @@ impl EditionsConfig {
             return Err(PublishError::SchemaOutsideSite {
                 schema: publishing.output_dir.clone(),
                 site: self.output_dir.clone(),
+            });
+        }
+        // Each version's brand goes to its edition, so a configured
+        // site_root_url would be ignored; refusing it says so.
+        if publishing.site_root_url != default_site_root_url() {
+            return Err(PublishError::SiteRootUrlWithEditions {
+                value: publishing.site_root_url.clone(),
             });
         }
         // The build replaces `<site>/book/` and writes the current edition
@@ -482,6 +499,8 @@ pub struct PublishingConfig {
     /// parent-relative default. Override when the publish output is
     /// nested under a parent site (e.g. `"../../"` to escape into a
     /// containing book) or when an absolute URL is genuinely needed.
+    /// With `[editions]`, each version's page links to the edition of
+    /// the book that describes it instead, and setting this is refused.
     #[serde(default = "default_site_root_url")]
     pub site_root_url: String,
     /// The site identity the header brand link carries, on every page
@@ -961,6 +980,26 @@ pub fn publish_versioned(
         .publishing
         .as_ref()
         .ok_or(PublishError::MissingPublishingSection)?;
+    // `publish_cfg` need not have come through the publish spec's own
+    // parse, and the edition brand relies on what that checks.
+    let editions = match &publish_cfg.editions {
+        Some(editions) => {
+            editions.validate(publishing)?;
+            let refs: Vec<&str> = publishing
+                .versions
+                .iter()
+                .chain(publishing.edge.iter())
+                .map(String::as_str)
+                .collect();
+            Some(EditionLayout::new(
+                &repo_root.join(&editions.output_dir),
+                output_dir,
+                &crate::editions::plan(publishing)?,
+                &refs,
+            )?)
+        }
+        None => None,
+    };
 
     // Fail fast on any unresolvable ref. Combined error names every bad
     // ref at once so the user fixes all of them in one editor pass.
@@ -1016,7 +1055,14 @@ pub fn publish_versioned(
             continue;
         }
         let links = links_for(&planned, i, publish_cfg, publishing);
-        render_page(repo_root, plan, links, publish_cfg, publishing)?;
+        render_page(
+            repo_root,
+            plan,
+            links,
+            publish_cfg,
+            publishing,
+            editions.as_ref(),
+        )?;
     }
 
     Ok(())
@@ -1330,9 +1376,17 @@ fn render_page(
     links: Vec<crate::html_writer::PageLink>,
     publish_cfg: &PublishConfig,
     publishing: &PublishingConfig,
+    editions: Option<&EditionLayout>,
 ) -> Result<(), PublishError> {
     let page = plan.page;
-    let cohort = cohort_for(publishing, publish_cfg, page, &plan.present(), links);
+    let cohort = cohort_for(
+        publishing,
+        publish_cfg,
+        page,
+        &plan.present(),
+        links,
+        editions,
+    );
     for rp in &plan.plans {
         let schema = match &rp.dep_schema {
             Some(path) => Materialized::OnDisk(path.clone()),
@@ -1628,6 +1682,9 @@ struct CohortContext {
     edge: Option<String>,
     url_pattern: String,
     site_root_href: String,
+    /// With `[editions]`, each built ref's brand link, pointing at the
+    /// edition of the book that describes it.
+    edition_brands: Option<std::collections::BTreeMap<String, String>>,
     /// The site identity for the brand link, from `[publishing]
     /// site_title`; `None` falls back to each page's schema title.
     site_title: Option<String>,
@@ -1655,6 +1712,7 @@ fn cohort_for(
     page: &PageSpec<'_>,
     present: &[String],
     page_links: Vec<crate::html_writer::PageLink>,
+    editions: Option<&EditionLayout>,
 ) -> CohortContext {
     let current = page_current(publishing, present);
     let site_root_href = if publishing.site_root_url == default_site_root_url() {
@@ -1675,12 +1733,25 @@ fn cohort_for(
             page_dir_segments(publishing, page),
         )
     };
+    // Every built ref is a release or the edge, so the plan holds each.
+    let edition_brands = editions.map(|layout| {
+        present
+            .iter()
+            .map(|version| {
+                let brand = layout
+                    .brand(version, page_dir_segments(publishing, page))
+                    .expect("every built ref is in the edition plan");
+                (version.clone(), brand)
+            })
+            .collect()
+    });
     CohortContext {
         all_versions: present.to_vec(),
         current: current.version,
         edge: publishing.edge.clone(),
         url_pattern: publishing.url_pattern.clone(),
         site_root_href,
+        edition_brands,
         site_title: publishing.site_title.clone(),
         label_sources: publish_cfg.label_sources.clone(),
         instances_first: page.instances_first,
@@ -1768,7 +1839,99 @@ fn page_current(publishing: &PublishingConfig, present: &[String]) -> PageCurren
     }
 }
 
+/// Where the editions sit relative to where the schema docs land, so a
+/// version page can link to its edition: `climb` directories up from a
+/// version directory of the own page to the site root, then
+/// `book/<label>/` down. Built once per publish from where the docs are
+/// actually written, which `--output-dir` can move away from the
+/// manifest's `[publishing].output_dir`.
+#[derive(Debug, Clone)]
+struct EditionLayout {
+    /// The edition label of every release and the edge.
+    label_by_ref: std::collections::BTreeMap<String, String>,
+    /// Directories from the own page's version directory up to the site
+    /// root: the docs' directory below the site, plus the version's own.
+    climb: usize,
+}
+
+impl EditionLayout {
+    /// Refuses docs landing outside `site`, at it, or under its `book/`,
+    /// where the brand links could not reach the editions.
+    fn new(
+        site: &Path,
+        output_dir: &Path,
+        plan: &crate::editions::EditionPlan,
+        refs: &[&str],
+    ) -> Result<Self, PublishError> {
+        let outside = || PublishError::OutputOutsideSite {
+            output: output_dir.to_path_buf(),
+            site: site.to_path_buf(),
+        };
+        let site_abs = absolute(site)?;
+        let output_abs = absolute(output_dir)?;
+        let site_parts = lexical_components(&site_abs);
+        let output_parts = lexical_components(&output_abs);
+        let below: &[std::path::Component<'_>] = output_parts
+            .strip_prefix(site_parts.as_slice())
+            .ok_or_else(outside)?;
+        match below.first() {
+            None => return Err(outside()),
+            Some(first) if first.as_os_str().eq_ignore_ascii_case("book") => {
+                return Err(outside());
+            }
+            Some(_) => {}
+        }
+        // The plan says which edition holds each ref, the same answer the
+        // book's toolbar gets, so the two directions agree.
+        let label_by_ref = refs
+            .iter()
+            .map(|r| {
+                let edition = plan
+                    .edition_of(r)
+                    .expect("the plan was made from these refs");
+                (r.to_string(), edition.label.clone())
+            })
+            .collect();
+        Ok(EditionLayout {
+            label_by_ref,
+            climb: below.len() + 1,
+        })
+    }
+
+    /// The brand link for the page of `version`, whose version directory
+    /// sits `extra_segments` deeper than the own page's. `None` for a ref
+    /// no edition holds.
+    fn brand(&self, version: &str, extra_segments: usize) -> Option<String> {
+        let label = self.label_by_ref.get(version)?;
+        Some(format!(
+            "{}book/{}/",
+            "../".repeat(self.climb + extra_segments),
+            crate::editions::encode_segment(label)
+        ))
+    }
+}
+
+/// `path` as an absolute path: itself, or under the current directory.
+fn absolute(path: &Path) -> Result<PathBuf, PublishError> {
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    Ok(std::env::current_dir()?.join(path))
+}
+
 impl CohortContext {
+    /// The brand link for the page of `version`: its edition's book when
+    /// editions are published, the site root otherwise.
+    fn site_root_href_for(&self, version: &str) -> String {
+        match &self.edition_brands {
+            Some(brands) => brands
+                .get(version)
+                .expect("every built ref has an edition brand")
+                .clone(),
+            None => self.site_root_href.clone(),
+        }
+    }
+
     fn context_for(&self, viewing: &str) -> crate::html_writer::VersionContext {
         crate::html_writer::VersionContext {
             all_versions: self.all_versions.clone(),
@@ -1812,7 +1975,7 @@ fn generate_html_for_version(
     })?;
     let mut writer = HtmlWriter::with_options(true)
         .with_version_context(cohort.context_for(version))
-        .with_site_root_href(cohort.site_root_href.clone())
+        .with_site_root_href(cohort.site_root_href_for(version))
         .with_instances_first(cohort.instances_first)
         .with_schema_sections(cohort.schema_sections)
         .with_page_links(cohort.page_links.clone());
@@ -2899,6 +3062,30 @@ versions = ["v0.1.0"]
         )
         .parse::<PublishConfig>()
         .expect("the newest tag of a line and the edge are what the editions build from");
+    }
+
+    /// With editions the brand goes to a version's edition, so a
+    /// configured `site_root_url` would be silently ignored; it is refused
+    /// instead, and the default passes.
+    #[test]
+    fn site_root_url_is_refused_alongside_editions() {
+        let err = spec_with_editions(
+            "versions = [\"v0.1.0\"]\ncurrent = \"v0.1.0\"\nsite_root_url = \"../../\"",
+            "",
+        )
+        .parse::<PublishConfig>()
+        .unwrap_err();
+        match err {
+            PublishError::SiteRootUrlWithEditions { value } => assert_eq!(value, "../../"),
+            other => panic!("expected SiteRootUrlWithEditions, got {other:?}"),
+        }
+
+        spec_with_editions(
+            "versions = [\"v0.1.0\"]\ncurrent = \"v0.1.0\"\nsite_root_url = \"../current/\"",
+            "",
+        )
+        .parse::<PublishConfig>()
+        .expect("the default, spelled out, is not a setting");
     }
 
     #[test]
@@ -4143,6 +4330,165 @@ default = true
         }
     }
 
+    fn editions_cfg() -> EditionsConfig {
+        EditionsConfig {
+            book: PathBuf::from("book"),
+            output_dir: PathBuf::from("site"),
+            toolchain: std::collections::BTreeMap::new(),
+        }
+    }
+
+    /// With editions, a version's page links back to the book that
+    /// describes it, not to the newest book: `schema/v0.1.0/` and
+    /// `schema/v0.1.1/` both reach `book/v0.1/`, the edge page reaches
+    /// `book/main/`, and the `current/` copy carries its version's link.
+    #[test]
+    fn with_editions_each_version_page_brands_its_own_edition() {
+        let repo = make_versioned_linkml_repo();
+        let mut cfg =
+            make_publish_cfg_with_versions(vec!["v0.1.0", "v0.2.0"], Some("main"), "v0.2.0");
+        cfg.editions = Some(editions_cfg());
+        let out = repo.path().join("site/schema");
+        publish_versioned(repo.path(), &cfg, &out, false).expect("publish succeeds");
+
+        for (page, brand) in [
+            ("v0.1.0", "../../book/v0.1/"),
+            ("v0.2.0", "../../book/v0.2/"),
+            ("main", "../../book/main/"),
+            ("current", "../../book/v0.2/"),
+        ] {
+            let html = std::fs::read_to_string(out.join(page).join("index.html")).unwrap();
+            assert!(
+                html.contains(&format!(r#"<a href="{brand}" class="site-title""#)),
+                "page {page} must brand its edition `{brand}`; got {:?}",
+                brand_of(&html)
+            );
+        }
+    }
+
+    #[test]
+    fn a_dependency_page_brands_the_same_edition_one_level_deeper() {
+        let repo = make_repo_with_dependency_data();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], None, "v0.2.0");
+        cfg.instances.push(dep_entry());
+        cfg.editions = Some(editions_cfg());
+        let out = repo.path().join("site/schema");
+        publish_versioned(repo.path(), &cfg, &out, false).expect("publish succeeds");
+
+        let own = std::fs::read_to_string(out.join("v0.2.0/index.html")).unwrap();
+        assert!(
+            own.contains(r#"<a href="../../book/v0.2/" class="site-title""#),
+            "own page; got a brand of {:?}",
+            brand_of(&own)
+        );
+        let dep = std::fs::read_to_string(out.join("cqa/v0.2.0/index.html")).unwrap();
+        assert!(
+            dep.contains(r#"<a href="../../../book/v0.2/" class="site-title""#),
+            "dependency page; got a brand of {:?}",
+            brand_of(&dep)
+        );
+    }
+
+    /// The brand spells the edition the way the book's canonical does,
+    /// so the two directions name the same directory.
+    #[test]
+    fn the_brand_spells_the_edition_the_way_its_canonical_does() {
+        let repo = make_versioned_linkml_repo();
+        run(repo.path(), &["branch", "rc#2"]);
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], Some("rc#2"), "v0.2.0");
+        cfg.editions = Some(editions_cfg());
+        let out = repo.path().join("site/schema");
+        publish_versioned(repo.path(), &cfg, &out, false).expect("publish succeeds");
+
+        let html = std::fs::read_to_string(out.join("rc#2/index.html")).unwrap();
+        assert!(
+            html.contains(r#"<a href="../../book/rc%232/" class="site-title""#),
+            "got a brand of {:?}",
+            brand_of(&html)
+        );
+    }
+
+    /// A config that never went through the publish spec's parse can put
+    /// the schema docs outside the site; `publish` checks before it
+    /// writes anything.
+    #[test]
+    fn publish_refuses_editions_the_spec_parse_would_have_refused() {
+        let repo = make_versioned_linkml_repo();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], None, "v0.2.0");
+        cfg.editions = Some(EditionsConfig {
+            output_dir: PathBuf::from("elsewhere"),
+            ..editions_cfg()
+        });
+        let out = repo.path().join("elsewhere/schema");
+
+        let err = publish_versioned(repo.path(), &cfg, &out, false).unwrap_err();
+
+        assert!(
+            matches!(err, PublishError::SchemaOutsideSite { .. }),
+            "expected SchemaOutsideSite, got {err:?}"
+        );
+        assert!(!out.exists(), "nothing may be written first");
+    }
+
+    /// The brand climbs from where the docs actually land, which
+    /// `--output-dir` can move, not from the manifest's idea of it; a
+    /// deeper directory under the site climbs further.
+    #[test]
+    fn the_brand_follows_the_actual_output_directory() {
+        let repo = make_versioned_linkml_repo();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], None, "v0.2.0");
+        cfg.editions = Some(editions_cfg());
+        let out = repo.path().join("site/docs/schema");
+        publish_versioned(repo.path(), &cfg, &out, false).expect("publish succeeds");
+
+        let html = std::fs::read_to_string(out.join("v0.2.0/index.html")).unwrap();
+        assert!(
+            html.contains(r#"<a href="../../../book/v0.2/" class="site-title""#),
+            "got a brand of {:?}",
+            brand_of(&html)
+        );
+    }
+
+    /// Published outside the site, or into its `book/`, the pages' brand
+    /// links could not reach the book, so the run is refused before it
+    /// writes.
+    #[test]
+    fn an_output_directory_outside_the_site_is_refused_with_editions() {
+        let repo = make_versioned_linkml_repo();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], None, "v0.2.0");
+        cfg.editions = Some(editions_cfg());
+        let elsewhere = tempfile::tempdir().unwrap();
+        for out in [
+            elsewhere.path().join("preview"),
+            repo.path().join("site"),
+            repo.path().join("site/book/schema"),
+        ] {
+            let err = publish_versioned(repo.path(), &cfg, &out, false).unwrap_err();
+
+            match err {
+                PublishError::OutputOutsideSite { output, site } => {
+                    assert_eq!(output, out);
+                    assert_eq!(site, repo.path().join("site"));
+                }
+                other => panic!(
+                    "{}: expected OutputOutsideSite, got {other:?}",
+                    out.display()
+                ),
+            }
+            assert!(
+                !out.join("v0.2.0").exists(),
+                "{}: nothing may be written first",
+                out.display()
+            );
+        }
+    }
+
+    fn brand_of(html: &str) -> Option<&str> {
+        let start = html.find(r#"<a href=""#)? + r#"<a href=""#.len();
+        let end = html[start..].find('"')? + start;
+        Some(&html[start..end])
+    }
+
     /// A relative `site_root_url` override must climb out of the
     /// version directory: a value that does not begin with `../`
     /// resolves somewhere different on every page, so it is refused at
@@ -4912,6 +5258,7 @@ current = "v0.1.0"
             edge: None,
             url_pattern: "../{version}/".to_string(),
             site_root_href: "../current/".to_string(),
+            edition_brands: None,
             site_title: None,
             label_sources: std::collections::BTreeMap::new(),
             instances_first: false,

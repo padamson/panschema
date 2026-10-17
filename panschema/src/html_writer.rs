@@ -553,8 +553,9 @@ struct IndexTemplate<'a> {
     page_links: &'a [PageLink],
     /// URL the header brand link targets. `"./"` for single-version
     /// output (page sits at the deploy root). `panschema publish`
-    /// supplies this explicitly from the manifest's
-    /// `[publishing].site_root_url` (default `"../current/"`).
+    /// supplies this explicitly: the manifest's `[publishing].site_root_url`
+    /// (default `"../current/"`), or under `[editions]` the edition of the
+    /// book that describes the page's version.
     site_root_href: &'a str,
     /// Page composition: lead with the instance section.
     instances_first: bool,
@@ -1781,7 +1782,8 @@ impl Writer for HtmlWriter {
             page_links: &self.page_links,
             // `panschema generate` writes the page at the output root, so
             // `./` always resolves to the deploy root. `panschema publish`
-            // sets this explicitly from the manifest's `site_root_url`.
+            // sets this explicitly: the manifest's `site_root_url`, or the
+            // version's book edition.
             site_root_href: self.site_root_href.as_deref().unwrap_or("./"),
             site_title: self
                 .site_title
