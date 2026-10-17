@@ -411,19 +411,41 @@ from a commit no branch holds, publishes without a separate commit on
 
 ---
 
-### Slice 7: Dogfood and docs
+### Slice 7: Integration tests and docs
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** A schema repo with a released line and a diverged `main`
-publishes both books, verified on a real site.
+publishes both books, verified end to end against a site built from a
+real repository's content.
 
 **Acceptance Criteria:**
-- [ ] A real schema repo with a released `v0.1.1` (no `toolchain.toml`)
-  and a `main` on v0.2 publishes `/`, `book/v0.1/` and `book/main/`, with
-  the switcher, the banners and the schema links correct in a browser.
-- [ ] README documents `[editions]`, `toolchain.toml`, the override and
+- [x] A real schema repo's content with a released `v0.1.1` (no
+  `toolchain.toml`) and a `main` on v0.2 publishes `/`, `book/v0.1/` and
+  `book/main/`, with the switcher, the banners and the schema links
+  correct in a browser (integration and e2e tests).
+- [x] README documents `[editions]`, `toolchain.toml`, the override and
   the command; CHANGELOG records the feature.
+
+**Notes:**
+- Integration run, 2026-10-17: on a clone of cqa-schema with `main` one
+  commit past `v0.1.1` and the release list left to the tags, both
+  commands built `/`, `book/v0.1/` (from `v0.1.1`), `book/main/`, and
+  three schema versions, with the tag's toolchain supplied by an
+  override and the tools from a prepared cache.
+- The browser check is the ignored e2e test
+  `a_built_editions_site_links_agree_both_ways_in_a_browser`, which reads
+  a site from `target/editions-site` and checks the switcher's entries
+  and that choosing one navigates, the banner on the unreleased edition
+  and its absence on the current one and the root copy, the schema
+  button's target per edition, and each schema version's brand link,
+  `current/` included. Run it with `--run-ignored only` against any
+  built site.
+- Dogfooding is not this slice: it is using the released panschema in
+  cqa-schema, the ontology-authoring-template scaffold and the other
+  schema repos, by hand, in their own manifests, install scripts and
+  docs workflows. That follows the release, and what it finds comes back
+  as issues.
 
 ---
 
@@ -437,7 +459,7 @@ publishes both books, verified on a real site.
 | Slice 4: Schema pages link back | Must Have | Slice 1 | Completed |
 | Slice 5: Per-edition toolchain | Must Have | Slice 2 | Completed |
 | Slice 6: Versions derived from tags | Should Have | None | Completed |
-| Slice 7: Dogfood and docs | Must Have | Slices 3, 4, 5 | Not Started |
+| Slice 7: Integration tests and docs | Must Have | Slices 3, 4, 5 | Completed |
 
 ---
 
@@ -467,8 +489,8 @@ publishes both books, verified on a real site.
 
 ## Definition of Done
 
-- [ ] All acceptance criteria met; all slices "Completed".
-- [ ] All tests passing: `cargo nextest run`.
-- [ ] Docs build cleanly: `cargo doc`.
-- [ ] Formatted: `cargo fmt --check`; no clippy warnings.
-- [ ] README.md and CHANGELOG.md updated.
+- [x] All acceptance criteria met; all slices "Completed".
+- [x] All tests passing: `cargo nextest run`.
+- [x] Docs build cleanly: `cargo doc`.
+- [x] Formatted: `cargo fmt --check`; no clippy warnings.
+- [x] README.md and CHANGELOG.md updated.

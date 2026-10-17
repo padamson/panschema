@@ -8,8 +8,10 @@
 //!
 //! No mdbook and no server: the page is a minimal stand-in for mdbook's
 //! toolbar loaded over `file://`, which is enough because the asset does no
-//! fetching and imports nothing. Setup is the parent target's: install
-//! Playwright browsers matching [`playwright_rs::PLAYWRIGHT_VERSION`].
+//! fetching and imports nothing. The one exception is ignored: a check of
+//! a site built from a real schema repository's content. Setup is the
+//! parent target's: install Playwright browsers matching
+//! [`playwright_rs::PLAYWRIGHT_VERSION`].
 
 use std::path::Path;
 
@@ -453,6 +455,151 @@ fn e2e_a_nested_page_resolves_links_and_editions_from_the_site_root() {
         page.wait_for_url("**/prefix/book/v0.2/", None)
             .await
             .expect("the v0.2 edition's root under the prefix should open");
+    });
+}
+
+/// A site that `mdbook-panschema editions` and `panschema publish` built
+/// from a real schema repository with a released line (`v0.1`, from
+/// `v0.1.1`) and a `main` that has moved on, read in a browser: the
+/// switcher, the banners and the schema links on the book side, and the
+/// brand links on the schema side, agree about which edition describes
+/// which version. The site is not checked in: build it from such a
+/// repository with both commands and copy its site root to
+/// `target/editions-site`.
+#[test]
+#[ignore = "needs a site built from a real schema repo at target/editions-site; run with --run-ignored only -E 'test(a_built_editions_site)'"]
+fn a_built_editions_site_links_agree_both_ways_in_a_browser() {
+    let site = Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/editions-site");
+    assert!(
+        site.join("book/v0.1/index.html").is_file(),
+        "no built editions site at {}",
+        site.display()
+    );
+    let site = site.canonicalize().expect("site path");
+    let url = |rel: &str| format!("file://{}/{rel}", site.display());
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let playwright = Playwright::launch().await.expect("playwright");
+        let browser = playwright.chromium().launch().await.expect("chromium");
+
+        // The released edition at its stable path is the current one.
+        let page = browser.new_page().await.expect("page");
+        page.goto(&url("book/v0.1/index.html"), None)
+            .await
+            .expect("goto");
+        let options = page
+            .evaluate_value(
+                "Array.from(document.querySelectorAll('select.edition-switcher option'))\
+                 .map(o => o.value + '|' + o.textContent + '|' + o.selected).join(',')",
+            )
+            .await
+            .expect("read options");
+        assert_eq!(options, "v0.1|v0.1|true,main|main (unreleased)|false");
+        assert_eq!(
+            page.locator(".edition-banner")
+                .count()
+                .await
+                .expect("count"),
+            0,
+            "the current edition carries no banner"
+        );
+        let href = page
+            .evaluate_value("document.querySelector('a.schema-docs-button').href")
+            .await
+            .expect("href");
+        assert!(
+            href.ends_with("/editions-site/schema/v0.1.1/"),
+            "the schema button targets the release the edition was built from; got {href}"
+        );
+        page.locator("select.edition-switcher")
+            .select_option("main", None)
+            .await
+            .expect("select");
+        page.wait_for_url("**/editions-site/book/main/", None)
+            .await
+            .expect("choosing main opens the unreleased edition");
+
+        // The unreleased edition carries main's revision and says so.
+        let page = browser.new_page().await.expect("page");
+        page.goto(&url("book/main/introduction.html"), None)
+            .await
+            .expect("goto");
+        let text = page
+            .evaluate_value("document.body.innerText")
+            .await
+            .expect("text");
+        assert!(
+            text.contains("not released yet"),
+            "main's own introduction should render; got {text:.200}"
+        );
+        let banner = page
+            .locator(".edition-banner")
+            .text_content()
+            .await
+            .expect("banner")
+            .unwrap_or_default();
+        assert!(banner.contains("unreleased"), "got: {banner}");
+        let banner_href = page
+            .evaluate_value("document.querySelector('.edition-banner a').href")
+            .await
+            .expect("banner href");
+        assert!(
+            banner_href.ends_with("/editions-site/book/v0.1/"),
+            "the banner points at the current edition; got {banner_href}"
+        );
+        let href = page
+            .evaluate_value("document.querySelector('a.schema-docs-button').href")
+            .await
+            .expect("href");
+        assert!(
+            href.ends_with("/editions-site/schema/main/"),
+            "the unreleased edition links to the edge schema; got {href}"
+        );
+
+        // The root copy is the current edition, with its links intact.
+        let page = browser.new_page().await.expect("page");
+        page.goto(&url("index.html"), None).await.expect("goto");
+        assert_eq!(
+            page.locator(".edition-banner")
+                .count()
+                .await
+                .expect("count"),
+            0
+        );
+        let selected = page
+            .evaluate_value("document.querySelector('select.edition-switcher').value")
+            .await
+            .expect("selected");
+        assert_eq!(selected, "v0.1");
+        let href = page
+            .evaluate_value("document.querySelector('a.schema-docs-button').href")
+            .await
+            .expect("href");
+        assert!(
+            href.ends_with("/editions-site/schema/v0.1.1/"),
+            "got {href}"
+        );
+
+        // The schema pages link back to the edition that describes them.
+        for (version, edition) in [
+            ("v0.1.0", "v0.1"),
+            ("v0.1.1", "v0.1"),
+            ("current", "v0.1"),
+            ("main", "main"),
+        ] {
+            let page = browser.new_page().await.expect("page");
+            page.goto(&url(&format!("schema/{version}/index.html")), None)
+                .await
+                .expect("goto");
+            let href = page
+                .evaluate_value("document.querySelector('a.site-title').href")
+                .await
+                .expect("brand href");
+            assert!(
+                href.ends_with(&format!("/editions-site/book/{edition}/")),
+                "schema/{version}/ brands the {edition} edition; got {href}"
+            );
+        }
     });
 }
 
