@@ -51,7 +51,7 @@ All fields under `[publishing]` are optional from a parsing perspective — pres
 Field semantics:
 - `versions` — list of git tag names. `panschema` resolves each via `git rev-parse`. Failing resolution is an error (caller bug — they listed a tag that doesn't exist).
 - `edge` — a ref (branch or commit-ish); skipped when null/omitted. Typical value `"main"`. Built from a fresh extraction, not from the working tree (so the publish is reproducible regardless of dirty working state).
-- `current` — the alias target. Validate it's in `versions` OR equals `edge`. Don't silently default to "latest semver" — explicit is better; users may want `current` to lag the latest tag during an in-progress release.
+- `current` — the alias target. Validate it's in `versions` OR equals `edge`. Don't silently default to "latest semver" — explicit is better; users may want `current` to lag the latest tag during an in-progress release. (Revised by [Feature 52](52-book-editions.md), slice 6: both `versions` and `current` may be omitted, so a tag can publish itself; `versions` is then every `v<semver>` tag and `current` the newest release. Listing either still wins, so the lagging case stays available.)
 - `url_pattern` — uses `{version}` as the placeholder. Used in template rendering to build cross-version links.
 - `output_dir` — defaults to `site/schema/` if omitted.
 - `format` — defaults to `html`. Reserved for future writer fan-out.

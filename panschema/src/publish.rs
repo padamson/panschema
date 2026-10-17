@@ -43,6 +43,40 @@ pub enum PublishError {
         edge: Option<String>,
     },
     #[error(
+        "[publishing].current is left to the newest release, but {} and there is no edge; set `current` or tag a release",
+        match (*derived, versions.is_empty()) {
+            (true, true) => "the repository has no release tag".to_string(),
+            (false, true) => "[publishing].versions is empty".to_string(),
+            (_, false) => format!(
+                "none of {versions:?} is a release (a pre-release, or a tag that is not semver, never stands as current)"
+            ),
+        }
+    )]
+    NoDefaultCurrent {
+        versions: Vec<String>,
+        derived: bool,
+    },
+    #[error(
+        "could not list the tags of `{}` to fill in [publishing].versions: {message}",
+        repo_root.display()
+    )]
+    TagsUnreadable { repo_root: PathBuf, message: String },
+    #[error(
+        "`{}` is a shallow clone, whose tags may be incomplete, so [publishing].versions cannot be read from them; fetch the whole history (`fetch-depth: 0` for actions/checkout) or list `versions`",
+        repo_root.display()
+    )]
+    ShallowRepository { repo_root: PathBuf },
+    #[error("the release list has not been read from the repository's tags")]
+    ReleasesUnresolved,
+    #[error(
+        "`{tag}`, a tag taken from the repository, cannot publish: {source}; list [publishing].versions to leave it out"
+    )]
+    DerivedTag {
+        tag: String,
+        #[source]
+        source: Box<PublishError>,
+    },
+    #[error(
         "the following git refs failed to resolve in `{}`: {} \
          (each name is tried as a local ref, then as the remote-tracking branch \
          `<remote>/<name>` of exactly one remote; a tag checkout needs the \
@@ -265,14 +299,21 @@ impl EditionsConfig {
             });
         }
         // An override is keyed by the ref its edition builds from; a key
-        // naming anything else would be a silently ignored override.
-        let plan = crate::editions::plan(publishing)?;
-        let sources: Vec<String> = plan.editions.iter().map(|e| e.source.clone()).collect();
-        if let Some(key) = self.toolchain.keys().find(|key| !sources.contains(key)) {
-            return Err(PublishError::UnknownToolchainKey {
-                key: key.clone(),
-                sources,
-            });
+        // naming anything else would be a silently ignored override. A
+        // release list left to the tags is unknown until a build reads
+        // them and runs this check again.
+        if let Some(versions) = &publishing.versions {
+            let sources: Vec<String> =
+                crate::editions::editions_of(versions, publishing.edge.as_deref())?
+                    .iter()
+                    .map(|e| e.source.clone())
+                    .collect();
+            if let Some(key) = self.toolchain.keys().find(|key| !sources.contains(key)) {
+                return Err(PublishError::UnknownToolchainKey {
+                    key: key.clone(),
+                    sources,
+                });
+            }
         }
         Ok(())
     }
@@ -469,22 +510,30 @@ fn default_book_link_label() -> String {
 /// `[publishing]` table — multi-version doc orchestration config. Drives
 /// `panschema publish`: which git refs to build, where they land on disk,
 /// and which version the `current/` alias points to. Defaults are chosen
-/// so a minimal block (`versions = [...]`, `current = "..."`) works
-/// out-of-the-box.
+/// so an empty block works out-of-the-box: the versions are the
+/// repository's release tags and the current one is the newest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PublishingConfig {
-    /// Git tag names whose docs should be built. Each must resolve via
+    /// Git tag names whose docs should be built, in the order the version
+    /// dropdown lists them. Omitted, every tag of the form `v<semver>` in
+    /// the repository, oldest first, read when a publish starts
+    /// ([`Self::resolve_releases`]), so a tag pushed on an old line
+    /// publishes without a commit listing it. Each must resolve via
     /// `git rev-parse` (validated at extraction time, not parse time).
-    #[serde(default)]
-    pub versions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub versions: Option<Vec<String>>,
     /// Optional ref (branch or commit-ish) whose HEAD is also built.
     /// `None` means skip the edge build. Typical value: `"main"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edge: Option<String>,
     /// Alias target — `current/` mirrors this version's output. Must be
-    /// in `versions` OR equal `edge` (validated at parse time).
-    pub current: String,
+    /// in `versions` OR equal `edge`. Omitted, the newest release among
+    /// the versions (a pre-release never stands as current), else the
+    /// edge. Checked at parse time when `versions` is listed too, and
+    /// otherwise once the tags are read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<String>,
     /// URL template for cross-version links. `{version}` placeholder is
     /// substituted with the target version's ref name. Defaults to
     /// `"../{version}/"`, a parent-relative form that resolves correctly
@@ -585,9 +634,125 @@ fn default_format() -> String {
     "html".to_string()
 }
 
+/// A tag's prefix (`v`, `V`, or none) and its semver version, for a tag
+/// that has one: the one reading of a tag that the derived release list,
+/// the default current, and the edition grouping share.
+pub(crate) fn tag_semver(tag: &str) -> Option<(&str, semver::Version)> {
+    let prefix = if tag.starts_with(['v', 'V']) {
+        &tag[..1]
+    } else {
+        ""
+    };
+    let version = semver::Version::parse(&tag[prefix.len()..]).ok()?;
+    Some((prefix, version))
+}
+
+/// The error for a tag listing that failed; `git` missing from PATH has
+/// its own message, as it does for every other git read here.
+fn tags_error(repo_root: &Path, e: std::io::Error) -> PublishError {
+    match classify_git_spawn_error(e) {
+        PublishError::Io(e) => PublishError::TagsUnreadable {
+            repo_root: repo_root.to_path_buf(),
+            message: e.to_string(),
+        },
+        other => other,
+    }
+}
+
+/// Every tag of the form `v<semver>` (`v` or `V`) in `repo_root`, oldest
+/// first. A shallow clone is refused: its tags are whatever the fetch
+/// brought, and a list read from them would quietly shrink the site.
+fn semver_tags(repo_root: &Path) -> Result<Vec<String>, PublishError> {
+    let git =
+        |args: &[&str]| run_git_capture(repo_root, args).map_err(|e| tags_error(repo_root, e));
+    if git(&["rev-parse", "--is-shallow-repository"])?.trim() == "true" {
+        return Err(PublishError::ShallowRepository {
+            repo_root: repo_root.to_path_buf(),
+        });
+    }
+    let mut tags: Vec<(semver::Version, String)> = git(&["tag", "--list"])?
+        .lines()
+        .filter_map(|tag| {
+            let (prefix, version) = tag_semver(tag)?;
+            (!prefix.is_empty()).then(|| (version, tag.to_string()))
+        })
+        .collect();
+    tags.sort();
+    Ok(tags.into_iter().map(|(_, tag)| tag).collect())
+}
+
+/// The newest release among `versions`; a pre-release is never one, and
+/// a version that is not semver cannot be ranked.
+fn newest_release(versions: &[String]) -> Option<String> {
+    versions
+        .iter()
+        .filter_map(|tag| {
+            let (_, version) = tag_semver(tag)?;
+            version.pre.is_empty().then_some((version, tag))
+        })
+        .max_by(|a, b| a.0.cmp(&b.0))
+        .map(|(_, tag)| tag.clone())
+}
+
 impl PublishingConfig {
+    /// The release list, settled: the versions and the current one. A
+    /// list left to the tags and not yet read is a caller that skipped
+    /// [`Self::resolve_releases`].
+    pub fn releases(&self) -> Result<(&[String], &str), PublishError> {
+        match (&self.versions, &self.current) {
+            (Some(versions), Some(current)) => Ok((versions, current)),
+            _ => Err(PublishError::ReleasesUnresolved),
+        }
+    }
+
+    /// This configuration with its release list settled: `versions` as
+    /// listed, else every `v<semver>` tag of the repository at
+    /// `repo_root` in release order; `current` as given, else the newest
+    /// release among the versions, else the edge. The check that
+    /// `current` is a version or the edge, which the parse could only
+    /// make with both fields listed, is made here. A fully listed
+    /// configuration reads nothing.
+    pub fn resolve_releases(&self, repo_root: &Path) -> Result<PublishingConfig, PublishError> {
+        let derived = self.versions.is_none();
+        let versions = match &self.versions {
+            Some(versions) => versions.clone(),
+            None => semver_tags(repo_root)?,
+        };
+        let current = match (&self.current, newest_release(&versions)) {
+            (Some(current), _) => current.clone(),
+            (None, Some(release)) => release,
+            (None, None) => {
+                let edge = self
+                    .edge
+                    .clone()
+                    .ok_or_else(|| PublishError::NoDefaultCurrent {
+                        versions: versions.clone(),
+                        derived,
+                    })?;
+                eprintln!(
+                    "note: no release among the versions {versions:?}; the edge `{edge}` stands as current"
+                );
+                edge
+            }
+        };
+        if !versions.contains(&current) && self.edge.as_deref() != Some(current.as_str()) {
+            return Err(PublishError::InvalidCurrent {
+                current,
+                versions,
+                edge: self.edge.clone(),
+            });
+        }
+        Ok(PublishingConfig {
+            versions: Some(versions),
+            current: Some(current),
+            ..self.clone()
+        })
+    }
+
     /// Validate cross-field invariants that pure serde can't express.
-    /// Currently: `current` must appear in `versions` or equal `edge`.
+    /// Currently: `current` must appear in `versions` or equal `edge`,
+    /// where both are listed; with either left to the tags the check
+    /// waits for [`Self::resolve_releases`].
     fn validate(&self) -> Result<(), PublishError> {
         // A relative `site_root_url` is authored against a version
         // directory and re-based per page by prepending `../` — sound
@@ -604,16 +769,18 @@ impl PublishingConfig {
                     .to_string(),
             });
         }
-        let in_versions = self.versions.iter().any(|v| v == &self.current);
-        let matches_edge = self.edge.as_deref() == Some(self.current.as_str());
-        if !in_versions && !matches_edge {
-            return Err(PublishError::InvalidCurrent {
-                current: self.current.clone(),
-                versions: self.versions.clone(),
-                edge: self.edge.clone(),
-            });
+        if let (Some(versions), Some(current)) = (&self.versions, &self.current) {
+            let in_versions = versions.contains(current);
+            let matches_edge = self.edge.as_deref() == Some(current.as_str());
+            if !in_versions && !matches_edge {
+                return Err(PublishError::InvalidCurrent {
+                    current: current.clone(),
+                    versions: versions.clone(),
+                    edge: self.edge.clone(),
+                });
+            }
         }
-        for label in self.versions.iter().chain(self.edge.as_ref()) {
+        for label in self.versions.iter().flatten().chain(self.edge.as_ref()) {
             require_fresh_segment("a version label", label)?;
         }
         Ok(())
@@ -700,7 +867,7 @@ impl PublishConfig {
             let dir = publishing.page_dir(dep);
             let what = format!("the page directory for dependency `{dep}`");
             require_fresh_segment(&what, &dir)?;
-            if publishing.versions.iter().any(|v| v == &dir)
+            if publishing.versions.iter().flatten().any(|v| v == &dir)
                 || publishing.edge.as_deref() == Some(dir.as_str())
             {
                 return Err(PublishError::InvalidSegment {
@@ -941,19 +1108,6 @@ pub fn extract_main_at_ref(
     Ok(file)
 }
 
-/// Orchestrate the multi-version doc build described by
-/// `publish_cfg`'s `[publishing]` section. For each entry in
-/// `versions` (and `edge` if set), extracts the schema's main file
-/// at that ref into a temp file, runs the HTML generator against it,
-/// and writes output to `<output_dir>/<ref>/`. Finally copies the
-/// `current` version's output to `<output_dir>/current/` so consumers
-/// can link to `/schema/current/` without hard-coding a version.
-///
-/// `output_dir` may be relative; resolved against the caller's CWD.
-///
-/// Resolves all refs up-front via [`resolve_refs`] so a bad tag
-/// fails fast with a single combined error rather than after a
-/// partial build.
 /// Source for a per-version build's input schema file. Tagged
 /// versions always come from a git ref; the optional edge build may
 /// instead come from the working tree, for the local-preview use case
@@ -970,23 +1124,81 @@ enum BuildSource<'a> {
     WorkingTree,
 }
 
+/// Orchestrate the multi-version doc build described by
+/// `publish_cfg`'s `[publishing]` section. For each entry in
+/// `versions` (and `edge` if set), extracts the schema's main file
+/// at that ref into a temp file, runs the HTML generator against it,
+/// and writes output to `<output_dir>/<ref>/`. Finally copies the
+/// `current` version's output to `<output_dir>/current/` so consumers
+/// can link to `/schema/current/` without hard-coding a version. A
+/// release list left to the repository's tags is read first
+/// ([`PublishingConfig::resolve_releases`]).
+///
+/// `output_dir` may be relative; resolved against the caller's CWD.
+///
+/// Resolves all refs up-front via [`resolve_refs`] so a bad tag
+/// fails fast with a single combined error rather than after a
+/// partial build. Returns the number of versions built for the
+/// schema's own page, the edge included.
 pub fn publish_versioned(
     repo_root: &Path,
     publish_cfg: &PublishConfig,
     output_dir: &Path,
     edge_from_worktree: bool,
-) -> Result<(), PublishError> {
-    let publishing = publish_cfg
+) -> Result<usize, PublishError> {
+    let listed = publish_cfg
         .publishing
         .as_ref()
         .ok_or(PublishError::MissingPublishingSection)?;
+    let publishing = listed.resolve_releases(repo_root)?;
+    publish_resolved(
+        repo_root,
+        publish_cfg,
+        &publishing,
+        output_dir,
+        edge_from_worktree,
+    )
+    .map_err(|err| match publishing.releases() {
+        Ok((derived, _)) if listed.versions.is_none() => hint_derived_tag(err, derived),
+        _ => err,
+    })
+}
+
+/// A failure on a tag the manifest never named, which `versions` can
+/// leave out; any other error passes through.
+fn hint_derived_tag(err: PublishError, derived: &[String]) -> PublishError {
+    let tag = match &err {
+        PublishError::ExtractFailed { ref_, .. } => ref_.clone(),
+        PublishError::GenerateFailed { version, .. } => version.clone(),
+        _ => return err,
+    };
+    if derived.contains(&tag) {
+        PublishError::DerivedTag {
+            tag,
+            source: Box::new(err),
+        }
+    } else {
+        err
+    }
+}
+
+/// [`publish_versioned`] once `publishing` carries its release list.
+fn publish_resolved(
+    repo_root: &Path,
+    publish_cfg: &PublishConfig,
+    publishing: &PublishingConfig,
+    output_dir: &Path,
+    edge_from_worktree: bool,
+) -> Result<usize, PublishError> {
+    let (versions, _) = publishing.releases()?;
     // `publish_cfg` need not have come through the publish spec's own
-    // parse, and the edition brand relies on what that checks.
+    // parse, and a release list left to the tags was not known to it:
+    // the checks that read the list run here against the settled one.
+    publish_cfg.validate_pages(publishing)?;
     let editions = match &publish_cfg.editions {
         Some(editions) => {
             editions.validate(publishing)?;
-            let refs: Vec<&str> = publishing
-                .versions
+            let refs: Vec<&str> = versions
                 .iter()
                 .chain(publishing.edge.iter())
                 .map(String::as_str)
@@ -1006,7 +1218,7 @@ pub fn publish_versioned(
     // Skip the edge ref's resolution when `edge_from_worktree` is set:
     // the working-tree path is the source of truth in that mode and
     // the ref name is only used as a subdir label.
-    let mut all_refs: Vec<&str> = publishing.versions.iter().map(String::as_str).collect();
+    let mut all_refs: Vec<&str> = versions.iter().map(String::as_str).collect();
     if let Some(edge) = &publishing.edge
         && !edge_from_worktree
     {
@@ -1032,8 +1244,7 @@ pub fn publish_versioned(
     // the edge's source wins, so `--edge-from-worktree` keeps meaning
     // the worktree, and the label appears once in every dropdown.
     refs.extend(
-        publishing
-            .versions
+        versions
             .iter()
             .filter(|v| Some(v.as_str()) != publishing.edge.as_deref())
             .map(|v| {
@@ -1065,7 +1276,7 @@ pub fn publish_versioned(
         )?;
     }
 
-    Ok(())
+    Ok(refs.len())
 }
 
 /// One published schema-docs page: the own-schema page, or one
@@ -1442,9 +1653,9 @@ fn render_page(
     // symlink (static hosts handle directories cleanly; symlinks are
     // flaky on GH Pages) and not a re-render (would duplicate work and
     // risk byte divergence). For the own page the source always exists:
-    // `current` is parse-time-validated to be in `versions` or equal
-    // `edge`, both of which were just built.
-    refresh_current(&page.out_dir, &publishing.current)?;
+    // `current` is validated to be in `versions` or equal `edge` before
+    // anything builds, both of which were just built.
+    refresh_current(&page.out_dir, publishing.releases()?.1)?;
     Ok(())
 }
 
@@ -1821,9 +2032,11 @@ struct PageCurrent {
 }
 
 fn page_current(publishing: &PublishingConfig, present: &[String]) -> PageCurrent {
-    if present.iter().any(|v| v == &publishing.current) {
+    if let Some(current) = publishing.current.as_deref()
+        && present.iter().any(|v| v == current)
+    {
         return PageCurrent {
-            version: publishing.current.clone(),
+            version: current.to_string(),
             aliased: true,
         };
     }
@@ -2468,8 +2681,11 @@ current = "v0.2.0"
 "#;
         let cfg: PublishConfig = toml.parse().expect("should parse");
         let publishing = cfg.publishing.expect("publishing should be present");
-        assert_eq!(publishing.versions, vec!["v0.1.0", "v0.2.0"]);
-        assert_eq!(publishing.current, "v0.2.0");
+        assert_eq!(
+            publishing.versions.as_deref().unwrap(),
+            ["v0.1.0", "v0.2.0"]
+        );
+        assert_eq!(publishing.current.as_deref(), Some("v0.2.0"));
         assert!(publishing.edge.is_none());
         assert_eq!(publishing.url_pattern, "../{version}/");
         assert_eq!(publishing.site_root_url, "../current/");
@@ -2502,7 +2718,7 @@ format = "html"
         let cfg: PublishConfig = toml.parse().expect("should parse");
         let publishing = cfg.publishing.expect("publishing should be present");
         assert_eq!(publishing.edge.as_deref(), Some("main"));
-        assert_eq!(publishing.current, "main");
+        assert_eq!(publishing.current.as_deref(), Some("main"));
         assert_eq!(publishing.url_pattern, "/docs/{version}/");
         assert_eq!(publishing.site_root_url, "../../");
         assert_eq!(publishing.output_dir, PathBuf::from("build/site"));
@@ -2840,28 +3056,57 @@ current = "v0.1.0"
         assert!(matches!(err, PublishError::InvalidCurrent { .. }));
     }
 
-    #[test]
-    fn rejects_missing_current_field() {
-        // `current` is required when `[publishing]` is present —
-        // there's no sensible default.
-        let toml = r#"
-[schema]
-name = "x"
-version = "0.1.0"
-linkml = "1.7.0"
+    /// A publish spec whose `[publishing]` body is `publishing`.
+    fn spec_with_publishing(publishing: &str) -> String {
+        format!(
+            "[schema]\nname = \"x\"\nversion = \"0.1.0\"\nlinkml = \"1.7.0\"\n\
+             [files]\nmain = \"schema.yaml\"\n\
+             [publishing]\n{publishing}\n"
+        )
+    }
 
-[files]
-main = "schema.yaml"
-
-[publishing]
-versions = ["v0.1.0"]
-"#;
-        let err = toml
+    fn publishing_block(body: &str) -> PublishingConfig {
+        spec_with_publishing(body)
             .parse::<PublishConfig>()
-            .expect_err("should reject missing current");
-        // serde gives a generic Parse error pointing at the missing field.
-        assert!(matches!(err, PublishError::Parse(_)));
-        assert!(err.to_string().contains("current"));
+            .expect("spec should parse")
+            .publishing
+            .expect("publishing should be present")
+    }
+
+    #[test]
+    fn a_publishing_block_may_leave_versions_and_current_to_the_tags() {
+        let cfg: PublishConfig = spec_with_publishing("edge = \"main\"")
+            .parse()
+            .expect("versions and current may both be omitted");
+        let publishing = cfg.publishing.as_ref().unwrap();
+        assert_eq!(publishing.versions, None);
+        assert_eq!(publishing.current, None);
+        assert!(
+            matches!(publishing.releases(), Err(PublishError::ReleasesUnresolved)),
+            "a list left to the tags is unresolved until they are read"
+        );
+
+        // The manifest round-trips without the fields being invented, so
+        // a command that rewrites it keeps them derived.
+        let written = toml::to_string(&cfg).unwrap();
+        assert!(!written.contains("\nversions ="), "{written}");
+        assert!(!written.contains("\ncurrent ="), "{written}");
+    }
+
+    #[test]
+    fn a_current_with_versions_omitted_is_judged_once_the_tags_are_read() {
+        // Which versions exist is unknown until the repo is read, so the
+        // parse accepts the value and `resolve_releases` judges it.
+        let publishing = publishing_block("current = \"v9.9.9\"");
+        let repo = make_versioned_fixture_repo();
+
+        let err = publishing.resolve_releases(repo.path()).unwrap_err();
+
+        assert!(
+            matches!(err, PublishError::InvalidCurrent { ref current, ref versions, .. }
+                if current == "v9.9.9" && versions == &["v0.1.0", "v0.2.0"]),
+            "{err:?}"
+        );
     }
 
     /// A publish spec with `[publishing]` and the given `[editions]` body.
@@ -3200,6 +3445,209 @@ versions = ["v0.1.0"]
             .to_string()
     }
 
+    // ----- resolve_releases -----
+
+    /// The settled list of a resolved configuration.
+    fn releases_of(publishing: &PublishingConfig) -> (Vec<&str>, &str) {
+        let (versions, current) = publishing.releases().expect("resolved");
+        (versions.iter().map(String::as_str).collect(), current)
+    }
+
+    #[test]
+    fn a_release_list_is_unresolved_until_both_fields_are_settled() {
+        for body in [
+            "edge = \"main\"",
+            "current = \"main\"\nedge = \"main\"",
+            "versions = [\"v0.1.0\"]",
+        ] {
+            let publishing = publishing_block(body);
+            assert!(
+                matches!(publishing.releases(), Err(PublishError::ReleasesUnresolved)),
+                "body {body:?}"
+            );
+        }
+        let settled = publishing_block("versions = [\"v0.1.0\"]\ncurrent = \"v0.1.0\"");
+        assert_eq!(releases_of(&settled), (vec!["v0.1.0"], "v0.1.0"));
+    }
+
+    #[test]
+    fn versions_left_out_are_every_semver_v_tag_in_release_order() {
+        let repo = make_versioned_fixture_repo();
+        // Tagged out of order, with a pre-release and tags that are not
+        // versions: a bare major, a name, and semver with no prefix.
+        for tag in ["v0.3.0-rc.1", "v0.1.1", "v1", "docs-2024", "2.0.0"] {
+            run(repo.path(), &["tag", tag]);
+        }
+
+        let resolved = publishing_block("edge = \"main\"")
+            .resolve_releases(repo.path())
+            .unwrap();
+
+        assert_eq!(
+            releases_of(&resolved),
+            (vec!["v0.1.0", "v0.1.1", "v0.2.0", "v0.3.0-rc.1"], "v0.2.0"),
+            "the newest release stands as current, never a pre-release"
+        );
+        assert_eq!(resolved.edge.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn an_upper_case_prefix_is_read_like_a_lower_case_one() {
+        let repo = make_versioned_fixture_repo();
+        run(repo.path(), &["tag", "V0.4.0"]);
+
+        let resolved = publishing_block("").resolve_releases(repo.path()).unwrap();
+
+        assert_eq!(
+            releases_of(&resolved),
+            (vec!["v0.1.0", "v0.2.0", "V0.4.0"], "V0.4.0")
+        );
+    }
+
+    #[test]
+    fn an_explicit_release_list_wins_over_the_tags() {
+        let repo = make_versioned_fixture_repo();
+
+        let resolved = publishing_block("versions = [\"v0.1.0\"]")
+            .resolve_releases(repo.path())
+            .unwrap();
+
+        assert_eq!(
+            releases_of(&resolved),
+            (vec!["v0.1.0"], "v0.1.0"),
+            "current defaults to the newest release of the list as given"
+        );
+    }
+
+    #[test]
+    fn an_explicit_current_may_lag_the_newest_tag() {
+        let repo = make_versioned_fixture_repo();
+
+        let resolved = publishing_block("current = \"v0.1.0\"")
+            .resolve_releases(repo.path())
+            .unwrap();
+
+        assert_eq!(releases_of(&resolved), (vec!["v0.1.0", "v0.2.0"], "v0.1.0"));
+    }
+
+    #[test]
+    fn a_fully_explicit_release_list_needs_no_repository() {
+        let not_a_repo = tempfile::tempdir().unwrap();
+
+        let resolved = publishing_block("versions = [\"v0.1.0\"]\ncurrent = \"v0.1.0\"")
+            .resolve_releases(not_a_repo.path())
+            .unwrap();
+
+        assert_eq!(releases_of(&resolved), (vec!["v0.1.0"], "v0.1.0"));
+    }
+
+    #[test]
+    fn with_only_pre_release_tags_current_defaults_to_the_edge_or_is_refused() {
+        let repo = init_repo();
+        std::fs::write(repo.path().join("schema.yaml"), "version: 0.1.0-rc.1\n").unwrap();
+        run(repo.path(), &["add", "schema.yaml"]);
+        run(repo.path(), &["commit", "-m", "rc", "--quiet"]);
+        run(repo.path(), &["tag", "v0.1.0-rc.1"]);
+
+        let with_edge = publishing_block("edge = \"main\"")
+            .resolve_releases(repo.path())
+            .unwrap();
+        assert_eq!(releases_of(&with_edge), (vec!["v0.1.0-rc.1"], "main"));
+
+        let err = publishing_block("")
+            .resolve_releases(repo.path())
+            .unwrap_err();
+        assert!(
+            matches!(err, PublishError::NoDefaultCurrent { ref versions, derived: true }
+                if versions == &["v0.1.0-rc.1"]),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn no_default_current_says_what_the_listed_versions_hold() {
+        let not_a_repo = tempfile::tempdir().unwrap();
+        for (body, reason) in [
+            ("versions = []", "[publishing].versions is empty"),
+            ("versions = [\"release-2024\"]", "not semver"),
+        ] {
+            let err = publishing_block(body)
+                .resolve_releases(not_a_repo.path())
+                .unwrap_err();
+            assert!(
+                matches!(err, PublishError::NoDefaultCurrent { derived: false, .. }),
+                "body {body:?}: {err:?}"
+            );
+            assert!(err.to_string().contains(reason), "body {body:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_shallow_clone_cannot_supply_the_release_list() {
+        let origin = make_versioned_fixture_repo();
+        let tmp = tempfile::tempdir().unwrap();
+        // The `file://` form, since git ignores `--depth` for a plain path.
+        let url = format!(
+            "file:///{}",
+            origin
+                .path()
+                .display()
+                .to_string()
+                .replace('\\', "/")
+                .trim_start_matches('/')
+        );
+        run(
+            tmp.path(),
+            &["clone", "--depth", "1", "--quiet", &url, "shallow"],
+        );
+        let shallow = tmp.path().join("shallow");
+
+        let err = publishing_block("edge = \"main\"")
+            .resolve_releases(&shallow)
+            .unwrap_err();
+
+        assert!(
+            matches!(err, PublishError::ShallowRepository { ref repo_root } if repo_root == &shallow),
+            "{err:?}"
+        );
+        assert!(
+            publishing_block("versions = [\"v0.2.0\"]")
+                .resolve_releases(&shallow)
+                .is_ok(),
+            "a listed release list is not read from the clone"
+        );
+    }
+
+    #[test]
+    fn a_repository_whose_tags_cannot_be_listed_is_reported() {
+        let not_a_repo = tempfile::tempdir().unwrap();
+
+        let err = publishing_block("")
+            .resolve_releases(not_a_repo.path())
+            .unwrap_err();
+
+        assert!(
+            matches!(err, PublishError::TagsUnreadable { ref repo_root, .. }
+                if repo_root == not_a_repo.path()),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn tags_error_tells_a_missing_git_apart() {
+        let root = Path::new("/repo");
+
+        let missing = tags_error(root, std::io::Error::from(std::io::ErrorKind::NotFound));
+        assert!(matches!(missing, PublishError::GitNotFound), "{missing:?}");
+
+        let failed = tags_error(root, std::io::Error::other("fatal: not a git repository"));
+        assert!(
+            matches!(failed, PublishError::TagsUnreadable { ref repo_root, ref message }
+                if repo_root == root && message.contains("not a git repository")),
+            "{failed:?}"
+        );
+    }
+
     #[test]
     fn resolve_refs_falls_back_to_the_remote_tracking_branch() {
         let repo = make_versioned_fixture_repo();
@@ -3390,9 +3838,9 @@ versions = ["v0.1.0"]
                 main: PathBuf::from("schema.yaml"),
             },
             publishing: Some(PublishingConfig {
-                versions: versions.into_iter().map(String::from).collect(),
+                versions: Some(versions.into_iter().map(String::from).collect()),
                 edge: edge.map(String::from),
-                current: current.into(),
+                current: Some(current.into()),
                 url_pattern: default_url_pattern(),
                 site_root_url: default_site_root_url(),
                 site_title: None,
@@ -4062,6 +4510,118 @@ default = true
             !v01.contains("ind-morgon"),
             "a ref without the data file publishes without that dataset"
         );
+    }
+
+    /// A publish config whose release list is left to the tags.
+    fn make_publish_cfg_from_tags(edge: Option<&str>) -> PublishConfig {
+        let mut cfg = make_publish_cfg_with_versions(vec![], edge, "");
+        let publishing = cfg.publishing.as_mut().unwrap();
+        publishing.versions = None;
+        publishing.current = None;
+        cfg
+    }
+
+    #[test]
+    fn a_derived_tag_without_the_schema_names_itself_and_the_way_out() {
+        let repo = init_repo();
+        let path = repo.path();
+        std::fs::write(path.join("README.md"), "before the schema\n").unwrap();
+        run(path, &["add", "README.md"]);
+        run(path, &["commit", "-m", "readme", "--quiet"]);
+        run(path, &["tag", "v0.0.1"]);
+        std::fs::write(
+            path.join("schema.yaml"),
+            "id: https://example.org/v0.1.0\nname: fixture\nversion: 0.1.0\n\
+             prefixes:\n  schema: https://example.org/\ndefault_prefix: schema\n\
+             classes:\n  Thing:\n    description: a thing\n",
+        )
+        .unwrap();
+        run(path, &["add", "schema.yaml"]);
+        run(path, &["commit", "-m", "release v0.1.0", "--quiet"]);
+        run(path, &["tag", "v0.1.0"]);
+        let out = tempfile::tempdir().unwrap();
+
+        let err = publish_versioned(path, &make_publish_cfg_from_tags(None), out.path(), false)
+            .unwrap_err();
+
+        assert!(
+            matches!(&err, PublishError::DerivedTag { tag, source }
+                if tag == "v0.0.1" && matches!(**source, PublishError::ExtractFailed { .. })),
+            "expected DerivedTag over ExtractFailed, got {err:?}"
+        );
+        assert!(
+            err.to_string().contains("list [publishing].versions"),
+            "{err}"
+        );
+
+        // The same tag listed by hand is reported as itself.
+        let listed = make_publish_cfg_with_versions(vec!["v0.0.1", "v0.1.0"], None, "v0.1.0");
+        let err = publish_versioned(path, &listed, out.path(), false).unwrap_err();
+        assert!(
+            matches!(err, PublishError::ExtractFailed { ref ref_, .. } if ref_ == "v0.0.1"),
+            "expected ExtractFailed, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_derived_tag_whose_schema_does_not_load_names_itself_too() {
+        let repo = make_versioned_linkml_repo();
+        let path = repo.path();
+        std::fs::write(path.join("schema.yaml"), "classes: [not a schema\n").unwrap();
+        run(path, &["add", "schema.yaml"]);
+        run(path, &["commit", "-m", "a broken schema", "--quiet"]);
+        run(path, &["tag", "v0.3.0"]);
+        let out = tempfile::tempdir().unwrap();
+
+        let err = publish_versioned(path, &make_publish_cfg_from_tags(None), out.path(), false)
+            .unwrap_err();
+
+        assert!(
+            matches!(&err, PublishError::DerivedTag { tag, source }
+                if tag == "v0.3.0" && matches!(**source, PublishError::GenerateFailed { .. })),
+            "expected DerivedTag over GenerateFailed, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_dependency_page_directory_equal_to_a_derived_tag_is_refused() {
+        let repo = make_versioned_linkml_repo();
+        let mut cfg = make_publish_cfg_from_tags(None);
+        cfg.instances.push(InstanceEntry {
+            name: "records".into(),
+            data: PathBuf::from("data/records.yaml"),
+            default: false,
+            schema: Some("v0.1.0".into()),
+        });
+        let out = tempfile::tempdir().unwrap();
+
+        let err = publish_versioned(repo.path(), &cfg, out.path(), false).unwrap_err();
+
+        assert!(
+            matches!(err, PublishError::InvalidSegment { ref value, .. } if value == "v0.1.0"),
+            "expected InvalidSegment, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn publish_versioned_builds_every_tag_when_the_release_list_is_omitted() {
+        let repo = make_versioned_linkml_repo();
+        let mut cfg = make_publish_cfg_with_versions(vec![], Some("main"), "main");
+        let publishing = cfg.publishing.as_mut().unwrap();
+        publishing.versions = None;
+        publishing.current = None;
+        let out = tempfile::tempdir().unwrap();
+
+        let built =
+            publish_versioned(repo.path(), &cfg, out.path(), false).expect("publish succeeds");
+
+        assert_eq!(built, 3, "v0.1.0, v0.2.0 and the edge");
+        assert!(out.path().join("v0.1.0/index.html").is_file());
+        assert!(out.path().join("v0.2.0/index.html").is_file());
+        assert!(out.path().join("main/index.html").is_file());
+        let current = std::fs::read(out.path().join("current/index.html")).unwrap();
+        let v02 = std::fs::read(out.path().join("v0.2.0/index.html")).unwrap();
+        assert_eq!(current, v02, "the newest release is current, not the edge");
     }
 
     #[test]

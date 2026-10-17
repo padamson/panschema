@@ -372,25 +372,42 @@ released, even after the repo's toolchain moves on.
 
 ### Slice 6: Versions derived from tags
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** A release is a tag push. A patch tag cut on an old line,
 from a commit no branch holds, publishes without a separate commit on
 `main` to list it.
 
 **Acceptance Criteria:**
-- [ ] With `versions` omitted, every `v*` tag that parses as semver is a
+- [x] With `versions` omitted, every `v*` tag that parses as semver is a
   version, for schema docs and editions alike.
-- [ ] With `current` omitted, the highest release tag is current.
-- [ ] Pre-release tags (`v0.2.0-rc.1`) are versions but never the
+- [x] With `current` omitted, the highest release tag is current.
+- [x] Pre-release tags (`v0.2.0-rc.1`) are versions but never the
   default `current`.
-- [ ] An explicit `versions` or `current` still wins, so a repo can lag
+- [x] An explicit `versions` or `current` still wins, so a repo can lag
   `current` or leave a tag out.
 
 **Notes:**
 - Feature 11 chose explicit fields ("don't silently default to latest
   semver"). The tag-only patch line changes the cost: under an explicit
   list, a tag cannot publish itself.
+- The manifest keeps the fields as written: a parse leaves an omitted
+  `versions` or `current` absent, and `panschema publish` and
+  `mdbook-panschema editions` each read the tags once at the start of
+  the run, so a command that rewrites the manifest never freezes the
+  derived list into it. The checks that need the list run at parse
+  time only when the fields they read are listed (`current` is a
+  version or the edge: both; an `[editions.toolchain]` key names a
+  build source: `versions`) and otherwise once the tags are read, as
+  does the check that a dependency page's directory is no version's.
+- The tags are read from the checkout, so a shallow clone is refused
+  (`fetch-depth: 0` for `actions/checkout`), and a derived tag that
+  cannot publish, one from before the schema existed or belonging to
+  another component of the repository, fails by name with `versions`
+  as the way to leave it out.
+- With no release among the versions (none, or pre-releases only), the
+  default `current` is the edge; with no edge either, the publish is
+  refused and says to set `current` or tag a release.
 
 ---
 
@@ -419,7 +436,7 @@ publishes both books, verified on a real site.
 | Slice 3: Edition-aware toolbar | Must Have | Slice 2 | Completed |
 | Slice 4: Schema pages link back | Must Have | Slice 1 | Completed |
 | Slice 5: Per-edition toolchain | Must Have | Slice 2 | Completed |
-| Slice 6: Versions derived from tags | Should Have | None | Not Started |
+| Slice 6: Versions derived from tags | Should Have | None | Completed |
 | Slice 7: Dogfood and docs | Must Have | Slices 3, 4, 5 | Not Started |
 
 ---

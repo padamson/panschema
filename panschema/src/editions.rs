@@ -80,25 +80,45 @@ pub struct EditionPlan {
     pub current: String,
 }
 
-/// Group `[publishing]`'s release list into editions.
+/// Group `[publishing]`'s release list into editions and name the
+/// current one.
+///
+/// Fails as [`editions_of`] does, when the release list has not been
+/// read from the tags it was left to, or when `current` is held by no
+/// edition.
+pub fn plan(publishing: &PublishingConfig) -> Result<EditionPlan, PublishError> {
+    let (versions, current) = publishing.releases()?;
+    let editions = editions_of(versions, publishing.edge.as_deref())?;
+    let current = holding(&editions, current)
+        .map(|e| e.label.clone())
+        .ok_or_else(|| PublishError::InvalidCurrent {
+            current: current.to_string(),
+            versions: versions.to_vec(),
+            edge: publishing.edge.clone(),
+        })?;
+
+    Ok(EditionPlan { editions, current })
+}
+
+/// The editions a release list forms, released ones newest first and
+/// then the unreleased one from `edge`, without deciding which is
+/// current.
 ///
 /// Fails when a version does not parse as semver (its line cannot be
 /// known), when the tags are spelled two ways or one is listed twice
 /// (edition names would be inconsistent or ambiguous), or when the edge
 /// label is also an edition's label.
-pub fn plan(publishing: &PublishingConfig) -> Result<EditionPlan, PublishError> {
+pub(crate) fn editions_of(
+    versions: &[String],
+    edge: Option<&str>,
+) -> Result<Vec<Edition>, PublishError> {
     // Edition labels reuse the tags' prefix, so every tag must share one.
     let mut spelling: Option<(&str, &str)> = None;
     // Keyed by line, so iteration runs oldest line first; each line's
     // versions are sorted by semver below.
     let mut lines: BTreeMap<Line, Vec<(Version, &str)>> = BTreeMap::new();
-    for tag in &publishing.versions {
-        let prefix = if tag.starts_with(['v', 'V']) {
-            &tag[..1]
-        } else {
-            ""
-        };
-        let version = Version::parse(&tag[prefix.len()..]).map_err(|_| {
+    for tag in versions {
+        let (prefix, version) = crate::publish::tag_semver(tag).ok_or_else(|| {
             PublishError::EditionVersionNotSemver {
                 version: tag.clone(),
             }
@@ -144,26 +164,20 @@ pub fn plan(publishing: &PublishingConfig) -> Result<EditionPlan, PublishError> 
         })
         .collect();
 
-    if let Some(edge) = &publishing.edge {
-        if editions.iter().any(|e| &e.label == edge) {
-            return Err(PublishError::EdgeShadowsEdition { edge: edge.clone() });
+    if let Some(edge) = edge {
+        if editions.iter().any(|e| e.label == edge) {
+            return Err(PublishError::EdgeShadowsEdition {
+                edge: edge.to_string(),
+            });
         }
         editions.push(Edition {
-            label: edge.clone(),
-            source: edge.clone(),
+            label: edge.to_string(),
+            source: edge.to_string(),
             versions: Vec::new(),
         });
     }
 
-    let current = holding(&editions, &publishing.current)
-        .map(|e| e.label.clone())
-        .ok_or_else(|| PublishError::InvalidCurrent {
-            current: publishing.current.clone(),
-            versions: publishing.versions.clone(),
-            edge: publishing.edge.clone(),
-        })?;
-
-    Ok(EditionPlan { editions, current })
+    Ok(editions)
 }
 
 /// The edition among `editions` that holds `version`.
@@ -212,6 +226,14 @@ pub enum EditionsError {
     Publish(#[from] PublishError),
     #[error("`mdbook-panschema editions` requires an [editions] section in {PUBLISH_FILENAME}")]
     MissingEditions,
+    #[error(
+        "`{tag}`, a tag taken from the repository, cannot build an edition: {source}; list [publishing].versions to leave it out"
+    )]
+    DerivedTag {
+        tag: String,
+        #[source]
+        source: Box<EditionsError>,
+    },
     #[error("edition `{edition}`: could not read the tree at `{tag}`: {message}")]
     Extract {
         edition: String,
@@ -314,11 +336,13 @@ pub fn build_editions(
         .editions
         .as_ref()
         .ok_or(EditionsError::MissingEditions)?;
-    let publishing = cfg
+    let listed = cfg
         .publishing
         .as_ref()
         .ok_or(PublishError::EditionsWithoutPublishing)?;
-    // `cfg` need not have come through the publish spec's own parse.
+    let publishing = &listed.resolve_releases(spec_dir)?;
+    // `cfg` need not have come through the publish spec's own parse, and
+    // a release list left to the tags was not known to it.
     editions_cfg.validate(publishing)?;
     let plan = plan(publishing)?;
 
@@ -341,24 +365,38 @@ pub fn build_editions(
     let scratch = tempfile::tempdir().map_err(EditionsError::Scratch)?;
     let mut built: Vec<(String, PathBuf)> = Vec::new();
     for edition in &plan.editions {
-        let tree = scratch.path().join("tree").join(&edition.label);
-        extract_tree(&top, &commits[&edition.source], &tree).map_err(|message| {
-            EditionsError::Extract {
-                edition: edition.label.clone(),
-                tag: edition.source.clone(),
-                message,
+        let build = || -> Result<PathBuf, EditionsError> {
+            let tree = scratch.path().join("tree").join(&edition.label);
+            extract_tree(&top, &commits[&edition.source], &tree).map_err(|message| {
+                EditionsError::Extract {
+                    edition: edition.label.clone(),
+                    tag: edition.source.clone(),
+                    message,
+                }
+            })?;
+            let book_dir = tree.join(&prefix).join(&editions_cfg.book);
+            build_one(
+                edition,
+                &plan,
+                &book_dir,
+                cfg,
+                editions_cfg,
+                toolchain,
+                &scratch.path().join("out").join(&edition.label),
+            )
+        };
+        // A tag the manifest never named may hold no book at all, and
+        // `versions` is the way to leave it out.
+        let html = build().map_err(|err| {
+            if listed.versions.is_none() && edition.is_released() {
+                EditionsError::DerivedTag {
+                    tag: edition.source.clone(),
+                    source: Box::new(err),
+                }
+            } else {
+                err
             }
         })?;
-        let book_dir = tree.join(&prefix).join(&editions_cfg.book);
-        let html = build_one(
-            edition,
-            &plan,
-            &book_dir,
-            cfg,
-            editions_cfg,
-            toolchain,
-            &scratch.path().join("out").join(&edition.label),
-        )?;
         built.push((edition.label.clone(), html));
     }
 
@@ -927,6 +965,23 @@ mod tests {
     }
 
     #[test]
+    fn plan_refuses_a_release_list_that_has_not_been_read_from_the_tags() {
+        // Either field left to the tags is enough: a listed `current`
+        // beside a derived `versions` is not a plan of the edge alone.
+        for body in [
+            "edge = \"main\"",
+            "current = \"main\"\nedge = \"main\"",
+            "versions = [\"v0.1.0\"]",
+        ] {
+            let err = plan(&publishing(body)).unwrap_err();
+            assert!(
+                matches!(err, PublishError::ReleasesUnresolved),
+                "body {body:?}: expected ReleasesUnresolved, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
     fn a_minor_line_is_one_edition_built_from_its_newest_patch() {
         let plan = plan(&publishing(
             r#"versions = ["v0.1.0", "v0.1.1", "v0.2.0"]
@@ -1370,11 +1425,21 @@ mod build_tests {
     /// The fixture's publish spec, with `extra` appended to `[editions]`
     /// (or starting a later section).
     fn spec(current: &str, extra: &str) -> PublishConfig {
+        spec_with(
+            &format!(
+                "versions = [\"v0.1.0\", \"v0.1.1\", \"v0.2.0\"]\n\
+                 edge = \"main\"\ncurrent = \"{current}\""
+            ),
+            extra,
+        )
+    }
+
+    /// The fixture's publish spec with the given `[publishing]` body.
+    fn spec_with(publishing: &str, extra: &str) -> PublishConfig {
         format!(
             "[schema]\nname = \"x\"\nversion = \"0.2.0\"\nlinkml = \"1.7.0\"\n\
              [files]\nmain = \"schema.yaml\"\n\
-             [publishing]\nversions = [\"v0.1.0\", \"v0.1.1\", \"v0.2.0\"]\n\
-             edge = \"main\"\ncurrent = \"{current}\"\n\
+             [publishing]\n{publishing}\n\
              [editions]\n{extra}\n"
         )
         .parse()
@@ -1408,6 +1473,101 @@ mod build_tests {
         let mut out = BTreeMap::new();
         walk(dir, dir, &mut out);
         out
+    }
+
+    #[test]
+    fn a_derived_tag_without_a_book_names_itself_and_the_way_out() {
+        let repo = init_repo();
+        let p = repo.path();
+        commit(p, &[("README.md", "before the book")], Some("v0.0.1"));
+        commit(
+            p,
+            &[
+                ("book/book.toml", "[book]\ntitle = \"T\"\n"),
+                ("book/toolchain.toml", "mdbook = \"0.5.2\"\n"),
+                ("book/src/chapter.md", "v0.1.0"),
+            ],
+            Some("v0.1.0"),
+        );
+
+        let err = build_editions(p, &spec_with("", ""), &FakeToolchain::default()).unwrap_err();
+
+        assert!(
+            matches!(&err, EditionsError::DerivedTag { tag, source }
+                if tag == "v0.0.1" && matches!(**source, EditionsError::NoBook { .. })),
+            "expected DerivedTag over NoBook, got {err:?}"
+        );
+        assert!(
+            err.to_string().contains("list [publishing].versions"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_listed_tag_without_a_book_is_reported_as_itself() {
+        let repo = init_repo();
+        let p = repo.path();
+        commit(p, &[("README.md", "before the book")], Some("v0.0.1"));
+        commit(
+            p,
+            &[
+                ("book/book.toml", "[book]\ntitle = \"T\"\n"),
+                ("book/toolchain.toml", "mdbook = \"0.5.2\"\n"),
+                ("book/src/chapter.md", "v0.1.0"),
+            ],
+            Some("v0.1.0"),
+        );
+        let cfg = spec_with("versions = [\"v0.0.1\", \"v0.1.0\"]", "");
+
+        let err = build_editions(p, &cfg, &FakeToolchain::default()).unwrap_err();
+
+        assert!(
+            matches!(err, EditionsError::NoBook { ref tag, .. } if tag == "v0.0.1"),
+            "expected NoBook, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn the_editions_come_from_the_tags_when_the_release_list_is_omitted() {
+        let repo = book_repo();
+
+        let report = build_editions(
+            repo.path(),
+            &spec_with("edge = \"main\"", ""),
+            &FakeToolchain::default(),
+        )
+        .unwrap();
+
+        let planned: Vec<(&str, &str)> = report
+            .plan
+            .editions
+            .iter()
+            .map(|e| (e.label.as_str(), e.source.as_str()))
+            .collect();
+        assert_eq!(
+            planned,
+            [("v0.2", "v0.2.0"), ("v0.1", "v0.1.1"), ("main", "main")]
+        );
+        assert_eq!(report.plan.current, "v0.2");
+        assert_eq!(body(repo.path().join("site/chapter.html")), "v0.2.0");
+    }
+
+    #[test]
+    fn an_override_for_a_tag_no_edition_builds_from_is_refused_once_the_tags_are_read() {
+        let repo = book_repo();
+        // Which tags exist is unknown at parse time, so the spec parses.
+        let cfg = spec_with(
+            "edge = \"main\"",
+            "[editions.toolchain.\"v9.9.9\"]\nmdbook = \"0.5.2\"",
+        );
+
+        let err = build_editions(repo.path(), &cfg, &FakeToolchain::default()).unwrap_err();
+
+        assert!(
+            matches!(err, EditionsError::Publish(PublishError::UnknownToolchainKey { ref key, .. })
+                if key == "v9.9.9"),
+            "expected UnknownToolchainKey, got {err:?}"
+        );
     }
 
     #[test]

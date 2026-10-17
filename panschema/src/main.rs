@@ -2412,13 +2412,9 @@ fn publish_command(
         manifest_dir.join(output_dir)
     };
 
-    publish_versioned(manifest_dir, &cfg, &output_dir, edge_from_worktree)?;
+    let built = publish_versioned(manifest_dir, &cfg, &output_dir, edge_from_worktree)?;
 
-    println!(
-        "Published {} versions to {}",
-        publishing.versions.len() + publishing.edge.iter().count(),
-        output_dir.display()
-    );
+    println!("Published {built} versions to {}", output_dir.display());
     Ok(())
 }
 

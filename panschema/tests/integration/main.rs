@@ -6453,8 +6453,9 @@ fn cli_publish_builds_per_version_subdirs_and_current_alias() {
     git(repo, &["commit", "-m", "release v0.1.0", "--quiet"]);
     git(repo, &["tag", "v0.1.0"]);
 
-    // Manifest with [publishing]. Note `current = "v0.1.0"` — that's
-    // the only legal value here (no other versions, no edge).
+    // Manifest with [publishing] that lists neither `versions` nor
+    // `current`: the tag is read from the repository and, as its only
+    // release, stands as current.
     fs::write(
         repo.join("panschema-publish.toml"),
         r#"[schema]
@@ -6466,8 +6467,6 @@ linkml = "1.7.0"
 main = "schema.yaml"
 
 [publishing]
-versions = ["v0.1.0"]
-current = "v0.1.0"
 output_dir = "site"
 "#,
     )

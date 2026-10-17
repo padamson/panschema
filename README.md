@@ -403,15 +403,15 @@ The editions come from the same release list the schema docs use, so the two agr
 
 ```toml
 [publishing]
-versions = ["v0.1.0", "v0.1.1", "v0.2.0"]
 edge = "main"
-current = "v0.2.0"
 output_dir = "site/schema"   # must lie inside the editions' output_dir
 
 [editions]
 book = "book"                # the directory holding book.toml
 output_dir = "site"          # the site root; editions land in site/book/
 ```
+
+With no `versions` listed, every tag of the form `v<semver>` in the repository is a version, oldest first, and with no `current`, the newest release among them is current (never a pre-release; the edge when there is no release). Both are read when the command runs, by `panschema publish` and `mdbook-panschema editions` alike, so a release is a tag push: a patch tag cut on an old line publishes without a commit on `main` listing it. List `versions = ["v0.1.0", "v0.1.1", "v0.2.0"]` to leave a tag out, or `current = "v0.1.1"` to let the site lag a release in progress; either still wins. The tags are read from the checkout, so a publishing workflow needs the whole history (`fetch-depth: 0` for `actions/checkout`); a shallow clone is refused rather than read. Every such tag counts, so a tag from before the schema existed, or one that belongs to another component of a monorepo, fails the publish by name, with `versions` as the way to leave it out.
 
 Then, from anywhere in the repo:
 
