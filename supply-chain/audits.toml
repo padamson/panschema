@@ -124,6 +124,12 @@ criteria = "safe-to-deploy"
 delta = "0.16.1 -> 0.17.2"
 notes = "ArrayRef refactor and packaging cut (tests, benches, examples dropped). Every added unsafe line read: view construction from (ptr, dim, strides), from_raw_parts on the array's own pointer, ref-type casts. No build script, no I/O; process::abort pre-existing."
 
+[[audits.nix]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.30.1 -> 0.31.3"
+notes = "Delta audit, read in full. cfg widening for newer targets, a readdir refactor, kevent64 on macOS, a ptrace fix, and documentation; cfg_aliases added as a build dependency for the target cfgs. No network or process access beyond the syscall wrappers the crate already exposes. Only the fs feature is enabled here, for fchmodat in zip."
+
 [[audits.oxigraph]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-deploy"
@@ -196,11 +202,23 @@ criteria = "safe-to-run"
 delta = "0.18.1 -> 0.19.0"
 notes = "Delta audit. The build script now assembles the driver into the per-user cache (dirs::cache_dir, version-keyed) rather than OUT_DIR, falling back to OUT_DIR with no home; PLAYWRIGHT_DRIVER_CACHE_DIR and PLAYWRIGHT_SKIP_DRIVER_DOWNLOAD keep their meaning; dirs 7 added as a build dependency. Protocol fixes for Download::path, WebSocketRoute, and locator handlers; ServerNotFound now says why. No unsafe. Authored by the certifier."
 
+[[audits.playwright-rs]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.19.0 -> 0.20.1"
+notes = "Delta audit, read in full; the browser_context.rs split into browser_context/ was compared as a position-independent diff. Driver pinned to Playwright 1.64.0 with Node 24.21.0, and the assembled driver's cache directory now names the Node version; zip taken at 9 for the build script's Windows Node archive, which is what clears RUSTSEC-2026-0367 through 0369 downstream. Every tokio::spawn now goes through task::spawn or spawn_detached, so the read loop, stderr drain, and SIGINT listener stop holding the caller's span; request ids become abcd@N strings with a RandomState-derived prefix; record_har is applied by the client through harStart and harExport instead of being sent as a parameter the driver drops; acronym option names take the driver's spelling. New surface: WebMCP, Locator::within, Page::get_by_ref, content_with_options, cookie url and regex filters, screen emulation, fps and show-actions style. protocol_spec.rs is cfg(test) only. No new network, process, or unsafe. Authored by the certifier."
+
 [[audits.playwright-rs-macros]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-run"
 version = "0.1.1"
 notes = "Authored and maintained by the certifier. Proc-macro half of playwright-rs; same dev-dependency scope and criteria."
+
+[[audits.playwright-rs-macros]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.1.1 -> 0.1.2"
+notes = "Delta audit, read in full. The locator!() macro learns the aria-ref selector engine; nothing else changes. Authored by the certifier."
 
 [[audits.rand]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
@@ -265,6 +283,12 @@ who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "0.3.6 -> 0.3.7"
 notes = "Delta audit of the oxigraph 2026-09 patch bumps: dependency pins, clippy lint lists, edition-2024 attribute migration, and small parser/optimizer correctness fixes. No new dependencies, build scripts, unsafe, network, or filesystem code."
+
+[[audits.zip]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "8.6.0 -> 9.0.4"
+notes = "Delta audit, read in full. Extraction moved to read/extract.rs: symlink targets resolved one component at a time inside the destination (path::resolve_enclosed), a 4096-byte cap on a symlink entry's declared size, and permissions set with fchmodat NoFollowSymlink through a new nix (fs) dependency on macOS and the BSDs; these are RUSTSEC-2026-0367, 0368 and 0369. Legacy decoders no longer pre-allocate the declared size and the implode and huffman arithmetic overflows are fixed; reads past the declared uncompressed size fail. spec.rs and the write options split into format/ and write/options.rs with the same logic. No build script, network, process, or env access; the only unsafe is the pre-existing Pod byte view of the packed header blocks, moved unchanged."
 
 [[trusted.aho-corasick]]
 criteria = "safe-to-deploy"

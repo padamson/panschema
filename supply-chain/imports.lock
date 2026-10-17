@@ -1172,6 +1172,12 @@ who = "Pat Hickey <p.hickey@f5.com>"
 criteria = "safe-to-deploy"
 delta = "1.8.1 -> 1.8.2"
 
+[[audits.embark-studios.audits.cfg_aliases]]
+who = "Johan Andersson <opensource@embark-studios.com>"
+criteria = "safe-to-deploy"
+version = "0.1.1"
+notes = "No unsafe usage or ambient capabilities"
+
 [[audits.embark-studios.audits.ident_case]]
 who = "Johan Andersson <opensource@embark-studios.com>"
 criteria = "safe-to-deploy"
@@ -1270,6 +1276,12 @@ criteria = "safe-to-deploy"
 version = "1.5.0"
 notes = "Unsafe review in https://crrev.com/c/5838022"
 aggregated-from = "https://chromium.googlesource.com/chromium/src/+/main/third_party/rust/chromium_crates_io/supply-chain/audits.toml?format=TEXT"
+
+[[audits.google.audits.cfg_aliases]]
+who = "Hsin-chen Chuang <chharry@chromium.org>"
+criteria = "safe-to-run"
+delta = "0.1.1 -> 0.2.1"
+aggregated-from = "https://chromium.googlesource.com/chromiumos/third_party/rust_crates/+/refs/heads/main/cargo-vet/audits.toml?format=TEXT"
 
 [[audits.google.audits.core-foundation-sys]]
 who = "Manish Goregaokar <manishearth@google.com>"
@@ -1462,6 +1474,44 @@ criteria = "safe-to-deploy"
 delta = "0.4.25 -> 0.4.26"
 notes = "Only trivial code and documentation changes."
 aggregated-from = "https://chromium.googlesource.com/chromium/src/+/main/third_party/rust/chromium_crates_io/supply-chain/audits.toml?format=TEXT"
+
+[[audits.google.audits.nix]]
+who = "David Koloski <dkoloski@google.com>"
+criteria = "safe-to-run"
+version = "0.26.2"
+notes = """
+Reviewed on https://fxrev.dev/780283
+Issues:
+- https://github.com/nix-rust/nix/issues/1975
+- https://github.com/nix-rust/nix/issues/1977
+- https://github.com/nix-rust/nix/pull/1978
+- https://github.com/nix-rust/nix/pull/1979
+- https://github.com/nix-rust/nix/issues/1980
+- https://github.com/nix-rust/nix/issues/1981
+- https://github.com/nix-rust/nix/pull/1983
+- https://github.com/nix-rust/nix/issues/1990
+- https://github.com/nix-rust/nix/pull/1992
+- https://github.com/nix-rust/nix/pull/1993
+"""
+aggregated-from = "https://fuchsia.googlesource.com/fuchsia/+/refs/heads/main/third_party/rust_crates/supply-chain/audits.toml?format=TEXT"
+
+[[audits.google.audits.nix]]
+who = "George Burgess IV <gbiv@google.com>"
+criteria = "safe-to-run"
+delta = "0.26.2 -> 0.27.1"
+aggregated-from = "https://chromium.googlesource.com/chromiumos/third_party/rust_crates/+/refs/heads/main/cargo-vet/audits.toml?format=TEXT"
+
+[[audits.google.audits.nix]]
+who = "Daniel Verkamp <dverkamp@chromium.org>"
+criteria = "safe-to-run"
+delta = "0.27.1 -> 0.28.0"
+aggregated-from = "https://chromium.googlesource.com/chromiumos/third_party/rust_crates/+/refs/heads/main/cargo-vet/audits.toml?format=TEXT"
+
+[[audits.google.audits.nix]]
+who = "Hsin-chen Chuang <chharry@chromium.org>"
+criteria = "safe-to-run"
+delta = "0.28.0 -> 0.29.0"
+aggregated-from = "https://chromium.googlesource.com/chromiumos/third_party/rust_crates/+/refs/heads/main/cargo-vet/audits.toml?format=TEXT"
 
 [[audits.google.audits.nom]]
 who = "danakj@chromium.org"
@@ -2126,6 +2176,12 @@ criteria = "safe-to-deploy"
 delta = "2.9.4 -> 2.10.0"
 aggregated-from = "https://raw.githubusercontent.com/mozilla-firefox/firefox/main/supply-chain/audits.toml"
 
+[[audits.mozilla.audits.cfg_aliases]]
+who = "Erich Gubler <erichdongubler@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.1 -> 0.2.2"
+aggregated-from = "https://raw.githubusercontent.com/mozilla-firefox/firefox/main/supply-chain/audits.toml"
+
 [[audits.mozilla.audits.crossbeam-utils]]
 who = "Mike Hommey <mh+mozilla@glandium.org>"
 criteria = "safe-to-deploy"
@@ -2340,6 +2396,13 @@ aggregated-from = "https://raw.githubusercontent.com/mozilla-firefox/firefox/mai
 who = "Erich Gubler <erichdongubler@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "0.4.26 -> 0.4.29"
+aggregated-from = "https://raw.githubusercontent.com/mozilla-firefox/firefox/main/supply-chain/audits.toml"
+
+[[audits.mozilla.audits.nix]]
+who = "Gabriele Svelto <gsvelto@mozilla.com>"
+criteria = "safe-to-deploy"
+delta = "0.29.0 -> 0.30.1"
+notes = "Some new wrappers, support for minor platforms and lots of work around type safety that reduces the unsafe surafce."
 aggregated-from = "https://raw.githubusercontent.com/mozilla-firefox/firefox/main/supply-chain/audits.toml"
 
 [[audits.mozilla.audits.num-conv]]
