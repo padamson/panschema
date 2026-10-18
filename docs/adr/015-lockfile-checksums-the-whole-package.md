@@ -59,10 +59,13 @@ be re-fetched.
   filesystem (macOS, Windows), and its digest there differs from Linux's. A
   path that is not UTF-8 is refused rather than made printable, since two
   such names could print the same.
-- A dataset path in a fetched package's `[[instances]]` is not yet confined
-  to the package, as the main file and `imports:` are, so a dataset reached
-  through `../` or a symlink out of the package is read but not covered by
-  the checksum.
+- The checksum covers what a pin renders from because everything read from
+  it is confined to the package. The main file must exist and resolve inside
+  it, and its `imports:` may not resolve above it. A dataset is checked when
+  a consumer names it, and may not exist yet: the part of its path that
+  exists is resolved, symlinks followed, and the whole must stay inside, so a
+  `[[instances]]` path that leads out through `../` or a symlink is refused
+  at the name.
 - `fetch --check` and `publish` now read and hash the whole cached tag tree
   on each run, where they read one file before. The cost grows with the
   size of the dependency's repository, not only its schema.

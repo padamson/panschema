@@ -209,7 +209,9 @@ pub struct PublishedDataset {
     /// The `[[instances]]` entry's `name`.
     pub name: String,
     /// Absolute path to the data file, resolved against the package
-    /// directory the publish manifest sits in.
+    /// directory the publish manifest sits in. Not yet confined to the
+    /// package: [`resolve_named_datasets`] refuses one that leads out of it
+    /// before a consumer reads it.
     pub data: PathBuf,
     /// The `[schemas.<dep>]` dependency this dataset conforms to, when the
     /// publish entry names one. `None` means the package's own schema.
@@ -311,6 +313,27 @@ pub enum DatasetError {
         name: String,
         declared: Vec<String>,
     },
+    #[error(
+        "[generate.{entry}]: `{dep}`'s dataset `{name}` names `{}`, which does not resolve \
+         inside the package",
+        data.display()
+    )]
+    OutsidePackage {
+        entry: String,
+        dep: String,
+        name: String,
+        /// The `data` path as the publish manifest writes it.
+        data: PathBuf,
+    },
+    #[error("[generate.{entry}]: `{dep}`'s dataset `{name}` at `{}`: {message}", data.display())]
+    Unreadable {
+        entry: String,
+        dep: String,
+        name: String,
+        /// The `data` path as the publish manifest writes it.
+        data: PathBuf,
+        message: String,
+    },
 }
 
 impl Resolved {
@@ -391,6 +414,31 @@ pub fn resolve_named_datasets(
                 schema: conforms_to.to_string(),
                 block,
             }));
+        }
+        let written = dataset
+            .data
+            .strip_prefix(&dep.pkg_dir)
+            .unwrap_or(&dataset.data)
+            .to_path_buf();
+        match crate::cache::lies_within(&dep.pkg_dir, &dataset.data) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(Box::new(DatasetError::OutsidePackage {
+                    entry: entry.to_string(),
+                    dep: dep.published_name.clone(),
+                    name: dataset_name.to_string(),
+                    data: written,
+                }));
+            }
+            Err(e) => {
+                return Err(Box::new(DatasetError::Unreadable {
+                    entry: entry.to_string(),
+                    dep: dep.published_name.clone(),
+                    name: dataset_name.to_string(),
+                    data: written,
+                    message: e.to_string(),
+                }));
+            }
         }
         out.push(dataset.data.clone());
     }
@@ -1062,6 +1110,67 @@ schema = "cqa"
             resolved.dataset("benchmark").expect("published").schema,
             Some("cqa".to_string()),
             "and this one names the dependency it conforms to"
+        );
+    }
+
+    /// The consumer's one dependency, a real package directory holding
+    /// `data/in.yaml` beside a file outside it, whose `worked-example`
+    /// dataset names `data`.
+    fn depending_on_data(
+        tmp: &tempfile::TempDir,
+        data: &str,
+    ) -> std::collections::BTreeMap<String, Resolved> {
+        let pkg = tmp.path().join("pkg");
+        std::fs::create_dir_all(pkg.join("data")).unwrap();
+        std::fs::write(pkg.join("data/in.yaml"), "x: 1\n").unwrap();
+        std::fs::write(tmp.path().join("outside.yaml"), "secret: 1\n").unwrap();
+        let pkg = pkg.canonicalize().unwrap();
+        let mut wine = published(pkg.to_str().unwrap());
+        wine.datasets[0].data = pkg.join(data);
+        std::collections::BTreeMap::from([("wine".to_string(), wine)])
+    }
+
+    /// A fetched package is untrusted, so the data file a consumer names
+    /// must lie inside it, as its main file and its `imports:` must.
+    #[test]
+    fn a_named_dataset_must_lie_inside_the_package_that_publishes_it() {
+        let named = ["worked-example".to_string()];
+        let tmp = tempfile::tempdir().unwrap();
+        let deps = depending_on_data(&tmp, "data/in.yaml");
+        assert_eq!(
+            resolve_named_datasets("wine", &deps, &named).expect("a file inside resolves"),
+            [deps["wine"].pkg_dir.join("data/in.yaml")]
+        );
+
+        let tmp = tempfile::tempdir().unwrap();
+        let err =
+            resolve_named_datasets("wine", &depending_on_data(&tmp, "../outside.yaml"), &named)
+                .expect_err("a path out of the package is refused");
+        assert_eq!(
+            *err,
+            DatasetError::OutsidePackage {
+                entry: "wine".to_string(),
+                dep: "wine".to_string(),
+                name: "worked-example".to_string(),
+                data: PathBuf::from("../outside.yaml"),
+            },
+            "the error names the dataset and its `data` path as written"
+        );
+    }
+
+    #[test]
+    fn a_dataset_path_that_cannot_be_read_is_reported_with_its_path_not_as_an_escape() {
+        let tmp = tempfile::tempdir().unwrap();
+        let deps = depending_on_data(&tmp, "data/in.yaml/below-a-file.yaml");
+        let err = resolve_named_datasets("wine", &deps, &["worked-example".to_string()])
+            .expect_err("a path below a file cannot be checked");
+        assert!(
+            matches!(
+                &*err,
+                DatasetError::Unreadable { data, .. }
+                    if data == Path::new("data/in.yaml/below-a-file.yaml")
+            ),
+            "got: {err:?}"
         );
     }
 

@@ -84,6 +84,40 @@ pub fn validate_within(base: &Path, target: &Path) -> Result<(), CacheError> {
     Ok(())
 }
 
+/// Whether `target` lies inside `base` (canonical), for a path that need not
+/// exist yet: the nearest part of it that exists is resolved, symlinks
+/// followed, the part that does not exist is appended as written, and the
+/// result must lie under `base`. The part that does not exist may not hold
+/// `..`, since it cannot be resolved. A dangling symlink resolves to nothing
+/// that can be checked, so it does not lie inside. Errors other than a
+/// missing path are returned, so a permission failure is never reported as
+/// an escape.
+pub fn lies_within(base: &Path, target: &Path) -> std::io::Result<bool> {
+    let mut existing = target;
+    loop {
+        match existing.symlink_metadata() {
+            Ok(_) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => match existing.parent() {
+                Some(parent) => existing = parent,
+                None => return Ok(false),
+            },
+            Err(e) => return Err(e),
+        }
+    }
+    let missing = target.strip_prefix(existing).unwrap_or(target);
+    if missing
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Ok(false);
+    }
+    match existing.canonicalize() {
+        Ok(canon) => Ok(canon.join(missing).starts_with(base)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
 /// Extract a gzipped-tar reader into `target_dir` and return the top-level
 /// directory name. For `codeload.github.com/<owner>/<repo>/tar.gz/refs/tags/<tag>`
 /// URLs this is `<repo>-<tag-without-leading-v>`, e.g. `scimantic-schema-0.1.0`.
@@ -383,6 +417,70 @@ mod tests {
 
         let err = validate_within(&base, &link).unwrap_err();
         assert!(matches!(err, CacheError::PathEscape(_)));
+    }
+
+    /// A package at `<tmp>/pkg` holding `data/in.yaml`, beside a file outside
+    /// it at `<tmp>/outside.yaml`; returns the canonical package directory.
+    fn package_beside_an_outside_file(tmp: &TempDir) -> PathBuf {
+        let pkg = tmp.path().join("pkg");
+        fs::create_dir_all(pkg.join("data")).unwrap();
+        fs::write(pkg.join("data/in.yaml"), b"x").unwrap();
+        fs::write(tmp.path().join("outside.yaml"), b"secret").unwrap();
+        pkg.canonicalize().unwrap()
+    }
+
+    #[test]
+    fn lies_within_accepts_a_file_inside_whether_or_not_it_exists_yet() {
+        let tmp = TempDir::new().unwrap();
+        let pkg = package_beside_an_outside_file(&tmp);
+        for rel in ["data/in.yaml", "data/missing.yaml", "new/dir/missing.yaml"] {
+            assert!(
+                lies_within(&pkg, &pkg.join(rel)).unwrap(),
+                "`{rel}` is inside the package"
+            );
+        }
+    }
+
+    #[test]
+    fn lies_within_refuses_a_path_that_climbs_out() {
+        let tmp = TempDir::new().unwrap();
+        let pkg = package_beside_an_outside_file(&tmp);
+        for rel in [
+            "../outside.yaml",
+            "../missing.yaml",
+            "missing/../../outside.yaml",
+        ] {
+            assert!(
+                !lies_within(&pkg, &pkg.join(rel)).unwrap(),
+                "`{rel}` climbs out of the package"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lies_within_refuses_a_link_out_of_the_package_even_to_nothing_yet() {
+        use std::os::unix::fs::symlink;
+        let tmp = TempDir::new().unwrap();
+        let pkg = package_beside_an_outside_file(&tmp);
+        symlink(tmp.path().join("outside.yaml"), pkg.join("to-file.yaml")).unwrap();
+        symlink(tmp.path().join("not-yet.yaml"), pkg.join("dangling.yaml")).unwrap();
+        symlink(tmp.path(), pkg.join("to-dir")).unwrap();
+        for rel in ["to-file.yaml", "dangling.yaml", "to-dir/missing.yaml"] {
+            assert!(
+                !lies_within(&pkg, &pkg.join(rel)).unwrap(),
+                "`{rel}` leads out of the package"
+            );
+        }
+        symlink("loop.yaml", pkg.join("loop.yaml")).unwrap();
+        let err = lies_within(&pkg, &pkg.join("loop.yaml"))
+            .expect_err("a link that loops cannot be resolved, and is not called an escape");
+        assert_ne!(err.kind(), std::io::ErrorKind::NotFound, "got: {err}");
+        symlink(pkg.join("data/in.yaml"), pkg.join("to-inside.yaml")).unwrap();
+        assert!(
+            lies_within(&pkg, &pkg.join("to-inside.yaml")).unwrap(),
+            "a link to a file inside the package stays inside"
+        );
     }
 
     /// Build a tarball with a leading `pax_global_header` pseudo-entry
