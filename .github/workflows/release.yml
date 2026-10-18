@@ -33,12 +33,12 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+      uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
       with:
         toolchain: stable
 
     - name: Install cargo-semver-checks
-      uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7 # v2.87.23
+      uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
       with:
         tool: cargo-semver-checks
 
@@ -98,7 +98,7 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+      uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
       with:
         toolchain: stable
         targets: ${{ matrix.target }}, wasm32-unknown-unknown
@@ -107,7 +107,7 @@ jobs:
     # to build without wasm-pack when the bundle is absent — no stubs in a
     # shipped binary), so the bundle is built before the release build.
     - name: Install wasm-pack
-      uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7 # v2.87.23
+      uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
       with:
         tool: wasm-pack
 
@@ -176,7 +176,7 @@ jobs:
         7z a ../../../panschema-${{ github.ref_name }}-${{ matrix.target }}.zip panschema.exe mdbook-panschema.exe
 
     - name: Upload artifact
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:
         name: panschema-${{ matrix.target }}
         path: panschema-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}
@@ -193,7 +193,7 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     - name: Install parse-changelog
-      uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7 # v2.87.23
+      uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
       with:
         tool: parse-changelog
 
@@ -205,7 +205,7 @@ jobs:
       run: parse-changelog CHANGELOG.md ${{ steps.get_version.outputs.version }} > release_notes.md
 
     - name: Download all artifacts
-      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
       with:
         path: artifacts
         merge-multiple: true
@@ -234,13 +234,13 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+      uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
       with:
         toolchain: stable
         targets: wasm32-unknown-unknown
 
     - name: Install wasm-pack
-      uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7 # v2.87.23
+      uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
       with:
         tool: wasm-pack
 
