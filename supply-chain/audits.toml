@@ -260,6 +260,12 @@ criteria = "safe-to-deploy"
 delta = "0.23.45 -> 0.23.46"
 notes = "Four advisories, RUSTSEC-2026-0346 through 0349: secrets left out of session Debug impls, no application data sent to the outer server after ECH rejection, brotli certificate decompression bounded by the output buffer, the KX hint stored only after the server is authenticated. Also key updates before sequence exhaustion, LimitedCache eviction on an explicit max, and protected change_cipher_spec rejected. No unsafe, no dependency changes."
 
+[[audits.sha2]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.11.0 -> 0.11.1"
+notes = "Refactor of the SIMD backends: unsafe fns become safe #[target_feature] fns, with unsafe confined to load/store helpers whose round-constant reads go through bounds-checked slices (the AArch64 Stacked Borrows fix). riscv-zknh unaligned-load asm removed in favor of as_chunks. x86 round-constant order and AVX2 odd-block handling match 0.11.0. No build script, I/O, process or network code; MSRV 1.88."
+
 [[audits.sparesults]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-deploy"
