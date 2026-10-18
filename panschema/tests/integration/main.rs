@@ -4824,6 +4824,11 @@ fn fetch_locks_pins_and_fetch_check_accepts_them() {
         lock.contains("sha256:"),
         "the lock records a checksum: {lock}"
     );
+    assert_eq!(
+        lock.matches("package_checksum = \"sha256:").count(),
+        2,
+        "every pin records a package checksum: {lock}"
+    );
 
     let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
     assert!(
@@ -4897,6 +4902,29 @@ fn fetch_check_detects_pin_drift_and_never_rewrites_the_lockfile() {
     assert!(
         !check.status.success() && stderr.contains("`contract`: lockfile has sha256:"),
         "cached content that no longer matches the pin is drift, by name; got: {stderr}"
+    );
+
+    seed_github_pkg(
+        &cache,
+        "test-owner",
+        "contract",
+        "1.0.0",
+        "schema.yaml",
+        CONTRACT_BODY,
+    );
+    fs::write(
+        cache.join("github/test-owner/contract/1.0.0/contract-1.0.0/common.yaml"),
+        "name: common\n",
+    )
+    .expect("add a file beside the main schema");
+    let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
+    let stderr = String::from_utf8_lossy(&check.stderr);
+    assert!(
+        !check.status.success()
+            && stderr.contains("`contract`: lockfile has package sha256:")
+            && !stderr.contains("`contract`: lockfile has sha256:"),
+        "a changed file beside an intact main schema is package drift, and only that; \
+         got: {stderr}"
     );
     assert_eq!(
         fs::read_to_string(&lock_path).expect("lockfile"),
@@ -5099,7 +5127,22 @@ fn fetch_check_reads_lockfile_entries_by_what_they_record() {
         source: "path:./sibling-pkg".into(),
         revision: None,
         checksum: "sha256:0".into(),
+        package_checksum: None,
     };
+
+    let mut lock = good.clone();
+    lock.entries[0].package_checksum = None;
+    lock.write_to_path(&lock_path).expect("write lockfile");
+    let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
+    let stderr = String::from_utf8_lossy(&check.stderr);
+    assert!(
+        check.status.success()
+            && stderr.contains("`contract`")
+            && stderr.contains("package checksum")
+            && stderr.contains("panschema fetch"),
+        "an entry written before package checksums passes on its main file, with a note \
+         naming the re-fetch; got: {stderr}"
+    );
 
     let mut lock = good.clone();
     lock.entries.push(path_entry("sibling"));

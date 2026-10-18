@@ -58,6 +58,12 @@ pub struct LockEntry {
     pub revision: Option<String>,
     /// Content checksum of the schema's main file, e.g. `sha256:abc123…`.
     pub checksum: String,
+    /// Checksum of every file in the package, from [`checksum_package`]:
+    /// the `imports:` siblings, the publish manifest and the datasets a
+    /// pin renders from, which `checksum` does not cover. `None` in an
+    /// entry written before panschema recorded it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_checksum: Option<String>,
 }
 
 impl FromStr for Lockfile {
@@ -102,25 +108,149 @@ impl LockEntry {
         SchemaSource::spec_is_pinned(&self.source)
     }
 
-    /// Compare this entry's pinned checksum against a file's current
-    /// content. `Ok(None)` means they agree; `Ok(Some(observed))`
-    /// carries the observed checksum on disagreement, for the caller's
-    /// own message. The one comparison `panschema fetch --check` and
-    /// `panschema publish` both gate on, so the two can never disagree
-    /// about whether content drifted.
-    pub fn checksum_drift(&self, path: &Path) -> std::io::Result<Option<String>> {
-        let observed = checksum_file(path)?;
-        Ok((observed != self.checksum).then_some(observed))
+    /// Compare this entry's checksums against a pin's content as it is now.
+    /// The one comparison `panschema fetch --check` and `panschema publish`
+    /// both gate on, so the two can never disagree about whether content
+    /// drifted. A changed main file is reported first; the package is
+    /// compared only when the main file is intact and the entry records a
+    /// package checksum, which one written before panschema recorded it
+    /// does not.
+    pub fn content_drift(&self, observed: Content) -> Option<ContentDrift<'_>> {
+        if observed.checksum != self.checksum {
+            return Some(ContentDrift::MainFile {
+                locked: &self.checksum,
+                observed: observed.checksum,
+            });
+        }
+        let locked = self.package_checksum.as_deref()?;
+        (observed.package_checksum != locked).then_some(ContentDrift::Package {
+            locked,
+            observed: observed.package_checksum,
+        })
     }
+}
+
+/// A pin's content as it is on disk: the checksums a [`LockEntry`] records.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Content {
+    /// [`checksum_file`] of the main schema file.
+    pub checksum: String,
+    /// [`checksum_package`] of the package directory.
+    pub package_checksum: String,
+}
+
+impl Content {
+    /// Checksum a resolved pin's main file and package directory.
+    pub fn of(schema_path: &Path, pkg_dir: &Path) -> std::io::Result<Self> {
+        Ok(Self {
+            checksum: checksum_file(schema_path)?,
+            package_checksum: checksum_package(pkg_dir)?,
+        })
+    }
+}
+
+/// How a pin's content disagrees with its lock entry, from
+/// [`LockEntry::content_drift`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContentDrift<'a> {
+    /// The main schema file changed.
+    MainFile { locked: &'a str, observed: String },
+    /// The main file is intact, and another file in the package changed.
+    Package { locked: &'a str, observed: String },
 }
 
 /// Compute the SHA-256 hex digest of a file's content, returned as
 /// `sha256:<64-hex>`.
 pub fn checksum_file(path: &Path) -> std::io::Result<String> {
-    let bytes = std::fs::read(path)?;
+    Ok(format!("sha256:{}", digest_file(path)?))
+}
+
+/// The SHA-256 of a file's content as hex, read in chunks so a large file
+/// in a package is never held in memory whole.
+fn digest_file(path: &Path) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
     let mut hasher = Sha256::new();
-    hasher.update(&bytes);
+    let mut buf = [0u8; 65_536];
+    loop {
+        match file.read(&mut buf)? {
+            0 => break,
+            n => hasher.update(&buf[..n]),
+        }
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+/// Checksum every file under a package directory, returned as
+/// `sha256:<64-hex>`: the SHA-256 of a summary with one line per file,
+/// `<sha256-hex>  <path>\n`, sorted by path, where the path is relative to
+/// the directory and `/`-separated. This is the shape of Go's module
+/// `dirhash`. It hashes the extracted files rather than the tarball, so a
+/// re-compressed archive of the same tag is not drift, and a package
+/// extracted on two platforms gives one digest, unless it holds two paths
+/// that differ only in case, which a case-insensitive filesystem extracts
+/// as one file. A symlink's line hashes its target, written with `/`, which
+/// is not followed. A path that is not UTF-8, or that holds a newline, is
+/// refused: the first could collide with another once made printable, and
+/// the second could forge a line.
+pub fn checksum_package(dir: &Path) -> std::io::Result<String> {
+    let mut digests = std::collections::BTreeMap::new();
+    summarize_dir(dir, "", &mut digests)?;
+    let mut hasher = Sha256::new();
+    for (rel, digest) in &digests {
+        hasher.update(format!("{digest}  {rel}\n").as_bytes());
+    }
     Ok(format!("sha256:{}", hex::encode(hasher.finalize())))
+}
+
+/// Collect each file under `dir` as its `/`-separated path (after
+/// `prefix`) and the hex digest that goes on its summary line.
+fn summarize_dir(
+    dir: &Path,
+    prefix: &str,
+    digests: &mut std::collections::BTreeMap<String, String>,
+) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let refuse = |why: &str| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "package path `{prefix}{}` {why}",
+                    name.to_string_lossy().escape_debug()
+                ),
+            )
+        };
+        let rel = format!(
+            "{prefix}{}",
+            name.to_str().ok_or_else(|| refuse("is not UTF-8"))?
+        );
+        if rel.contains('\n') {
+            return Err(refuse("holds a newline"));
+        }
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            summarize_dir(&entry.path(), &format!("{rel}/"), digests)?;
+            continue;
+        }
+        let digest = if kind.is_symlink() {
+            let target = std::fs::read_link(entry.path())?;
+            let target = target
+                .to_str()
+                .ok_or_else(|| refuse("links to a target that is not UTF-8"))?;
+            let target = if cfg!(windows) {
+                target.replace('\\', "/")
+            } else {
+                target.to_owned()
+            };
+            hex::encode(Sha256::digest(target.as_bytes()))
+        } else {
+            digest_file(&entry.path())?
+        };
+        digests.insert(rel, digest);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -178,6 +308,7 @@ checksum = "sha256:1111111111111111111111111111111111111111111111111111111111111
                     source: "path:./a.yaml".into(),
                     revision: None,
                     checksum: "sha256:aaaa".into(),
+                    package_checksum: None,
                 },
                 LockEntry {
                     name: "b".into(),
@@ -185,6 +316,7 @@ checksum = "sha256:1111111111111111111111111111111111111111111111111111111111111
                     source: "github:x/b".into(),
                     revision: Some("deadbeef".into()),
                     checksum: "sha256:bbbb".into(),
+                    package_checksum: None,
                 },
             ],
         };
@@ -242,6 +374,158 @@ unrecognized = "field"
         assert_ne!(cs1, cs2);
     }
 
+    fn package_dir(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for (rel, body) in files {
+            let path = dir.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).expect("mkdir");
+            std::fs::write(path, body).expect("write");
+        }
+        dir
+    }
+
+    #[test]
+    fn package_checksum_hashes_the_sorted_list_of_file_digests_and_slash_paths() {
+        // Frozen by hand with `shasum -a 256` over the two summary lines, so
+        // a lockfile written on one platform or version checks on another.
+        let pkg = package_dir(&[("sub/b.yaml", "nested"), ("a.yaml", "hello world")]);
+        assert_eq!(
+            checksum_package(pkg.path()).expect("checksum"),
+            "sha256:5474bbdf2bfea8ef7418c0881b0832d398fc6e99894853e3f233f6fb79c9bb01"
+        );
+    }
+
+    #[test]
+    fn package_checksum_changes_when_any_file_but_the_main_one_changes() {
+        let pkg = package_dir(&[("schema.yaml", "main"), ("imports/common.yaml", "shared")]);
+        let before = checksum_package(pkg.path()).expect("checksum");
+        std::fs::write(pkg.path().join("imports/common.yaml"), "edited").expect("edit");
+        assert_ne!(checksum_package(pkg.path()).expect("checksum"), before);
+    }
+
+    #[test]
+    fn package_checksum_changes_when_a_file_is_added_or_renamed() {
+        let pkg = package_dir(&[("schema.yaml", "main")]);
+        let before = checksum_package(pkg.path()).expect("checksum");
+        std::fs::write(pkg.path().join("extra.yaml"), "").expect("add");
+        assert_ne!(
+            checksum_package(pkg.path()).expect("checksum"),
+            before,
+            "an added empty file is drift"
+        );
+        std::fs::remove_file(pkg.path().join("extra.yaml")).expect("remove");
+        std::fs::rename(
+            pkg.path().join("schema.yaml"),
+            pkg.path().join("renamed.yaml"),
+        )
+        .expect("rename");
+        assert_ne!(
+            checksum_package(pkg.path()).expect("checksum"),
+            before,
+            "a renamed file with the same bytes is drift"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn package_checksum_records_a_symlink_by_its_target_without_following_it() {
+        let pkg = package_dir(&[("a.yaml", "a"), ("b.yaml", "b")]);
+        std::os::unix::fs::symlink("a.yaml", pkg.path().join("link.yaml")).expect("symlink");
+        let to_a = checksum_package(pkg.path()).expect("checksum");
+        std::fs::remove_file(pkg.path().join("link.yaml")).expect("unlink");
+        std::os::unix::fs::symlink("b.yaml", pkg.path().join("link.yaml")).expect("symlink");
+        assert_ne!(checksum_package(pkg.path()).expect("checksum"), to_a);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn package_checksum_refuses_a_path_that_could_forge_a_summary_line() {
+        let pkg = package_dir(&[("a.yaml", "a")]);
+        std::fs::write(pkg.path().join("x\ny.yaml"), "").expect("write");
+        let err = checksum_package(pkg.path()).expect_err("a newline in a path is refused");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData, "got: {err}");
+    }
+
+    // APFS refuses a file name that is not UTF-8, so only Linux can build
+    // the fixture.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn package_checksum_refuses_a_path_that_is_not_utf8() {
+        use std::os::unix::ffi::OsStrExt;
+        let pkg = package_dir(&[("a.yaml", "a")]);
+        let name = std::ffi::OsStr::from_bytes(b"\xff.yaml");
+        std::fs::write(pkg.path().join(name), "").expect("write");
+        let err = checksum_package(pkg.path()).expect_err("a lossy name could collide");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData, "got: {err}");
+    }
+
+    #[test]
+    fn an_entry_written_before_package_checksums_parses_without_one() {
+        let toml = r#"
+[[schema]]
+name = "cqa"
+version = "0.1.0"
+source = "github:o/cqa"
+checksum = "sha256:00"
+"#;
+        let lf: Lockfile = toml.parse().expect("parse");
+        assert_eq!(lf.entries[0].package_checksum, None);
+    }
+
+    #[test]
+    fn content_drift_reports_the_main_file_first_and_the_package_only_when_recorded() {
+        let entry = |package_checksum: Option<&str>| LockEntry {
+            name: "x".into(),
+            version: Some("1.0.0".into()),
+            source: "github:o/r".into(),
+            revision: None,
+            checksum: "sha256:main".into(),
+            package_checksum: package_checksum.map(Into::into),
+        };
+        let content = |checksum: &str, package_checksum: &str| Content {
+            checksum: checksum.into(),
+            package_checksum: package_checksum.into(),
+        };
+        let recorded = entry(Some("sha256:pkg"));
+        assert_eq!(
+            recorded.content_drift(content("sha256:main", "sha256:pkg")),
+            None
+        );
+        assert_eq!(
+            recorded.content_drift(content("sha256:main", "sha256:edited")),
+            Some(ContentDrift::Package {
+                locked: "sha256:pkg",
+                observed: "sha256:edited".into()
+            })
+        );
+        assert_eq!(
+            recorded.content_drift(content("sha256:edited", "sha256:edited")),
+            Some(ContentDrift::MainFile {
+                locked: "sha256:main",
+                observed: "sha256:edited".into()
+            }),
+            "a changed main file is named as such, not as package drift"
+        );
+        assert_eq!(
+            entry(None).content_drift(content("sha256:main", "sha256:edited")),
+            None,
+            "an entry recording no package checksum is gated on its main file alone"
+        );
+    }
+
+    #[test]
+    fn content_of_a_pin_checksums_its_main_file_and_its_package() {
+        let pkg = package_dir(&[("schema.yaml", "main"), ("common.yaml", "shared")]);
+        let main = pkg.path().join("schema.yaml");
+        assert_eq!(
+            Content::of(&main, pkg.path()).expect("checksum"),
+            Content {
+                checksum: checksum_file(&main).expect("checksum"),
+                package_checksum: checksum_package(pkg.path()).expect("checksum"),
+            }
+        );
+    }
+
     #[test]
     fn entry_lookup_by_name() {
         let lf = Lockfile {
@@ -252,6 +536,7 @@ unrecognized = "field"
                     source: "path:./a.yaml".into(),
                     revision: None,
                     checksum: "sha256:aaaa".into(),
+                    package_checksum: None,
                 },
                 LockEntry {
                     name: "b".into(),
@@ -259,6 +544,7 @@ unrecognized = "field"
                     source: "path:./b.yaml".into(),
                     revision: None,
                     checksum: "sha256:bbbb".into(),
+                    package_checksum: None,
                 },
             ],
         };
@@ -275,6 +561,7 @@ unrecognized = "field"
             source: source.into(),
             revision: None,
             checksum: "sha256:0".into(),
+            package_checksum: None,
         };
         assert!(entry("github:o/r").records_a_pin());
         assert!(!entry("path:./pkg").records_a_pin());

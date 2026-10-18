@@ -1846,15 +1846,21 @@ fn lockfile_drift(
             resolved.version,
         ));
     }
-    match entry.checksum_drift(&resolved.schema_path) {
-        Err(e) => Some(format!("the cached schema could not be checksummed: {e}")),
-        Ok(Some(observed)) => Some(format!(
-            "the cached content fails the ref's lockfile checksum (locked {}, cached \
+    let content = match crate::lockfile::Content::of(&resolved.schema_path, &resolved.pkg_dir) {
+        Ok(content) => content,
+        Err(e) => return Some(format!("the cached package could not be checksummed: {e}")),
+    };
+    match entry.content_drift(content)? {
+        crate::lockfile::ContentDrift::MainFile { locked, observed } => Some(format!(
+            "the cached content fails the ref's lockfile checksum (locked {locked}, cached \
              {observed}) — a re-published tag or an edited cache; `panschema fetch \
-             --check` inspects, `panschema fetch` refreshes",
-            entry.checksum
+             --check` inspects, `panschema fetch` refreshes"
         )),
-        Ok(None) => None,
+        crate::lockfile::ContentDrift::Package { locked, observed } => Some(format!(
+            "a cached file beside the main schema fails the ref's lockfile package \
+             checksum (locked {locked}, cached {observed}) — a re-published tag or an \
+             edited cache; `panschema fetch --check` inspects"
+        )),
     }
 }
 
@@ -5626,21 +5632,24 @@ current = "v0.1.0"
 
     #[test]
     fn lockfile_drift_gates_cached_content_for_pinned_sources() {
-        use crate::lockfile::{LockEntry, Lockfile, checksum_file};
+        use crate::lockfile::{LockEntry, Lockfile, checksum_file, checksum_package};
         use crate::manifest::SchemaDep;
-        let schema = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(schema.path(), "id: https://example.org/c\nname: c\n").unwrap();
-        let good = checksum_file(schema.path()).unwrap();
+        let pkg = tempfile::tempdir().unwrap();
+        let schema_path = pkg.path().join("schema.yaml");
+        std::fs::write(&schema_path, "id: https://example.org/c\nname: c\n").unwrap();
+        std::fs::write(pkg.path().join("common.yaml"), "name: common\n").unwrap();
+        let good = checksum_file(&schema_path).unwrap();
+        let good_package = checksum_package(pkg.path()).unwrap();
         let dep_spec = SchemaDep {
             path: None,
             source: Some("github:o/r".into()),
             version: Some("0.1.0".into()),
         };
         let resolved = crate::source::Resolved {
-            pkg_dir: schema.path().parent().unwrap().to_path_buf(),
+            pkg_dir: pkg.path().to_path_buf(),
             published_name: String::from("pkg"),
             datasets: Vec::new(),
-            schema_path: schema.path().to_path_buf(),
+            schema_path: schema_path.clone(),
             version: "0.1.0".into(),
             revision: None,
         };
@@ -5651,6 +5660,7 @@ current = "v0.1.0"
                 source: source.into(),
                 revision: None,
                 checksum: checksum.into(),
+                package_checksum: Some(good_package.clone()),
             }],
         };
 
@@ -5708,6 +5718,31 @@ current = "v0.1.0"
             lockfile_drift(&other_dep, "nimbly", &dep_spec, &resolved),
             None,
             "a dependency the lockfile does not record is ungated"
+        );
+
+        let mut before_package_checksums = lock("0.1.0", "github:o/r", &good);
+        before_package_checksums.entries[0].package_checksum = None;
+        std::fs::write(pkg.path().join("common.yaml"), "name: edited\n").unwrap();
+        assert_eq!(
+            lockfile_drift(&before_package_checksums, "cqa", &dep_spec, &resolved),
+            None,
+            "a lock entry from before package checksums is gated on the main file alone"
+        );
+
+        let package_drift = lockfile_drift(
+            &lock("0.1.0", "github:o/r", &good),
+            "cqa",
+            &dep_spec,
+            &resolved,
+        )
+        .expect("an edited file beside an intact main file is refused");
+        let edited_package = checksum_package(pkg.path()).unwrap();
+        assert!(
+            package_drift.contains(&good_package)
+                && package_drift.contains(&edited_package)
+                && package_drift.contains("cache"),
+            "the mismatch names both package checksums and blames the cache side; got: \
+             {package_drift}"
         );
     }
 

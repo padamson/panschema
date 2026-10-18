@@ -1940,18 +1940,20 @@ fn relative_path(base: &Path, target: &Path) -> PathBuf {
 
 /// What `panschema fetch` would record: every entry under `[schemas]`
 /// resolved — so a broken one fails here as it would in `generate` — and
-/// the pins among them checksummed and described. Shared by the write and
-/// `--check` paths so they cannot disagree.
-fn resolve_lockfile(
+/// the pins among them checksummed and described, each beside the content
+/// its checksums were taken from. Shared by the write and `--check` paths
+/// so they cannot disagree.
+fn resolve_pins(
     manifest: &panschema::manifest::Manifest,
     manifest_dir: &Path,
-) -> anyhow::Result<panschema::lockfile::Lockfile> {
-    use panschema::lockfile::{LockEntry, Lockfile, checksum_file};
+) -> anyhow::Result<Vec<(panschema::lockfile::LockEntry, panschema::lockfile::Content)>> {
+    use panschema::lockfile::{Content, LockEntry};
     use panschema::source::SchemaSource;
 
-    let mut entries = Vec::new();
+    let mut pins = Vec::new();
     for (name, dep) in &manifest.schemas {
         let panschema::source::Resolved {
+            pkg_dir,
             schema_path,
             version,
             revision,
@@ -1961,15 +1963,18 @@ fn resolve_lockfile(
         if !source.is_pinned() {
             continue;
         }
-        entries.push(LockEntry {
+        let content = Content::of(&schema_path, &pkg_dir)?;
+        let entry = LockEntry {
             name: name.clone(),
             version: Some(version),
             source: source.source_spec(),
             revision,
-            checksum: checksum_file(&schema_path)?,
-        });
+            checksum: content.checksum.clone(),
+            package_checksum: Some(content.package_checksum.clone()),
+        };
+        pins.push((entry, content));
     }
-    Ok(Lockfile { entries })
+    Ok(pins)
 }
 
 /// The parenthetical naming the entries `fetch` and `--check` leave alone.
@@ -1990,7 +1995,12 @@ fn fetch_from_manifest() -> anyhow::Result<()> {
     use panschema::lockfile::LOCKFILE_FILENAME;
 
     let (manifest, manifest_dir) = load_manifest()?;
-    let lockfile = resolve_lockfile(&manifest, &manifest_dir)?;
+    let lockfile = panschema::lockfile::Lockfile {
+        entries: resolve_pins(&manifest, &manifest_dir)?
+            .into_iter()
+            .map(|(entry, _)| entry)
+            .collect(),
+    };
     let (_, unpinned) =
         panschema::source::partition_pins(&manifest.schemas).map_err(|e| anyhow::anyhow!("{e}"))?;
     let clause = unpinned_clause(&unpinned);
@@ -2234,7 +2244,7 @@ fn verify_data(schema_path: &Path, data_paths: &[PathBuf], verbose: bool) -> any
 fn check_lockfile() -> anyhow::Result<()> {
     use panschema::lockfile::{LOCKFILE_FILENAME, Lockfile};
 
-    use panschema::lockfile::{LockEntry, LockfileError};
+    use panschema::lockfile::{ContentDrift, LockEntry, LockfileError};
     use panschema::source::{SchemaSource, partition_pins};
 
     let (manifest, manifest_dir) = load_manifest()?;
@@ -2301,17 +2311,26 @@ fn check_lockfile() -> anyhow::Result<()> {
         }
     }
     if findings.is_empty() {
-        let fresh = resolve_lockfile(&manifest, &manifest_dir)?;
-        for want in &fresh.entries {
+        for (want, content) in resolve_pins(&manifest, &manifest_dir)? {
             let Some(have): Option<&LockEntry> = locked_pin(&want.name) else {
                 continue;
             };
             let name = &want.name;
-            if have.checksum != want.checksum {
-                findings.push(format!(
-                    "  - `{name}`: lockfile has {}, on-disk is {}",
-                    have.checksum, want.checksum
-                ));
+            if have.package_checksum.is_none() {
+                eprintln!(
+                    "note: `{name}`'s lock entry records no package checksum, so only its main \
+                     schema file is checked. Run `panschema fetch` to record one."
+                );
+            }
+            match have.content_drift(content) {
+                Some(ContentDrift::MainFile { locked, observed }) => findings.push(format!(
+                    "  - `{name}`: lockfile has {locked}, on-disk is {observed}"
+                )),
+                Some(ContentDrift::Package { locked, observed }) => findings.push(format!(
+                    "  - `{name}`: lockfile has package {locked}, on-disk is {observed} \
+                     (a file beside the main schema changed)"
+                )),
+                None => {}
             }
             if have.version != want.version {
                 findings.push(format!(

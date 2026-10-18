@@ -121,6 +121,8 @@ overriding the built-in map. Used to resolve labels for external groundings.
 ## `panschema.lock`
 
 Written by `fetch`, checked by `fetch --check`. Records each **pin** — a
-`github:` source at a version — with its resolved source and a `sha256:`
-checksum of its main file; `path:` sources are never recorded, and with no
-pins the file is not written. `generate` does not read it.
+`github:` source at a version — with its resolved source, a `sha256:`
+checksum of its main file, and a `package_checksum` over every file in the
+package, so an edited `imports:` sibling or publish manifest is drift too;
+`path:` sources are never recorded, and with no pins the file is not
+written. `generate` does not read it.

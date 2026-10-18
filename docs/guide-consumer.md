@@ -15,7 +15,7 @@ panschema's consumer-side workflow uses three files:
 | File | What it does | You write it? |
 |---|---|---|
 | `panschema.toml` | Declares schema dependencies + per-schema codegen config | Yes (or via `panschema add`) |
-| `panschema.lock` | Records each pin's resolved version + content checksum | Written by `panschema fetch` when there is a pin, committed to git |
+| `panschema.lock` | Records each pin's resolved version + content checksums | Written by `panschema fetch` when there is a pin, committed to git |
 | `panschema-publish.toml` | Lives in each *schema's* repo; declares its name/version/main file | Authored by the schema author, not you |
 
 Both `panschema.toml` and `panschema.lock` live at your project root
@@ -122,9 +122,11 @@ Resolves every entry under `[schemas]`:
 - `path:` sources: re-reads from disk.
 
 Then writes (or updates) `panschema.lock` with one entry per **pin** —
-each `github:` source at its version: name, version, source spec, and a
-SHA-256 checksum of the main file. (A `revision` field is reserved for
-future commit-identifier provenance; currently always `None`.) A `path:`
+each `github:` source at its version: name, version, source spec, a
+SHA-256 checksum of the main file, and a `package_checksum` over every
+file in the package (its `imports:` siblings, `panschema-publish.toml`,
+and datasets). (A `revision` field is reserved for future
+commit-identifier provenance; currently always `None`.) A `path:`
 source is the working tree, not a pin, so it is resolved (a broken one
 still fails) but not recorded; with no pins at all, no lockfile is
 written, and one left over from an earlier layout is removed.
@@ -144,7 +146,11 @@ Re-checksums every pin and compares against the lockfile. Fails
 loudly if:
 
 - A pin's main-file checksum differs (someone edited the schema in
-  your cache).
+  your cache, or the tag was re-published).
+- A pin's package checksum differs while its main file is intact (a
+  file beside the main schema changed). An entry written before
+  panschema recorded package checksums is checked on its main file
+  alone, with a note that a `fetch` would record one.
 - A pin's publish-toml-declared version differs from what was
   recorded (you moved `version` in the manifest and haven't refetched).
 - A pin is in `panschema.toml` but missing from `panschema.lock`
