@@ -84,36 +84,53 @@ pub fn validate_within(base: &Path, target: &Path) -> Result<(), CacheError> {
     Ok(())
 }
 
-/// Whether `target` lies inside `base` (canonical), for a path that need not
-/// exist yet: the nearest part of it that exists is resolved, symlinks
-/// followed, the part that does not exist is appended as written, and the
-/// result must lie under `base`. The part that does not exist may not hold
-/// `..`, since it cannot be resolved. A dangling symlink resolves to nothing
-/// that can be checked, so it does not lie inside. Errors other than a
-/// missing path are returned, so a permission failure is never reported as
-/// an escape.
+/// Whether `target` lies inside `base`, for paths that need not exist yet.
+/// Each is resolved by [`resolve_as_far_as_it_exists`] and the results
+/// compared, so neither needs canonicalizing first. A target that cannot be
+/// resolved that way (a dangling symlink, or `..` in a part that does not
+/// exist) does not lie inside. Errors other than a missing path are
+/// returned, so a permission failure is never reported as an escape.
 pub fn lies_within(base: &Path, target: &Path) -> std::io::Result<bool> {
-    let mut existing = target;
+    match (
+        resolve_as_far_as_it_exists(base)?,
+        resolve_as_far_as_it_exists(target)?,
+    ) {
+        (Some(base), Some(target)) => Ok(target.starts_with(base)),
+        _ => Ok(false),
+    }
+}
+
+/// `path` with the nearest part of it that exists canonicalized, symlinks
+/// followed, and the part that does not exist appended as written. `None`
+/// when that part holds `..`, which cannot be resolved, or when the part that
+/// exists is a dangling symlink.
+fn resolve_as_far_as_it_exists(path: &Path) -> std::io::Result<Option<PathBuf>> {
+    let mut existing = path;
     loop {
         match existing.symlink_metadata() {
             Ok(_) => break,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => match existing.parent() {
                 Some(parent) => existing = parent,
-                None => return Ok(false),
+                // Only a relative path runs out of parents, at the empty
+                // path; it is relative to the working directory.
+                None => {
+                    existing = Path::new(".");
+                    break;
+                }
             },
             Err(e) => return Err(e),
         }
     }
-    let missing = target.strip_prefix(existing).unwrap_or(target);
+    let missing = path.strip_prefix(existing).unwrap_or(path);
     if missing
         .components()
         .any(|c| matches!(c, std::path::Component::ParentDir))
     {
-        return Ok(false);
+        return Ok(None);
     }
     match existing.canonicalize() {
-        Ok(canon) => Ok(canon.join(missing).starts_with(base)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Ok(canon) => Ok(Some(canon.join(missing))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e),
     }
 }
@@ -439,6 +456,29 @@ mod tests {
                 "`{rel}` is inside the package"
             );
         }
+    }
+
+    /// The base is resolved the way the target is, so a caller need not
+    /// canonicalize it first (a temp dir under macOS's `/var` symlink, a
+    /// path without a drive on Windows).
+    #[test]
+    fn lies_within_judges_a_base_given_as_written() {
+        let tmp = TempDir::new().unwrap();
+        package_beside_an_outside_file(&tmp);
+        let written = tmp.path().join("pkg");
+        assert!(
+            lies_within(&written, &written.join("data/in.yaml")).unwrap(),
+            "a file inside the package is inside, however the base is spelled"
+        );
+        assert!(
+            !lies_within(&written, &written.join("../outside.yaml")).unwrap(),
+            "a file outside stays outside"
+        );
+        let nowhere = Path::new("/no/such/pkg");
+        assert!(
+            lies_within(nowhere, &nowhere.join("data/x.yaml")).unwrap(),
+            "a base that does not exist is judged by its spelling, like the target"
+        );
     }
 
     #[test]
