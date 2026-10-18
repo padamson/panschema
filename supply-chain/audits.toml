@@ -31,6 +31,18 @@ criteria = "safe-to-deploy"
 delta = "0.22.1 -> 0.23.1"
 notes = "Minor release whose substance is the new default-on simd-unsafe feature: a single new module (src/engine/simd.rs) adds AVX2/NEON encode/decode kernels plus Simd/Avx2/Neon engine types. All unsafe is confined to that module behind a crate-level deny(unsafe_code) with a localized allow; every raw load/store is guarded by an explicit loop bound over input.len()/output.len()/quads_end (which decode_helper derives from the input, so it cannot exceed it), and the caller contract (whole quads only, output == input/4*3) is debug_asserted at the seam. The runtime Simd engine dispatches only after is_x86_feature_detected!/is_aarch64_feature_detected!; the no-detection Avx2/Neon constructors are either checked (Option, gated on detection) or marked unsafe with the contract documented. Invalid input makes the SIMD prefix stop so the scalar decoder reports the exact offset — no silent acceptance. Remainder: edition 2018→2021, MSRV 1.71, custom padding symbols and more consts (safe code), dev-dependency bumps, CI/docs churn. build = false, no new runtime dependencies, no filesystem/network/process access anywhere in src/."
 
+[[audits.borsh]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "1.5.7 -> 1.8.1"
+notes = "Optional uuid impls; IP and socket-address impls move from std::net to core::net and drop the std gate; nostd_io gains Error::other; bytes builds without default features. build.rs unchanged. Rest is tests and docs. No new unsafe or I/O. Never compiled in this workspace (an optional dependency of bit-vec that nothing enables)."
+
+[[audits.borsh-derive]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+version = "1.8.1"
+notes = "Full read of src/. Derive macros for BorshSerialize, BorshDeserialize and BorshSchema, built only on syn and quote token generation. No build script, unsafe, file, process, network or env access of its own; finds the borsh crate name through proc-macro-crate. Generated code only reads and writes through the caller's Read and Write. Never compiled in this workspace (reached only through borsh, an optional dependency of bit-vec that nothing enables)."
+
 [[audits.dirs]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-run"
@@ -220,6 +232,18 @@ criteria = "safe-to-run"
 delta = "0.1.1 -> 0.1.2"
 notes = "Delta audit, read in full. The locator!() macro learns the aria-ref selector engine; nothing else changes. Authored by the certifier."
 
+[[audits.proc-macro-crate]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "2.0.1 -> 3.5.0"
+notes = "toml_edit 0.20 to 0.25 (DocumentMut, TableLike); a missing CARGO env var now falls back to the package manifest instead of erroring. Still only reads Cargo.toml files and runs cargo locate-project, as in 2.0.1. No unsafe."
+
+[[audits.proptest]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "1.11.0 -> 1.12.0"
+notes = "Port to rand 0.10 and rand_xorshift 0.5; rand_chacha replaced by chacha20 with a manual Clone that rebuilds from seed, stream and word position. Two soundness fixes remove unsafe: the panic-hook static mut becomes a OnceLock set before set_hook, and hardware_rng asserts rdrand support before calling it. Forked-test replay now terminates the child on a persisted failure. No new I/O or network."
+
 [[audits.rand]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-deploy"
@@ -230,6 +254,12 @@ who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "0.10.0 -> 0.10.1"
 notes = "Doc-only patch release: CHANGELOG addition + version bump + two doc comments updated to reference the renamed rand::RngExt trait. Zero code changes; no unsafe; no new ambient capabilities."
+
+[[audits.rand_xorshift]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.4.0 -> 0.5.0"
+notes = "Port to rand_core 0.10 (TryRng with Infallible, utils helpers), edition 2024. Still forbid(unsafe_code) and no_std; no I/O."
 
 [[audits.referencing]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
