@@ -213,6 +213,10 @@ pub struct PublishedDataset {
     /// package: [`resolve_named_datasets`] refuses one that leads out of it
     /// before a consumer reads it.
     pub data: PathBuf,
+    /// The `data` path as the publish manifest writes it, for messages:
+    /// `data` cannot always give it back, since joining a Windows verbatim
+    /// path resolves `..` on the spot.
+    pub written: PathBuf,
     /// The `[schemas.<dep>]` dependency this dataset conforms to, when the
     /// publish entry names one. `None` means the package's own schema.
     pub schema: Option<String>,
@@ -225,6 +229,7 @@ impl PublishedDataset {
             .map(|entry| PublishedDataset {
                 name: entry.name.clone(),
                 data: pkg_dir.join(&entry.data),
+                written: entry.data.clone(),
                 schema: entry.schema.clone(),
             })
             .collect()
@@ -415,11 +420,7 @@ pub fn resolve_named_datasets(
                 block,
             }));
         }
-        let written = dataset
-            .data
-            .strip_prefix(&dep.pkg_dir)
-            .unwrap_or(&dataset.data)
-            .to_path_buf();
+        let written = dataset.written.clone();
         match crate::cache::lies_within(&dep.pkg_dir, &dataset.data) {
             Ok(true) => {}
             Ok(false) => {
@@ -1127,6 +1128,7 @@ schema = "cqa"
         let pkg = pkg.canonicalize().unwrap();
         let mut wine = published(pkg.to_str().unwrap());
         wine.datasets[0].data = pkg.join(data);
+        wine.datasets[0].written = PathBuf::from(data);
         std::collections::BTreeMap::from([("wine".to_string(), wine)])
     }
 
@@ -1158,6 +1160,10 @@ schema = "cqa"
         );
     }
 
+    // Unix reports a path below a file as "not a directory". Windows reports
+    // it as not found, so there the path counts as inside and the load
+    // reports the missing file.
+    #[cfg(unix)]
     #[test]
     fn a_dataset_path_that_cannot_be_read_is_reported_with_its_path_not_as_an_escape() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1186,11 +1192,13 @@ schema = "cqa"
                 PublishedDataset {
                     name: "worked-example".to_string(),
                     data: PathBuf::from(pkg).join("data/wine-instances.yaml"),
+                    written: PathBuf::from("data/wine-instances.yaml"),
                     schema: None,
                 },
                 PublishedDataset {
                     name: "benchmark".to_string(),
                     data: PathBuf::from(pkg).join("data/wine-benchmark.yaml"),
+                    written: PathBuf::from("data/wine-benchmark.yaml"),
                     schema: Some("cqa".to_string()),
                 },
             ],
@@ -1372,6 +1380,7 @@ schema = "cqa"
             .push(PublishedDataset {
                 name: "restated".to_string(),
                 data: PathBuf::from("/pkg/wine/data/restated.yaml"),
+                written: PathBuf::from("data/restated.yaml"),
                 schema: Some("wine".to_string()),
             });
         let paths =

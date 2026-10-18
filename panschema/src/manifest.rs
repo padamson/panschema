@@ -1490,6 +1490,7 @@ instances = ["b.yaml", "c.yaml"]
                 datasets: vec![crate::source::PublishedDataset {
                     name: "worked-example".to_string(),
                     data: PathBuf::from("/pkg/wine/data/wine-instances.yaml"),
+                    written: PathBuf::from("data/wine-instances.yaml"),
                     schema: None,
                 }],
                 revision: None,
