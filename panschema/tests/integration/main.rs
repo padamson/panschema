@@ -6005,6 +6005,43 @@ fn release_with_git_creates_annotated_tag() {
     );
 }
 
+/// A consumer refuses to name a dataset that leads out of its package, so
+/// a release that would ship one is refused before anything is bumped.
+#[test]
+fn release_refuses_a_dataset_outside_the_package() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+    seed_publish(dir, "0.1.0");
+    fs::write(
+        dir.join("schema.yaml"),
+        "id: https://example.org/x\nname: x\n",
+    )
+    .expect("write linkml");
+    let publish = fs::read_to_string(dir.join("panschema-publish.toml")).expect("read");
+    fs::write(
+        dir.join("panschema-publish.toml"),
+        format!("{publish}\n[[instances]]\nname = \"leak\"\ndata = \"../outside.yaml\"\n"),
+    )
+    .expect("add an instance entry");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args(["release", "--level", "patch"])
+        .current_dir(dir)
+        .output()
+        .expect("panschema");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success() && stderr.contains("leak") && stderr.contains("../outside.yaml"),
+        "the release is refused, naming the entry and its path; got: {stderr}"
+    );
+    assert!(
+        fs::read_to_string(dir.join("panschema-publish.toml"))
+            .expect("read")
+            .contains("version = \"0.1.0\""),
+        "nothing is bumped before the refusal"
+    );
+}
+
 /// Fix 3: refuse to release while the LinkML main file's `version:`
 /// field disagrees with publish.toml.
 #[test]

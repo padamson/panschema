@@ -69,6 +69,12 @@ first declared entry opens. A version whose git ref predates a data
 file simply publishes without that graph (a note, not an error), so
 adding a dataset doesn't make older tags unpublishable.
 
+A `data` path must lie inside the package, the directory holding
+`panschema-publish.toml`: no `../` that climbs out, and no symlink that
+leads out. A consumer that names such a dataset refuses it, so `release`
+refuses it before bumping, and `publish` refuses it when it builds the
+edge. (A released tag publishes as it shipped.)
+
 These are *curated* graphs: small, hand-picked A-boxes whose job is to
 teach the schema. Production datasets are runtime artifacts, not page
 content.

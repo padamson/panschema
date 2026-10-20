@@ -1597,6 +1597,9 @@ fn release_schema(
         ensure_working_tree_clean(&cwd)?;
         ensure_tag_does_not_exist(&cwd, &new_tag)?;
     }
+    // After the clean-tree check, so with `--git` the files judged are the
+    // ones the tag will hold.
+    panschema::publish::check_dataset_paths(&cwd, &current_cfg)?;
 
     if dry_run {
         println!("Dry run: would bump {old_version} → {projected_new}");

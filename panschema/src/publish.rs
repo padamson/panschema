@@ -25,6 +25,23 @@ pub enum PublishError {
     Parse(#[from] toml::de::Error),
     #[error("`{}` already exists in `{}` (pass `--force` to overwrite)", PUBLISH_FILENAME, dir.display())]
     AlreadyExists { dir: PathBuf },
+    #[error(
+        "[[instances]] `{name}` names `{}`, which does not resolve inside the package; \
+         a consumer that names the dataset refuses it, so move the data inside",
+        data.display()
+    )]
+    DatasetOutsidePackage {
+        name: String,
+        /// The `data` path as the publish manifest writes it.
+        data: PathBuf,
+    },
+    #[error("[[instances]] `{name}` names `{}`, which cannot be resolved: {message}", data.display())]
+    DatasetUnreadable {
+        name: String,
+        /// The `data` path as the publish manifest writes it.
+        data: PathBuf,
+        message: String,
+    },
     #[error("malformed publish spec (toml_edit): {0}")]
     Edit(#[from] toml_edit::TomlError),
     #[error("`[schema].version` is missing or not a string in the publish file")]
@@ -1150,6 +1167,17 @@ pub fn publish_versioned(
         .publishing
         .as_ref()
         .ok_or(PublishError::MissingPublishingSection)?;
+    // The edge is held to the rule, from the files themselves when it is
+    // built from the working tree and from the paths as written when it is
+    // built from a ref. A released tag is published as it shipped: a path
+    // its tree cannot extract is skipped with a note.
+    if listed.edge.is_some() {
+        if edge_from_worktree {
+            check_dataset_paths(repo_root, publish_cfg)?;
+        } else {
+            check_dataset_paths_as_written(publish_cfg)?;
+        }
+    }
     let publishing = listed.resolve_releases(repo_root)?;
     publish_resolved(
         repo_root,
@@ -1162,6 +1190,62 @@ pub fn publish_versioned(
         Ok((derived, _)) if listed.versions.is_none() => hint_derived_tag(err, derived),
         _ => err,
     })
+}
+
+/// Refuse an `[[instances]]` entry whose `data` leads out of the package
+/// directory `pkg_dir`, through `../` or a symlink, by the check a consumer
+/// applies when it names the dataset, so a producer cannot ship what every
+/// consumer would refuse.
+pub fn check_dataset_paths(pkg_dir: &Path, cfg: &PublishConfig) -> Result<(), PublishError> {
+    for entry in &cfg.instances {
+        let inside =
+            crate::cache::lies_within(pkg_dir, &pkg_dir.join(&entry.data)).map_err(|e| {
+                PublishError::DatasetUnreadable {
+                    name: entry.name.clone(),
+                    data: entry.data.clone(),
+                    message: e.to_string(),
+                }
+            })?;
+        if !inside {
+            return Err(PublishError::DatasetOutsidePackage {
+                name: entry.name.clone(),
+                data: entry.data.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Refuse an `[[instances]]` entry whose `data`, as written, climbs out of
+/// the package or is absolute. For a build from a git ref, where the
+/// working tree is not what is built; a symlink in the ref's tree is not
+/// seen here, and `release` catches it from the working tree before a tag.
+fn check_dataset_paths_as_written(cfg: &PublishConfig) -> Result<(), PublishError> {
+    match cfg.instances.iter().find(|entry| climbs_out(&entry.data)) {
+        Some(entry) => Err(PublishError::DatasetOutsidePackage {
+            name: entry.name.clone(),
+            data: entry.data.clone(),
+        }),
+        None => Ok(()),
+    }
+}
+
+/// Whether a relative path, read as written, leaves the directory it is
+/// relative to: it is absolute, or a `..` climbs above its start.
+fn climbs_out(path: &Path) -> bool {
+    let mut depth = 0usize;
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(_) => depth += 1,
+            std::path::Component::ParentDir => match depth.checked_sub(1) {
+                Some(d) => depth = d,
+                None => return true,
+            },
+            std::path::Component::CurDir => {}
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => return true,
+        }
+    }
+    false
 }
 
 /// A failure on a tag the manifest never named, which `versions` can
@@ -4183,6 +4267,132 @@ default = true
             default: false,
             schema: Some("cqa".into()),
         }
+    }
+
+    fn own_entry(name: &str, data: &str) -> InstanceEntry {
+        InstanceEntry {
+            name: name.into(),
+            data: PathBuf::from(data),
+            default: false,
+            schema: None,
+        }
+    }
+
+    /// A consumer refuses to name a dataset that leads out of its package,
+    /// so the producer is refused first.
+    #[test]
+    fn check_dataset_paths_refuses_an_entry_that_leads_out_of_the_package() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pkg = tmp.path().join("pkg");
+        std::fs::create_dir_all(pkg.join("data")).unwrap();
+        std::fs::write(pkg.join("data/in.yaml"), "x: 1\n").unwrap();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], None, "v0.2.0");
+        cfg.instances.push(own_entry("inside", "data/in.yaml"));
+        check_dataset_paths(&pkg, &cfg).expect("an entry inside the package passes");
+
+        cfg.instances.push(own_entry("leak", "../outside.yaml"));
+        match check_dataset_paths(&pkg, &cfg) {
+            Err(PublishError::DatasetOutsidePackage { name, data }) => {
+                assert_eq!(
+                    (name.as_str(), data.as_path()),
+                    ("leak", Path::new("../outside.yaml"))
+                );
+            }
+            other => panic!("expected DatasetOutsidePackage, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn check_dataset_paths_refuses_an_entry_that_links_out_of_the_package() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pkg = tmp.path().join("pkg");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(tmp.path().join("outside.yaml"), "x: 1\n").unwrap();
+        std::os::unix::fs::symlink(tmp.path().join("outside.yaml"), pkg.join("data.yaml")).unwrap();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], None, "v0.2.0");
+        cfg.instances.push(own_entry("linked", "data.yaml"));
+        assert!(
+            matches!(
+                check_dataset_paths(&pkg, &cfg),
+                Err(PublishError::DatasetOutsidePackage { ref name, .. }) if name == "linked"
+            ),
+            "a symlink out of the package is refused like `../`"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn check_dataset_paths_names_an_entry_whose_path_cannot_be_resolved() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink("loop.yaml", tmp.path().join("loop.yaml")).unwrap();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], None, "v0.2.0");
+        cfg.instances.push(own_entry("looped", "loop.yaml"));
+        match check_dataset_paths(tmp.path(), &cfg) {
+            Err(PublishError::DatasetUnreadable { name, data, .. }) => {
+                assert_eq!(
+                    (name.as_str(), data.as_path()),
+                    ("looped", Path::new("loop.yaml"))
+                );
+            }
+            other => panic!("expected DatasetUnreadable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn publishing_the_working_tree_without_an_edge_builds_nothing_from_it_to_check() {
+        let repo = make_versioned_linkml_repo();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], None, "v0.2.0");
+        cfg.instances.push(own_entry("leak", "../outside.yaml"));
+        let out = tempfile::tempdir().unwrap();
+        publish_versioned(repo.path(), &cfg, out.path(), true)
+            .expect("with no edge the working tree is not built, so nothing is refused");
+    }
+
+    #[test]
+    fn an_edge_built_from_a_ref_refuses_a_dataset_path_that_climbs_out() {
+        let repo = make_repo_with_instance_data();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], Some("main"), "v0.2.0");
+        cfg.instances.push(own_entry("leak", "../outside.yaml"));
+        let out = tempfile::tempdir().unwrap();
+        let result = publish_versioned(repo.path(), &cfg, out.path(), false);
+        assert!(
+            matches!(result, Err(PublishError::DatasetOutsidePackage { .. })),
+            "got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn climbs_out_reads_a_path_as_written() {
+        for (path, climbs) in [
+            ("data/x.yaml", false),
+            ("./data/../x.yaml", false),
+            ("..", true),
+            ("../x.yaml", true),
+            ("data/../../x.yaml", true),
+        ] {
+            assert_eq!(climbs_out(Path::new(path)), climbs, "`{path}`");
+        }
+        let absolute = std::env::temp_dir().join("x.yaml");
+        assert!(climbs_out(&absolute), "an absolute path leaves the package");
+    }
+
+    #[test]
+    fn publishing_the_working_tree_refuses_a_dataset_outside_the_package_before_writing() {
+        let repo = make_repo_with_instance_data();
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], Some("main"), "v0.2.0");
+        cfg.instances.push(own_entry("leak", "../outside.yaml"));
+        let out = tempfile::tempdir().unwrap();
+        let result = publish_versioned(repo.path(), &cfg, out.path(), true);
+        assert!(
+            matches!(result, Err(PublishError::DatasetOutsidePackage { .. })),
+            "got: {result:?}"
+        );
+        assert_eq!(
+            std::fs::read_dir(out.path()).unwrap().count(),
+            0,
+            "nothing is written before the refusal"
+        );
     }
 
     #[test]
