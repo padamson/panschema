@@ -35,8 +35,10 @@ clap_complete = "4"
 sophia = { version = "0.10", features = ["jsonld", "xml"] }
 url = "2"
 
-# Templating
-askama = "0.16"
+# Templating. The default `config` feature reads an `askama.toml`, which
+# panschema has none of, through `basic-toml` (unmaintained,
+# RUSTSEC-2026-0374), so it is left off.
+askama = { version = "0.16", default-features = false, features = ["derive", "std", "urlencode"] }
 
 # Markdown rendering inside LinkML `description:` fields. CommonMark
 # only; raw HTML inside descriptions is escaped (Event::Html /
