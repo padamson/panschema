@@ -4946,6 +4946,48 @@ fn fetch_check_detects_pin_drift_and_never_rewrites_the_lockfile() {
     );
 }
 
+/// `fetch` re-downloads a pin whose cache no longer matches the lock rather
+/// than locking the edit; with the download unreachable (a proxy on a dead
+/// port), it fails and leaves both the lock and the cached copy as they were.
+#[test]
+fn fetch_never_locks_an_edited_cache() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (consumer, cache) = pinned_consumer(tmp.path());
+    assert!(
+        run_with_cache(&consumer, &cache, &["fetch"])
+            .status
+            .success()
+    );
+    let lock_path = consumer.join("panschema.lock");
+    let locked = fs::read_to_string(&lock_path).expect("lockfile");
+    let edited = cache.join("github/test-owner/contract/1.0.0/contract-1.0.0/common.yaml");
+    fs::write(&edited, "name: edited\n").expect("edit the cache");
+
+    let fetch = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .arg("fetch")
+        .current_dir(&consumer)
+        .env("PANSCHEMA_CACHE_ROOT", &cache)
+        .env("ALL_PROXY", "http://127.0.0.1:9")
+        .env("HTTPS_PROXY", "http://127.0.0.1:9")
+        .output()
+        .expect("run panschema");
+    let stderr = String::from_utf8_lossy(&fetch.stderr);
+    assert!(
+        !fetch.status.success() && stderr.contains("network error fetching test-owner/contract"),
+        "an edited cache is downloaded again, and when that fails so does the fetch; got: {stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(&lock_path).expect("lockfile"),
+        locked,
+        "the lockfile keeps the content it recorded"
+    );
+    assert_eq!(
+        fs::read_to_string(&edited).expect("cached file"),
+        "name: edited\n",
+        "the cached copy is left as it was"
+    );
+}
+
 #[test]
 fn fetch_check_detects_pins_missing_from_or_stale_in_the_lockfile() {
     let tmp = tempfile::tempdir().expect("tempdir");

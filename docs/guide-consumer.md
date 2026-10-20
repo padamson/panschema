@@ -118,7 +118,13 @@ panschema fetch
 Resolves every entry under `[schemas]`:
 
 - `github:` sources: downloads the tarball if not already cached;
-  reuses the cache when the version is already extracted.
+  reuses the cache when the version is already extracted. When
+  `panschema.lock` already records the pin at that version, the cached
+  copy is checked against it first: one that disagrees (an edited cache)
+  is downloaded again rather than locked, and if the fresh download still
+  disagrees, the tag was re-published after it was locked and `fetch`
+  refuses, leaving the lockfile alone. To accept the new content, remove
+  that entry from `panschema.lock` and fetch again.
 - `path:` sources: re-reads from disk.
 
 Then writes (or updates) `panschema.lock` with one entry per **pin** —

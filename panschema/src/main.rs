@@ -1949,29 +1949,32 @@ fn relative_path(base: &Path, target: &Path) -> PathBuf {
 fn resolve_pins(
     manifest: &panschema::manifest::Manifest,
     manifest_dir: &Path,
+    locked: Option<&panschema::lockfile::Lockfile>,
 ) -> anyhow::Result<Vec<(panschema::lockfile::LockEntry, panschema::lockfile::Content)>> {
-    use panschema::lockfile::{Content, LockEntry};
-    use panschema::source::SchemaSource;
+    use panschema::lockfile::LockEntry;
+    use panschema::source::{CodeloadGithubSource, SchemaSource, resolve_pin_against_lock};
 
+    let cache = panschema::cache::cache_root().map_err(|e| anyhow::anyhow!("{e}"))?;
     let mut pins = Vec::new();
     for (name, dep) in &manifest.schemas {
-        let panschema::source::Resolved {
-            pkg_dir,
-            schema_path,
-            version,
-            revision,
-            ..
-        } = resolve_source(name, dep, manifest_dir)?;
         let source = SchemaSource::from_dep(name, dep)?;
         if !source.is_pinned() {
+            resolve_source(name, dep, manifest_dir)?;
             continue;
         }
-        let content = Content::of(&schema_path, &pkg_dir)?;
+        let (resolved, content) = resolve_pin_against_lock(
+            name,
+            &source,
+            &cache,
+            locked.and_then(|lock| lock.entry(name)),
+            &CodeloadGithubSource,
+        )
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
         let entry = LockEntry {
             name: name.clone(),
-            version: Some(version),
+            version: Some(resolved.version),
             source: source.source_spec(),
-            revision,
+            revision: resolved.revision,
             checksum: content.checksum.clone(),
             package_checksum: Some(content.package_checksum.clone()),
         };
@@ -1979,6 +1982,11 @@ fn resolve_pins(
     }
     Ok(pins)
 }
+
+/// The repair for cached content that drifted from the lock: `fetch`
+/// downloads it again, and refuses when the tag itself moved.
+const RESTORE_HINT: &str = "`panschema fetch` downloads it again, and refuses if the tag \
+                            itself was re-published";
 
 /// The parenthetical naming the entries `fetch` and `--check` leave alone.
 fn unpinned_clause(unpinned: &[&str]) -> String {
@@ -1998,8 +2006,28 @@ fn fetch_from_manifest() -> anyhow::Result<()> {
     use panschema::lockfile::LOCKFILE_FILENAME;
 
     let (manifest, manifest_dir) = load_manifest()?;
+    // A pin the lock already records is checked against it, so an edited
+    // cache is downloaded again rather than locked. A lockfile that does not
+    // read is rewritten, as before, but said so: its pins go unchecked.
+    let lock_path = manifest_dir.join(LOCKFILE_FILENAME);
+    let previous = match panschema::lockfile::Lockfile::from_path(&lock_path) {
+        Ok(lockfile) => Some(lockfile),
+        Err(panschema::lockfile::LockfileError::Io(e))
+            if e.kind() == std::io::ErrorKind::NotFound =>
+        {
+            None
+        }
+        Err(e) => {
+            eprintln!(
+                "warning: {} does not read ({e}); its pins are not checked against the cache \
+                 before it is rewritten",
+                lock_path.display()
+            );
+            None
+        }
+    };
     let lockfile = panschema::lockfile::Lockfile {
-        entries: resolve_pins(&manifest, &manifest_dir)?
+        entries: resolve_pins(&manifest, &manifest_dir, previous.as_ref())?
             .into_iter()
             .map(|(entry, _)| entry)
             .collect(),
@@ -2007,7 +2035,6 @@ fn fetch_from_manifest() -> anyhow::Result<()> {
     let (_, unpinned) =
         panschema::source::partition_pins(&manifest.schemas).map_err(|e| anyhow::anyhow!("{e}"))?;
     let clause = unpinned_clause(&unpinned);
-    let lock_path = manifest_dir.join(LOCKFILE_FILENAME);
     if lockfile.entries.is_empty() {
         if lock_path.exists() {
             std::fs::remove_file(&lock_path)?;
@@ -2314,7 +2341,7 @@ fn check_lockfile() -> anyhow::Result<()> {
         }
     }
     if findings.is_empty() {
-        for (want, content) in resolve_pins(&manifest, &manifest_dir)? {
+        for (want, content) in resolve_pins(&manifest, &manifest_dir, None)? {
             let Some(have): Option<&LockEntry> = locked_pin(&want.name) else {
                 continue;
             };
@@ -2325,13 +2352,21 @@ fn check_lockfile() -> anyhow::Result<()> {
                      schema file is checked. Run `panschema fetch` to record one."
                 );
             }
+            // `fetch` downloads again only a pin its entry still holds, at
+            // the same source and version; otherwise the entry is stale and
+            // that finding, below, is the one to act on.
+            let hint = if have.source == want.source && have.version == want.version {
+                format!("; {RESTORE_HINT}")
+            } else {
+                String::new()
+            };
             match have.content_drift(content) {
                 Some(ContentDrift::MainFile { locked, observed }) => findings.push(format!(
-                    "  - `{name}`: lockfile has {locked}, on-disk is {observed}"
+                    "  - `{name}`: lockfile has {locked}, on-disk is {observed}{hint}"
                 )),
                 Some(ContentDrift::Package { locked, observed }) => findings.push(format!(
                     "  - `{name}`: lockfile has package {locked}, on-disk is {observed} \
-                     (a file beside the main schema changed)"
+                     (a file beside the main schema changed{hint})"
                 )),
                 None => {}
             }

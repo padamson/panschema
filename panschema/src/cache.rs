@@ -135,6 +135,60 @@ fn resolve_as_far_as_it_exists(path: &Path) -> std::io::Result<Option<PathBuf>> 
     }
 }
 
+/// Replace the extraction cached in `version_dir` with `fresh`, a top-level
+/// directory extracted elsewhere on the same filesystem, under the version's
+/// cache lock so a concurrent [`populate_cache`] never sees a half-swapped
+/// directory. Returns the top-level name it now has in `version_dir`.
+pub fn replace_extraction(version_dir: &Path, fresh: &Path) -> Result<String, CacheError> {
+    let _lock = lock_version_dir(version_dir)?;
+    let top_level = fresh
+        .file_name()
+        .ok_or_else(|| CacheError::Extract(format!("`{}` names no directory", fresh.display())))?
+        .to_string_lossy()
+        .into_owned();
+    // The old copies move aside first and go only once the fresh one is in,
+    // so a failed rename leaves the cache as it was.
+    let mut aside = Vec::new();
+    for entry in fs::read_dir(version_dir)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if entry.file_type()?.is_dir() && !name.starts_with('.') {
+            let to = version_dir.join(format!(".replaced-{name}"));
+            let _ = fs::remove_dir_all(&to);
+            fs::rename(entry.path(), &to)?;
+            aside.push((to, entry.path()));
+        }
+    }
+    if let Err(e) = fs::rename(fresh, version_dir.join(&top_level)) {
+        for (from, to) in aside {
+            let _ = fs::rename(from, to);
+        }
+        return Err(e.into());
+    }
+    for (old, _) in aside {
+        let _ = fs::remove_dir_all(old);
+    }
+    Ok(top_level)
+}
+
+/// Create `version_dir` and take its exclusive cache lock, held until the
+/// returned file drops: the one protocol [`populate_cache`] and
+/// [`replace_extraction`] share, so neither sees the other mid-change.
+fn lock_version_dir(version_dir: &Path) -> Result<File, CacheError> {
+    fs::create_dir_all(version_dir)?;
+    let lock_path = version_dir.join(".lock");
+    let lock_file = File::create(&lock_path).map_err(|e| CacheError::Lock {
+        path: lock_path.clone(),
+        source: e,
+    })?;
+    use fs2::FileExt;
+    lock_file.lock_exclusive().map_err(|e| CacheError::Lock {
+        path: lock_path.clone(),
+        source: e,
+    })?;
+    Ok(lock_file)
+}
+
 /// Extract a gzipped-tar reader into `target_dir` and return the top-level
 /// directory name. For `codeload.github.com/<owner>/<repo>/tar.gz/refs/tags/<tag>`
 /// URLs this is `<repo>-<tag-without-leading-v>`, e.g. `scimantic-schema-0.1.0`.
@@ -238,17 +292,7 @@ pub fn populate_cache(
     tag: &str,
     version_dir: &Path,
 ) -> Result<String, CacheError> {
-    fs::create_dir_all(version_dir)?;
-    let lock_path = version_dir.join(".lock");
-    let lock_file = File::create(&lock_path).map_err(|e| CacheError::Lock {
-        path: lock_path.clone(),
-        source: e,
-    })?;
-    use fs2::FileExt;
-    lock_file.lock_exclusive().map_err(|e| CacheError::Lock {
-        path: lock_path.clone(),
-        source: e,
-    })?;
+    let _lock = lock_version_dir(version_dir)?;
 
     // If a sibling top-level dir already exists (from a previous successful
     // fetch), reuse it.
@@ -434,6 +478,32 @@ mod tests {
 
         let err = validate_within(&base, &link).unwrap_err();
         assert!(matches!(err, CacheError::PathEscape(_)));
+    }
+
+    #[test]
+    fn replace_extraction_swaps_only_the_extraction_and_keeps_the_caches_own_entries() {
+        let tmp = TempDir::new().unwrap();
+        let version_dir = tmp.path().join("cache/v1");
+        fs::create_dir_all(version_dir.join("repo-old")).unwrap();
+        fs::create_dir_all(version_dir.join(".keep")).unwrap();
+        let fresh = tmp.path().join("scratch/repo-new");
+        fs::create_dir_all(&fresh).unwrap();
+        fs::write(fresh.join("schema.yaml"), b"x").unwrap();
+
+        let top = replace_extraction(&version_dir, &fresh).unwrap();
+
+        assert_eq!(top, "repo-new");
+        let mut left: Vec<String> = fs::read_dir(&version_dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            [".keep", ".lock", "repo-new"],
+            "the old extraction is gone, the fresh one is in, and the cache's own entries stay"
+        );
+        assert!(version_dir.join("repo-new/schema.yaml").exists());
     }
 
     /// A package at `<tmp>/pkg` holding `data/in.yaml`, beside a file outside

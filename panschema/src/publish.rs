@@ -1938,7 +1938,7 @@ fn lockfile_drift(
         crate::lockfile::ContentDrift::MainFile { locked, observed } => Some(format!(
             "the cached content fails the ref's lockfile checksum (locked {locked}, cached \
              {observed}) — a re-published tag or an edited cache; `panschema fetch \
-             --check` inspects, `panschema fetch` refreshes"
+             --check` inspects"
         )),
         crate::lockfile::ContentDrift::Package { locked, observed } => Some(format!(
             "a cached file beside the main schema fails the ref's lockfile package \

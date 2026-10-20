@@ -48,6 +48,17 @@ be re-fetched.
   nothing, such as a README. A re-published tag is the event the lock exists
   to catch, so a false alarm on a tag nobody should have moved is the
   intended reading.
+- `fetch` does not trust the cache it records from. For a pin the lockfile
+  already holds at the same source and version, it compares the cached copy
+  first. When it disagrees, or no longer resolves, the tag is downloaded
+  again into a scratch directory beside the cache and compared there; only a
+  copy that agrees replaces the cached one, under the version's cache lock.
+  A copy that still disagrees means the tag was re-published after it was
+  locked, which `fetch` refuses, leaving the lockfile and the cache as they
+  were. Accepting
+  new content for a locked version means removing its entry, the way Cargo
+  treats a changed checksum. A pin recorded for the first time, or an entry
+  that predates the package checksum, is trusted on first use.
 - A lockfile written by this version is refused by earlier versions, whose
   `LockEntry` rejects unknown fields. The release that introduces the field
   is therefore a breaking one (0.5.0), as is the `LockEntry` struct itself,

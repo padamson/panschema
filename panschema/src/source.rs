@@ -478,12 +478,37 @@ pub enum ResolveError {
     NameMismatch { name: String, declared: String },
     #[error("schema `{name}`: {message}")]
     Other { name: String, message: String },
+    #[error("{0}")]
+    TagMoved(Box<MovedTag>),
     #[error(transparent)]
     Source(#[from] SourceError),
     #[error(transparent)]
     Cache(#[from] crate::cache::CacheError),
     #[error(transparent)]
     Publish(#[from] crate::publish::PublishError),
+}
+
+/// A locked tag whose content changed after it was locked, from
+/// [`resolve_github_against_lock`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "schema `{name}`: the tag for {version} no longer matches the lockfile: its {what} was \
+     locked as {locked} and downloads as {observed}. The tag was re-published after it was \
+     locked; the lockfile and the cache are left as they were. To accept the new content, \
+     remove the `{name}` entry from panschema.lock and the cached copy at `{}`, then run \
+     `panschema fetch` again",
+    cached.display()
+)]
+pub struct MovedTag {
+    pub name: String,
+    pub version: String,
+    /// Which checksum disagrees: `main schema file` or `package`.
+    pub what: &'static str,
+    pub locked: String,
+    pub observed: String,
+    /// The version's cache directory, which a re-fetch would otherwise
+    /// record from.
+    pub cached: PathBuf,
 }
 
 /// Resolve one manifest dependency to its package, dispatching on the
@@ -611,6 +636,137 @@ pub fn resolve_github(
         published_name: publish.schema.name,
         revision: None,
     })
+}
+
+/// A [`TarballSource`] that never downloads, so [`resolve_github`] only reads
+/// what is already cached.
+struct CacheOnly;
+
+impl TarballSource for CacheOnly {
+    fn fetch(
+        &self,
+        owner: &str,
+        repo: &str,
+        tag: &str,
+        _sink: &mut dyn Write,
+    ) -> Result<(), TarballFetchError> {
+        Err(TarballFetchError::TagNotFound {
+            owner: owner.to_string(),
+            repo: repo.to_string(),
+            tag: tag.to_string(),
+        })
+    }
+}
+
+/// Resolve a `github:` pin for `fetch` to lock, checked against the entry
+/// the lockfile already holds for it, if any. Only an entry recording the
+/// same source at the same version holds the pin; with one, resolution goes
+/// through [`resolve_github_against_lock`]. Otherwise the pin is new (or its
+/// entry stale), and it resolves from the cache as [`resolve_github`] does.
+pub fn resolve_pin_against_lock(
+    name: &str,
+    source: &SchemaSource,
+    cache_root: &Path,
+    locked: Option<&crate::lockfile::LockEntry>,
+    tarballs: &dyn TarballSource,
+) -> Result<(Resolved, crate::lockfile::Content), ResolveError> {
+    let SchemaSource::Github {
+        owner,
+        repo,
+        version,
+    } = source
+    else {
+        return Err(ResolveError::Other {
+            name: name.to_string(),
+            message: "a path source is the working tree, not a pin".to_string(),
+        });
+    };
+    let held = locked.filter(|entry| {
+        entry.source == source.source_spec() && entry.version.as_deref() == Some(version.as_str())
+    });
+    match held {
+        Some(entry) => {
+            resolve_github_against_lock(name, owner, repo, version, cache_root, entry, tarballs)
+        }
+        None => {
+            let resolved = resolve_github(name, owner, repo, version, cache_root, tarballs)?;
+            let content = checksum_resolved(name, &resolved)?;
+            Ok((resolved, content))
+        }
+    }
+}
+
+fn checksum_resolved(
+    name: &str,
+    resolved: &Resolved,
+) -> Result<crate::lockfile::Content, ResolveError> {
+    crate::lockfile::Content::of(&resolved.schema_path, &resolved.pkg_dir).map_err(|e| {
+        ResolveError::Other {
+            name: name.to_string(),
+            message: format!("checksumming the cached package: {e}"),
+        }
+    })
+}
+
+/// Resolve a `github:` pin the lockfile already records at this source and
+/// version, for `fetch` to record again without trusting an edited cache.
+///
+/// The cached copy is used when it resolves and agrees with `locked`.
+/// Otherwise the tag is downloaded again into a scratch directory beside the
+/// cache and compared there before anything in the cache moves: a copy that
+/// agrees replaces the cached one; a copy that still disagrees means the tag
+/// was re-published after it was locked, which is refused
+/// ([`ResolveError::TagMoved`]) with the cache left as it was, since the
+/// lockfile records the content that was reviewed. A failed download leaves
+/// the cache as it was too.
+pub fn resolve_github_against_lock(
+    name: &str,
+    owner: &str,
+    repo: &str,
+    version: &str,
+    cache_root: &Path,
+    locked: &crate::lockfile::LockEntry,
+    tarballs: &dyn TarballSource,
+) -> Result<(Resolved, crate::lockfile::Content), ResolveError> {
+    use crate::lockfile::ContentDrift;
+
+    if let Ok(cached) = resolve_github(name, owner, repo, version, cache_root, &CacheOnly)
+        && let Ok(content) = checksum_resolved(name, &cached)
+        && locked.content_drift(content.clone()).is_none()
+    {
+        return Ok((cached, content));
+    }
+
+    std::fs::create_dir_all(cache_root).map_err(crate::cache::CacheError::from)?;
+    let scratch = tempfile::Builder::new()
+        .prefix(".verify-")
+        .tempdir_in(cache_root)
+        .map_err(crate::cache::CacheError::from)?;
+    let fresh = resolve_github(name, owner, repo, version, scratch.path(), tarballs)?;
+    let content = checksum_resolved(name, &fresh)?;
+    let version_dir = crate::cache::github_version_dir(cache_root, owner, repo, version);
+    let moved = |what, locked: &str, observed: String| {
+        ResolveError::TagMoved(Box::new(MovedTag {
+            name: name.to_string(),
+            version: version.to_string(),
+            what,
+            locked: locked.to_string(),
+            observed,
+            cached: version_dir.clone(),
+        }))
+    };
+    match locked.content_drift(content.clone()) {
+        None => {}
+        Some(ContentDrift::MainFile { locked, observed }) => {
+            return Err(moved("main schema file", locked, observed));
+        }
+        Some(ContentDrift::Package { locked, observed }) => {
+            return Err(moved("package", locked, observed));
+        }
+    }
+    crate::cache::replace_extraction(&version_dir, &fresh.pkg_dir)?;
+    let resolved = resolve_github(name, owner, repo, version, cache_root, tarballs)?;
+    Ok((resolved, content))
 }
 
 /// Resolve a `path:` source against the manifest directory.
@@ -1052,6 +1208,272 @@ main = "schema/example.yaml"
         assert_eq!(first_contents, second_contents);
         assert!(first.revision.is_none());
         assert!(second.revision.is_none());
+    }
+
+    const LOCKED_PUBLISH: &str = "[schema]\nname = \"myrepo\"\nversion = \"0.1.0\"\nlinkml = \"1.7.0\"\n\n[files]\nmain = \"schema/example.yaml\"\n";
+    const LOCKED_SCHEMA: &str = "id: https://example.org/\nname: example\n";
+
+    /// A source that fails every download, so a test can tell whether one
+    /// was attempted.
+    struct UnreachableSource;
+
+    impl TarballSource for UnreachableSource {
+        fn fetch(
+            &self,
+            owner: &str,
+            repo: &str,
+            tag: &str,
+            _sink: &mut dyn Write,
+        ) -> Result<(), TarballFetchError> {
+            Err(TarballFetchError::TagNotFound {
+                owner: owner.to_string(),
+                repo: repo.to_string(),
+                tag: tag.to_string(),
+            })
+        }
+    }
+
+    /// `myrepo` 0.1.0 resolved once into a fresh cache, and the lock entry
+    /// `fetch` would write for it.
+    fn locked_pin(tmp: &TempDir) -> (PathBuf, LocalTarballFixture, crate::lockfile::LockEntry) {
+        let cache_root = tmp.path().join("cache");
+        let fix_dir = tmp.path().join("fix");
+        std::fs::create_dir_all(&fix_dir).unwrap();
+        let (_t, src) = fixture_tarball(&fix_dir, "myrepo", "0.1.0", LOCKED_PUBLISH, LOCKED_SCHEMA);
+        let resolved =
+            resolve_github("myrepo", "ownerco", "myrepo", "0.1.0", &cache_root, &src).unwrap();
+        let content =
+            crate::lockfile::Content::of(&resolved.schema_path, &resolved.pkg_dir).unwrap();
+        let entry = crate::lockfile::LockEntry {
+            name: "myrepo".to_string(),
+            version: Some("0.1.0".to_string()),
+            source: "github:ownerco/myrepo".to_string(),
+            revision: None,
+            checksum: content.checksum,
+            package_checksum: Some(content.package_checksum),
+        };
+        (cache_root, src, entry)
+    }
+
+    fn against_lock(
+        cache_root: &Path,
+        locked: &crate::lockfile::LockEntry,
+        tarballs: &dyn TarballSource,
+    ) -> Result<(Resolved, crate::lockfile::Content), ResolveError> {
+        resolve_github_against_lock(
+            "myrepo", "ownerco", "myrepo", "0.1.0", cache_root, locked, tarballs,
+        )
+    }
+
+    #[test]
+    fn a_cache_that_agrees_with_the_lock_is_used_without_a_download() {
+        let tmp = TempDir::new().unwrap();
+        let (cache_root, _src, entry) = locked_pin(&tmp);
+        let (_, content) = against_lock(&cache_root, &entry, &UnreachableSource)
+            .expect("an intact cache needs no download");
+        assert_eq!(
+            Some(content.package_checksum),
+            entry.package_checksum,
+            "the content returned is the cache's"
+        );
+    }
+
+    #[test]
+    fn an_edited_cache_is_downloaded_again_rather_than_locked() {
+        let tmp = TempDir::new().unwrap();
+        let (cache_root, src, entry) = locked_pin(&tmp);
+        let pkg = crate::cache::github_version_dir(&cache_root, "ownerco", "myrepo", "0.1.0")
+            .join("myrepo-0.1.0");
+        std::fs::write(
+            pkg.join("panschema-publish.toml"),
+            format!("{LOCKED_PUBLISH}# edited\n"),
+        )
+        .unwrap();
+        let (resolved, content) =
+            against_lock(&cache_root, &entry, &src).expect("a fresh download restores the cache");
+        assert_eq!(
+            entry.content_drift(content),
+            None,
+            "the restored cache agrees with the lock"
+        );
+        assert_eq!(
+            std::fs::read_to_string(resolved.pkg_dir.join("panschema-publish.toml")).unwrap(),
+            LOCKED_PUBLISH,
+            "the edit is gone from the cache"
+        );
+    }
+
+    #[test]
+    fn a_tag_that_moved_after_it_was_locked_is_refused() {
+        let tmp = TempDir::new().unwrap();
+        let (cache_root, _src, entry) = locked_pin(&tmp);
+        let moved_dir = tmp.path().join("moved");
+        std::fs::create_dir_all(&moved_dir).unwrap();
+        let (_t, moved) = fixture_tarball(
+            &moved_dir,
+            "myrepo",
+            "0.1.0",
+            LOCKED_PUBLISH,
+            "name: republished\n",
+        );
+        let pkg = crate::cache::github_version_dir(&cache_root, "ownerco", "myrepo", "0.1.0")
+            .join("myrepo-0.1.0");
+        std::fs::write(pkg.join("schema/example.yaml"), "name: edited\n").unwrap();
+        match against_lock(&cache_root, &entry, &moved) {
+            Err(ResolveError::TagMoved(moved)) => {
+                assert_eq!(
+                    (
+                        moved.name.as_str(),
+                        moved.version.as_str(),
+                        moved.locked.as_str()
+                    ),
+                    ("myrepo", "0.1.0", entry.checksum.as_str())
+                );
+            }
+            other => panic!("expected TagMoved, got {:?}", other.map(|(r, _)| r)),
+        }
+        assert_eq!(
+            std::fs::read_to_string(pkg.join("schema/example.yaml")).unwrap(),
+            "name: edited\n",
+            "the re-published content is kept out of the cache"
+        );
+        assert_no_scratch_left(&cache_root);
+    }
+
+    fn assert_no_scratch_left(cache_root: &Path) {
+        let left: Vec<_> = std::fs::read_dir(cache_root)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .filter(|n| n != "github")
+            .collect();
+        assert!(
+            left.is_empty(),
+            "no scratch download is left behind: {left:?}"
+        );
+    }
+
+    #[test]
+    fn a_cache_edited_past_resolving_is_downloaded_again() {
+        let tmp = TempDir::new().unwrap();
+        let (cache_root, src, entry) = locked_pin(&tmp);
+        let pkg = crate::cache::github_version_dir(&cache_root, "ownerco", "myrepo", "0.1.0")
+            .join("myrepo-0.1.0");
+        std::fs::remove_file(pkg.join("schema/example.yaml")).unwrap();
+        let (resolved, content) = against_lock(&cache_root, &entry, &src)
+            .expect("a cache missing its main file is downloaded again");
+        assert_eq!(entry.content_drift(content), None);
+        assert!(resolved.schema_path.exists(), "the main file is back");
+        assert_no_scratch_left(&cache_root);
+    }
+
+    /// With nothing cached, the only download goes to scratch, so a tag
+    /// re-published since it was locked never reaches the cache.
+    #[test]
+    fn a_moved_tag_never_reaches_an_empty_cache() {
+        let tmp = TempDir::new().unwrap();
+        let (cache_root, _src, entry) = locked_pin(&tmp);
+        std::fs::remove_dir_all(cache_root.join("github")).unwrap();
+        let moved_dir = tmp.path().join("moved");
+        std::fs::create_dir_all(&moved_dir).unwrap();
+        let (_t, moved) = fixture_tarball(
+            &moved_dir,
+            "myrepo",
+            "0.1.0",
+            LOCKED_PUBLISH,
+            "name: republished\n",
+        );
+        match against_lock(&cache_root, &entry, &moved) {
+            Err(ResolveError::TagMoved(moved)) => assert_eq!(
+                moved.cached,
+                crate::cache::github_version_dir(&cache_root, "ownerco", "myrepo", "0.1.0"),
+                "the refusal names the cached copy to remove"
+            ),
+            other => panic!("expected TagMoved, got {:?}", other.map(|(r, _)| r)),
+        }
+        let cached: Vec<_> = std::fs::read_dir(crate::cache::github_version_dir(
+            &cache_root,
+            "ownerco",
+            "myrepo",
+            "0.1.0",
+        ))
+        .map(|dir| {
+            dir.map(|e| e.unwrap().file_name())
+                .filter(|n| n != ".lock")
+                .collect()
+        })
+        .unwrap_or_default();
+        assert!(
+            cached.is_empty(),
+            "the re-published tag is not cached: {cached:?}"
+        );
+        assert_no_scratch_left(&cache_root);
+    }
+
+    #[test]
+    fn a_failed_download_leaves_the_cached_copy_alone() {
+        let tmp = TempDir::new().unwrap();
+        let (cache_root, _src, entry) = locked_pin(&tmp);
+        let pkg = crate::cache::github_version_dir(&cache_root, "ownerco", "myrepo", "0.1.0")
+            .join("myrepo-0.1.0");
+        std::fs::write(pkg.join("extra.yaml"), "x: 1\n").unwrap();
+        let err = against_lock(&cache_root, &entry, &UnreachableSource)
+            .expect_err("an edited cache that cannot be downloaded again is not locked");
+        assert!(matches!(err, ResolveError::Cache(_)), "got: {err:?}");
+        assert!(
+            pkg.join("extra.yaml").exists(),
+            "the cached copy is left as it was"
+        );
+        assert_no_scratch_left(&cache_root);
+    }
+
+    #[test]
+    fn an_entry_without_a_package_checksum_is_held_to_its_main_file() {
+        let tmp = TempDir::new().unwrap();
+        let (cache_root, _src, mut entry) = locked_pin(&tmp);
+        entry.package_checksum = None;
+        let pkg = crate::cache::github_version_dir(&cache_root, "ownerco", "myrepo", "0.1.0")
+            .join("myrepo-0.1.0");
+        std::fs::write(pkg.join("extra.yaml"), "x: 1\n").unwrap();
+        against_lock(&cache_root, &entry, &UnreachableSource)
+            .expect("with no package checksum recorded, an intact main file needs no download");
+    }
+
+    /// A pin is checked against its entry only when the entry records the
+    /// same source at the same version; any other entry is stale, and the
+    /// pin is recorded afresh.
+    #[test]
+    fn only_an_entry_at_the_same_source_and_version_holds_a_pin() {
+        let tmp = TempDir::new().unwrap();
+        let (cache_root, _src, entry) = locked_pin(&tmp);
+        let pkg = crate::cache::github_version_dir(&cache_root, "ownerco", "myrepo", "0.1.0")
+            .join("myrepo-0.1.0");
+        std::fs::write(pkg.join("extra.yaml"), "x: 1\n").unwrap();
+        let source = SchemaSource::Github {
+            owner: "ownerco".to_string(),
+            repo: "myrepo".to_string(),
+            version: "0.1.0".to_string(),
+        };
+        let pin = |locked: Option<&crate::lockfile::LockEntry>| {
+            resolve_pin_against_lock("myrepo", &source, &cache_root, locked, &UnreachableSource)
+        };
+        assert!(
+            pin(Some(&entry)).is_err(),
+            "the entry holds the pin, so the edited cache is downloaded again (and cannot be)"
+        );
+        let mut other_version = entry.clone();
+        other_version.version = Some("0.0.9".to_string());
+        let mut other_source = entry.clone();
+        other_source.source = "github:someone-else/myrepo".to_string();
+        for (stale, why) in [
+            (Some(&other_version), "another version"),
+            (Some(&other_source), "another source"),
+            (None, "no entry"),
+        ] {
+            assert!(
+                pin(stale).is_ok(),
+                "with {why} the pin is recorded from the cache as it is"
+            );
+        }
     }
 
     /// Resolving a package carries its published datasets across: the
