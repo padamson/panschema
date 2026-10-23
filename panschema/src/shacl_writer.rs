@@ -117,26 +117,10 @@ mod tests {
         let out = dir.path().join("shapes.ttl");
         ShaclWriter::new().write(schema, &out).expect("write shacl");
         let ttl = fs::read_to_string(&out).expect("read shapes");
-        let store = oxigraph::store::Store::new().expect("store");
-        store
-            .load_from_slice(oxigraph::io::RdfFormat::Turtle, &ttl)
-            .unwrap_or_else(|e| panic!("oxigraph rejected generated SHACL: {e}\n\n{ttl}"));
-        store
+        load(oxigraph::io::RdfFormat::Turtle, &ttl)
     }
 
-    fn ask(store: &oxigraph::store::Store, query: &str) -> bool {
-        use oxigraph::sparql::{QueryResults, SparqlEvaluator};
-        match SparqlEvaluator::new()
-            .parse_query(query)
-            .unwrap_or_else(|e| panic!("bad SPARQL: {e}\n\n{query}"))
-            .on_store(store)
-            .execute()
-            .expect("query")
-        {
-            QueryResults::Boolean(b) => b,
-            _ => panic!("expected ASK result"),
-        }
-    }
+    use crate::rdf_serializers::oracle::{ask, load};
 
     const SH: &str = "http://www.w3.org/ns/shacl#";
     const EX: &str = "http://example.org/test";

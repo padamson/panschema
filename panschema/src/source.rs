@@ -354,6 +354,141 @@ impl Resolved {
     }
 }
 
+/// A dataset some package declares, as a generated graph names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeclaredDataset {
+    /// The `[[instances]]` entry's `name`.
+    pub name: String,
+    /// The declaring package's `[schema] version`, which is the dataset's
+    /// version: the package ships its data at the version it releases.
+    pub version: String,
+    /// The consumer's `[schemas]` key for the declaring package.
+    pub dep_key: String,
+    /// The schema the `[[instances]]` entry says the data conforms to, by
+    /// the publisher's key; `None` means the declaring package's own.
+    pub schema: Option<String>,
+}
+
+/// Every data file the resolved packages declare in `[[instances]]`, keyed
+/// by where the file sits on disk, so a file a `[generate]` entry reaches
+/// by a path list or by name finds the dataset it is.
+#[derive(Debug, Default)]
+pub struct DeclaredDatasets {
+    by_file: std::collections::BTreeMap<PathBuf, DeclaredDataset>,
+}
+
+impl DeclaredDatasets {
+    /// Several manifest keys can resolve to one package (an alias per
+    /// dataset, each `path = "."`), so a file is recorded once; were two
+    /// packages to declare one file, the first in key order names it.
+    ///
+    /// A data path that leads out of its package declares nothing here, as
+    /// [`resolve_named_datasets`] refuses to resolve one by name.
+    pub fn from_resolved(resolved: &std::collections::BTreeMap<String, Resolved>) -> Self {
+        let mut by_file = std::collections::BTreeMap::new();
+        for (dep_key, package) in resolved {
+            for dataset in &package.datasets {
+                if !crate::cache::lies_within(&package.pkg_dir, &dataset.data).unwrap_or(false) {
+                    continue;
+                }
+                by_file
+                    .entry(on_disk(&dataset.data))
+                    .or_insert_with(|| DeclaredDataset {
+                        name: dataset.name.clone(),
+                        version: package.version.clone(),
+                        dep_key: dep_key.clone(),
+                        schema: dataset.schema.clone(),
+                    });
+            }
+        }
+        Self { by_file }
+    }
+
+    /// The dataset `file` is, or `None` when no resolved package declares it.
+    pub fn of(&self, file: &Path) -> Option<&DeclaredDataset> {
+        self.by_file.get(&on_disk(file))
+    }
+
+    /// Refuse a declared dataset that `[generate.<entry>]` or
+    /// `[check.<entry>]` lists by path although its package says it
+    /// conforms to another schema, as [`resolve_named_datasets`] refuses it
+    /// by name, so a graph never states `dcterms:conformsTo` a schema its
+    /// publisher contradicts. A file no package declares passes.
+    pub fn check_listed(
+        &self,
+        entry: &str,
+        resolved: &std::collections::BTreeMap<String, Resolved>,
+        files: &[PathBuf],
+    ) -> Result<(), Box<DatasetError>> {
+        for declared in files.iter().filter_map(|file| self.of(file)) {
+            require_block(
+                entry,
+                resolved,
+                &declared.dep_key,
+                &declared.name,
+                declared.schema.as_deref(),
+            )?;
+        }
+        Ok(())
+    }
+}
+
+/// Refuse dataset `name`, declared by the package at `dep_key`, unless
+/// `[generate.<entry>]` is the block for the schema it conforms to: the
+/// one its publish entry names, or with none named its own package's.
+///
+/// The publish entry names that schema by the *publisher's* manifest key,
+/// which the consumer need not spell the same way, so the entry's key, the
+/// published name of the entry's package, or (for a package's own data)
+/// the same package under another key all count as a match.
+fn require_block(
+    entry: &str,
+    resolved: &std::collections::BTreeMap<String, Resolved>,
+    dep_key: &str,
+    name: &str,
+    schema: Option<&str>,
+) -> Result<(), Box<DatasetError>> {
+    let conforms_to = schema.unwrap_or(dep_key);
+    let own = resolved.get(entry);
+    let dep = resolved.get(dep_key);
+    let same_package = schema.is_none()
+        && own
+            .zip(dep)
+            .is_some_and(|(own, dep)| own.pkg_dir == dep.pkg_dir);
+    if conforms_to == entry || own.is_some_and(|r| r.published_name == conforms_to) || same_package
+    {
+        return Ok(());
+    }
+    Err(Box::new(DatasetError::WrongSchema {
+        entry: entry.to_string(),
+        dep: dep
+            .map_or(dep_key, |d| d.published_name.as_str())
+            .to_string(),
+        dep_key: dep_key.to_string(),
+        name: name.to_string(),
+        schema: conforms_to.to_string(),
+        block: block_for(resolved, conforms_to),
+    }))
+}
+
+/// The consumer's key for the block a dataset conforming to `schema`
+/// belongs under, spelled the consumer's way.
+fn block_for(
+    resolved: &std::collections::BTreeMap<String, Resolved>,
+    schema: &str,
+) -> Option<String> {
+    resolved
+        .iter()
+        .find(|(key, r)| key.as_str() == schema || r.published_name == schema)
+        .map(|(key, _)| key.clone())
+}
+
+/// One spelling per file: the canonical path when the file exists, the
+/// path as given when it does not (it then matches only the same spelling).
+fn on_disk(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
 /// Resolve the dataset names a `[generate.<entry>]` block declares against
 /// the dependency that block is about, to the data files they name.
 ///
@@ -390,36 +525,13 @@ pub fn resolve_named_datasets(
                 available: dep.dataset_names(),
             }));
         };
-        // A dataset conforms to the schema its publish entry names, or — when
-        // it names none — to its own package's. Either way it belongs under
-        // the block for that schema, so this entry must be it.
-        //
-        // The publish entry names that schema by the *publisher's* manifest
-        // key, which the consumer need not spell the same way, so either that
-        // key or the published name of this entry's own package counts as a
-        // match.
-        let conforms_to = dataset.schema.as_deref().unwrap_or(dep_key);
-        let entry_names = |key: &str| {
-            key == entry
-                || resolved
-                    .get(entry)
-                    .is_some_and(|r| r.published_name == conforms_to)
-        };
-        if !entry_names(conforms_to) {
-            // Point at a block the consumer actually has, spelled its way.
-            let block = resolved
-                .iter()
-                .find(|(key, r)| key.as_str() == conforms_to || r.published_name == conforms_to)
-                .map(|(key, _)| key.clone());
-            return Err(Box::new(DatasetError::WrongSchema {
-                entry: entry.to_string(),
-                dep: dep.published_name.clone(),
-                dep_key: dep_key.to_string(),
-                name: dataset_name.to_string(),
-                schema: conforms_to.to_string(),
-                block,
-            }));
-        }
+        require_block(
+            entry,
+            resolved,
+            dep_key,
+            dataset_name,
+            dataset.schema.as_deref(),
+        )?;
         let written = dataset.written.clone();
         match crate::cache::lies_within(&dep.pkg_dir, &dataset.data) {
             Ok(true) => {}
@@ -1637,6 +1749,153 @@ schema = "cqa"
         cqa.datasets.clear();
         map.insert("cqa".to_string(), cqa);
         map
+    }
+
+    #[test]
+    fn a_declared_file_is_the_dataset_its_package_names() {
+        let declared = DeclaredDatasets::from_resolved(&deps());
+        assert_eq!(
+            declared.of(Path::new("/pkg/wine/data/wine-benchmark.yaml")),
+            Some(&DeclaredDataset {
+                name: "benchmark".to_string(),
+                version: "1.0.0".to_string(),
+                dep_key: "wine".to_string(),
+                schema: Some("cqa".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn a_file_no_package_declares_is_no_dataset() {
+        let declared = DeclaredDatasets::from_resolved(&deps());
+        assert_eq!(declared.of(Path::new("/pkg/wine/data/scratch.yaml")), None);
+    }
+
+    #[test]
+    fn a_data_path_leading_out_of_its_package_declares_no_dataset() {
+        let tmp = tempfile::tempdir().unwrap();
+        let deps = depending_on_data(&tmp, "../outside.yaml");
+        let declared = DeclaredDatasets::from_resolved(&deps);
+        assert_eq!(declared.of(&tmp.path().join("outside.yaml")), None);
+    }
+
+    #[test]
+    fn a_dataset_listed_under_the_block_for_its_schema_passes() {
+        let declared = DeclaredDatasets::from_resolved(&deps());
+        let listed = [
+            PathBuf::from("/pkg/wine/data/wine-benchmark.yaml"),
+            PathBuf::from("/pkg/wine/data/scratch.yaml"),
+        ];
+        assert_eq!(declared.check_listed("cqa", &deps(), &listed), Ok(()));
+    }
+
+    #[test]
+    fn a_packages_own_dataset_listed_under_its_own_block_passes() {
+        let declared = DeclaredDatasets::from_resolved(&deps());
+        let listed = [PathBuf::from("/pkg/wine/data/wine-instances.yaml")];
+        assert_eq!(declared.check_listed("wine", &deps(), &listed), Ok(()));
+    }
+
+    /// The publisher names cqa by its own key; a consumer keying it
+    /// `grader` lists the benchmark under `[generate.grader]`, matched
+    /// through the package's published name.
+    #[test]
+    fn a_dataset_listed_under_a_block_the_consumer_keys_differently_passes() {
+        let mut aliased = std::collections::BTreeMap::new();
+        aliased.insert("vino".to_string(), published("/pkg/wine"));
+        let mut cqa = published("/pkg/cqa");
+        cqa.published_name = "cqa".to_string();
+        cqa.datasets.clear();
+        aliased.insert("grader".to_string(), cqa);
+        let declared = DeclaredDatasets::from_resolved(&aliased);
+        let listed = [PathBuf::from("/pkg/wine/data/wine-benchmark.yaml")];
+        assert_eq!(declared.check_listed("grader", &aliased, &listed), Ok(()));
+    }
+
+    /// The by-path twin of naming a dataset under the wrong block: the
+    /// publisher says `benchmark` conforms to cqa, so `[generate.wine]`
+    /// listing its file would render it against a schema it does not meet.
+    #[test]
+    fn a_dataset_listed_under_another_schemas_block_is_refused() {
+        let declared = DeclaredDatasets::from_resolved(&deps());
+        let listed = [PathBuf::from("/pkg/wine/data/wine-benchmark.yaml")];
+        let err = declared
+            .check_listed("wine", &deps(), &listed)
+            .expect_err("benchmark conforms to cqa");
+        assert_eq!(
+            *err,
+            DatasetError::WrongSchema {
+                entry: "wine".to_string(),
+                dep: "wine".to_string(),
+                dep_key: "wine".to_string(),
+                name: "benchmark".to_string(),
+                schema: "cqa".to_string(),
+                block: Some("cqa".to_string()),
+            }
+        );
+    }
+
+    /// A dataset declaring no schema conforms to its own package's, which
+    /// another package's block is not.
+    #[test]
+    fn a_packages_own_dataset_listed_under_another_packages_block_is_refused() {
+        let declared = DeclaredDatasets::from_resolved(&deps());
+        let listed = [PathBuf::from("/pkg/wine/data/wine-instances.yaml")];
+        let err = declared
+            .check_listed("cqa", &deps(), &listed)
+            .expect_err("worked-example conforms to wine");
+        assert_eq!(
+            *err,
+            DatasetError::WrongSchema {
+                entry: "cqa".to_string(),
+                dep: "wine".to_string(),
+                dep_key: "wine".to_string(),
+                name: "worked-example".to_string(),
+                schema: "wine".to_string(),
+                block: Some("wine".to_string()),
+            }
+        );
+    }
+
+    /// Aliases of one package (`path = "."` under several keys) declare the
+    /// same files; two different packages declaring one file is a tie the
+    /// first key breaks, so the answer does not depend on map internals.
+    #[test]
+    fn a_file_two_packages_declare_is_named_by_the_first_key() {
+        let mut deps = deps();
+        let mut zinfandel = published("/pkg/wine");
+        zinfandel.published_name = "zinfandel".to_string();
+        deps.insert("zinfandel".to_string(), zinfandel);
+        let declared = DeclaredDatasets::from_resolved(&deps);
+        assert_eq!(
+            declared
+                .of(Path::new("/pkg/wine/data/wine-instances.yaml"))
+                .map(|d| d.dep_key.as_str()),
+            Some("wine")
+        );
+    }
+
+    /// A consumer reaches a sibling's file as `../pkg/data/…` joined to its
+    /// own directory, which names the same file the package declares by a
+    /// different spelling.
+    #[test]
+    fn a_file_reached_through_a_relative_path_is_still_its_dataset() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let pkg = tmp.path().join("pkg");
+        std::fs::create_dir_all(pkg.join("data")).expect("mkdir");
+        std::fs::create_dir_all(tmp.path().join("consumer")).expect("mkdir");
+        std::fs::write(pkg.join("data/records.yaml"), "records: []\n").expect("write");
+        let mut resolved = published(pkg.to_str().expect("utf-8 path"));
+        resolved.datasets[0].data = pkg.join("data/records.yaml");
+        let mut deps = std::collections::BTreeMap::new();
+        deps.insert("wine".to_string(), resolved);
+
+        let declared = DeclaredDatasets::from_resolved(&deps);
+        let reached = tmp.path().join("consumer/../pkg/data/records.yaml");
+        assert_eq!(
+            declared.of(&reached).map(|d| d.name.as_str()),
+            Some("worked-example")
+        );
     }
 
     /// A dataset one package publishes against another's schema is named by

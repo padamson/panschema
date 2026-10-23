@@ -354,6 +354,17 @@ Individual IRIs mint identically across the docs, the RDF, and the graph
 JSON, so a SPARQL query and a graph-JSON traversal agree on which node is
 which.
 
+When `generate` runs from a manifest and the data file is a dataset some
+package declares in `[[instances]]`, the RDF outputs also name it, so a tool
+handed the file alone knows which dataset it holds:
+
+```turtle
+[] a dcat:Dataset ;
+   dcterms:identifier "worked-example" ;   # the [[instances]] name
+   dcat:version "0.2.1" ;                  # the declaring package's version
+   dcterms:conformsTo <https://w3id.org/wine-linkml/> .
+```
+
 See [examples/university/](examples/university/) for a sample schema and [docs/features/04-schema-force-graph-visualization.md](docs/features/04-schema-force-graph-visualization.md) for the full feature plan.
 
 ## Linking an mdbook book to the schema docs

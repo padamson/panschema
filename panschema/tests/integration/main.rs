@@ -219,12 +219,14 @@ fn a_qualified_dataset_renders_under_the_schema_it_conforms_to() {
     );
 
     // The same dataset by path, under the same block: naming it must render
-    // exactly what pathing to it renders.
+    // exactly what pathing to it renders. The publishing package stays a
+    // dependency, since it is what declares the file a dataset.
     let by_path = tmp.path().join("by-path");
     fs::create_dir_all(&by_path).expect("mkdir consumer");
     fs::write(
         by_path.join("panschema.toml"),
-        "[schemas.audit]\npath = \"../audit-pkg\"\n\n\
+        "[schemas.catalog]\npath = \"../catalog-pkg\"\n\n\
+         [schemas.audit]\npath = \"../audit-pkg\"\n\n\
          [generate.audit]\nttl = \"out.ttl\"\n\
          instances = [\"../catalog-pkg/data/audit.yaml\"]\n",
     )
@@ -242,6 +244,171 @@ fn a_qualified_dataset_renders_under_the_schema_it_conforms_to() {
     );
 }
 
+fn ask(store: &oxigraph::store::Store, query: &str) -> bool {
+    use oxigraph::sparql::{QueryResults, SparqlEvaluator};
+    match SparqlEvaluator::new()
+        .parse_query(query)
+        .unwrap_or_else(|e| panic!("invalid SPARQL: {e}\n{query}"))
+        .on_store(store)
+        .execute()
+        .expect("query runs")
+    {
+        QueryResults::Boolean(b) => b,
+        _ => panic!("expected an ASK result"),
+    }
+}
+
+fn names_dataset(name: &str, version: &str, schema: &str) -> String {
+    format!(
+        "ASK {{ ?d a <http://www.w3.org/ns/dcat#Dataset> ; \
+         <http://purl.org/dc/terms/identifier> \"{name}\" ; \
+         <http://www.w3.org/ns/dcat#version> \"{version}\" ; \
+         <http://purl.org/dc/terms/conformsTo> <{schema}> }}"
+    )
+}
+
+/// The dataset's version is its publishing package's, and its schema the
+/// one it conforms to, so a dataset shipped by one package against
+/// another's schema carries one package's version and the other's IRI.
+#[test]
+fn a_generated_graph_names_the_dataset_it_holds() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    write_dataset_pkg(tmp.path());
+    let catalog_schema =
+        fs::read_to_string("../panschema-model/tests/fixtures/catalog.yaml").expect("read schema");
+    let with_id = |id: &str| {
+        catalog_schema.replace(
+            "id: https://example.org/catalog",
+            &format!("id: https://example.org/{id}"),
+        )
+    };
+    write_pkg(
+        &tmp.path().join("audit-pkg"),
+        "audit",
+        "2.0.0",
+        "audit.yaml",
+        &with_id("audit"),
+    );
+
+    let consumer = tmp.path().join("consumer");
+    fs::create_dir_all(&consumer).expect("mkdir consumer");
+    fs::write(
+        consumer.join("panschema.toml"),
+        "[schemas.catalog]\npath = \"../catalog-pkg\"\n\n\
+         [schemas.audit]\npath = \"../audit-pkg\"\n\n\
+         [generate.catalog]\nttl = \"records.ttl\"\njsonld = \"records.jsonld\"\n\
+         rdfxml = \"records.rdf\"\ndatasets = [\"records\"]\n\n\
+         [generate.audit]\nntriples = \"audit.nt\"\ndatasets = [\"catalog:audit\"]\n",
+    )
+    .expect("write manifest");
+    let out = run_generate_in(&consumer);
+    assert!(
+        out.status.success(),
+        "generate failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The consumer's own package, reached through `path = "."` and a
+    // manifest-relative path list: the shape most schema repos have.
+    let own = tmp.path().join("own");
+    write_pkg(&own, "own", "3.0.0", "own.yaml", &with_id("own"));
+    let mut publish = fs::read_to_string(own.join("panschema-publish.toml")).expect("read");
+    publish.push_str("\n[[instances]]\nname = \"local\"\ndata = \"data/local.yaml\"\n");
+    fs::write(own.join("panschema-publish.toml"), publish).expect("write publish toml");
+    fs::create_dir_all(own.join("data")).expect("mkdir own/data");
+    fs::write(
+        own.join("data/local.yaml"),
+        "wines:\n  - id: localPour\n    name: Local Pour\n",
+    )
+    .expect("write data");
+    fs::write(
+        own.join("panschema.toml"),
+        "[schemas.own]\npath = \".\"\n\n\
+         [generate.own]\nttl = \"local.ttl\"\ninstances = [\"data/local.yaml\"]\n",
+    )
+    .expect("write manifest");
+    let out = run_generate_in(&own);
+    assert!(
+        out.status.success(),
+        "generate failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let jsonld = oxigraph::io::RdfFormat::JsonLd {
+        profile: oxigraph::io::JsonLdProfileSet::empty(),
+    };
+    let records = names_dataset("records", "1.0.0", "https://example.org/catalog");
+    for (file, format, query) in [
+        (
+            consumer.join("records.ttl"),
+            oxigraph::io::RdfFormat::Turtle,
+            records.clone(),
+        ),
+        (consumer.join("records.jsonld"), jsonld, records.clone()),
+        (
+            consumer.join("records.rdf"),
+            oxigraph::io::RdfFormat::RdfXml,
+            records,
+        ),
+        (
+            consumer.join("audit.nt"),
+            oxigraph::io::RdfFormat::NTriples,
+            names_dataset("audit", "1.0.0", "https://example.org/audit"),
+        ),
+        (
+            own.join("local.ttl"),
+            oxigraph::io::RdfFormat::Turtle,
+            names_dataset("local", "3.0.0", "https://example.org/own"),
+        ),
+    ] {
+        let file = file.display();
+        let content = fs::read_to_string(file.to_string()).expect("read output");
+        let store = oxigraph::store::Store::new().expect("store");
+        store
+            .load_from_slice(format, &content)
+            .unwrap_or_else(|e| panic!("{file} does not load: {e}"));
+        assert!(
+            ask(&store, &query),
+            "{file} must name its dataset; got:\n{content}"
+        );
+    }
+}
+
+/// A manifest can list a file no package declares; there is no dataset to
+/// name, so the graph says nothing about one and the run says nothing new.
+#[test]
+fn a_file_no_package_declares_names_no_dataset() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    write_dataset_pkg(tmp.path());
+    let consumer = tmp.path().join("consumer");
+    fs::create_dir_all(&consumer).expect("mkdir consumer");
+    fs::write(
+        consumer.join("local.yaml"),
+        "wines:\n  - id: localPour\n    name: Local Pour\n",
+    )
+    .expect("write local data");
+    fs::write(
+        consumer.join("panschema.toml"),
+        "[schemas.catalog]\npath = \"../catalog-pkg\"\n\n\
+         [generate.catalog]\nttl = \"out.ttl\"\ninstances = [\"local.yaml\"]\n",
+    )
+    .expect("write manifest");
+    let out = run_generate_in(&consumer);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "generate failed: {stderr}");
+    assert!(!stderr.contains("warning"), "no warning; got:\n{stderr}");
+
+    let content = fs::read_to_string(consumer.join("out.ttl")).expect("read output");
+    let store = oxigraph::store::Store::new().expect("store");
+    store
+        .load_from_slice(oxigraph::io::RdfFormat::Turtle, &content)
+        .expect("output loads");
+    assert!(
+        !ask(&store, "ASK { ?d a <http://www.w3.org/ns/dcat#Dataset> }"),
+        "no dataset node; got:\n{content}"
+    );
+}
+
 /// The package states which schema each dataset conforms to, so naming one
 /// under the wrong block fails with the block it belongs under, and a name
 /// the package does not publish fails with the ones it does.
@@ -252,15 +419,21 @@ fn a_misnamed_dataset_says_what_the_package_publishes() {
     let consumer = tmp.path().join("consumer");
     fs::create_dir_all(&consumer).expect("mkdir consumer");
 
+    // The last case lists the file by path: the package still says which
+    // schema it conforms to, so the path route refuses what naming refuses.
     for (named, expected) in [
-        ("nope", "publishes no dataset named `nope`"),
-        ("audit", "conforms to schema `audit`"),
+        ("datasets = [\"nope\"]", "publishes no dataset named `nope`"),
+        ("datasets = [\"audit\"]", "conforms to schema `audit`"),
+        (
+            "instances = [\"../catalog-pkg/data/audit.yaml\"]",
+            "conforms to schema `audit`",
+        ),
     ] {
         fs::write(
             consumer.join("panschema.toml"),
             format!(
                 "[schemas.catalog]\npath = \"../catalog-pkg\"\n\n\
-                 [generate.catalog]\nttl = \"out.ttl\"\ndatasets = [\"{named}\"]\n"
+                 [generate.catalog]\nttl = \"out.ttl\"\n{named}\n"
             ),
         )
         .expect("write manifest");

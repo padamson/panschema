@@ -796,6 +796,9 @@ struct GenerateOptions<'a> {
     /// Compare a fresh generation against the declared output instead of
     /// writing it; the drifted path is returned rather than printed.
     check: bool,
+    /// The dataset the one instance file is, when a package declares it,
+    /// so an RDF output names it. `None` outside a manifest.
+    dataset: Option<&'a panschema::source::DeclaredDataset>,
 }
 
 fn generate(
@@ -818,6 +821,7 @@ fn generate(
         verify_instances,
         verbose,
         check,
+        dataset,
     } = *opts;
     // Check mode renders to a scratch path and byte-compares against the
     // declared output. HTML is a directory artifact and is not compared;
@@ -976,19 +980,35 @@ fn generate(
             );
         }
         use panschema::io::Writer;
+        use panschema::rdf_serializers::{
+            DatasetDescription, JsonLdWriter, NTriplesWriter, RdfXmlWriter,
+        };
         let set = read_instance_set(&schema, inst_path)?;
+        let dataset = dataset.map(|declared| DatasetDescription::declared(declared, &schema));
         let writer: Box<dyn Writer> = match format.to_lowercase().as_str() {
-            "ttl" => Box::new(panschema::owl_writer::OwlWriter::new().with_instances(set)),
+            "ttl" => Box::new(
+                panschema::owl_writer::OwlWriter::new()
+                    .with_instances(set)
+                    .with_dataset(dataset),
+            ),
             "instance-graph-json" => {
                 Box::new(panschema::graph_writer::InstanceGraphWriter::new().with_instances(set))
             }
-            "jsonld" => {
-                Box::new(panschema::rdf_serializers::JsonLdWriter::new().with_instances(set))
-            }
-            "rdfxml" => {
-                Box::new(panschema::rdf_serializers::RdfXmlWriter::new().with_instances(set))
-            }
-            _ => Box::new(panschema::rdf_serializers::NTriplesWriter::new().with_instances(set)),
+            "jsonld" => Box::new(
+                JsonLdWriter::new()
+                    .with_instances(set)
+                    .with_dataset(dataset),
+            ),
+            "rdfxml" => Box::new(
+                RdfXmlWriter::new()
+                    .with_instances(set)
+                    .with_dataset(dataset),
+            ),
+            _ => Box::new(
+                NTriplesWriter::new()
+                    .with_instances(set)
+                    .with_dataset(dataset),
+            ),
         };
         writer
             .write(&schema, output)
@@ -1244,6 +1264,7 @@ fn generate_from_manifest(
     let resolved = resolved_deps(&manifest, &manifest_dir)?;
     let deps = dep_paths(&resolved);
     let registry = FormatRegistry::with_defaults();
+    let declared = panschema::source::DeclaredDatasets::from_resolved(&resolved);
 
     let mut produced_anything = false;
     for name in manifest.schemas.keys() {
@@ -1269,6 +1290,12 @@ fn generate_from_manifest(
             .iter()
             .map(|p| manifest_dir.join(p))
             .collect();
+        // The single-graph formats take exactly one file, so only then is
+        // there one dataset for them to name.
+        let dataset = match instances.as_slice() {
+            [only] => declared.of(only),
+            _ => None,
+        };
         // The entry is verified once here, by the pass `verify` runs, before
         // any writer: so a dataset is checked whatever outputs the entry
         // declares, reported once however many writers read it, and
@@ -1362,6 +1389,7 @@ fn generate_from_manifest(
                         rust_time: gen_cfg.rust_time.as_deref(),
                         strict,
                         check,
+                        dataset,
                         ..Default::default()
                     },
                     &labels,
@@ -2087,6 +2115,8 @@ fn verify_entry(
         .iter()
         .map(|p| manifest_dir.join(p))
         .collect();
+    panschema::source::DeclaredDatasets::from_resolved(resolved)
+        .check_listed(name, resolved, &declared)?;
     let (violations, datasets) = verify_datasets(schema, &declared, true, "warning: ", verbose)
         .with_context(|| format!("schema `{name}`, check"))?;
     let problems = check_resolve_against(name, manifest, manifest_dir, resolved, schema, registry)

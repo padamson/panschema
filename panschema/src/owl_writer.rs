@@ -12,7 +12,8 @@ use sophia::turtle::serializer::turtle::{TurtleConfig, TurtleSerializer};
 use crate::io::{IoError, IoResult, Writer};
 use crate::linkml::SchemaDefinition;
 use crate::rdf_serializers::{
-    OWL_NS, RDF_NS, RDFS_NS, XSD_NS, build_rdf_graph_with_instances, build_turtle_prefix_map,
+    DCAT_NS, DCTERMS_NS, OWL_NS, RDF_NS, RDFS_NS, XSD_NS, build_rdf_graph_for_dataset,
+    build_turtle_prefix_map,
 };
 
 /// Writer for OWL ontologies in Turtle (.ttl) format
@@ -21,6 +22,8 @@ pub struct OwlWriter {
     /// Optional A-box: when set, each instance emits as an
     /// `owl:NamedIndividual` alongside the T-box.
     instances: Option<crate::instances::InstanceSet>,
+    /// Optional description of the dataset the A-box holds.
+    dataset: Option<crate::rdf_serializers::DatasetDescription>,
 }
 
 impl OwlWriter {
@@ -35,11 +38,21 @@ impl OwlWriter {
         self.instances = Some(set);
         self
     }
+
+    /// Name the dataset the attached A-box holds; `None` names none.
+    pub fn with_dataset(
+        mut self,
+        dataset: Option<crate::rdf_serializers::DatasetDescription>,
+    ) -> Self {
+        self.dataset = dataset;
+        self
+    }
 }
 
 impl Writer for OwlWriter {
     fn write(&self, schema: &SchemaDefinition, output: &Path) -> IoResult<()> {
-        let graph = build_rdf_graph_with_instances(schema, self.instances.as_ref())?;
+        let graph =
+            build_rdf_graph_for_dataset(schema, self.instances.as_ref(), self.dataset.as_ref())?;
 
         crate::io::ensure_output_parent(output)?;
         let file = File::create(output).map_err(IoError::Io)?;
@@ -51,15 +64,18 @@ impl Writer for OwlWriter {
         // compact CURIE form instead of verbose absolute IRIs. `with_pretty`
         // is required for prefix-aware output (sophia ignores the prefix map
         // in streaming mode).
-        let prefix_map = build_turtle_prefix_map(
-            schema,
-            &[
-                ("xsd", XSD_NS),
-                ("rdf", RDF_NS),
-                ("rdfs", RDFS_NS),
-                ("owl", OWL_NS),
-            ],
-        );
+        // `dcat:`/`dcterms:` join only with a dataset node, so a graph
+        // without one serializes exactly as it did before the node existed.
+        let mut builtins = vec![
+            ("xsd", XSD_NS),
+            ("rdf", RDF_NS),
+            ("rdfs", RDFS_NS),
+            ("owl", OWL_NS),
+        ];
+        if self.dataset.is_some() {
+            builtins.extend([("dcat", DCAT_NS), ("dcterms", DCTERMS_NS)]);
+        }
+        let prefix_map = build_turtle_prefix_map(schema, &builtins);
         let config = TurtleConfig::new()
             .with_pretty(true)
             .with_own_prefix_map(prefix_map);
@@ -759,27 +775,10 @@ mod tests {
             .expect("Failed to write");
         let ttl = fs::read_to_string(&output_path).expect("Failed to read");
 
-        let store = oxigraph::store::Store::new().expect("Failed to create oxigraph store");
-        store
-            .load_from_slice(oxigraph::io::RdfFormat::Turtle, &ttl)
-            .unwrap_or_else(|e| panic!("oxigraph rejected generated TTL: {e}\n\nTTL:\n{ttl}"));
-        store
+        load(oxigraph::io::RdfFormat::Turtle, &ttl)
     }
 
-    fn ask(store: &oxigraph::store::Store, query: &str) -> bool {
-        use oxigraph::sparql::{QueryResults, SparqlEvaluator};
-        match SparqlEvaluator::new()
-            .parse_query(query)
-            .unwrap_or_else(|e| panic!("invalid SPARQL query: {e}\n\n{query}"))
-            .on_store(store)
-            .execute()
-            .expect("query execution failed")
-        {
-            QueryResults::Boolean(b) => b,
-            QueryResults::Solutions(_) => panic!("expected an ASK query result, got Solutions"),
-            QueryResults::Graph(_) => panic!("expected an ASK query result, got Graph"),
-        }
-    }
+    use crate::rdf_serializers::oracle::{ask, load};
 
     #[test]
     fn oxigraph_rejects_malformed_turtle() {
@@ -1020,5 +1019,29 @@ mod tests {
             fs::read_to_string(&attached).unwrap(),
             "an empty instance set must produce byte-identical output"
         );
+    }
+
+    /// Every consumer's committed Turtle would churn if the dataset node's
+    /// prefixes were declared on graphs that carry no node.
+    #[test]
+    fn turtle_declares_the_dcat_prefix_only_with_a_dataset() {
+        let schema = create_test_schema();
+        let temp_dir = TempDir::new().expect("temp dir");
+        let plain = temp_dir.path().join("plain.ttl");
+        let described = temp_dir.path().join("described.ttl");
+        OwlWriter::new().write(&schema, &plain).expect("plain");
+        OwlWriter::new()
+            .with_instances(crate::instances::InstanceSet::default())
+            .with_dataset(Some(crate::rdf_serializers::DatasetDescription {
+                identifier: "worked-example".to_string(),
+                version: "0.2.1".to_string(),
+                conforms_to: None,
+            }))
+            .write(&schema, &described)
+            .expect("described");
+        let plain = fs::read_to_string(&plain).unwrap();
+        let described = fs::read_to_string(&described).unwrap();
+        assert!(!plain.contains("PREFIX dcat:"), "got:\n{plain}");
+        assert!(described.contains("PREFIX dcat:"), "got:\n{described}");
     }
 }

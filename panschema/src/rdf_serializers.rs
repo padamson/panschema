@@ -24,7 +24,8 @@ use crate::linkml_resolve::{
 
 // Namespace constants
 pub(crate) const OWL_NS: &str = "http://www.w3.org/2002/07/owl#";
-const DCTERMS_NS: &str = "http://purl.org/dc/terms/";
+pub(crate) const DCTERMS_NS: &str = "http://purl.org/dc/terms/";
+pub(crate) const DCAT_NS: &str = "http://www.w3.org/ns/dcat#";
 const SKOS_NS: &str = "http://www.w3.org/2004/02/skos/core#";
 pub(crate) const SH_NS: &str = "http://www.w3.org/ns/shacl#";
 pub(crate) const XSD_NS: &str = "http://www.w3.org/2001/XMLSchema#";
@@ -647,6 +648,91 @@ pub fn build_rdf_graph_with_instances(
         emit_instances(&mut graph, schema, set)?;
     }
     Ok(graph)
+}
+
+/// What an instance graph states about the dataset it holds, so a reader
+/// handed the file alone learns which dataset it is: the name its package
+/// declares it under, the package version it ships at, and the IRI of the
+/// schema it conforms to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DatasetDescription {
+    /// The `[[instances]]` entry's `name`.
+    pub identifier: String,
+    /// The declaring package's `[schema] version`.
+    pub version: String,
+    /// The conforming schema's `id`; `None` when the schema declares none.
+    pub conforms_to: Option<String>,
+}
+
+impl DatasetDescription {
+    /// Describe `declared`, read against `schema`, the schema it conforms to.
+    pub fn declared(declared: &crate::source::DeclaredDataset, schema: &SchemaDefinition) -> Self {
+        Self {
+            identifier: declared.name.clone(),
+            version: declared.version.clone(),
+            conforms_to: schema.id.clone(),
+        }
+    }
+}
+
+/// [`build_rdf_graph_with_instances`] plus, when supplied, one
+/// `dcat:Dataset` node describing the dataset the A-box holds. The node is
+/// a blank node: a dataset has no IRI of its own to mint.
+pub fn build_rdf_graph_for_dataset(
+    schema: &SchemaDefinition,
+    instances: Option<&crate::instances::InstanceSet>,
+    dataset: Option<&DatasetDescription>,
+) -> IoResult<FastGraph> {
+    let mut graph = build_rdf_graph_with_instances(schema, instances)?;
+    if let Some(dataset) = dataset {
+        emit_dataset_description(&mut graph, dataset)?;
+    }
+    Ok(graph)
+}
+
+fn emit_dataset_description(graph: &mut FastGraph, dataset: &DatasetDescription) -> IoResult<()> {
+    let label = dataset_node_label(dataset);
+    let node = sophia::api::term::BnodeId::new_unchecked(label.as_str());
+    let term = |ns: &str, local: &str| make_iri(&format!("{ns}{local}"));
+    triple(graph, node, rdf::type_, term(DCAT_NS, "Dataset")?)?;
+    triple(
+        graph,
+        node,
+        term(DCTERMS_NS, "identifier")?,
+        dataset.identifier.as_str(),
+    )?;
+    triple(
+        graph,
+        node,
+        term(DCAT_NS, "version")?,
+        dataset.version.as_str(),
+    )?;
+    if let Some(schema) = &dataset.conforms_to {
+        triple(
+            graph,
+            node,
+            term(DCTERMS_NS, "conformsTo")?,
+            make_iri(schema)?,
+        )?;
+    }
+    Ok(())
+}
+
+/// A blank-node label that only this dataset's description spells, so
+/// concatenated N-Triples (where labels stop being per document) keep two
+/// datasets apart, and a rerun writes the same bytes.
+fn dataset_node_label(dataset: &DatasetDescription) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    for part in [
+        dataset.identifier.as_str(),
+        dataset.version.as_str(),
+        dataset.conforms_to.as_deref().unwrap_or(""),
+    ] {
+        hasher.update(part.as_bytes());
+        hasher.update([0]);
+    }
+    format!("dataset-{}", &hex::encode(hasher.finalize())[..16])
 }
 
 /// Emit each instance as an `owl:NamedIndividual`: `rdf:type` per declared
@@ -1457,6 +1543,8 @@ pub struct JsonLdWriter {
     /// Optional A-box: when set, each instance emits as an
     /// `owl:NamedIndividual` alongside the T-box.
     instances: Option<crate::instances::InstanceSet>,
+    /// Optional description of the dataset the A-box holds.
+    dataset: Option<DatasetDescription>,
 }
 
 impl JsonLdWriter {
@@ -1470,11 +1558,18 @@ impl JsonLdWriter {
         self.instances = Some(set);
         self
     }
+
+    /// Name the dataset the attached A-box holds; `None` names none.
+    pub fn with_dataset(mut self, dataset: Option<DatasetDescription>) -> Self {
+        self.dataset = dataset;
+        self
+    }
 }
 
 impl Writer for JsonLdWriter {
     fn write(&self, schema: &SchemaDefinition, output: &Path) -> IoResult<()> {
-        let graph = build_rdf_graph_with_instances(schema, self.instances.as_ref())?;
+        let graph =
+            build_rdf_graph_for_dataset(schema, self.instances.as_ref(), self.dataset.as_ref())?;
 
         use sophia::jsonld::serializer::JsonLdSerializer;
 
@@ -1508,6 +1603,8 @@ pub struct RdfXmlWriter {
     /// Optional A-box: when set, each instance emits as an
     /// `owl:NamedIndividual` alongside the T-box.
     instances: Option<crate::instances::InstanceSet>,
+    /// Optional description of the dataset the A-box holds.
+    dataset: Option<DatasetDescription>,
 }
 
 impl RdfXmlWriter {
@@ -1521,11 +1618,18 @@ impl RdfXmlWriter {
         self.instances = Some(set);
         self
     }
+
+    /// Name the dataset the attached A-box holds; `None` names none.
+    pub fn with_dataset(mut self, dataset: Option<DatasetDescription>) -> Self {
+        self.dataset = dataset;
+        self
+    }
 }
 
 impl Writer for RdfXmlWriter {
     fn write(&self, schema: &SchemaDefinition, output: &Path) -> IoResult<()> {
-        let graph = build_rdf_graph_with_instances(schema, self.instances.as_ref())?;
+        let graph =
+            build_rdf_graph_for_dataset(schema, self.instances.as_ref(), self.dataset.as_ref())?;
 
         use sophia::xml::serializer::RdfXmlSerializer;
 
@@ -1557,6 +1661,8 @@ pub struct NTriplesWriter {
     /// Optional A-box: when set, each instance emits as an
     /// `owl:NamedIndividual` alongside the T-box.
     instances: Option<crate::instances::InstanceSet>,
+    /// Optional description of the dataset the A-box holds.
+    dataset: Option<DatasetDescription>,
 }
 
 impl NTriplesWriter {
@@ -1570,11 +1676,18 @@ impl NTriplesWriter {
         self.instances = Some(set);
         self
     }
+
+    /// Name the dataset the attached A-box holds; `None` names none.
+    pub fn with_dataset(mut self, dataset: Option<DatasetDescription>) -> Self {
+        self.dataset = dataset;
+        self
+    }
 }
 
 impl Writer for NTriplesWriter {
     fn write(&self, schema: &SchemaDefinition, output: &Path) -> IoResult<()> {
-        let graph = build_rdf_graph_with_instances(schema, self.instances.as_ref())?;
+        let graph =
+            build_rdf_graph_for_dataset(schema, self.instances.as_ref(), self.dataset.as_ref())?;
 
         use sophia::turtle::serializer::nt::NTriplesSerializer;
 
@@ -1593,6 +1706,37 @@ impl Writer for NTriplesWriter {
 
     fn format_id(&self) -> &str {
         "ntriples"
+    }
+}
+
+/// Test helpers shared by the RDF writers' tests: an independent store
+/// (oxigraph) to load their output into and query.
+#[cfg(test)]
+pub(crate) mod oracle {
+    /// Run a SPARQL ASK against `store`.
+    pub(crate) fn ask(store: &oxigraph::store::Store, query: &str) -> bool {
+        use oxigraph::sparql::{QueryResults, SparqlEvaluator};
+        match SparqlEvaluator::new()
+            .parse_query(query)
+            .unwrap_or_else(|e| panic!("invalid SPARQL query: {e}\n\n{query}"))
+            .on_store(store)
+            .execute()
+            .expect("query execution failed")
+        {
+            QueryResults::Boolean(b) => b,
+            QueryResults::Solutions(_) => panic!("expected an ASK result, got Solutions\n{query}"),
+            QueryResults::Graph(_) => panic!("expected an ASK result, got Graph\n{query}"),
+        }
+    }
+
+    /// Load `content` into a fresh store, panicking with the content when it
+    /// does not parse.
+    pub(crate) fn load(format: oxigraph::io::RdfFormat, content: &str) -> oxigraph::store::Store {
+        let store = oxigraph::store::Store::new().expect("store");
+        store
+            .load_from_slice(format, content)
+            .unwrap_or_else(|e| panic!("does not load: {e}\n\n{content}"));
+        store
     }
 }
 
@@ -2602,6 +2746,179 @@ mod tests {
                 &content[..content.len().min(400)]
             );
         }
+    }
+
+    fn worked_example() -> DatasetDescription {
+        DatasetDescription {
+            identifier: "worked-example".to_string(),
+            version: "0.2.1".to_string(),
+            conforms_to: Some("https://example.org/cellar".to_string()),
+        }
+    }
+
+    fn records() -> crate::source::DeclaredDataset {
+        crate::source::DeclaredDataset {
+            name: "records".to_string(),
+            version: "1.0.0".to_string(),
+            dep_key: "catalog".to_string(),
+            schema: None,
+        }
+    }
+
+    #[test]
+    fn a_declared_dataset_conforms_to_its_schemas_id() {
+        let (schema, _) = abox_fixture();
+        assert_eq!(
+            DatasetDescription::declared(&records(), &schema),
+            DatasetDescription {
+                identifier: "records".to_string(),
+                version: "1.0.0".to_string(),
+                conforms_to: Some("https://example.org/cellar".to_string()),
+            }
+        );
+    }
+
+    fn dataset_subjects(graph: &FastGraph) -> usize {
+        use sophia::api::graph::Graph;
+        let dataset_class = make_iri(&format!("{DCAT_NS}Dataset")).unwrap();
+        graph
+            .triples_matching(
+                sophia::api::term::matcher::Any,
+                [rdf::type_],
+                [dataset_class],
+            )
+            .count()
+    }
+
+    /// Each serialization is loaded by an independent store and queried, so
+    /// the claim is the graph a reader gets, whatever the syntax spells.
+    #[test]
+    fn each_rdf_writer_with_a_dataset_names_it() {
+        use oxigraph::io::RdfFormat;
+        let (schema, set) = abox_fixture();
+        let temp_dir = TempDir::new().expect("temp dir");
+        let writers: [(Box<dyn Writer>, &str, RdfFormat); 4] = [
+            (
+                Box::new(
+                    crate::owl_writer::OwlWriter::new()
+                        .with_instances(set.clone())
+                        .with_dataset(Some(worked_example())),
+                ),
+                "out.ttl",
+                RdfFormat::Turtle,
+            ),
+            (
+                Box::new(
+                    JsonLdWriter::new()
+                        .with_instances(set.clone())
+                        .with_dataset(Some(worked_example())),
+                ),
+                "out.jsonld",
+                RdfFormat::JsonLd {
+                    profile: oxigraph::io::JsonLdProfileSet::empty(),
+                },
+            ),
+            (
+                Box::new(
+                    RdfXmlWriter::new()
+                        .with_instances(set.clone())
+                        .with_dataset(Some(worked_example())),
+                ),
+                "out.rdf",
+                RdfFormat::RdfXml,
+            ),
+            (
+                Box::new(
+                    NTriplesWriter::new()
+                        .with_instances(set.clone())
+                        .with_dataset(Some(worked_example())),
+                ),
+                "out.nt",
+                RdfFormat::NTriples,
+            ),
+        ];
+        let query = format!(
+            "ASK {{ ?d a <{DCAT_NS}Dataset> ; <{DCTERMS_NS}identifier> \"worked-example\" ; \
+             <{DCAT_NS}version> \"0.2.1\" ; <{DCTERMS_NS}conformsTo> <https://example.org/cellar> }}"
+        );
+        for (writer, name, format) in writers {
+            let path = temp_dir.path().join(name);
+            writer.write(&schema, &path).expect("write");
+            let content = fs::read_to_string(&path).expect("read");
+            let store = oracle::load(format, &content);
+            assert!(
+                oracle::ask(&store, &query),
+                "{name} must name its dataset; got:\n{content}"
+            );
+        }
+    }
+
+    /// Concatenating N-Triples files is the usual way to combine them, and
+    /// a blank-node label is then shared across what were two documents,
+    /// so two datasets must not share a label and merge into one node
+    /// carrying both names.
+    #[test]
+    fn two_datasets_concatenated_stay_two_nodes() {
+        let (schema, set) = abox_fixture();
+        let temp_dir = TempDir::new().expect("temp dir");
+        let mut combined = String::new();
+        for identifier in ["worked-example", "benchmark"] {
+            let path = temp_dir.path().join(format!("{identifier}.nt"));
+            NTriplesWriter::new()
+                .with_instances(set.clone())
+                .with_dataset(Some(DatasetDescription {
+                    identifier: identifier.to_string(),
+                    ..worked_example()
+                }))
+                .write(&schema, &path)
+                .expect("write");
+            combined.push_str(&fs::read_to_string(&path).expect("read"));
+        }
+        let store = oracle::load(oxigraph::io::RdfFormat::NTriples, &combined);
+        let merged =
+            format!("ASK {{ ?d <{DCTERMS_NS}identifier> \"worked-example\", \"benchmark\" }}");
+        assert!(
+            !oracle::ask(&store, &merged),
+            "one node holds both names; got:\n{combined}"
+        );
+    }
+
+    #[test]
+    fn a_graph_without_a_dataset_description_has_no_dataset_node() {
+        let (schema, set) = abox_fixture();
+        let graph = build_rdf_graph_for_dataset(&schema, Some(&set), None).expect("graph");
+        assert_eq!(dataset_subjects(&graph), 0);
+    }
+
+    #[test]
+    fn a_dataset_description_is_one_node() {
+        let (schema, set) = abox_fixture();
+        let graph = build_rdf_graph_for_dataset(&schema, Some(&set), Some(&worked_example()))
+            .expect("graph");
+        assert_eq!(dataset_subjects(&graph), 1);
+    }
+
+    #[test]
+    fn a_dataset_whose_schema_has_no_id_states_no_conformance() {
+        use sophia::api::graph::Graph;
+        let (schema, set) = abox_fixture();
+        let dataset = DatasetDescription {
+            conforms_to: None,
+            ..worked_example()
+        };
+        let graph =
+            build_rdf_graph_for_dataset(&schema, Some(&set), Some(&dataset)).expect("graph");
+        let conforms_to = make_iri(&format!("{DCTERMS_NS}conformsTo")).unwrap();
+        assert_eq!(
+            graph
+                .triples_matching(
+                    sophia::api::term::matcher::Any,
+                    [conforms_to],
+                    sophia::api::term::matcher::Any
+                )
+                .count(),
+            0
+        );
     }
 
     fn create_test_schema() -> SchemaDefinition {

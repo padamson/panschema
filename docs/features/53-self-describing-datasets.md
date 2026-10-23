@@ -106,31 +106,33 @@ datasets = ["wine:benchmark"]
 
 ### Slice 1: The instance graph names its dataset
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** A graph handed over on its own says which dataset it
 holds, at what version, under which schema, so a reader takes file paths
 and nothing else.
 
 **Acceptance Criteria:**
-- [ ] `generate` writing a declared dataset to TTL emits one
+- [x] `generate` writing a declared dataset to TTL emits one
   `dcat:Dataset` node carrying the dataset's `[[instances]]` name as
   `dcterms:identifier`, the publishing package's `[schema] version` as
   `dcat:version`, and the schema's IRI as `dcterms:conformsTo`.
-- [ ] JSON-LD, RDF/XML, and N-Triples outputs of the same dataset carry
+- [x] JSON-LD, RDF/XML, and N-Triples outputs of the same dataset carry
   the same triples.
-- [ ] A dataset named from a dependency (`datasets = ["wine:benchmark"]`)
+- [x] A dataset named from a dependency (`datasets = ["wine:benchmark"]`)
   carries the dependency's version, and one whose `[[instances]]` entry
   declares `schema = "cqa"` conforms to the cqa schema's IRI.
-- [ ] An instance file no package declares is written as before, with no
+- [x] An instance file no package declares is written as before, with no
   dataset node and no new warning.
-- [ ] Schema-only outputs (SHACL, JSON Schema, OpenAPI, Rust, Postgres)
+- [x] A declared dataset listed by path under the block for a schema its
+  package says it does not conform to is refused, as naming it is.
+- [x] Schema-only outputs (SHACL, JSON Schema, OpenAPI, Rust, Postgres)
   are byte-identical to before.
 
 **Notes:**
 - The join from a generated file to the package and `[[instances]]`
-  entry that declares it moves out of `main.rs` into the `panschema`
-  library, beside `manifest` and `source`, where the pin check shares it.
+  entry that declares it lives in the `panschema` library
+  (`source::DeclaredDatasets`), not in `main.rs`.
 
 ---
 
@@ -205,7 +207,7 @@ by name, and change only when that data does.
 
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
-| Slice 1: The instance graph names its dataset | Must Have | None | Not Started |
+| Slice 1: The instance graph names its dataset | Must Have | None | Completed |
 | Slice 2: One file per dataset | Must Have | Slice 1 | Not Started |
 | Slice 3: A dependency's merged schema | Must Have | None | Not Started |
 | Slice 4: A dependency's data, as published | Must Have | Slice 2 | Not Started |
