@@ -158,6 +158,7 @@ Input → Reader → LinkML IR → [Filters] → Writer → Output
 | 45 | [One Graph Component, Two Surfaces](features/45-one-graph-component-two-surfaces.md) | One implementation behind the schema and instance canvases: shared toolbar, hover card, and control shell | **Shipped for v0.4.0** |
 | 50 | [Structured Verify Findings](features/50-structured-verify-findings.md) | Every `verify` finding is a record with a `kind` and fields, not a sentence to parse | **Shipped for v0.4.0** |
 | 48 | CLI distribution for agents ([ADR-012](adr/012-cli-distribution-for-agents.md)) | Prebuilt binaries as npm platform packages, so an agent runs `npx -y panschema` with nothing installed; needs an arm64 Linux target and the crates.io publish first; a feature spec arrives when the prerequisites clear | **Decided, sequenced** |
+| 53 | [Self-Describing Datasets](features/53-self-describing-datasets.md) | Instance graphs name their dataset, version, and schema; one file per dataset; a dependency's merged schema and data as outputs | **Specced, not started (v0.5.0)** |
 
 ## Delivery Approach
 
