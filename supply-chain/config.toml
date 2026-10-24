@@ -275,10 +275,6 @@ criteria = "safe-to-deploy"
 version = "0.2.2"
 criteria = "safe-to-deploy"
 
-[[exemptions.getrandom]]
-version = "0.2.17"
-criteria = "safe-to-deploy"
-
 [[exemptions.h2]]
 version = "0.4.16"
 criteria = "safe-to-deploy"
@@ -791,10 +787,6 @@ criteria = "safe-to-deploy"
 version = "6.0.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.rand]]
-version = "0.10.2"
-criteria = "safe-to-run"
-
 [[exemptions.rawpointer]]
 version = "0.2.1"
 criteria = "safe-to-deploy"
@@ -1035,10 +1027,6 @@ criteria = "safe-to-run"
 version = "0.28.0"
 criteria = "safe-to-run"
 
-[[exemptions.sync_wrapper]]
-version = "1.0.2"
-criteria = "safe-to-deploy"
-
 [[exemptions.tempfile]]
 version = "3.27.0"
 criteria = "safe-to-deploy"
@@ -1143,10 +1131,6 @@ criteria = "safe-to-run"
 version = "0.2.15"
 criteria = "safe-to-deploy"
 
-[[exemptions.untrusted]]
-version = "0.9.0"
-criteria = "safe-to-deploy"
-
 [[exemptions.ureq]]
 version = "2.12.1"
 criteria = "safe-to-deploy"
@@ -1214,10 +1198,6 @@ criteria = "safe-to-deploy"
 [[exemptions.web-sys]]
 version = "0.3.104"
 criteria = "safe-to-deploy"
-
-[[exemptions.web-time]]
-version = "1.1.0"
-criteria = "safe-to-run"
 
 [[exemptions.web_atoms]]
 version = "0.2.5"

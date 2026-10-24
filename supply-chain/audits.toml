@@ -43,6 +43,12 @@ criteria = "safe-to-run"
 version = "1.8.1"
 notes = "Full read of src/. Derive macros for BorshSerialize, BorshDeserialize and BorshSchema, built only on syn and quote token generation. No build script, unsafe, file, process, network or env access of its own; finds the borsh crate name through proc-macro-crate. Generated code only reads and writes through the caller's Read and Write. Never compiled in this workspace (reached only through borsh, an optional dependency of bit-vec that nothing enables)."
 
+[[audits.ctutils]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.4.2 -> 0.4.5"
+notes = "Reviewed the full diff. Comparison helpers move into a new public primitives module (pure integer arithmetic plus core::hint::black_box barriers on Thumb-1 ARM and 32-bit targets), u128 lt/le split into 64-bit halves on 32-bit targets, cast_unsigned/cast_signed replace as-casts, to_bool/to_u8 become const and the *_vartime variants are deprecated. #![forbid(unsafe_code)] kept; no build script, no new dependencies, no I/O. MSRV 1.87."
+
 [[audits.dirs]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-run"
