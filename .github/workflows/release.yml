@@ -38,7 +38,7 @@ jobs:
         toolchain: stable
 
     - name: Install cargo-semver-checks
-      uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+      uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
       with:
         tool: cargo-semver-checks
 
@@ -107,7 +107,7 @@ jobs:
     # to build without wasm-pack when the bundle is absent — no stubs in a
     # shipped binary), so the bundle is built before the release build.
     - name: Install wasm-pack
-      uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+      uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
       with:
         tool: wasm-pack
 
@@ -193,7 +193,7 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     - name: Install parse-changelog
-      uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+      uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
       with:
         tool: parse-changelog
 
@@ -240,7 +240,7 @@ jobs:
         targets: wasm32-unknown-unknown
 
     - name: Install wasm-pack
-      uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+      uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
       with:
         tool: wasm-pack
 
