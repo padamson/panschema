@@ -408,15 +408,15 @@ version = "0.9.6"
 criteria = "safe-to-deploy"
 
 [[exemptions.jsonschema]]
-version = "0.52.0"
+version = "0.59.0"
 criteria = "safe-to-run"
 
 [[exemptions.jsonschema-regex]]
-version = "0.52.1"
+version = "0.59.0"
 criteria = "safe-to-run"
 
 [[exemptions.jsonschema-value]]
-version = "0.52.1"
+version = "0.59.0"
 criteria = "safe-to-run"
 
 [[exemptions.kqueue]]
@@ -604,7 +604,7 @@ version = "0.5.2"
 criteria = "safe-to-run"
 
 [[exemptions.oxigraph]]
-version = "0.5.9"
+version = "0.5.12"
 criteria = "safe-to-run"
 
 [[exemptions.oxilangtag]]
@@ -812,7 +812,7 @@ version = "1.0.25"
 criteria = "safe-to-run"
 
 [[exemptions.referencing]]
-version = "0.52.1"
+version = "0.59.0"
 criteria = "safe-to-run"
 
 [[exemptions.resiter]]
@@ -980,15 +980,15 @@ version = "0.3.3"
 criteria = "safe-to-run"
 
 [[exemptions.spareval]]
-version = "0.2.6"
+version = "0.2.8"
 criteria = "safe-to-run"
 
 [[exemptions.spargebra]]
-version = "0.4.6"
+version = "0.4.8"
 criteria = "safe-to-run"
 
 [[exemptions.sparopt]]
-version = "0.3.6"
+version = "0.3.8"
 criteria = "safe-to-run"
 
 [[exemptions.stable_deref_trait]]

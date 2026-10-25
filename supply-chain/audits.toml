@@ -166,11 +166,23 @@ criteria = "safe-to-deploy"
 delta = "0.2.5 -> 0.2.6"
 notes = "Delta audit of the oxigraph 2026-09 patch bumps: dependency pins, clippy lint lists, edition-2024 attribute migration, and small parser/optimizer correctness fixes. No new dependencies, build scripts, unsafe, network, or filesystem code."
 
+[[audits.oxjsonld]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.6 -> 0.2.7"
+notes = "Version and sibling pin bumps only; one clippy lint removed."
+
 [[audits.oxrdf]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "0.3.3 -> 0.3.4"
 notes = "Delta audit of the oxigraph 2026-09 patch bumps: dependency pins, clippy lint lists, edition-2024 attribute migration, and small parser/optimizer correctness fixes. No new dependencies, build scripts, unsafe, network, or filesystem code."
+
+[[audits.oxrdf]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.4 -> 0.3.5"
+notes = "Term parser: numeric literals take only their own lexical span (&s[..cursor]) rather than the remaining input. Plus a test. No unsafe, no I/O."
 
 [[audits.oxrdfio]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
@@ -178,11 +190,23 @@ criteria = "safe-to-deploy"
 delta = "0.2.5 -> 0.2.6"
 notes = "Delta audit of the oxigraph 2026-09 patch bumps: dependency pins, clippy lint lists, edition-2024 attribute migration, and small parser/optimizer correctness fixes. No new dependencies, build scripts, unsafe, network, or filesystem code."
 
+[[audits.oxrdfio]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.6 -> 0.2.7"
+notes = "Version and sibling pin bumps only; one clippy lint removed."
+
 [[audits.oxrdfxml]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "0.2.3 -> 0.2.4"
 notes = "Delta audit of the oxigraph 2026-09 patch bumps: dependency pins, clippy lint lists, edition-2024 attribute migration, and small parser/optimizer correctness fixes. No new dependencies, build scripts, unsafe, network, or filesystem code."
+
+[[audits.oxrdfxml]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.4 -> 0.2.5"
+notes = "Version and sibling pin bumps only; one clippy lint removed."
 
 [[audits.oxsdatatypes]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
@@ -190,11 +214,23 @@ criteria = "safe-to-deploy"
 delta = "0.2.2 -> 0.2.3"
 notes = "Delta audit of the oxigraph 2026-09 patch bumps: dependency pins, clippy lint lists, edition-2024 attribute migration, and small parser/optimizer correctness fixes. No new dependencies, build scripts, unsafe, network, or filesystem code."
 
+[[audits.oxsdatatypes]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.3 -> 0.2.4"
+notes = "Arithmetic correctness: Euclidean div/rem in date/time normalization and floor conversion for timestamps, overflow-avoiding Decimal::checked_mul (cancel 2^18*5^18), half-away rounding fixes for Decimal/Float/Double incl. negative zero, Decimal Display rebuilt on a fixed 40-byte buffer with pad_integral. No unsafe, no I/O."
+
 [[audits.oxttl]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "0.2.3 -> 0.2.4"
 notes = "Delta audit of the oxigraph 2026-09 patch bumps: dependency pins, clippy lint lists, edition-2024 attribute migration, and small parser/optimizer correctness fixes. No new dependencies, build scripts, unsafe, network, or filesystem code."
+
+[[audits.oxttl]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.4 -> 0.2.5"
+notes = "Version and sibling pin bumps only; one clippy lint removed."
 
 [[audits.pg_query]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
@@ -249,6 +285,12 @@ who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-run"
 delta = "1.11.0 -> 1.12.0"
 notes = "Port to rand 0.10 and rand_xorshift 0.5; rand_chacha replaced by chacha20 with a manual Clone that rebuilds from seed, stream and word position. Two soundness fixes remove unsafe: the panic-hook static mut becomes a OnceLock set before set_hook, and hardware_rng asserts rdrand support before calling it. Forked-test replay now terminates the child on a persisted failure. No new I/O or network."
+
+[[audits.pulldown-cmark]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.13.4 -> 0.13.5"
+notes = "Parser fixes: cmark-derived early exit for repeated blank lines in nested lists (quadratic behavior), definition-list offsets stay on char boundaries, wikilink empty-display/malformed-input guards and event-chain fix, underscore lower-bound fix; ListFlags via existing bitflags dependency. build.rs change is in the gen-tests test generator only (adds a deflists flag). Bulk of the diff is generated test suites. No unsafe, no I/O."
 
 [[audits.rand]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
@@ -307,6 +349,12 @@ who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "0.3.3 -> 0.3.4"
 notes = "Delta audit of the oxigraph 2026-09 patch bumps: dependency pins, clippy lint lists, edition-2024 attribute migration, and small parser/optimizer correctness fixes. No new dependencies, build scripts, unsafe, network, or filesystem code."
+
+[[audits.sparesults]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.4 -> 0.3.5"
+notes = "Version and sibling pin bumps only; one clippy lint removed."
 
 [[audits.spareval]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
