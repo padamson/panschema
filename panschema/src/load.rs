@@ -95,4 +95,22 @@ mod tests {
             "and the untyped-slot diagnostic still reports it"
         );
     }
+
+    /// The reference ontology is the canonical example, and the instance
+    /// graph fixture is the one the e2e tier renders: anyone running either
+    /// should see output, not a warning about the example itself.
+    #[test]
+    fn the_example_ontologies_load_without_warnings() {
+        let registry = FormatRegistry::with_defaults();
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        for name in ["reference.ttl", "instance_graph.ttl"] {
+            let loaded = crate::import_resolve::load_schema(&fixtures.join(name), &registry)
+                .unwrap_or_else(|failure| panic!("{name} loads: {}", failure.error));
+            assert!(
+                loaded.warnings.is_empty(),
+                "{name} loads with warnings: {:?}",
+                loaded.warnings
+            );
+        }
+    }
 }

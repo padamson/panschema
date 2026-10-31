@@ -49,6 +49,8 @@
 :owns a owl:ObjectProperty ;
     rdfs:label "owns" ;
     rdfs:comment "Relates a person to an animal they own." ;
+    rdfs:domain :Person ;
+    rdfs:range :Animal ;
     owl:inverseOf :hasOwner ;
     skos:exactMatch <http://purl.org/dc/terms/relation> .
 
