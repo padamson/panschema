@@ -1213,14 +1213,13 @@ impl HtmlWriter {
                 labels,
             );
 
-            // class_uri wins when present; otherwise treat the
-            // class name as a bare CURIE so the schema's
-            // default_prefix resolves it (the LinkML convention).
+            // class_uri wins when present; otherwise LinkML's default
+            // IRI for the class, the one the RDF output declares.
             let iri_href = class_def
                 .class_uri
                 .as_deref()
                 .and_then(|c| crate::linkml_resolve::expand_curie(schema, c))
-                .or_else(|| crate::linkml_resolve::expand_curie(schema, class_id));
+                .or_else(|| crate::linkml_resolve::default_class_iri(class_id, schema));
 
             let external_superclasses: Vec<ExternalLink> = class_def
                 .subclass_of
@@ -1413,7 +1412,7 @@ impl HtmlWriter {
                 .slot_uri
                 .as_deref()
                 .and_then(|s| crate::linkml_resolve::expand_curie(schema, s))
-                .or_else(|| crate::linkml_resolve::expand_curie(schema, slot_id));
+                .or_else(|| crate::linkml_resolve::default_slot_iri(slot_id, schema));
 
             let governing_rule_groups = rules_by_slot.remove(*slot_id).unwrap_or_default();
             // The group label earns its place only when it says something
@@ -6138,12 +6137,36 @@ mod tests {
         schema
             .classes
             .insert("Act".to_string(), ClassDefinition::new("Act"));
+        schema.classes.insert(
+            "person_record".to_string(),
+            ClassDefinition::new("person_record"),
+        );
+        schema.slots.insert(
+            "has owner".to_string(),
+            crate::linkml::SlotDefinition::new("has owner"),
+        );
 
         let data = HtmlWriter::build_template_data(&schema);
         let card = data.class_data.iter().find(|c| c.id == "Act").unwrap();
         assert_eq!(
             card.iri_href.as_deref(),
             Some("https://w3id.org/scimantic/Act")
+        );
+        let card = data
+            .class_data
+            .iter()
+            .find(|c| c.id == "person_record")
+            .unwrap();
+        assert_eq!(
+            card.iri_href.as_deref(),
+            Some("https://w3id.org/scimantic/PersonRecord"),
+            "the card links the IRI the RDF output declares for the class"
+        );
+        let card = data.slot_data.iter().find(|s| s.id == "has owner").unwrap();
+        assert_eq!(
+            card.iri_href.as_deref(),
+            Some("https://w3id.org/scimantic/has_owner"),
+            "the card links the IRI the RDF output declares for the slot"
         );
     }
 

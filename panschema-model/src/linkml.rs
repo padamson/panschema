@@ -1001,6 +1001,10 @@ pub struct EnumDefinition {
     /// Worked examples; see [`SchemaDefinition::examples`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub examples: Vec<Example>,
+    /// The enum's IRI, as a CURIE or absolute IRI. Without one the enum
+    /// takes LinkML's default, its CamelCased name under the default prefix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enum_uri: Option<String>,
     /// The allowed values for this enum
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub permissible_values: BTreeMap<String, PermissibleValue>,
@@ -1019,6 +1023,7 @@ impl EnumDefinition {
             aliases: Vec::new(),
             see_also: Vec::new(),
             examples: Vec::new(),
+            enum_uri: None,
             permissible_values: BTreeMap::new(),
             annotations: Annotations::default(),
         }

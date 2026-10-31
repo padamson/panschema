@@ -212,22 +212,16 @@ impl CollidingSlot {
 /// A *definition site* is a top-level `slots:` entry or a class's
 /// `attributes:` entry. A class listing a top-level slot via `slots:` is a
 /// *use*, not a definition — sharing one slot is the supported way to say
-/// two classes carry the same property. Identity follows IRI minting: an
-/// explicit `slot_uri` is its own identity, everything else falls back to
-/// the name, mirroring how the RDF writers derive property IRIs.
+/// two classes carry the same property. Identity is the property IRI the
+/// RDF writers mint ([`crate::linkml_resolve::slot_iri_string`]), so two
+/// spellings LinkML's casing evens out (`has owner`, `has_owner`) collide,
+/// and each site then names the spelling it defines.
 pub fn colliding_slot_definitions(schema: &SchemaDefinition) -> Vec<CollidingSlot> {
-    use std::collections::BTreeMap;
-    // identity key -> (display name, sorted definition sites)
-    let mut sites: BTreeMap<String, (String, Vec<String>)> = BTreeMap::new();
+    // property IRI -> (name, site) per definition
+    let mut sites: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
     let mut record = |slot: &crate::linkml::SlotDefinition, name: &str, site: String| {
-        let key = match &slot.slot_uri {
-            Some(uri) => format!("uri:{uri}"),
-            None => format!("name:{name}"),
-        };
-        let entry = sites
-            .entry(key)
-            .or_insert_with(|| (name.to_string(), Vec::new()));
-        entry.1.push(site);
+        let iri = crate::linkml_resolve::slot_iri_string(name, slot, schema);
+        sites.entry(iri).or_default().push((name.to_string(), site));
     };
     for (name, slot) in &schema.slots {
         record(slot, name, "top-level `slots:`".to_string());
@@ -239,8 +233,20 @@ pub fn colliding_slot_definitions(schema: &SchemaDefinition) -> Vec<CollidingSlo
     }
     sites
         .into_values()
-        .filter(|(_, s)| s.len() > 1)
-        .map(|(name, mut sites)| {
+        .filter(|defs| defs.len() > 1)
+        .map(|defs| {
+            let name = defs[0].0.clone();
+            let one_spelling = defs.iter().all(|(n, _)| *n == name);
+            let mut sites: Vec<String> = defs
+                .into_iter()
+                .map(|(n, site)| {
+                    if one_spelling {
+                        site
+                    } else {
+                        format!("{site} (as `{n}`)")
+                    }
+                })
+                .collect();
             sites.sort();
             CollidingSlot { name, sites }
         })
@@ -643,6 +649,9 @@ pub fn unexpandable_declared_uris(schema: &SchemaDefinition) -> Vec<Unexpandable
     }
     for (name, enum_def) in &schema.enums {
         let element = format!("enum `{name}`");
+        if let Some(uri) = enum_def.enum_uri.as_deref() {
+            check(&element, "enum_uri", uri);
+        }
         for value in &enum_def.see_also {
             check(&element, "see_also", value);
         }
@@ -3287,6 +3296,46 @@ mod tests {
             collisions[0].sites,
             vec!["class `Image`", "top-level `slots:`"]
         );
+    }
+
+    /// Names that differ only where LinkML's slot casing evens them out
+    /// (`has owner`, `has_owner`) mint one IRI, and are reported.
+    #[test]
+    fn names_that_case_to_one_iri_collide() {
+        let schema = parse(
+            "name: s
+slots:
+  has owner:
+    range: string
+classes:
+  Image:
+    attributes:
+      has_owner:
+        range: string
+",
+        );
+        let collisions = super::colliding_slot_definitions(&schema);
+        assert_eq!(collisions.len(), 1, "{collisions:?}");
+        assert_eq!(
+            collisions[0].sites,
+            vec![
+                "class `Image` (as `has_owner`)",
+                "top-level `slots:` (as `has owner`)"
+            ],
+            "each site names the spelling it defines"
+        );
+    }
+
+    /// Identity is the expanded IRI, so a `slot_uri` written as a CURIE and
+    /// one written as the absolute IRI it expands to are one property.
+    #[test]
+    fn a_slot_uri_curie_and_its_expansion_collide() {
+        let schema = parse(
+            "name: s\nprefixes:\n  ex: https://example.org/\nclasses:\n  Recipe:\n    attributes:\n      id:\n        slot_uri: ex:id\n  Image:\n    attributes:\n      id:\n        slot_uri: https://example.org/id\n",
+        );
+        let collisions = super::colliding_slot_definitions(&schema);
+        assert_eq!(collisions.len(), 1, "{collisions:?}");
+        assert_eq!(collisions[0].sites, vec!["class `Image`", "class `Recipe`"]);
     }
 
     /// Distinct explicit `slot_uri`s mint distinct IRIs, so same-named
@@ -6597,6 +6646,7 @@ mod tests {
         widget.attributes.insert("label".to_string(), label);
         schema.classes.insert("Widget".to_string(), widget);
         let mut color = EnumDefinition::new("Color");
+        color.enum_uri = Some("unknown:ColorScheme".to_string());
         let mut red = PermissibleValue::new("red");
         red.meaning = Some("missing:red".to_string());
         color.permissible_values.insert("red".to_string(), red);
@@ -6619,6 +6669,11 @@ mod tests {
                     "attribute `label` of class `Widget`".to_string(),
                     "slot_uri",
                     "nope:label".to_string()
+                ),
+                (
+                    "enum `Color`".to_string(),
+                    "enum_uri",
+                    "unknown:ColorScheme".to_string()
                 ),
                 (
                     "enum `Color` value `red`".to_string(),

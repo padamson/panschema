@@ -2464,7 +2464,7 @@ mod tests {
             "the enum is a class"
         );
         for value in ["open", "shipped"] {
-            let value_iri = format!("https://example.org/orders/OrderStatus/{value}");
+            let value_iri = format!("https://example.org/orders/OrderStatus#{value}");
             assert!(
                 has_iri_triple(
                     &graph,
@@ -2525,7 +2525,7 @@ mod tests {
                 &graph,
                 "https://example.org/orders/o1",
                 "https://example.org/orders/status",
-                "https://example.org/orders/OrderStatus/shipped"
+                "https://example.org/orders/OrderStatus#shipped"
             ),
             "the assertion names the value's individual"
         );
@@ -2557,7 +2557,7 @@ mod tests {
                     &graph,
                     "https://example.org/orders/o1",
                     "https://example.org/orders/status",
-                    "https://example.org/orders/OrderStatus/on_hold"
+                    "https://example.org/orders/OrderStatus#on_hold"
                 ),
                 "`{authored}` must resolve to the value's individual"
             );

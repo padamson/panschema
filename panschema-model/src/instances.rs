@@ -2440,9 +2440,10 @@ fn local_name(iri: &str) -> &str {
     iri.rsplit(['#', '/']).next().unwrap_or(iri)
 }
 
-/// Capitalize the first character (ASCII), leaving the rest untouched — the
-/// display label fallback when an individual has no `rdfs:label`.
-fn capitalize_first(id: &str) -> String {
+/// Capitalize the first character, leaving the rest untouched — the
+/// display label fallback when an individual has no `rdfs:label`, and each
+/// word of a CamelCased element name.
+pub(crate) fn capitalize_first(id: &str) -> String {
     let mut chars = id.chars();
     match chars.next() {
         Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),

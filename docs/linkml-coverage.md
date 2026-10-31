@@ -153,11 +153,12 @@ renders an enum card per enum; the graph hover reuses it.
 |---|:--:|:--:|:--:|:--:|:--:|:--:|---|
 | `EnumDefinition.name` | ● | ● | ● | ✗ | ● | ●◨ | `#enum-` card; node; Rust enum (keyword names → raw identifiers); Postgres `CREATE TYPE ... AS ENUM` name ([feature 24 slice 1](features/24-postgres-ddl-writer.md) ✅, syntax-verified via `pg_query`) |
 | `EnumDefinition.description` | ● | ● | ● | ✗ | ● | ✗ | card; tooltip; doc-comment |
-| `permissible_values` | ● | ● | ● | ● | ● | ●◨ | card list; graph hover; Rust variants (keyword names → raw identifiers). RDF emits the enum as an `owl:Class` closed by `owl:oneOf` over its values, each a labelled `owl:NamedIndividual` of that class (a value's `meaning:` CURIE supplies its IRI when given); an enum-ranged slot is therefore an `owl:ObjectProperty` over those individuals with the enum class as its `rdfs:range`, and an individual's enum-valued assertion names the value's IRI rather than a literal (a value the enum doesn't permit stays a literal and is reported by validation); the SHACL shape for an enum-ranged slot closes the value set with `sh:in` over those same value IRIs, so data carrying an unlisted value fails validation instead of passing unconstrained — a rule *condition* on such a slot is deliberately not closed this way, since the condition's own `sh:hasValue` would then be unsatisfiable; Postgres enum value list (feature 24 slice 1 ✅, syntax-verified) |
+| `permissible_values` | ● | ● | ● | ● | ● | ●◨ | card list; graph hover; Rust variants (keyword names → raw identifiers). RDF emits the enum as an `owl:Class` closed by `owl:oneOf` over its values, each a labelled `owl:NamedIndividual` of that class (a value's `meaning:` CURIE supplies its IRI when given; otherwise it is `{enum IRI}#{key}` with the key percent-encoded, as gen-owl mints it, and `/` in place of the `#` when the enum IRI already has a fragment, since gen-owl's second `#` is not a valid IRI); an enum-ranged slot is therefore an `owl:ObjectProperty` over those individuals with the enum class as its `rdfs:range`, and an individual's enum-valued assertion names the value's IRI rather than a literal (a value the enum doesn't permit stays a literal and is reported by validation); the SHACL shape for an enum-ranged slot closes the value set with `sh:in` over those same value IRIs, so data carrying an unlisted value fails validation instead of passing unconstrained — a rule *condition* on such a slot is deliberately not closed this way, since the condition's own `sh:hasValue` would then be unsatisfiable; Postgres enum value list (feature 24 slice 1 ✅, syntax-verified) |
 | `PermissibleValue.text` | ● | ● | ● | ✗ | ● | ●◨ | card; variant ident; Postgres enum value literal (feature 24 slice 1 ✅, syntax-verified) |
 | `PermissibleValue.description` | ● | ● | ● | ✗ | ● | ✗ | |
 | `PermissibleValue.meaning` | ● | ● | ● | ✗ | ○ | ✗ | CURIE-expanded hyperlink on the card + graph; Rust ignores |
-| `enum_uri` `code_set` `pv_formula` `include` `minus` `inherits` `reachable_from` `matches` `concepts` | ✗ | — | — | — | — | — | not modeled. Dynamic/derived enums |
+| `enum_uri` | ● | ✗ | ✗ | ● | ✗ | ✗ | the enum's IRI in RDF and SHACL, CURIE-expanded; without one, LinkML's default `{default_prefix}:{camelcase(name)}`. The OWL reader records an enum's IRI here, so it round-trips |
+| `code_set` `pv_formula` `include` `minus` `inherits` `reachable_from` `matches` `concepts` | ✗ | — | — | — | — | — | not modeled. Dynamic/derived enums |
 
 ---
 
@@ -251,7 +252,11 @@ URIs-and-mappings), not against this file's own claims. Ranked by impact.
    2026-08-04:** the fallback now expands `{default_prefix}:{Name}` exactly
    as linkml-runtime does, unified across every site that names a class or
    slot; the fragment form survives only for schemas with no usable
-   `default_prefix`. Original finding: When `class_uri` /
+   `default_prefix`. The name's casing was missed until 2026-10-31: LinkML
+   spells a class or enum `camelcase(name)` and a slot `underscore(name)`
+   (`item_status` → `ItemStatus`, `has owner` → `has_owner`), which
+   panschema now does too, as measured by
+   `conformance/probe_permissible_value_iri.py`. Original finding: When `class_uri` /
    `slot_uri` is absent, LinkML mints `{default_prefix}:{Name}` — e.g.
    `https://example.org/estate/Provider`. panschema mints
    `{schema.id}#{Name}` — `https://example.org/estate#Provider`

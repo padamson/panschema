@@ -16,6 +16,7 @@ use sophia::turtle::parser::turtle;
 
 use crate::io::{IoError, IoResult, Reader};
 use crate::linkml::{ClassDefinition, SchemaDefinition, SlotDefinition};
+use crate::linkml_resolve::permissible_value_key;
 use crate::owl_model::{
     Annotations, OntologyClass, OntologyIndividual, OntologyMetadata, OntologyProperty,
     PropertyCharacteristics, PropertyType, PropertyValue,
@@ -727,17 +728,16 @@ impl OwlReader {
             metadata.enums.iter().map(|e| e.iri.as_str()).collect();
 
         // Map enums: each `owl:oneOf` member becomes a permissible value.
-        // The key is the tail of the value IRI under the enum's own
-        // namespace (`{enum}/{key}`, the derived form the writer mints); a
-        // member outside that namespace is a `meaning:` IRI, keyed by its
-        // label, with the IRI preserved as the value's meaning.
+        // A value IRI the writer derives from the enum's own IRI reads back
+        // as its key; a member outside that namespace is a `meaning:` IRI,
+        // keyed by its label, with the IRI preserved as the value's meaning.
         for owl_enum in &metadata.enums {
             let mut enum_def = crate::linkml::EnumDefinition::new(&owl_enum.id);
             enum_def.description = owl_enum.comment.clone();
-            let derived_prefix = format!("{}/", owl_enum.iri);
+            enum_def.enum_uri = Some(owl_enum.iri.clone());
             for value in &owl_enum.values {
-                let (key, meaning) = match value.iri.strip_prefix(&derived_prefix) {
-                    Some(tail) => (tail.to_string(), None),
+                let (key, meaning) = match permissible_value_key(&owl_enum.iri, &value.iri) {
+                    Some(key) => (key, None),
                     None => (
                         value
                             .label
@@ -1371,6 +1371,38 @@ ex:kind a owl:ObjectProperty ;
             Some("int".to_string()),
             "the range must name the enum, not be rewritten to `integer` by \
              the XSD fallback"
+        );
+    }
+
+    /// The IR has no other record of an OWL enum's IRI, and LinkML's
+    /// default for a lowercase name (`ex:status` -> `ex:Status`) is a
+    /// different IRI, so writing the enum back would move it.
+    #[test]
+    fn an_enum_read_from_owl_keeps_its_iri() {
+        let schema = read_ttl(
+            r#"@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ex: <https://example.org/s#> .
+
+<https://example.org/s> a owl:Ontology .
+
+ex:status a owl:Class ;
+  rdfs:label "status" ;
+  owl:oneOf ( <https://example.org/s#status/open> ) .
+
+<https://example.org/s#status/open> a owl:NamedIndividual, ex:status ;
+  rdfs:label "open" .
+"#,
+        );
+        assert_eq!(
+            crate::linkml_resolve::enum_iri_string("status", &schema),
+            "https://example.org/s#status"
+        );
+        let open = &schema.enums["status"].permissible_values["open"];
+        assert_eq!(
+            crate::linkml_resolve::permissible_value_iri("status", "open", open, &schema),
+            "https://example.org/s#status/open",
+            "and so do its values"
         );
     }
 

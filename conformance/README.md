@@ -43,6 +43,17 @@ and prints the fields `induced_slot` settles on beside the
 precedence, which takes each field from the first ancestor in that order
 that sets it.
 
+```bash
+uv run --project conformance conformance/probe_permissible_value_iri.py
+```
+
+The element-IRI probe puts a class, slots, and enums named outside
+LinkML's usual casing, with enum values that contain a space, a slash, or
+a non-ASCII letter, through `gen-owl` under a `/` and a `#` default
+prefix, and prints the IRI each element gets; it is the evidence behind
+the casing of a default element IRI and the percent-encoded
+`{enum IRI}#{value}` form of a permissible value's IRI.
+
 Load an arbitrary schema through the reference implementation:
 
 ```bash

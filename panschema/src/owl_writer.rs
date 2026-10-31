@@ -502,6 +502,48 @@ mod tests {
     }
 
     #[test]
+    fn roundtrip_preserves_enum_values_an_iri_must_escape() {
+        use crate::linkml::{EnumDefinition, PermissibleValue};
+        use crate::owl_reader::OwlReader;
+        for namespace in ["https://example.org/t/", "https://example.org/t#"] {
+            let mut schema = create_test_schema();
+            schema
+                .prefixes
+                .insert("ex".to_string(), namespace.to_string());
+            schema.default_prefix = Some("ex".to_string());
+            let mut status = EnumDefinition::new("item_status");
+            for key in ["planned", "in progress", "a/b", "café"] {
+                status
+                    .permissible_values
+                    .insert(key.to_string(), PermissibleValue::new(key));
+            }
+            schema.enums.insert("item_status".to_string(), status);
+
+            let temp_dir = TempDir::new().expect("Failed to create temp dir");
+            let output_path = temp_dir.path().join("output.ttl");
+            OwlWriter::new()
+                .write(&schema, &output_path)
+                .expect("an enum value with a space, slash, or non-ASCII letter writes");
+            let schema2 = OwlReader::new()
+                .read(&output_path)
+                .expect("Failed to read back");
+
+            let enums: Vec<_> = schema2.enums.values().collect();
+            assert_eq!(enums.len(), 1, "under {namespace}: {enums:?}");
+            let values = &enums[0].permissible_values;
+            assert_eq!(
+                values.keys().map(String::as_str).collect::<Vec<_>>(),
+                ["a/b", "café", "in progress", "planned"],
+                "under {namespace}"
+            );
+            assert!(
+                values.values().all(|pv| pv.meaning.is_none()),
+                "every value reads back as derived, not as a meaning: {values:?}"
+            );
+        }
+    }
+
+    #[test]
     fn roundtrip_preserves_inline_attribute_properties() {
         use crate::owl_reader::OwlReader;
         // The reference fixture is TTL-sourced, so its slots land top-level and

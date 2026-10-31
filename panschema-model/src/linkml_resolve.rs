@@ -980,10 +980,10 @@ pub fn ontology_iri_string(schema: &SchemaDefinition) -> &str {
         .unwrap_or("http://example.org/ontology")
 }
 
-/// Absolute IRI for a class: its `class_uri` (CURIE-expanded) or
-/// `{ontology}#{name}`. The single source of class-IRI derivation, shared
-/// by the OWL graph and the SHACL shapes graph so a shape targets exactly
-/// the IRI the OWL output declares.
+/// Absolute IRI for a class: its `class_uri` (CURIE-expanded) or LinkML's
+/// default, its CamelCased name under the default prefix. The single source
+/// of class-IRI derivation, shared by the OWL graph and the SHACL shapes
+/// graph so a shape targets exactly the IRI the OWL output declares.
 pub fn class_iri_string(
     name: &str,
     class_def: &ClassDefinition,
@@ -993,7 +993,7 @@ pub fn class_iri_string(
         .class_uri
         .as_deref()
         .map(|c| expand_curie_or_verbatim(schema, c))
-        .unwrap_or_else(|| fallback_element_iri(name, schema))
+        .unwrap_or_else(|| default_iri(name, camelcase, schema))
 }
 
 /// How an authored class designation matches a candidate set.
@@ -1090,7 +1090,9 @@ pub fn class_named_by_expanded<'a>(
 pub fn class_iri_by_name(name: &str, schema: &SchemaDefinition) -> String {
     match schema.classes.get(name) {
         Some(class_def) => class_iri_string(name, class_def, schema),
-        None => fallback_element_iri(name, schema),
+        // A CURIE or IRI names a class defined elsewhere.
+        None if name.contains(':') => resolve_reference_iri(schema, name),
+        None => default_iri(name, camelcase, schema),
     }
 }
 
@@ -1100,20 +1102,58 @@ pub fn class_iri_by_name(name: &str, schema: &SchemaDefinition) -> String {
 /// slot (`inverse`, slot-level `is_a`) gets the IRI that attribute's own
 /// emission uses.
 pub fn slot_iri_by_name(name: &str, schema: &SchemaDefinition) -> String {
-    schema
-        .find_slot(name)
-        .map(|def| slot_iri_string(name, def, schema))
-        .unwrap_or_else(|| fallback_element_iri(name, schema))
+    match schema.find_slot(name) {
+        Some(def) => slot_iri_string(name, def, schema),
+        // A CURIE or IRI names a slot defined elsewhere.
+        None if name.contains(':') => resolve_reference_iri(schema, name),
+        None => default_iri(name, underscore, schema),
+    }
 }
 
 /// LinkML's default URI for an element that declares none:
-/// `{default_prefix}:{name}`, expanded — the same rule linkml-runtime
-/// applies, so the two tools mint identical IRIs for the same schema. A
-/// schema without a usable `default_prefix` falls back to `{id}#{name}`,
-/// since LinkML has nothing to expand against there either.
-pub fn fallback_element_iri(name: &str, schema: &SchemaDefinition) -> String {
-    expand_curie(schema, name)
-        .unwrap_or_else(|| format!("{}#{}", ontology_iri_string(schema), name))
+/// `{default_prefix}:{local}`, expanded, where `local` is the name cased as
+/// linkml-runtime cases it (`case` is [`camelcase`] for a class or enum,
+/// [`underscore`] for a slot), so the two tools mint identical IRIs for the
+/// same schema. A schema without a usable `default_prefix` falls back to
+/// `{id}#{local}`, since LinkML has nothing to expand against there either.
+fn default_iri(name: &str, case: fn(&str) -> String, schema: &SchemaDefinition) -> String {
+    let local = case(name);
+    expand_curie(schema, &local)
+        .unwrap_or_else(|| format!("{}#{}", ontology_iri_string(schema), local))
+}
+
+/// LinkML's default IRI for the class or enum `name`, or `None` when the
+/// schema has no default prefix to expand it against: the rule
+/// [`class_iri_string`] and [`enum_iri_string`] fall back on, for a site
+/// that shows nothing rather than an IRI the schema does not imply.
+pub fn default_class_iri(name: &str, schema: &SchemaDefinition) -> Option<String> {
+    expand_curie(schema, &camelcase(name))
+}
+
+/// [`default_class_iri`] for a slot, the rule [`slot_iri_string`] falls
+/// back on.
+pub fn default_slot_iri(name: &str, schema: &SchemaDefinition) -> Option<String> {
+    expand_curie(schema, &underscore(name))
+}
+
+/// linkml-runtime's `camelcase`: commas dropped, the name split on
+/// underscores and whitespace, and each word's first letter uppercased.
+fn camelcase(name: &str) -> String {
+    name.replace(',', "")
+        .replace('_', " ")
+        .split_whitespace()
+        .map(crate::instances::capitalize_first)
+        .collect()
+}
+
+/// linkml-runtime's `underscore`: each whitespace run an underscore, commas
+/// dropped, and hyphens underscores.
+fn underscore(name: &str) -> String {
+    name.split_whitespace()
+        .collect::<Vec<_>>()
+        .join("_")
+        .replace(',', "")
+        .replace('-', "_")
 }
 
 /// The IRI of an enum's permissible value, matched against either the value
@@ -1136,8 +1176,9 @@ pub fn enum_value_iri(
 }
 
 /// The IRI of a permissible value by its key: its `meaning` expanded, or
-/// `{enum IRI}/{key}`. The one derivation behind the T-box individual the
-/// enum declares and every A-box value that names it.
+/// `{enum IRI}#{key}` with the key percent-encoded, as gen-owl mints it.
+/// The one derivation behind the T-box individual the enum declares and
+/// every A-box value that names it.
 pub fn permissible_value_iri(
     enum_name: &str,
     key: &str,
@@ -1147,24 +1188,93 @@ pub fn permissible_value_iri(
     pv.meaning
         .as_deref()
         .map(|m| expand_curie_or_verbatim(schema, m))
-        .unwrap_or_else(|| format!("{}/{}", enum_iri_string(enum_name, schema), key))
+        .unwrap_or_else(|| {
+            let enum_iri = enum_iri_string(enum_name, schema);
+            format!(
+                "{enum_iri}{}{}",
+                value_separator(&enum_iri),
+                quote_value(key)
+            )
+        })
 }
 
-/// Absolute IRI for an enum, mirroring how classes and slots without an
-/// explicit URI are addressed. The IR carries no `enum_uri`, so there is
-/// nothing to prefer over the derived form.
+/// The key of the value [`permissible_value_iri`] minted as `value_iri`
+/// under `enum_iri`, or `None` for an IRI it did not derive there, such as
+/// a value's `meaning`.
+pub fn permissible_value_key(enum_iri: &str, value_iri: &str) -> Option<String> {
+    let tail = value_iri
+        .strip_prefix(enum_iri)?
+        .strip_prefix(value_separator(enum_iri))?;
+    unquote_value(tail)
+}
+
+/// gen-owl joins a value to its enum with `#`. An enum IRI that already
+/// has a fragment takes `/`, since a second `#` is not a valid IRI.
+fn value_separator(enum_iri: &str) -> char {
+    if enum_iri.contains('#') { '/' } else { '#' }
+}
+
+/// Python's `quote(value.strip(), safe="")`, the encoding gen-owl gives a
+/// permissible value: every byte but an unreserved ASCII character
+/// percent-encoded.
+fn quote_value(value: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(value.len());
+    for byte in value.trim().bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            _ => {
+                let _ = write!(out, "%{byte:02X}");
+            }
+        }
+    }
+    out
+}
+
+/// The inverse of [`quote_value`], or `None` for a malformed escape or a
+/// result that is not UTF-8.
+fn unquote_value(encoded: &str) -> Option<String> {
+    let mut bytes = Vec::with_capacity(encoded.len());
+    let mut rest = encoded.as_bytes();
+    while let Some((&byte, tail)) = rest.split_first() {
+        if byte == b'%' {
+            let hex = tail.get(..2)?;
+            if !hex.iter().all(u8::is_ascii_hexdigit) {
+                return None;
+            }
+            bytes.push(u8::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok()?);
+            rest = &tail[2..];
+        } else {
+            bytes.push(byte);
+            rest = tail;
+        }
+    }
+    String::from_utf8(bytes).ok()
+}
+
+/// Absolute IRI for an enum: its `enum_uri` (CURIE-expanded) or LinkML's
+/// default, its CamelCased name under the default prefix, the same rule
+/// classes follow.
 pub fn enum_iri_string(name: &str, schema: &SchemaDefinition) -> String {
-    fallback_element_iri(name, schema)
+    schema
+        .enums
+        .get(name)
+        .and_then(|e| e.enum_uri.as_deref())
+        .map(|uri| expand_curie_or_verbatim(schema, uri))
+        .unwrap_or_else(|| default_iri(name, camelcase, schema))
 }
 
-/// Absolute IRI for a slot: its `slot_uri` (CURIE-expanded) or
-/// `{ontology}#{name}`. Shared by the OWL graph and the SHACL shapes graph.
+/// Absolute IRI for a slot: its `slot_uri` (CURIE-expanded) or LinkML's
+/// default, its underscored name under the default prefix. Shared by the
+/// OWL graph and the SHACL shapes graph.
 pub fn slot_iri_string(name: &str, slot_def: &SlotDefinition, schema: &SchemaDefinition) -> String {
     slot_def
         .slot_uri
         .as_deref()
         .map(|s| expand_curie_or_verbatim(schema, s))
-        .unwrap_or_else(|| fallback_element_iri(name, schema))
+        .unwrap_or_else(|| default_iri(name, underscore, schema))
 }
 
 /// The IRI a reference target (or bare record id) denotes: prefix or
@@ -2803,6 +2913,192 @@ mod tests {
             "required from the top-level slot: {title:?}"
         );
         assert_eq!(title.pattern.as_deref(), Some("^usage"));
+    }
+
+    /// The schema `conformance/probe_permissible_value_iri.py` puts through
+    /// LinkML's gen-owl, under the default prefix `namespace`.
+    fn unconventionally_named_schema(namespace: &str) -> SchemaDefinition {
+        parse(&format!(
+            "prefixes:\n  ex: '{namespace}'\n  skos: http://www.w3.org/2004/02/skos/core#\n\
+             default_prefix: ex\n\
+             enums:\n  item_status:\n    permissible_values:\n      planned: {{}}\n      \
+             in progress: {{}}\n      a/b: {{}}\n      café: {{}}\n      \
+             done: {{meaning: skos:Concept}}\n  \
+             declared:\n    enum_uri: skos:DeclaredScheme\n    permissible_values:\n      only: {{}}\n\
+             classes:\n  person_record: {{slots: [has owner, in-stock]}}\n\
+             slots:\n  has owner: {{}}\n  in-stock: {{}}\n"
+        ))
+    }
+
+    /// Each expected IRI is the one gen-owl mints for the same element in
+    /// `conformance/probe_permissible_value_iri.py`.
+    #[test]
+    fn an_element_without_a_declared_uri_gets_the_iri_gen_owl_mints() {
+        let ns = "https://example.org/t/";
+        let schema = unconventionally_named_schema(ns);
+        for (minted, expected) in [
+            (class_iri_by_name("person_record", &schema), "PersonRecord"),
+            (
+                class_iri_by_name("unlisted_class", &schema),
+                "UnlistedClass",
+            ),
+            (enum_iri_string("item_status", &schema), "ItemStatus"),
+            (slot_iri_by_name("has owner", &schema), "has_owner"),
+            (slot_iri_by_name("in-stock", &schema), "in_stock"),
+            (slot_iri_by_name("unlisted slot", &schema), "unlisted_slot"),
+        ] {
+            assert_eq!(minted, format!("{ns}{expected}"));
+        }
+    }
+
+    #[test]
+    fn a_declared_enum_uri_wins_over_the_default() {
+        let schema = unconventionally_named_schema("https://example.org/t/");
+        assert_eq!(
+            enum_iri_string("declared", &schema),
+            "http://www.w3.org/2004/02/skos/core#DeclaredScheme"
+        );
+    }
+
+    /// A reference to an element defined elsewhere is not a name to case:
+    /// `skos:Concept_scheme` would otherwise become `Skos:ConceptScheme`.
+    #[test]
+    fn a_curie_naming_an_element_elsewhere_expands_as_written() {
+        let schema = unconventionally_named_schema("https://example.org/t/");
+        assert_eq!(
+            class_iri_by_name("skos:Concept_scheme", &schema),
+            "http://www.w3.org/2004/02/skos/core#Concept_scheme"
+        );
+        assert_eq!(
+            slot_iri_by_name("skos:pref-label", &schema),
+            "http://www.w3.org/2004/02/skos/core#pref-label"
+        );
+    }
+
+    /// A value without `meaning` is `{enum IRI}#{percent-encoded value}`,
+    /// as gen-owl mints it in `conformance/probe_permissible_value_iri.py`.
+    /// Where the enum IRI already ends in a fragment, gen-owl's second `#`
+    /// would make an invalid IRI, so the value takes `/` there instead.
+    #[test]
+    fn a_permissible_value_iri_percent_encodes_the_value_after_the_enum_iri() {
+        for (ns, sep) in [
+            ("https://example.org/t/", "#"),
+            ("https://example.org/t#", "/"),
+        ] {
+            let schema = unconventionally_named_schema(ns);
+            let item_status = &schema.enums["item_status"];
+            for (key, tail) in [
+                ("planned", "planned"),
+                ("in progress", "in%20progress"),
+                ("a/b", "a%2Fb"),
+                ("café", "caf%C3%A9"),
+            ] {
+                assert_eq!(
+                    permissible_value_iri(
+                        "item_status",
+                        key,
+                        &item_status.permissible_values[key],
+                        &schema
+                    ),
+                    format!("{ns}ItemStatus{sep}{tail}"),
+                    "{key:?} under {ns}"
+                );
+            }
+        }
+        let schema = unconventionally_named_schema("https://example.org/t/");
+        assert_eq!(
+            permissible_value_iri(
+                "declared",
+                "only",
+                &schema.enums["declared"].permissible_values["only"],
+                &schema
+            ),
+            "http://www.w3.org/2004/02/skos/core#DeclaredScheme/only",
+            "a declared enum_uri with a fragment takes `/` too"
+        );
+    }
+
+    #[test]
+    fn a_permissible_values_meaning_is_its_iri() {
+        let schema = unconventionally_named_schema("https://example.org/t/");
+        assert_eq!(
+            permissible_value_iri(
+                "item_status",
+                "done",
+                &schema.enums["item_status"].permissible_values["done"],
+                &schema
+            ),
+            "http://www.w3.org/2004/02/skos/core#Concept"
+        );
+    }
+
+    /// The OWL reader keys a value by what this returns, so every key must
+    /// come back from the IRI it was minted as, and a `meaning` IRI from
+    /// outside the enum's namespace must not pass for a derived one.
+    #[test]
+    fn a_permissible_value_key_reads_back_from_the_iri_it_minted() {
+        for ns in ["https://example.org/t/", "https://example.org/t#"] {
+            let schema = unconventionally_named_schema(ns);
+            let item_status = &schema.enums["item_status"];
+            let enum_iri = enum_iri_string("item_status", &schema);
+            for (key, pv) in &item_status.permissible_values {
+                let minted = permissible_value_iri("item_status", key, pv, &schema);
+                let expected = pv.meaning.is_none().then_some(key.as_str());
+                assert_eq!(
+                    permissible_value_key(&enum_iri, &minted).as_deref(),
+                    expected,
+                    "{minted} under {ns}"
+                );
+            }
+        }
+    }
+
+    /// Each expected spelling is what linkml-runtime's `formatutils`
+    /// returns for the same input.
+    #[test]
+    fn names_case_the_way_linkml_runtime_cases_them() {
+        for (name, camel, under) in [
+            ("item_status", "ItemStatus", "item_status"),
+            ("type", "Type", "type"),
+            ("ItemStatus", "ItemStatus", "ItemStatus"),
+            ("has owner", "HasOwner", "has_owner"),
+            ("a__b, c", "ABC", "a__b_c"),
+            (" padded ", "Padded", "padded"),
+            ("in-stock", "In-stock", "in_stock"),
+            ("x_y-z", "XY-z", "x_y_z"),
+        ] {
+            assert_eq!(camelcase(name), camel, "camelcase({name:?})");
+            assert_eq!(underscore(name), under, "underscore({name:?})");
+        }
+    }
+
+    /// Each expected spelling is what Python's
+    /// `urllib.parse.quote(text.strip(), safe="")` returns, the encoding
+    /// gen-owl gives a permissible value.
+    #[test]
+    fn a_value_percent_encodes_the_way_gen_owl_quotes_it() {
+        for (raw, encoded) in [
+            ("in progress", "in%20progress"),
+            ("a/b", "a%2Fb"),
+            ("café", "caf%C3%A9"),
+            ("x~y.z-_", "x~y.z-_"),
+            ("a+b&c#d", "a%2Bb%26c%23d"),
+            (" trimmed ", "trimmed"),
+        ] {
+            assert_eq!(quote_value(raw), encoded, "quote_value({raw:?})");
+        }
+    }
+
+    /// `%+F` is the case `u8::from_str_radix` alone would accept.
+    #[test]
+    fn an_escape_quote_value_never_produces_decodes_to_nothing() {
+        for malformed in ["%+F", "%2", "%zz", "%C3"] {
+            assert_eq!(
+                unquote_value(malformed),
+                None,
+                "unquote_value({malformed:?})"
+            );
+        }
     }
 
     fn schema_with_prefixes() -> SchemaDefinition {
