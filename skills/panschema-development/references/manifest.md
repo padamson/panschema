@@ -84,6 +84,16 @@ Note the naming is not uniform: `json_schema` and `html_graph_aspect` use
 underscores, `graph-json` and `instance-graph-json` use hyphens. With
 `deny_unknown_fields`, guessing wrong is a parse error.
 
+**One file per dataset.** `ttl`, `jsonld`, `rdfxml`, `ntriples` and
+`instance-graph-json` each hold one instance graph, so an entry with several
+datasets fails on them, unless the path contains `{dataset}`
+(`ttl = "site/{dataset}.ttl"`). Then each dataset is written to its own file,
+named by its `[[instances]]` name, holding only its records and its own
+`dcat:Dataset` node, and `generate --check` compares each file. Every file
+in the entry must be a dataset some package declares, and two datasets that
+would write one path are refused. `{dataset}` on any other key is a parse
+error, and `--output` with `{dataset}` outside a manifest is refused.
+
 `migrations` is the odd one out in a second way. Every other key names an
 output regenerated from scratch on each run, so `generate` owns it. A
 migration directory is append-only — a runner checksums each file it has

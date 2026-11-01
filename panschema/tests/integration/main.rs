@@ -409,6 +409,198 @@ fn a_file_no_package_declares_names_no_dataset() {
     );
 }
 
+/// A consumer of the catalog package whose `[generate.catalog]` block
+/// holds `lines`, after the package gains a second catalog dataset,
+/// `cellar`, beside `records`.
+fn consumer_of_two_catalog_datasets(parent: &Path, lines: &str) -> std::path::PathBuf {
+    write_dataset_pkg(parent);
+    let pkg = parent.join("catalog-pkg");
+    let publish = fs::read_to_string(pkg.join("panschema-publish.toml")).expect("read publish");
+    fs::write(
+        pkg.join("panschema-publish.toml"),
+        format!("{publish}\n[[instances]]\nname = \"cellar\"\ndata = \"data/cellar.yaml\"\n"),
+    )
+    .expect("write publish toml");
+    fs::write(
+        pkg.join("data/cellar.yaml"),
+        "wines:\n  - id: cellarPour\n    name: Cellar Pour\n",
+    )
+    .expect("write cellar data");
+    let consumer = parent.join("consumer");
+    fs::create_dir_all(&consumer).expect("mkdir consumer");
+    fs::write(
+        consumer.join("panschema.toml"),
+        format!("[schemas.catalog]\npath = \"../catalog-pkg\"\n\n[generate.catalog]\n{lines}\n"),
+    )
+    .expect("write manifest");
+    consumer
+}
+
+/// Each single-graph format writes one file per dataset, and each file
+/// holds one dataset: its own node, and only its own records.
+#[test]
+fn a_per_dataset_path_writes_each_dataset_to_its_own_graph() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = consumer_of_two_catalog_datasets(
+        tmp.path(),
+        "ttl = \"out/{dataset}.ttl\"\njsonld = \"out/{dataset}.jsonld\"\n\
+         rdfxml = \"out/{dataset}.rdf\"\nntriples = \"out/{dataset}.nt\"\n\
+         instance-graph-json = \"out/{dataset}.json\"\ndatasets = [\"records\", \"cellar\"]",
+    );
+    let out = run_generate_in(&consumer);
+    assert!(
+        out.status.success(),
+        "generate failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let mut written: Vec<String> = fs::read_dir(consumer.join("out"))
+        .expect("read out/")
+        .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+        .collect();
+    written.sort();
+    assert_eq!(
+        written,
+        [
+            "cellar.json",
+            "cellar.jsonld",
+            "cellar.nt",
+            "cellar.rdf",
+            "cellar.ttl",
+            "records.json",
+            "records.jsonld",
+            "records.nt",
+            "records.rdf",
+            "records.ttl",
+        ]
+    );
+    for (dataset, own, other, other_dataset) in [
+        ("records", "chateauMorgon", "cellarPour", "cellar"),
+        ("cellar", "cellarPour", "chateauMorgon", "records"),
+    ] {
+        let file = consumer.join(format!("out/{dataset}.ttl"));
+        let content = fs::read_to_string(&file)
+            .unwrap_or_else(|e| panic!("{} was not written: {e}", file.display()));
+        let store = oxigraph::store::Store::new().expect("store");
+        store
+            .load_from_slice(oxigraph::io::RdfFormat::Turtle, &content)
+            .unwrap_or_else(|e| panic!("{dataset}.ttl does not load: {e}"));
+        let record = |id: &str| format!("ASK {{ <https://example.org/catalog/{id}> ?p ?o }}");
+        assert_eq!(
+            (
+                ask(
+                    &store,
+                    &names_dataset(dataset, "1.0.0", "https://example.org/catalog")
+                ),
+                ask(&store, &record(own)),
+                ask(
+                    &store,
+                    &format!(
+                        "ASK {{ ?d <http://purl.org/dc/terms/identifier> \"{other_dataset}\" }}"
+                    )
+                ),
+                ask(&store, &record(other)),
+            ),
+            (true, true, false, false),
+            "{dataset}.ttl: (names itself, holds {own}, names {other_dataset}, holds {other}); \
+             got:\n{content}"
+        );
+    }
+}
+
+#[test]
+fn generate_refuses_a_per_dataset_path_over_an_undeclared_file() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = consumer_of_two_catalog_datasets(
+        tmp.path(),
+        "ttl = \"out/{dataset}.ttl\"\ninstances = [\"local.yaml\"]\ndatasets = [\"records\"]",
+    );
+    fs::write(
+        consumer.join("local.yaml"),
+        "wines:\n  - id: localPour\n    name: Local Pour\n",
+    )
+    .expect("write local data");
+    let out = run_generate_in(&consumer);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success() && stderr.contains("local.yaml"),
+        "the refusal names the undeclared file; got:\n{stderr}"
+    );
+}
+
+/// The placeholder names a file by the dataset it holds, which only an
+/// instance-graph output does.
+#[test]
+fn a_per_dataset_path_on_a_schema_only_output_is_refused() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = consumer_of_two_catalog_datasets(
+        tmp.path(),
+        "shacl = \"out/{dataset}.shacl.ttl\"\ndatasets = [\"records\"]",
+    );
+    let out = run_generate_in(&consumer);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success() && stderr.contains("shacl") && stderr.contains("{dataset}"),
+        "the refusal names the format and the placeholder; got:\n{stderr}"
+    );
+}
+
+/// Only a package declares a dataset, so without a manifest there is no
+/// name to substitute.
+#[test]
+fn a_per_dataset_output_without_a_manifest_is_refused() {
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+        .args([
+            "generate",
+            "--schema",
+            "tests/fixtures/wine_catalog.yaml",
+            "--instances",
+            "tests/fixtures/wine_instances.yaml",
+            "--format",
+            "ttl",
+            "--output",
+            scratch.path().join("{dataset}.ttl").to_str().unwrap(),
+        ])
+        .output()
+        .expect("run panschema generate");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        (
+            out.status.success(),
+            stderr.contains("{dataset}"),
+            scratch.path().join("{dataset}.ttl").exists()
+        ),
+        (false, true, false),
+        "(passes, names the placeholder, writes a literal file); got:\n{stderr}"
+    );
+}
+
+#[test]
+fn check_reports_drift_in_each_per_dataset_file() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = consumer_of_two_catalog_datasets(
+        tmp.path(),
+        "ttl = \"out/{dataset}.ttl\"\ndatasets = [\"records\", \"cellar\"]",
+    );
+    assert!(
+        run_generate_in(&consumer).status.success(),
+        "first generate"
+    );
+    let cellar = consumer.join("out/cellar.ttl");
+    fs::write(&cellar, "# stale\n").expect("stale the cellar graph");
+    let out = run_in(&consumer, &["generate", "--check"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        (
+            out.status.success(),
+            stderr.contains("cellar.ttl"),
+            stderr.contains("records.ttl")
+        ),
+        (false, true, false),
+        "(passes, reports cellar.ttl, reports records.ttl); got:\n{stderr}"
+    );
+}
+
 /// The package states which schema each dataset conforms to, so naming one
 /// under the wrong block fails with the block it belongs under, and a name
 /// the package does not publish fails with the ones it does.

@@ -387,6 +387,42 @@ pub fn validate_layout_name(name: &str) -> Result<(), String> {
     }
 }
 
+/// The placeholder an instance-graph output path carries to write one file
+/// per dataset, the dataset's name substituted for it.
+pub const DATASET_PLACEHOLDER: &str = "{dataset}";
+
+/// Whether `output` carries [`DATASET_PLACEHOLDER`].
+pub fn writes_per_dataset(output: &Path) -> bool {
+    output
+        .to_str()
+        .is_some_and(|s| s.contains(DATASET_PLACEHOLDER))
+}
+
+/// The `[generate]` keys whose output holds exactly one instance graph,
+/// each also the `--format` name that writes it: the outputs a
+/// [`DATASET_PLACEHOLDER`] path splits per dataset.
+pub const ONE_INSTANCE_GRAPH_OUTPUTS: [&str; 5] =
+    ["ttl", "jsonld", "rdfxml", "ntriples", "instance-graph-json"];
+
+impl GenerateConfig {
+    /// The configured outputs that hold no single instance graph, by
+    /// `[generate]` key: every output but [`ONE_INSTANCE_GRAPH_OUTPUTS`].
+    fn whole_entry_outputs(&self) -> impl Iterator<Item = (&'static str, &PathBuf)> {
+        [
+            ("html", &self.html),
+            ("rust", &self.rust),
+            ("postgres", &self.postgres),
+            ("shacl", &self.shacl),
+            ("json_schema", &self.json_schema),
+            ("openapi", &self.openapi),
+            ("graph-json", &self.graph_json),
+            ("migrations", &self.migrations),
+        ]
+        .into_iter()
+        .filter_map(|(key, path)| path.as_ref().map(|path| (key, path)))
+    }
+}
+
 impl FromStr for Manifest {
     type Err = ManifestError;
 
@@ -409,6 +445,22 @@ impl FromStr for Manifest {
                     schema: name.clone(),
                     message: format!(
                         "unsupported rust_time `{value}`: expected `chrono` or `jiff`"
+                    ),
+                });
+            }
+            // Eager too, so a misplaced `{dataset}` stops the run before any
+            // output is written.
+            if let Some((key, path)) = cfg
+                .whole_entry_outputs()
+                .find(|(_, path)| writes_per_dataset(path))
+            {
+                return Err(ManifestError::InvalidField {
+                    schema: name.clone(),
+                    message: format!(
+                        "`{key} = \"{}\"` carries `{DATASET_PLACEHOLDER}`, but only an output \
+                         holding one instance graph ({}) is written per dataset",
+                        path.display(),
+                        ONE_INSTANCE_GRAPH_OUTPUTS.join(", ")
                     ),
                 });
             }
@@ -985,6 +1037,55 @@ html_default_layout = "wat"
                 );
             }
             other => panic!("expected InvalidField, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn only_a_path_carrying_the_placeholder_writes_per_dataset() {
+        assert_eq!(
+            (
+                writes_per_dataset(Path::new("out/{dataset}.ttl")),
+                writes_per_dataset(Path::new("out/all.ttl")),
+            ),
+            (true, false)
+        );
+    }
+
+    #[test]
+    fn a_dataset_placeholder_on_an_output_without_one_instance_graph_is_refused_at_parse() {
+        for key in [
+            "html",
+            "rust",
+            "postgres",
+            "shacl",
+            "json_schema",
+            "openapi",
+            "graph-json",
+            "migrations",
+        ] {
+            let toml = format!(
+                "[schemas]\nfoo = {{ path = \"./foo-pkg\" }}\n\n[generate.foo]\n\
+                 {key} = \"out/{{dataset}}\"\n"
+            );
+            match toml.parse::<Manifest>() {
+                Err(ManifestError::InvalidField { schema, message }) => assert_eq!(
+                    (schema.as_str(), message.contains(&format!("`{key} = "))),
+                    ("foo", true),
+                    "{key}: {message}"
+                ),
+                other => panic!("{key}: expected InvalidField, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_dataset_placeholder_on_a_single_graph_output_parses() {
+        for key in ONE_INSTANCE_GRAPH_OUTPUTS {
+            let toml = format!(
+                "[schemas]\nfoo = {{ path = \"./foo-pkg\" }}\n\n[generate.foo]\n\
+                 {key} = \"out/{{dataset}}\"\n"
+            );
+            assert!(toml.parse::<Manifest>().is_ok(), "{key}");
         }
     }
 

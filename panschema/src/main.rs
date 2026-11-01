@@ -753,10 +753,15 @@ fn print_rendering_notes(
 /// Whether `format` carries instance data: HTML holds several datasets
 /// behind a selector, the RDF formats and `instance-graph-json` one.
 fn format_reads_instances(format: &str) -> bool {
-    matches!(
-        format.to_lowercase().as_str(),
-        "html" | "ttl" | "jsonld" | "rdfxml" | "ntriples" | "instance-graph-json"
-    )
+    format.eq_ignore_ascii_case("html") || format_writes_one_instance_graph(format)
+}
+
+/// Whether `format` writes exactly one instance graph, the outputs a
+/// `{dataset}` path splits per dataset.
+fn format_writes_one_instance_graph(format: &str) -> bool {
+    panschema::manifest::ONE_INSTANCE_GRAPH_OUTPUTS
+        .iter()
+        .any(|f| f.eq_ignore_ascii_case(format))
 }
 
 /// The schema-level findings `--strict` refuses, as one clause.
@@ -956,10 +961,8 @@ fn generate(
         writer
             .write(&schema, output)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
-    } else if let (
-        [inst_path, rest @ ..],
-        "ttl" | "jsonld" | "rdfxml" | "ntriples" | "instance-graph-json",
-    ) = (instances, format.to_lowercase().as_str())
+    } else if format_writes_one_instance_graph(format)
+        && let [inst_path, rest @ ..] = instances
     {
         // An output with an A-box attached: RDF formats fold the instance
         // set into the same graph the T-box serializes from (one
@@ -974,7 +977,8 @@ fn generate(
         if !rest.is_empty() {
             anyhow::bail!(
                 "format `{format}` emits a single instance graph, but {} instance-data files \
-                 were supplied; supply one for this format, or render several on one page as \
+                 were supplied; supply one for this format, write one file per dataset with \
+                 `{{dataset}}` in a manifest output path, or render several on one page as \
                  HTML",
                 rest.len() + 1
             );
@@ -1290,12 +1294,6 @@ fn generate_from_manifest(
             .iter()
             .map(|p| manifest_dir.join(p))
             .collect();
-        // The single-graph formats take exactly one file, so only then is
-        // there one dataset for them to name.
-        let dataset = match instances.as_slice() {
-            [only] => declared.of(only),
-            _ => None,
-        };
         // The entry is verified once here, by the pass `verify` runs, before
         // any writer: so a dataset is checked whatever outputs the entry
         // declares, reported once however many writers read it, and
@@ -1376,14 +1374,14 @@ fn generate_from_manifest(
             ("instance-graph-json", &gen_cfg.instance_graph_json),
         ] {
             let Some(out) = out_opt else { continue };
-            let out = manifest_dir.join(out);
-            // `rust_time` rides along unconditionally; only the rust
-            // branch of `generate` reads it.
-            drifted.extend(
+            let context = || format!("schema `{name}`, format `{format}`");
+            // `rust_time` rides along unconditionally; only the rust branch
+            // of `generate` reads it.
+            let write = |out: &Path, instances: &[PathBuf], dataset| {
                 generate(
                     schema_path,
-                    &instances,
-                    &out,
+                    instances,
+                    &manifest_dir.join(out),
                     format,
                     &GenerateOptions {
                         rust_time: gen_cfg.rust_time.as_deref(),
@@ -1395,8 +1393,30 @@ fn generate_from_manifest(
                     &labels,
                     &deps,
                 )
-                .with_context(|| format!("schema `{name}`, format `{format}`"))?,
-            );
+                .with_context(context)
+            };
+            // A `{dataset}` path, which the manifest allows only on a
+            // single-graph output, writes each dataset to its own file, so
+            // each file names exactly one dataset; any other path takes the
+            // whole entry at once, and names a dataset only when it holds one.
+            if panschema::manifest::writes_per_dataset(out) {
+                for o in declared
+                    .per_dataset_outputs(out, &instances)
+                    .with_context(context)?
+                {
+                    drifted.extend(write(
+                        &o.output,
+                        std::slice::from_ref(o.instance),
+                        Some(o.dataset),
+                    )?);
+                }
+            } else {
+                let dataset = match instances.as_slice() {
+                    [only] => declared.of(only),
+                    _ => None,
+                };
+                drifted.extend(write(out, &instances, dataset)?);
+            }
             produced_anything = true;
         }
     }
@@ -2554,6 +2574,14 @@ async fn main() -> anyhow::Result<()> {
                         "warning: --no-graph only affects HTML output; \
                          ignored for format `{}`",
                         format
+                    );
+                }
+                if panschema::manifest::writes_per_dataset(&output) {
+                    anyhow::bail!(
+                        "`--output {}` carries `{{dataset}}`, which takes each dataset's name \
+                         from the package that declares it; write per-dataset files from a \
+                         manifest's [generate] block",
+                        output.display()
                     );
                 }
                 let no_overrides = std::collections::BTreeMap::new();

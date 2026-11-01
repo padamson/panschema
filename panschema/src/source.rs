@@ -409,6 +409,43 @@ impl DeclaredDatasets {
         self.by_file.get(&on_disk(file))
     }
 
+    /// Expand `template` into one output per file in `instances`, each
+    /// named by substituting its dataset's name for
+    /// [`crate::manifest::DATASET_PLACEHOLDER`].
+    pub fn per_dataset_outputs<'a>(
+        &'a self,
+        template: &Path,
+        instances: &'a [PathBuf],
+    ) -> Result<Vec<DatasetOutput<'a>>, DatasetOutputError> {
+        if instances.is_empty() {
+            return Err(DatasetOutputError::NoDatasets);
+        }
+        let template = template.to_string_lossy();
+        let mut outputs: Vec<DatasetOutput<'a>> = Vec::with_capacity(instances.len());
+        for instance in instances {
+            let dataset = self
+                .of(instance)
+                .ok_or_else(|| DatasetOutputError::Undeclared {
+                    file: instance.clone(),
+                })?;
+            let output = PathBuf::from(
+                template.replace(crate::manifest::DATASET_PLACEHOLDER, &dataset.name),
+            );
+            if let Some(first) = outputs.iter().find(|o| o.output == output) {
+                return Err(DatasetOutputError::SamePath {
+                    output,
+                    datasets: [first.dataset.name.clone(), dataset.name.clone()],
+                });
+            }
+            outputs.push(DatasetOutput {
+                output,
+                instance,
+                dataset,
+            });
+        }
+        Ok(outputs)
+    }
+
     /// Refuse a declared dataset that `[generate.<entry>]` or
     /// `[check.<entry>]` lists by path although its package says it
     /// conforms to another schema, as [`resolve_named_datasets`] refuses it
@@ -431,6 +468,38 @@ impl DeclaredDatasets {
         }
         Ok(())
     }
+}
+
+/// One file of a per-dataset output: where it goes, the instance file it
+/// holds, and the dataset that file is.
+#[derive(Debug, PartialEq, Eq)]
+pub struct DatasetOutput<'a> {
+    pub output: PathBuf,
+    pub instance: &'a PathBuf,
+    pub dataset: &'a DeclaredDataset,
+}
+
+/// Why a per-dataset output path cannot be expanded.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum DatasetOutputError {
+    #[error(
+        "`{{dataset}}` names each file by its dataset, but no package declares `{}` in \
+         `[[instances]]`, so it has no dataset name",
+        file.display()
+    )]
+    Undeclared { file: PathBuf },
+    #[error(
+        "datasets `{}` and `{}` both write `{}`; `{{dataset}}` must give each its own file",
+        datasets[0],
+        datasets[1],
+        output.display()
+    )]
+    SamePath {
+        output: PathBuf,
+        datasets: [String; 2],
+    },
+    #[error("`{{dataset}}` names each file by its dataset, but the entry lists no instance data")]
+    NoDatasets,
 }
 
 /// Refuse dataset `name`, declared by the package at `dep_key`, unless
@@ -1749,6 +1818,87 @@ schema = "cqa"
         cqa.datasets.clear();
         map.insert("cqa".to_string(), cqa);
         map
+    }
+
+    #[test]
+    fn a_per_dataset_path_names_one_file_per_declared_dataset() {
+        let declared = DeclaredDatasets::from_resolved(&deps());
+        let instances = [
+            PathBuf::from("/pkg/wine/data/wine-instances.yaml"),
+            PathBuf::from("/pkg/wine/data/wine-benchmark.yaml"),
+        ];
+        let outputs = declared
+            .per_dataset_outputs(Path::new("/out/wine-{dataset}.ttl"), &instances)
+            .expect("both files are declared");
+        let named: Vec<(&Path, &Path, &str)> = outputs
+            .iter()
+            .map(|o| {
+                (
+                    o.output.as_path(),
+                    o.instance.as_path(),
+                    o.dataset.name.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            named,
+            vec![
+                (
+                    Path::new("/out/wine-worked-example.ttl"),
+                    instances[0].as_path(),
+                    "worked-example"
+                ),
+                (
+                    Path::new("/out/wine-benchmark.ttl"),
+                    instances[1].as_path(),
+                    "benchmark"
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_per_dataset_path_refuses_a_file_no_package_declares() {
+        let declared = DeclaredDatasets::from_resolved(&deps());
+        let instances = [
+            PathBuf::from("/pkg/wine/data/wine-instances.yaml"),
+            PathBuf::from("/pkg/wine/data/scratch.yaml"),
+        ];
+        assert_eq!(
+            declared.per_dataset_outputs(Path::new("/out/{dataset}.ttl"), &instances),
+            Err(DatasetOutputError::Undeclared {
+                file: PathBuf::from("/pkg/wine/data/scratch.yaml")
+            })
+        );
+    }
+
+    #[test]
+    fn two_datasets_that_substitute_to_one_path_are_refused() {
+        let mut deps = deps();
+        let mut other = published("/pkg/other");
+        other.datasets.truncate(1);
+        deps.insert("other".to_string(), other);
+        let declared = DeclaredDatasets::from_resolved(&deps);
+        let instances = [
+            PathBuf::from("/pkg/wine/data/wine-instances.yaml"),
+            PathBuf::from("/pkg/other/data/wine-instances.yaml"),
+        ];
+        assert_eq!(
+            declared.per_dataset_outputs(Path::new("/out/{dataset}.ttl"), &instances),
+            Err(DatasetOutputError::SamePath {
+                output: PathBuf::from("/out/worked-example.ttl"),
+                datasets: ["worked-example".to_string(), "worked-example".to_string()],
+            })
+        );
+    }
+
+    #[test]
+    fn a_per_dataset_path_with_no_instance_data_is_refused() {
+        let declared = DeclaredDatasets::from_resolved(&deps());
+        assert_eq!(
+            declared.per_dataset_outputs(Path::new("/out/{dataset}.ttl"), &[]),
+            Err(DatasetOutputError::NoDatasets)
+        );
     }
 
     #[test]

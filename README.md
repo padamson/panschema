@@ -305,7 +305,10 @@ the first is shown until the reader picks another, and switching happens in the
 page with no navigation. Curated graphs are teaching artifacts, so keep them
 small — panschema warns per graph past a few hundred nodes. Formats that emit a
 single A-box (`ttl`, `jsonld`, `rdfxml`, `ntriples`, `instance-graph-json`)
-take exactly one file.
+take exactly one file. In a manifest, `{dataset}` in one of their output paths
+(`ttl = "site/{dataset}.ttl"`) writes one file per dataset in the entry
+instead, each named by its `[[instances]]` name and holding that dataset alone,
+so every file it writes must be a dataset some package declares.
 
 Each record becomes a typed node keyed by its identifier; a class-valued slot
 becomes an edge to the referenced record, and scalar values ride along as node

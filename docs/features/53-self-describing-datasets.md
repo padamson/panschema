@@ -138,24 +138,35 @@ and nothing else.
 
 ### Slice 2: One file per dataset
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** An entry holding several datasets publishes each as its
 own graph, loadable alone, without one `[schemas]` alias per dataset.
 
 **Acceptance Criteria:**
-- [ ] A `ttl`, `jsonld`, `rdfxml`, `ntriples`, or `instance-graph-json`
+- [x] A `ttl`, `jsonld`, `rdfxml`, `ntriples`, or `instance-graph-json`
   path containing `{dataset}` writes one file per dataset in the entry,
   named by substituting each dataset's name.
-- [ ] Each file holds only its own dataset's records and its own dataset
+- [x] Each file holds only its own dataset's records and its own dataset
   node.
-- [ ] `{dataset}` with an instance file no package declares is refused,
+- [x] `{dataset}` with an instance file no package declares is refused,
   naming the file.
-- [ ] Two datasets that substitute to the same path are refused, naming
+- [x] Two datasets that substitute to the same path are refused, naming
   both.
-- [ ] `generate --check` reports drift in each per-dataset file.
-- [ ] A path without `{dataset}` keeps the one-dataset rule and its
+- [x] `generate --check` reports drift in each per-dataset file.
+- [x] A path without `{dataset}` keeps the one-dataset rule and its
   error message.
+
+**Notes:**
+- The expansion lives in the `panschema` library
+  (`source::DeclaredDatasets::per_dataset_outputs`), beside the join slice 1
+  added.
+- `{dataset}` is refused where it could name nothing: on an output that
+  holds no single instance graph (HTML, the schema-only formats), when the
+  manifest is parsed so nothing is written first, and in `--output`
+  without a manifest, since only a package declares a dataset.
+- The one-dataset error keeps its wording and adds `{dataset}` as a way
+  out.
 
 ---
 
@@ -208,7 +219,7 @@ by name, and change only when that data does.
 | Slice | Priority | Depends On | Status |
 |-------|----------|------------|--------|
 | Slice 1: The instance graph names its dataset | Must Have | None | Completed |
-| Slice 2: One file per dataset | Must Have | Slice 1 | Not Started |
+| Slice 2: One file per dataset | Must Have | Slice 1 | Completed |
 | Slice 3: A dependency's merged schema | Must Have | None | Not Started |
 | Slice 4: A dependency's data, as published | Must Have | Slice 2 | Not Started |
 
