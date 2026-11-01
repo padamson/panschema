@@ -762,8 +762,8 @@ fn format_reads_instances(format: &str) -> bool {
 /// The schema-level findings `--strict` refuses, as one clause.
 fn strict_blocking_summary(blocking: &panschema::diagnostics::StrictBlocking) -> String {
     format!(
-        "{} unmodeled LinkML construct(s), {} dangling reference(s), {} colliding slot \
-         definition(s), {} untyped slot(s), {} rule constant(s) outside their enum's \
+        "{} unmodeled LinkML construct(s), {} dangling reference(s), {} IRI \
+         collision(s), {} untyped slot(s), {} rule constant(s) outside their enum's \
          values, and {} slot-semantics declaration issue(s) present",
         blocking.unmodeled,
         blocking.dangling,

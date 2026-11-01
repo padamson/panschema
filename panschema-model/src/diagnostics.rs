@@ -253,6 +253,56 @@ pub fn colliding_slot_definitions(schema: &SchemaDefinition) -> Vec<CollidingSlo
         .collect()
 }
 
+/// Distinct classes and enums that mint one RDF IRI, most often names
+/// LinkML's casing evens out (a class `status` and an enum `Status` are
+/// both `Status`). Both are `owl:Class` in RDF, so the output declares one
+/// class for them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CollidingElementIri {
+    /// The IRI they share.
+    pub iri: String,
+    /// Each element, sorted: `` class `X` `` or `` enum `X` ``.
+    pub elements: Vec<String>,
+}
+
+impl CollidingElementIri {
+    pub fn message(&self) -> String {
+        format!(
+            "{} mint one IRI <{}>, so RDF output declares one class for them and only \
+             one survives a read-back — rename one, or give it an explicit `class_uri` \
+             or `enum_uri`",
+            self.elements.join(" and "),
+            self.iri
+        )
+    }
+}
+
+/// Classes and enums whose IRIs ([`crate::linkml_resolve::class_iri_string`],
+/// [`crate::linkml_resolve::enum_iri_string`]) coincide. A slot sharing a
+/// class's IRI is not reported: OWL 2 lets one IRI name a class and a
+/// property.
+pub fn colliding_element_iris(schema: &SchemaDefinition) -> Vec<CollidingElementIri> {
+    use crate::linkml_resolve::{class_iri_string, enum_iri_string};
+    let mut by_iri: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (name, class) in &schema.classes {
+        by_iri
+            .entry(class_iri_string(name, class, schema))
+            .or_default()
+            .push(format!("class `{name}`"));
+    }
+    for name in schema.enums.keys() {
+        by_iri
+            .entry(enum_iri_string(name, schema))
+            .or_default()
+            .push(format!("enum `{name}`"));
+    }
+    by_iri
+        .into_iter()
+        .filter(|(_, elements)| elements.len() > 1)
+        .map(|(iri, elements)| CollidingElementIri { iri, elements })
+        .collect()
+}
+
 /// A class whose slot is both `identifier` and `key`: one declaration in
 /// the class's chain sets one, another sets the other. `slot_usage` refines
 /// rather than replaces, so the slot carries both, and the LinkML metamodel
@@ -699,6 +749,7 @@ pub fn schema_load_diagnostics(schema: &SchemaDefinition) -> Vec<String> {
             .iter()
             .map(|c| c.message()),
     );
+    out.extend(colliding_element_iris(schema).iter().map(|c| c.message()));
     out.extend(untyped_slots(schema).iter().map(|u| u.message()));
     out.extend(
         unmodeled_annotation_nesting(schema)
@@ -2212,6 +2263,7 @@ pub fn expansion_declarations(
 pub struct StrictBlocking {
     pub unmodeled: usize,
     pub dangling: usize,
+    /// Slot definitions sharing a property IRI, and classes or enums sharing a class IRI.
     pub colliding: usize,
     pub untyped: usize,
     pub impossible: usize,
@@ -2235,7 +2287,7 @@ pub fn strict_blocking(schema: &SchemaDefinition) -> StrictBlocking {
     StrictBlocking {
         unmodeled: unmodeled_class_constructs(schema).len(),
         dangling: dangling_references(schema).len(),
-        colliding: colliding_slot_definitions(schema).len(),
+        colliding: colliding_slot_definitions(schema).len() + colliding_element_iris(schema).len(),
         untyped: untyped_slots(schema).len(),
         impossible: impossible_rule_values(schema).len(),
         slot_semantics: SLOT_SEMANTICS_FAMILIES
@@ -3324,6 +3376,72 @@ classes:
             ],
             "each site names the spelling it defines"
         );
+    }
+
+    #[test]
+    fn classes_and_enums_whose_names_case_to_one_iri_collide() {
+        let schema = parse(
+            "name: s
+prefixes:
+  ex: https://example.org/s/
+default_prefix: ex
+classes:
+  status: {}
+  person_record: {}
+  PersonRecord: {}
+enums:
+  Status: {}
+",
+        );
+        assert_eq!(
+            super::colliding_element_iris(&schema),
+            vec![
+                CollidingElementIri {
+                    iri: "https://example.org/s/PersonRecord".to_string(),
+                    elements: vec![
+                        "class `PersonRecord`".to_string(),
+                        "class `person_record`".to_string(),
+                    ],
+                },
+                CollidingElementIri {
+                    iri: "https://example.org/s/Status".to_string(),
+                    elements: vec!["class `status`".to_string(), "enum `Status`".to_string()],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn an_element_iri_collision_is_a_load_warning_strict_refuses() {
+        let schema = parse(
+            "name: s\nprefixes:\n  ex: https://example.org/s/\ndefault_prefix: ex\n\
+             classes:\n  status: {}\nenums:\n  Status: {}\n",
+        );
+        assert_eq!(super::strict_blocking(&schema).colliding, 1);
+        let load = super::schema_load_diagnostics(&schema);
+        assert!(
+            load.iter()
+                .any(|m| m.contains("<https://example.org/s/Status>")),
+            "the warning names the shared IRI; got: {load:?}"
+        );
+    }
+
+    /// A slot named like a class's IRI local name (`PersonRecord` on class
+    /// `person_record`) mints the class's IRI, which OWL 2 allows.
+    #[test]
+    fn a_slot_sharing_a_class_iri_is_not_an_element_collision() {
+        let schema = parse(
+            "name: s
+prefixes:
+  ex: https://example.org/s/
+default_prefix: ex
+classes:
+  person_record:
+    attributes:
+      PersonRecord: {}
+",
+        );
+        assert_eq!(super::colliding_element_iris(&schema), vec![]);
     }
 
     /// Identity is the expanded IRI, so a `slot_uri` written as a CURIE and
