@@ -2854,6 +2854,34 @@ instances = ["data.yaml"]
     );
 }
 
+/// A schema's load warnings are reported once per entry, not once per
+/// writer that renders it.
+#[test]
+fn a_schema_warning_is_reported_once_however_many_writers_render_it() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    write_pkg(
+        tmp.path(),
+        "w",
+        "1.0.0",
+        "w.yaml",
+        "id: https://example.org/w\nname: w\nprefixes:\n  ex: https://example.org/w/\n\
+         default_prefix: ex\nclasses:\n  status: {}\nenums:\n  Status: {}\n",
+    );
+    fs::write(
+        tmp.path().join("panschema.toml"),
+        "[schemas.w]\npath = \".\"\n\n[generate.w]\nshacl = \"w.shacl.ttl\"\n\
+         json_schema = \"w.json\"\nttl = \"w.ttl\"\n",
+    )
+    .expect("write manifest");
+    let out = run_generate_in(tmp.path());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        (out.status.success(), stderr.matches("mint one IRI").count()),
+        (true, 1),
+        "(succeeds, times the collision is reported); got:\n{stderr}"
+    );
+}
+
 /// A dataset is reported once per run, not once per writer that reads it.
 #[test]
 fn generate_reports_each_dataset_once_however_many_writers_read_it() {

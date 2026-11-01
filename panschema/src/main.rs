@@ -779,9 +779,11 @@ fn strict_blocking_summary(blocking: &panschema::diagnostics::StrictBlocking) ->
     )
 }
 
-/// Per-format options a `generate` run carries — HTML's viz knobs and the
-/// Rust writer's time crate. One struct, so a new writer option extends
-/// this instead of growing `generate`'s signature and every call site.
+/// Options for rendering an output ([`write_output`]) — HTML's viz knobs,
+/// the Rust writer's time crate, `--check`, and the dataset a graph names —
+/// plus `strict` and `verbose`, which govern the `--schema` path's checks
+/// before it writes. One struct, so a new writer option extends this
+/// instead of growing every signature and call site.
 #[derive(Default)]
 struct GenerateOptions<'a> {
     include_graph: bool,
@@ -792,10 +794,6 @@ struct GenerateOptions<'a> {
     rust_time: Option<&'a str>,
     /// Promote load-time diagnostics to hard errors.
     strict: bool,
-    /// Verify the instance data and report on it before writing. A manifest
-    /// entry leaves this off: it verified its datasets once, for all its
-    /// writers, before calling.
-    verify_instances: bool,
     /// Name every outbound reference when this run verifies instances.
     verbose: bool,
     /// Compare a fresh generation against the declared output instead of
@@ -813,7 +811,84 @@ fn generate(
     format: &str,
     opts: &GenerateOptions<'_>,
     labels: &LabelOptions,
-    deps: &std::collections::BTreeMap<String, PathBuf>,
+) -> anyhow::Result<Vec<PathBuf>> {
+    let GenerateOptions {
+        strict, verbose, ..
+    } = *opts;
+    let registry = FormatRegistry::with_defaults();
+
+    // Read the input and fold in any `imports:` through the shared load path,
+    // so `generate` renders the same merged schema as `serve`/`publish`.
+    let schema =
+        panschema::load::load_schema(input, &registry).map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    // The unmodeled-construct, unresolved-unique-key, dangling-reference,
+    // untyped-slot, impossible-rule-value, and absence-declaration
+    // warnings are emitted by the shared load path above (so
+    // `serve`/`publish` surface them too). Under `--strict`, each is
+    // additionally a hard error here.
+    if strict {
+        let blocking = panschema::diagnostics::strict_blocking(&schema);
+        if panschema::diagnostics::should_fail_strict(strict, blocking.total()) {
+            anyhow::bail!(
+                "{}; failing because --strict is set",
+                strict_blocking_summary(&blocking)
+            );
+        }
+    }
+
+    // The same conformance check `verify --data` runs, once, before the
+    // writer, so embedding an A-box into an output can't ship violations
+    // the standalone command would have caught.
+    if !instances.is_empty() && format_reads_instances(format) {
+        let (violations, datasets) = verify_datasets(
+            &schema,
+            instances,
+            instances.len() > 1,
+            "warning: ",
+            verbose,
+        )?;
+        for (label, set) in &datasets {
+            print_rendering_notes(&schema, label, set);
+        }
+        if strict && violations > 0 {
+            anyhow::bail!(
+                "{violations} instance-data violation(s) present; failing because --strict is set"
+            );
+        }
+    }
+
+    print_projection_gaps(&registry, &schema, format);
+    write_output(&schema, &registry, instances, output, format, opts, labels)
+}
+
+/// Each writer owns its own gap story — what it drops or degrades when
+/// projecting this schema — and reports it through one surface, so a new
+/// writer or a new gap class never needs another format-gated block here.
+/// The cross-format unprojected-construct diagnostic is the default;
+/// Postgres and SHACL extend it with their own classes.
+fn print_projection_gaps(
+    registry: &FormatRegistry,
+    schema: &panschema::linkml::SchemaDefinition,
+    format: &str,
+) {
+    if let Some(writer) = registry.writer_for_format(format) {
+        for gap in writer.projection_gaps(schema) {
+            eprintln!("warning: {gap}");
+        }
+    }
+}
+
+/// Render an already-loaded `schema` to `output` in `format`, or under
+/// `--check` compare a fresh rendering with it and return it when it drifted.
+fn write_output(
+    schema: &panschema::linkml::SchemaDefinition,
+    registry: &FormatRegistry,
+    instances: &[PathBuf],
+    output: &Path,
+    format: &str,
+    opts: &GenerateOptions<'_>,
+    labels: &LabelOptions,
 ) -> anyhow::Result<Vec<PathBuf>> {
     let GenerateOptions {
         include_graph,
@@ -822,11 +897,9 @@ fn generate(
         html_page_layout,
         html_schema_sections,
         rust_time,
-        strict,
-        verify_instances,
-        verbose,
         check,
         dataset,
+        ..
     } = *opts;
     // Check mode renders to a scratch path and byte-compares against the
     // declared output. HTML is a directory artifact and is not compared;
@@ -854,61 +927,6 @@ fn generate(
         None => declared.clone(),
     };
     let output: &Path = &render_target;
-    let registry = FormatRegistry::with_defaults();
-
-    // Read the input and fold in any `imports:` through the shared load path,
-    // so `generate` renders the same merged schema as `serve`/`publish`.
-    // `deps` lets an `imports:` entry naming a manifest dependency resolve
-    // across the package boundary; it's empty for a single-file `--schema`.
-    let schema = panschema::load::load_schema_with_deps(input, &registry, deps)
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
-
-    // The unmodeled-construct, unresolved-unique-key, dangling-reference,
-    // untyped-slot, impossible-rule-value, and absence-declaration
-    // warnings are emitted by the shared load path above (so
-    // `serve`/`publish` surface them too). Under `--strict`, each is
-    // additionally a hard error here.
-    if strict {
-        let blocking = panschema::diagnostics::strict_blocking(&schema);
-        if panschema::diagnostics::should_fail_strict(strict, blocking.total()) {
-            anyhow::bail!(
-                "{}; failing because --strict is set",
-                strict_blocking_summary(&blocking)
-            );
-        }
-    }
-
-    // The same conformance check `verify --data` runs, once, before the
-    // writer, so embedding an A-box into an output can't ship violations
-    // the standalone command would have caught.
-    if verify_instances && !instances.is_empty() && format_reads_instances(format) {
-        let (violations, datasets) = verify_datasets(
-            &schema,
-            instances,
-            instances.len() > 1,
-            "warning: ",
-            verbose,
-        )?;
-        for (label, set) in &datasets {
-            print_rendering_notes(&schema, label, set);
-        }
-        if strict && violations > 0 {
-            anyhow::bail!(
-                "{violations} instance-data violation(s) present; failing because --strict is set"
-            );
-        }
-    }
-
-    // Each writer owns its own gap story — what it drops or degrades when
-    // projecting this schema — and reports it through one surface, so a
-    // new writer or a new gap class never needs another format-gated block
-    // here. The cross-format unprojected-construct diagnostic is the
-    // default; Postgres and SHACL extend it with their own classes.
-    if let Some(writer) = registry.writer_for_format(format) {
-        for gap in writer.projection_gaps(&schema) {
-            eprintln!("warning: {gap}");
-        }
-    }
 
     // For HTML format, use HtmlWriter with custom options
     if format.eq_ignore_ascii_case("html") {
@@ -937,7 +955,7 @@ fn generate(
         // A LinkML instance-data file overrides the schema's embedded OWL
         // individuals as the source for the instance graph.
         for inst_path in instances {
-            let set = read_instance_set(&schema, inst_path)?;
+            let set = read_instance_set(schema, inst_path)?;
             // The file's stem labels the selector; publish names entries
             // explicitly instead.
             let label = inst_path
@@ -951,7 +969,7 @@ fn generate(
             writer = writer.with_instance_dataset(dataset);
         }
         if let Some(store) = panschema::labels::open_default_store(
-            &schema,
+            schema,
             labels.offline,
             labels.overrides,
             labels.refresh,
@@ -959,7 +977,7 @@ fn generate(
             writer = writer.with_label_store(store);
         }
         writer
-            .write(&schema, output)
+            .write(schema, output)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
     } else if format_writes_one_instance_graph(format)
         && let [inst_path, rest @ ..] = instances
@@ -987,8 +1005,8 @@ fn generate(
         use panschema::rdf_serializers::{
             DatasetDescription, JsonLdWriter, NTriplesWriter, RdfXmlWriter,
         };
-        let set = read_instance_set(&schema, inst_path)?;
-        let dataset = dataset.map(|declared| DatasetDescription::declared(declared, &schema));
+        let set = read_instance_set(schema, inst_path)?;
+        let dataset = dataset.map(|declared| DatasetDescription::declared(declared, schema));
         let writer: Box<dyn Writer> = match format.to_lowercase().as_str() {
             "ttl" => Box::new(
                 panschema::owl_writer::OwlWriter::new()
@@ -1015,7 +1033,7 @@ fn generate(
             ),
         };
         writer
-            .write(&schema, output)
+            .write(schema, output)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
     } else if format.eq_ignore_ascii_case("rust") {
         use panschema::io::Writer;
@@ -1030,14 +1048,14 @@ fn generate(
             None => TimeCrate::default(),
         };
         RustWriter::with_time_crate(time)
-            .write(&schema, output)
+            .write(schema, output)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
     } else {
         let writer = registry
             .writer_for_format(format)
             .ok_or_else(|| anyhow::anyhow!("Unsupported output format: {}", format))?;
         writer
-            .write(&schema, output)
+            .write(schema, output)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
     }
 
@@ -1145,12 +1163,7 @@ fn emit_initial_migration(
     // The DDL covers the classes the Postgres writer can project; surface
     // what it drops through the writer's own gap surface — the same one
     // `generate` renders — rather than emitting a thinner script in silence.
-    for gap in panschema::io::Writer::projection_gaps(
-        &panschema::postgres_writer::PostgresWriter::new(),
-        &schema,
-    ) {
-        eprintln!("warning: {gap}");
-    }
+    print_projection_gaps(&registry, &schema, "postgres");
 
     let filename = migration_filename(&schema.name, FIRST_MIGRATION_VERSION);
     let body = panschema::postgres_writer::render_migration_body(&schema);
@@ -1299,22 +1312,23 @@ fn generate_from_manifest(
         // declares, reported once however many writers read it, and
         // `generate --strict` refuses what `verify --strict` would. The
         // writers then read the shipped datasets without reporting again.
-        // It writes nothing, so `--check` runs it too.
+        // It writes nothing, so `--check` runs it too. The schema is loaded
+        // once for the entry, so its load warnings are reported once, and
+        // every writer renders that one load.
+        let schema = panschema::load::load_schema_with_deps(schema_path, &registry, &deps)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
         {
-            let check_schema =
-                panschema::load::load_schema_with_deps(schema_path, &registry, &deps)
-                    .map_err(|e| anyhow::anyhow!("{e}"))?;
             let entry = verify_entry(
                 name,
                 &manifest,
                 &manifest_dir,
                 &resolved,
-                &check_schema,
+                &schema,
                 &registry,
                 verbose,
             )?;
             for (label, set) in &entry.datasets {
-                print_rendering_notes(&check_schema, label, set);
+                print_rendering_notes(&schema, label, set);
             }
             if strict {
                 let mut parts = Vec::new();
@@ -1335,8 +1349,10 @@ fn generate_from_manifest(
         }
         if let Some(html_out) = &gen_cfg.html {
             let html_out = manifest_dir.join(html_out);
-            generate(
-                schema_path,
+            print_projection_gaps(&registry, &schema, "html");
+            write_output(
+                &schema,
+                &registry,
                 &instances,
                 &html_out,
                 "html",
@@ -1346,13 +1362,10 @@ fn generate_from_manifest(
                     html_default_layout: gen_cfg.html_default_layout.as_deref(),
                     html_page_layout: gen_cfg.html_page_layout,
                     html_schema_sections: gen_cfg.html_schema_sections,
-                    rust_time: None,
-                    strict,
                     check,
                     ..Default::default()
                 },
                 &labels,
-                &deps,
             )
             .with_context(|| format!("schema `{name}`, format `html`"))?;
             produced_anything = true;
@@ -1376,22 +1389,22 @@ fn generate_from_manifest(
             let Some(out) = out_opt else { continue };
             let context = || format!("schema `{name}`, format `{format}`");
             // `rust_time` rides along unconditionally; only the rust branch
-            // of `generate` reads it.
+            // of `write_output` reads it.
+            print_projection_gaps(&registry, &schema, format);
             let write = |out: &Path, instances: &[PathBuf], dataset| {
-                generate(
-                    schema_path,
+                write_output(
+                    &schema,
+                    &registry,
                     instances,
                     &manifest_dir.join(out),
                     format,
                     &GenerateOptions {
                         rust_time: gen_cfg.rust_time.as_deref(),
-                        strict,
                         check,
                         dataset,
                         ..Default::default()
                     },
                     &labels,
-                    &deps,
                 )
                 .with_context(context)
             };
@@ -1426,6 +1439,11 @@ fn generate_from_manifest(
             "No outputs generated. Add an `[generate.<schema>]` block with at least one writer key (e.g. `html = \"docs/\"` or `rust = \"src/generated.rs\"`)."
         );
     }
+    bail_on_drift(&drifted)
+}
+
+/// Fail a `--check` run that found outputs out of date, naming each.
+fn bail_on_drift(drifted: &[PathBuf]) -> anyhow::Result<()> {
     if !drifted.is_empty() {
         anyhow::bail!(
             "{} output(s) out of date with a fresh generation:\n{}\nrun `panschema generate` to refresh",
@@ -2590,7 +2608,6 @@ async fn main() -> anyhow::Result<()> {
                     refresh: refresh_labels,
                     overrides: &no_overrides,
                 };
-                let no_deps = std::collections::BTreeMap::new();
                 let drifted = generate(
                     &schema_path,
                     &instances,
@@ -2600,25 +2617,13 @@ async fn main() -> anyhow::Result<()> {
                         include_graph: !no_graph,
                         rust_time: rust_time.as_deref(),
                         strict,
-                        verify_instances: true,
                         verbose,
                         check,
                         ..Default::default()
                     },
                     &labels,
-                    &no_deps,
                 )?;
-                if !drifted.is_empty() {
-                    anyhow::bail!(
-                        "{} output(s) out of date with a fresh generation:\n{}\nrun `panschema generate` to refresh",
-                        drifted.len(),
-                        drifted
-                            .iter()
-                            .map(|p| format!("  {}", p.display()))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    );
-                }
+                bail_on_drift(&drifted)?;
             }
             None => generate_from_manifest(offline, refresh_labels, strict, verbose, check)?,
         },
