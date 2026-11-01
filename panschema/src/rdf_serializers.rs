@@ -735,6 +735,20 @@ fn dataset_node_label(dataset: &DatasetDescription) -> String {
     format!("dataset-{}", &hex::encode(hasher.finalize())[..16])
 }
 
+/// The predicate a record asserts slot `name` under: the IRI of the slot as
+/// the record's class resolves it, or, for a slot the class does not
+/// declare, the IRI the schema gives that name.
+fn instance_predicate(
+    name: &str,
+    def: Option<&SlotDefinition>,
+    schema: &SchemaDefinition,
+) -> IoResult<Iri<String>> {
+    make_iri(&def.map_or_else(
+        || slot_iri_by_name(name, schema),
+        |def| slot_iri_string(name, def, schema),
+    ))
+}
+
 /// Emit each instance as an `owl:NamedIndividual`: `rdf:type` per declared
 /// class, `rdfs:label` from the display name, one data-property triple per
 /// scalar slot value, and one object-property triple per id reference,
@@ -799,10 +813,7 @@ fn emit_instances(
 
         for sv in &inst.slot_values {
             let slot_def = effective_slot(&inst.types, &sv.slot);
-            let predicate = match &slot_def {
-                Some(def) => make_iri(&slot_iri_string(&sv.slot, def, schema))?,
-                None => make_iri(&format!("{}#{}", ontology_iri_string(schema), sv.slot))?,
-            };
+            let predicate = instance_predicate(&sv.slot, slot_def.as_ref(), schema)?;
             let range = slot_def.as_ref().and_then(|d| d.range.as_deref());
             // Guard order mirrors the shapes writer: a class or enum range is
             // an object-property assertion, never a typed literal — so an
@@ -863,14 +874,8 @@ fn emit_instances(
         }
 
         for reference in &inst.references {
-            let predicate = match effective_slot(&inst.types, &reference.property) {
-                Some(def) => make_iri(&slot_iri_string(&reference.property, &def, schema))?,
-                None => make_iri(&format!(
-                    "{}#{}",
-                    ontology_iri_string(schema),
-                    reference.property
-                ))?,
-            };
+            let slot_def = effective_slot(&inst.types, &reference.property);
+            let predicate = instance_predicate(&reference.property, slot_def.as_ref(), schema)?;
             let target_iri_str = iri_by_id
                 .get(reference.target.as_str())
                 .cloned()
@@ -1968,9 +1973,9 @@ mod tests {
         (schema, set)
     }
 
-    /// The typed fixture's predicate IRI for `slot`.
-    fn cellar(slot: &str) -> String {
-        format!("https://example.org/cellar/{slot}")
+    /// The IRI `local` takes in the cellar fixtures' namespace.
+    fn cellar(local: &str) -> String {
+        format!("https://example.org/cellar/{local}")
     }
 
     #[test]
@@ -2714,6 +2719,25 @@ mod tests {
             linked,
             "a union-ranged slot must assert an object property to the referenced individual"
         );
+    }
+
+    #[test]
+    fn a_slot_the_class_does_not_declare_asserts_at_linkmls_default_slot_iri() {
+        let (schema, _) = abox_fixture();
+        let data: serde_norway::Value = serde_norway::from_str(
+            "bottles:\n  - id: b1\n    tasting note: smoky\n    vintage: '2019'\n",
+        )
+        .unwrap();
+        let set = crate::instances::InstanceSet::from_linkml_data(&schema, &data);
+        let graph = build_rdf_graph_with_instances(&schema, Some(&set)).expect("graph");
+        for (predicate, value) in [("tasting_note", "smoky"), ("vintage", "2019")] {
+            let lexical_forms: Vec<String> =
+                literal_parts(&graph, &cellar("b1"), &cellar(predicate))
+                    .into_iter()
+                    .map(|(lexical, _)| lexical)
+                    .collect();
+            assert_eq!(lexical_forms, vec![value], "b1's value under {predicate}");
+        }
     }
 
     #[test]
