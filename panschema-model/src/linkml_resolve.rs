@@ -1122,18 +1122,54 @@ fn default_iri(name: &str, case: fn(&str) -> String, schema: &SchemaDefinition) 
         .unwrap_or_else(|| format!("{}#{}", ontology_iri_string(schema), local))
 }
 
-/// LinkML's default IRI for the class or enum `name`, or `None` when the
-/// schema has no default prefix to expand it against: the rule
-/// [`class_iri_string`] and [`enum_iri_string`] fall back on, for a site
-/// that shows nothing rather than an IRI the schema does not imply.
-pub fn default_class_iri(name: &str, schema: &SchemaDefinition) -> Option<String> {
-    expand_curie(schema, &camelcase(name))
+/// The IRI a display surface shows for class `name`, as `(iri, unresolved)`:
+/// see [`display_iri`].
+pub fn class_display_iri(
+    name: &str,
+    class_def: &ClassDefinition,
+    schema: &SchemaDefinition,
+) -> (Option<String>, bool) {
+    display_iri(schema, class_def.class_uri.as_deref(), name, camelcase)
 }
 
-/// [`default_class_iri`] for a slot, the rule [`slot_iri_string`] falls
-/// back on.
-pub fn default_slot_iri(name: &str, schema: &SchemaDefinition) -> Option<String> {
-    expand_curie(schema, &underscore(name))
+/// The IRI a display surface shows for slot `name`, as `(iri, unresolved)`:
+/// see [`display_iri`].
+pub fn slot_display_iri(
+    name: &str,
+    slot_def: &SlotDefinition,
+    schema: &SchemaDefinition,
+) -> (Option<String>, bool) {
+    display_iri(schema, slot_def.slot_uri.as_deref(), name, underscore)
+}
+
+/// The IRI a display surface shows for enum `name`, as `(iri, unresolved)`:
+/// see [`display_iri`].
+pub fn enum_display_iri(
+    name: &str,
+    enum_def: &EnumDefinition,
+    schema: &SchemaDefinition,
+) -> (Option<String>, bool) {
+    display_iri(schema, enum_def.enum_uri.as_deref(), name, camelcase)
+}
+
+/// An element's IRI for display. A declared URI resolves as
+/// [`resolve_node_uri`] resolves it: expanded, or kept verbatim and flagged
+/// unresolved when no declared prefix expands it. An element that declares
+/// none shows LinkML's default IRI, the one [`class_iri_string`],
+/// [`slot_iri_string`] and [`enum_iri_string`] mint, or nothing when the
+/// schema has no default prefix, where the RDF output's `{schema id}#` IRI
+/// is a placeholder the schema does not imply.
+fn display_iri(
+    schema: &SchemaDefinition,
+    declared: Option<&str>,
+    name: &str,
+    case: fn(&str) -> String,
+) -> (Option<String>, bool) {
+    let (iri, unresolved) = resolve_node_uri(schema, declared);
+    (
+        iri.or_else(|| expand_curie(schema, &case(name))),
+        unresolved,
+    )
 }
 
 /// linkml-runtime's `camelcase`: commas dropped, the name split on
@@ -3050,6 +3086,68 @@ mod tests {
                     "{minted} under {ns}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn an_elements_display_iri_is_the_iri_rdf_mints_for_it() {
+        let schema = unconventionally_named_schema("https://example.org/t/");
+        let class = &schema.classes["person_record"];
+        let slot = &schema.slots["has owner"];
+        let item_status = &schema.enums["item_status"];
+        let declared = &schema.enums["declared"];
+        for (shown, minted) in [
+            (
+                class_display_iri("person_record", class, &schema),
+                class_iri_by_name("person_record", &schema),
+            ),
+            (
+                slot_display_iri("has owner", slot, &schema),
+                slot_iri_by_name("has owner", &schema),
+            ),
+            (
+                enum_display_iri("item_status", item_status, &schema),
+                enum_iri_string("item_status", &schema),
+            ),
+            (
+                enum_display_iri("declared", declared, &schema),
+                enum_iri_string("declared", &schema),
+            ),
+        ] {
+            assert_eq!(shown, (Some(minted.clone()), false), "{minted}");
+        }
+    }
+
+    #[test]
+    fn a_declared_uri_no_prefix_expands_displays_as_written_and_flagged() {
+        let schema = parse(
+            "prefixes:\n  ex: https://example.org/t/\ndefault_prefix: ex\n\
+             classes:\n  Orphan: {class_uri: 'unknown:Foo'}\n",
+        );
+        assert_eq!(
+            class_display_iri("Orphan", &schema.classes["Orphan"], &schema),
+            (Some("unknown:Foo".to_string()), true)
+        );
+    }
+
+    #[test]
+    fn an_element_without_a_declared_uri_displays_none_without_a_default_prefix() {
+        let schema = parse("classes:\n  Thing: {}\nslots:\n  name: {}\nenums:\n  Status: {}\n");
+        for (element, shown) in [
+            (
+                "class",
+                class_display_iri("Thing", &schema.classes["Thing"], &schema),
+            ),
+            (
+                "slot",
+                slot_display_iri("name", &schema.slots["name"], &schema),
+            ),
+            (
+                "enum",
+                enum_display_iri("Status", &schema.enums["Status"], &schema),
+            ),
+        ] {
+            assert_eq!(shown, (None, false), "{element}");
         }
     }
 

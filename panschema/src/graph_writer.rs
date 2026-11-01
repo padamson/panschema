@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::io::{IoError, IoResult, Writer};
 use crate::linkml::SchemaDefinition;
-use crate::linkml_resolve::resolve_node_uri;
+use crate::linkml_resolve::{
+    class_display_iri, enum_display_iri, resolve_node_uri, slot_display_iri,
+};
 
 /// Color constants for node types (RGBA, normalized 0.0-1.0)
 pub mod colors {
@@ -911,7 +913,7 @@ impl GraphWriter {
                 rules,
             });
 
-            let (uri, uri_unresolved) = resolve_node_uri(schema, class_def.class_uri.as_deref());
+            let (uri, uri_unresolved) = class_display_iri(name, class_def, schema);
             graph.nodes.push(GraphNode {
                 id: format!("class:{}", name),
                 label,
@@ -1043,7 +1045,7 @@ impl GraphWriter {
                     .collect(),
             });
 
-            let (uri, uri_unresolved) = resolve_node_uri(schema, slot_def.slot_uri.as_deref());
+            let (uri, uri_unresolved) = slot_display_iri(name, slot_def, schema);
             graph.nodes.push(GraphNode {
                 id: format!("slot:{}", name),
                 label,
@@ -1140,14 +1142,15 @@ impl GraphWriter {
                 .collect();
             let kind_metadata = Some(KindMetadata::Enum { permissible_values });
 
+            let (uri, uri_unresolved) = enum_display_iri(name, enum_def, schema);
             graph.nodes.push(GraphNode {
                 id: format!("enum:{}", name),
                 label: name.clone(),
                 node_type: NodeType::Enum,
                 color: NodeType::Enum.color(),
                 description: enum_def.description.clone(),
-                uri: None,
-                uri_unresolved: false,
+                uri,
+                uri_unresolved,
                 is_abstract: false,
                 kind_metadata,
             });
@@ -3112,11 +3115,12 @@ mod tests {
     }
 
     #[test]
-    fn node_uri_is_expanded_or_flagged_unresolved() {
+    fn node_uri_is_expanded_flagged_or_absent() {
         // A curie with a declared prefix expands to the full IRI; a
         // curie with an unknown prefix stays verbatim and is flagged so
         // the hover can mark it `?`; a value already a full IRI is left
-        // untouched.
+        // untouched; an element with no URI and no default prefix to
+        // mint one against has none.
         let mut schema = SchemaDefinition::new("uri_expansion");
         schema
             .prefixes
@@ -3130,6 +3134,12 @@ mod tests {
         let mut full = ClassDefinition::new("Full");
         full.class_uri = Some("http://example.org/Direct".to_string());
         schema.classes.insert("Full".to_string(), full);
+        schema
+            .classes
+            .insert("Bare".to_string(), ClassDefinition::new("Bare"));
+        let mut unknown_enum = EnumDefinition::new("UnknownEnum");
+        unknown_enum.enum_uri = Some("mystery:Scheme".to_string());
+        schema.enums.insert("UnknownEnum".to_string(), unknown_enum);
 
         let writer = GraphWriter::new();
         let graph = writer.schema_to_graph(&schema);
@@ -3146,6 +3156,58 @@ mod tests {
         let f = node("class:Full");
         assert_eq!(f.uri.as_deref(), Some("http://example.org/Direct"));
         assert!(!f.uri_unresolved);
+
+        let b = node("class:Bare");
+        assert_eq!(
+            (b.uri.as_deref(), b.uri_unresolved),
+            (None, false),
+            "no declared URI and no default prefix to mint one against"
+        );
+
+        let ue = node("enum:UnknownEnum");
+        assert_eq!(
+            (ue.uri.as_deref(), ue.uri_unresolved),
+            (Some("mystery:Scheme"), true),
+            "an enum_uri with an unknown prefix is flagged like a class_uri"
+        );
+    }
+
+    #[test]
+    fn an_element_without_a_declared_uri_hovers_at_linkmls_default_iri() {
+        let mut schema = SchemaDefinition::new("defaults");
+        schema.default_prefix = Some("ex".to_string());
+        schema
+            .prefixes
+            .insert("ex".to_string(), "https://example.org/d/".to_string());
+        schema.classes.insert(
+            "person_record".to_string(),
+            ClassDefinition::new("person_record"),
+        );
+        schema
+            .slots
+            .insert("has owner".to_string(), SlotDefinition::new("has owner"));
+        schema.enums.insert(
+            "item_status".to_string(),
+            EnumDefinition::new("item_status"),
+        );
+        let mut declared = EnumDefinition::new("declared");
+        declared.enum_uri = Some("ex:DeclaredScheme".to_string());
+        schema.enums.insert("declared".to_string(), declared);
+
+        let graph = GraphWriter::new().schema_to_graph(&schema);
+        let node = |id: &str| graph.nodes.iter().find(|n| n.id == id).unwrap();
+        for (id, iri) in [
+            ("class:person_record", "https://example.org/d/PersonRecord"),
+            ("slot:has owner", "https://example.org/d/has_owner"),
+            ("enum:item_status", "https://example.org/d/ItemStatus"),
+            ("enum:declared", "https://example.org/d/DeclaredScheme"),
+        ] {
+            assert_eq!(
+                (node(id).uri.as_deref(), node(id).uri_unresolved),
+                (Some(iri), false),
+                "{id}"
+            );
+        }
     }
 
     #[test]

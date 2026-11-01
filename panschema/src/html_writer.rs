@@ -1213,13 +1213,9 @@ impl HtmlWriter {
                 labels,
             );
 
-            // class_uri wins when present; otherwise LinkML's default
-            // IRI for the class, the one the RDF output declares.
-            let iri_href = class_def
-                .class_uri
-                .as_deref()
-                .and_then(|c| crate::linkml_resolve::expand_curie(schema, c))
-                .or_else(|| crate::linkml_resolve::default_class_iri(class_id, schema));
+            let iri_href = resolved_iri(crate::linkml_resolve::class_display_iri(
+                class_id, class_def, schema,
+            ));
 
             let external_superclasses: Vec<ExternalLink> = class_def
                 .subclass_of
@@ -1408,11 +1404,9 @@ impl HtmlWriter {
                 labels,
             );
 
-            let iri_href = slot_def
-                .slot_uri
-                .as_deref()
-                .and_then(|s| crate::linkml_resolve::expand_curie(schema, s))
-                .or_else(|| crate::linkml_resolve::default_slot_iri(slot_id, schema));
+            let iri_href = resolved_iri(crate::linkml_resolve::slot_display_iri(
+                slot_id, slot_def, schema,
+            ));
 
             let governing_rule_groups = rules_by_slot.remove(*slot_id).unwrap_or_default();
             // The group label earns its place only when it says something
@@ -2233,6 +2227,12 @@ fn format_ifabsent_default(raw: &str) -> String {
         };
     }
     trimmed.to_string()
+}
+
+/// A card's link target: the element's display IRI when it resolves. A
+/// declared CURIE no prefix expands links nowhere and shows as written.
+fn resolved_iri((iri, unresolved): (Option<String>, bool)) -> Option<String> {
+    iri.filter(|_| !unresolved)
 }
 
 /// `(label, definitions)` for an expanded IRI, when the store has it.
@@ -6167,6 +6167,34 @@ mod tests {
             card.iri_href.as_deref(),
             Some("https://w3id.org/scimantic/has_owner"),
             "the card links the IRI the RDF output declares for the slot"
+        );
+    }
+
+    #[test]
+    fn a_declared_uri_no_prefix_expands_links_nowhere_even_with_a_default_prefix() {
+        use crate::linkml::{ClassDefinition, SchemaDefinition, SlotDefinition};
+        let mut schema = SchemaDefinition::new("s");
+        schema
+            .prefixes
+            .insert("ex".to_string(), "https://example.org/s/".to_string());
+        schema.default_prefix = Some("ex".to_string());
+        let mut orphan = ClassDefinition::new("Orphan");
+        orphan.class_uri = Some("unknown:Foo".to_string());
+        schema.classes.insert("Orphan".to_string(), orphan);
+        let mut stray = SlotDefinition::new("stray");
+        stray.slot_uri = Some("unknown:bar".to_string());
+        schema.slots.insert("stray".to_string(), stray);
+
+        let data = HtmlWriter::build_template_data(&schema);
+        let class_card = data.class_data.iter().find(|c| c.id == "Orphan").unwrap();
+        let slot_card = data.slot_data.iter().find(|s| s.id == "stray").unwrap();
+        assert_eq!(
+            (
+                class_card.iri_href.as_deref(),
+                slot_card.iri_href.as_deref()
+            ),
+            (None, None),
+            "(class card, slot card)"
         );
     }
 
