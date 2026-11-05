@@ -16,6 +16,10 @@ ignore = [
     "RUSTSEC-2024-0388", # derivative unmaintained (via wgpu/naga)
     "RUSTSEC-2024-0370", # proc-macro-error unmaintained
     "RUSTSEC-2026-0215", # smallstr unmaintained (via sophia_jsonld → json-ld → json-syntax)
+    # astral-tokio-tar unmaintained, dev-only (via testcontainers 0.27 ←
+    # testcontainers-modules 0.15, the Postgres-apply test). Cleared when a
+    # testcontainers-modules release moves to testcontainers >= 0.28.
+    "RUSTSEC-2026-0440",
 
     # Accepted DoS risk, upstream-blocked (real advisories, not merely
     # unmaintained). quick-xml < 0.41 (memory-exhaustion via unbounded

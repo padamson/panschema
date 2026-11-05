@@ -35,7 +35,7 @@ jobs:
       - name: Run cargo audit
         # Keep this ignore list in sync with deny.toml's `[advisories].ignore`
         # and the cargo-audit pre-commit hook (see deny.toml for per-ID
-        # rationale). Three unmaintained-crate warnings plus the
+        # rationale). Four unmaintained-crate warnings plus the
         # upstream-blocked quick-xml DoS advisories.
         run: >-
           cargo audit
@@ -44,6 +44,7 @@ jobs:
           --ignore RUSTSEC-2026-0194
           --ignore RUSTSEC-2026-0195
           --ignore RUSTSEC-2026-0215
+          --ignore RUSTSEC-2026-0440
 
   deny:
     name: License & Dependency Check

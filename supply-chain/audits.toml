@@ -292,6 +292,12 @@ criteria = "safe-to-deploy"
 delta = "0.13.4 -> 0.13.5"
 notes = "Parser fixes: cmark-derived early exit for repeated blank lines in nested lists (quadratic behavior), definition-list offsets stay on char boundaries, wikilink empty-display/malformed-input guards and event-chain fix, underscore lower-bound fix; ListFlags via existing bitflags dependency. build.rs change is in the gen-tests test generator only (adds a deflists flag). Bulk of the diff is generated test suites. No unsafe, no I/O."
 
+[[audits.pulldown-cmark]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.13.5 -> 0.13.6"
+notes = "One-line parser fix: closing the deepest wikilink now clears the wikilink stack, so enclosing image openers no longer rescan the body (quadratic parse, RUSTSEC-2026-0433). Rest of the diff is the version bump, one new wikilink test, and the tests after it renumbered. No unsafe, no I/O, no new dependencies."
+
 [[audits.rand]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-deploy"
