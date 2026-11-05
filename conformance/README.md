@@ -54,6 +54,22 @@ prefix, and prints the IRI each element gets; it is the evidence behind
 the casing of a default element IRI and the percent-encoded
 `{enum IRI}#{value}` form of a permissible value's IRI.
 
+```bash
+uv run --project conformance conformance/probe_merge_imports.py
+```
+
+The merge-imports probe gives a main schema an import, and the import two
+imports of its own, colliding on purpose, and compares the unmerged schema
+(what `gen-owl` projects) with `SchemaView.merge_imports` and with
+`gen-linkml --mergeimports` reloaded standalone: which definition and prefix
+binding win, what provenance survives, whether `linkml:types` stays an
+import, and the IRI and range an imported element ends up with. It is the
+evidence behind the loader minting an imported element under its own file's
+default prefix and typing a rangeless imported slot from the root's
+`default_range`; the merged files `gen-linkml` writes move every imported
+element into the root's namespace, which is why they are not the reference
+for meaning.
+
 Load an arbitrary schema through the reference implementation:
 
 ```bash

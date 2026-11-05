@@ -372,7 +372,7 @@ fn declared_ranges(def: &SlotDefinition) -> Option<Vec<String>> {
 /// declared in another file contributes to fields still unset. For
 /// `range` the ordering holds across files too: a specializing slot's
 /// default fill is deferred past the post-merge pass, so a cross-file
-/// parent's range always beats the child file's `default_range`.
+/// parent's range always beats the root's `default_range`.
 ///
 /// Only `Option`- and list-valued metaslots inherit. The boolean
 /// metaslots (`required`, `multivalued`, …) do not: the IR cannot
@@ -446,10 +446,10 @@ fn inherit_unset(child: &mut SlotDefinition, parent: &SlotDefinition) {
 /// Fill the schema's `default_range` into its own rangeless slot
 /// definitions — top-level `slots:` entries and every class's inline
 /// `attributes`. Runs once per schema file at load time, *before* imports
-/// merge: LinkML scopes `default_range` to the declaring schema, so each
-/// file's default lands on exactly the slots that file declares, and no
-/// later consumer — resolver, writer, or validator — needs to know
-/// defaults exist.
+/// merge, with an import's `default_range` already replaced by the root's:
+/// LinkML types every rangeless slot from the importing schema's default,
+/// wherever the slot is declared. No later consumer — resolver, writer, or
+/// validator — needs to know defaults exist.
 ///
 /// A slot that states anything more specific is left alone: an explicit
 /// `range`, an `any_of` union whose branches carry ranges, or
@@ -461,10 +461,9 @@ fn inherit_unset(child: &mut SlotDefinition, parent: &SlotDefinition) {
 /// A still-rangeless slot with `is_a` is not filled here: its parent may
 /// live in a file this pass cannot see, and an inherited range beats any
 /// default — LinkML's derivation order is ancestors first, default last.
-/// Such a slot instead records this file's default with itself, and
+/// Such a slot instead records the default it would take with itself, and
 /// [`materialize_deferred_default_range`] completes the fill after the
-/// cross-file inheritance pass — from that recorded per-file default, so
-/// the scoping is exact whether the slot's chain resolves or not.
+/// cross-file inheritance pass, from that recorded default.
 pub fn materialize_default_range(schema: &mut SchemaDefinition) {
     let Some(default) = schema.default_range.clone() else {
         return;
@@ -482,7 +481,7 @@ pub fn materialize_default_range(schema: &mut SchemaDefinition) {
 }
 
 /// The transient marker [`materialize_default_range`] leaves on a
-/// specializing slot it deferred, carrying the declaring file's default.
+/// specializing slot it deferred, carrying the default it would have taken.
 /// It travels with the definition through the imports merge and is
 /// removed by [`materialize_deferred_default_range`] before anything else
 /// observes the schema.
@@ -491,9 +490,8 @@ const DEFERRED_DEFAULT_KEY: &str = "panschema:deferred_default_range";
 /// The post-merge completion of [`materialize_default_range`]: each slot
 /// the per-file pass deferred takes its recorded default now, unless the
 /// cross-file inheritance pass gave it a range — ancestors first, default
-/// last, with each slot's default coming from its own declaring file.
-/// Slots that were never deferred (an OWL/Turtle-sourced property with no
-/// `rdfs:range`, whose file has no default) are untouched and stay
+/// last. Slots that were never deferred (an OWL/Turtle-sourced property
+/// with no `rdfs:range`, whose file has no default) are untouched and stay
 /// genuinely rangeless.
 pub fn materialize_deferred_default_range(schema: &mut SchemaDefinition) {
     for_each_slot_definition(schema, |slot| {
@@ -953,8 +951,7 @@ pub fn expand_curie(schema: &SchemaDefinition, value: &str) -> Option<String> {
             .get(prefix)
             .map(|base| format!("{base}{rest}"));
     }
-    let default = schema.default_prefix.as_deref()?;
-    let base = schema.prefixes.get(default)?;
+    let base = default_namespace(schema)?;
     Some(format!("{base}{value}"))
 }
 
@@ -1120,6 +1117,45 @@ fn default_iri(name: &str, case: fn(&str) -> String, schema: &SchemaDefinition) 
     let local = case(name);
     expand_curie(schema, &local)
         .unwrap_or_else(|| format!("{}#{}", ontology_iri_string(schema), local))
+}
+
+/// Give each class, slot, attribute, and enum `imported` defines without a
+/// URI the IRI LinkML mints for it in its own file, under that file's
+/// default prefix. Merged into a root whose default namespace is
+/// `root_namespace`, a bare name would mint there instead, so an element
+/// would change IRI by being imported. Nothing changes when the two
+/// namespaces are the same, or when `imported` has no bound default prefix
+/// to mint under. The pin is the full IRI, which no prefix the merge
+/// rebinds can move.
+pub(crate) fn pin_default_uris(imported: &mut SchemaDefinition, root_namespace: Option<&str>) {
+    let Some(namespace) = default_namespace(imported).map(str::to_string) else {
+        return;
+    };
+    if root_namespace == Some(namespace.as_str()) {
+        return;
+    }
+    let pin = |uri: &mut Option<String>, name: &str, case: fn(&str) -> String| {
+        uri.get_or_insert_with(|| format!("{namespace}{}", case(name)));
+    };
+    for (name, class) in imported.classes.iter_mut() {
+        pin(&mut class.class_uri, name, camelcase);
+        for (slot_name, attribute) in class.attributes.iter_mut() {
+            pin(&mut attribute.slot_uri, slot_name, underscore);
+        }
+    }
+    for (name, slot) in imported.slots.iter_mut() {
+        pin(&mut slot.slot_uri, name, underscore);
+    }
+    for (name, enum_def) in imported.enums.iter_mut() {
+        pin(&mut enum_def.enum_uri, name, camelcase);
+    }
+}
+
+/// The base a bare element name mints under: the expansion of the
+/// schema's `default_prefix`, when it declares one its `prefixes` bind.
+pub(crate) fn default_namespace(schema: &SchemaDefinition) -> Option<&str> {
+    let prefix = schema.default_prefix.as_deref()?;
+    schema.prefixes.get(prefix).map(String::as_str)
 }
 
 /// The IRI a display surface shows for class `name`, as `(iri, unresolved)`:

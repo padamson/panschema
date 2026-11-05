@@ -49,10 +49,11 @@ impl Reader for YamlReader {
         backfill_names(&mut schema)?;
         // LinkML's derivation rules give a schema that omits `default_range`
         // the default `string`, so this document means the same thing here
-        // as through linkml-runtime. Set at read time — per file, before
-        // load-time materialization — so imported files each carry their
-        // own effective default. Deliberately not done for other readers:
-        // an OWL property without `rdfs:range` is genuinely rangeless.
+        // as through linkml-runtime. Set at read time, before load-time
+        // materialization, which marks this as a LinkML file whose default
+        // an importing root's replaces. Deliberately not done for other
+        // readers: an OWL property without `rdfs:range` is genuinely
+        // rangeless.
         if schema.default_range.is_none() {
             schema.default_range = Some(crate::linkml::LINKML_DEFAULT_RANGE.to_string());
         }
