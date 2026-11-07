@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::import_resolve::{LoadFailure, LoadedSchema};
+use crate::import_resolve::{ImportReport, LoadFailure, LoadedSchema};
 use crate::io::{IoResult, ReaderLookup};
 use crate::linkml::SchemaDefinition;
 
@@ -27,6 +27,21 @@ pub fn load_schema_with_deps(
         crate::import_resolve::load_schema_with_deps(input, registry, deps),
         "",
     )
+}
+
+/// [`load_schema_with_deps`], with the report of the files its imports
+/// resolved to, for an output built from those files.
+pub fn load_schema_with_report(
+    input: &Path,
+    registry: &dyn ReaderLookup,
+    deps: &BTreeMap<String, PathBuf>,
+) -> IoResult<(SchemaDefinition, ImportReport)> {
+    let (loaded, imports) =
+        match crate::import_resolve::load_schema_with_report(input, registry, deps) {
+            Ok((loaded, imports)) => (Ok(loaded), imports),
+            Err(failure) => (Err(failure), ImportReport::default()),
+        };
+    Ok((report(loaded, "")?, imports))
 }
 
 /// Print a load's warnings, each after `prefix`, and return its schema or

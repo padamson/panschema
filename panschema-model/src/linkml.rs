@@ -463,16 +463,32 @@ pub struct SchemaDefinition {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_range: Option<String>,
     /// Class definitions in this schema
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "null_bodies_as_empty",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
     pub classes: BTreeMap<String, ClassDefinition>,
     /// Slot definitions in this schema
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "null_bodies_as_empty",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
     pub slots: BTreeMap<String, SlotDefinition>,
     /// Enum definitions in this schema
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "null_bodies_as_empty",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
     pub enums: BTreeMap<String, EnumDefinition>,
     /// Type definitions in this schema
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "null_bodies_as_empty",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
     pub types: BTreeMap<String, TypeDefinition>,
     /// Format-specific annotations (e.g., OWL-specific metadata)
     #[serde(default, skip_serializing_if = "Annotations::is_empty")]
@@ -693,10 +709,18 @@ pub struct ClassDefinition {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub slots: Vec<String>,
     /// Inline slot definitions specific to this class
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "null_bodies_as_empty",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
     pub attributes: BTreeMap<String, SlotDefinition>,
     /// Slot refinements in the context of this class
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "null_bodies_as_empty",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
     pub slot_usage: BTreeMap<String, SlotDefinition>,
     /// URI for semantic interpretation (e.g., owl:Class IRI)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1006,7 +1030,11 @@ pub struct EnumDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enum_uri: Option<String>,
     /// The allowed values for this enum
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "null_bodies_as_empty",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
     pub permissible_values: BTreeMap<String, PermissibleValue>,
     /// Format-specific annotations
     #[serde(default, skip_serializing_if = "Annotations::is_empty")]
@@ -1119,6 +1147,30 @@ impl TypeDefinition {
 /// Helper function for serde skip_serializing_if
 fn is_false(b: &bool) -> bool {
     !(*b)
+}
+
+/// Read a map of named definitions in which a null body (`Widget:`,
+/// `Widget: null`, `Widget: ~`) is a definition with nothing set, and a
+/// null map is no definitions, as LinkML reads both.
+fn null_bodies_as_empty<'de, D, T>(deserializer: D) -> Result<BTreeMap<String, T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    let bodies = Option::<BTreeMap<String, Option<T>>>::deserialize(deserializer)?;
+    bodies
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(name, body)| {
+            let body = match body {
+                Some(body) => body,
+                None => T::deserialize(serde::de::value::MapDeserializer::<_, D::Error>::new(
+                    std::iter::empty::<(String, String)>(),
+                ))?,
+            };
+            Ok((name, body))
+        })
+        .collect()
 }
 
 #[cfg(test)]

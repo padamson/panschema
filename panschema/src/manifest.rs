@@ -249,6 +249,12 @@ pub struct GenerateConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub instance_graph_json: Option<PathBuf>,
+    /// Merged LinkML schema output file path: the entry's schema with its
+    /// local and cross-package imports merged into one YAML document that
+    /// loads on its own, for a tool that reads LinkML rather than a
+    /// projection of it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linkml_schema: Option<PathBuf>,
     /// Directory holding this schema's versioned migration files.
     ///
     /// Unlike every other key here, this names a directory of append-only
@@ -349,6 +355,7 @@ impl GenerateConfig {
             ntriples: Some(PathBuf::from("x")),
             graph_json: Some(PathBuf::from("x")),
             instance_graph_json: Some(PathBuf::from("x")),
+            linkml_schema: Some(PathBuf::from("x")),
             migrations: Some(PathBuf::from("x")),
         };
         key_names_of(&populated)
@@ -416,6 +423,7 @@ impl GenerateConfig {
             ("json_schema", &self.json_schema),
             ("openapi", &self.openapi),
             ("graph-json", &self.graph_json),
+            ("linkml_schema", &self.linkml_schema),
             ("migrations", &self.migrations),
         ]
         .into_iter()
@@ -1061,6 +1069,7 @@ html_default_layout = "wat"
             "json_schema",
             "openapi",
             "graph-json",
+            "linkml_schema",
             "migrations",
         ] {
             let toml = format!(
@@ -1720,6 +1729,7 @@ resolve_against = []
             "ntriples",
             "graph-json",
             "instance-graph-json",
+            "linkml_schema",
             "migrations",
         ];
         for key in expected {

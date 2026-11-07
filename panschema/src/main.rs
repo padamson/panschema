@@ -1062,12 +1062,7 @@ fn write_output(
     if check {
         let fresh = std::fs::read(&render_target)
             .map_err(|e| anyhow::anyhow!("read fresh generation: {e}"))?;
-        let current = std::fs::read(&declared).ok();
-        return Ok(if current.as_deref() == Some(fresh.as_slice()) {
-            Vec::new()
-        } else {
-            vec![declared]
-        });
+        return Ok(drift(&declared, &fresh));
     }
 
     let title = schema.title.as_deref().unwrap_or(&schema.name);
@@ -1315,8 +1310,9 @@ fn generate_from_manifest(
         // It writes nothing, so `--check` runs it too. The schema is loaded
         // once for the entry, so its load warnings are reported once, and
         // every writer renders that one load.
-        let schema = panschema::load::load_schema_with_deps(schema_path, &registry, &deps)
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let (schema, imports) =
+            panschema::load::load_schema_with_report(schema_path, &registry, &deps)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
         {
             let entry = verify_entry(
                 name,
@@ -1432,6 +1428,26 @@ fn generate_from_manifest(
             }
             produced_anything = true;
         }
+        // The merged schema is built from the YAML documents the entry's
+        // load read, so constructs the loaded schema drops still reach it.
+        if let Some(out) = &gen_cfg.linkml_schema {
+            let out = manifest_dir.join(out);
+            let context = || format!("schema `{name}`, `linkml_schema` `{}`", out.display());
+            let document =
+                panschema::merged_schema::merged_schema_document(schema_path, &schema, &imports)
+                    .with_context(context)?;
+            if check {
+                drifted.extend(drift(&out, document.as_bytes()));
+            } else {
+                panschema::io::ensure_output_parent(&out).with_context(context)?;
+                std::fs::write(&out, &document).with_context(context)?;
+                println!(
+                    "Generated merged LinkML schema for '{name}' at {}",
+                    out.display()
+                );
+            }
+            produced_anything = true;
+        }
     }
 
     if !produced_anything {
@@ -1440,6 +1456,16 @@ fn generate_from_manifest(
         );
     }
     bail_on_drift(&drifted)
+}
+
+/// `declared`, when its bytes are not `fresh` (or it is missing): the
+/// output `--check` reports as drifted.
+fn drift(declared: &Path, fresh: &[u8]) -> Vec<PathBuf> {
+    if std::fs::read(declared).ok().as_deref() == Some(fresh) {
+        Vec::new()
+    } else {
+        vec![declared.to_path_buf()]
+    }
 }
 
 /// Fail a `--check` run that found outputs out of date, naming each.

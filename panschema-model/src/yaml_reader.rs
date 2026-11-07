@@ -163,6 +163,54 @@ mod tests {
         );
     }
 
+    /// YAML spells a null body three ways (`Widget:`, `Widget: null`,
+    /// `Widget: ~`), and LinkML reads each as a definition with nothing
+    /// set, wherever a named definition or a whole section of them sits.
+    #[test]
+    fn a_null_definition_body_reads_as_an_empty_definition() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schema.yaml");
+        fs::write(
+            &path,
+            "name: s\nid: https://example.org/s\nsubsets: null\n\
+             classes:\n  Bare:\n  Null: null\n  Tilde: ~\n  Holder:\n    slots: [label]\n    \
+             attributes:\n      a: null\n    slot_usage:\n      label: ~\n\
+             slots:\n  label: null\nenums:\n  Color:\n    permissible_values:\n      red: null\n  \
+             Shade: ~\ntypes:\n  Code: ~\n",
+        )
+        .expect("write");
+        let schema = YamlReader::new().read(&path).expect("a null body reads");
+        let holder = &schema.classes["Holder"];
+        assert_eq!(
+            (
+                ["Bare", "Null", "Tilde"].map(|c| schema.classes[c].name.clone()),
+                holder.attributes["a"].name.as_str(),
+                holder.slot_usage["label"].name.as_str(),
+                schema.slots["label"].name.as_str(),
+                schema.enums["Color"].permissible_values.contains_key("red"),
+                schema.enums["Shade"].name.as_str(),
+                schema.types["Code"].name.as_str(),
+            ),
+            (
+                ["Bare", "Null", "Tilde"].map(String::from),
+                "a",
+                "label",
+                "label",
+                true,
+                "Shade",
+                "Code",
+            )
+        );
+
+        fs::write(
+            &path,
+            "name: s\nid: https://example.org/s\nclasses: ~\nslots: null\n",
+        )
+        .expect("write");
+        let schema = YamlReader::new().read(&path).expect("a null section reads");
+        assert!(schema.classes.is_empty() && schema.slots.is_empty());
+    }
+
     #[test]
     fn a_declared_default_range_is_never_overridden() {
         let dir = tempfile::tempdir().expect("tempdir");

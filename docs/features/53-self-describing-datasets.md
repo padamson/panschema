@@ -172,25 +172,25 @@ own graph, loadable alone, without one `[schemas]` alias per dataset.
 
 ### Slice 3: A dependency's merged schema
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** A tool that reads a dependency through `panschema-model`
 gets its schema as one file that loads standalone, pinned by the lock.
 
 **Acceptance Criteria:**
-- [ ] A probe in `conformance/` records what `gen-linkml --mergeimports`
+- [x] A probe in `conformance/` records what `gen-linkml --mergeimports`
   does when a main file and an import define the same element, and what
   it does with each import's prefixes and provenance.
-- [ ] `linkml_schema` writes the entry's schema with its local and
+- [x] `linkml_schema` writes the entry's schema with its local and
   cross-package imports merged, matching the probe on each recorded
   behavior; `linkml:` imports stay as imports.
-- [ ] The merged file loads with `panschema_model::load_dataset` and
+- [x] The merged file loads with `panschema_model::load_dataset` and
   reads the same classes, slots, enums, and types as the unmerged schema.
-- [ ] A construct the IR does not model, present in an import, is present
+- [x] A construct the IR does not model, present in an import, is present
   in the merged file.
-- [ ] Two runs write byte-identical files, and `generate --check` reports
+- [x] Two runs write byte-identical files, and `generate --check` reports
   drift.
-- [ ] A `github:` dependency's schema comes from the locked extraction.
+- [x] A `github:` dependency's schema comes from the locked extraction.
 
 ---
 
@@ -220,7 +220,7 @@ by name, and change only when that data does.
 |-------|----------|------------|--------|
 | Slice 1: The instance graph names its dataset | Must Have | None | Completed |
 | Slice 2: One file per dataset | Must Have | Slice 1 | Completed |
-| Slice 3: A dependency's merged schema | Must Have | None | Not Started |
+| Slice 3: A dependency's merged schema | Must Have | None | Completed |
 | Slice 4: A dependency's data, as published | Must Have | Slice 2 | Not Started |
 
 ---
@@ -233,8 +233,14 @@ by name, and change only when that data does.
   triple (`dcterms:requires`) on the same node, not an index file.
 - **The merge is not a LinkML writer.** A writer from the IR (for OWL →
   LinkML conversion) is separate work. The merge reads and writes YAML
-  documents and never passes through the IR, so it loses nothing the IR
-  drops.
+  documents, so it loses nothing the IR drops. The loaded IR decides only
+  which import's definitions are refused as conflicting and what IRI an
+  imported element is written with.
+- **The merge follows LinkML's reading of the split schema, not
+  `gen-linkml --mergeimports`.** The probe shows `gen-linkml` moving every
+  imported element into the root's namespace and stamping the root as each
+  element's `from_schema`. The merged file instead keeps each imported
+  element's own IRI, so it means what the split schema means.
 
 ---
 

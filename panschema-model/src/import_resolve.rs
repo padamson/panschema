@@ -116,7 +116,7 @@ pub fn load_released_schema(
     input: &Path,
     registry: &dyn ReaderLookup,
 ) -> Result<LoadedSchema, LoadFailure> {
-    load_with(input, registry, &BTreeMap::new(), Rules::AsReleased)
+    load_with(input, registry, &BTreeMap::new(), Rules::AsReleased).map(|(loaded, _)| loaded)
 }
 
 /// Whether a schema is held to today's rules or to the ones its release
@@ -141,6 +141,17 @@ pub fn load_schema_with_deps(
     registry: &dyn ReaderLookup,
     deps: &BTreeMap<String, PathBuf>,
 ) -> Result<LoadedSchema, LoadFailure> {
+    load_schema_with_report(input, registry, deps).map(|(loaded, _)| loaded)
+}
+
+/// [`load_schema_with_deps`], with the report of which files the imports
+/// resolved to and in what precedence, for a caller that reads the files
+/// themselves, such as [`crate::merged_schema::merged_schema_document`].
+pub fn load_schema_with_report(
+    input: &Path,
+    registry: &dyn ReaderLookup,
+    deps: &BTreeMap<String, PathBuf>,
+) -> Result<(LoadedSchema, ImportReport), LoadFailure> {
     load_with(input, registry, deps, Rules::Current)
 }
 
@@ -149,7 +160,7 @@ fn load_with(
     registry: &dyn ReaderLookup,
     deps: &BTreeMap<String, PathBuf>,
     rules: Rules,
-) -> Result<LoadedSchema, LoadFailure> {
+) -> Result<(LoadedSchema, ImportReport), LoadFailure> {
     let reader = registry.reader_for_path(input)?;
     let (mut schema, reader_warnings) = reader.read_with_warnings(input)?;
     // Read-time drops — constructs the IR cannot hold — surface with the
@@ -162,8 +173,8 @@ fn load_with(
     crate::linkml_resolve::resolve_slot_inheritance(&mut schema);
     crate::linkml_resolve::materialize_default_range(&mut schema);
 
+    let mut report = ImportReport::default();
     if !schema.imports.is_empty() {
-        let mut report = ImportReport::default();
         if let Err(e) = resolve_imports_into(&mut schema, input, registry, deps, &mut report) {
             // The files read before the failure already raised warnings;
             // they go out with the error.
@@ -240,7 +251,7 @@ fn load_with(
     // warnings stay at the `generate` site.
     warnings.extend(crate::diagnostics::schema_load_diagnostics(&schema));
 
-    Ok(LoadedSchema { schema, warnings })
+    Ok((LoadedSchema { schema, warnings }, report))
 }
 
 /// Extensions tried, in order, when an `imports:` entry has no
@@ -318,11 +329,16 @@ pub struct ImportReport {
     /// For each merged element, the file it came from. Keyed by
     /// `"<kind> <name>"` so the same name across kinds stays distinct.
     pub origins: BTreeMap<String, PathBuf>,
-    /// Canonical path of every import file actually read and merged, in
-    /// resolution order. A diamond-deduplicated file appears exactly
-    /// once here even though two importers reference it; a skipped
-    /// duplicate is never re-added.
+    /// Canonical path of every import file read and merged, in the order
+    /// its definitions take precedence in the merge: an importer's own
+    /// before its imports', and an earlier import, with everything it
+    /// imports, before a later one. A diamond-deduplicated file appears
+    /// exactly once here even though two importers reference it.
     pub loaded_files: Vec<PathBuf>,
+    /// The built-in and remote entries left as imports (`linkml:types`, a
+    /// remote URL), each once, in the order first met. A remote CURIE is
+    /// expanded through the prefixes of the file that imports it.
+    pub builtin_imports: Vec<String>,
     /// What each imported file's reader dropped, each prefixed by the
     /// file's path, in resolution order.
     pub warnings: Vec<String>,
@@ -420,7 +436,9 @@ struct RootDefaults {
 ///   — not re-read, not re-merged — and its elements appear once.
 ///
 /// Order at each entry: cycle check first (`visiting`), then dedup skip
-/// (`loaded`), else read + recurse + merge + record as loaded.
+/// (`loaded`), else record in `loaded_files` + read + recurse + merge +
+/// mark as loaded. Recording before the recursion puts an importer ahead
+/// of its own imports, the precedence the merge gives their definitions.
 #[allow(clippy::too_many_arguments)]
 fn resolve_into(
     root: &mut SchemaDefinition,
@@ -477,6 +495,10 @@ fn resolve_into(
             // `linkml:` modules and any CURIE or URL that expands to a
             // remote URI name well-known schemas a writer already
             // understands. Skip them as no-ops.
+            let entry = builtin_import_iri(&entry, &prefixes);
+            if !report.builtin_imports.contains(&entry) {
+                report.builtin_imports.push(entry);
+            }
             continue;
         } else {
             return Err(ImportError::Unresolvable {
@@ -496,6 +518,7 @@ fn resolve_into(
         if loaded.contains(&canonical) {
             continue;
         }
+        report.loaded_files.push(canonical.clone());
 
         let reader = registry
             .reader_for_path(&resolved)
@@ -549,7 +572,6 @@ fn resolve_into(
         visiting.pop();
 
         merge_schema(root, &imported, &resolved, report);
-        report.loaded_files.push(canonical.clone());
         loaded.insert(canonical);
     }
 
@@ -609,6 +631,19 @@ fn is_builtin_import(entry: &str, prefixes: &BTreeMap<String, String>) -> bool {
     // and expands to a remote URI; otherwise treat it as a local path so
     // a genuine local import is never silently skipped.
     prefixes.get(prefix).is_some_and(|base| is_remote_uri(base))
+}
+
+/// A built-in or remote import as a file outside its importer can name it:
+/// a `linkml:` module stays a CURIE, which every LinkML reader knows, and
+/// any other CURIE expands through the importer's own prefixes.
+fn builtin_import_iri(entry: &str, prefixes: &BTreeMap<String, String>) -> String {
+    match entry.split_once(':') {
+        Some((prefix, local)) if prefix != LINKML_PREFIX => match prefixes.get(prefix) {
+            Some(base) => format!("{base}{local}"),
+            None => entry.to_string(),
+        },
+        _ => entry.to_string(),
+    }
 }
 
 /// True for an `http`/`https` URI — the shape a remote schema namespace

@@ -78,6 +78,7 @@ are manifest-relative.
 | `ntriples` | N-Triples |
 | `graph-json` | Schema graph wire format — **hyphen** |
 | `instance-graph-json` | A-box graph wire format — **hyphen** |
+| `linkml_schema` | The entry's schema as **one LinkML YAML file**, its local and cross-package imports merged, that loads standalone. The root's definitions and prefix bindings win; an imported element without a URI is written with the IRI its own file gives it; `linkml:` imports stay imports. Constructs the IR does not model (`comments`, `subsets`) survive. Every file merged must be LinkML YAML, and two imports defining one name differently are refused |
 | `migrations` | **A directory** of versioned migration files. Written by `panschema migrate`, *not* by `generate` |
 
 Note the naming is not uniform: `json_schema` and `html_graph_aspect` use

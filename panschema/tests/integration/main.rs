@@ -4938,6 +4938,153 @@ rust = "sample.rs"
     );
 }
 
+/// A package whose main file imports a local file and `linkml:types`.
+fn write_importing_pkg(pkg: &Path, name: &str) {
+    write_pkg(
+        pkg,
+        name,
+        "1.0.0",
+        "main.yaml",
+        &format!(
+            "name: {name}\nid: https://example.org/{name}\ndefault_prefix: {name}\n\
+             prefixes:\n  {name}: https://example.org/{name}/\n\
+             imports:\n  - linkml:types\n  - parts\n\
+             classes:\n  Assembly:\n    attributes:\n      part:\n        range: Part\n"
+        ),
+    );
+    fs::write(
+        pkg.join("parts.yaml"),
+        "name: parts\nid: https://example.org/parts\ndefault_prefix: parts\n\
+         prefixes:\n  parts: https://example.org/parts/\n\
+         classes:\n  Part: {}\n",
+    )
+    .expect("write import");
+}
+
+/// `linkml_schema` writes the entry's schema with its imports merged: the
+/// file loads standalone to what the split schema loads to, a rerun writes
+/// the same bytes, and `generate --check` reports a stale copy.
+#[test]
+fn linkml_schema_writes_a_merged_schema_that_loads_standalone() {
+    use panschema::yaml_reader::YamlReader;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path();
+    write_importing_pkg(&consumer.join("parts-pkg"), "assembly");
+    fs::write(
+        consumer.join("panschema.toml"),
+        "[schemas]\nassembly = { path = \"./parts-pkg\" }\n\n\
+         [generate.assembly]\nlinkml_schema = \"schemas/merged.yaml\"\n",
+    )
+    .expect("write manifest");
+    fs::write(consumer.join("data.yaml"), "").expect("write data");
+    let merged_path = consumer.join("schemas").join("merged.yaml");
+
+    let check = run_in(consumer, &["generate", "--check"]);
+    assert!(
+        !check.status.success() && !merged_path.exists(),
+        "a missing merged schema is drift, and --check does not write it"
+    );
+    let out = run_generate_in(consumer);
+    assert!(
+        out.status.success(),
+        "generate: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let first = fs::read(&merged_path).expect("the merged schema is written");
+
+    let load = |schema: &Path| {
+        panschema_model::load_dataset(schema, &consumer.join("data.yaml"), &YamlReader::new())
+            .expect("load")
+            .schema
+    };
+    let merged = load(&merged_path);
+    let unmerged = load(&consumer.join("parts-pkg").join("main.yaml"));
+    assert_eq!(
+        (&merged.classes, &merged.slots, &merged.enums, &merged.types),
+        (
+            &unmerged.classes,
+            &unmerged.slots,
+            &unmerged.enums,
+            &unmerged.types
+        )
+    );
+
+    let out = run_generate_in(consumer);
+    assert!(out.status.success());
+    assert_eq!(
+        fs::read(&merged_path).unwrap(),
+        first,
+        "a rerun writes the same bytes"
+    );
+    let check = run_in(consumer, &["generate", "--check"]);
+    assert!(
+        check.status.success(),
+        "an up-to-date merged schema passes --check: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    fs::write(&merged_path, "name: stale\n").expect("tamper");
+    let check = run_in(consumer, &["generate", "--check"]);
+    assert!(
+        !check.status.success() && String::from_utf8_lossy(&check.stderr).contains("merged.yaml"),
+        "a stale merged schema is drift, named: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    assert_eq!(fs::read_to_string(&merged_path).unwrap(), "name: stale\n");
+}
+
+/// A `github:` dependency's merged schema is read from the extraction its
+/// lock pins, imports and all.
+#[test]
+fn linkml_schema_merges_a_github_dependency_from_its_extraction() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = tmp.path().join("consumer");
+    fs::create_dir_all(&consumer).expect("mkdir consumer");
+    let cache = tmp.path().join("cache");
+    write_importing_pkg(
+        &cache
+            .join("github/test-owner/assembly/1.0.0")
+            .join("assembly-1.0.0"),
+        "assembly",
+    );
+    fs::write(
+        consumer.join("panschema.toml"),
+        "[schemas]\nassembly = { source = \"github:test-owner/assembly\", version = \"1.0.0\" }\n\n\
+         [generate.assembly]\nlinkml_schema = \"merged.yaml\"\n",
+    )
+    .expect("write manifest");
+
+    let fetch = run_with_cache(&consumer, &cache, &["fetch"]);
+    assert!(
+        fetch.status.success(),
+        "fetch: {}",
+        String::from_utf8_lossy(&fetch.stderr)
+    );
+    let generate = run_with_cache(&consumer, &cache, &["generate"]);
+    assert!(
+        generate.status.success(),
+        "generate: {}",
+        String::from_utf8_lossy(&generate.stderr)
+    );
+    let merged = panschema::import_resolve::load_schema(
+        &consumer.join("merged.yaml"),
+        &panschema::yaml_reader::YamlReader::new(),
+    )
+    .expect("the merged schema loads standalone")
+    .schema;
+    assert_eq!(
+        (
+            merged.classes.contains_key("Assembly"),
+            merged
+                .classes
+                .get("Part")
+                .and_then(|part| part.class_uri.as_deref()),
+        ),
+        (true, Some("https://example.org/parts/Part")),
+        "the extraction's main file and its import are merged"
+    );
+}
+
 /// The manager flow (fetch/fetch --check/generate) dispatches input files by
 /// extension to the same readers as `--input`. This proves a `.ttl`
 /// schema flows end-to-end through the manager, not just YAML.

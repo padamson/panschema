@@ -83,6 +83,7 @@ pub mod instances;
 pub mod io;
 pub mod linkml;
 pub mod linkml_resolve;
+pub mod merged_schema;
 pub mod primitives;
 pub mod rules;
 pub mod yaml_reader;
