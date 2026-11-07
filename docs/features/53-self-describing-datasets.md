@@ -80,11 +80,11 @@ invented. A path without the placeholder keeps the one-dataset rule.
 one file that `panschema_model::load_dataset` loads standalone. The merge
 works on the YAML documents, not through the IR, so constructs the IR
 does not model (class expressions, `subsets`, `comments`, …) survive
-into the file. Collisions and provenance follow what `gen-linkml
---mergeimports` does, measured by a probe in `conformance/`.
-`linkml_data` writes each named dataset as a byte copy of the file its
-package publishes, so a consumer's committed fixtures change only when
-the producer's data does.
+into the file. Collisions and provenance follow LinkML's reading of the
+split schema, measured by a probe in `conformance/` (see Things to
+watch). `linkml_data` writes each dataset the entry ships as a byte copy
+of the file its package publishes, so a consumer's committed fixtures
+change only when the producer's data does.
 
 ### Configuration
 
@@ -196,21 +196,31 @@ gets its schema as one file that loads standalone, pinned by the lock.
 
 ### Slice 4: A dependency's data, as published
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** A tool's fixtures come from a producer's published data
 by name, and change only when that data does.
 
 **Acceptance Criteria:**
-- [ ] `linkml_data` writes each dataset the entry names as a byte copy of
+- [x] `linkml_data` writes each dataset the entry names as a byte copy of
   the file its package publishes, resolved by name the way `ttl =`
   resolves it.
-- [ ] With several datasets the path must contain `{dataset}`, and is
+- [x] With several datasets the path must contain `{dataset}`, and is
   refused otherwise, naming the datasets.
-- [ ] `generate --check` reports drift.
-- [ ] The README and the shipped agent skill document the dataset node,
+- [x] `generate --check` reports drift.
+- [x] The README and the shipped agent skill document the dataset node,
   `{dataset}`, `linkml_schema`, and `linkml_data`, and the skill's drift
   test covers the new keys.
+
+**Notes:**
+- "Each dataset the entry names" is every dataset the entry ships, its
+  `instances` paths and its named `datasets`, the same set `ttl =`
+  receives. Each must be a declared dataset, with or without `{dataset}`,
+  since the copy is of the file a package publishes.
+- The expansion lives beside slice 2's
+  (`source::DeclaredDatasets::data_copies`). `generate` resolves and reads
+  every copy before the entry's first writer runs, so an entry
+  `linkml_data` refuses writes none of its outputs.
 
 ---
 
@@ -221,7 +231,7 @@ by name, and change only when that data does.
 | Slice 1: The instance graph names its dataset | Must Have | None | Completed |
 | Slice 2: One file per dataset | Must Have | Slice 1 | Completed |
 | Slice 3: A dependency's merged schema | Must Have | None | Completed |
-| Slice 4: A dependency's data, as published | Must Have | Slice 2 | Not Started |
+| Slice 4: A dependency's data, as published | Must Have | Slice 2 | Completed |
 
 ---
 
@@ -246,9 +256,9 @@ by name, and change only when that data does.
 
 ## Definition of Done
 
-- [ ] All acceptance criteria met, every slice Completed
-- [ ] All tests passing: `cargo nextest run --workspace --features panschema/dev`
-- [ ] `cargo doc` builds cleanly
-- [ ] `cargo fmt --check` and `cargo clippy --all-targets --all-features -- -D warnings` clean
-- [ ] README.md and the agent skill updated
-- [ ] CHANGELOG.md updated
+- [x] All acceptance criteria met, every slice Completed
+- [x] All tests passing: `cargo nextest run --workspace --features panschema/dev`
+- [x] `cargo doc` builds cleanly
+- [x] `cargo fmt --check` and `cargo clippy --all-targets --all-features -- -D warnings` clean
+- [x] README.md and the agent skill updated
+- [x] CHANGELOG.md updated

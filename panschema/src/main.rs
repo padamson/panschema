@@ -1302,6 +1302,23 @@ fn generate_from_manifest(
             .iter()
             .map(|p| manifest_dir.join(p))
             .collect();
+        // `linkml_data` is resolved and read before any writer runs, so an
+        // entry it refuses writes nothing.
+        let data_copies = match &gen_cfg.linkml_data {
+            Some(template) => {
+                let context = || format!("schema `{name}`, `linkml_data` `{}`", template.display());
+                declared
+                    .data_copies(template, &instances)
+                    .with_context(context)?
+                    .into_iter()
+                    .map(|copy| {
+                        let bytes = std::fs::read(copy.instance).with_context(context)?;
+                        Ok((manifest_dir.join(&copy.output), &copy.dataset.name, bytes))
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?
+            }
+            None => Vec::new(),
+        };
         // The entry is verified once here, by the pass `verify` runs, before
         // any writer: so a dataset is checked whatever outputs the entry
         // declares, reported once however many writers read it, and
@@ -1432,20 +1449,30 @@ fn generate_from_manifest(
         // load read, so constructs the loaded schema drops still reach it.
         if let Some(out) = &gen_cfg.linkml_schema {
             let out = manifest_dir.join(out);
-            let context = || format!("schema `{name}`, `linkml_schema` `{}`", out.display());
             let document =
                 panschema::merged_schema::merged_schema_document(schema_path, &schema, &imports)
-                    .with_context(context)?;
-            if check {
-                drifted.extend(drift(&out, document.as_bytes()));
-            } else {
-                panschema::io::ensure_output_parent(&out).with_context(context)?;
-                std::fs::write(&out, &document).with_context(context)?;
-                println!(
-                    "Generated merged LinkML schema for '{name}' at {}",
-                    out.display()
-                );
-            }
+                    .with_context(|| {
+                        format!("schema `{name}`, `linkml_schema` `{}`", out.display())
+                    })?;
+            drifted.extend(write_or_drift(
+                &out,
+                document.as_bytes(),
+                check,
+                &format!("schema `{name}`, `linkml_schema`"),
+                &format!("Generated merged LinkML schema for '{name}'"),
+            )?);
+            produced_anything = true;
+        }
+        // Copied byte for byte, so a consumer's fixtures change only when
+        // the producer's data does.
+        for (out, dataset, bytes) in &data_copies {
+            drifted.extend(write_or_drift(
+                out,
+                bytes,
+                check,
+                &format!("schema `{name}`, `linkml_data`"),
+                &format!("Copied dataset '{dataset}' for '{name}'"),
+            )?);
             produced_anything = true;
         }
     }
@@ -1466,6 +1493,27 @@ fn drift(declared: &Path, fresh: &[u8]) -> Vec<PathBuf> {
     } else {
         vec![declared.to_path_buf()]
     }
+}
+
+/// Write `bytes` to `out` and say so after `done`, or under `--check`
+/// return `out` when it has drifted from them. A failure names `out` after
+/// `context`.
+fn write_or_drift(
+    out: &Path,
+    bytes: &[u8],
+    check: bool,
+    context: &str,
+    done: &str,
+) -> anyhow::Result<Vec<PathBuf>> {
+    use anyhow::Context as _;
+    if check {
+        return Ok(drift(out, bytes));
+    }
+    let context = || format!("{context} `{}`", out.display());
+    panschema::io::ensure_output_parent(out).with_context(context)?;
+    std::fs::write(out, bytes).with_context(context)?;
+    println!("{done} at {}", out.display());
+    Ok(Vec::new())
 }
 
 /// Fail a `--check` run that found outputs out of date, naming each.

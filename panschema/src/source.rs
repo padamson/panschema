@@ -409,6 +409,27 @@ impl DeclaredDatasets {
         self.by_file.get(&on_disk(file))
     }
 
+    /// Each file in `instances` with the dataset it is, refusing an empty
+    /// list or a file no package declares.
+    fn datasets_of<'a>(
+        &'a self,
+        instances: &'a [PathBuf],
+    ) -> Result<Vec<(&'a PathBuf, &'a DeclaredDataset)>, DatasetOutputError> {
+        if instances.is_empty() {
+            return Err(DatasetOutputError::NoDatasets);
+        }
+        instances
+            .iter()
+            .map(|instance| {
+                self.of(instance)
+                    .map(|dataset| (instance, dataset))
+                    .ok_or_else(|| DatasetOutputError::Undeclared {
+                        file: instance.clone(),
+                    })
+            })
+            .collect()
+    }
+
     /// Expand `template` into one output per file in `instances`, each
     /// named by substituting its dataset's name for
     /// [`crate::manifest::DATASET_PLACEHOLDER`].
@@ -417,17 +438,9 @@ impl DeclaredDatasets {
         template: &Path,
         instances: &'a [PathBuf],
     ) -> Result<Vec<DatasetOutput<'a>>, DatasetOutputError> {
-        if instances.is_empty() {
-            return Err(DatasetOutputError::NoDatasets);
-        }
         let template = template.to_string_lossy();
         let mut outputs: Vec<DatasetOutput<'a>> = Vec::with_capacity(instances.len());
-        for instance in instances {
-            let dataset = self
-                .of(instance)
-                .ok_or_else(|| DatasetOutputError::Undeclared {
-                    file: instance.clone(),
-                })?;
+        for (instance, dataset) in self.datasets_of(instances)? {
             let output = PathBuf::from(
                 template.replace(crate::manifest::DATASET_PLACEHOLDER, &dataset.name),
             );
@@ -444,6 +457,32 @@ impl DeclaredDatasets {
             });
         }
         Ok(outputs)
+    }
+
+    /// Where `linkml_data = template` copies each file in `instances`: one
+    /// file per dataset for a [`crate::manifest::DATASET_PLACEHOLDER`] path,
+    /// otherwise `template` itself, which holds one dataset only. Every file
+    /// must be a declared dataset, since what is copied is the file its
+    /// package publishes.
+    pub fn data_copies<'a>(
+        &'a self,
+        template: &Path,
+        instances: &'a [PathBuf],
+    ) -> Result<Vec<DatasetOutput<'a>>, DatasetOutputError> {
+        if crate::manifest::writes_per_dataset(template) {
+            return self.per_dataset_outputs(template, instances);
+        }
+        match self.datasets_of(instances)?.as_slice() {
+            [(instance, dataset)] => Ok(vec![DatasetOutput {
+                output: template.to_path_buf(),
+                instance,
+                dataset,
+            }]),
+            several => Err(DatasetOutputError::SeveralDatasets {
+                output: template.to_path_buf(),
+                datasets: several.iter().map(|(_, d)| d.name.clone()).collect(),
+            }),
+        }
     }
 
     /// Refuse a declared dataset that `[generate.<entry>]` or
@@ -483,8 +522,7 @@ pub struct DatasetOutput<'a> {
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum DatasetOutputError {
     #[error(
-        "`{{dataset}}` names each file by its dataset, but no package declares `{}` in \
-         `[[instances]]`, so it has no dataset name",
+        "`{}` is not a dataset: no package declares it in `[[instances]]`",
         file.display()
     )]
     Undeclared { file: PathBuf },
@@ -498,7 +536,17 @@ pub enum DatasetOutputError {
         output: PathBuf,
         datasets: [String; 2],
     },
-    #[error("`{{dataset}}` names each file by its dataset, but the entry lists no instance data")]
+    #[error(
+        "`{}` would hold datasets `{}`; add `{{dataset}}` to the path to write one file per \
+         dataset",
+        output.display(),
+        datasets.join("`, `")
+    )]
+    SeveralDatasets {
+        output: PathBuf,
+        datasets: Vec<String>,
+    },
+    #[error("the entry lists no instance data, so there is no dataset to write")]
     NoDatasets,
 }
 
@@ -1897,6 +1945,107 @@ schema = "cqa"
         let declared = DeclaredDatasets::from_resolved(&deps());
         assert_eq!(
             declared.per_dataset_outputs(Path::new("/out/{dataset}.ttl"), &[]),
+            Err(DatasetOutputError::NoDatasets)
+        );
+    }
+
+    #[test]
+    fn a_data_copy_path_without_the_placeholder_takes_the_one_dataset() {
+        let declared = DeclaredDatasets::from_resolved(&deps());
+        let instances = [PathBuf::from("/pkg/wine/data/wine-benchmark.yaml")];
+        let copies = declared
+            .data_copies(Path::new("/out/one.yaml"), &instances)
+            .expect("one declared dataset");
+        let named: Vec<(&Path, &Path, &str)> = copies
+            .iter()
+            .map(|o| {
+                (
+                    o.output.as_path(),
+                    o.instance.as_path(),
+                    o.dataset.name.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            named,
+            vec![(
+                Path::new("/out/one.yaml"),
+                instances[0].as_path(),
+                "benchmark"
+            )]
+        );
+    }
+
+    #[test]
+    fn a_data_copy_path_with_the_placeholder_names_one_file_per_dataset() {
+        let declared = DeclaredDatasets::from_resolved(&deps());
+        let instances = [
+            PathBuf::from("/pkg/wine/data/wine-instances.yaml"),
+            PathBuf::from("/pkg/wine/data/wine-benchmark.yaml"),
+        ];
+        let outputs: Vec<PathBuf> = declared
+            .data_copies(Path::new("/out/{dataset}.yaml"), &instances)
+            .expect("both files are declared")
+            .into_iter()
+            .map(|o| o.output)
+            .collect();
+        assert_eq!(
+            outputs,
+            [
+                PathBuf::from("/out/worked-example.yaml"),
+                PathBuf::from("/out/benchmark.yaml")
+            ]
+        );
+    }
+
+    #[test]
+    fn a_data_copy_path_without_the_placeholder_refuses_several_datasets_by_name() {
+        let mut deps = deps();
+        let mut cellar = published("/pkg/cellar");
+        cellar.datasets.truncate(1);
+        cellar.datasets[0].name = "cellar".to_string();
+        deps.insert("cellar".to_string(), cellar);
+        let declared = DeclaredDatasets::from_resolved(&deps);
+        let instances = [
+            PathBuf::from("/pkg/wine/data/wine-instances.yaml"),
+            PathBuf::from("/pkg/wine/data/wine-benchmark.yaml"),
+            PathBuf::from("/pkg/cellar/data/wine-instances.yaml"),
+        ];
+        assert_eq!(
+            declared.data_copies(Path::new("/out/all.yaml"), &instances),
+            Err(DatasetOutputError::SeveralDatasets {
+                output: PathBuf::from("/out/all.yaml"),
+                datasets: vec![
+                    "worked-example".to_string(),
+                    "benchmark".to_string(),
+                    "cellar".to_string()
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn a_data_copy_refuses_a_file_no_package_declares() {
+        let declared = DeclaredDatasets::from_resolved(&deps());
+        for template in ["/out/one.yaml", "/out/{dataset}.yaml"] {
+            assert_eq!(
+                declared.data_copies(
+                    Path::new(template),
+                    &[PathBuf::from("/pkg/wine/data/scratch.yaml")]
+                ),
+                Err(DatasetOutputError::Undeclared {
+                    file: PathBuf::from("/pkg/wine/data/scratch.yaml")
+                }),
+                "{template}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_data_copy_with_no_instance_data_is_refused() {
+        let declared = DeclaredDatasets::from_resolved(&deps());
+        assert_eq!(
+            declared.data_copies(Path::new("/out/one.yaml"), &[]),
             Err(DatasetOutputError::NoDatasets)
         );
     }

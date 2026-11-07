@@ -601,6 +601,111 @@ fn check_reports_drift_in_each_per_dataset_file() {
     );
 }
 
+/// A consumer whose `linkml_data` copies the catalog's `records`, listed by
+/// path, and `cellar`, named, after `cellar` is rewritten with a comment and
+/// flow style that only a byte copy keeps.
+fn consumer_copying_catalog_data(parent: &Path) -> std::path::PathBuf {
+    let consumer = consumer_of_two_catalog_datasets(
+        parent,
+        "linkml_data = \"fixtures/{dataset}.yaml\"\n\
+         instances = [\"../catalog-pkg/data/records.yaml\"]\ndatasets = [\"cellar\"]",
+    );
+    fs::write(
+        parent.join("catalog-pkg/data/cellar.yaml"),
+        "# kept by hand\nwines:\n  - {id: cellarPour, name: 'Cellar Pour'}\n",
+    )
+    .expect("write cellar data");
+    consumer
+}
+
+/// `linkml_data` copies each dataset the entry ships, listed by path or
+/// named, byte for byte as its package publishes it, and fresh copies pass
+/// `generate --check`.
+#[test]
+fn linkml_data_copies_each_shipped_dataset_as_published() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = consumer_copying_catalog_data(tmp.path());
+    let out = run_generate_in(&consumer);
+    assert!(
+        out.status.success(),
+        "generate failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for dataset in ["records", "cellar"] {
+        let published = fs::read(tmp.path().join(format!("catalog-pkg/data/{dataset}.yaml")))
+            .unwrap_or_else(|e| panic!("read published {dataset}.yaml: {e}"));
+        assert_eq!(
+            fs::read(consumer.join(format!("fixtures/{dataset}.yaml"))).ok(),
+            Some(published),
+            "{dataset}.yaml is a byte copy of the published file"
+        );
+    }
+    let check = run_in(&consumer, &["generate", "--check"]);
+    assert!(
+        check.status.success(),
+        "fresh copies pass --check: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+}
+
+/// Once the producer's data moves, `generate --check` names the copy it
+/// left behind, only that one, and leaves it as it was.
+#[test]
+fn linkml_data_check_reports_a_copy_the_producer_moved() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = consumer_copying_catalog_data(tmp.path());
+    assert!(
+        run_generate_in(&consumer).status.success(),
+        "first generate"
+    );
+    let copy = consumer.join("fixtures/cellar.yaml");
+    let before = fs::read(&copy).expect("read the cellar copy");
+    fs::write(
+        tmp.path().join("catalog-pkg/data/cellar.yaml"),
+        "wines:\n  - id: cellarPour\n    name: Cellar Pour, Recorked\n",
+    )
+    .expect("move the producer's cellar data");
+    let check = run_in(&consumer, &["generate", "--check"]);
+    let stderr = String::from_utf8_lossy(&check.stderr);
+    assert_eq!(
+        (
+            check.status.success(),
+            stderr.contains("cellar.yaml"),
+            stderr.contains("records.yaml"),
+            fs::read(&copy).ok() == Some(before)
+        ),
+        (false, true, false, true),
+        "(passes, reports cellar.yaml, reports records.yaml, leaves the copy); got:\n{stderr}"
+    );
+}
+
+/// One path cannot hold two datasets' files, so without `{dataset}` the
+/// entry is refused by its datasets' names before any of its outputs is
+/// written.
+#[test]
+fn linkml_data_without_the_placeholder_refuses_several_datasets() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let consumer = consumer_of_two_catalog_datasets(
+        tmp.path(),
+        "shacl = \"out.shacl.ttl\"\nlinkml_data = \"fixtures/all.yaml\"\n\
+         datasets = [\"records\", \"cellar\"]",
+    );
+    let out = run_generate_in(&consumer);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        (
+            out.status.success(),
+            stderr.contains("`records`") && stderr.contains("`cellar`"),
+            stderr.contains("{dataset}"),
+            consumer.join("fixtures/all.yaml").exists(),
+            consumer.join("out.shacl.ttl").exists()
+        ),
+        (false, true, true, false, false),
+        "(passes, names both datasets, names the placeholder, writes the copy, \
+         writes the entry's other output); got:\n{stderr}"
+    );
+}
+
 /// The package states which schema each dataset conforms to, so naming one
 /// under the wrong block fails with the block it belongs under, and a name
 /// the package does not publish fails with the ones it does.

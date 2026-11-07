@@ -79,6 +79,7 @@ are manifest-relative.
 | `graph-json` | Schema graph wire format — **hyphen** |
 | `instance-graph-json` | A-box graph wire format — **hyphen** |
 | `linkml_schema` | The entry's schema as **one LinkML YAML file**, its local and cross-package imports merged, that loads standalone. The root's definitions and prefix bindings win; an imported element without a URI is written with the IRI its own file gives it; `linkml:` imports stay imports. Constructs the IR does not model (`comments`, `subsets`) survive. Every file merged must be LinkML YAML, and two imports defining one name differently are refused |
+| `linkml_data` | Each dataset the entry ships (its `instances` paths and named `datasets`), as a **byte copy** of the file its package publishes, so a consumer's fixtures change only when the producer's data does. Every file must be a dataset some package declares. A path holding several datasets must contain `{dataset}` (`linkml_data = "fixtures/{dataset}.yaml"`), and is refused otherwise, naming them |
 | `migrations` | **A directory** of versioned migration files. Written by `panschema migrate`, *not* by `generate` |
 
 Note the naming is not uniform: `json_schema` and `html_graph_aspect` use
@@ -92,8 +93,16 @@ datasets fails on them, unless the path contains `{dataset}`
 named by its `[[instances]]` name, holding only its records and its own
 `dcat:Dataset` node, and `generate --check` compares each file. Every file
 in the entry must be a dataset some package declares, and two datasets that
-would write one path are refused. `{dataset}` on any other key is a parse
-error, and `--output` with `{dataset}` outside a manifest is refused.
+would write one path are refused. `linkml_data` takes `{dataset}` the same
+way. On any other key it is a parse error, and `--output` with `{dataset}`
+outside a manifest is refused.
+
+**The dataset node.** When the data file is a dataset some package declares
+in `[[instances]]`, the RDF outputs carry one `dcat:Dataset` blank node: the
+`[[instances]]` name as `dcterms:identifier`, the declaring package's
+`[schema] version` as `dcat:version`, and the schema's `id` as
+`dcterms:conformsTo`. A tool handed the file alone reads which dataset it
+holds from there. A file no package declares gets no node.
 
 `migrations` is the odd one out in a second way. Every other key names an
 output regenerated from scratch on each run, so `generate` owns it. A

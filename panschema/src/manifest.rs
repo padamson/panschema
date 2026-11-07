@@ -255,6 +255,11 @@ pub struct GenerateConfig {
     /// projection of it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub linkml_schema: Option<PathBuf>,
+    /// LinkML data output file path: each dataset the entry ships, as a
+    /// byte copy of the file its package publishes. A path holding several
+    /// datasets must carry [`DATASET_PLACEHOLDER`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linkml_data: Option<PathBuf>,
     /// Directory holding this schema's versioned migration files.
     ///
     /// Unlike every other key here, this names a directory of append-only
@@ -356,6 +361,7 @@ impl GenerateConfig {
             graph_json: Some(PathBuf::from("x")),
             instance_graph_json: Some(PathBuf::from("x")),
             linkml_schema: Some(PathBuf::from("x")),
+            linkml_data: Some(PathBuf::from("x")),
             migrations: Some(PathBuf::from("x")),
         };
         key_names_of(&populated)
@@ -394,7 +400,7 @@ pub fn validate_layout_name(name: &str) -> Result<(), String> {
     }
 }
 
-/// The placeholder an instance-graph output path carries to write one file
+/// The placeholder a [`PER_DATASET_OUTPUTS`] path carries to write one file
 /// per dataset, the dataset's name substituted for it.
 pub const DATASET_PLACEHOLDER: &str = "{dataset}";
 
@@ -405,15 +411,24 @@ pub fn writes_per_dataset(output: &Path) -> bool {
         .is_some_and(|s| s.contains(DATASET_PLACEHOLDER))
 }
 
-/// The `[generate]` keys whose output holds exactly one instance graph,
-/// each also the `--format` name that writes it: the outputs a
-/// [`DATASET_PLACEHOLDER`] path splits per dataset.
-pub const ONE_INSTANCE_GRAPH_OUTPUTS: [&str; 5] =
-    ["ttl", "jsonld", "rdfxml", "ntriples", "instance-graph-json"];
+/// The `[generate]` keys whose output holds exactly one dataset: the
+/// outputs a [`DATASET_PLACEHOLDER`] path splits per dataset.
+pub const PER_DATASET_OUTPUTS: [&str; 6] = [
+    "ttl",
+    "jsonld",
+    "rdfxml",
+    "ntriples",
+    "instance-graph-json",
+    "linkml_data",
+];
+
+/// The [`PER_DATASET_OUTPUTS`] that hold an instance graph, each also the
+/// `--format` name that writes it.
+pub const ONE_INSTANCE_GRAPH_OUTPUTS: &[&str] = PER_DATASET_OUTPUTS.split_at(5).0;
 
 impl GenerateConfig {
-    /// The configured outputs that hold no single instance graph, by
-    /// `[generate]` key: every output but [`ONE_INSTANCE_GRAPH_OUTPUTS`].
+    /// The configured outputs that hold no single dataset, by `[generate]`
+    /// key: every output but [`PER_DATASET_OUTPUTS`].
     fn whole_entry_outputs(&self) -> impl Iterator<Item = (&'static str, &PathBuf)> {
         [
             ("html", &self.html),
@@ -466,9 +481,9 @@ impl FromStr for Manifest {
                     schema: name.clone(),
                     message: format!(
                         "`{key} = \"{}\"` carries `{DATASET_PLACEHOLDER}`, but only an output \
-                         holding one instance graph ({}) is written per dataset",
+                         holding one dataset ({}) is written per dataset",
                         path.display(),
-                        ONE_INSTANCE_GRAPH_OUTPUTS.join(", ")
+                        PER_DATASET_OUTPUTS.join(", ")
                     ),
                 });
             }
@@ -1088,8 +1103,8 @@ html_default_layout = "wat"
     }
 
     #[test]
-    fn a_dataset_placeholder_on_a_single_graph_output_parses() {
-        for key in ONE_INSTANCE_GRAPH_OUTPUTS {
+    fn a_dataset_placeholder_on_a_per_dataset_output_parses() {
+        for key in PER_DATASET_OUTPUTS {
             let toml = format!(
                 "[schemas]\nfoo = {{ path = \"./foo-pkg\" }}\n\n[generate.foo]\n\
                  {key} = \"out/{{dataset}}\"\n"
@@ -1730,6 +1745,7 @@ resolve_against = []
             "graph-json",
             "instance-graph-json",
             "linkml_schema",
+            "linkml_data",
             "migrations",
         ];
         for key in expected {

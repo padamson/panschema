@@ -149,6 +149,24 @@ for record in &loaded.instances.instances {
 }
 ```
 
+When the schema and data belong to a dependency, have `generate` write them
+where the tool reads them, resolved by name and pinned by the lock like any
+other output:
+
+```toml
+[generate.cqa]
+linkml_schema = "tests/fixtures/cqa.yaml"        # the schema, imports merged
+linkml_data = "tests/fixtures/{dataset}.yaml"    # each dataset, as published
+datasets = ["wine:benchmark"]
+```
+
+`linkml_schema` merges the schema's local and cross-package imports into one
+file that loads on its own (`linkml:` imports stay imports). `linkml_data`
+copies each dataset the entry ships byte for byte from the file its package
+publishes, so the copy changes only when the producer's data does. A path
+holding more than one dataset needs `{dataset}`. `generate --check` reports
+either file once it is stale.
+
 `panschema` re-exports every one of those modules at its own paths, so code
 written against `panschema::linkml` keeps working.
 
