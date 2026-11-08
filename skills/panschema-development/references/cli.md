@@ -1,19 +1,32 @@
 # CLI surface
 
-`panschema` with no subcommand prints help and exits non-zero. There is no
+`panschema` with no subcommand prints help and exits 2. There is no
 bare no-subcommand form.
+
+## Exit status
+
+| Code | Meaning |
+|---|---|
+| 0 | The command did what it was asked, and any check it ran found nothing |
+| 1 | A check ran to the end and found something: `generate --check` or `fetch --check` drift, `verify --schema`/`--data` violations, or what `--strict` refuses on `generate` or bare `verify` |
+| 2 | The command could not run: a bad flag, a file that does not parse (the manifest, the lockfile, a schema, or a data file), a dependency that does not resolve, a missing file, or a refusal such as `release` on a dirty tree |
+
+The split is between a finding and an error, not between a transient
+failure and a permanent one: a 2 from a network failure may pass on a
+rerun, and a 2 from a typo in `panschema.toml` will not. A panic exits 101,
+Rust's default, and is a bug in panschema.
 
 | Subcommand | What it does |
 |---|---|
 | `generate` | Render a schema to an output format. With no `--schema`, discovers `panschema.toml` and generates every manifested schema |
-| `verify` | With `--schema`/`--data`: check a LinkML **instance-data** file against a schema, exiting non-zero listing every violation. With **no flags**: read `panschema.toml` and check everything it declares — conformance, cross-graph resolution, stated absences — writing nothing; findings warn, `--strict` fails on them. *Not* schema-vs-metaschema verification |
+| `verify` | With `--schema`/`--data`: check a LinkML **instance-data** file against a schema, listing every violation and exiting 1 if there are any. With **no flags**: read `panschema.toml` and check everything it declares — conformance, cross-graph resolution, stated absences — writing nothing; findings warn, `--strict` fails on them. *Not* schema-vs-metaschema verification |
 | `migrate` | Write the schema's Postgres DDL as a versioned migration file. Writes files only — it never connects to a database |
 | `publish` | Build versioned HTML docs per git ref, per `[publishing]` in `panschema-publish.toml` |
 | `serve` | Hot-reload dev server for HTML output |
 | `init` | Scaffold a `panschema-publish.toml` |
 | `add` | Add a schema dependency to `panschema.toml` and fetch it |
 | `fetch` | Resolve every dependency; lock the pins (`github:` sources) in `panschema.lock` |
-| `fetch --check` | Verify every pin against the lockfile and fail on drift; writes nothing |
+| `fetch --check` | Verify every pin against the lockfile and exit 1 on drift; writes nothing |
 | `release` | Bump the schema version in `panschema-publish.toml`, optionally commit/tag/push |
 | `completions` | Emit a shell completion script |
 | `styleguide` | Component preview page (requires the `dev` feature) |
@@ -49,7 +62,7 @@ bare no-subcommand form.
 - `--no-graph`, `--viz-mode` — HTML only; warn if used with another format.
 - `--check` (`generate`) — the committed-codegen drift gate: regenerates to
   a temporary location, byte-compares against every declared output, exits
-  non-zero naming what drifted or is missing, writes nothing. HTML outputs
+  1 naming what drifted or is missing, writes nothing. HTML outputs
   are directories and are skipped with a warning. Replaces consumer-side
   regenerate-and-git-diff wrapper scripts.
 - `--rust-time <chrono|jiff>` (`generate`) — time crate for `--format rust`

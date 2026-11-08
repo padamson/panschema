@@ -15,6 +15,12 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+/// The exit status of a check that ran and found something: drift,
+/// instance-data violations, or what `--strict` refuses.
+const FOUND: Option<i32> = Some(1);
+/// The exit status of a command that could not run.
+const COULD_NOT_RUN: Option<i32> = Some(2);
+
 /// Write a `panschema-publish.toml` + main schema file into `pkg_dir`.
 /// The one spelling of `panschema-publish.toml` every package fixture
 /// uses; a format change edits this and reaches them all.
@@ -521,8 +527,9 @@ fn generate_refuses_a_per_dataset_path_over_an_undeclared_file() {
     .expect("write local data");
     let out = run_generate_in(&consumer);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        !out.status.success() && stderr.contains("local.yaml"),
+    assert_eq!(
+        (out.status.code(), stderr.contains("local.yaml")),
+        (COULD_NOT_RUN, true),
         "the refusal names the undeclared file; got:\n{stderr}"
     );
 }
@@ -538,8 +545,12 @@ fn a_per_dataset_path_on_a_schema_only_output_is_refused() {
     );
     let out = run_generate_in(&consumer);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        !out.status.success() && stderr.contains("shacl") && stderr.contains("{dataset}"),
+    assert_eq!(
+        (
+            out.status.code(),
+            stderr.contains("shacl") && stderr.contains("{dataset}")
+        ),
+        (COULD_NOT_RUN, true),
         "the refusal names the format and the placeholder; got:\n{stderr}"
     );
 }
@@ -566,12 +577,12 @@ fn a_per_dataset_output_without_a_manifest_is_refused() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(
         (
-            out.status.success(),
+            out.status.code(),
             stderr.contains("{dataset}"),
             scratch.path().join("{dataset}.ttl").exists()
         ),
-        (false, true, false),
-        "(passes, names the placeholder, writes a literal file); got:\n{stderr}"
+        (COULD_NOT_RUN, true, false),
+        "(exit code, names the placeholder, writes a literal file); got:\n{stderr}"
     );
 }
 
@@ -592,12 +603,12 @@ fn check_reports_drift_in_each_per_dataset_file() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(
         (
-            out.status.success(),
+            out.status.code(),
             stderr.contains("cellar.ttl"),
             stderr.contains("records.ttl")
         ),
-        (false, true, false),
-        "(passes, reports cellar.ttl, reports records.ttl); got:\n{stderr}"
+        (FOUND, true, false),
+        "(exit code, reports cellar.ttl, reports records.ttl); got:\n{stderr}"
     );
 }
 
@@ -669,13 +680,13 @@ fn linkml_data_check_reports_a_copy_the_producer_moved() {
     let stderr = String::from_utf8_lossy(&check.stderr);
     assert_eq!(
         (
-            check.status.success(),
+            check.status.code(),
             stderr.contains("cellar.yaml"),
             stderr.contains("records.yaml"),
             fs::read(&copy).ok() == Some(before)
         ),
-        (false, true, false, true),
-        "(passes, reports cellar.yaml, reports records.yaml, leaves the copy); got:\n{stderr}"
+        (FOUND, true, false, true),
+        "(exit code, reports cellar.yaml, reports records.yaml, leaves the copy); got:\n{stderr}"
     );
 }
 
@@ -694,14 +705,14 @@ fn linkml_data_without_the_placeholder_refuses_several_datasets() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(
         (
-            out.status.success(),
+            out.status.code(),
             stderr.contains("`records`") && stderr.contains("`cellar`"),
             stderr.contains("{dataset}"),
             consumer.join("fixtures/all.yaml").exists(),
             consumer.join("out.shacl.ttl").exists()
         ),
-        (false, true, true, false, false),
-        "(passes, names both datasets, names the placeholder, writes the copy, \
+        (COULD_NOT_RUN, true, true, false, false),
+        "(exit code, names both datasets, names the placeholder, writes the copy, \
          writes the entry's other output); got:\n{stderr}"
     );
 }
@@ -735,7 +746,11 @@ fn a_misnamed_dataset_says_what_the_package_publishes() {
         )
         .expect("write manifest");
         let out = run_generate_in(&consumer);
-        assert!(!out.status.success(), "`{named}` must not generate");
+        assert_eq!(
+            out.status.code(),
+            COULD_NOT_RUN,
+            "`{named}` must not generate"
+        );
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(
             stderr.contains(expected),
@@ -1348,8 +1363,9 @@ fn generate_reports_conformance_violations_in_the_instance_data() {
         ])
         .output()
         .expect("run panschema");
-    assert!(
-        !out.status.success(),
+    assert_eq!(
+        out.status.code(),
+        FOUND,
         "--strict must fail on a non-conforming A-box"
     );
 }
@@ -1441,8 +1457,9 @@ fn single_a_box_formats_reject_several_instances_files() {
         ])
         .output()
         .expect("Failed to execute panschema");
-    assert!(
-        !out.status.success(),
+    assert_eq!(
+        out.status.code(),
+        COULD_NOT_RUN,
         "several A-boxes for a single-graph format must fail"
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -1544,25 +1561,34 @@ fn verify_command_exit_code_reflects_conformance() {
         "a clean verification should report conformance"
     );
 
-    // A dangling reference is a violation: non-zero exit, named on stderr.
-    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
-        .args([
-            "verify",
-            "--schema",
-            "tests/fixtures/wine_catalog.yaml",
+    // A dangling reference is a violation, named on stderr, alone or among
+    // several data files.
+    let dangling = "tests/fixtures/wine_instances_dangling.yaml";
+    for data in [
+        &["--data", dangling][..],
+        &[
             "--data",
-            "tests/fixtures/wine_instances_dangling.yaml",
-        ])
-        .output()
-        .expect("run panschema");
-    assert!(
-        !out.status.success(),
-        "non-conforming data must exit non-zero"
-    );
-    assert!(
-        String::from_utf8_lossy(&out.stderr).contains("ghostWinery"),
-        "the violation should name the dangling reference"
-    );
+            "tests/fixtures/wine_instances.yaml",
+            "--data",
+            dangling,
+        ][..],
+    ] {
+        let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
+            .args(["verify", "--schema", "tests/fixtures/wine_catalog.yaml"])
+            .args(data)
+            .output()
+            .expect("run panschema");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            out.status.code(),
+            FOUND,
+            "non-conforming data in {data:?} is a finding; stderr:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("ghostWinery"),
+            "the violation names the dangling reference; stderr:\n{stderr}"
+        );
+    }
 
     // The retired name is a hard break that still points the way.
     let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
@@ -1576,8 +1602,12 @@ fn verify_command_exit_code_reflects_conformance() {
         .output()
         .expect("run panschema");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        !out.status.success() && stderr.contains("renamed to `panschema verify`"),
+    assert_eq!(
+        (
+            out.status.code(),
+            stderr.contains("renamed to `panschema verify`")
+        ),
+        (COULD_NOT_RUN, true),
         "`validate` fails and names its replacement; got: {stderr}"
     );
 }
@@ -1889,8 +1919,9 @@ fn dangling_instance_reference_warns_and_fails_under_strict() {
         ])
         .output()
         .expect("run panschema");
-    assert!(
-        !out.status.success(),
+    assert_eq!(
+        out.status.code(),
+        FOUND,
         "--strict must fail on a dangling instance reference"
     );
 }
@@ -2038,8 +2069,9 @@ fn rdf_with_dangling_instance_reference_fails_under_strict() {
         ])
         .output()
         .expect("run panschema");
-    assert!(
-        !output.status.success(),
+    assert_eq!(
+        output.status.code(),
+        FOUND,
         "a dangling instance reference must fail the build under --strict"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2322,7 +2354,11 @@ html_page_layout = "sideways"
         .current_dir(consumer)
         .output()
         .expect("Failed to execute panschema");
-    assert!(!output.status.success(), "an unknown layout must fail");
+    assert_eq!(
+        output.status.code(),
+        COULD_NOT_RUN,
+        "an unknown layout must fail"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("sideways") && stderr.contains("instances-first"),
@@ -2550,8 +2586,9 @@ resolve_against = ["catalog"]
         "the warning names the failure and the note still counts; got:\n{lax_err}"
     );
     let strict = run(&["--strict"]);
-    assert!(
-        !strict.status.success(),
+    assert_eq!(
+        strict.status.code(),
+        FOUND,
         "--strict must fail on an unresolved cross-graph reference"
     );
     assert!(
@@ -2609,8 +2646,9 @@ resolve_against = ["bench"]
     )
     .unwrap();
     let self_ref = run(&[]);
-    assert!(
-        !self_ref.status.success(),
+    assert_eq!(
+        self_ref.status.code(),
+        COULD_NOT_RUN,
         "resolve_against naming the entry itself is an error"
     );
     assert!(
@@ -2636,8 +2674,9 @@ resolve_against = ["ghost"]
     )
     .unwrap();
     let misconfigured = run(&[]);
-    assert!(
-        !misconfigured.status.success(),
+    assert_eq!(
+        misconfigured.status.code(),
+        COULD_NOT_RUN,
         "an unknown resolve_against target is an error"
     );
     assert!(
@@ -2787,8 +2826,9 @@ resolve_against = ["catalog"]
     .unwrap();
     let out = run_in(consumer, &["generate", "--strict"]);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        !out.status.success() && stderr.contains("cat:ghost"),
+    assert_eq!(
+        (out.status.code(), stderr.contains("cat:ghost")),
+        (FOUND, true),
         "the shipped dataset's dangling cross-graph reference must fail the gate; got:\n{stderr}"
     );
 }
@@ -2862,8 +2902,12 @@ instances = ["checked.yaml"]
 
     let strict = run_in(consumer, &["generate", "--strict"]);
     let stderr = String::from_utf8_lossy(&strict.stderr);
-    assert!(
-        !strict.status.success() && stderr.contains("instance-data violation"),
+    assert_eq!(
+        (
+            strict.status.code(),
+            stderr.contains("instance-data violation")
+        ),
+        (FOUND, true),
         "generate --strict refuses what verify --strict would; got:\n{stderr}"
     );
 
@@ -2901,15 +2945,20 @@ instances = ["orders.yaml"]
     )
     .unwrap();
     let verified = run_in(consumer, &["verify", "--strict"]);
-    assert!(
-        !verified.status.success(),
+    assert_eq!(
+        verified.status.code(),
+        FOUND,
         "the dangling range fails verify --strict; got:\n{}",
         String::from_utf8_lossy(&verified.stderr)
     );
     let generated = run_in(consumer, &["generate", "--strict"]);
     let stderr = String::from_utf8_lossy(&generated.stderr);
-    assert!(
-        !generated.status.success() && stderr.contains("1 dangling reference(s)"),
+    assert_eq!(
+        (
+            generated.status.code(),
+            stderr.contains("1 dangling reference(s)")
+        ),
+        (FOUND, true),
         "and generate --strict refuses it too; got:\n{stderr}"
     );
 }
@@ -2953,8 +3002,12 @@ instances = ["data.yaml"]
     );
     let strict = run_in(consumer, &["generate", "--strict"]);
     let stderr = String::from_utf8_lossy(&strict.stderr);
-    assert!(
-        !strict.status.success() && stderr.contains("instance-data violation"),
+    assert_eq!(
+        (
+            strict.status.code(),
+            stderr.contains("instance-data violation")
+        ),
+        (FOUND, true),
         "and generate --strict refuses it, as verify --strict does; got:\n{stderr}"
     );
 }
@@ -3119,7 +3172,7 @@ fn a_dataset_that_ingests_nothing_is_not_vacuously_clean() {
         String::from_utf8_lossy(&warned.stderr)
     );
     let strict = run_in(consumer, &["verify", "--strict"]);
-    assert!(!strict.status.success(), "--strict fails on it");
+    assert_eq!(strict.status.code(), FOUND, "--strict fails on it");
 }
 
 /// `--strict` reports everything before failing: one entry's check
@@ -3172,7 +3225,7 @@ resolve_against = ["catalog"]
     .unwrap();
     let strict = run_in(consumer, &["verify", "--strict"]);
     let stderr = String::from_utf8_lossy(&strict.stderr);
-    assert!(!strict.status.success());
+    assert_eq!(strict.status.code(), FOUND);
     assert!(
         stderr.contains("no resolve-against dataset mints")
             && stderr.contains("1 of 1 cross-graph reference(s) do not resolve against `catalog`"),
@@ -3217,8 +3270,9 @@ resolve_against = ["catalog"]
     .unwrap();
     for args in [["verify"].as_slice(), ["generate"].as_slice()] {
         let out = run_in(consumer, args);
-        assert!(
-            !out.status.success(),
+        assert_eq!(
+            out.status.code(),
+            COULD_NOT_RUN,
             "{args:?} accepts a check entry that nothing will ever run"
         );
         assert!(
@@ -3310,8 +3364,9 @@ fn bare_verify_strict_promotes_schema_level_findings() {
         String::from_utf8_lossy(&warned.stderr)
     );
     let strict = run_in(consumer, &["verify", "--strict"]);
-    assert!(
-        !strict.status.success(),
+    assert_eq!(
+        strict.status.code(),
+        FOUND,
         "the dangling schema reference fails --strict; got:\n{}",
         String::from_utf8_lossy(&strict.stderr)
     );
@@ -3440,8 +3495,9 @@ resolve_against = ["catalog"]
     );
 
     let strict = run(&["--strict"]);
-    assert!(
-        !strict.status.success(),
+    assert_eq!(
+        strict.status.code(),
+        FOUND,
         "--strict promotes the same findings: {}",
         String::from_utf8_lossy(&strict.stderr)
     );
@@ -3518,8 +3574,9 @@ require_namespace_coverage = true
         "the uncovered reference is named; got:\n{stderr}"
     );
     let strict = run(&["--strict"]);
-    assert!(
-        !strict.status.success(),
+    assert_eq!(
+        strict.status.code(),
+        FOUND,
         "--strict fails on the uncovered reference"
     );
     assert!(
@@ -3553,7 +3610,7 @@ fn resolve_keys_under_generate_are_a_parse_error() {
         .current_dir(consumer)
         .output()
         .expect("run panschema");
-    assert!(!out.status.success());
+    assert_eq!(out.status.code(), COULD_NOT_RUN);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains("unknown field") && stderr.contains("resolve_against"),
@@ -3622,8 +3679,9 @@ resolve_against = ["catalog"]
         .current_dir(consumer)
         .output()
         .expect("run panschema");
-    assert!(
-        !out.status.success(),
+    assert_eq!(
+        out.status.code(),
+        COULD_NOT_RUN,
         "a collided sibling cannot be resolved against"
     );
     assert!(
@@ -3742,9 +3800,12 @@ resolve_against = ["catalog"]
         "a stale pin warns naming the record, slot, both versions, and the sibling; got:\n{stderr}"
     );
     let strict = run(&["--strict"]);
-    assert!(
-        !strict.status.success()
-            && String::from_utf8_lossy(&strict.stderr).contains("version pin(s) disagree"),
+    assert_eq!(
+        (
+            strict.status.code(),
+            String::from_utf8_lossy(&strict.stderr).contains("version pin(s) disagree")
+        ),
+        (FOUND, true),
         "a stale pin fails --strict; got:\n{}",
         String::from_utf8_lossy(&strict.stderr)
     );
@@ -3768,8 +3829,9 @@ resolve_against = ["catalog"]
         String::from_utf8_lossy(&contradicted.stderr)
     );
     let strict = run(&["--strict"]);
-    assert!(
-        !strict.status.success(),
+    assert_eq!(
+        strict.status.code(),
+        FOUND,
         "--strict must refuse a contradicted absence claim"
     );
     assert!(
@@ -3802,8 +3864,9 @@ verify_absences = { slot = "unconnected" }
     )
     .unwrap();
     let retired_key = run(&[]);
-    assert!(
-        !retired_key.status.success(),
+    assert_eq!(
+        retired_key.status.code(),
+        COULD_NOT_RUN,
         "the retired manifest key is refused"
     );
     assert!(
@@ -3855,10 +3918,12 @@ instances = ["bench-data.yaml"]
     .unwrap();
     let defective = run(&["--strict"]);
     let stderr = String::from_utf8_lossy(&defective.stderr);
-    assert!(
-        !defective.status.success()
-            && stderr.contains("`records_version_of`")
-            && stderr.contains("ghost"),
+    assert_eq!(
+        (
+            defective.status.code(),
+            stderr.contains("`records_version_of`") && stderr.contains("ghost")
+        ),
+        (FOUND, true),
         "a defective declaration fails --strict naming the slot it points at; got:\n{stderr}"
     );
     fs::write(&bench_schema_path, bench_schema).unwrap();
@@ -3989,8 +4054,9 @@ ttl = "bench.ttl"
     );
     for args in [&["generate", "--strict"][..], &["verify", "--strict"][..]] {
         let strict = run(args);
-        assert!(
-            !strict.status.success(),
+        assert_eq!(
+            strict.status.code(),
+            FOUND,
             "`{}` refuses the defective declaration",
             args.join(" ")
         );
@@ -4022,8 +4088,9 @@ instances = ["data/absent.yaml"]
         .current_dir(consumer)
         .output()
         .expect("run panschema");
-    assert!(
-        !out.status.success(),
+    assert_eq!(
+        out.status.code(),
+        COULD_NOT_RUN,
         "a missing instances path must fail the build"
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -4213,8 +4280,9 @@ slots:
     };
 
     let strict = run(&["--strict"]);
-    assert!(
-        !strict.status.success(),
+    assert_eq!(
+        strict.status.code(),
+        FOUND,
         "--strict must fail on a dangling reference"
     );
     let strict_err = String::from_utf8_lossy(&strict.stderr);
@@ -4262,8 +4330,9 @@ fn cli_verify_kind_checks_a_rangeless_slot_via_the_implicit_string_default() {
         ])
         .output()
         .expect("panschema");
-    assert!(
-        !out.status.success(),
+    assert_eq!(
+        out.status.code(),
+        FOUND,
         "an integer at an implicitly string-typed slot must not verify clean"
     );
     let err = String::from_utf8_lossy(&out.stderr);
@@ -4317,8 +4386,9 @@ ex:label a owl:DatatypeProperty ;
         ])
         .output()
         .expect("panschema");
-    assert!(
-        !strict.status.success(),
+    assert_eq!(
+        strict.status.code(),
+        FOUND,
         "--strict must refuse the imported rangeless property"
     );
     assert!(
@@ -4368,8 +4438,9 @@ ex:nickname a owl:DatatypeProperty ;
     };
 
     let strict = run(&["--strict"]);
-    assert!(
-        !strict.status.success(),
+    assert_eq!(
+        strict.status.code(),
+        FOUND,
         "--strict must fail on a rangeless property"
     );
     assert!(
@@ -4685,8 +4756,9 @@ rust = "out/app.rs"
         .output()
         .expect("Failed to execute panschema");
 
-    assert!(
-        !output.status.success(),
+    assert_eq!(
+        output.status.code(),
+        COULD_NOT_RUN,
         "an undeclared import must fail the command, not drop silently"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -4847,8 +4919,9 @@ rust = "out/app.rs"
         .output()
         .expect("Failed to execute panschema");
 
-    assert!(
-        !output.status.success(),
+    assert_eq!(
+        output.status.code(),
+        COULD_NOT_RUN,
         "a dep-vs-dep definitional conflict must fail, not silently pick by import order"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -4964,8 +5037,9 @@ rust_time = "chrono2"
         .current_dir(consumer)
         .output()
         .expect("Failed to execute panschema");
-    assert!(
-        !output.status.success(),
+    assert_eq!(
+        output.status.code(),
+        COULD_NOT_RUN,
         "a typo'd rust_time must fail the run"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -4976,8 +5050,8 @@ rust_time = "chrono2"
 }
 
 /// `generate --check` is the committed-codegen drift gate: it compares a
-/// fresh generation against every declared output byte-for-byte, exits
-/// non-zero naming what drifted, and writes nothing — a tampered output
+/// fresh generation against every declared output byte-for-byte, exits 1
+/// naming what drifted, and writes nothing — a tampered output
 /// stays tampered, and a missing one stays missing.
 #[test]
 fn generate_check_reports_drift_without_writing() {
@@ -5006,7 +5080,12 @@ rust = "sample.rs"
 
     // Missing output: drift.
     let out = check(consumer);
-    assert!(!out.status.success(), "a missing declared output is drift");
+    assert_eq!(
+        out.status.code(),
+        FOUND,
+        "a missing declared output is drift; stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     // Freshly generated: clean.
     let status = Command::new(env!("CARGO_BIN_EXE_panschema"))
@@ -5030,8 +5109,12 @@ rust = "sample.rs"
     );
     fs::write(&rust_out, &tampered).expect("tamper output");
     let out = check(consumer);
-    assert!(!out.status.success(), "a tampered output is drift");
     let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        FOUND,
+        "a tampered output is drift; stderr:\n{stderr}"
+    );
     assert!(
         stderr.contains("sample.rs"),
         "the drifted file is named; got: {stderr}"
@@ -5040,6 +5123,43 @@ rust = "sample.rs"
         fs::read_to_string(&rust_out).expect("read back"),
         tampered,
         "--check must not rewrite the output"
+    );
+
+    // The single-schema form checks its one output the same way.
+    let flag_generate = |extra: &[&str]| {
+        let base = [
+            "generate",
+            "--schema",
+            "sample-pkg/sample_schema.yaml",
+            "--format",
+            "rust",
+            "--output",
+            "flag.rs",
+        ];
+        run_in(consumer, &[&base[..], extra].concat())
+    };
+    assert!(
+        flag_generate(&[]).status.success(),
+        "generate --schema writes flag.rs"
+    );
+    let out = flag_generate(&["--check"]);
+    assert!(
+        out.status.success(),
+        "an up-to-date output passes --check; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let flag_out = consumer.join("flag.rs");
+    fs::write(&flag_out, "// stale\n").expect("stale the output");
+    let out = flag_generate(&["--check"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        (
+            out.status.code(),
+            stderr.contains("flag.rs"),
+            fs::read_to_string(&flag_out).expect("read back").as_str()
+        ),
+        (FOUND, true, "// stale\n"),
+        "(exit code, names the output, leaves the output) for a stale output; stderr:\n{stderr}"
     );
 }
 
@@ -5086,8 +5206,9 @@ fn linkml_schema_writes_a_merged_schema_that_loads_standalone() {
     let merged_path = consumer.join("schemas").join("merged.yaml");
 
     let check = run_in(consumer, &["generate", "--check"]);
-    assert!(
-        !check.status.success() && !merged_path.exists(),
+    assert_eq!(
+        (check.status.code(), !merged_path.exists()),
+        (FOUND, true),
         "a missing merged schema is drift, and --check does not write it"
     );
     let out = run_generate_in(consumer);
@@ -5130,8 +5251,12 @@ fn linkml_schema_writes_a_merged_schema_that_loads_standalone() {
     );
     fs::write(&merged_path, "name: stale\n").expect("tamper");
     let check = run_in(consumer, &["generate", "--check"]);
-    assert!(
-        !check.status.success() && String::from_utf8_lossy(&check.stderr).contains("merged.yaml"),
+    assert_eq!(
+        (
+            check.status.code(),
+            String::from_utf8_lossy(&check.stderr).contains("merged.yaml")
+        ),
+        (FOUND, true),
         "a stale merged schema is drift, named: {}",
         String::from_utf8_lossy(&check.stderr)
     );
@@ -5268,8 +5393,9 @@ html = "docs/"
         .current_dir(consumer)
         .output()
         .expect("Failed to execute panschema");
-    assert!(
-        !output.status.success(),
+    assert_eq!(
+        output.status.code(),
+        COULD_NOT_RUN,
         "panschema should have failed on missing path"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -5304,7 +5430,12 @@ x = { path = "./naked-pkg" }
         .current_dir(consumer)
         .output()
         .expect("panschema");
-    assert!(!output.status.success(), "expected failure");
+    assert_eq!(
+        output.status.code(),
+        COULD_NOT_RUN,
+        "a path source without a publish file cannot run; stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("panschema-publish.toml"),
@@ -5508,8 +5639,12 @@ fn fetch_check_detects_pin_drift_and_never_rewrites_the_lockfile() {
     fs::write(&manifest_path, manifest.replace("1.0.0", "1.1.0")).expect("bump pin");
     let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
     let stderr = String::from_utf8_lossy(&check.stderr);
-    assert!(
-        !check.status.success() && stderr.contains("lockfile records version"),
+    assert_eq!(
+        (
+            check.status.code(),
+            stderr.contains("lockfile records version")
+        ),
+        (FOUND, true),
         "a pin moved without a re-fetch is drift; got: {stderr}"
     );
 
@@ -5528,8 +5663,12 @@ fn fetch_check_detects_pin_drift_and_never_rewrites_the_lockfile() {
     .expect("repoint pin");
     let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
     let stderr = String::from_utf8_lossy(&check.stderr);
-    assert!(
-        !check.status.success() && stderr.contains("lockfile records source"),
+    assert_eq!(
+        (
+            check.status.code(),
+            stderr.contains("lockfile records source")
+        ),
+        (FOUND, true),
         "a repointed pin is drift even when the bytes agree; got: {stderr}"
     );
     fs::write(&manifest_path, &manifest).expect("restore manifest");
@@ -5544,8 +5683,12 @@ fn fetch_check_detects_pin_drift_and_never_rewrites_the_lockfile() {
     );
     let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
     let stderr = String::from_utf8_lossy(&check.stderr);
-    assert!(
-        !check.status.success() && stderr.contains("`contract`: lockfile has sha256:"),
+    assert_eq!(
+        (
+            check.status.code(),
+            stderr.contains("`contract`: lockfile has sha256:")
+        ),
+        (FOUND, true),
         "cached content that no longer matches the pin is drift, by name; got: {stderr}"
     );
 
@@ -5564,10 +5707,13 @@ fn fetch_check_detects_pin_drift_and_never_rewrites_the_lockfile() {
     .expect("add a file beside the main schema");
     let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
     let stderr = String::from_utf8_lossy(&check.stderr);
-    assert!(
-        !check.status.success()
-            && stderr.contains("`contract`: lockfile has package sha256:")
-            && !stderr.contains("`contract`: lockfile has sha256:"),
+    assert_eq!(
+        (
+            check.status.code(),
+            stderr.contains("`contract`: lockfile has package sha256:")
+                && !stderr.contains("`contract`: lockfile has sha256:")
+        ),
+        (FOUND, true),
         "a changed file beside an intact main schema is package drift, and only that; \
          got: {stderr}"
     );
@@ -5617,8 +5763,12 @@ fn fetch_never_locks_an_edited_cache() {
         .output()
         .expect("run panschema");
     let stderr = String::from_utf8_lossy(&fetch.stderr);
-    assert!(
-        !fetch.status.success() && stderr.contains("network error fetching test-owner/contract"),
+    assert_eq!(
+        (
+            fetch.status.code(),
+            stderr.contains("network error fetching test-owner/contract")
+        ),
+        (COULD_NOT_RUN, true),
         "an edited cache is downloaded again, and when that fails so does the fetch; got: {stderr}"
     );
     assert_eq!(
@@ -5651,8 +5801,12 @@ fn fetch_check_detects_pins_missing_from_or_stale_in_the_lockfile() {
     .expect("add a pin without re-fetching");
     let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
     let stderr = String::from_utf8_lossy(&check.stderr);
-    assert!(
-        !check.status.success() && stderr.contains("`other`: in manifest but not in lockfile"),
+    assert_eq!(
+        (
+            check.status.code(),
+            stderr.contains("`other`: in manifest but not in lockfile")
+        ),
+        (FOUND, true),
         "a pin the lockfile does not record is named, with the fix; got: {stderr}"
     );
 
@@ -5668,8 +5822,12 @@ fn fetch_check_detects_pins_missing_from_or_stale_in_the_lockfile() {
     .expect("drop a pin without re-fetching");
     let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
     let stderr = String::from_utf8_lossy(&check.stderr);
-    assert!(
-        !check.status.success() && stderr.contains("`other`") && stderr.contains("stale"),
+    assert_eq!(
+        (
+            check.status.code(),
+            stderr.contains("`other`") && stderr.contains("stale")
+        ),
+        (FOUND, true),
         "a locked pin the manifest dropped is stale; got: {stderr}"
     );
 }
@@ -5742,8 +5900,12 @@ fn fetch_check_verifies_pins_and_leaves_path_sources_to_the_working_tree() {
     );
     let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
     let stderr = String::from_utf8_lossy(&check.stderr);
-    assert!(
-        !check.status.success() && stderr.contains("`contract`: lockfile has sha256:"),
+    assert_eq!(
+        (
+            check.status.code(),
+            stderr.contains("`contract`: lockfile has sha256:")
+        ),
+        (FOUND, true),
         "the pin is still verified, by name; got: {stderr}"
     );
     seed_github_pkg(
@@ -5758,8 +5920,9 @@ fn fetch_check_verifies_pins_and_leaves_path_sources_to_the_working_tree() {
     fs::remove_file(sibling.join("panschema-publish.toml")).expect("break the sibling package");
     let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
     let stderr = String::from_utf8_lossy(&check.stderr);
-    assert!(
-        !check.status.success() && stderr.contains("`sibling`"),
+    assert_eq!(
+        (check.status.code(), stderr.contains("`sibling`")),
+        (COULD_NOT_RUN, true),
         "every entry is still resolved, so a broken path source fails the check; got: {stderr}"
     );
     write_pkg(
@@ -5780,8 +5943,9 @@ fn fetch_check_verifies_pins_and_leaves_path_sources_to_the_working_tree() {
     .expect("malform the own entry");
     let fetch = run_with_cache(&consumer, &cache, &["fetch"]);
     let stderr = String::from_utf8_lossy(&fetch.stderr);
-    assert!(
-        !fetch.status.success() && stderr.contains("`version`"),
+    assert_eq!(
+        (fetch.status.code(), stderr.contains("`version`")),
+        (COULD_NOT_RUN, true),
         "a malformed entry fails `fetch` the same way it fails `generate`; got: {stderr}"
     );
 }
@@ -5850,8 +6014,12 @@ fn fetch_check_reads_lockfile_entries_by_what_they_record() {
     .expect("write lockfile");
     let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
     let stderr = String::from_utf8_lossy(&check.stderr);
-    assert!(
-        !check.status.success() && stderr.contains("`contract`: in manifest but not in lockfile"),
+    assert_eq!(
+        (
+            check.status.code(),
+            stderr.contains("`contract`: in manifest but not in lockfile")
+        ),
+        (FOUND, true),
         "a leftover under a pinned name does not stand in for the pin; got: {stderr}"
     );
     assert!(
@@ -5867,8 +6035,12 @@ fn fetch_check_reads_lockfile_entries_by_what_they_record() {
     .expect("malform the pin");
     let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
     let stderr = String::from_utf8_lossy(&check.stderr);
-    assert!(
-        !check.status.success() && stderr.contains("`version`") && !stderr.contains("path source"),
+    assert_eq!(
+        (
+            check.status.code(),
+            stderr.contains("`version`") && !stderr.contains("path source")
+        ),
+        (COULD_NOT_RUN, true),
         "a malformed pin fails with its own error, not a fabricated one; got: {stderr}"
     );
 
@@ -5876,9 +6048,12 @@ fn fetch_check_reads_lockfile_entries_by_what_they_record() {
         .expect("repoint the pin to a path source");
     let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
     let stderr = String::from_utf8_lossy(&check.stderr);
-    assert!(
-        !check.status.success()
-            && stderr.contains("`contract`: lockfile records source `github:test-owner/contract`"),
+    assert_eq!(
+        (
+            check.status.code(),
+            stderr.contains("`contract`: lockfile records source `github:test-owner/contract`")
+        ),
+        (FOUND, true),
         "a lockfile pin the manifest no longer pins is drift; got: {stderr}"
     );
 }
@@ -5926,13 +6101,17 @@ fn a_manifest_with_no_pins_needs_no_lockfile() {
 }
 
 #[test]
-fn fetch_check_errors_when_a_pin_is_declared_and_no_lockfile_exists() {
+fn fetch_check_reports_a_missing_lockfile_as_drift_when_pins_are_declared() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let (consumer, cache) = pinned_consumer(tmp.path());
     let check = run_with_cache(&consumer, &cache, &["fetch", "--check"]);
     let stderr = String::from_utf8_lossy(&check.stderr);
-    assert!(
-        !check.status.success() && stderr.contains("panschema.lock") && stderr.contains("fetch"),
+    assert_eq!(
+        (
+            check.status.code(),
+            stderr.contains("panschema.lock") && stderr.contains("fetch")
+        ),
+        (FOUND, true),
         "a missing lockfile names itself and the fix; got: {stderr}"
     );
 }
@@ -6037,8 +6216,9 @@ fn add_errors_when_github_spec_has_no_version() {
         .current_dir(consumer)
         .output()
         .expect("panschema run");
-    assert!(
-        !output.status.success(),
+    assert_eq!(
+        output.status.code(),
+        COULD_NOT_RUN,
         "add should reject github source without version"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -6061,7 +6241,11 @@ fn add_errors_on_unknown_source_protocol() {
         .current_dir(consumer)
         .output()
         .expect("panschema run");
-    assert!(!output.status.success(), "unknown protocol should fail");
+    assert_eq!(
+        output.status.code(),
+        COULD_NOT_RUN,
+        "unknown protocol should fail"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("protocol") || stderr.contains("gitlab"),
@@ -6085,8 +6269,9 @@ fn add_missing_manifest_error_includes_literal_init_command() {
         .current_dir(consumer)
         .output()
         .expect("panschema run");
-    assert!(
-        !output.status.success(),
+    assert_eq!(
+        output.status.code(),
+        COULD_NOT_RUN,
         "add should fail without a manifest"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -6259,8 +6444,9 @@ fn init_refuses_clobber_without_force() {
         .current_dir(dir)
         .output()
         .expect("panschema");
-    assert!(
-        !output.status.success(),
+    assert_eq!(
+        output.status.code(),
+        COULD_NOT_RUN,
         "init should refuse to overwrite existing file"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -6468,7 +6654,7 @@ fn release_errors_on_invalid_semver_via_version_arg() {
         .current_dir(dir)
         .output()
         .expect("panschema");
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), COULD_NOT_RUN);
 
     let body = fs::read_to_string(dir.join("panschema-publish.toml")).unwrap();
     assert!(body.contains(r#"version = "0.1.0""#), "file unchanged");
@@ -6485,7 +6671,7 @@ fn release_errors_when_publish_toml_missing() {
         .current_dir(tmp.path())
         .output()
         .expect("panschema");
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), COULD_NOT_RUN);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("panschema-publish.toml") || stderr.contains("panschema init"),
@@ -6504,7 +6690,7 @@ fn release_errors_when_neither_level_nor_version_given() {
         .current_dir(tmp.path())
         .output()
         .expect("panschema");
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), COULD_NOT_RUN);
 }
 
 /// `--git` in a clean git repo bumps + commits + tags.
@@ -6574,7 +6760,7 @@ fn release_with_git_refuses_on_dirty_tree() {
         .current_dir(dir)
         .output()
         .expect("panschema");
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), COULD_NOT_RUN);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("git working tree is not clean"),
@@ -6603,7 +6789,7 @@ fn release_with_git_refuses_when_tag_already_exists() {
         .current_dir(dir)
         .output()
         .expect("panschema");
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), COULD_NOT_RUN);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("already exists"),
@@ -6643,7 +6829,11 @@ fn release_errors_on_noop_bump() {
         .current_dir(dir)
         .output()
         .expect("panschema");
-    assert!(!output.status.success(), "no-op bump should error");
+    assert_eq!(
+        output.status.code(),
+        COULD_NOT_RUN,
+        "no-op bump should error"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("already") && stderr.contains("0.1.0"),
@@ -6717,8 +6907,12 @@ fn release_refuses_a_dataset_outside_the_package() {
         .output()
         .expect("panschema");
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        !output.status.success() && stderr.contains("leak") && stderr.contains("../outside.yaml"),
+    assert_eq!(
+        (
+            output.status.code(),
+            stderr.contains("leak") && stderr.contains("../outside.yaml")
+        ),
+        (COULD_NOT_RUN, true),
         "the release is refused, naming the entry and its path; got: {stderr}"
     );
     assert!(
@@ -6749,7 +6943,11 @@ fn release_errors_on_linkml_version_drift() {
         .current_dir(dir)
         .output()
         .expect("panschema");
-    assert!(!output.status.success(), "drift should refuse the release");
+    assert_eq!(
+        output.status.code(),
+        COULD_NOT_RUN,
+        "drift should refuse the release"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("drift") || (stderr.contains("0.1.0") && stderr.contains("0.9.0")),
@@ -7295,8 +7493,12 @@ fn cli_publish_errors_when_publishing_section_absent() {
         .current_dir(tmp.path())
         .output()
         .expect("panschema");
-    assert!(!output.status.success(), "expected non-zero exit");
     let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        COULD_NOT_RUN,
+        "a publish file without [publishing] cannot run; stderr:\n{stderr}"
+    );
     assert!(
         stderr.contains("[publishing]"),
         "stderr should name the missing [publishing] section: {stderr}"

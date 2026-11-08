@@ -8,7 +8,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use super::write_sample_pkg;
+use super::{COULD_NOT_RUN, write_sample_pkg};
 
 /// The stem a versioned runner discovers: a `V` or `U` prefix, a numeric
 /// version, `__`, then a name of word characters only. Mirrors
@@ -222,8 +222,9 @@ fn migrating_into_a_non_empty_directory_refuses() {
             migrations.to_str().unwrap(),
         ],
     );
-    assert!(
-        !out.status.success(),
+    assert_eq!(
+        out.status.code(),
+        COULD_NOT_RUN,
         "migrate should refuse a directory that already contains migrations"
     );
 

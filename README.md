@@ -22,7 +22,7 @@ Think of it as **pandoc for data modeling** — a single tool that speaks all mo
 - **Multi-format input/output** via Reader/Writer architecture
 - **LinkML IR** as canonical internal representation
 - **Fast**: Generate complete documentation in milliseconds
-- **CI-native**: Single binary, no JVM or complex dependencies
+- **CI-native**: Single binary, no JVM or complex dependencies. A check that finds something (drift, violations, what `--strict` refuses) exits 1, and a command that cannot run exits 2, so a CI job can tell the two apart
 - **Hot reload**: Development server with live preview
 - **mdbook integration**: `mdbook-panschema install` adds a maintained toolbar link from an mdbook book to its schema docs
 - **Loud about gaps**: warns on LinkML constructs it parses but doesn't model (so nothing is silently dropped); `generate --strict` fails the build instead
@@ -30,7 +30,7 @@ Think of it as **pandoc for data modeling** — a single tool that speaks all mo
 - **Versioned migrations**: `migrate --schema schema.yaml --migrations db/migrations/` writes that DDL as a migration file a checksumming runner can apply — deterministic bytes, append-only, and no database connection
 - **SHACL shapes**: `generate --format shacl` emits a SHACL shapes graph so a schema's value constraints are machine-checkable by any SHACL engine, not just visible in the docs
 - **JSON Schema / OpenAPI**: `generate --format json-schema` (draft 2020-12) and `--format openapi` (3.1 `components/schemas`) emit a structured-output/API contract from the same LinkML source — an LLM's structured output or a generated TS/Swift client shares the model the Rust types come from
-- **Instance-data verification**: `verify --schema schema.yaml --data data.yaml` checks a LinkML instance-data file against the schema and exits non-zero on any violation — a conformance gate for CI or an LLM authoring loop
+- **Instance-data verification**: `verify --schema schema.yaml --data data.yaml` checks a LinkML instance-data file against the schema and exits 1 on any violation — a conformance gate for CI or an LLM authoring loop
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 

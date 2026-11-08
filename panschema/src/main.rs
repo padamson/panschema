@@ -9,6 +9,19 @@ mod server;
 
 use panschema::io::FormatRegistry;
 
+/// A check that ran to the end and found something: drift, instance-data
+/// violations, or what `--strict` refuses. `main` exits 1 for it (see
+/// [`EXIT_STATUS`]).
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+struct Findings(String);
+
+/// The exit-status contract, shown under `--help` for the top level and for
+/// each command that can exit 1.
+const EXIT_STATUS: &str = "Exit status: 0 when the command did what it was asked and found \
+                           nothing, 1 when a check found something (drift, violations, or \
+                           what --strict refuses), 2 when the command could not run.";
+
 // musl's allocator is markedly slower than glibc's; see Cargo.toml.
 #[cfg(target_env = "musl")]
 #[global_allocator]
@@ -42,6 +55,7 @@ impl From<ReleaseLevel> for panschema::publish::BumpLevel {
 #[command(name = "panschema")]
 #[command(version = env!("PANSCHEMA_VERSION"), about, long_about = None)]
 #[command(arg_required_else_help = true)]
+#[command(after_help = EXIT_STATUS)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -52,6 +66,7 @@ enum Commands {
     /// Generate documentation or convert to other formats. With no `--schema`,
     /// discovers a `panschema.toml` (cargo-style walk up from CWD) and runs
     /// codegen for each manifested schema.
+    #[command(after_help = EXIT_STATUS)]
     Generate {
         /// Schema file (.ttl, .yaml, .yml). When omitted, uses the manifest.
         #[arg(short, long)]
@@ -78,7 +93,7 @@ enum Commands {
         no_graph: bool,
 
         /// Check mode: regenerate to a temporary location and compare
-        /// against each declared output byte-for-byte. Exits non-zero
+        /// against each declared output byte-for-byte. Exits 1
         /// naming every drifted or missing output; writes nothing. The
         /// committed-codegen CI gate, without wrapping git.
         #[arg(long)]
@@ -102,7 +117,7 @@ enum Commands {
         #[arg(long = "refresh-labels")]
         refresh_labels: bool,
 
-        /// Fail (non-zero exit) instead of only warning when the schema uses
+        /// Fail (exit 1) instead of only warning when the schema uses
         /// a LinkML construct panschema parses but does not model, contains
         /// a dangling reference (a `range`, `is_a`, `mixin`, or `inverse`
         /// naming nothing the schema defines), or defines the same slot name
@@ -212,10 +227,11 @@ enum Commands {
     ///
     /// With `--check`, resolve the same way but write no lockfile: compare
     /// each pin `fetch` would record against `panschema.lock` — checksum,
-    /// version, source, revision — and exit non-zero on any drift. A
+    /// version, source, revision — and exit 1 on any drift. A
     /// lockfile entry recording a `path:` source is a leftover: noted, with
     /// `fetch` as the remedy, not failed. Run that form in CI. (Resolving a
     /// `github:` source can still populate the local cache.)
+    #[command(after_help = EXIT_STATUS)]
     Fetch {
         /// Compare against `panschema.lock` instead of writing it.
         #[arg(long)]
@@ -229,11 +245,12 @@ enum Commands {
     },
     /// Verify instance data against its schema, reporting every violation.
     ///
-    /// With `--schema`/`--data`, checks the given file(s) and exits non-zero
+    /// With `--schema`/`--data`, checks the given file(s) and exits 1
     /// on any violation. With no flags, reads `panschema.toml` instead and
     /// checks everything it declares — instance conformance for every
     /// dataset, cross-graph resolution, stated absences — writing nothing;
     /// findings warn, and `--strict` fails on them.
+    #[command(after_help = EXIT_STATUS)]
     Verify {
         /// Schema file (.yaml, .yml, .ttl) the data must conform to.
         #[arg(short, long, requires = "data")]
@@ -830,10 +847,10 @@ fn generate(
     if strict {
         let blocking = panschema::diagnostics::strict_blocking(&schema);
         if panschema::diagnostics::should_fail_strict(strict, blocking.total()) {
-            anyhow::bail!(
+            anyhow::bail!(Findings(format!(
                 "{}; failing because --strict is set",
                 strict_blocking_summary(&blocking)
-            );
+            )));
         }
     }
 
@@ -852,9 +869,9 @@ fn generate(
             print_rendering_notes(&schema, label, set);
         }
         if strict && violations > 0 {
-            anyhow::bail!(
+            anyhow::bail!(Findings(format!(
                 "{violations} instance-data violation(s) present; failing because --strict is set"
-            );
+            )));
         }
     }
 
@@ -1353,10 +1370,10 @@ fn generate_from_manifest(
                 }
                 parts.extend(entry.problems);
                 if !parts.is_empty() {
-                    anyhow::bail!(
+                    anyhow::bail!(Findings(format!(
                         "schema `{name}`, check: {}; failing because --strict is set",
                         parts.join("; ")
-                    );
+                    )));
                 }
             }
         }
@@ -1519,7 +1536,7 @@ fn write_or_drift(
 /// Fail a `--check` run that found outputs out of date, naming each.
 fn bail_on_drift(drifted: &[PathBuf]) -> anyhow::Result<()> {
     if !drifted.is_empty() {
-        anyhow::bail!(
+        anyhow::bail!(Findings(format!(
             "{} output(s) out of date with a fresh generation:\n{}\nrun `panschema generate` to refresh",
             drifted.len(),
             drifted
@@ -1527,7 +1544,7 @@ fn bail_on_drift(drifted: &[PathBuf]) -> anyhow::Result<()> {
                 .map(|p| format!("  {}", p.display()))
                 .collect::<Vec<_>>()
                 .join("\n")
-        );
+        )));
     }
     Ok(())
 }
@@ -2286,7 +2303,10 @@ fn verify_manifest(strict: bool, verbose: bool) -> anyhow::Result<()> {
         if findings > 0 {
             parts.insert(0, format!("{findings} schema or conformance finding(s)"));
         }
-        anyhow::bail!("{}; failing because --strict is set", parts.join("; "));
+        anyhow::bail!(Findings(format!(
+            "{}; failing because --strict is set",
+            parts.join("; ")
+        )));
     }
     Ok(())
 }
@@ -2350,7 +2370,7 @@ fn verify_datasets(
 }
 
 /// Verify LinkML instance-data files against their schema, printing every
-/// violation and exiting non-zero when the data does not conform. Given more
+/// violation and exiting 1 when the data does not conform. Given more
 /// than one file, each is verified on its own and the set is then checked for
 /// ids that mint to the same IRI across files.
 fn verify_data(schema_path: &Path, data_paths: &[PathBuf], verbose: bool) -> anyhow::Result<()> {
@@ -2395,12 +2415,15 @@ fn verify_data(schema_path: &Path, data_paths: &[PathBuf], verbose: bool) -> any
         }
         Ok(())
     } else if let [only] = data_paths {
-        anyhow::bail!("{violation_count} violation(s) in {}", only.display());
+        anyhow::bail!(Findings(format!(
+            "{violation_count} violation(s) in {}",
+            only.display()
+        )));
     } else {
-        anyhow::bail!(
+        anyhow::bail!(Findings(format!(
             "{violation_count} violation(s) across {} data files",
             data_paths.len()
-        );
+        )));
     }
 }
 
@@ -2427,10 +2450,10 @@ fn check_lockfile() -> anyhow::Result<()> {
         if pinned.is_empty() {
             Lockfile::default()
         } else {
-            anyhow::bail!(
+            anyhow::bail!(Findings(format!(
                 "no `{}` next to the manifest. Run `panschema fetch` first.",
                 LOCKFILE_FILENAME
-            );
+            )));
         }
     } else {
         match Lockfile::from_path(&lock_path) {
@@ -2547,10 +2570,10 @@ fn check_lockfile() -> anyhow::Result<()> {
         }
         return Ok(());
     }
-    anyhow::bail!(
+    anyhow::bail!(Findings(format!(
         "schema dependencies drifted from the lockfile:\n{}",
         findings.join("\n")
-    );
+    )));
 }
 
 /// `panschema publish`: build versioned HTML docs from a
@@ -2632,10 +2655,20 @@ fn generate_styleguide(output: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Exits by [`EXIT_STATUS`] (clap exits 2 for a bad flag on its own),
+/// printing the error the way `anyhow` prints one returned from `main`.
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
+async fn main() -> std::process::ExitCode {
+    match run(Cli::parse()).await {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("Error: {err:?}");
+            std::process::ExitCode::from(if err.is::<Findings>() { 1 } else { 2 })
+        }
+    }
+}
 
+async fn run(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
         Commands::Generate {
             schema,
