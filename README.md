@@ -139,7 +139,7 @@ the model directly instead of parsing a projection back out of Turtle:
 
 ```toml
 [dependencies]
-panschema-model = "0.3"
+panschema-model = "0.4"
 ```
 
 ```rust

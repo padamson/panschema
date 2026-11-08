@@ -188,14 +188,15 @@ model crate before the CLI without anyone remembering the order.
 - The entry composes what exists: `import_resolve::load_schema`, the
   instance model's `from_linkml_data`, and the record-IRI function.
 - Release: `cargo publish --workspace --exclude panschema-viz` orders the
-  crates itself; the model crate's first publish is a one-time manual
-  token publish, because trusted publishing cannot mint a crate's first
-  release. The workflow publishes the workspace in dependency order, so
-  the model crate lands before the `panschema` that requires it.
-- Two things wait on that first publish, both because they compare
-  against a registry release that does not exist yet: the semver check is
-  scoped to `panschema`, and the model crate's supply-chain policy is
-  `audit-as-crates-io = false`. Flip both once the crate is on crates.io.
+  crates itself. The model crate's first publish, 0.4.0, was a one-time
+  manual token publish, because trusted publishing cannot mint a crate's
+  first release. The workflow publishes the workspace in dependency
+  order, so the model crate lands before the `panschema` that requires it.
+- The release workflow's semver check runs for every published crate that
+  is already on crates.io, so it has covered the model crate since 0.4.0.
+  Its supply-chain policy stays `audit-as-crates-io = false`, the same as
+  `panschema`'s: both are first-party crates, vetted as the workspace's own
+  source rather than as the registry copy.
 - Deliberately not pulled, with the reason: `validate` qualifies under the
   rule (it is conformance of instance data against the IR) and crosses
   when a consumer wants conformance through the crate; `casing` (only the

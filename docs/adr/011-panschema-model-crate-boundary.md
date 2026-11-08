@@ -105,8 +105,8 @@ needs the model as a library — and does not claim the build-time benefit
    `panschema-model`; the path dependency also states the version so
    `cargo publish` resolves it; a release runs one multi-package publish
    that orders the leaf first. `panschema-viz` keeps its own version and
-   is marked never published. The model crate's first publish is a
-   one-time manual token publish, since trusted publishing cannot mint a
+   is marked never published. The model crate's first publish (0.4.0) was
+   a one-time manual token publish, since trusted publishing cannot mint a
    crate's first release. Until a release covers a consumer's needs, the
    consumer tracks git main with a `package =` dependency. The cost
    accepted: a CLI-only release also publishes a model crate that did
