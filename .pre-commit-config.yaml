@@ -95,28 +95,12 @@ repos:
       # Doctests deliberately run in CI only (test.yml): they are a third
       # full compilation mode for a test class that changes rarely, and
       # the commit gate already runs clippy + the full nextest suite.
-      - id: cargo-audit
-        name: cargo audit
-        description: Check dependencies for known vulnerabilities
-        # Keep this ignore list in sync with deny.toml's `[advisories].ignore`.
-        # Unmaintained-crate warnings plus the upstream-blocked quick-xml DoS
-        # advisories (see deny.toml for the rationale on each).
-        entry: >-
-          cargo audit
-          --ignore RUSTSEC-2024-0388
-          --ignore RUSTSEC-2024-0370
-          --ignore RUSTSEC-2026-0194
-          --ignore RUSTSEC-2026-0195
-          --ignore RUSTSEC-2026-0215
-          --ignore RUSTSEC-2026-0440
-        language: system
-        pass_filenames: false
-        files: (Cargo\.toml|Cargo\.lock)$
 
+      # Advisories are the cargo-lockpatrol hook's, at the end of this file.
       - id: cargo-deny
         name: cargo deny
         description: Check licenses, bans, and source restrictions
-        entry: cargo deny check
+        entry: cargo deny check bans licenses sources
         language: system
         pass_filenames: false
         files: (Cargo\.toml|Cargo\.lock|deny\.toml)$
@@ -136,3 +120,9 @@ repos:
         language: system
         pass_filenames: false
         files: (Cargo\.toml|Cargo\.lock|supply-chain/.*\.toml)$
+
+  # prek builds the pinned rev; needs cargo-deny on PATH.
+  - repo: https://github.com/padamson/cargo-lockpatrol
+    rev: 40075b2231e33e8f0a6d08f39acd0691e1f3efba  # frozen: v0.1.1
+    hooks:
+      - id: cargo-lockpatrol

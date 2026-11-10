@@ -5,7 +5,8 @@ name: Security Advisory Monitor
 # advisories` reads deny.toml's `[advisories].ignore`, so already-triaged
 # advisories stay quiet and only a *new* one trips the check. On a hit, a
 # single tracking issue is opened (or updated); when the tree is clean
-# again the issue is closed.
+# again the issue is closed. It runs the same action as the gate in
+# security.yml.
 #
 # Why a monitor when Security & Quality already runs `cargo deny` on push
 # and weekly: advisories are published by the world, not by a commit. This
@@ -19,19 +20,22 @@ on:
     - cron: "0 7 * * *"
   workflow_dispatch:
 
+# Two overlapping runs would each open an issue.
+concurrency:
+  group: advisory-monitor
+  cancel-in-progress: false
+
 permissions:
   contents: read
-  issues: write
 
 jobs:
   advisories:
     name: Check for new advisories
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      ISSUE_TITLE: "Security: new dependency advisory detected"
-      ISSUE_LABEL: security-advisory
+    permissions:
+      contents: read
+      issues: write # open, update and close the tracking issue
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -41,96 +45,14 @@ jobs:
           toolchain: stable
 
       - name: Install cargo-deny
-        run: cargo install cargo-deny
+        uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
+        with:
+          tool: cargo-deny
 
-      - name: Check advisories
-        id: check
-        shell: bash
-        run: |
-          set +e
-          report="$(cargo deny check advisories 2>&1)"
-          code=$?
-          set -e
-          echo "$report"
-          if [ "$code" -ne 0 ]; then
-            {
-              echo "report<<REPORT_EOF"
-              echo "$report"
-              echo "REPORT_EOF"
-            } >> "$GITHUB_OUTPUT"
-            echo "has_new=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_new=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Open or update tracking issue
-        if: steps.check.outputs.has_new == 'true'
-        # Pass the report through the environment, not `${{ }}` string
-        # interpolation into the script — advisory text is community-authored
-        # and could otherwise be evaluated by the shell (injection).
-        env:
-          REPORT: ${{ steps.check.outputs.report }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          body="$(cat <<EOF
-          \`cargo deny check advisories\` failed — a dependency advisory that is
-          **not** in \`deny.toml\`'s \`[advisories].ignore\` is affecting the tree.
-
-          Triage each one:
-          - **Fix available** → bump the crate (\`cargo update -p <crate>\`), or bump
-            the parent that pins it.
-          - **No fix / upstream-blocked** → accept the risk and add the \`RUSTSEC-…\`
-            id to \`deny.toml\`'s ignore list *with a rationale*, then mirror it into
-            the \`cargo audit\` invocations in \`security.yml\` and \`.pre-commit-config.yaml\`.
-
-          \`\`\`
-          ${REPORT}
-          \`\`\`
-
-          _Maintained automatically by the Security Advisory Monitor workflow._
-          EOF
-          )"
-
-          existing="$(gh issue list \
-            --state open \
-            --label "$ISSUE_LABEL" \
-            --search "in:title \"$ISSUE_TITLE\"" \
-            --json number,title \
-            --jq ".[] | select(.title == \"$ISSUE_TITLE\") | .number" \
-            | head -1)"
-
-          if [ -n "$existing" ]; then
-            echo "Updating existing tracking issue #$existing"
-            gh issue edit "$existing" --body "$body"
-          else
-            echo "Opening new tracking issue"
-            gh label create "$ISSUE_LABEL" \
-              --description "Tracks newly published dependency advisories awaiting triage" \
-              --color B60205 2>/dev/null || true
-            gh issue create \
-              --title "$ISSUE_TITLE" \
-              --label "$ISSUE_LABEL" \
-              --body "$body"
-          fi
-
-      - name: Close stale tracking issue
-        if: steps.check.outputs.has_new == 'false'
-        shell: bash
-        run: |
-          set -euo pipefail
-          existing="$(gh issue list \
-            --state open \
-            --label "$ISSUE_LABEL" \
-            --search "in:title \"$ISSUE_TITLE\"" \
-            --json number,title \
-            --jq ".[] | select(.title == \"$ISSUE_TITLE\") | .number" \
-            | head -1)"
-          if [ -n "$existing" ]; then
-            echo "Advisories clean; closing tracking issue #$existing"
-            gh issue close "$existing" \
-              --comment "\`cargo deny check advisories\` is clean again. Closing automatically."
-          else
-            echo "Advisories clean; no tracking issue to close."
-          fi
+      # Triage goes in comments: the action rewrites the issue body.
+      - name: Check advisories and keep the tracking issue current
+        uses: padamson/cargo-lockpatrol@40075b2231e33e8f0a6d08f39acd0691e1f3efba # v0.1.1
+        with:
+          issue: "true"
+          issue-title: "Security: new dependency advisory detected"
+          issue-label: security-advisory

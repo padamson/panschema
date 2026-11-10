@@ -73,6 +73,21 @@ updates:
         patterns:
           - "*"
 
+  # Only the cargo-lockpatrol hook: auto-merge arms every update type and
+  # CI never runs hooks, so other hook bumps stay manual.
+  - package-ecosystem: "pre-commit"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "saturday"
+      time: "04:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 10
+    cooldown:
+      default-days: 7
+    allow: # names are repo URLs, hence the wildcards
+      - dependency-name: "*padamson/cargo-lockpatrol*"
+
   # The LinkML reference-implementation oracle under conformance/ is a
   # Python project with its own lockfile. Without an entry here it moved
   # only when a security advisory forced it, so its lock aged in place.

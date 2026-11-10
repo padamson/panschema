@@ -69,8 +69,8 @@ step in the release workflow beside the existing `cargo publish`.
 - The skill's install section shrinks to one command that needs nothing but
   Node, which is the outcome the whole skill effort is for. An agent that
   reads the skill can act on it in the same turn.
-- **npm is a second supply chain**, outside `cargo vet`, `cargo deny`, and
-  `cargo audit` — the gates this repo otherwise runs on every push. The
+- **npm is a second supply chain**, outside `cargo vet` and `cargo deny`,
+  the gates this repo otherwise runs on every push. The
   wrapper's own dependency surface must stay near zero (a shim that selects
   a binary needs no runtime dependencies), and npm publishing needs its own
   trusted-publishing setup rather than a long-lived token.
