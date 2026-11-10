@@ -279,7 +279,12 @@ RDF must carry them (see Open Questions for the vocabulary).
    other two. Needs a decision before Slice 3; the contract schema's
    `target_dataset` description already defines the value's referent (a
    published dataset name of the target package, per that package's
-   publish manifest).
+   publish manifest). The mechanism should not assume one dataset per
+   record: adopters have benchmarks whose anchors span two datasets of
+   the target package, and with a single-valued `target_dataset` (and
+   version pin) one of the two is never bound or pinned. The choices are
+   a list of datasets, each with its own version, or a dataset per
+   anchor.
 2. **Slice 5 vocabulary.** LinkML's RDF mapping has no standard
    per-annotation predicate. Proposal: mint predicates under the
    schema's own namespace (`<ns>asserts_absence`, structured value as a
