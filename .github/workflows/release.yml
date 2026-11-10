@@ -1,5 +1,7 @@
 name: Release
 
+# A tag pattern added here also goes into the `release tags` ruleset and
+# the `release` environment's deployment policies.
 on:
   push:
     tags:
@@ -227,6 +229,9 @@ jobs:
     needs: release
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Only release tags can deploy here, and the crates.io publisher names
+    # this environment, so a copy of this file run from a branch can't publish.
+    environment: release
     permissions:
       id-token: write
       contents: read
@@ -254,13 +259,15 @@ jobs:
         mkdir -p panschema/viz-bundle
         cp panschema-viz/pkg/panschema_viz.js panschema-viz/pkg/panschema_viz_bg.wasm panschema/viz-bundle/
 
-    # Trusted publishing: a short-lived OIDC-exchanged token, no
-    # long-lived secret. No skip-if-missing guard — failing at auth is
-    # correct; a skipped publish that reports success is the trap.
+    # Trusted publishing: a short-lived OIDC-exchanged token scoped to this
+    # repo, workflow and environment, no long-lived secret. No
+    # skip-if-missing guard — failing at auth is correct; a skipped publish
+    # that reports success is the trap.
     #
     # Trusted publishing cannot mint a crate's *first* release, so a newly
     # added workspace member is published once by hand with a token before
-    # its first tag; every release after that runs from here.
+    # its first tag, then given a trusted publisher naming this workflow and
+    # the `release` environment; every release after that runs from here.
     - name: Authenticate with crates.io
       id: auth
       uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
