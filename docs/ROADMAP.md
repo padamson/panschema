@@ -85,7 +85,19 @@ Input → Reader → LinkML IR → [Filters] → Writer → Output
 - **LinkML coverage**: `designates_type` chooses a union member outright; an omitted `default_range` means `string`, as LinkML's derivation rules specify; an annotation value may be any object, as LinkML 1.6 allows; a declared URI that no prefix expands is a load warning; a slot left untyped is reported and `--strict` refuses it. Enumerations participate in the rules that key on their values, on the cards, in the graph, and in the linting. Shipped.
 - **Agent skill** ([feature 40](features/40-agent-facing-skill-that-cannot-drift.md)): renamed `panschema-development`, installed through the Agent Skills CLI as the one channel, and carrying its own version rather than the crate's, so it moves when its content does. Slice 1 shipped.
 
-### v0.5.0+ — Future Directions
+### v0.5.0 — Book Editions, Self-Describing Datasets, and Exit Codes ✅ (released 2026-11-11)
+
+**Goal:** Keep every released line of a schema's book published next to the schema it describes, let a tool that reads published graphs learn which dataset each one holds from the file itself, and let a CI job tell a finding from an error.
+
+- **Book editions** ([feature 52](features/52-book-editions.md)): `mdbook-panschema editions` builds a schema repo's book once per minor line (a major line after 1.0) from the line's newest tag, with the toolchain the tag pins, and puts an edition switcher, an out-of-date note, and a canonical link on every page. `panschema publish` points each schema version at the edition that describes it. A release is a tag push: `[publishing].versions` and `current` may be left out and are read from the `v<semver>` tags. Shipped.
+- **Self-describing datasets** ([feature 53](features/53-self-describing-datasets.md)): every instance graph `generate` writes names its dataset, the dataset's version, and its schema; `{dataset}` in an output path writes one file per dataset; and `linkml_schema` and `linkml_data` write a dependency's schema, with its imports merged, and its data as published. Shipped.
+- **Exit codes**: a check that finds something (`generate --check` drift, `verify` violations, what `--strict` refuses) exits 1, and a command that cannot run exits 2. Shipped.
+- **Published page information architecture** ([feature 51](features/51-published-page-information-architecture.md)): the schema page is grouped into Overview, Schema, and Instances, and each dataset has its own metadata card. Slices 1 and 2 shipped.
+- **Release binaries**: a statically linked `x86_64-unknown-linux-musl` binary ships with each release, and the glibc build states its floor (glibc 2.39). Shipped.
+- **Writers follow LinkML more closely**: JSON Schema and OpenAPI give a class-ranged slot the shape its inlining declares; generated Rust gives each identified class an id type that references hold; a Postgres table for a class its `key` names keys on a synthetic `uuid`, with the key unique within its scope; Rust and Postgres DDL follow a slot's cardinality bounds, not only its flags. Shipped.
+- **Graph layout**: the layout numerics are vendored rather than taken from a git dependency, a long, thin graph lies along the canvas, and Kamada-Kawai settles further, runs far faster on larger graphs, handles graphs with more than one connected piece, and stops when it cannot converge. Shipped.
+
+### v0.6.0+ — Future Directions
 *Planned, and further out, aspirational.*
 
 - **Bootstrap LinkML IR from the metaschema** ([feature 08](features/08-bootstrap-linkml-ir.md), inside the `panschema-model` crate of [feature 46](features/46-panschema-model-crate.md)): replace the hand-rolled `panschema-model/src/linkml.rs` types with types generated from the LinkML metaschema YAML via panschema's own `RustWriter`. Closes the drift between panschema's IR and the LinkML spec by construction, and doubles as the most aggressive `RustWriter` dogfood we have — the metaschema is the hardest schema we'll feed it. Pairs with feature 07: once the IR is metaschema-derived, validation rules can be coded against canonical field names. The [LinkML coverage matrix](linkml-coverage.md) tracks today's per-metaslot, per-writer support and the prioritized gaps this would close.
@@ -114,10 +126,10 @@ Input → Reader → LinkML IR → [Filters] → Writer → Output
 | 04 | [Schema Force Graph Visualization](features/04-schema-force-graph-visualization.md) | Schema graph viz (`panschema-viz` wasm crate); 3D/WebGPU path removed 2026-09-04 | **Released v0.2.0** |
 | 05 | [Schema Package Manager](features/05-schema-manager.md) | `init` / `add` / `release` / `fetch` / `fetch --check` / `generate` with manifest + lockfile | **In progress (v0.3.0): slices 1–4.6 shipped, slice 5 remaining** |
 | 06 | [Rust Codegen + Multi-Writer Fan-Out](features/06-rust-codegen.md) | `RustWriter` producing typed Rust modules; multi-writer dispatch in `generate` | **In progress (v0.3.0): slices 6.1–6.9 shipped, slice 6.10 optional** |
-| 07 | [Schema Validation](features/07-schema-validation.md) | `panschema verify --schema` against the LinkML metaschema | **Planned (v0.5.0)** |
-| 08 | [Bootstrap LinkML IR from the metaschema](features/08-bootstrap-linkml-ir.md) | Replace hand-rolled LinkML types with codegen from the metaschema | **Planned (v0.5.0)** |
+| 07 | [Schema Validation](features/07-schema-validation.md) | `panschema verify --schema` against the LinkML metaschema | **Planned** |
+| 08 | [Bootstrap LinkML IR from the metaschema](features/08-bootstrap-linkml-ir.md) | Replace hand-rolled LinkML types with codegen from the metaschema | **Planned** |
 | 09 | [Graph Layout Selection](features/09-graph-layout-selection.md) | Layout-algorithm picker + egraph-rs / rust-sugiyama adoption (KK, stress, SGD, Sugiyama, circular, radial) | **In progress (v0.3.0+): slices 1–3 + 6 shipped (FD, KK, Hierarchical); slices 4–5, 7–8 planned** |
-| 10 | Authoring Experience | Schema/ontology authoring lints + diagnostics (friction-gathered from real authoring passes) | **Planned (v0.5.0+)** |
+| 10 | Authoring Experience | Schema/ontology authoring lints + diagnostics (friction-gathered from real authoring passes) | **Planned** |
 | 11 | [Versioned Docs (`panschema publish`)](features/11-versioned-docs-publish.md) | Multi-version HTML orchestration + in-page version dropdown/banner | **In progress (v0.3.0+): slices 1–4, 6, 7 shipped; slice 5 (dogfood) remaining** |
 | 12 | [LinkML IR Resolver Services](features/12-linkml-ir-resolver-services.md) | Shared `is_a`/mixin/`slot_usage` resolver + effective cardinality | **Shipped for v0.3.0** |
 | 13 | [Upstream Ontology Label Cache](features/13-upstream-label-cache.md) | Cache upstream ontology labels for cross-references | **Shipped for v0.3.0** |
@@ -158,7 +170,9 @@ Input → Reader → LinkML IR → [Filters] → Writer → Output
 | 45 | [One Graph Component, Two Surfaces](features/45-one-graph-component-two-surfaces.md) | One implementation behind the schema and instance canvases: shared toolbar, hover card, and control shell | **Shipped for v0.4.0** |
 | 50 | [Structured Verify Findings](features/50-structured-verify-findings.md) | Every `verify` finding is a record with a `kind` and fields, not a sentence to parse | **Shipped for v0.4.0** |
 | 48 | CLI distribution for agents ([ADR-012](adr/012-cli-distribution-for-agents.md)) | Prebuilt binaries as npm platform packages, so an agent runs `npx -y panschema` with nothing installed; needs an arm64 Linux target and the crates.io publish first; a feature spec arrives when the prerequisites clear | **Decided, sequenced** |
-| 53 | [Self-Describing Datasets](features/53-self-describing-datasets.md) | Instance graphs name their dataset, version, and schema; one file per dataset; a dependency's merged schema and data as outputs | **Complete, ships in v0.5.0** |
+| 53 | [Self-Describing Datasets](features/53-self-describing-datasets.md) | Instance graphs name their dataset, version, and schema; one file per dataset; a dependency's merged schema and data as outputs | **Shipped for v0.5.0** |
+| 52 | [Book Editions](features/52-book-editions.md) | `mdbook-panschema editions` publishes the book once per schema release line, each edition built from its tag with the toolchain the tag pins | **Shipped for v0.5.0** |
+| 51 | [Published Page Information Architecture](features/51-published-page-information-architecture.md) | The schema page grouped into Overview, Schema, and Instances, with a metadata card per dataset | **Slices 1–2 shipped for v0.5.0; slice 3 proposed** |
 
 ## Delivery Approach
 
