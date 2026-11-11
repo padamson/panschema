@@ -602,7 +602,7 @@ fn block_for(
 
 /// One spelling per file: the canonical path when the file exists, the
 /// path as given when it does not (it then matches only the same spelling).
-fn on_disk(path: &Path) -> PathBuf {
+pub(crate) fn on_disk(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 

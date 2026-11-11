@@ -48,58 +48,73 @@ pub struct Manifest {
 
 impl Manifest {
     /// The datasets `generate` ships for `name`: the `[generate.<name>]`
-    /// path list, then the datasets it names, each once. Writers take only
-    /// these. A `[check.<name>]` list adds datasets to verification, never
-    /// to an output, so a single-graph format still receives one and a
+    /// path list, then the datasets it names, each file once. Writers take
+    /// only these. A `[check.<name>]` list adds datasets to verification,
+    /// never to an output, so a single-graph format still receives one and a
     /// published page carries nothing listed only to be checked.
+    ///
+    /// Listed paths come back joined to `manifest_dir`; named datasets
+    /// resolve to absolute paths inside the dependency's package. A file
+    /// reached both ways keeps the spelling it was first reached by.
     pub fn generated_instances(
         &self,
         name: &str,
+        manifest_dir: &Path,
+        resolved: &BTreeMap<String, crate::source::Resolved>,
+    ) -> Result<Vec<PathBuf>, Box<crate::source::DatasetError>> {
+        Ok(once_per_file(self.shipped(name, manifest_dir, resolved)?))
+    }
+
+    /// The datasets declared for `name`: what [`Self::generated_instances`]
+    /// ships, then the `[check.<name>]` path list's additions, each file
+    /// once. Verification consumes this union — conformance and cross-graph
+    /// checks cover everything declared, so a check list can only add
+    /// datasets, never hide the ones `generate` ships, and a dataset named
+    /// rather than pathed is still one of them.
+    pub fn declared_instances(
+        &self,
+        name: &str,
+        manifest_dir: &Path,
+        resolved: &BTreeMap<String, crate::source::Resolved>,
+    ) -> Result<Vec<PathBuf>, Box<crate::source::DatasetError>> {
+        let checked = self
+            .check
+            .get(name)
+            .into_iter()
+            .flat_map(|c| &c.instances)
+            .map(|p| manifest_dir.join(p));
+        Ok(once_per_file(
+            self.shipped(name, manifest_dir, resolved)?
+                .into_iter()
+                .chain(checked),
+        ))
+    }
+
+    /// `[generate.<name>]`'s listed paths, joined to `manifest_dir`, then the
+    /// files of the datasets it names, with repeats.
+    fn shipped(
+        &self,
+        name: &str,
+        manifest_dir: &Path,
         resolved: &BTreeMap<String, crate::source::Resolved>,
     ) -> Result<Vec<PathBuf>, Box<crate::source::DatasetError>> {
         let Some(gen_cfg) = self.generate.get(name) else {
             return Ok(Vec::new());
         };
-        let mut out: Vec<PathBuf> = Vec::new();
-        for path in &gen_cfg.instances {
-            if !out.contains(path) {
-                out.push(path.clone());
-            }
-        }
+        let mut paths: Vec<PathBuf> = gen_cfg
+            .instances
+            .iter()
+            .map(|p| manifest_dir.join(p))
+            .collect();
         // No guard on this entry's own dependency: a name may qualify another
         // package, and a bare name with no dependency to resolve against is
         // the resolver's error to report, not a reason to skip silently.
-        if !gen_cfg.datasets.is_empty() {
-            for path in crate::source::resolve_named_datasets(name, resolved, &gen_cfg.datasets)? {
-                if !out.contains(&path) {
-                    out.push(path);
-                }
-            }
-        }
-        Ok(out)
-    }
-
-    /// The datasets declared for `name`: what [`Self::generated_instances`]
-    /// ships, then the `[check.<name>]` path list's additions, each once.
-    /// Verification consumes this union — conformance and cross-graph
-    /// checks cover everything declared, so a check list can only add
-    /// datasets, never hide the ones `generate` ships, and a dataset named
-    /// rather than pathed is still one of them.
-    ///
-    /// Named datasets resolve to absolute paths inside the dependency's
-    /// package; the path lists stay manifest-relative, as authored.
-    pub fn declared_instances(
-        &self,
-        name: &str,
-        resolved: &BTreeMap<String, crate::source::Resolved>,
-    ) -> Result<Vec<PathBuf>, Box<crate::source::DatasetError>> {
-        let mut out = self.generated_instances(name, resolved)?;
-        for path in self.check.get(name).into_iter().flat_map(|c| &c.instances) {
-            if !out.contains(path) {
-                out.push(path.clone());
-            }
-        }
-        Ok(out)
+        paths.extend(crate::source::resolve_named_datasets(
+            name,
+            resolved,
+            &gen_cfg.datasets,
+        )?);
+        Ok(paths)
     }
 
     /// `[check.<name>]` entries naming no `[schemas]` entry — check
@@ -776,6 +791,17 @@ pub(crate) fn discover_file(start_dir: &Path, filename: &str) -> Option<PathBuf>
             return None;
         }
     }
+}
+
+/// `paths` in order, without a second spelling of a file already in it: a
+/// manifest-relative path and a dependency's absolute one can name the same
+/// file, and a dataset shipped twice is minted twice.
+fn once_per_file(paths: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
+    let mut seen = std::collections::BTreeSet::new();
+    paths
+        .into_iter()
+        .filter(|path| seen.insert(crate::source::on_disk(path)))
+        .collect()
 }
 
 #[cfg(test)]
@@ -1570,29 +1596,52 @@ instances = ["b.yaml", "c.yaml"]
         .expect("parse");
         assert_eq!(
             manifest
-                .generated_instances("x", &BTreeMap::new())
+                .generated_instances("x", Path::new("m"), &BTreeMap::new())
                 .expect("resolves"),
-            vec![PathBuf::from("a.yaml"), PathBuf::from("b.yaml")],
+            vec![PathBuf::from("m/a.yaml"), PathBuf::from("m/b.yaml")],
             "writers ship generate's list once each, and none of check's additions"
         );
         assert_eq!(
             manifest
-                .declared_instances("x", &BTreeMap::new())
+                .declared_instances("x", Path::new("m"), &BTreeMap::new())
                 .expect("resolves"),
             vec![
-                PathBuf::from("a.yaml"),
-                PathBuf::from("b.yaml"),
-                PathBuf::from("c.yaml")
+                PathBuf::from("m/a.yaml"),
+                PathBuf::from("m/b.yaml"),
+                PathBuf::from("m/c.yaml")
             ],
             "generate's list first, check's additions after, shared paths once"
         );
         assert_eq!(
             manifest
-                .declared_instances("ghost", &BTreeMap::new())
+                .declared_instances("ghost", Path::new("m"), &BTreeMap::new())
                 .expect("resolves"),
             Vec::<PathBuf>::new(),
             "an undeclared name declares nothing"
         );
+    }
+
+    /// `dep`, resolved to `pkg_dir`, publishing one dataset at `written`.
+    fn one_dataset_dep(
+        dep: &str,
+        pkg_dir: &Path,
+        dataset: &str,
+        written: &str,
+    ) -> BTreeMap<String, crate::source::Resolved> {
+        let resolved = crate::source::Resolved {
+            pkg_dir: pkg_dir.to_path_buf(),
+            schema_path: pkg_dir.join(format!("{dep}.yaml")),
+            version: "1.0.0".to_string(),
+            published_name: dep.to_string(),
+            datasets: vec![crate::source::PublishedDataset {
+                name: dataset.to_string(),
+                data: pkg_dir.join(written),
+                written: PathBuf::from(written),
+                schema: None,
+            }],
+            revision: None,
+        };
+        BTreeMap::from([(dep.to_string(), resolved)])
     }
 
     /// A dataset named rather than pathed is still declared: `verify` and
@@ -1604,42 +1653,63 @@ instances = ["b.yaml", "c.yaml"]
             "[schemas]\nwine = { path = \"../wine\" }\n\n             [generate.wine]\nttl = \"out.ttl\"\ninstances = [\"local.yaml\"]\n             datasets = [\"worked-example\"]\n",
         )
         .expect("parse");
-        let mut resolved = BTreeMap::new();
-        resolved.insert(
-            "wine".to_string(),
-            crate::source::Resolved {
-                pkg_dir: PathBuf::from("/pkg/wine"),
-                schema_path: PathBuf::from("/pkg/wine/wine.yaml"),
-                version: "1.0.0".to_string(),
-                published_name: "wine".to_string(),
-                datasets: vec![crate::source::PublishedDataset {
-                    name: "worked-example".to_string(),
-                    data: PathBuf::from("/pkg/wine/data/wine-instances.yaml"),
-                    written: PathBuf::from("data/wine-instances.yaml"),
-                    schema: None,
-                }],
-                revision: None,
-            },
+        let resolved = one_dataset_dep(
+            "wine",
+            Path::new("/pkg/wine"),
+            "worked-example",
+            "data/wine-instances.yaml",
         );
         assert_eq!(
             manifest
-                .declared_instances("wine", &resolved)
+                .declared_instances("wine", Path::new("m"), &resolved)
                 .expect("resolves"),
             vec![
-                PathBuf::from("local.yaml"),
+                PathBuf::from("m/local.yaml"),
                 PathBuf::from("/pkg/wine/data/wine-instances.yaml"),
             ],
             "the authored path first, then the named dataset's own file"
         );
         assert_eq!(
             manifest
-                .generated_instances("wine", &resolved)
+                .generated_instances("wine", Path::new("m"), &resolved)
                 .expect("resolves"),
             vec![
-                PathBuf::from("local.yaml"),
+                PathBuf::from("m/local.yaml"),
                 PathBuf::from("/pkg/wine/data/wine-instances.yaml"),
             ],
             "a named dataset ships, not only gets checked"
+        );
+    }
+
+    #[test]
+    fn a_dataset_listed_by_path_and_named_ships_once() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let pkg = tmp.path().join("catalog-pkg");
+        let consumer = tmp.path().join("consumer");
+        std::fs::create_dir_all(pkg.join("data")).expect("mkdir pkg");
+        std::fs::create_dir_all(&consumer).expect("mkdir consumer");
+        std::fs::write(pkg.join("data/records.yaml"), "").expect("write data");
+        let manifest: Manifest = toml::from_str(
+            "[schemas]\ncatalog = { path = \"../catalog-pkg\" }\n\n\
+             [generate.catalog]\ninstances = [\"../catalog-pkg/data/records.yaml\"]\n\
+             datasets = [\"records\"]\n\n\
+             [check.catalog]\ninstances = [\"../consumer/../catalog-pkg/data/records.yaml\"]\n",
+        )
+        .expect("parse");
+        let resolved = one_dataset_dep("catalog", &pkg, "records", "data/records.yaml");
+        let listed = vec![consumer.join("../catalog-pkg/data/records.yaml")];
+        assert_eq!(
+            (
+                manifest
+                    .generated_instances("catalog", &consumer, &resolved)
+                    .expect("resolves"),
+                manifest
+                    .declared_instances("catalog", &consumer, &resolved)
+                    .expect("resolves"),
+            ),
+            (listed.clone(), listed),
+            "one file reached by a path and by its dataset's name is one dataset, \
+             in the spelling the manifest gave it"
         );
     }
 
@@ -1651,13 +1721,13 @@ instances = ["b.yaml", "c.yaml"]
         .expect("parse");
         assert_eq!(
             manifest
-                .declared_instances("x", &BTreeMap::new())
+                .declared_instances("x", Path::new("m"), &BTreeMap::new())
                 .expect("resolves"),
-            vec![PathBuf::from("c.yaml")]
+            vec![PathBuf::from("m/c.yaml")]
         );
         assert_eq!(
             manifest
-                .generated_instances("x", &BTreeMap::new())
+                .generated_instances("x", Path::new("m"), &BTreeMap::new())
                 .expect("resolves"),
             Vec::<PathBuf>::new(),
             "a check-only entry ships nothing"

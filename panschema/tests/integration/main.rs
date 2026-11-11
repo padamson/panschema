@@ -613,13 +613,15 @@ fn check_reports_drift_in_each_per_dataset_file() {
 }
 
 /// A consumer whose `linkml_data` copies the catalog's `records`, listed by
-/// path, and `cellar`, named, after `cellar` is rewritten with a comment and
-/// flow style that only a byte copy keeps.
-fn consumer_copying_catalog_data(parent: &Path) -> std::path::PathBuf {
+/// path, and the datasets `datasets` names, after `cellar` is rewritten with
+/// a comment and flow style that only a byte copy keeps.
+fn consumer_copying_catalog_data(parent: &Path, datasets: &str) -> std::path::PathBuf {
     let consumer = consumer_of_two_catalog_datasets(
         parent,
-        "linkml_data = \"fixtures/{dataset}.yaml\"\n\
-         instances = [\"../catalog-pkg/data/records.yaml\"]\ndatasets = [\"cellar\"]",
+        &format!(
+            "linkml_data = \"fixtures/{{dataset}}.yaml\"\n\
+             instances = [\"../catalog-pkg/data/records.yaml\"]\ndatasets = {datasets}"
+        ),
     );
     fs::write(
         parent.join("catalog-pkg/data/cellar.yaml"),
@@ -630,33 +632,36 @@ fn consumer_copying_catalog_data(parent: &Path) -> std::path::PathBuf {
 }
 
 /// `linkml_data` copies each dataset the entry ships, listed by path or
-/// named, byte for byte as its package publishes it, and fresh copies pass
+/// named, byte for byte as its package publishes it, one copy per dataset
+/// however many ways the entry reaches it, and fresh copies pass
 /// `generate --check`.
 #[test]
 fn linkml_data_copies_each_shipped_dataset_as_published() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let consumer = consumer_copying_catalog_data(tmp.path());
-    let out = run_generate_in(&consumer);
-    assert!(
-        out.status.success(),
-        "generate failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    for dataset in ["records", "cellar"] {
-        let published = fs::read(tmp.path().join(format!("catalog-pkg/data/{dataset}.yaml")))
-            .unwrap_or_else(|e| panic!("read published {dataset}.yaml: {e}"));
-        assert_eq!(
-            fs::read(consumer.join(format!("fixtures/{dataset}.yaml"))).ok(),
-            Some(published),
-            "{dataset}.yaml is a byte copy of the published file"
+    for datasets in [r#"["cellar"]"#, r#"["records", "cellar"]"#] {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let consumer = consumer_copying_catalog_data(tmp.path(), datasets);
+        let out = run_generate_in(&consumer);
+        assert!(
+            out.status.success(),
+            "datasets = {datasets}: generate failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        for dataset in ["records", "cellar"] {
+            let published = fs::read(tmp.path().join(format!("catalog-pkg/data/{dataset}.yaml")))
+                .unwrap_or_else(|e| panic!("read published {dataset}.yaml: {e}"));
+            assert_eq!(
+                fs::read(consumer.join(format!("fixtures/{dataset}.yaml"))).ok(),
+                Some(published),
+                "datasets = {datasets}: {dataset}.yaml is a byte copy of the published file"
+            );
+        }
+        let check = run_in(&consumer, &["generate", "--check"]);
+        assert!(
+            check.status.success(),
+            "datasets = {datasets}: fresh copies pass --check: {}",
+            String::from_utf8_lossy(&check.stderr)
         );
     }
-    let check = run_in(&consumer, &["generate", "--check"]);
-    assert!(
-        check.status.success(),
-        "fresh copies pass --check: {}",
-        String::from_utf8_lossy(&check.stderr)
-    );
 }
 
 /// Once the producer's data moves, `generate --check` names the copy it
@@ -664,7 +669,7 @@ fn linkml_data_copies_each_shipped_dataset_as_published() {
 #[test]
 fn linkml_data_check_reports_a_copy_the_producer_moved() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let consumer = consumer_copying_catalog_data(tmp.path());
+    let consumer = consumer_copying_catalog_data(tmp.path(), r#"["cellar"]"#);
     assert!(
         run_generate_in(&consumer).status.success(),
         "first generate"

@@ -418,6 +418,7 @@ fn dep_paths(
 /// unresolved ones.
 fn check_resolve_against(
     name: &str,
+    declared: &[PathBuf],
     manifest: &panschema::manifest::Manifest,
     manifest_dir: &Path,
     resolved: &std::collections::BTreeMap<String, panschema::source::Resolved>,
@@ -501,16 +502,14 @@ fn check_resolve_against(
             });
         }
         let mut sibling_sets: Vec<panschema::instances::InstanceSet> = Vec::new();
-        let declared = manifest.declared_instances(sibling, resolved)?;
-        if declared.is_empty() {
+        let sibling_instances = manifest.declared_instances(sibling, manifest_dir, resolved)?;
+        if sibling_instances.is_empty() {
             eprintln!(
                 "note: resolve_against `{sibling}` declares no datasets (no \
                  `instances` or `datasets` in [check.{sibling}] or \
                  [generate.{sibling}]); references into its namespace cannot resolve"
             );
         }
-        let sibling_instances: Vec<PathBuf> =
-            declared.iter().map(|p| manifest_dir.join(p)).collect();
         for path in &sibling_instances {
             let set = read_instance_set(&sibling_schema, path)?;
             // A dataset that matched no single root produced no records; an
@@ -562,12 +561,8 @@ fn check_resolve_against(
     let mut uncovered = 0usize;
     // One streamed pass per referring file: each file's warnings flush
     // before the next file is even opened, and nothing is retained.
-    for path in manifest
-        .declared_instances(name, resolved)?
-        .iter()
-        .map(|p| manifest_dir.join(p))
-    {
-        let set = read_instance_set(schema, &path)?;
+    for path in declared {
+        let set = read_instance_set(schema, path)?;
         let resolution = panschema::diagnostics::resolve_sibling_references(
             schema,
             &set,
@@ -1309,16 +1304,10 @@ fn generate_from_manifest(
             }
             continue;
         };
-        // What the writers ship: this entry's manifest-relative paths, then
-        // the datasets it names, resolved inside the dependency's own
-        // package. Joining the manifest directory leaves the named datasets'
-        // absolute paths untouched. No added context on the error: it
-        // already names its block.
-        let instances: Vec<PathBuf> = manifest
-            .generated_instances(name, &resolved)?
-            .iter()
-            .map(|p| manifest_dir.join(p))
-            .collect();
+        // What the writers ship: this entry's listed paths, then the
+        // datasets it names, resolved inside the dependency's own package.
+        // No added context on the error: it already names its block.
+        let instances = manifest.generated_instances(name, &manifest_dir, &resolved)?;
         // `linkml_data` is resolved and read before any writer runs, so an
         // entry it refuses writes nothing.
         let data_copies = match &gen_cfg.linkml_data {
@@ -2239,17 +2228,21 @@ fn verify_entry(
     verbose: bool,
 ) -> anyhow::Result<EntryFindings> {
     use anyhow::Context as _;
-    let declared: Vec<PathBuf> = manifest
-        .declared_instances(name, resolved)?
-        .iter()
-        .map(|p| manifest_dir.join(p))
-        .collect();
+    let declared = manifest.declared_instances(name, manifest_dir, resolved)?;
     panschema::source::DeclaredDatasets::from_resolved(resolved)
         .check_listed(name, resolved, &declared)?;
     let (violations, datasets) = verify_datasets(schema, &declared, true, "warning: ", verbose)
         .with_context(|| format!("schema `{name}`, check"))?;
-    let problems = check_resolve_against(name, manifest, manifest_dir, resolved, schema, registry)
-        .with_context(|| format!("schema `{name}`, check"))?;
+    let problems = check_resolve_against(
+        name,
+        &declared,
+        manifest,
+        manifest_dir,
+        resolved,
+        schema,
+        registry,
+    )
+    .with_context(|| format!("schema `{name}`, check"))?;
     Ok(EntryFindings {
         schema: panschema::diagnostics::strict_blocking(schema),
         violations,
