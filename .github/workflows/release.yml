@@ -24,15 +24,26 @@ jobs:
   # The tag's version against each crate's latest release on crates.io: a
   # breaking change under a version that does not allow one fails here,
   # before anything is built or published. On 0.x a minor bump (0.4 to
-  # 0.5) allows one. A crate not yet on crates.io has no baseline, so it
-  # is skipped by name; its first release is published by hand anyway (see
-  # the publish job), and the check starts with its second.
+  # 0.5) allows one.
   semver-checks:
     name: Semver Compatibility
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+    # A tag whose version no publishable crate carries is a release whose
+    # Cargo.toml bump was forgotten. Without this, the GitHub Release is
+    # built and created before `cargo publish` refuses the old version.
+    - name: Check the tag against the crate versions
+      run: |
+        set -euo pipefail
+        tag="${GITHUB_REF_NAME#v}"
+        if ! cargo metadata --no-deps --format-version 1 \
+             | jq -e --arg v "$tag" '[.packages[] | select(.publish != []) | .version] | index($v) != null' > /dev/null; then
+          echo "::error::no publishable crate is at version $tag; bump Cargo.toml"
+          exit 1
+        fi
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
@@ -52,19 +63,34 @@ jobs:
         mkdir -p panschema-viz/pkg
         touch panschema-viz/pkg/panschema_viz.js panschema-viz/pkg/panschema_viz_bg.wasm
 
+    # Only crates with a library target have an API to compare;
+    # cargo-semver-checks exits 1 on a binary-only or proc-macro crate, so
+    # those are listed and passed over. A crate not yet on crates.io has no
+    # baseline, so it is skipped too, but only on a 404; its first release
+    # is published by hand anyway (see the publish job). Any other answer
+    # (an outage, a rate limit) fails the job: skipping on it would release
+    # with no semver check at all. The loop reads the crate list on stdin,
+    # so the check (or a git fetch it starts) is kept off it, or it could
+    # swallow the crates after the first.
     - name: Check semver compatibility
+      env:
+        USER_AGENT: ${{ github.repository }} release workflow (https://github.com/${{ github.repository }})
       run: |
         set -euo pipefail
-        for crate in $(cargo metadata --no-deps --format-version 1 \
-                       | jq -r '.packages[] | select(.publish != []) | .name'); do
-          if curl -sfo /dev/null \
-               -A "panschema release workflow (github.com/padamson/panschema)" \
-               "https://crates.io/api/v1/crates/$crate"; then
-            cargo semver-checks check-release -p "$crate"
-          else
-            echo "$crate is not on crates.io yet; nothing to compare against"
-          fi
-        done
+        metadata=$(cargo metadata --no-deps --format-version 1)
+        has_lib='any(.targets[]; any(.kind[]; . == "lib" or . == "rlib"))'
+        jq -r ".packages[] | select(.publish != []) | select($has_lib | not) | .name" <<< "$metadata" \
+          | while read -r crate; do echo "$crate has no library target; nothing to semver-check"; done
+        jq -r ".packages[] | select(.publish != []) | select($has_lib) | .name" <<< "$metadata" > "$RUNNER_TEMP/crates"
+        while read -r crate; do
+          status=$(curl -s -o /dev/null -w '%{http_code}' --retry 3 \
+                     -A "$USER_AGENT" "https://crates.io/api/v1/crates/$crate")
+          case "$status" in
+            200) cargo semver-checks check-release -p "$crate" </dev/null ;;
+            404) echo "$crate is not on crates.io yet; nothing to compare against" ;;
+            *)   echo "::error::crates.io answered $status for $crate"; exit 1 ;;
+          esac
+        done < "$RUNNER_TEMP/crates"
 
   build:
     name: Build ${{ matrix.target }}
@@ -277,10 +303,13 @@ jobs:
     # aborts on a member that is already published, so a release that got
     # partway — the first crate up, the second refused — could not be
     # finished by re-running this job. Skipping makes the job idempotent.
-    # cargo waits for each publish to reach the index before the next.
+    # A version is skipped only on a 200; a 404 publishes and any other
+    # answer fails the job. cargo waits for each publish to reach the index
+    # before the next.
     - name: Publish to crates.io
       env:
         CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        USER_AGENT: ${{ github.repository }} release workflow (https://github.com/${{ github.repository }})
       run: |
         set -euo pipefail
         version="${GITHUB_REF#refs/tags/v}"
@@ -298,11 +327,11 @@ jobs:
         done
 
         for crate in "${ordered[@]}"; do
-          if curl -sfo /dev/null \
-               -A "panschema release workflow (github.com/padamson/panschema)" \
-               "https://crates.io/api/v1/crates/$crate/$version"; then
-            echo "$crate $version is already on crates.io; skipping"
-            continue
-          fi
-          cargo publish -p "$crate" --allow-dirty
+          status=$(curl -s -o /dev/null -w '%{http_code}' --retry 3 \
+                     -A "$USER_AGENT" "https://crates.io/api/v1/crates/$crate/$version")
+          case "$status" in
+            200) echo "$crate $version is already on crates.io; skipping it" ;;
+            404) cargo publish -p "$crate" --allow-dirty ;;
+            *)   echo "::error::crates.io answered $status for $crate $version"; exit 1 ;;
+          esac
         done
