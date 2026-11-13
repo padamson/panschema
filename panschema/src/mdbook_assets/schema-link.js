@@ -177,9 +177,7 @@
     banner.appendChild(
       document.createTextNode(
         unreleased
-          ? "This is the unreleased edition of the book, built from " +
-              editions.own +
-              ". The current edition is "
+          ? "This is the unreleased edition of the book. The current edition is "
           : "This is the " + editions.own + " edition of the book. The current edition is "
       )
     );

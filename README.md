@@ -425,15 +425,14 @@ Writing an entry is itself the opt-in, so the list form has no `enabled` switch;
 
 ### Publishing the book in editions
 
-A schema's book is edited in place as the schema moves on, so the day `main`'s book describes the next version, readers pinned to the last release lose the book that describes theirs. `mdbook-panschema editions` publishes one book per release line, each built from the line's newest tag the way `panschema publish` builds the schema docs, with the current one at the site root:
+A schema's book is edited in place as the schema moves on, so the day `main`'s book describes the next version, readers pinned to the last release lose the book that describes theirs. `mdbook-panschema editions` publishes the editions the book's author declares. Each edition is a book directory on `main` that covers a span of releases, and the current one is also served at the site root:
 
 | Path | Serves |
 |---|---|
 | `/` | the current edition, as a copy |
-| `book/v0.1/`, `book/v0.2/` | one edition per minor line during 0.x (each 0.0.z on its own), per major line after 1.0 |
-| `book/main/` | the unreleased edition, from `[publishing].edge` |
+| `book/1/`, `book/2/` | each declared edition, at its `id` |
 
-The editions come from the same release list the schema docs use, so the two agree on which edition a version belongs to. Declare where the book and the site are:
+Declare the editions and the site in `panschema-publish.toml`:
 
 ```toml
 [publishing]
@@ -441,11 +440,26 @@ edge = "main"
 output_dir = "site/schema"   # must lie inside the editions' output_dir
 
 [editions]
-book = "book"                # the directory holding book.toml
 output_dir = "site"          # the site root; editions land in site/book/
+
+[[editions.edition]]
+id = "1"                     # served at site/book/1/
+book = "book/editions/1"     # the directory holding book.toml
+from = "v0.1.0"              # the first release it covers
+
+[[editions.edition]]
+id = "2"
+book = "book/editions/2"
+from = "v0.3.0"
 ```
 
-With no `versions` listed, every tag of the form `v<semver>` in the repository is a version, oldest first, and with no `current`, the newest release among them is current (never a pre-release; the edge when there is no release). Both are read when the command runs, by `panschema publish` and `mdbook-panschema editions` alike, so a release is a tag push: a patch tag cut on an old line publishes without a commit on `main` listing it. List `versions = ["v0.1.0", "v0.1.1", "v0.2.0"]` to leave a tag out, or `current = "v0.1.1"` to let the site lag a release in progress; either still wins. The tags are read from the checkout, so a publishing workflow needs the whole history (`fetch-depth: 0` for `actions/checkout`); a shallow clone is refused rather than read. Every such tag counts, so a tag from before the schema existed, or one that belongs to another component of a monorepo, fails the publish by name, with `versions` as the way to leave it out.
+`from` is the first release an edition covers, and the next edition's `from` closes it, so every release belongs to exactly one edition. Here `v0.1.0` through the last `v0.2.z` belong to edition `1`, and `v0.3.0` onward, with `main`, to edition `2`. A pre-release belongs with the release it precedes (`v0.3.0-rc.1` to edition `2`). A release older than the first edition's `from` is refused, so start the first edition at or before the oldest release you publish.
+
+To start a new edition, add a book directory and an `[[editions.edition]]` whose `from` is the next release. Until that release is tagged the edition is unreleased: it is published at `book/<id>/` from its first build and marked in the switcher, and its URL does not move when the tag is cut. Only the last edition may be unreleased. (A rewrite that changes only the prose still starts at a release, since the spans divide up the releases.)
+
+Every edition builds from `[publishing].edge`, not from a tag. A fix to an old edition is an ordinary commit on `main`, and the next run republishes that edition for every release in its span.
+
+With no `versions` listed, every tag of the form `v<semver>` in the repository is a version, oldest first, and with no `current`, the newest release among them is current (never a pre-release; the edge when there is no release). Both are read when the command runs, by `panschema publish` and `mdbook-panschema editions` alike, so a release is a tag push: a patch tag cut on an old line publishes without a commit on `main` listing it. List `versions = ["v0.1.0", "v0.1.1", "v0.2.0"]` to leave a tag out, or `current = "v0.1.1"` to let the site lag a release in progress; either still wins. The tags are read from the checkout, so a publishing workflow needs the whole history (`fetch-depth: 0` for `actions/checkout`); a shallow clone is refused rather than read. Every such tag counts, so a tag from before the schema existed, one older than the first edition, or one that belongs to another component of a monorepo, fails the publish by name, with `versions` as the way to leave it out.
 
 Then, from anywhere in the repo:
 
@@ -453,36 +467,27 @@ Then, from anywhere in the repo:
 mdbook-panschema editions
 ```
 
-Each tag's tree is checked out through a scratch index, so the working tree is never touched, and every edition builds before anything is written. Every page gets the toolbar asset from the running binary, a tag from before it existed included: an edition switcher, a note on every page of an edition that is not the current one, the `[book_link]` button pointed at the schema docs of the release the edition was built from (`schema/v0.1.1/` rather than `schema/current/`), and a `<link rel="canonical">` to the page at its edition's stable path. In the other direction, `panschema publish` points each schema version's header brand at the edition that describes it (`schema/v0.1.1/` links to `book/v0.1/`), so drop `site_root_url` from `[publishing]`: it is refused alongside `[editions]`, where it would be ignored.
+The edge's tree is checked out through a scratch index, so the working tree is never touched (and an uncommitted edit is not published), and every edition builds before anything is written. Every page gets the toolbar asset from the running binary: an edition switcher, a note on every page of an edition that is not the current one, the `[book_link]` button pointed at the schema docs of the newest release in the edition's span (`schema/v0.2.1/` rather than `schema/current/`, and the edge for an unreleased edition), and a `<link rel="canonical">` to the page at its edition's stable path. In the other direction, `panschema publish` points each schema version's header brand at the edition that covers it (`schema/v0.1.1/` links to `book/1/`), so drop `site_root_url` from `[publishing]`: it is refused alongside `[editions]`, where it would be ignored.
 
-A released edition builds with the tools its tag names in `<book>/toolchain.toml`, so it renders the way it did when it shipped however the repo's tools have moved on since. Each pin is installed once with `cargo install --locked` under panschema's cache directory and reused by every later edition and run that names it; `PANSCHEMA_CACHE_ROOT` moves the cache, which a CI job will want to keep between runs.
+The tools come from `PATH` unless the publish spec pins them, and the pins hold for every edition, so a tool upgrade re-renders all of them:
 
 ```toml
+[editions.toolchain]
 mdbook = "0.5.2"
 
-[[plugin]]
+[[editions.toolchain.plugin]]
 name = "mdbook-listings"
 version = "0.2.2"
-install = ["install"]        # run in the book directory before building
+install = ["install"]        # run in each edition's book directory before building
 
-[[plugin]]
+[[editions.toolchain.plugin]]
 name = "mdbook-admonish"
 git = "https://github.com/padamson/mdbook-admonish"
 rev = "f67dc47c24bc48dada3ae4decf055fdd6ba4a4ed"
 install = ["install", "."]
 ```
 
-A released edition's pins have to be exact: an mdbook version, and each plugin at one crates.io `version` (`0.2.2`, not `0.2` or `^0.2`) or a full git commit id in `rev`. The unreleased edition may name a `branch` instead, or a `rev` that is a tag or branch name, each resolved to the commit at its tip, or leave a tool unpinned to take it from `PATH`. A pin that says two things (`version` beside `rev`, `rev` without `git`) is refused for every edition, and so is an override keyed by a ref no edition builds from. A tag cut before the file existed gets its toolchain from the publish spec, which also wins over the tag's own file:
-
-```toml
-[editions.toolchain."v0.1.1"]
-mdbook = "0.5.2"
-
-[[editions.toolchain."v0.1.1".plugin]]
-name = "mdbook-listings"
-version = "0.2.2"
-install = ["install"]
-```
+Each pin is installed once with `cargo install --locked` under panschema's cache directory and reused by every later run that names it; `PANSCHEMA_CACHE_ROOT` moves the cache, which a CI job will want to keep between runs. mdbook is pinned to one version, and a plugin to one crates.io `version` (`0.2.2`, not `0.2` or `^0.2`) or to a `git` repository at a `rev` or a `branch`. A branch, or a `rev` that is a tag or branch name, is resolved to the commit at its tip once per run. A pin that says two things (`version` beside `git`, `rev` without `git`) is refused when the spec is read, and so is a `git` with neither a `rev` nor a `branch`. A `toolchain.toml` beside a book, where v0.5.0 kept the pins, is refused as well.
 
 Anything the current edition's book has at its top level that the site reserves (`book/`, the schema docs' directory) is refused before anything is written, and the site root keeps a record of what the copy wrote so the next run removes exactly that.
 

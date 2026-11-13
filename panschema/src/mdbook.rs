@@ -38,7 +38,7 @@ pub enum InstallOutcome {
 /// working tree, has none.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EditionsContext {
-    /// Released editions newest first, then the unreleased one.
+    /// Newest first; only the newest may be unreleased.
     pub editions: Vec<EditionOption>,
     /// The edition the site root serves.
     pub current: String,
@@ -51,7 +51,7 @@ pub struct EditionsContext {
 pub struct EditionOption {
     /// The edition's directory under `book/`.
     pub label: String,
-    /// Built from the edge ref rather than a release.
+    /// Covers no release yet.
     pub unreleased: bool,
 }
 

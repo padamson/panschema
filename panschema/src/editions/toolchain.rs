@@ -1,11 +1,9 @@
-//! The tools an edition builds with: mdbook and its plugins, pinned per
-//! tag in `<book>/toolchain.toml` and installed once per pin.
+//! The tools the editions build with: mdbook and its plugins, pinned in
+//! `[editions.toolchain]` and installed once per pin.
 //!
-//! A released edition builds with exactly the versions its tag names, so
-//! it renders the way it did when it shipped however the repo's tools
-//! have moved on since. The unreleased edition may name branch tips, so
-//! the dogfood loop survives, or nothing at all, in which case the tools
-//! come from `PATH`.
+//! Every edition builds with the same tools, so a tool upgrade re-renders
+//! them all. A plugin may follow a branch tip, so the dogfood loop
+//! survives, and a tool left unpinned comes from `PATH`.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -15,16 +13,12 @@ use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
-/// The file in a book directory naming the tools that build it.
-pub const TOOLCHAIN_FILENAME: &str = "toolchain.toml";
-
-/// `<book>/toolchain.toml`: the mdbook and plugin versions a tag's book
+/// `[editions.toolchain]`: the mdbook and plugin versions every edition
 /// builds with.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ToolchainFile {
-    /// The mdbook version. Unset, mdbook comes from `PATH`, which only
-    /// the unreleased edition may do.
+pub struct ToolchainPins {
+    /// The mdbook version. Unset, mdbook comes from `PATH`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mdbook: Option<String>,
     /// The preprocessors and other plugins, in the order their assets
@@ -33,7 +27,83 @@ pub struct ToolchainFile {
     pub plugins: Vec<PluginPin>,
 }
 
-/// One `[[plugin]]` in `toolchain.toml`.
+impl ToolchainPins {
+    /// Whether nothing is pinned, so every tool comes from `PATH`.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The first pin that cannot be installed as written: the tool's name
+    /// and what is wrong with its pin.
+    pub fn conflict(&self) -> Option<(String, PinConflict)> {
+        let not_one_version = |version: &String| semver::Version::parse(version).is_err();
+        if let Some(version) = self.mdbook.as_ref().filter(|v| not_one_version(v)) {
+            return Some((
+                "mdbook".to_string(),
+                PinConflict::NotOneVersion(version.clone()),
+            ));
+        }
+        self.plugins.iter().find_map(|plugin| {
+            let conflict = match (&plugin.version, &plugin.git, &plugin.rev, &plugin.branch) {
+                (Some(_), Some(_), _, _) => PinConflict::VersionAndGit,
+                (Some(_), None, Some(_), _) | (Some(_), None, _, Some(_)) => {
+                    PinConflict::UnusedRevOrBranch
+                }
+                (None, None, Some(_), _) | (None, None, _, Some(_)) => {
+                    PinConflict::RevOrBranchWithoutGit
+                }
+                (None, Some(_), Some(_), Some(_)) => PinConflict::RevAndBranch,
+                (None, Some(_), None, None) => PinConflict::GitWithoutRevOrBranch,
+                (Some(version), None, None, None) if not_one_version(version) => {
+                    PinConflict::NotOneVersion(version.clone())
+                }
+                _ => return None,
+            };
+            Some((plugin.name.clone(), conflict))
+        })
+    }
+}
+
+/// Why a pin in `[editions.toolchain]` cannot be installed as written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PinConflict {
+    /// A range or a malformed version: a range installs whatever is
+    /// newest on the day of the first install.
+    NotOneVersion(String),
+    /// A crates.io version and a git repository.
+    VersionAndGit,
+    /// A crates.io version beside a `rev` or `branch` that nothing uses.
+    UnusedRevOrBranch,
+    /// A `rev` or `branch` with no `git` repository to find it in.
+    RevOrBranchWithoutGit,
+    /// Both a `rev` and a `branch`.
+    RevAndBranch,
+    /// A git repository with neither a `rev` nor a `branch`.
+    GitWithoutRevOrBranch,
+}
+
+impl std::fmt::Display for PinConflict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PinConflict::NotOneVersion(version) => {
+                write!(f, "names `{version}`, which is not one version")
+            }
+            PinConflict::VersionAndGit => f.write_str("names both a version and a git repository"),
+            PinConflict::UnusedRevOrBranch => {
+                f.write_str("names a version beside a `rev` or `branch` that nothing uses")
+            }
+            PinConflict::RevOrBranchWithoutGit => {
+                f.write_str("names a `rev` or `branch` without a `git` repository")
+            }
+            PinConflict::RevAndBranch => f.write_str("names both a `rev` and a `branch`"),
+            PinConflict::GitWithoutRevOrBranch => {
+                f.write_str("names a git repository without a `rev` or `branch`")
+            }
+        }
+    }
+}
+
+/// One `[[editions.toolchain.plugin]]`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginPin {
@@ -49,7 +119,7 @@ pub struct PluginPin {
     /// An exact commit in `git`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rev: Option<String>,
-    /// A branch in `git`; only the unreleased edition may build from one.
+    /// A branch in `git`, resolved to its tip once per run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
     /// The arguments that generate the plugin's book assets, run in the
@@ -79,7 +149,7 @@ pub trait Toolchain {
     /// names it.
     fn install_assets(
         &self,
-        pins: &ToolchainFile,
+        pins: &ToolchainPins,
         plugin: &str,
         args: &[String],
         book_dir: &Path,
@@ -90,7 +160,7 @@ pub trait Toolchain {
     /// than one backend.
     fn build(
         &self,
-        pins: &ToolchainFile,
+        pins: &ToolchainPins,
         book_dir: &Path,
         dest: &Path,
     ) -> Result<PathBuf, ToolError>;
@@ -200,7 +270,7 @@ struct Prepared {
 }
 
 impl InstalledToolchain {
-    fn prepare(&self, pins: &ToolchainFile) -> Result<Prepared, ToolError> {
+    fn prepare(&self, pins: &ToolchainPins) -> Result<Prepared, ToolError> {
         let mdbook = match &pins.mdbook {
             None => from_path("mdbook"),
             Some(version) => self.ensure("mdbook", version, version, &["--version", version])?,
@@ -313,7 +383,7 @@ impl InstalledToolchain {
 
 /// Whether `rev` is a full commit id, the one spelling of a git rev that
 /// cannot move.
-pub(crate) fn is_commit_id(rev: &str) -> bool {
+fn is_commit_id(rev: &str) -> bool {
     rev.len() == 40 && rev.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
@@ -327,7 +397,7 @@ fn from_path(tool: &str) -> Tool {
 impl Toolchain for InstalledToolchain {
     fn install_assets(
         &self,
-        pins: &ToolchainFile,
+        pins: &ToolchainPins,
         plugin: &str,
         args: &[String],
         book_dir: &Path,
@@ -352,7 +422,7 @@ impl Toolchain for InstalledToolchain {
 
     fn build(
         &self,
-        pins: &ToolchainFile,
+        pins: &ToolchainPins,
         book_dir: &Path,
         dest: &Path,
     ) -> Result<PathBuf, ToolError> {
@@ -455,8 +525,145 @@ mod tests {
         }
     }
 
-    fn pins(mdbook: Option<&str>, plugins: &[PluginPin]) -> ToolchainFile {
-        ToolchainFile {
+    /// An empty toolchain is left out when the spec is written back, so
+    /// one that pins anything must not read as empty.
+    #[test]
+    fn a_toolchain_is_empty_only_while_it_pins_nothing() {
+        assert!(ToolchainPins::default().is_empty());
+        for pinned in [
+            pins(Some("0.5.2"), &[]),
+            pins(None, &[versioned("mdbook-x", "1.0.0")]),
+        ] {
+            assert!(!pinned.is_empty(), "toolchain: {pinned:?}");
+        }
+    }
+
+    #[test]
+    fn a_conflict_names_the_keys_at_fault() {
+        for (conflict, tokens) in [
+            (
+                PinConflict::NotOneVersion("^1.0".to_string()),
+                &["^1.0"][..],
+            ),
+            (PinConflict::VersionAndGit, &["version", "git"]),
+            (
+                PinConflict::UnusedRevOrBranch,
+                &["version", "`rev`", "`branch`"],
+            ),
+            (
+                PinConflict::RevOrBranchWithoutGit,
+                &["`rev`", "`branch`", "`git`"],
+            ),
+            (PinConflict::RevAndBranch, &["`rev`", "`branch`"]),
+            (
+                PinConflict::GitWithoutRevOrBranch,
+                &["git", "`rev`", "`branch`"],
+            ),
+        ] {
+            let said = conflict.to_string();
+            for token in tokens {
+                assert!(
+                    said.contains(token),
+                    "{conflict:?} should name {token}; got: {said}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_pin_that_cannot_be_installed_as_written_is_its_conflict() {
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        let url = "https://example.com/r";
+        let plugin = |version: Option<&str>,
+                      git: Option<&str>,
+                      rev: Option<&str>,
+                      branch: Option<&str>| PluginPin {
+            name: "mdbook-x".to_string(),
+            version: version.map(str::to_string),
+            git: git.map(str::to_string),
+            rev: rev.map(str::to_string),
+            branch: branch.map(str::to_string),
+            install: Vec::new(),
+        };
+        let x = |conflict| Some(("mdbook-x".to_string(), conflict));
+        for (toolchain, expected) in [
+            (
+                pins(Some("0.5"), &[]),
+                Some((
+                    "mdbook".to_string(),
+                    PinConflict::NotOneVersion("0.5".to_string()),
+                )),
+            ),
+            (
+                pins(None, &[plugin(Some("^1.0"), None, None, None)]),
+                x(PinConflict::NotOneVersion("^1.0".to_string())),
+            ),
+            (
+                pins(None, &[plugin(Some("1.0.0"), Some(url), Some(sha), None)]),
+                x(PinConflict::VersionAndGit),
+            ),
+            (
+                pins(None, &[plugin(Some("1.0.0"), None, Some(sha), None)]),
+                x(PinConflict::UnusedRevOrBranch),
+            ),
+            (
+                pins(None, &[plugin(Some("1.0.0"), None, None, Some("main"))]),
+                x(PinConflict::UnusedRevOrBranch),
+            ),
+            (
+                pins(None, &[plugin(None, None, Some(sha), None)]),
+                x(PinConflict::RevOrBranchWithoutGit),
+            ),
+            (
+                pins(None, &[plugin(None, None, None, Some("main"))]),
+                x(PinConflict::RevOrBranchWithoutGit),
+            ),
+            (
+                pins(None, &[plugin(None, Some(url), Some(sha), Some("main"))]),
+                x(PinConflict::RevAndBranch),
+            ),
+            (
+                pins(None, &[plugin(None, Some(url), None, None)]),
+                x(PinConflict::GitWithoutRevOrBranch),
+            ),
+            (
+                pins(Some("0.5.2"), &[plugin(Some("1.0.0"), None, None, None)]),
+                None,
+            ),
+            (
+                pins(None, &[plugin(None, Some(url), Some(sha), None)]),
+                None,
+            ),
+            (
+                pins(None, &[plugin(None, Some(url), Some("v1.0"), None)]),
+                None,
+            ),
+            (
+                pins(None, &[plugin(None, Some(url), None, Some("main"))]),
+                None,
+            ),
+            (pins(None, &[plugin(None, None, None, None)]), None),
+        ] {
+            assert_eq!(toolchain.conflict(), expected, "toolchain: {toolchain:?}");
+        }
+    }
+
+    /// The first conflict found is reported, so a later plugin's is not
+    /// lost behind an earlier one that is fine.
+    #[test]
+    fn a_conflict_in_a_later_plugin_is_found() {
+        let fine = versioned("mdbook-a", "1.0.0");
+        let mut broken = versioned("mdbook-b", "1.0.0");
+        broken.branch = Some("main".to_string());
+
+        assert_eq!(
+            pins(Some("0.5.2"), &[fine, broken]).conflict(),
+            Some(("mdbook-b".to_string(), PinConflict::UnusedRevOrBranch))
+        );
+    }
+
+    fn pins(mdbook: Option<&str>, plugins: &[PluginPin]) -> ToolchainPins {
+        ToolchainPins {
             mdbook: mdbook.map(str::to_string),
             plugins: plugins.to_vec(),
         }
@@ -728,7 +935,7 @@ mod tests {
 
     /// A rev that is not a commit id (`main`, a tag, a short prefix) moves
     /// like a branch, so it is looked up the same way and cached by the
-    /// commit it names today. Only the unreleased edition gets this far.
+    /// commit it names today.
     #[test]
     fn a_rev_that_is_not_a_commit_id_is_resolved_like_a_branch() {
         let (dir, toolchain, runner) = toolchain();
@@ -788,14 +995,14 @@ mod tests {
 
         toolchain
             .install_assets(
-                &ToolchainFile::default(),
+                &ToolchainPins::default(),
                 "mdbook-listings",
                 &["install".to_string()],
                 &book,
             )
             .unwrap();
         toolchain
-            .build(&ToolchainFile::default(), &book, &dir.path().join("out"))
+            .build(&ToolchainPins::default(), &book, &dir.path().join("out"))
             .unwrap();
 
         assert!(installs(runner).is_empty(), "nothing to install");
@@ -959,7 +1166,7 @@ mod tests {
         fs::write(book.join("src/chapter.md"), "# Chapter\n").unwrap();
 
         let root = InstalledToolchain::new(dir.path().join("toolchains"))
-            .build(&ToolchainFile::default(), &book, &dir.path().join("out"))
+            .build(&ToolchainPins::default(), &book, &dir.path().join("out"))
             .unwrap();
 
         assert_eq!(root, dir.path().join("out"));
@@ -985,7 +1192,7 @@ mod tests {
         fs::write(book.join("src/chapter.md"), "# Chapter\n").unwrap();
 
         let root = InstalledToolchain::new(dir.path().join("toolchains"))
-            .build(&ToolchainFile::default(), &book, &dir.path().join("out"))
+            .build(&ToolchainPins::default(), &book, &dir.path().join("out"))
             .unwrap();
 
         assert_eq!(root, dir.path().join("out/html"));

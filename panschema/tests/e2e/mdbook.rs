@@ -210,14 +210,15 @@ fn e2e_menu_dismisses_both_ways_and_toggle_reports_expanded_state() {
 }
 
 /// A site with the asset installed for an edition `own` of a book whose
-/// current edition is `v0.2`, at its stable path `book/<own>/`, under a
+/// editions are `3` (unreleased), `2` (current) and `1`, newest first as
+/// the build bakes them, at its stable path `book/<own>/`, under a
 /// `prefix/` directory standing in for a GitHub Pages project path. The
 /// page mimics what an edition's page carries: mdbook's toolbar and
 /// content markup, `path_to_root`, and the canonical link the editions
 /// build injects, which the asset reads to find the site root. `links`
 /// are what the build bakes after rewriting them for the edition. With
 /// `nested`, the page sits one directory down, as a chapter in a part
-/// does. `book/v0.2/` exists so choosing it has somewhere to go.
+/// does. `book/2/` exists so choosing it has somewhere to go.
 fn edition_site(own: &str, nested: bool, links: &[(&str, &str)]) -> (tempfile::TempDir, String) {
     let dir = tempfile::tempdir().expect("tempdir");
     let site = dir.path().join("prefix");
@@ -228,10 +229,10 @@ fn edition_site(own: &str, nested: bool, links: &[(&str, &str)]) -> (tempfile::T
         edition_dir.clone()
     };
     std::fs::create_dir_all(&page_dir).expect("page dir");
-    std::fs::create_dir_all(site.join("book/v0.2")).expect("target dir");
+    std::fs::create_dir_all(site.join("book/2")).expect("target dir");
     std::fs::write(edition_dir.join("book.toml"), "[book]\ntitle = \"T\"\n").expect("book.toml");
 
-    let mut labels = vec!["v0.2", "v0.1", "main"];
+    let mut labels = vec!["3", "2", "1"];
     if !labels.contains(&own) {
         labels.insert(2, own);
     }
@@ -240,10 +241,10 @@ fn edition_site(own: &str, nested: bool, links: &[(&str, &str)]) -> (tempfile::T
             .iter()
             .map(|label| EditionOption {
                 label: label.to_string(),
-                unreleased: *label == "main",
+                unreleased: *label == "3",
             })
             .collect(),
-        current: "v0.2".to_string(),
+        current: "2".to_string(),
         own: own.to_string(),
     };
     let links: Vec<BookLinkEntry> = links
@@ -296,14 +297,13 @@ fn edition_page(own: &str) -> (tempfile::TempDir, String) {
     edition_site(own, false, &[])
 }
 
-/// The switcher lists the released editions newest first and the
-/// unreleased one last, says which is unreleased, and starts on the
-/// page's own edition.
+/// The switcher lists the editions in the order the build bakes them,
+/// says which is unreleased, and starts on the page's own edition.
 #[test]
 fn e2e_the_switcher_lists_editions_with_the_pages_own_selected() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
-        let (_dir, url) = edition_page("v0.1");
+        let (_dir, url) = edition_page("1");
         let playwright = Playwright::launch().await.expect("playwright");
         let browser = playwright.chromium().launch().await.expect("chromium");
         let page = browser.new_page().await.expect("page");
@@ -317,8 +317,8 @@ fn e2e_the_switcher_lists_editions_with_the_pages_own_selected() {
             .await
             .expect("read options");
         assert_eq!(
-            options, "v0.2|v0.2|false,v0.1|v0.1|true,main|main (unreleased)|false",
-            "newest first, the unreleased one last and marked, own selected"
+            options, "3|3 (unreleased)|false,2|2|false,1|1|true",
+            "in baked order, the unreleased one marked, own selected"
         );
     });
 }
@@ -327,20 +327,20 @@ fn e2e_the_switcher_lists_editions_with_the_pages_own_selected() {
 fn e2e_choosing_an_edition_opens_its_first_page() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
-        let (_dir, url) = edition_page("v0.1");
+        let (_dir, url) = edition_page("1");
         let playwright = Playwright::launch().await.expect("playwright");
         let browser = playwright.chromium().launch().await.expect("chromium");
         let page = browser.new_page().await.expect("page");
         page.goto(&url, None).await.expect("goto");
 
         page.locator("select.edition-switcher")
-            .select_option("v0.2", None)
+            .select_option("2", None)
             .await
             .expect("select");
 
-        page.wait_for_url("**/book/v0.2/", None)
+        page.wait_for_url("**/book/2/", None)
             .await
-            .expect("the v0.2 edition's root should open");
+            .expect("edition 2's root should open");
     });
 }
 
@@ -353,7 +353,7 @@ fn e2e_a_non_current_edition_shows_a_banner_linking_to_the_current() {
         let playwright = Playwright::launch().await.expect("playwright");
         let browser = playwright.chromium().launch().await.expect("chromium");
 
-        let (_dir, url) = edition_page("v0.1");
+        let (_dir, url) = edition_page("1");
         let page = browser.new_page().await.expect("page");
         page.goto(&url, None).await.expect("goto");
         let banner = page.locator(".edition-banner");
@@ -364,19 +364,21 @@ fn e2e_a_non_current_edition_shows_a_banner_linking_to_the_current() {
             .expect("text")
             .unwrap_or_default();
         assert!(
-            text.contains("v0.1") && text.contains("v0.2"),
-            "the banner should name the page's edition and the current one; got: {text}"
+            text.contains(" 1 "),
+            "the banner should name the page's edition; got: {text}"
         );
-        let href = page
-            .evaluate_value("document.querySelector('.edition-banner a').href")
+        let link = page
+            .evaluate_value(
+                "(a => a.textContent + '|' + a.href)(document.querySelector('.edition-banner a'))",
+            )
             .await
-            .expect("href");
+            .expect("link");
         assert!(
-            href.ends_with("/book/v0.2/"),
-            "the banner should link to the current edition's root; got: {href}"
+            link.starts_with("2|") && link.ends_with("/book/2/"),
+            "the banner should name the current edition and link to its root; got: {link}"
         );
 
-        let (_dir, url) = edition_page("main");
+        let (_dir, url) = edition_page("3");
         let page = browser.new_page().await.expect("page");
         page.goto(&url, None).await.expect("goto");
         let text = page
@@ -396,7 +398,7 @@ fn e2e_a_non_current_edition_shows_a_banner_linking_to_the_current() {
 fn e2e_the_current_edition_shows_no_banner() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
-        let (_dir, url) = edition_page("v0.2");
+        let (_dir, url) = edition_page("2");
         let playwright = Playwright::launch().await.expect("playwright");
         let browser = playwright.chromium().launch().await.expect("chromium");
         let page = browser.new_page().await.expect("page");
@@ -429,7 +431,7 @@ fn e2e_the_current_edition_shows_no_banner() {
 fn e2e_a_nested_page_resolves_links_and_editions_from_the_site_root() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
-        let (_dir, url) = edition_site("v0.1", true, &[("schema/v0.1.1/", "Schema")]);
+        let (_dir, url) = edition_site("1", true, &[("schema/v0.1.1/", "Schema")]);
         let playwright = Playwright::launch().await.expect("playwright");
         let browser = playwright.chromium().launch().await.expect("chromium");
         let page = browser.new_page().await.expect("page");
@@ -438,7 +440,7 @@ fn e2e_a_nested_page_resolves_links_and_editions_from_the_site_root() {
         // The tail, not the whole URL: the browser spells the tempdir's
         // path its own way (`file:///C:/…` for a Windows `C:\…`). Resolved
         // inside the edition instead, it would end in
-        // `/book/v0.1/schema/v0.1.1/`.
+        // `/book/1/schema/v0.1.1/`.
         let href = page
             .evaluate_value("document.querySelector('a.schema-docs-button').href")
             .await
@@ -449,12 +451,12 @@ fn e2e_a_nested_page_resolves_links_and_editions_from_the_site_root() {
         );
 
         page.locator("select.edition-switcher")
-            .select_option("v0.2", None)
+            .select_option("2", None)
             .await
             .expect("select");
-        page.wait_for_url("**/prefix/book/v0.2/", None)
+        page.wait_for_url("**/prefix/book/2/", None)
             .await
-            .expect("the v0.2 edition's root under the prefix should open");
+            .expect("edition 2's root under the prefix should open");
     });
 }
 
@@ -603,9 +605,9 @@ fn a_built_editions_site_links_agree_both_ways_in_a_browser() {
     });
 }
 
-/// The canonical's path is percent-encoded, so an edition label the URL
-/// spells differently from the label (`#` is legal in a git ref and
-/// starts a URL fragment) still has its switcher.
+/// The canonical's path is percent-encoded, so an edition id the URL
+/// spells differently from the id (`#` is legal in one and starts a URL
+/// fragment) still has its switcher.
 #[test]
 fn e2e_an_edition_label_the_url_spells_differently_still_gets_the_switcher() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");

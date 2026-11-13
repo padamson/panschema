@@ -148,14 +148,46 @@ pub enum PublishError {
         "[publishing].versions entry `{version}` is not a semver version, so its book edition cannot be known"
     )]
     EditionVersionNotSemver { version: String },
+    #[error("[publishing].versions lists one version twice, as `{first}` and as `{second}`")]
+    DuplicateVersion { first: String, second: String },
+    #[error("[editions] builds every edition from [publishing].edge, which is not set")]
+    EditionsWithoutEdge,
     #[error(
-        "[publishing].versions spells its tags two ways (`{first}` and `{second}`), so book editions cannot be named consistently"
+        "[editions] declares no edition; add an [[editions.edition]] with `id`, `book` and `from` for each book"
     )]
-    MixedTagSpelling { first: String, second: String },
-    #[error("[publishing].versions lists `{version}` twice")]
-    DuplicateVersion { version: String },
-    #[error("[publishing].edge `{edge}` has the same name as a book edition built from a release")]
-    EdgeShadowsEdition { edge: String },
+    NoEditionDeclared,
+    #[error("edition `{id}`: `from = \"{from}\"` is not a semver version")]
+    EditionFromNotSemver { id: String, from: String },
+    #[error("editions `{first}` and `{second}` share {shared}")]
+    EditionsShare {
+        first: String,
+        second: String,
+        shared: crate::editions::Shared,
+    },
+    #[error(
+        "edition `{id}`: its book `{}` must be a path relative to {PUBLISH_FILENAME}",
+        book.display()
+    )]
+    EditionBookNotRelative { id: String, book: PathBuf },
+    #[error("editions `{first}` and `{second}` are both marked `authoring`; only one may be")]
+    TwoAuthoringEditions { first: String, second: String },
+    #[error(
+        "release `{version}` is older than every edition: the first, `{edition}`, starts at `{from}`"
+    )]
+    ReleaseBeforeFirstEdition {
+        version: String,
+        edition: String,
+        from: String,
+    },
+    #[error(
+        "edition `{id}` covers no release before the next edition starts, and only the last edition may be unreleased"
+    )]
+    EmptyEdition { id: String },
+    #[error("[editions.toolchain] pins `{tool}` in a way it cannot be installed: it {conflict}")]
+    ToolchainPin {
+        tool: String,
+        conflict: crate::editions::PinConflict,
+    },
     #[error(
         "[publishing].output_dir `{}` must lie inside [editions].output_dir `{}` and outside its `book/` directory, since the book and the schema docs link to each other by relative path",
         schema.display(),
@@ -163,16 +195,15 @@ pub enum PublishError {
     )]
     SchemaOutsideSite { schema: PathBuf, site: PathBuf },
     #[error(
-        "[editions].book `{}` lies inside [editions].output_dir `{}`, which the editions build writes over",
+        "edition `{edition}`: its book `{}` lies inside [editions].output_dir `{}`, which the editions build writes over",
         book.display(),
         site.display()
     )]
-    BookInsideSite { book: PathBuf, site: PathBuf },
-    #[error(
-        "[editions.toolchain] names `{key}`, which no edition builds from; the editions build from {}",
-        sources.iter().map(|s| format!("`{s}`")).collect::<Vec<_>>().join(", ")
-    )]
-    UnknownToolchainKey { key: String, sources: Vec<String> },
+    BookInsideSite {
+        edition: String,
+        book: PathBuf,
+        site: PathBuf,
+    },
     #[error(
         "[publishing].site_root_url = `{value}` is set, but with [editions] each version's brand links to its edition; remove it"
     )]
@@ -200,11 +231,7 @@ pub(crate) fn is_single_path_segment(s: &str) -> bool {
 /// every page directory — configured or defaulted — go through here.
 fn require_fresh_segment(what: &str, value: &str) -> Result<(), PublishError> {
     if !is_single_path_segment(value) {
-        return Err(PublishError::InvalidSegment {
-            what: what.to_string(),
-            value: value.to_string(),
-            problem: "it must be a single path segment (no `/`, `.`, or `..`)".to_string(),
-        });
+        return Err(not_a_segment(what, value));
     }
     if value == "current" {
         return Err(PublishError::InvalidSegment {
@@ -214,6 +241,15 @@ fn require_fresh_segment(what: &str, value: &str) -> Result<(), PublishError> {
         });
     }
     Ok(())
+}
+
+/// The refusal of `value`, which is not one path segment, as `what`.
+pub(crate) fn not_a_segment(what: &str, value: &str) -> PublishError {
+    PublishError::InvalidSegment {
+        what: what.to_string(),
+        value: value.to_string(),
+        problem: "it must be a single path segment (no `/`, `.`, or `..`)".to_string(),
+    }
 }
 
 /// Which component of a semver version to bump.
@@ -254,35 +290,79 @@ pub struct PublishConfig {
     pub editions: Option<EditionsConfig>,
 }
 
-/// `[editions]` — where the book lives and where its editions land.
+/// `[editions]` — the editions the author declares and where they land.
 ///
-/// The editions themselves come from `[publishing]`: one per release line
-/// of `versions`, plus `edge`, with the line holding `current` served at
-/// the site root. Unknown keys are rejected so a typo'd setting fails
-/// loudly instead of silently reverting to its default.
+/// Each `[[editions.edition]]` is a book directory on the edge ref covering
+/// the releases from its `from` up to the next edition's, so the spans
+/// partition `[publishing]`'s release list. Unknown keys are rejected so a
+/// typo'd setting fails loudly instead of silently reverting to its
+/// default.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EditionsConfig {
-    /// The directory holding `book.toml`, relative to the publish spec.
-    #[serde(default = "default_editions_book")]
-    pub book: PathBuf,
     /// The site root, relative to the publish spec. Editions land in
-    /// `<output_dir>/book/<edition>/` and the current edition is copied
-    /// to `<output_dir>/`. `[publishing].output_dir` must lie inside it.
+    /// `<output_dir>/book/<id>/` and the current edition is copied to
+    /// `<output_dir>/`. `[publishing].output_dir` must lie inside it.
     #[serde(default = "default_editions_output_dir")]
     pub output_dir: PathBuf,
-    /// Toolchains for tags cut before the book carried its own
-    /// `toolchain.toml`, keyed by tag (`[editions.toolchain."v0.1.1"]`).
-    /// One here wins over the tag's own file.
-    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    pub toolchain: std::collections::BTreeMap<String, crate::editions::ToolchainFile>,
+    /// The tools every edition builds with; those it leaves out come
+    /// from `PATH`.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::editions::ToolchainPins::is_empty"
+    )]
+    pub toolchain: crate::editions::ToolchainPins,
+    /// The declared editions, in any order.
+    #[serde(default, rename = "edition", skip_serializing_if = "Vec::is_empty")]
+    pub editions: Vec<DeclaredEdition>,
+}
+
+/// One `[[editions.edition]]`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeclaredEdition {
+    /// The edition's directory under `book/`, one path segment.
+    pub id: String,
+    /// What the switcher and the banner call the edition; the id when
+    /// absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The directory holding the edition's `book.toml`, relative to the
+    /// publish spec.
+    pub book: PathBuf,
+    /// The first release the edition covers.
+    pub from: String,
+    /// Whether new chapters and listings go into this edition. The last
+    /// edition is the authoring one when none says so.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub authoring: bool,
 }
 
 impl EditionsConfig {
-    /// Refuse a release list that cannot be grouped into editions, and a
-    /// schema-docs directory the book cannot reach by relative path.
+    /// Refuse editions that cannot be built or planned, and a
+    /// schema-docs directory the book cannot reach by relative path. With
+    /// the release list known, the partition is checked too; one left to
+    /// the tags is checked by [`crate::editions::plan`] once they are read.
     pub(crate) fn validate(&self, publishing: &PublishingConfig) -> Result<(), PublishError> {
+        let spans = self.check(publishing)?;
+        if let (Some(versions), Some(edge)) = (&publishing.versions, &publishing.edge) {
+            crate::editions::editions_of(&spans, versions, edge)?;
+        }
+        Ok(())
+    }
+
+    /// Every check that needs no release list, returning the declared
+    /// editions oldest first. The declarations come first, so a spec
+    /// that declares no edition is told what to add before anything else.
+    pub(crate) fn check(
+        &self,
+        publishing: &PublishingConfig,
+    ) -> Result<Vec<crate::editions::Span<'_>>, PublishError> {
         use std::path::Component;
+        let spans = crate::editions::declared(&self.editions)?;
+        if publishing.edge.is_none() {
+            return Err(PublishError::EditionsWithoutEdge);
+        }
         let site = lexical_components(&self.output_dir);
         let schema = lexical_components(&publishing.output_dir);
         // `book` matches in any case: on a case-insensitive filesystem
@@ -306,33 +386,22 @@ impl EditionsConfig {
         }
         // The build replaces `<site>/book/` and writes the current edition
         // over `<site>/`, so a book source anywhere in there is lost.
-        let book = lexical_components(&self.book);
-        let book_inside =
-            book.starts_with(&site) && book.get(site.len()) != Some(&Component::ParentDir);
-        if book_inside {
-            return Err(PublishError::BookInsideSite {
-                book: self.book.clone(),
-                site: self.output_dir.clone(),
-            });
-        }
-        // An override is keyed by the ref its edition builds from; a key
-        // naming anything else would be a silently ignored override. A
-        // release list left to the tags is unknown until a build reads
-        // them and runs this check again.
-        if let Some(versions) = &publishing.versions {
-            let sources: Vec<String> =
-                crate::editions::editions_of(versions, publishing.edge.as_deref())?
-                    .iter()
-                    .map(|e| e.source.clone())
-                    .collect();
-            if let Some(key) = self.toolchain.keys().find(|key| !sources.contains(key)) {
-                return Err(PublishError::UnknownToolchainKey {
-                    key: key.clone(),
-                    sources,
+        for edition in &self.editions {
+            let book = lexical_components(&edition.book);
+            let book_inside =
+                book.starts_with(&site) && book.get(site.len()) != Some(&Component::ParentDir);
+            if book_inside {
+                return Err(PublishError::BookInsideSite {
+                    edition: edition.id.clone(),
+                    book: edition.book.clone(),
+                    site: self.output_dir.clone(),
                 });
             }
         }
-        Ok(())
+        if let Some((tool, conflict)) = self.toolchain.conflict() {
+            return Err(PublishError::ToolchainPin { tool, conflict });
+        }
+        Ok(spans)
     }
 }
 
@@ -353,10 +422,6 @@ pub(crate) fn lexical_components(path: &Path) -> Vec<std::path::Component<'_>> {
         }
     }
     out
-}
-
-fn default_editions_book() -> PathBuf {
-    PathBuf::from("book")
 }
 
 fn default_editions_output_dir() -> PathBuf {
@@ -700,7 +765,7 @@ fn semver_tags(repo_root: &Path) -> Result<Vec<String>, PublishError> {
 
 /// The newest release among `versions`; a pre-release is never one, and
 /// a version that is not semver cannot be ranked.
-fn newest_release(versions: &[String]) -> Option<String> {
+pub(crate) fn newest_release(versions: &[String]) -> Option<String> {
     versions
         .iter()
         .filter_map(|tag| {
@@ -819,7 +884,14 @@ impl FromStr for PublishConfig {
     type Err = PublishError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let cfg: PublishConfig = toml::from_str(s)?;
+        toml::from_str::<PublishConfig>(s)?.checked()
+    }
+}
+
+impl PublishConfig {
+    /// The cross-field checks serde cannot express.
+    fn checked(self) -> Result<Self, PublishError> {
+        let cfg = self;
         if let Some(publishing) = &cfg.publishing {
             publishing.validate()?;
             cfg.validate_pages(publishing)?;
@@ -844,13 +916,23 @@ impl FromStr for PublishConfig {
         }
         Ok(cfg)
     }
-}
 
-impl PublishConfig {
     /// Parse a `panschema-publish.toml` from disk.
     pub fn from_path(path: &Path) -> Result<Self, PublishError> {
         let content = std::fs::read_to_string(path)?;
         content.parse()
+    }
+
+    /// Parse the `panschema-publish.toml` of a package read as a
+    /// dependency. Its `[editions]` says how the package publishes its
+    /// own book, which no consumer reads, and a released spec cannot be
+    /// rewritten when the table's form changes, so the table is dropped
+    /// before the parse.
+    pub fn from_dependency_path(path: &Path) -> Result<Self, PublishError> {
+        let content = std::fs::read_to_string(path)?;
+        let mut spec: toml::Table = content.parse()?;
+        spec.remove("editions");
+        spec.try_into::<PublishConfig>()?.checked()
     }
 
     /// Cross-check `[publishing.pages.*]` against the `[[instances]]`
@@ -1186,10 +1268,7 @@ pub fn publish_versioned(
         output_dir,
         edge_from_worktree,
     )
-    .map_err(|err| match publishing.releases() {
-        Ok((derived, _)) if listed.versions.is_none() => hint_derived_tag(err, derived),
-        _ => err,
-    })
+    .map_err(|err| hint_if_derived(err, listed, &publishing))
 }
 
 /// Refuse an `[[instances]]` entry whose `data` leads out of the package
@@ -1232,7 +1311,7 @@ fn check_dataset_paths_as_written(cfg: &PublishConfig) -> Result<(), PublishErro
 
 /// Whether a relative path, read as written, leaves the directory it is
 /// relative to: it is absolute, or a `..` climbs above its start.
-fn climbs_out(path: &Path) -> bool {
+pub(crate) fn climbs_out(path: &Path) -> bool {
     let mut depth = 0usize;
     for component in path.components() {
         match component {
@@ -1248,17 +1327,28 @@ fn climbs_out(path: &Path) -> bool {
     false
 }
 
-/// A failure on a tag the manifest never named, which `versions` can
-/// leave out; any other error passes through.
-fn hint_derived_tag(err: PublishError, derived: &[String]) -> PublishError {
+/// `err` from a run over `resolved`, the settled form of `listed`: a
+/// failure on a tag the manifest never named, which `versions` can leave
+/// out, says so. Any other error passes through.
+pub(crate) fn hint_if_derived(
+    err: PublishError,
+    listed: &PublishingConfig,
+    resolved: &PublishingConfig,
+) -> PublishError {
     let tag = match &err {
-        PublishError::ExtractFailed { ref_, .. } => ref_.clone(),
-        PublishError::GenerateFailed { version, .. } => version.clone(),
+        PublishError::ExtractFailed { ref_, .. } => ref_,
+        PublishError::GenerateFailed { version, .. }
+        | PublishError::ReleaseBeforeFirstEdition { version, .. } => version,
         _ => return err,
     };
-    if derived.contains(&tag) {
+    let derived = listed.versions.is_none()
+        && resolved
+            .versions
+            .as_ref()
+            .is_some_and(|versions| versions.contains(tag));
+    if derived {
         PublishError::DerivedTag {
-            tag,
+            tag: tag.clone(),
             source: Box::new(err),
         }
     } else {
@@ -1281,7 +1371,6 @@ fn publish_resolved(
     publish_cfg.validate_pages(publishing)?;
     let editions = match &publish_cfg.editions {
         Some(editions) => {
-            editions.validate(publishing)?;
             let refs: Vec<&str> = versions
                 .iter()
                 .chain(publishing.edge.iter())
@@ -1290,7 +1379,7 @@ fn publish_resolved(
             Some(EditionLayout::new(
                 &repo_root.join(&editions.output_dir),
                 output_dir,
-                &crate::editions::plan(publishing)?,
+                &crate::editions::plan(editions, publishing)?,
                 &refs,
             )?)
         }
@@ -2192,7 +2281,7 @@ impl EditionLayout {
                 let edition = plan
                     .edition_of(r)
                     .expect("the plan was made from these refs");
-                (r.to_string(), edition.label.clone())
+                (r.to_string(), edition.id.clone())
             })
             .collect();
         Ok(EditionLayout {
@@ -3199,34 +3288,65 @@ current = "v0.1.0"
         );
     }
 
-    /// A publish spec with `[publishing]` and the given `[editions]` body.
-    fn spec_with_editions(publishing: &str, editions: &str) -> String {
+    /// One `[[editions.edition]]` table.
+    pub(crate) fn edition_toml(id: &str, book: &str, from: &str) -> String {
+        format!("[[editions.edition]]\nid = \"{id}\"\nbook = \"{book}\"\nfrom = \"{from}\"\n")
+    }
+
+    /// One edition, `1`, reading `book/` from `v0.1.0`.
+    const ONE_EDITION: &str =
+        "[[editions.edition]]\nid = \"1\"\nbook = \"book\"\nfrom = \"v0.1.0\"\n";
+
+    /// A publish spec with `[publishing]`, the given `[editions]` keys,
+    /// and then the editions `declared`.
+    pub(crate) fn spec_declaring(publishing: &str, keys: &str, declared: &str) -> String {
         format!(
             "[schema]\nname = \"x\"\nversion = \"0.1.1\"\nlinkml = \"1.7.0\"\n\
              [files]\nmain = \"schema.yaml\"\n\
              [publishing]\n{publishing}\n\
-             [editions]\n{editions}\n"
+             [editions]\n{keys}\n{declared}"
         )
     }
 
+    /// [`spec_declaring`] with [`ONE_EDITION`].
+    fn spec_with_editions(publishing: &str, keys: &str) -> String {
+        spec_declaring(publishing, keys, ONE_EDITION)
+    }
+
     #[test]
-    fn an_empty_editions_section_takes_the_documented_defaults() {
+    fn a_declared_edition_takes_the_documented_defaults() {
         let cfg: PublishConfig = spec_with_editions(
-            "versions = [\"v0.1.0\", \"v0.1.1\"]\ncurrent = \"v0.1.1\"",
+            "versions = [\"v0.1.0\", \"v0.1.1\"]\nedge = \"main\"\ncurrent = \"v0.1.1\"",
             "",
         )
         .parse()
         .expect("should parse");
 
         let editions = cfg.editions.expect("[editions] should be present");
-        assert_eq!(editions.book, PathBuf::from("book"));
         assert_eq!(editions.output_dir, PathBuf::from("site"));
+        assert!(
+            editions.toolchain.is_empty(),
+            "got {:?}",
+            editions.toolchain
+        );
+        assert_eq!(
+            editions.editions,
+            vec![DeclaredEdition {
+                id: "1".to_string(),
+                name: None,
+                book: PathBuf::from("book"),
+                from: "v0.1.0".to_string(),
+                authoring: false,
+            }]
+        );
     }
 
     #[test]
     fn editions_without_publishing_are_refused() {
-        let toml = "[schema]\nname = \"x\"\nversion = \"0.1.0\"\nlinkml = \"1.7.0\"\n\
-                    [files]\nmain = \"schema.yaml\"\n[editions]\n";
+        let toml = format!(
+            "[schema]\nname = \"x\"\nversion = \"0.1.0\"\nlinkml = \"1.7.0\"\n\
+             [files]\nmain = \"schema.yaml\"\n[editions]\n{ONE_EDITION}"
+        );
         let err = toml.parse::<PublishConfig>().unwrap_err();
 
         assert!(
@@ -3236,9 +3356,41 @@ current = "v0.1.0"
     }
 
     #[test]
+    fn editions_without_an_edge_to_build_from_are_refused() {
+        let err = spec_with_editions("versions = [\"v0.1.0\"]\ncurrent = \"v0.1.0\"", "")
+            .parse::<PublishConfig>()
+            .unwrap_err();
+
+        assert!(
+            matches!(err, PublishError::EditionsWithoutEdge),
+            "expected EditionsWithoutEdge, got {err:?}"
+        );
+    }
+
+    /// A spec written for one book per release line has an `[editions]`
+    /// with no edition and, often, no edge; the error names what to add
+    /// before it mentions anything else.
+    #[test]
+    fn an_editions_section_declaring_no_edition_is_refused_naming_the_table_to_add() {
+        let err = spec_declaring(
+            "versions = [\"v0.1.0\"]\ncurrent = \"v0.1.0\"",
+            "output_dir = \"site\"",
+            "",
+        )
+        .parse::<PublishConfig>()
+        .unwrap_err();
+
+        assert!(
+            matches!(err, PublishError::NoEditionDeclared),
+            "expected NoEditionDeclared, got {err:?}"
+        );
+        assert!(err.to_string().contains("[[editions.edition]]"), "{err}");
+    }
+
+    #[test]
     fn a_release_list_that_cannot_form_editions_is_refused_at_parse() {
         let err = spec_with_editions(
-            "versions = [\"v0.1.0\", \"nightly\"]\ncurrent = \"v0.1.0\"",
+            "versions = [\"v0.1.0\", \"nightly\"]\nedge = \"main\"\ncurrent = \"v0.1.0\"",
             "",
         )
         .parse::<PublishConfig>()
@@ -3250,8 +3402,42 @@ current = "v0.1.0"
         }
     }
 
+    /// With the release list left to the tags, no edition holds a release
+    /// at parse time; only the declarations themselves are checked then.
+    #[test]
+    fn editions_over_a_release_list_left_to_the_tags_parse() {
+        let two = format!("{ONE_EDITION}{}", edition_toml("2", "book2", "v0.3.0"));
+        spec_declaring("edge = \"main\"", "", &two)
+            .parse::<PublishConfig>()
+            .expect("which edition covers which release is known once the tags are read");
+
+        let twice = format!("{ONE_EDITION}{ONE_EDITION}");
+        let err = spec_declaring("edge = \"main\"", "", &twice)
+            .parse::<PublishConfig>()
+            .unwrap_err();
+        assert!(
+            matches!(err, PublishError::EditionsShare { .. }),
+            "the declarations are still checked; got {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_release_older_than_every_edition_is_refused_at_parse() {
+        let err = spec_with_editions(
+            "versions = [\"v0.0.1\", \"v0.1.0\"]\nedge = \"main\"\ncurrent = \"v0.1.0\"",
+            "",
+        )
+        .parse::<PublishConfig>()
+        .unwrap_err();
+
+        assert!(
+            matches!(&err, PublishError::ReleaseBeforeFirstEdition { version, .. } if version == "v0.0.1"),
+            "expected ReleaseBeforeFirstEdition, got {err:?}"
+        );
+    }
+
     /// Without `[editions]`, a version label need not be semver: schema
-    /// docs alone never ask which line a version belongs to.
+    /// docs alone never ask which edition a version belongs to.
     #[test]
     fn a_non_semver_version_is_fine_without_editions() {
         let toml = "[schema]\nname = \"x\"\nversion = \"0.1.0\"\nlinkml = \"1.7.0\"\n\
@@ -3281,11 +3467,12 @@ current = "v0.1.0"
             ("schema", ".", true),
             ("../schema", ".", false),
         ] {
-            let result = spec_with_editions(
+            let result = spec_declaring(
                 &format!(
-                    "versions = [\"v0.1.0\"]\ncurrent = \"v0.1.0\"\noutput_dir = \"{schema_dir}\""
+                    "versions = [\"v0.1.0\"]\nedge = \"main\"\ncurrent = \"v0.1.0\"\noutput_dir = \"{schema_dir}\""
                 ),
-                &format!("book = \"../book\"\noutput_dir = \"{site_dir}\""),
+                &format!("output_dir = \"{site_dir}\""),
+                &edition_toml("1", "../book", "v0.1.0"),
             )
             .parse::<PublishConfig>();
 
@@ -3306,7 +3493,7 @@ current = "v0.1.0"
     /// current edition over `<output_dir>/`, so a book source in there
     /// would be deleted.
     #[test]
-    fn the_book_source_must_lie_outside_the_site_root() {
+    fn every_editions_book_must_lie_outside_the_site_root() {
         for (book, site, accepted) in [
             ("book", "site", true),
             ("../book", "site", true),
@@ -3317,11 +3504,14 @@ current = "v0.1.0"
             ("book", ".", false),
             ("docs", "docs", false),
         ] {
-            let result = spec_with_editions(
+            let declared =
+                edition_toml("1", "../first", "v0.1.0") + &edition_toml("2", book, "v0.2.0");
+            let result = spec_declaring(
                 &format!(
-                    "versions = [\"v0.1.0\"]\ncurrent = \"v0.1.0\"\noutput_dir = \"{site}/schema\""
+                    "versions = [\"v0.1.0\"]\nedge = \"main\"\ncurrent = \"v0.1.0\"\noutput_dir = \"{site}/schema\""
                 ),
-                &format!("book = \"{book}\"\noutput_dir = \"{site}\""),
+                &format!("output_dir = \"{site}\""),
+                &declared,
             )
             .parse::<PublishConfig>();
 
@@ -3330,10 +3520,12 @@ current = "v0.1.0"
                 (
                     false,
                     Err(PublishError::BookInsideSite {
+                        edition,
                         book: got,
                         site: got_site,
                     }),
                 ) => {
+                    assert_eq!(edition, "2");
                     assert_eq!(got, PathBuf::from(book));
                     assert_eq!(got_site, PathBuf::from(site));
                 }
@@ -3345,58 +3537,77 @@ current = "v0.1.0"
     }
 
     #[test]
-    fn a_toolchain_override_parses_per_tag_and_refuses_an_unknown_key() {
+    fn one_toolchain_parses_for_every_edition_and_refuses_an_unknown_key() {
+        let releases = "versions = [\"v0.1.0\"]\nedge = \"main\"\ncurrent = \"v0.1.0\"";
         let cfg: PublishConfig = spec_with_editions(
-            "versions = [\"v0.1.0\", \"v0.1.1\"]\ncurrent = \"v0.1.1\"",
-            "[editions.toolchain.\"v0.1.1\"]\nmdbook = \"0.5.2\"\n\
-             [[editions.toolchain.\"v0.1.1\".plugin]]\nname = \"mdbook-listings\"\nversion = \"0.2.2\"\ninstall = [\"install\"]\n",
+            releases,
+            "[editions.toolchain]\nmdbook = \"0.5.2\"\n\
+             [[editions.toolchain.plugin]]\nname = \"mdbook-listings\"\nversion = \"0.2.2\"\ninstall = [\"install\"]\n",
         )
         .parse()
         .expect("should parse");
-        let editions = cfg.editions.unwrap();
-        let pins = &editions.toolchain["v0.1.1"];
+        let pins = cfg.editions.unwrap().toolchain;
         assert_eq!(pins.mdbook.as_deref(), Some("0.5.2"));
         assert_eq!(pins.plugins[0].name, "mdbook-listings");
         assert_eq!(pins.plugins[0].install, vec!["install"]);
 
-        let err = spec_with_editions(
-            "versions = [\"v0.1.0\"]\ncurrent = \"v0.1.0\"",
-            "[editions.toolchain.\"v0.1.0\"]\nmdbok = \"0.5.2\"\n",
-        )
-        .parse::<PublishConfig>()
-        .unwrap_err();
-        assert!(
-            matches!(err, PublishError::Parse(_)) && err.to_string().contains("mdbok"),
-            "expected a parse error naming `mdbok`; got {err}"
-        );
-    }
-
-    /// A key the plan never builds from (the wrong tag in a line, an
-    /// edition label, a typo) would be a silently ignored override.
-    #[test]
-    fn a_toolchain_override_must_name_a_ref_the_editions_build_from() {
-        for key in ["v0.1.0", "v0.1", "0.1.1", "v0.1.1 "] {
+        // A toolchain keyed by tag, the old form, is an unknown key.
+        for key in ["mdbok", "v0.1.0"] {
             let err = spec_with_editions(
-                "versions = [\"v0.1.0\", \"v0.1.1\"]\nedge = \"main\"\ncurrent = \"v0.1.1\"",
-                &format!("[editions.toolchain.\"{key}\"]\nmdbook = \"0.5.2\"\n"),
+                releases,
+                &format!("[editions.toolchain]\n\"{key}\" = \"0.5.2\"\n"),
             )
             .parse::<PublishConfig>()
             .unwrap_err();
-
-            match err {
-                PublishError::UnknownToolchainKey { key: got, sources } => {
-                    assert_eq!(got, key);
-                    assert_eq!(sources, vec!["v0.1.1", "main"], "key {key}");
-                }
-                other => panic!("key {key}: expected UnknownToolchainKey, got {other:?}"),
-            }
+            assert!(
+                matches!(err, PublishError::Parse(_)) && err.to_string().contains(key),
+                "expected a parse error naming `{key}`; got {err}"
+            );
         }
-        spec_with_editions(
-            "versions = [\"v0.1.0\", \"v0.1.1\"]\nedge = \"main\"\ncurrent = \"v0.1.1\"",
-            "[editions.toolchain.\"v0.1.1\"]\nmdbook = \"0.5.2\"\n[editions.toolchain.main]\nmdbook = \"0.5.2\"\n",
+    }
+
+    #[test]
+    fn a_pin_that_cannot_be_installed_as_written_is_refused_naming_the_tool() {
+        let err = spec_with_editions(
+            "versions = [\"v0.1.0\"]\nedge = \"main\"\ncurrent = \"v0.1.0\"",
+            "[editions.toolchain]\n[[editions.toolchain.plugin]]\nname = \"mdbook-x\"\ngit = \"https://example.com/r\"\n",
         )
         .parse::<PublishConfig>()
-        .expect("the newest tag of a line and the edge are what the editions build from");
+        .unwrap_err();
+
+        match err {
+            PublishError::ToolchainPin { tool, conflict } => assert_eq!(
+                (tool.as_str(), conflict),
+                (
+                    "mdbook-x",
+                    crate::editions::PinConflict::GitWithoutRevOrBranch
+                )
+            ),
+            other => panic!("expected ToolchainPin, got {other:?}"),
+        }
+    }
+
+    /// Every edition builds from the edge, so a plugin may follow a
+    /// branch as readily as a version or a commit.
+    #[test]
+    fn a_plugin_may_be_pinned_to_a_version_a_commit_or_a_branch() {
+        let git = "git = \"https://example.com/r\"";
+        for pin in [
+            "version = \"1.0.0\"".to_string(),
+            format!("{git}\nrev = \"0123456789abcdef0123456789abcdef01234567\""),
+            format!("{git}\nbranch = \"main\""),
+            format!("{git}\nrev = \"v1.0\""),
+            String::new(),
+        ] {
+            spec_with_editions(
+                "versions = [\"v0.1.0\"]\nedge = \"main\"\ncurrent = \"v0.1.0\"",
+                &format!(
+                    "[editions.toolchain]\nmdbook = \"0.5.2\"\n[[editions.toolchain.plugin]]\nname = \"mdbook-x\"\n{pin}\n"
+                ),
+            )
+            .parse::<PublishConfig>()
+            .unwrap_or_else(|e| panic!("pin:\n{pin}\nshould parse; got {e}"));
+        }
     }
 
     /// With editions the brand goes to a version's edition, so a
@@ -3405,7 +3616,7 @@ current = "v0.1.0"
     #[test]
     fn site_root_url_is_refused_alongside_editions() {
         let err = spec_with_editions(
-            "versions = [\"v0.1.0\"]\ncurrent = \"v0.1.0\"\nsite_root_url = \"../../\"",
+            "versions = [\"v0.1.0\"]\nedge = \"main\"\ncurrent = \"v0.1.0\"\nsite_root_url = \"../../\"",
             "",
         )
         .parse::<PublishConfig>()
@@ -3416,26 +3627,33 @@ current = "v0.1.0"
         }
 
         spec_with_editions(
-            "versions = [\"v0.1.0\"]\ncurrent = \"v0.1.0\"\nsite_root_url = \"../current/\"",
+            "versions = [\"v0.1.0\"]\nedge = \"main\"\ncurrent = \"v0.1.0\"\nsite_root_url = \"../current/\"",
             "",
         )
         .parse::<PublishConfig>()
         .expect("the default, spelled out, is not a setting");
     }
 
+    /// A single `book` for every edition among them: each edition names
+    /// its own.
     #[test]
-    fn an_unknown_editions_key_is_refused_by_name() {
-        let err = spec_with_editions(
-            "versions = [\"v0.1.0\"]\ncurrent = \"v0.1.0\"",
-            "book_dir = \"book\"",
-        )
-        .parse::<PublishConfig>()
-        .unwrap_err();
+    fn an_unknown_key_in_editions_or_an_edition_is_refused_by_name() {
+        let releases = "versions = [\"v0.1.0\"]\nedge = \"main\"\ncurrent = \"v0.1.0\"";
+        for (keys, declared, key) in [
+            ("book = \"book\"", ONE_EDITION.to_string(), "book"),
+            ("book_dir = \"book\"", ONE_EDITION.to_string(), "book_dir"),
+            ("", format!("{ONE_EDITION}starts = \"v0.1.0\"\n"), "starts"),
+        ] {
+            let err = spec_declaring(releases, keys, &declared)
+                .parse::<PublishConfig>()
+                .unwrap_err();
 
-        assert!(
-            matches!(err, PublishError::Parse(_)) && err.to_string().contains("book_dir"),
-            "expected a parse error naming `book_dir`; got {err}"
-        );
+            assert!(
+                matches!(err, PublishError::Parse(_))
+                    && err.to_string().contains(&format!("`{key}`")),
+                "expected a parse error naming `{key}`; got {err}"
+            );
+        }
     }
 
     #[test]
@@ -4779,6 +4997,38 @@ default = true
         );
     }
 
+    /// A tag listed by hand is reported as itself, and so is a ref the
+    /// release list does not hold.
+    #[test]
+    fn a_release_older_than_every_edition_is_hinted_only_when_its_tag_was_derived() {
+        let older = |version: &str| PublishError::ReleaseBeforeFirstEdition {
+            version: version.to_string(),
+            edition: "1".to_string(),
+            from: "v0.2.0".to_string(),
+        };
+        let from_tags: PublishingConfig = toml::from_str("edge = \"main\"").unwrap();
+        let resolved = PublishingConfig {
+            versions: Some(vec!["v0.1.0".to_string()]),
+            current: Some("v0.1.0".to_string()),
+            ..from_tags.clone()
+        };
+
+        let hinted = hint_if_derived(older("v0.1.0"), &from_tags, &resolved);
+        assert!(
+            matches!(&hinted, PublishError::DerivedTag { tag, source }
+                if tag == "v0.1.0"
+                    && matches!(**source, PublishError::ReleaseBeforeFirstEdition { .. })),
+            "expected DerivedTag over ReleaseBeforeFirstEdition, got {hinted:?}"
+        );
+        for (version, listed) in [("v0.1.0", &resolved), ("v0.0.9", &from_tags)] {
+            let plain = hint_if_derived(older(version), listed, &resolved);
+            assert!(
+                matches!(plain, PublishError::ReleaseBeforeFirstEdition { .. }),
+                "`{version}`: expected the error as it came, got {plain:?}"
+            );
+        }
+    }
+
     #[test]
     fn a_derived_tag_whose_schema_does_not_load_names_itself_too() {
         let repo = make_versioned_linkml_repo();
@@ -5106,32 +5356,51 @@ default = true
         }
     }
 
+    fn declared(id: &str, from: &str) -> DeclaredEdition {
+        DeclaredEdition {
+            id: id.to_string(),
+            name: None,
+            book: PathBuf::from(format!("book/{id}")),
+            from: from.to_string(),
+            authoring: false,
+        }
+    }
+
+    /// The one edition `1`, from `v0.1.0`.
     fn editions_cfg() -> EditionsConfig {
         EditionsConfig {
-            book: PathBuf::from("book"),
             output_dir: PathBuf::from("site"),
-            toolchain: std::collections::BTreeMap::new(),
+            toolchain: crate::editions::ToolchainPins::default(),
+            editions: vec![declared("1", "v0.1.0")],
         }
     }
 
     /// With editions, a version's page links back to the book that
-    /// describes it, not to the newest book: `schema/v0.1.0/` and
-    /// `schema/v0.1.1/` both reach `book/v0.1/`, the edge page reaches
-    /// `book/main/`, and the `current/` copy carries its version's link.
+    /// covers it, not to the newest book: `schema/v0.1.0/` reaches
+    /// `book/1/` and `schema/v0.2.0/` reaches `book/2/`, the edge reaches
+    /// the unreleased `book/3/`, and the `current/` copy carries its
+    /// version's link.
     #[test]
     fn with_editions_each_version_page_brands_its_own_edition() {
         let repo = make_versioned_linkml_repo();
         let mut cfg =
             make_publish_cfg_with_versions(vec!["v0.1.0", "v0.2.0"], Some("main"), "v0.2.0");
-        cfg.editions = Some(editions_cfg());
+        cfg.editions = Some(EditionsConfig {
+            editions: vec![
+                declared("1", "v0.1.0"),
+                declared("2", "v0.2.0"),
+                declared("3", "v0.3.0"),
+            ],
+            ..editions_cfg()
+        });
         let out = repo.path().join("site/schema");
         publish_versioned(repo.path(), &cfg, &out, false).expect("publish succeeds");
 
         for (page, brand) in [
-            ("v0.1.0", "../../book/v0.1/"),
-            ("v0.2.0", "../../book/v0.2/"),
-            ("main", "../../book/main/"),
-            ("current", "../../book/v0.2/"),
+            ("v0.1.0", "../../book/1/"),
+            ("v0.2.0", "../../book/2/"),
+            ("main", "../../book/3/"),
+            ("current", "../../book/2/"),
         ] {
             let html = std::fs::read_to_string(out.join(page).join("index.html")).unwrap();
             assert!(
@@ -5145,7 +5414,7 @@ default = true
     #[test]
     fn a_dependency_page_brands_the_same_edition_one_level_deeper() {
         let repo = make_repo_with_dependency_data();
-        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], None, "v0.2.0");
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], Some("main"), "v0.2.0");
         cfg.instances.push(dep_entry());
         cfg.editions = Some(editions_cfg());
         let out = repo.path().join("site/schema");
@@ -5153,13 +5422,13 @@ default = true
 
         let own = std::fs::read_to_string(out.join("v0.2.0/index.html")).unwrap();
         assert!(
-            own.contains(r#"<a href="../../book/v0.2/" class="site-title""#),
+            own.contains(r#"<a href="../../book/1/" class="site-title""#),
             "own page; got a brand of {:?}",
             brand_of(&own)
         );
         let dep = std::fs::read_to_string(out.join("cqa/v0.2.0/index.html")).unwrap();
         assert!(
-            dep.contains(r#"<a href="../../../book/v0.2/" class="site-title""#),
+            dep.contains(r#"<a href="../../../book/1/" class="site-title""#),
             "dependency page; got a brand of {:?}",
             brand_of(&dep)
         );
@@ -5170,13 +5439,15 @@ default = true
     #[test]
     fn the_brand_spells_the_edition_the_way_its_canonical_does() {
         let repo = make_versioned_linkml_repo();
-        run(repo.path(), &["branch", "rc#2"]);
-        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], Some("rc#2"), "v0.2.0");
-        cfg.editions = Some(editions_cfg());
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], Some("main"), "v0.2.0");
+        cfg.editions = Some(EditionsConfig {
+            editions: vec![declared("rc#2", "v0.1.0")],
+            ..editions_cfg()
+        });
         let out = repo.path().join("site/schema");
         publish_versioned(repo.path(), &cfg, &out, false).expect("publish succeeds");
 
-        let html = std::fs::read_to_string(out.join("rc#2/index.html")).unwrap();
+        let html = std::fs::read_to_string(out.join("v0.2.0/index.html")).unwrap();
         assert!(
             html.contains(r#"<a href="../../book/rc%232/" class="site-title""#),
             "got a brand of {:?}",
@@ -5190,7 +5461,7 @@ default = true
     #[test]
     fn publish_refuses_editions_the_spec_parse_would_have_refused() {
         let repo = make_versioned_linkml_repo();
-        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], None, "v0.2.0");
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], Some("main"), "v0.2.0");
         cfg.editions = Some(EditionsConfig {
             output_dir: PathBuf::from("elsewhere"),
             ..editions_cfg()
@@ -5212,14 +5483,14 @@ default = true
     #[test]
     fn the_brand_follows_the_actual_output_directory() {
         let repo = make_versioned_linkml_repo();
-        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], None, "v0.2.0");
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], Some("main"), "v0.2.0");
         cfg.editions = Some(editions_cfg());
         let out = repo.path().join("site/docs/schema");
         publish_versioned(repo.path(), &cfg, &out, false).expect("publish succeeds");
 
         let html = std::fs::read_to_string(out.join("v0.2.0/index.html")).unwrap();
         assert!(
-            html.contains(r#"<a href="../../../book/v0.2/" class="site-title""#),
+            html.contains(r#"<a href="../../../book/1/" class="site-title""#),
             "got a brand of {:?}",
             brand_of(&html)
         );
@@ -5231,7 +5502,7 @@ default = true
     #[test]
     fn an_output_directory_outside_the_site_is_refused_with_editions() {
         let repo = make_versioned_linkml_repo();
-        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], None, "v0.2.0");
+        let mut cfg = make_publish_cfg_with_versions(vec!["v0.2.0"], Some("main"), "v0.2.0");
         cfg.editions = Some(editions_cfg());
         let elsewhere = tempfile::tempdir().unwrap();
         for out in [

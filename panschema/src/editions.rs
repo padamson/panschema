@@ -1,56 +1,85 @@
-//! Book editions: one published book per schema release line.
+//! Book editions: the books an author declares, each covering a span of
+//! schema releases.
 //!
-//! An edition is a minor line during 0.x and a major line after 1.0, built
-//! from the newest tag in the line, so it spans exactly the releases a
-//! consumer's pin moves within. The edge ref builds one more, unreleased,
-//! edition. Editions read the release list `panschema publish` reads
-//! (`[publishing]`), so the book and the schema docs agree on which
-//! edition every version belongs to.
+//! An edition is a book directory on the edge ref. It names the first
+//! release it covers, and the next edition's start closes it, so the spans
+//! partition the release list `panschema publish` reads (`[publishing]`):
+//! the book and the schema docs agree on which edition every version
+//! belongs to. The edge belongs to the last edition.
 //!
-//! Reference: [`docs/features/52-book-editions.md`](../../docs/features/52-book-editions.md)
+//! Reference: [`docs/features/54-book-editions-as-declared-spans.md`](../../docs/features/54-book-editions-as-declared-spans.md)
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use semver::Version;
 
 use crate::publish::{
-    BookLinkEntry, PUBLISH_FILENAME, PublishConfig, PublishError, PublishingConfig,
+    BookLinkEntry, DeclaredEdition, EditionsConfig, PUBLISH_FILENAME, PublishConfig, PublishError,
+    PublishingConfig,
 };
 
 pub mod toolchain;
 pub use toolchain::{
-    InstalledToolchain, PluginPin, TOOLCHAIN_FILENAME, ToolError, Toolchain, ToolchainFile,
+    InstalledToolchain, PinConflict, PluginPin, ToolError, Toolchain, ToolchainPins,
 };
 
 /// One edition of the book.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Edition {
-    /// The directory the edition lands in under `book/`: `v0.1`, `v1`, or
-    /// the edge label.
-    pub label: String,
-    /// The ref the edition builds from: the newest tag in its line, or the
-    /// edge ref.
-    pub source: String,
-    /// The released versions the edition spans, oldest first. Empty for
-    /// the unreleased edition.
+    /// The directory the edition lands in under `book/`.
+    pub id: String,
+    /// What the switcher and the banner call it.
+    pub name: String,
+    /// The directory holding its `book.toml`, relative to the publish spec.
+    pub book: PathBuf,
+    /// The versions in its span, pre-releases among them, oldest first.
     pub versions: Vec<String>,
+    /// The version whose schema docs the book describes: its newest
+    /// release, or the edge for an unreleased edition.
+    pub schema_version: String,
+    /// Whether new chapters and listings go into it.
+    pub authoring: bool,
 }
 
 impl Edition {
-    /// Whether the edition is built from a release tag rather than the
-    /// edge ref.
+    /// Whether the edition covers a release yet. A pre-release is not
+    /// one, so an edition holding only those is still unreleased.
     pub fn is_released(&self) -> bool {
-        !self.versions.is_empty()
+        crate::publish::newest_release(&self.versions).is_some()
     }
 }
 
+/// Every declared edition with the releases it covers, and which one is
+/// current.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditionPlan {
+    /// Newest first.
+    pub editions: Vec<Edition>,
+    /// The id of the edition the site root serves.
+    pub current: String,
+    /// The ref every edition builds from, which the newest edition holds.
+    pub edge: String,
+}
+
 impl EditionPlan {
-    /// The edition holding `version`: the line a release belongs to, or
-    /// the unreleased edition when `version` is the edge ref. The book's
-    /// toolbar and the schema page's brand both ask this, so they agree.
+    /// The edition holding `version`: the span a release falls in, or the
+    /// newest edition for the edge. The book's toolbar and the schema
+    /// page's brand both ask this, so they agree.
     pub fn edition_of(&self, version: &str) -> Option<&Edition> {
-        holding(&self.editions, version)
+        if version == self.edge {
+            return self.editions.first();
+        }
+        self.editions
+            .iter()
+            .find(|e| e.versions.iter().any(|v| v == version))
+    }
+
+    /// The edition new chapters and listings go into.
+    pub fn authoring(&self) -> &Edition {
+        self.editions
+            .iter()
+            .find(|e| e.authoring)
+            .expect("a plan marks one edition authoring")
     }
 
     /// What the toolbar asset of edition `own` is told: every edition in
@@ -61,7 +90,7 @@ impl EditionPlan {
                 .editions
                 .iter()
                 .map(|e| crate::mdbook::EditionOption {
-                    label: e.label.clone(),
+                    label: e.id.clone(),
                     unreleased: !e.is_released(),
                 })
                 .collect(),
@@ -71,149 +100,226 @@ impl EditionPlan {
     }
 }
 
-/// Every edition a release list produces, and which one is current.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EditionPlan {
-    /// Released editions newest first, then the unreleased one.
-    pub editions: Vec<Edition>,
-    /// The label of the edition the site root serves.
-    pub current: String,
-}
-
-/// Group `[publishing]`'s release list into editions and name the
-/// current one.
+/// Check `editions` against `[publishing]`, partition its release list
+/// among the declared editions, and name the current one.
 ///
-/// Fails as [`editions_of`] does, when the release list has not been
-/// read from the tags it was left to, or when `current` is held by no
-/// edition.
-pub fn plan(publishing: &PublishingConfig) -> Result<EditionPlan, PublishError> {
+/// Fails when the release list has not been read from the tags it was
+/// left to, when the config is refused (`EditionsConfig::check` says
+/// why), as `editions_of` does, and when `current` is neither a
+/// release nor the edge.
+pub fn plan(
+    editions: &EditionsConfig,
+    publishing: &PublishingConfig,
+) -> Result<EditionPlan, PublishError> {
     let (versions, current) = publishing.releases()?;
-    let editions = editions_of(versions, publishing.edge.as_deref())?;
-    let current = holding(&editions, current)
-        .map(|e| e.label.clone())
+    let spans = editions.check(publishing)?;
+    let edge = publishing
+        .edge
+        .clone()
+        .expect("the check refuses editions without an edge");
+    let mut plan = EditionPlan {
+        editions: editions_of(&spans, versions, &edge)?,
+        current: String::new(),
+        edge,
+    };
+    plan.current = plan
+        .edition_of(current)
+        .map(|e| e.id.clone())
         .ok_or_else(|| PublishError::InvalidCurrent {
             current: current.to_string(),
             versions: versions.to_vec(),
             edge: publishing.edge.clone(),
         })?;
-
-    Ok(EditionPlan { editions, current })
+    Ok(plan)
 }
 
-/// The editions a release list forms, released ones newest first and
-/// then the unreleased one from `edge`, without deciding which is
-/// current.
+/// A declaration that passed `declared`'s checks, with its start parsed.
+pub struct Span<'a> {
+    edition: &'a DeclaredEdition,
+    start: Version,
+}
+
+/// Check the declarations on their own, without a release list, and
+/// return them oldest first.
 ///
-/// Fails when a version does not parse as semver (its line cannot be
-/// known), when the tags are spelled two ways or one is listed twice
-/// (edition names would be inconsistent or ambiguous), or when the edge
-/// label is also an edition's label.
+/// Fails when there is none, when an id is not one path segment or a
+/// `from` not semver, when two share an id (in any letter case, since a
+/// case-insensitive filesystem would merge their directories), a start,
+/// or a book, and when two are marked authoring.
+pub(crate) fn declared(editions: &[DeclaredEdition]) -> Result<Vec<Span<'_>>, PublishError> {
+    if editions.is_empty() {
+        return Err(PublishError::NoEditionDeclared);
+    }
+    let mut spans: Vec<Span<'_>> = Vec::with_capacity(editions.len());
+    for edition in editions {
+        let id = || edition.id.clone();
+        if !crate::publish::is_single_path_segment(&edition.id) {
+            return Err(crate::publish::not_a_segment("an edition id", &edition.id));
+        }
+        // A Windows drive-relative path (`C:book`) has a prefix and no
+        // root, and joining it to a directory replaces the directory.
+        let anchored = edition.book.components().any(|c| {
+            matches!(
+                c,
+                std::path::Component::RootDir | std::path::Component::Prefix(_)
+            )
+        });
+        if anchored {
+            return Err(PublishError::EditionBookNotRelative {
+                id: id(),
+                book: edition.book.clone(),
+            });
+        }
+        let start = crate::publish::tag_semver(&edition.from)
+            .map(|(_, version)| release_of(&version))
+            .ok_or_else(|| PublishError::EditionFromNotSemver {
+                id: id(),
+                from: edition.from.clone(),
+            })?;
+        for seen in &spans {
+            let shared = if seen.edition.id.eq_ignore_ascii_case(&edition.id) {
+                Some(Shared::Id)
+            } else if seen.start == start {
+                Some(Shared::Start(start.clone()))
+            } else if same_book(&seen.edition.book, &edition.book) {
+                Some(Shared::Book(edition.book.clone()))
+            } else {
+                None
+            };
+            if let Some(shared) = shared {
+                return Err(PublishError::EditionsShare {
+                    first: seen.edition.id.clone(),
+                    second: id(),
+                    shared,
+                });
+            }
+            if seen.edition.authoring && edition.authoring {
+                return Err(PublishError::TwoAuthoringEditions {
+                    first: seen.edition.id.clone(),
+                    second: id(),
+                });
+            }
+        }
+        spans.push(Span { edition, start });
+    }
+    spans.sort_by(|a, b| a.start.cmp(&b.start));
+    Ok(spans)
+}
+
+/// What two declared editions may not share.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Shared {
+    /// The id, compared in any letter case.
+    Id,
+    /// The first release covered.
+    Start(Version),
+    /// The book directory.
+    Book(PathBuf),
+}
+
+impl std::fmt::Display for Shared {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Shared::Id => f.write_str("an id"),
+            Shared::Start(start) => write!(f, "the start `{start}`"),
+            Shared::Book(book) => write!(f, "the book `{}`", book.display()),
+        }
+    }
+}
+
+/// Whether two book paths name one directory: compared after `.` and
+/// `..` drop out, and in any letter case, since a case-insensitive
+/// filesystem would read both from one place.
+fn same_book(a: &Path, b: &Path) -> bool {
+    let spelled = |path: &Path| {
+        crate::publish::lexical_components(path)
+            .iter()
+            .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
+            .collect::<Vec<_>>()
+    };
+    spelled(a) == spelled(b)
+}
+
+/// The editions `spans` form over a release list, newest first, without
+/// deciding which is current; an edition covering no release describes
+/// `edge`.
+///
+/// Fails when a version does not parse as semver or is listed twice
+/// (under one spelling or two), when a release is older than every
+/// edition, or when an edition but the last covers no release.
 pub(crate) fn editions_of(
+    spans: &[Span<'_>],
     versions: &[String],
-    edge: Option<&str>,
+    edge: &str,
 ) -> Result<Vec<Edition>, PublishError> {
-    // Edition labels reuse the tags' prefix, so every tag must share one.
-    let mut spelling: Option<(&str, &str)> = None;
-    // Keyed by line, so iteration runs oldest line first; each line's
-    // versions are sorted by semver below.
-    let mut lines: BTreeMap<Line, Vec<(Version, &str)>> = BTreeMap::new();
+    let mut held: Vec<Vec<(Version, &str)>> = vec![Vec::new(); spans.len()];
     for tag in versions {
-        let (prefix, version) = crate::publish::tag_semver(tag).ok_or_else(|| {
+        let (_, version) = crate::publish::tag_semver(tag).ok_or_else(|| {
             PublishError::EditionVersionNotSemver {
                 version: tag.clone(),
             }
         })?;
-        match spelling {
-            None => spelling = Some((prefix, tag)),
-            Some((first_prefix, first)) if first_prefix != prefix => {
-                return Err(PublishError::MixedTagSpelling {
-                    first: first.to_string(),
-                    second: tag.clone(),
-                });
-            }
-            Some(_) => {}
-        }
-        let line = lines.entry(Line::of(&version)).or_default();
-        if line.iter().any(|(seen, _)| *seen == version) {
-            return Err(PublishError::DuplicateVersion {
+        // A pre-release belongs to the edition of the release it precedes.
+        let release = release_of(&version);
+        let index = spans
+            .iter()
+            .rposition(|span| span.start <= release)
+            .ok_or_else(|| PublishError::ReleaseBeforeFirstEdition {
                 version: tag.clone(),
+                edition: spans[0].edition.id.clone(),
+                from: spans[0].edition.from.clone(),
+            })?;
+        if let Some((_, first)) = held[index].iter().find(|(seen, _)| *seen == version) {
+            return Err(PublishError::DuplicateVersion {
+                first: first.to_string(),
+                second: tag.clone(),
             });
         }
-        line.push((version, tag));
+        held[index].push((version, tag));
     }
-    let prefix = spelling.map_or("", |(prefix, _)| prefix);
 
-    let mut editions: Vec<Edition> = lines
-        .into_iter()
-        .rev()
-        .map(|(line, mut tags)| {
-            tags.sort_by(|a, b| a.0.cmp(&b.0));
-            // A pin never resolves to a pre-release, so a line builds from
-            // its newest release; a line of only pre-releases has none.
-            let (_, source) = tags
-                .iter()
-                .rev()
-                .find(|(version, _)| version.pre.is_empty())
-                .or(tags.last())
-                .expect("a line holds at least one tag");
-            Edition {
-                label: format!("{prefix}{}", line.label()),
-                source: source.to_string(),
-                versions: tags.iter().map(|(_, tag)| tag.to_string()).collect(),
-            }
-        })
-        .collect();
-
-    if let Some(edge) = edge {
-        if editions.iter().any(|e| e.label == edge) {
-            return Err(PublishError::EdgeShadowsEdition {
-                edge: edge.to_string(),
+    let last = spans.len() - 1;
+    let authoring = spans
+        .iter()
+        .position(|s| s.edition.authoring)
+        .unwrap_or(last);
+    let mut out = Vec::with_capacity(spans.len());
+    for (index, (span, mut tags)) in spans.iter().zip(held).enumerate() {
+        tags.sort_by(|a, b| a.0.cmp(&b.0));
+        let versions: Vec<String> = tags.iter().map(|(_, tag)| tag.to_string()).collect();
+        // A pin never resolves to a pre-release, so the book describes the
+        // span's newest release. Without one the edition is unreleased
+        // and describes the edge it is built from.
+        let released = crate::publish::newest_release(&versions);
+        if released.is_none() && index != last {
+            return Err(PublishError::EmptyEdition {
+                id: span.edition.id.clone(),
             });
         }
-        editions.push(Edition {
-            label: edge.to_string(),
-            source: edge.to_string(),
-            versions: Vec::new(),
+        let schema_version = released.unwrap_or_else(|| edge.to_string());
+        let decl = span.edition;
+        out.push(Edition {
+            id: decl.id.clone(),
+            name: decl.name.clone().unwrap_or_else(|| decl.id.clone()),
+            book: decl.book.clone(),
+            versions,
+            schema_version,
+            authoring: index == authoring,
         });
     }
-
-    Ok(editions)
+    out.reverse();
+    Ok(out)
 }
 
-/// The edition among `editions` that holds `version`.
-fn holding<'a>(editions: &'a [Edition], version: &str) -> Option<&'a Edition> {
-    editions
-        .iter()
-        .find(|e| e.versions.iter().any(|v| v == version) || e.source == version)
+/// `version` without its pre-release and build metadata: the release a
+/// span boundary is compared on.
+fn release_of(version: &Version) -> Version {
+    Version::new(version.major, version.minor, version.patch)
 }
 
-/// A release line: what a Cargo-style caret pin moves within. Each 0.0.z
-/// release is its own line, then the minor line during 0.x, then the
-/// major line after 1.0. Variant order is release order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Line {
-    Patch(u64),
-    Minor(u64),
-    Major(u64),
-}
-
-impl Line {
-    fn of(version: &Version) -> Self {
-        match (version.major, version.minor) {
-            (0, 0) => Line::Patch(version.patch),
-            (0, minor) => Line::Minor(minor),
-            (major, _) => Line::Major(major),
-        }
-    }
-
-    fn label(self) -> String {
-        match self {
-            Line::Patch(patch) => format!("0.0.{patch}"),
-            Line::Minor(minor) => format!("0.{minor}"),
-            Line::Major(major) => major.to_string(),
-        }
-    }
-}
+/// The file a book directory pinned its tools in before
+/// `[editions.toolchain]` did.
+const SUPERSEDED_TOOLCHAIN_FILE: &str = "toolchain.toml";
 
 /// The site-root file recording which top-level entries the root copy of
 /// the current edition wrote, so the next run removes exactly those.
@@ -226,64 +332,35 @@ pub enum EditionsError {
     Publish(#[from] PublishError),
     #[error("`mdbook-panschema editions` requires an [editions] section in {PUBLISH_FILENAME}")]
     MissingEditions,
+    #[error("could not read the tree at `{reference}`: {message}")]
+    Extract { reference: String, message: String },
+    #[error("edition `{edition}`: there is no `book.toml` in `{}` at the edge", book.display())]
+    NoBook { edition: String, book: PathBuf },
     #[error(
-        "`{tag}`, a tag taken from the repository, cannot build an edition: {source}; list [publishing].versions to leave it out"
+        "edition `{edition}`: `{}` is not read; put its pins in [editions.toolchain] of {PUBLISH_FILENAME} and delete it",
+        file.display()
     )]
-    DerivedTag {
-        tag: String,
-        #[source]
-        source: Box<EditionsError>,
-    },
-    #[error("edition `{edition}`: could not read the tree at `{tag}`: {message}")]
-    Extract {
-        edition: String,
-        tag: String,
-        message: String,
-    },
-    #[error("edition `{edition}`: there is no `book.toml` in `{}` at `{tag}`", book.display())]
-    NoBook {
-        edition: String,
-        tag: String,
-        book: PathBuf,
-    },
-    #[error("edition `{edition}`: {TOOLCHAIN_FILENAME} at `{tag}` is malformed: {message}")]
-    Toolchain {
-        edition: String,
-        tag: String,
-        message: String,
-    },
+    ToolchainFileNotRead { edition: String, file: PathBuf },
     #[error(
-        "edition `{edition}`: `{tag}` has no toolchain; add {TOOLCHAIN_FILENAME} to the book at a later release, or `[editions.toolchain.\"{tag}\"]` to {PUBLISH_FILENAME}"
+        "edition `{edition}`: its book `{}` lies outside the repository, which is all the edge holds",
+        book.display()
     )]
-    ToolchainMissing { edition: String, tag: String },
-    #[error("edition `{edition}`: the toolchain for `{tag}` {problem}")]
-    ToolchainNotExact {
-        edition: String,
-        tag: String,
-        tool: String,
-        problem: String,
-    },
-    #[error("edition `{edition}`: could not install `{tool}` {pin} for `{tag}`:\n{output}")]
+    BookOutsideRepository { edition: String, book: PathBuf },
+    #[error("edition `{edition}`: could not install `{tool}` {pin}:\n{output}")]
     ToolchainInstall {
         edition: String,
-        tag: String,
         tool: String,
         pin: String,
         output: String,
     },
-    #[error("edition `{edition}`: `{command}` failed at `{tag}`:\n{output}")]
+    #[error("edition `{edition}`: `{command}` failed:\n{output}")]
     Install {
         edition: String,
-        tag: String,
         command: String,
         output: String,
     },
-    #[error("edition `{edition}`: the book at `{tag}` did not build:\n{output}")]
-    Build {
-        edition: String,
-        tag: String,
-        output: String,
-    },
+    #[error("edition `{edition}` did not build:\n{output}")]
+    Build { edition: String, output: String },
     #[error(
         "the current edition `{edition}` has a top-level `{entry}`, which at the site root {what}"
     )]
@@ -319,12 +396,12 @@ pub struct EditionsReport {
     pub site: PathBuf,
 }
 
-/// Build every edition `cfg` plans and write them under the site root:
-/// each at `book/<edition>/`, and the current one copied to the root.
+/// Build every edition `cfg` declares and write them under the site root:
+/// each at `book/<id>/`, and the current one copied to the root.
 ///
 /// `spec_dir` holds the publish spec and is where git is run; every path
-/// in `cfg` is relative to it. Each edition builds from its ref's tree,
-/// checked out through a scratch index, so the working tree is never
+/// in `cfg` is relative to it. The editions build from the edge ref's
+/// tree, checked out through a scratch index, so the working tree is never
 /// touched. All editions build before anything is written, so a failed
 /// edition leaves the previous site in place.
 pub fn build_editions(
@@ -341,10 +418,11 @@ pub fn build_editions(
         .as_ref()
         .ok_or(PublishError::EditionsWithoutPublishing)?;
     let publishing = &listed.resolve_releases(spec_dir)?;
-    // `cfg` need not have come through the publish spec's own parse, and
-    // a release list left to the tags was not known to it.
-    editions_cfg.validate(publishing)?;
-    let plan = plan(publishing)?;
+    // Planning checks the config again: `cfg` need not have come through
+    // the publish spec's own parse, and a release list left to the tags
+    // was not known to it.
+    let plan = plan(editions_cfg, publishing)
+        .map_err(|err| crate::publish::hint_if_derived(err, listed, publishing))?;
 
     // Check out from the repo's top level so a book can include files
     // from outside its own directory; the spec's paths then start from
@@ -359,52 +437,67 @@ pub fn build_editions(
     };
     let top = spec_dir.join(repo_relative("--show-cdup")?.trim());
     let prefix = repo_relative("--show-prefix")?.trim().to_string();
-    let sources: Vec<&str> = plan.editions.iter().map(|e| e.source.as_str()).collect();
-    let commits = crate::publish::resolve_refs(spec_dir, &sources)?;
+    // Every book is placed before any is built, so a refused one stops the
+    // run before the others spend a build. The checkout holds the
+    // repository and nothing above it; a book that climbs out would be
+    // read, and written to, somewhere else.
+    let books: Vec<PathBuf> = plan
+        .editions
+        .iter()
+        .map(|edition| {
+            let in_repo = Path::new(&prefix).join(&edition.book);
+            if crate::publish::climbs_out(&in_repo) {
+                return Err(EditionsError::BookOutsideRepository {
+                    edition: edition.id.clone(),
+                    book: edition.book.clone(),
+                });
+            }
+            Ok(in_repo)
+        })
+        .collect::<Result<_, _>>()?;
+    let commits = crate::publish::resolve_refs(spec_dir, &[plan.edge.as_str()])?;
 
     let scratch = tempfile::tempdir().map_err(EditionsError::Scratch)?;
+    let tree = scratch.path().join("tree");
+    extract_tree(&top, &commits[&plan.edge], &tree).map_err(|message| EditionsError::Extract {
+        reference: plan.edge.clone(),
+        message,
+    })?;
+    for (edition, book) in plan.editions.iter().zip(&books) {
+        if !tree.join(book).join("book.toml").is_file() {
+            return Err(EditionsError::NoBook {
+                edition: edition.id.clone(),
+                book: edition.book.clone(),
+            });
+        }
+        // Pins once lived beside the book. Building past the file would
+        // take every tool from `PATH` without saying so.
+        if tree.join(book).join(SUPERSEDED_TOOLCHAIN_FILE).is_file() {
+            return Err(EditionsError::ToolchainFileNotRead {
+                edition: edition.id.clone(),
+                file: edition.book.join(SUPERSEDED_TOOLCHAIN_FILE),
+            });
+        }
+    }
     let mut built: Vec<(String, PathBuf)> = Vec::new();
-    for edition in &plan.editions {
-        let build = || -> Result<PathBuf, EditionsError> {
-            let tree = scratch.path().join("tree").join(&edition.label);
-            extract_tree(&top, &commits[&edition.source], &tree).map_err(|message| {
-                EditionsError::Extract {
-                    edition: edition.label.clone(),
-                    tag: edition.source.clone(),
-                    message,
-                }
-            })?;
-            let book_dir = tree.join(&prefix).join(&editions_cfg.book);
-            build_one(
-                edition,
-                &plan,
-                &book_dir,
-                cfg,
-                editions_cfg,
-                toolchain,
-                &scratch.path().join("out").join(&edition.label),
-            )
-        };
-        // A tag the manifest never named may hold no book at all, and
-        // `versions` is the way to leave it out.
-        let html = build().map_err(|err| {
-            if listed.versions.is_none() && edition.is_released() {
-                EditionsError::DerivedTag {
-                    tag: edition.source.clone(),
-                    source: Box::new(err),
-                }
-            } else {
-                err
-            }
-        })?;
-        built.push((edition.label.clone(), html));
+    for (edition, book) in plan.editions.iter().zip(&books) {
+        let html = build_one(
+            edition,
+            &plan,
+            &tree.join(book),
+            cfg,
+            &editions_cfg.toolchain,
+            toolchain,
+            &scratch.path().join("out").join(&edition.id),
+        )?;
+        built.push((edition.id.clone(), html));
     }
 
     let site = spec_dir.join(&editions_cfg.output_dir);
     let schema_dir = schema_dir(publishing, editions_cfg);
     let current = &built
         .iter()
-        .find(|(label, _)| *label == plan.current)
+        .find(|(id, _)| *id == plan.current)
         .expect("the plan's current edition was built")
         .1;
     let entries = root_entries(current, &plan.current, &schema_dir)?;
@@ -414,15 +507,15 @@ pub fn build_editions(
     let root_copy = scratch.path().join("root");
     crate::publish::copy_dir_recursive(current, &root_copy).map_err(EditionsError::Scratch)?;
     inject_canonicals(&root_copy, &root_copy, &plan.current, 0).map_err(EditionsError::Scratch)?;
-    for (label, html) in &built {
-        inject_canonicals(html, html, label, 2).map_err(EditionsError::Scratch)?;
+    for (id, html) in &built {
+        inject_canonicals(html, html, id, 2).map_err(EditionsError::Scratch)?;
     }
     write_site(&site, &built, &root_copy, &entries, &schema_dir)?;
     Ok(EditionsReport { plan, site })
 }
 
 /// Find `panschema-publish.toml` at or above `dir`, then build every
-/// edition it plans with `toolchain`. What `mdbook-panschema editions`
+/// edition it declares with `toolchain`. What `mdbook-panschema editions`
 /// runs.
 pub fn run(dir: &Path, toolchain: &dyn Toolchain) -> anyhow::Result<EditionsReport> {
     use anyhow::Context;
@@ -436,55 +529,33 @@ pub fn run(dir: &Path, toolchain: &dyn Toolchain) -> anyhow::Result<EditionsRepo
     Ok(build_editions(spec_dir, &cfg, toolchain)?)
 }
 
-/// Install one edition's assets into its extracted book and build it
-/// into `dest`, returning the directory holding the rendered HTML.
+/// Install one edition's assets into its book in the checkout and build
+/// it into `dest`, returning the directory holding the rendered HTML.
 fn build_one(
     edition: &Edition,
     plan: &EditionPlan,
     book_dir: &Path,
     cfg: &PublishConfig,
-    editions_cfg: &crate::publish::EditionsConfig,
+    pins: &ToolchainPins,
     toolchain: &dyn Toolchain,
     dest: &Path,
 ) -> Result<PathBuf, EditionsError> {
-    let label = || edition.label.clone();
-    let tag = || edition.source.clone();
-    if !book_dir.join("book.toml").is_file() {
-        return Err(EditionsError::NoBook {
-            edition: label(),
-            tag: tag(),
-            book: editions_cfg.book.clone(),
-        });
-    }
-    // The publish spec's override covers a tag cut before the toolchain
-    // file existed, and wins over the file where both exist.
-    let pins = match editions_cfg.toolchain.get(&edition.source) {
-        Some(pins) => Some(pins.clone()),
-        None => read_toolchain(book_dir).map_err(|message| EditionsError::Toolchain {
-            edition: label(),
-            tag: tag(),
-            message,
-        })?,
-    };
-    let pins = check_pins(edition, pins)?;
+    let id = || edition.id.clone();
     for plugin in pins.plugins.iter().filter(|p| !p.install.is_empty()) {
         toolchain
-            .install_assets(&pins, &plugin.name, &plugin.install, book_dir)
+            .install_assets(pins, &plugin.name, &plugin.install, book_dir)
             .map_err(|e| {
                 tool_error(edition, e, |output| EditionsError::Install {
-                    edition: label(),
-                    tag: tag(),
+                    edition: id(),
                     command: format!("{} {}", plugin.name, plugin.install.join(" ")),
                     output,
                 })
             })?;
     }
-    // The toolbar asset always comes from the running binary, never from
-    // the tag: a tag's own copy, if it had one, is gitignored anyway, and
-    // a tag from before the asset existed gets it wired here. An entry
-    // aliasing `current/` is pointed at the release this edition was
-    // built from, so a reader reaches the schema docs of the version the
-    // book describes.
+    // The toolbar asset always comes from the running binary: the book's
+    // own copy, if it has one, is gitignored anyway. An entry aliasing
+    // `current/` is pointed at the version the edition describes, so a
+    // reader reaches the schema docs the book was written against.
     let links: Vec<BookLinkEntry> = cfg
         .book_link
         .as_ref()
@@ -496,24 +567,22 @@ fn build_one(
             let alias = entry.schema_path == "current/" || entry.schema_path.ends_with("/current/");
             if alias {
                 let base = &entry.schema_path[..entry.schema_path.len() - "current/".len()];
-                entry.schema_path = format!("{base}{}/", edition.source);
+                entry.schema_path = format!("{base}{}/", edition.schema_version);
             }
             entry
         })
         .collect();
-    let context = plan.toolbar_context(&edition.label);
+    let context = plan.toolbar_context(&edition.id);
     crate::mdbook::install_toolbar(book_dir, &links, Some(&context)).map_err(|e| {
         EditionsError::Install {
-            edition: label(),
-            tag: tag(),
+            edition: id(),
             command: "mdbook-panschema install".to_string(),
             output: format!("{e:#}"),
         }
     })?;
-    toolchain.build(&pins, book_dir, dest).map_err(|e| {
+    toolchain.build(pins, book_dir, dest).map_err(|e| {
         tool_error(edition, e, |output| EditionsError::Build {
-            edition: label(),
-            tag: tag(),
+            edition: id(),
             output,
         })
     })
@@ -528,120 +597,13 @@ fn tool_error(
 ) -> EditionsError {
     match error {
         ToolError::Install { tool, pin, output } => EditionsError::ToolchainInstall {
-            edition: edition.label.clone(),
-            tag: edition.source.clone(),
+            edition: edition.id.clone(),
             tool,
             pin,
             output,
         },
         ToolError::Run { output } => on_run(output),
     }
-}
-
-/// `<book>/toolchain.toml`, or `None` when the tag has none.
-fn read_toolchain(book_dir: &Path) -> Result<Option<ToolchainFile>, String> {
-    match std::fs::read_to_string(book_dir.join(TOOLCHAIN_FILENAME)) {
-        Ok(text) => toml::from_str(&text).map(Some).map_err(|e| e.to_string()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e.to_string()),
-    }
-}
-
-/// The pins an edition may build with. A pin that says two things is
-/// refused for every edition. A released edition renders the way it did
-/// when it shipped, so it also needs a toolchain with every pin exact:
-/// an mdbook version, and each plugin at one crates.io version or a git
-/// commit id. The unreleased edition may name a branch tip, so the
-/// dogfood loop survives, or nothing, in which case the tools come from
-/// `PATH`.
-fn check_pins(
-    edition: &Edition,
-    pins: Option<ToolchainFile>,
-) -> Result<ToolchainFile, EditionsError> {
-    let released = edition.is_released();
-    let pins = match pins {
-        Some(pins) => pins,
-        None if released => {
-            return Err(EditionsError::ToolchainMissing {
-                edition: edition.label.clone(),
-                tag: edition.source.clone(),
-            });
-        }
-        None => return Ok(ToolchainFile::default()),
-    };
-    let not_exact = |tool: &str, problem: String| EditionsError::ToolchainNotExact {
-        edition: edition.label.clone(),
-        tag: edition.source.clone(),
-        tool: tool.to_string(),
-        problem,
-    };
-    match &pins.mdbook {
-        None if released => {
-            return Err(not_exact(
-                "mdbook",
-                "names no mdbook version, which a released edition needs".to_string(),
-            ));
-        }
-        Some(version) if Version::parse(version).is_err() => {
-            return Err(not_exact(
-                "mdbook",
-                format!("pins mdbook to `{version}`, which is not one version"),
-            ));
-        }
-        _ => {}
-    }
-    for plugin in &pins.plugins {
-        let name = &plugin.name;
-        let pin = (&plugin.version, &plugin.git, &plugin.rev, &plugin.branch);
-        let contradiction = match pin {
-            (Some(_), Some(_), _, _) => Some(format!(
-                "pins `{name}` to both a version and a git repository"
-            )),
-            (Some(_), None, Some(_), _) | (Some(_), None, _, Some(_)) => Some(format!(
-                "pins `{name}` to a version beside a `rev` or `branch` that nothing uses"
-            )),
-            (None, None, Some(_), _) | (None, None, _, Some(_)) => Some(format!(
-                "names a `rev` or `branch` for `{name}` without a `git` repository"
-            )),
-            (None, Some(_), Some(_), Some(_)) => {
-                Some(format!("pins `{name}` to both a `rev` and a `branch`"))
-            }
-            _ => None,
-        };
-        if let Some(problem) = contradiction {
-            return Err(not_exact(name, problem));
-        }
-        if let Some(version) = &plugin.version
-            && Version::parse(version).is_err()
-        {
-            return Err(not_exact(
-                name,
-                format!("pins `{name}` to `{version}`, which is not one version"),
-            ));
-        }
-        if !released {
-            continue;
-        }
-        let loose = match pin {
-            (None, None, None, None) => Some(format!(
-                "pins `{name}` to nothing, which a released edition cannot build from"
-            )),
-            (None, Some(_), None, Some(_)) => Some(format!(
-                "pins `{name}` to a branch, which only the unreleased edition may"
-            )),
-            (None, Some(_), None, None) => {
-                Some(format!("pins `{name}` to a git repository without a rev"))
-            }
-            (None, Some(_), Some(rev), None) if !toolchain::is_commit_id(rev) => Some(format!(
-                "pins `{name}` to `{rev}`, which is not a commit id"
-            )),
-            _ => None,
-        };
-        if let Some(problem) = loose {
-            return Err(not_exact(name, problem));
-        }
-    }
-    Ok(pins)
 }
 
 /// Check the tree of `commit` out under `dest` through a scratch index,
@@ -884,9 +846,8 @@ fn write_site(
 
     let book = site.join("book");
     remove_entry(&book).map_err(EditionsError::Write)?;
-    for (label, html) in built {
-        crate::publish::copy_dir_recursive(html, &book.join(label))
-            .map_err(EditionsError::Write)?;
+    for (id, html) in built {
+        crate::publish::copy_dir_recursive(html, &book.join(id)).map_err(EditionsError::Write)?;
     }
 
     for name in &previous {
@@ -919,16 +880,54 @@ fn remove_entry(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::publish::tests::edition_toml as edition;
 
     fn publishing(body: &str) -> PublishingConfig {
         toml::from_str(body).expect("test [publishing] body should parse")
     }
 
-    fn labels_and_sources(plan: &EditionPlan) -> Vec<(&str, &str)> {
+    /// `[[editions.edition]]` tables, parsed without the publish spec's
+    /// checks.
+    fn editions_config(body: &str) -> EditionsConfig {
+        #[derive(serde::Deserialize)]
+        struct Spec {
+            editions: EditionsConfig,
+        }
+        toml::from_str::<Spec>(body)
+            .expect("test [editions] body should parse")
+            .editions
+    }
+
+    fn declared_editions(body: &str) -> Vec<DeclaredEdition> {
+        editions_config(body).editions
+    }
+
+    /// Two editions: `1` from `v0.1.0`, `2` from `v0.3.0`.
+    fn two_editions() -> String {
+        edition("1", "book/1", "v0.1.0") + &edition("2", "book/2", "v0.3.0")
+    }
+
+    fn plan_of(publishing_body: &str, editions_body: &str) -> Result<EditionPlan, PublishError> {
+        plan(
+            &editions_config(editions_body),
+            &publishing(publishing_body),
+        )
+    }
+
+    fn spans(plan: &EditionPlan) -> Vec<(&str, Vec<&str>)> {
         plan.editions
             .iter()
-            .map(|e| (e.label.as_str(), e.source.as_str()))
+            .map(|e| {
+                (
+                    e.id.as_str(),
+                    e.versions.iter().map(String::as_str).collect(),
+                )
+            })
             .collect()
+    }
+
+    fn id_of<'a>(plan: &'a EditionPlan, version: &str) -> Option<&'a str> {
+        plan.edition_of(version).map(|e| e.id.as_str())
     }
 
     #[test]
@@ -971,9 +970,9 @@ mod tests {
         for body in [
             "edge = \"main\"",
             "current = \"main\"\nedge = \"main\"",
-            "versions = [\"v0.1.0\"]",
+            "versions = [\"v0.1.0\"]\nedge = \"main\"",
         ] {
-            let err = plan(&publishing(body)).unwrap_err();
+            let err = plan_of(body, &two_editions()).unwrap_err();
             assert!(
                 matches!(err, PublishError::ReleasesUnresolved),
                 "body {body:?}: expected ReleasesUnresolved, got {err:?}"
@@ -982,240 +981,154 @@ mod tests {
     }
 
     #[test]
-    fn a_minor_line_is_one_edition_built_from_its_newest_patch() {
-        let plan = plan(&publishing(
-            r#"versions = ["v0.1.0", "v0.1.1", "v0.2.0"]
-               current = "v0.2.0""#,
-        ))
-        .unwrap();
-
-        assert_eq!(
-            labels_and_sources(&plan),
-            vec![("v0.2", "v0.2.0"), ("v0.1", "v0.1.1")]
-        );
-        let v01 = plan.editions.iter().find(|e| e.label == "v0.1").unwrap();
-        assert_eq!(v01.versions, vec!["v0.1.0", "v0.1.1"]);
-    }
-
-    #[test]
-    fn after_one_point_oh_an_edition_is_a_major_line() {
-        let plan = plan(&publishing(
-            r#"versions = ["v1.0.0", "v1.2.3", "v2.0.0"]
-               current = "v2.0.0""#,
-        ))
-        .unwrap();
-
-        assert_eq!(
-            labels_and_sources(&plan),
-            vec![("v2", "v2.0.0"), ("v1", "v1.2.3")]
-        );
-    }
-
-    /// Ordering by version, not by position, is the whole difference
-    /// between building `v0.1` from its newest patch and from whichever
-    /// tag the author happened to write last.
-    #[test]
-    fn the_newest_patch_is_chosen_by_semver_not_list_order() {
-        let plan = plan(&publishing(
-            r#"versions = ["v0.1.10", "v0.1.9", "v0.1.2"]
-               current = "v0.1.10""#,
-        ))
-        .unwrap();
-
-        assert_eq!(labels_and_sources(&plan), vec![("v0.1", "v0.1.10")]);
-        assert_eq!(
-            plan.editions[0].versions,
-            vec!["v0.1.2", "v0.1.9", "v0.1.10"]
-        );
-    }
-
-    #[test]
-    fn a_release_beats_its_own_pre_release() {
-        let plan = plan(&publishing(
-            r#"versions = ["v0.2.0", "v0.2.0-rc.1"]
-               current = "v0.2.0""#,
-        ))
-        .unwrap();
-
-        assert_eq!(labels_and_sources(&plan), vec![("v0.2", "v0.2.0")]);
-    }
-
-    /// A consumer's pin never resolves to a pre-release, so the line's
-    /// book describes its newest release, not a candidate after it.
-    #[test]
-    fn a_line_builds_from_its_newest_release_not_a_later_pre_release() {
-        let plan = plan(&publishing(
-            r#"versions = ["v0.2.0", "v0.2.1-rc.1"]
-               current = "v0.2.0""#,
-        ))
-        .unwrap();
-
-        assert_eq!(labels_and_sources(&plan), vec![("v0.2", "v0.2.0")]);
-    }
-
-    #[test]
-    fn a_line_of_only_pre_releases_builds_from_the_newest_one() {
-        let plan = plan(&publishing(
-            r#"versions = ["v0.3.0-rc.1", "v0.3.0-rc.2"]
-               current = "v0.3.0-rc.2""#,
-        ))
-        .unwrap();
-
-        assert_eq!(labels_and_sources(&plan), vec![("v0.3", "v0.3.0-rc.2")]);
-    }
-
-    /// Cargo's caret treats every 0.0.z as its own incompatible line, so
-    /// a pin on `0.0.1` never moves to `0.0.2`.
-    #[test]
-    fn each_zero_zero_release_is_its_own_edition() {
-        let plan = plan(&publishing(
-            r#"versions = ["v0.0.1", "v0.0.2"]
-               current = "v0.0.2""#,
-        ))
-        .unwrap();
-
-        assert_eq!(
-            labels_and_sources(&plan),
-            vec![("v0.0.2", "v0.0.2"), ("v0.0.1", "v0.0.1")]
-        );
-    }
-
-    #[test]
-    fn an_upper_case_v_prefix_is_a_prefix_too() {
-        let plan = plan(&publishing(
-            r#"versions = ["V1.0.0"]
-               current = "V1.0.0""#,
-        ))
-        .unwrap();
-
-        assert_eq!(labels_and_sources(&plan), vec![("V1", "V1.0.0")]);
-    }
-
-    /// Edition directories are named from the tags, so two spellings would
-    /// publish `book/v0.1/` beside `book/0.2/`.
-    #[test]
-    fn tags_spelled_two_ways_are_refused() {
-        let err = plan(&publishing(
-            r#"versions = ["0.1.0", "v0.1.1", "0.2.0"]
-               current = "0.2.0""#,
-        ))
+    fn plan_refuses_a_release_list_without_an_edge_to_build_from() {
+        let err = plan_of(
+            "versions = [\"v0.1.0\"]\ncurrent = \"v0.1.0\"",
+            &edition("1", "book/1", "v0.1.0"),
+        )
         .unwrap_err();
 
-        match err {
-            PublishError::MixedTagSpelling { first, second } => {
-                assert_eq!((first.as_str(), second.as_str()), ("0.1.0", "v0.1.1"))
-            }
-            other => panic!("expected MixedTagSpelling, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn a_version_listed_twice_is_refused() {
-        let err = plan(&publishing(
-            r#"versions = ["v0.1.0", "v0.1.1", "v0.1.0"]
-               current = "v0.1.1""#,
-        ))
-        .unwrap_err();
-
-        match err {
-            PublishError::DuplicateVersion { version } => assert_eq!(version, "v0.1.0"),
-            other => panic!("expected DuplicateVersion, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn tags_without_a_v_prefix_keep_that_spelling() {
-        let plan = plan(&publishing(
-            r#"versions = ["0.1.0", "0.1.1"]
-               current = "0.1.1""#,
-        ))
-        .unwrap();
-
-        assert_eq!(labels_and_sources(&plan), vec![("0.1", "0.1.1")]);
-    }
-
-    #[test]
-    fn the_edge_is_an_unreleased_edition_after_the_released_ones() {
-        let plan = plan(&publishing(
-            r#"versions = ["v0.1.1"]
-               edge = "main"
-               current = "v0.1.1""#,
-        ))
-        .unwrap();
-
-        assert_eq!(
-            labels_and_sources(&plan),
-            vec![("v0.1", "v0.1.1"), ("main", "main")]
-        );
-        let main = &plan.editions[1];
         assert!(
-            !main.is_released(),
-            "the edge edition must not count as released; got {main:?}"
-        );
-        assert!(
-            plan.editions[0].is_released(),
-            "a tagged edition is released; got {:?}",
-            plan.editions[0]
+            matches!(err, PublishError::EditionsWithoutEdge),
+            "expected EditionsWithoutEdge, got {err:?}"
         );
     }
 
     #[test]
-    fn edition_of_finds_the_line_holding_a_version_or_the_edge() {
-        let plan = plan(&publishing(
-            r#"versions = ["v0.1.0", "v0.1.1", "v0.2.0"]
+    fn each_release_belongs_to_the_edition_with_the_latest_start_at_or_below_it() {
+        let plan = plan_of(
+            r#"versions = ["v0.1.0", "v0.1.1", "v0.2.0", "v0.3.0", "v0.3.1"]
                edge = "main"
-               current = "v0.2.0""#,
-        ))
+               current = "v0.3.1""#,
+            &two_editions(),
+        )
         .unwrap();
 
         assert_eq!(
-            plan.edition_of("v0.1.0").map(|e| e.label.as_str()),
-            Some("v0.1")
+            spans(&plan),
+            vec![
+                ("2", vec!["v0.3.0", "v0.3.1"]),
+                ("1", vec!["v0.1.0", "v0.1.1", "v0.2.0"]),
+            ]
         );
-        assert_eq!(
-            plan.edition_of("v0.1.1").map(|e| e.label.as_str()),
-            Some("v0.1")
-        );
-        assert_eq!(
-            plan.edition_of("main").map(|e| e.label.as_str()),
-            Some("main")
-        );
-        assert_eq!(plan.edition_of("v0.3.0"), None);
+        assert_eq!(id_of(&plan, "main"), Some("2"), "the edge is the newest's");
     }
 
     #[test]
-    fn the_current_edition_is_the_line_holding_current() {
-        let plan = plan(&publishing(
-            r#"versions = ["v0.1.0", "v0.1.1", "v0.2.0"]
+    fn the_order_editions_are_declared_in_does_not_matter() {
+        let releases = r#"versions = ["v0.1.0", "v0.3.0"]
+                          edge = "main"
+                          current = "v0.3.0""#;
+        let reversed = edition("2", "book/2", "v0.3.0") + &edition("1", "book/1", "v0.1.0");
+
+        assert_eq!(
+            plan_of(releases, &reversed).unwrap(),
+            plan_of(releases, &two_editions()).unwrap()
+        );
+    }
+
+    /// `v0.3.0-rc.1` sorts below `v0.3.0` in semver, but it previews the
+    /// release the second edition starts at, so it belongs there.
+    #[test]
+    fn a_pre_release_belongs_to_the_edition_of_the_release_it_precedes() {
+        let plan = plan_of(
+            r#"versions = ["v0.1.0", "v0.3.0-rc.1"]
                edge = "main"
                current = "v0.1.0""#,
-        ))
+            &two_editions(),
+        )
         .unwrap();
 
-        assert_eq!(plan.current, "v0.1");
+        assert_eq!(id_of(&plan, "v0.3.0-rc.1"), Some("2"));
+    }
+
+    /// Ordering by version, not by position, is the difference between
+    /// linking the span's newest release and whichever tag the author
+    /// listed last; a pin never resolves to a pre-release, so a release
+    /// wins over a later candidate, and candidates alone leave the
+    /// edition unreleased.
+    #[test]
+    fn an_edition_describes_its_newest_release_by_semver_and_the_edge_while_it_has_none() {
+        for (versions, expected, released) in [
+            (r#"["v0.1.10", "v0.1.9", "v0.1.2"]"#, "v0.1.10", true),
+            (r#"["v0.1.0", "v0.1.1-rc.1"]"#, "v0.1.0", true),
+            (r#"["v0.1.0-rc.1", "v0.1.0-rc.2"]"#, "main", false),
+        ] {
+            let plan = plan_of(
+                &format!("versions = {versions}\nedge = \"main\"\ncurrent = \"main\""),
+                &edition("1", "book/1", "v0.1.0"),
+            )
+            .unwrap();
+            let only = &plan.editions[0];
+            assert_eq!(
+                (only.schema_version.as_str(), only.is_released()),
+                (expected, released),
+                "versions {versions}"
+            );
+        }
     }
 
     #[test]
-    fn current_naming_the_edge_makes_the_unreleased_edition_current() {
-        let plan = plan(&publishing(
-            r#"versions = ["v0.1.1"]
+    fn the_last_edition_without_a_release_is_unreleased_and_describes_the_edge() {
+        let plan = plan_of(
+            r#"versions = ["v0.1.0", "v0.2.0"]
                edge = "main"
-               current = "main""#,
-        ))
+               current = "v0.2.0""#,
+            &two_editions(),
+        )
         .unwrap();
 
-        assert_eq!(plan.current, "main");
+        let second = &plan.editions[0];
+        assert_eq!(second.id, "2");
+        assert!(!second.is_released(), "got {second:?}");
+        assert_eq!(second.schema_version, "main");
+        assert!(
+            plan.editions[1].is_released(),
+            "the first edition covers both releases; got {:?}",
+            plan.editions[1]
+        );
+    }
+
+    #[test]
+    fn edition_of_finds_the_span_holding_a_version_and_the_newest_edition_for_the_edge() {
+        let plan = plan_of(
+            r#"versions = ["v0.1.0", "v0.3.0"]
+               edge = "main"
+               current = "v0.3.0""#,
+            &two_editions(),
+        )
+        .unwrap();
+
+        assert_eq!(id_of(&plan, "v0.1.0"), Some("1"));
+        assert_eq!(id_of(&plan, "v0.3.0"), Some("2"));
+        assert_eq!(id_of(&plan, "main"), Some("2"));
+        assert_eq!(id_of(&plan, "v0.2.0"), None, "an unlisted version");
+    }
+
+    #[test]
+    fn the_current_edition_is_the_one_holding_current_or_the_newest_for_the_edge() {
+        for (current, expected) in [("v0.1.0", "1"), ("v0.3.0", "2"), ("main", "2")] {
+            let plan = plan_of(
+                &format!(
+                    "versions = [\"v0.1.0\", \"v0.3.0\"]\nedge = \"main\"\ncurrent = \"{current}\""
+                ),
+                &two_editions(),
+            )
+            .unwrap();
+            assert_eq!(plan.current, expected, "current {current}");
+        }
     }
 
     /// `plan` is public, so it can be handed a `[publishing]` that never
     /// went through the publish spec's own validation.
     #[test]
     fn a_current_in_no_edition_is_refused() {
-        let err = plan(&publishing(
-            r#"versions = ["v0.1.1"]
+        let err = plan_of(
+            r#"versions = ["v0.1.0"]
                edge = "main"
                current = "v0.9.0""#,
-        ))
+            &two_editions(),
+        )
         .unwrap_err();
 
         match err {
@@ -1225,11 +1138,223 @@ mod tests {
     }
 
     #[test]
-    fn a_version_that_is_not_semver_is_refused_by_name() {
-        let err = plan(&publishing(
-            r#"versions = ["v0.1.0", "release-2"]
+    fn an_edition_is_named_by_its_id_unless_it_has_a_name() {
+        let plan = plan_of(
+            r#"versions = ["v0.1.0", "v0.3.0"]
+               edge = "main"
+               current = "v0.3.0""#,
+            &(two_editions() + "name = \"Second edition\"\n"),
+        )
+        .unwrap();
+
+        let names: Vec<(&str, &str)> = plan
+            .editions
+            .iter()
+            .map(|e| (e.id.as_str(), e.name.as_str()))
+            .collect();
+        assert_eq!(names, vec![("2", "Second edition"), ("1", "1")]);
+    }
+
+    #[test]
+    fn the_last_edition_is_authoring_unless_another_is_marked() {
+        let releases = r#"versions = ["v0.1.0", "v0.3.0"]
+                          edge = "main"
+                          current = "v0.3.0""#;
+
+        let unmarked = plan_of(releases, &two_editions()).unwrap();
+        assert_eq!(unmarked.authoring().id, "2");
+
+        let marked = edition("1", "book/1", "v0.1.0")
+            + "authoring = true\n"
+            + &edition("2", "book/2", "v0.3.0");
+        let marked = plan_of(releases, &marked).unwrap();
+        assert_eq!(marked.authoring().id, "1");
+        assert_eq!(
+            marked.editions.iter().filter(|e| e.authoring).count(),
+            1,
+            "exactly one edition is authoring; got {:?}",
+            marked.editions
+        );
+    }
+
+    #[test]
+    fn two_authoring_editions_are_refused_naming_both() {
+        let body = edition("1", "book/1", "v0.1.0")
+            + "authoring = true\n"
+            + &edition("2", "book/2", "v0.3.0")
+            + "authoring = true\n";
+
+        match declared(&declared_editions(&body)).err() {
+            Some(PublishError::TwoAuthoringEditions { first, second }) => {
+                assert_eq!((first.as_str(), second.as_str()), ("1", "2"))
+            }
+            other => panic!("expected TwoAuthoringEditions, got {other:?}"),
+        }
+    }
+
+    /// Declared newest first, so the edition named is the first by start,
+    /// not by position.
+    #[test]
+    fn a_release_older_than_every_edition_is_refused_naming_it_and_the_first_edition() {
+        let err = plan_of(
+            r#"versions = ["v0.0.9", "v0.1.0"]
+               edge = "main"
                current = "v0.1.0""#,
-        ))
+            &(edition("2", "book/2", "v0.3.0") + &edition("1", "book/1", "v0.1.0")),
+        )
+        .unwrap_err();
+
+        match err {
+            PublishError::ReleaseBeforeFirstEdition {
+                version,
+                edition,
+                from,
+            } => assert_eq!(
+                (version.as_str(), edition.as_str(), from.as_str()),
+                ("v0.0.9", "1", "v0.1.0")
+            ),
+            other => panic!("expected ReleaseBeforeFirstEdition, got {other:?}"),
+        }
+    }
+
+    /// A pre-release is not a release, so a span holding only one is as
+    /// empty as a span holding nothing.
+    #[test]
+    fn an_edition_before_the_last_that_covers_no_release_is_refused() {
+        let three = two_editions() + &edition("3", "book/3", "v0.4.0");
+
+        for versions in [
+            r#"["v0.1.0", "v0.4.0"]"#,
+            r#"["v0.1.0", "v0.3.0-rc.1", "v0.4.0"]"#,
+        ] {
+            let err = plan_of(
+                &format!("versions = {versions}\nedge = \"main\"\ncurrent = \"v0.4.0\""),
+                &three,
+            )
+            .unwrap_err();
+
+            match err {
+                PublishError::EmptyEdition { id } => assert_eq!(id, "2", "versions {versions}"),
+                other => panic!("versions {versions}: expected EmptyEdition, got {other:?}"),
+            }
+        }
+    }
+
+    /// A start is compared as a release, so two spellings of one version
+    /// are one start; an id or a book in another letter case is the same
+    /// directory on a case-insensitive filesystem; a book path is compared
+    /// after `.` and a trailing separator drop out.
+    #[test]
+    fn editions_sharing_an_id_a_start_or_a_book_are_refused_naming_both() {
+        let start = Version::new(0, 1, 0);
+        for (second, shared) in [
+            (edition("a", "book/2", "v0.3.0"), Shared::Id),
+            (edition("A", "book/2", "v0.3.0"), Shared::Id),
+            (
+                edition("b", "book/2", "v0.1.0"),
+                Shared::Start(start.clone()),
+            ),
+            (edition("b", "book/2", "0.1.0"), Shared::Start(start)),
+            (
+                edition("b", "./book/a/", "v0.3.0"),
+                Shared::Book(PathBuf::from("./book/a/")),
+            ),
+            (
+                edition("b", "Book/A", "v0.3.0"),
+                Shared::Book(PathBuf::from("Book/A")),
+            ),
+        ] {
+            let body = edition("a", "book/a", "v0.1.0") + &second;
+            match declared(&declared_editions(&body)).err() {
+                Some(PublishError::EditionsShare {
+                    first,
+                    second: got,
+                    shared: got_shared,
+                }) => assert_eq!(
+                    (first.as_str(), got, got_shared),
+                    ("a", declared_editions(&second)[0].id.clone(), shared),
+                    "case:\n{second}"
+                ),
+                other => panic!("case:\n{second}\nexpected EditionsShare, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn what_two_editions_share_is_named_with_its_value() {
+        for (shared, token) in [
+            (Shared::Id, "id"),
+            (Shared::Start(Version::new(0, 1, 0)), "0.1.0"),
+            (Shared::Book(PathBuf::from("book/a")), "book/a"),
+        ] {
+            let said = shared.to_string();
+            assert!(
+                said.contains(token),
+                "{shared:?} should name `{token}`; got: {said}"
+            );
+        }
+    }
+
+    /// A book is read from the edge's checkout, never from wherever an
+    /// absolute path points, nor a Windows path relative to a drive or to
+    /// the current drive's root.
+    #[test]
+    fn a_book_that_is_not_a_relative_path_is_refused() {
+        let books: &[&str] = if cfg!(windows) {
+            &["C:\\\\book", "C:book", "\\\\book"]
+        } else {
+            &["/book"]
+        };
+        for book in books {
+            match declared(&declared_editions(&edition("1", book, "v0.1.0"))).err() {
+                Some(PublishError::EditionBookNotRelative { id, .. }) => {
+                    assert_eq!(id, "1", "book {book}")
+                }
+                other => panic!("book {book}: expected EditionBookNotRelative, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn an_id_that_is_not_one_path_segment_is_refused() {
+        for id in ["", ".", "..", "a/b", "a\\\\b"] {
+            match declared(&declared_editions(&edition(id, "book/1", "v0.1.0"))).err() {
+                Some(PublishError::InvalidSegment { what, value, .. }) => assert_eq!(
+                    (what.as_str(), value),
+                    ("an edition id", id.replace("\\\\", "\\"))
+                ),
+                other => panic!("id {id:?}: expected InvalidSegment, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_from_that_is_not_semver_is_refused_naming_the_edition() {
+        match declared(&declared_editions(&edition("1", "book/1", "first"))).err() {
+            Some(PublishError::EditionFromNotSemver { id, from }) => {
+                assert_eq!((id.as_str(), from.as_str()), ("1", "first"))
+            }
+            other => panic!("expected EditionFromNotSemver, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn no_declared_edition_is_refused() {
+        let err = declared(&[]).err();
+        assert!(
+            matches!(err, Some(PublishError::NoEditionDeclared)),
+            "expected NoEditionDeclared, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_version_that_is_not_semver_is_refused_by_name() {
+        let err = plan_of(
+            r#"versions = ["v0.1.0", "release-2"]
+               edge = "main"
+               current = "v0.1.0""#,
+            &two_editions(),
+        )
         .unwrap_err();
 
         match err {
@@ -1238,18 +1363,26 @@ mod tests {
         }
     }
 
+    /// Two spellings of one version are one version, and the error names
+    /// both so the author can find the pair.
     #[test]
-    fn an_edge_label_that_is_also_an_edition_label_is_refused() {
-        let err = plan(&publishing(
-            r#"versions = ["v0.1.1"]
-               edge = "v0.1"
-               current = "v0.1.1""#,
-        ))
-        .unwrap_err();
+    fn a_version_listed_twice_is_refused_naming_both_spellings() {
+        for (versions, pair) in [
+            (r#"["v0.1.0", "v0.1.1", "v0.1.0"]"#, ("v0.1.0", "v0.1.0")),
+            (r#"["v0.1.0", "v0.1.1", "0.1.0"]"#, ("v0.1.0", "0.1.0")),
+        ] {
+            let err = plan_of(
+                &format!("versions = {versions}\nedge = \"main\"\ncurrent = \"v0.1.1\""),
+                &two_editions(),
+            )
+            .unwrap_err();
 
-        match err {
-            PublishError::EdgeShadowsEdition { edge } => assert_eq!(edge, "v0.1"),
-            other => panic!("expected EdgeShadowsEdition, got {other:?}"),
+            match err {
+                PublishError::DuplicateVersion { first, second } => {
+                    assert_eq!((first.as_str(), second.as_str()), pair)
+                }
+                other => panic!("versions {versions}: expected DuplicateVersion, got {other:?}"),
+            }
         }
     }
 }
@@ -1257,27 +1390,30 @@ mod tests {
 #[cfg(test)]
 mod build_tests {
     use super::*;
-    use crate::publish::tests::{init_repo, run as git};
+    use crate::publish::tests::{edition_toml as edition, init_repo, run as git, spec_declaring};
     use std::cell::RefCell;
+    use std::collections::BTreeMap;
     use std::fs;
 
     /// Builds a book so a test can see what went in: every `src/**/*.md`
     /// becomes the same path ending `.html`, holding the markdown's text,
     /// and `assets.txt` lists the book directory's top-level entries, so the
     /// installs that ran before the build are visible. A chapter holding
-    /// `BROKEN` fails the build, and a plugin named `broken-plugin` fails its
-    /// install.
+    /// `BROKEN` fails the build, and in a book directory named `2` a plugin
+    /// named `broken-plugin` fails its install and one named
+    /// `uninstallable` cannot be installed, so which edition fails does not
+    /// depend on the order they build in.
     #[derive(Default)]
     struct FakeToolchain {
         installs: RefCell<Vec<(String, Vec<String>)>>,
         /// The pins each build was given, in build order.
-        builds: RefCell<Vec<ToolchainFile>>,
+        builds: RefCell<Vec<ToolchainPins>>,
     }
 
     impl Toolchain for FakeToolchain {
         fn install_assets(
             &self,
-            _pins: &ToolchainFile,
+            _pins: &ToolchainPins,
             plugin: &str,
             args: &[String],
             book_dir: &Path,
@@ -1285,12 +1421,13 @@ mod build_tests {
             self.installs
                 .borrow_mut()
                 .push((plugin.to_string(), args.to_vec()));
-            if plugin == "broken-plugin" {
+            let second = book_dir.ends_with("2");
+            if second && plugin == "broken-plugin" {
                 return Err(ToolError::Run {
                     output: "broken-plugin: no such asset".to_string(),
                 });
             }
-            if plugin == "uninstallable" {
+            if second && plugin == "uninstallable" {
                 return Err(ToolError::Install {
                     tool: plugin.to_string(),
                     pin: "9.9.9".to_string(),
@@ -1306,7 +1443,7 @@ mod build_tests {
 
         fn build(
             &self,
-            pins: &ToolchainFile,
+            pins: &ToolchainPins,
             book_dir: &Path,
             dest: &Path,
         ) -> Result<PathBuf, ToolError> {
@@ -1391,10 +1528,12 @@ mod build_tests {
         }
     }
 
-    /// A repo whose book's chapter names the release it was written at:
-    /// `v0.1.0`, `v0.1.1`, `v0.2.0` (which adds a second chapter and a
-    /// directory), then `main` past them. Every tag pins mdbook 0.5.2 in
-    /// its toolchain file. `site/` is ignored, as a consumer's would be.
+    /// A repo with two edition books on `main`: `book/1/`, whose chapter
+    /// reads `first`, and `book/2/`, whose chapter reads `second` beside an
+    /// extra chapter and a directory. The tags `v0.1.0`, `v0.1.1` and
+    /// `v0.2.0` hold earlier text (`first at v0.1.1`, and so on), so a page
+    /// that reads `first` came from the edge. `site/` is ignored, as a
+    /// consumer's would be.
     fn book_repo() -> tempfile::TempDir {
         let repo = init_repo();
         let p = repo.path();
@@ -1402,48 +1541,58 @@ mod build_tests {
             p,
             &[
                 (".gitignore", "site/\n"),
-                ("book/book.toml", "[book]\ntitle = \"T\"\n"),
-                ("book/toolchain.toml", "mdbook = \"0.5.2\"\n"),
-                ("book/src/chapter.md", "v0.1.0"),
+                ("book/1/book.toml", "[book]\ntitle = \"First\"\n"),
+                ("book/1/src/chapter.md", "first at v0.1.0"),
             ],
             Some("v0.1.0"),
         );
-        commit(p, &[("book/src/chapter.md", "v0.1.1")], Some("v0.1.1"));
+        commit(
+            p,
+            &[("book/1/src/chapter.md", "first at v0.1.1")],
+            Some("v0.1.1"),
+        );
         commit(
             p,
             &[
-                ("book/src/chapter.md", "v0.2.0"),
-                ("book/src/extra.md", "only in v0.2"),
-                ("book/src/part/page.md", "only in v0.2"),
+                ("book/2/book.toml", "[book]\ntitle = \"Second\"\n"),
+                ("book/2/src/chapter.md", "second at v0.2.0"),
+                ("book/2/src/extra.md", "only in the second"),
+                ("book/2/src/part/page.md", "only in the second"),
             ],
             Some("v0.2.0"),
         );
-        commit(p, &[("book/src/chapter.md", "main")], None);
+        commit(
+            p,
+            &[
+                ("book/1/src/chapter.md", "first"),
+                ("book/2/src/chapter.md", "second"),
+            ],
+            None,
+        );
         repo
     }
 
-    /// The fixture's publish spec, with `extra` appended to `[editions]`
-    /// (or starting a later section).
+    /// The fixture's two editions: `1` from `v0.1.0` and `2` from `v0.2.0`.
+    const EDITIONS: &str = "[[editions.edition]]\nid = \"1\"\nbook = \"book/1\"\nfrom = \"v0.1.0\"\n\
+                            [[editions.edition]]\nid = \"2\"\nbook = \"book/2\"\nfrom = \"v0.2.0\"\n";
+
+    /// The fixture's publish spec, with `extra` after the editions (a key
+    /// of the last edition, or a later table).
     fn spec(current: &str, extra: &str) -> PublishConfig {
         spec_with(
             &format!(
                 "versions = [\"v0.1.0\", \"v0.1.1\", \"v0.2.0\"]\n\
                  edge = \"main\"\ncurrent = \"{current}\""
             ),
-            extra,
+            &format!("{EDITIONS}{extra}"),
         )
     }
 
-    /// The fixture's publish spec with the given `[publishing]` body.
-    fn spec_with(publishing: &str, extra: &str) -> PublishConfig {
-        format!(
-            "[schema]\nname = \"x\"\nversion = \"0.2.0\"\nlinkml = \"1.7.0\"\n\
-             [files]\nmain = \"schema.yaml\"\n\
-             [publishing]\n{publishing}\n\
-             [editions]\n{extra}\n"
-        )
-        .parse()
-        .expect("fixture spec should parse")
+    /// A publish spec with the given `[publishing]` and `[editions]` bodies.
+    fn spec_with(publishing: &str, editions: &str) -> PublishConfig {
+        spec_declaring(publishing, "", editions)
+            .parse()
+            .expect("fixture spec should parse")
     }
 
     fn read(path: impl AsRef<Path>) -> String {
@@ -1476,109 +1625,140 @@ mod build_tests {
     }
 
     #[test]
-    fn a_derived_tag_without_a_book_names_itself_and_the_way_out() {
-        let repo = init_repo();
-        let p = repo.path();
-        commit(p, &[("README.md", "before the book")], Some("v0.0.1"));
-        commit(
-            p,
-            &[
-                ("book/book.toml", "[book]\ntitle = \"T\"\n"),
-                ("book/toolchain.toml", "mdbook = \"0.5.2\"\n"),
-                ("book/src/chapter.md", "v0.1.0"),
-            ],
-            Some("v0.1.0"),
-        );
-
-        let err = build_editions(p, &spec_with("", ""), &FakeToolchain::default()).unwrap_err();
-
-        assert!(
-            matches!(&err, EditionsError::DerivedTag { tag, source }
-                if tag == "v0.0.1" && matches!(**source, EditionsError::NoBook { .. })),
-            "expected DerivedTag over NoBook, got {err:?}"
-        );
-        assert!(
-            err.to_string().contains("list [publishing].versions"),
-            "{err}"
-        );
-    }
-
-    #[test]
-    fn a_listed_tag_without_a_book_is_reported_as_itself() {
-        let repo = init_repo();
-        let p = repo.path();
-        commit(p, &[("README.md", "before the book")], Some("v0.0.1"));
-        commit(
-            p,
-            &[
-                ("book/book.toml", "[book]\ntitle = \"T\"\n"),
-                ("book/toolchain.toml", "mdbook = \"0.5.2\"\n"),
-                ("book/src/chapter.md", "v0.1.0"),
-            ],
-            Some("v0.1.0"),
-        );
-        let cfg = spec_with("versions = [\"v0.0.1\", \"v0.1.0\"]", "");
-
-        let err = build_editions(p, &cfg, &FakeToolchain::default()).unwrap_err();
-
-        assert!(
-            matches!(err, EditionsError::NoBook { ref tag, .. } if tag == "v0.0.1"),
-            "expected NoBook, got {err:?}"
-        );
-    }
-
-    #[test]
-    fn the_editions_come_from_the_tags_when_the_release_list_is_omitted() {
+    fn the_releases_come_from_the_tags_when_the_release_list_is_omitted() {
         let repo = book_repo();
 
         let report = build_editions(
             repo.path(),
-            &spec_with("edge = \"main\"", ""),
+            &spec_with("edge = \"main\"", EDITIONS),
             &FakeToolchain::default(),
         )
         .unwrap();
 
-        let planned: Vec<(&str, &str)> = report
+        let planned: Vec<(&str, &[String])> = report
             .plan
             .editions
             .iter()
-            .map(|e| (e.label.as_str(), e.source.as_str()))
+            .map(|e| (e.id.as_str(), e.versions.as_slice()))
             .collect();
         assert_eq!(
             planned,
-            [("v0.2", "v0.2.0"), ("v0.1", "v0.1.1"), ("main", "main")]
+            [
+                ("2", &["v0.2.0".to_string()][..]),
+                ("1", &["v0.1.0".to_string(), "v0.1.1".to_string()][..])
+            ]
         );
-        assert_eq!(report.plan.current, "v0.2");
-        assert_eq!(body(repo.path().join("site/chapter.html")), "v0.2.0");
+        assert_eq!(report.plan.current, "2");
     }
 
     #[test]
-    fn an_override_for_a_tag_no_edition_builds_from_is_refused_once_the_tags_are_read() {
-        let repo = book_repo();
-        // Which tags exist is unknown at parse time, so the spec parses.
-        let cfg = spec_with(
-            "edge = \"main\"",
-            "[editions.toolchain.\"v9.9.9\"]\nmdbook = \"0.5.2\"",
-        );
-
-        let err = build_editions(repo.path(), &cfg, &FakeToolchain::default()).unwrap_err();
-
-        assert!(
-            matches!(err, EditionsError::Publish(PublishError::UnknownToolchainKey { ref key, .. })
-                if key == "v9.9.9"),
-            "expected UnknownToolchainKey, got {err:?}"
-        );
-    }
-
-    #[test]
-    fn every_edition_lands_at_its_stable_path_built_from_its_own_tree() {
+    fn every_edition_lands_at_its_id_built_from_the_edge() {
         let repo = book_repo();
         build_editions(repo.path(), &spec("v0.2.0", ""), &FakeToolchain::default()).unwrap();
 
         let book = repo.path().join("site/book");
-        assert_eq!(body(book.join("v0.1/chapter.html")), "v0.1.1");
-        assert_eq!(body(book.join("v0.2/chapter.html")), "v0.2.0");
-        assert_eq!(body(book.join("main/chapter.html")), "main");
+        assert_eq!(body(book.join("1/chapter.html")), "first");
+        assert_eq!(body(book.join("2/chapter.html")), "second");
+    }
+
+    /// The edge ref, not the checkout, is what publishes: an edit nobody
+    /// committed is not in the site.
+    #[test]
+    fn an_uncommitted_edit_is_not_published() {
+        let repo = book_repo();
+        fs::write(repo.path().join("book/1/src/chapter.md"), "uncommitted").unwrap();
+
+        build_editions(repo.path(), &spec("v0.2.0", ""), &FakeToolchain::default()).unwrap();
+
+        assert_eq!(body(repo.path().join("site/book/1/chapter.html")), "first");
+    }
+
+    /// The second edition's book does not exist at `v0.1.1`, so a build
+    /// that read the checked-out commit could not have written it.
+    #[test]
+    fn the_editions_build_from_the_edge_whatever_is_checked_out() {
+        let repo = book_repo();
+        git(repo.path(), &["checkout", "--quiet", "v0.1.1"]);
+
+        build_editions(repo.path(), &spec("v0.2.0", ""), &FakeToolchain::default()).unwrap();
+
+        let book = repo.path().join("site/book");
+        assert_eq!(body(book.join("1/chapter.html")), "first");
+        assert_eq!(body(book.join("2/chapter.html")), "second");
+    }
+
+    #[test]
+    fn the_editions_land_under_the_configured_site_root() {
+        let repo = book_repo();
+        let cfg = spec_with(
+            "versions = [\"v0.1.0\", \"v0.1.1\", \"v0.2.0\"]\nedge = \"main\"\n\
+             current = \"v0.2.0\"\noutput_dir = \"public/schema\"",
+            &format!("output_dir = \"public\"\n{EDITIONS}"),
+        );
+
+        let report = build_editions(repo.path(), &cfg, &FakeToolchain::default()).unwrap();
+
+        assert_eq!(report.site, repo.path().join("public"));
+        assert_eq!(
+            body(repo.path().join("public/book/1/chapter.html")),
+            "first"
+        );
+        assert_eq!(body(repo.path().join("public/chapter.html")), "second");
+        assert!(
+            !repo.path().join("site").exists(),
+            "nothing lands in the default"
+        );
+    }
+
+    /// The refused book is the older edition's, so a check made as each
+    /// edition builds would already have built the newer one.
+    #[test]
+    fn a_book_outside_the_repository_is_refused_before_anything_builds() {
+        let repo = book_repo();
+        let toolchain = FakeToolchain::default();
+        let cfg = spec_with(
+            "versions = [\"v0.1.0\", \"v0.2.0\"]\nedge = \"main\"\ncurrent = \"v0.2.0\"",
+            &(edition("1", "../elsewhere", "v0.1.0") + &edition("2", "book/2", "v0.2.0")),
+        );
+
+        let err = build_editions(repo.path(), &cfg, &toolchain).unwrap_err();
+
+        match err {
+            EditionsError::BookOutsideRepository { edition, book } => {
+                assert_eq!(
+                    (edition.as_str(), book),
+                    ("1", PathBuf::from("../elsewhere"))
+                )
+            }
+            other => panic!("expected BookOutsideRepository, got {other:?}"),
+        }
+        assert!(
+            toolchain.installs.borrow().is_empty() && toolchain.builds.borrow().is_empty(),
+            "nothing may install or build first"
+        );
+    }
+
+    #[test]
+    fn an_unreleased_last_edition_builds_and_is_current_for_the_edge() {
+        let repo = book_repo();
+        commit(
+            repo.path(),
+            &[
+                ("book/3/book.toml", "[book]\n"),
+                ("book/3/src/chapter.md", "third"),
+            ],
+            None,
+        );
+        let cfg = spec_with(
+            "versions = [\"v0.1.0\", \"v0.1.1\", \"v0.2.0\"]\nedge = \"main\"\ncurrent = \"main\"",
+            &(EDITIONS.to_string() + &edition("3", "book/3", "v0.3.0")),
+        );
+
+        let report = build_editions(repo.path(), &cfg, &FakeToolchain::default()).unwrap();
+
+        assert_eq!(report.plan.current, "3");
+        assert_eq!(body(repo.path().join("site/book/3/chapter.html")), "third");
+        assert_eq!(body(repo.path().join("site/chapter.html")), "third");
     }
 
     #[test]
@@ -1586,7 +1766,7 @@ mod build_tests {
         let repo = book_repo();
         build_editions(repo.path(), &spec("v0.1.0", ""), &FakeToolchain::default()).unwrap();
 
-        assert_eq!(body(repo.path().join("site/chapter.html")), "v0.1.1");
+        assert_eq!(body(repo.path().join("site/chapter.html")), "first");
     }
 
     #[test]
@@ -1608,30 +1788,30 @@ mod build_tests {
         build_editions(repo.path(), &spec("v0.2.0", ""), &toolchain).unwrap();
         assert!(
             repo.path().join("site/extra.html").is_file(),
-            "v0.2's extra chapter should be at the root while v0.2 is current"
+            "the second edition's extra chapter should be at the root while it is current"
         );
 
         build_editions(repo.path(), &spec("v0.1.0", ""), &toolchain).unwrap();
 
         assert!(
             !repo.path().join("site/extra.html").exists(),
-            "v0.2's extra chapter must leave the root when v0.1 becomes current"
+            "the second edition's extra chapter must leave the root when the first becomes current"
         );
         assert!(
             !repo.path().join("site/part").exists(),
-            "v0.2's directory must leave the root when v0.1 becomes current"
+            "the second edition's directory must leave the root when the first becomes current"
         );
-        assert_eq!(body(repo.path().join("site/chapter.html")), "v0.1.1");
+        assert_eq!(body(repo.path().join("site/chapter.html")), "first");
     }
 
     #[test]
     fn a_root_entry_that_would_overwrite_the_schema_docs_or_the_editions_is_refused() {
         for (page, entry) in [
-            ("book/src/schema/page.md", "schema"),
-            ("book/src/Schema/page.md", "Schema"),
-            ("book/src/Book/page.md", "Book"),
+            ("book/2/src/schema/page.md", "schema"),
+            ("book/2/src/Schema/page.md", "Schema"),
+            ("book/2/src/Book/page.md", "Book"),
             (
-                "book/src/.panschema-editions-root",
+                "book/2/src/.panschema-editions-root",
                 ".panschema-editions-root",
             ),
         ] {
@@ -1649,7 +1829,7 @@ mod build_tests {
                 } => {
                     assert_eq!(
                         (edition.as_str(), got.as_str()),
-                        ("main", entry),
+                        ("2", entry),
                         "case {page}"
                     )
                 }
@@ -1683,50 +1863,74 @@ mod build_tests {
     }
 
     #[test]
-    fn plugins_the_tags_toolchain_lists_install_before_the_build() {
+    fn the_toolchains_plugins_install_into_every_edition_before_its_build() {
         let repo = book_repo();
-        commit(
-            repo.path(),
-            &[(
-                "book/toolchain.toml",
-                "mdbook = \"0.5.2\"\n[[plugin]]\nname = \"mdbook-fake\"\nversion = \"1.0.0\"\ninstall = [\"install\", \".\"]\n",
-            )],
-            None,
+        let toolchain = FakeToolchain::default();
+        let cfg = spec(
+            "v0.2.0",
+            "[editions.toolchain]\nmdbook = \"0.5.2\"\n\
+             [[editions.toolchain.plugin]]\nname = \"mdbook-fake\"\nversion = \"1.0.0\"\ninstall = [\"install\", \".\"]\n",
         );
+
+        build_editions(repo.path(), &cfg, &toolchain).unwrap();
+
+        for id in ["1", "2"] {
+            let assets = read(repo.path().join(format!("site/book/{id}/assets.txt")));
+            assert!(
+                assets.lines().any(|l| l == "mdbook-fake.css"),
+                "edition {id} should have mdbook-fake's assets; got {assets}"
+            );
+        }
+        let install = (
+            "mdbook-fake".to_string(),
+            vec!["install".to_string(), ".".to_string()],
+        );
+        assert_eq!(*toolchain.installs.borrow(), vec![install.clone(), install]);
+    }
+
+    #[test]
+    fn every_edition_builds_with_the_one_toolchain() {
+        let repo = book_repo();
+        let toolchain = FakeToolchain::default();
+
+        build_editions(
+            repo.path(),
+            &spec("v0.2.0", "[editions.toolchain]\nmdbook = \"0.5.3\"\n"),
+            &toolchain,
+        )
+        .unwrap();
+
+        let mdbooks: Vec<Option<String>> = toolchain
+            .builds
+            .borrow()
+            .iter()
+            .map(|pins| pins.mdbook.clone())
+            .collect();
+        assert_eq!(mdbooks, vec![Some("0.5.3".into()), Some("0.5.3".into())]);
+    }
+
+    #[test]
+    fn without_a_toolchain_every_edition_builds_with_the_tools_on_path() {
+        let repo = book_repo();
         let toolchain = FakeToolchain::default();
 
         build_editions(repo.path(), &spec("v0.2.0", ""), &toolchain).unwrap();
 
-        let book = repo.path().join("site/book");
-        assert!(
-            read(book.join("main/assets.txt"))
-                .lines()
-                .any(|l| l == "mdbook-fake.css"),
-            "main's toolchain lists mdbook-fake; got {}",
-            read(book.join("main/assets.txt"))
-        );
-        assert!(
-            !read(book.join("v0.2/assets.txt")).contains("mdbook-fake"),
-            "v0.2's toolchain file lists no plugin, so nothing installs there"
-        );
         assert_eq!(
-            *toolchain.installs.borrow(),
-            vec![(
-                "mdbook-fake".to_string(),
-                vec!["install".to_string(), ".".to_string()]
-            )]
+            *toolchain.builds.borrow(),
+            vec![ToolchainPins::default(), ToolchainPins::default()]
         );
     }
 
     /// The switcher needs the asset whether or not the book links to a
-    /// schema, and a tag whose `book.toml` never wired it gets it wired in
-    /// the checkout.
+    /// schema, and a book whose `book.toml` never wired it gets it wired
+    /// in the checkout.
     #[test]
     fn the_toolbar_asset_installs_into_every_edition() {
         let repo = book_repo();
         build_editions(repo.path(), &spec("v0.2.0", ""), &FakeToolchain::default()).unwrap();
 
-        for edition in ["v0.1", "v0.2", "main"] {
+        for edition in ["1", "2"] {
             let assets = read(repo.path().join(format!("site/book/{edition}/assets.txt")));
             assert!(
                 assets.lines().any(|l| l == "schema-link.js"),
@@ -1736,20 +1940,16 @@ mod build_tests {
     }
 
     #[test]
-    fn a_failed_build_names_the_edition_and_tag_and_carries_the_output() {
+    fn a_failed_build_names_the_edition_and_carries_the_output() {
         let repo = book_repo();
-        commit(repo.path(), &[("book/src/chapter.md", "BROKEN")], None);
+        commit(repo.path(), &[("book/1/src/chapter.md", "BROKEN")], None);
 
         let err = build_editions(repo.path(), &spec("v0.2.0", ""), &FakeToolchain::default())
             .unwrap_err();
 
         match err {
-            EditionsError::Build {
-                edition,
-                tag,
-                output,
-            } => {
-                assert_eq!((edition.as_str(), tag.as_str()), ("main", "main"));
+            EditionsError::Build { edition, output } => {
+                assert_eq!(edition, "1");
                 assert!(output.contains("cannot render chapter.md"), "got {output}");
             }
             other => panic!("expected Build, got {other:?}"),
@@ -1761,30 +1961,24 @@ mod build_tests {
     }
 
     #[test]
-    fn a_failed_install_names_the_command_and_carries_the_output() {
+    fn a_failed_install_names_the_edition_and_command_and_carries_the_output() {
         let repo = book_repo();
-        commit(
-            repo.path(),
-            &[(
-                "book/toolchain.toml",
-                "[[plugin]]\nname = \"broken-plugin\"\ninstall = [\"install\"]\n",
-            )],
-            None,
+        let cfg = spec(
+            "v0.2.0",
+            "[[editions.toolchain.plugin]]\nname = \"broken-plugin\"\ninstall = [\"install\"]\n",
         );
 
-        let err = build_editions(repo.path(), &spec("v0.2.0", ""), &FakeToolchain::default())
-            .unwrap_err();
+        let err = build_editions(repo.path(), &cfg, &FakeToolchain::default()).unwrap_err();
 
         match err {
             EditionsError::Install {
                 edition,
-                tag,
                 command,
                 output,
             } => {
                 assert_eq!(
-                    (edition.as_str(), tag.as_str(), command.as_str()),
-                    ("main", "main", "broken-plugin install")
+                    (edition.as_str(), command.as_str()),
+                    ("2", "broken-plugin install")
                 );
                 assert!(output.contains("no such asset"), "got {output}");
             }
@@ -1793,124 +1987,149 @@ mod build_tests {
     }
 
     #[test]
-    fn a_malformed_toolchain_file_names_the_edition_and_tag() {
+    fn a_tool_that_cannot_be_installed_names_the_edition_tool_and_pin() {
         let repo = book_repo();
-        commit(
-            repo.path(),
-            &[("book/toolchain.toml", "[[plugin]]\nnmae = \"typo\"\n")],
-            None,
+        let cfg = spec(
+            "v0.2.0",
+            "[[editions.toolchain.plugin]]\nname = \"uninstallable\"\nversion = \"9.9.9\"\ninstall = [\"install\"]\n",
         );
 
-        let err = build_editions(repo.path(), &spec("v0.2.0", ""), &FakeToolchain::default())
-            .unwrap_err();
+        let err = build_editions(repo.path(), &cfg, &FakeToolchain::default()).unwrap_err();
 
         match err {
-            EditionsError::Toolchain {
+            EditionsError::ToolchainInstall {
                 edition,
-                tag,
-                message,
+                tool,
+                pin,
+                output,
             } => {
-                assert_eq!((edition.as_str(), tag.as_str()), ("main", "main"));
-                assert!(
-                    message.contains("nmae"),
-                    "the typo'd key should be named; got {message}"
+                assert_eq!(
+                    (edition.as_str(), tool.as_str(), pin.as_str()),
+                    ("2", "uninstallable", "9.9.9")
                 );
+                assert!(output.contains("no such crate"), "got {output}");
             }
-            other => panic!("expected Toolchain, got {other:?}"),
+            other => panic!("expected ToolchainInstall, got {other:?}"),
         }
     }
 
-    #[test]
-    fn a_toolchain_path_that_cannot_be_read_is_refused_not_ignored() {
-        let repo = book_repo();
-        fs::remove_file(repo.path().join("book/toolchain.toml")).unwrap();
-        commit(
-            repo.path(),
-            &[("book/toolchain.toml/README", "a directory")],
-            None,
-        );
-
-        let err = build_editions(repo.path(), &spec("v0.2.0", ""), &FakeToolchain::default())
-            .unwrap_err();
-
-        assert!(
-            matches!(&err, EditionsError::Toolchain { edition, .. } if edition == "main"),
-            "expected Toolchain for main, got {err:?}"
-        );
-    }
-
     /// The common layout this guards: the publish spec beside the schema in
-    /// `schema/`, the book at the repo root.
+    /// `schema/`, the books at the repo root.
     #[test]
-    fn a_book_outside_the_specs_directory_is_read_from_the_same_tag() {
+    fn a_book_outside_the_specs_directory_is_read_from_the_same_ref() {
         let repo = init_repo();
         commit(
             repo.path(),
             &[
                 ("sub/schema.yaml", "id: x"),
                 ("book/book.toml", "[book]\n"),
-                ("book/toolchain.toml", "mdbook = \"0.5.2\"\n"),
                 ("book/src/chapter.md", "beside"),
             ],
             Some("v0.1.0"),
         );
-        let cfg: PublishConfig =
-            "[schema]\nname = \"x\"\nversion = \"0.1.0\"\nlinkml = \"1.7.0\"\n\
-                                  [files]\nmain = \"schema.yaml\"\n\
-                                  [publishing]\nversions = [\"v0.1.0\"]\ncurrent = \"v0.1.0\"\n\
-                                  [editions]\nbook = \"../book\"\n"
-                .parse()
-                .unwrap();
+        let cfg = spec_with(
+            "versions = [\"v0.1.0\"]\nedge = \"main\"\ncurrent = \"v0.1.0\"",
+            &edition("1", "../book", "v0.1.0"),
+        );
 
         build_editions(&repo.path().join("sub"), &cfg, &FakeToolchain::default()).unwrap();
 
         assert_eq!(
-            body(repo.path().join("sub/site/book/v0.1/chapter.html")),
+            body(repo.path().join("sub/site/book/1/chapter.html")),
             "beside"
         );
     }
 
+    /// The file is the older edition's, which builds last.
     #[test]
-    fn an_edition_without_a_book_is_refused() {
+    fn a_toolchain_file_beside_a_book_is_refused_before_anything_builds() {
         let repo = book_repo();
-
-        let err = build_editions(
+        commit(
             repo.path(),
-            &spec("v0.2.0", "book = \"docs\""),
-            &FakeToolchain::default(),
-        )
-        .unwrap_err();
+            &[("book/1/toolchain.toml", "mdbook = \"0.5.2\"\n")],
+            None,
+        );
+        let toolchain = FakeToolchain::default();
+
+        let err = build_editions(repo.path(), &spec("v0.2.0", ""), &toolchain).unwrap_err();
+
+        match &err {
+            EditionsError::ToolchainFileNotRead { edition, file } => assert_eq!(
+                (edition.as_str(), file.as_path()),
+                ("1", Path::new("book/1/toolchain.toml"))
+            ),
+            other => panic!("expected ToolchainFileNotRead, got {other:?}"),
+        }
+        assert!(err.to_string().contains("[editions.toolchain]"), "{err}");
+        assert!(
+            toolchain.builds.borrow().is_empty(),
+            "nothing may build first; built {:?}",
+            toolchain.builds.borrow()
+        );
+    }
+
+    /// The fixture's tags start at `v0.1.0` and the only edition at
+    /// `v0.2.0`, with the release list left to the tags.
+    #[test]
+    fn a_tag_older_than_every_edition_names_the_release_list_as_the_way_out() {
+        let repo = book_repo();
+        let from_tags = spec_with("edge = \"main\"", &edition("2", "book/2", "v0.2.0"));
+
+        let err = build_editions(repo.path(), &from_tags, &FakeToolchain::default()).unwrap_err();
+
+        assert!(
+            matches!(&err, EditionsError::Publish(PublishError::DerivedTag { tag, source })
+                if tag == "v0.1.0"
+                    && matches!(**source, PublishError::ReleaseBeforeFirstEdition { .. })),
+            "expected DerivedTag over ReleaseBeforeFirstEdition, got {err:?}"
+        );
+    }
+
+    /// The missing book is the older edition's, which builds last.
+    #[test]
+    fn an_edition_without_a_book_is_refused_before_anything_builds() {
+        let repo = book_repo();
+        let toolchain = FakeToolchain::default();
+        let cfg = spec_with(
+            "versions = [\"v0.1.0\", \"v0.2.0\"]\nedge = \"main\"\ncurrent = \"v0.2.0\"",
+            &(edition("1", "docs", "v0.1.0") + &edition("2", "book/2", "v0.2.0")),
+        );
+
+        let err = build_editions(repo.path(), &cfg, &toolchain).unwrap_err();
 
         match err {
-            EditionsError::NoBook { book, .. } => assert_eq!(book, PathBuf::from("docs")),
+            EditionsError::NoBook { edition, book } => {
+                assert_eq!((edition.as_str(), book), ("1", PathBuf::from("docs")))
+            }
             other => panic!("expected NoBook, got {other:?}"),
         }
+        assert!(
+            toolchain.builds.borrow().is_empty(),
+            "nothing may build first; built {:?}",
+            toolchain.builds.borrow()
+        );
     }
 
     #[test]
-    fn a_spec_in_a_subdirectory_reads_its_book_relative_to_itself() {
+    fn a_spec_in_a_subdirectory_reads_its_books_relative_to_itself() {
         let repo = init_repo();
         commit(
             repo.path(),
             &[
                 ("sub/book/book.toml", "[book]\n"),
-                ("sub/book/toolchain.toml", "mdbook = \"0.5.2\"\n"),
                 ("sub/book/src/chapter.md", "nested"),
             ],
             Some("v0.1.0"),
         );
-        let cfg: PublishConfig =
-            "[schema]\nname = \"x\"\nversion = \"0.1.0\"\nlinkml = \"1.7.0\"\n\
-                                  [files]\nmain = \"schema.yaml\"\n\
-                                  [publishing]\nversions = [\"v0.1.0\"]\ncurrent = \"v0.1.0\"\n\
-                                  [editions]\n"
-                .parse()
-                .unwrap();
+        let cfg = spec_with(
+            "versions = [\"v0.1.0\"]\nedge = \"main\"\ncurrent = \"v0.1.0\"",
+            &edition("1", "book", "v0.1.0"),
+        );
 
         build_editions(&repo.path().join("sub"), &cfg, &FakeToolchain::default()).unwrap();
 
         assert_eq!(
-            body(repo.path().join("sub/site/book/v0.1/chapter.html")),
+            body(repo.path().join("sub/site/book/1/chapter.html")),
             "nested"
         );
     }
@@ -1942,16 +2161,18 @@ mod build_tests {
         let repo = book_repo();
         fs::write(
             repo.path().join(PUBLISH_FILENAME),
-            "[schema]\nname = \"x\"\nversion = \"0.2.0\"\nlinkml = \"1.7.0\"\n\
-             [files]\nmain = \"schema.yaml\"\n\
-             [publishing]\nversions = [\"v0.1.1\"]\ncurrent = \"v0.1.1\"\n[editions]\n",
+            spec_declaring(
+                "versions = [\"v0.1.1\"]\nedge = \"main\"\ncurrent = \"v0.1.1\"",
+                "",
+                &edition("1", "book/1", "v0.1.0"),
+            ),
         )
         .unwrap();
 
-        let report = run(&repo.path().join("book/src"), &FakeToolchain::default()).unwrap();
+        let report = run(&repo.path().join("book/1/src"), &FakeToolchain::default()).unwrap();
 
-        assert_eq!(report.plan.current, "v0.1");
-        assert_eq!(body(repo.path().join("site/chapter.html")), "v0.1.1");
+        assert_eq!(report.plan.current, "1");
+        assert_eq!(body(repo.path().join("site/chapter.html")), "first");
     }
 
     /// A ledger line is trusted with a `remove_dir_all`, so a ledger that
@@ -2014,8 +2235,8 @@ mod build_tests {
         let repo = book_repo();
         let toolchain = FakeToolchain::default();
         let site = repo.path().join("site");
-        // v0.2's root entries copy in name order: chapter.html, extra.html,
-        // then part, which cannot be replaced.
+        // The second edition's root entries copy in name order:
+        // chapter.html, extra.html, then part, which cannot be replaced.
         let blocker = site.join("part");
         fs::create_dir_all(&blocker).unwrap();
         fs::write(blocker.join("x"), "").unwrap();
@@ -2047,15 +2268,15 @@ mod build_tests {
         let repo = book_repo();
         commit(
             repo.path(),
-            &[(".gitattributes", "book/src/extra.md export-ignore\n")],
+            &[(".gitattributes", "book/2/src/extra.md export-ignore\n")],
             None,
         );
 
         build_editions(repo.path(), &spec("v0.2.0", ""), &FakeToolchain::default()).unwrap();
 
         assert_eq!(
-            body(repo.path().join("site/book/main/extra.html")),
-            "only in v0.2"
+            body(repo.path().join("site/book/2/extra.html")),
+            "only in the second"
         );
     }
 
@@ -2065,12 +2286,12 @@ mod build_tests {
     #[test]
     fn an_unvalidated_config_is_checked_before_anything_builds() {
         let repo = book_repo();
-        let cfg: PublishConfig = toml::from_str(
+        let cfg: PublishConfig = toml::from_str(&format!(
             "[schema]\nname = \"x\"\nversion = \"0.2.0\"\nlinkml = \"1.7.0\"\n\
              [files]\nmain = \"schema.yaml\"\n\
-             [publishing]\nversions = [\"v0.1.1\"]\ncurrent = \"v0.1.1\"\noutput_dir = \"site\"\n\
-             [editions]\noutput_dir = \"site\"\n",
-        )
+             [publishing]\nversions = [\"v0.1.1\"]\nedge = \"main\"\ncurrent = \"v0.1.1\"\noutput_dir = \"site\"\n\
+             [editions]\noutput_dir = \"site\"\n{EDITIONS}"
+        ))
         .unwrap();
         let toolchain = FakeToolchain::default();
 
@@ -2098,7 +2319,7 @@ mod build_tests {
         let repo = book_repo();
         fs::write(
             repo.path()
-                .join("book/src")
+                .join("book/2/src")
                 .join(std::ffi::OsStr::from_bytes(b"caf\xe9.png")),
             "",
         )
@@ -2110,7 +2331,7 @@ mod build_tests {
 
         match err {
             EditionsError::RootEntryNotUtf8 { edition, entry } => {
-                assert_eq!(edition, "main");
+                assert_eq!(edition, "2");
                 assert!(entry.starts_with("caf"), "got {entry}");
             }
             other => panic!("expected RootEntryNotUtf8, got {other:?}"),
@@ -2125,10 +2346,7 @@ mod build_tests {
 
         build_editions(repo.path(), &spec("v0.2.0", ""), &FakeToolchain::default()).unwrap();
 
-        assert_eq!(
-            body(repo.path().join("site/book/v0.2/chapter.html")),
-            "v0.2.0"
-        );
+        assert_eq!(body(repo.path().join("site/book/2/chapter.html")), "second");
     }
 
     #[test]
@@ -2175,16 +2393,12 @@ mod build_tests {
 
         let book = repo.path().join("site/book");
         assert_eq!(
-            canonical(book.join("v0.1/chapter.html")),
-            "../../book/v0.1/chapter.html"
+            canonical(book.join("1/chapter.html")),
+            "../../book/1/chapter.html"
         );
         assert_eq!(
-            canonical(book.join("v0.2/part/page.html")),
-            "../../../book/v0.2/part/page.html"
-        );
-        assert_eq!(
-            canonical(book.join("main/chapter.html")),
-            "../../book/main/chapter.html"
+            canonical(book.join("2/part/page.html")),
+            "../../../book/2/part/page.html"
         );
     }
 
@@ -2196,13 +2410,10 @@ mod build_tests {
         build_editions(repo.path(), &spec("v0.2.0", ""), &FakeToolchain::default()).unwrap();
 
         let site = repo.path().join("site");
-        assert_eq!(
-            canonical(site.join("chapter.html")),
-            "book/v0.2/chapter.html"
-        );
+        assert_eq!(canonical(site.join("chapter.html")), "book/2/chapter.html");
         assert_eq!(
             canonical(site.join("part/page.html")),
-            "../book/v0.2/part/page.html"
+            "../book/2/part/page.html"
         );
     }
 
@@ -2211,14 +2422,14 @@ mod build_tests {
         let repo = book_repo();
         commit(
             repo.path(),
-            &[("book/src/raw.html", "<p>no head here</p>")],
+            &[("book/2/src/raw.html", "<p>no head here</p>")],
             None,
         );
 
         build_editions(repo.path(), &spec("main", ""), &FakeToolchain::default()).unwrap();
 
         assert_eq!(
-            read(repo.path().join("site/book/main/raw.html")),
+            read(repo.path().join("site/book/2/raw.html")),
             "<p>no head here</p>"
         );
         assert_eq!(
@@ -2227,10 +2438,10 @@ mod build_tests {
         );
     }
 
-    /// The reader of an edition reaches the schema docs for the release
-    /// that edition was built from, not whatever `current/` aliases today.
+    /// The reader of an edition reaches the schema docs for the newest
+    /// release it covers, not whatever `current/` aliases today.
     #[test]
-    fn the_schema_link_points_at_the_editions_own_version() {
+    fn the_schema_link_points_at_the_newest_release_the_edition_covers() {
         let repo = book_repo();
         let links = "[[book_link]]\nschema_path = \"schema/current/\"\nlabel = \"Schema\"\n\
                      [[book_link]]\nschema_path = \"schema/cqa/current/\"\nlabel = \"CQ&A\"\n\
@@ -2244,24 +2455,68 @@ mod build_tests {
         .unwrap();
 
         let book = repo.path().join("site/book");
-        let v01 = read(book.join("v0.1/schema-link.js"));
+        let first = read(book.join("1/schema-link.js"));
         assert!(
-            v01.contains(r#""schemaPath":"schema/v0.1.1/""#)
-                && v01.contains(r#""schemaPath":"schema/cqa/v0.1.1/""#)
-                && v01.contains(r#""schemaPath":"docs/model/""#)
-                && v01.contains(r#""schemaPath":"docs/concurrent/""#),
-            "v0.1 links its own version, and keeps a path that is not an alias; got:\n{v01}"
+            first.contains(r#""schemaPath":"schema/v0.1.1/""#)
+                && first.contains(r#""schemaPath":"schema/cqa/v0.1.1/""#)
+                && first.contains(r#""schemaPath":"docs/model/""#)
+                && first.contains(r#""schemaPath":"docs/concurrent/""#),
+            "the first edition links its newest release, and keeps a path that is not an alias; got:\n{first}"
         );
         assert!(
-            !v01.contains(r#""schemaPath":"schema/current/""#)
-                && !v01.contains(r#""schemaPath":"schema/cqa/current/""#),
-            "no alias may survive into an edition's links; got:\n{v01}"
+            !first.contains(r#""schemaPath":"schema/current/""#)
+                && !first.contains(r#""schemaPath":"schema/cqa/current/""#),
+            "no alias may survive into an edition's links; got:\n{first}"
         );
-        let main = read(book.join("main/schema-link.js"));
+        let second = read(book.join("2/schema-link.js"));
         assert!(
-            main.contains(r#""schemaPath":"schema/main/""#),
-            "the unreleased edition links the edge build; got:\n{main}"
+            second.contains(r#""schemaPath":"schema/v0.2.0/""#),
+            "got:\n{second}"
         );
+    }
+
+    #[test]
+    fn an_unreleased_edition_links_the_edge_build() {
+        let repo = book_repo();
+        commit(
+            repo.path(),
+            &[
+                ("book/3/book.toml", "[book]\n"),
+                ("book/3/src/chapter.md", "third"),
+            ],
+            None,
+        );
+        let editions = EDITIONS.to_string()
+            + &edition("3", "book/3", "v0.3.0")
+            + "[[book_link]]\nschema_path = \"schema/current/\"\nlabel = \"Schema\"\n";
+        let cfg = spec_with(
+            "versions = [\"v0.1.0\", \"v0.2.0\"]\nedge = \"main\"\ncurrent = \"v0.2.0\"",
+            &editions,
+        );
+
+        build_editions(repo.path(), &cfg, &FakeToolchain::default()).unwrap();
+
+        let third = read(repo.path().join("site/book/3/schema-link.js"));
+        assert!(
+            third.contains(r#""schemaPath":"schema/main/""#),
+            "got:\n{third}"
+        );
+        assert_eq!(
+            baked(repo.path().join("site/book/3/schema-link.js"))["editions"][0],
+            serde_json::json!({"label": "3", "unreleased": true}),
+            "the switcher marks it unreleased"
+        );
+    }
+
+    /// The editions context the build baked into a toolbar asset.
+    fn baked(asset: impl AsRef<Path>) -> serde_json::Value {
+        let js = read(asset);
+        let start = js
+            .find("var editions = ")
+            .expect("the asset declares its editions")
+            + "var editions = ".len();
+        let end = js[start..].find(";\n").expect("the declaration ends") + start;
+        serde_json::from_str(&js[start..end]).expect("the baked context is JSON")
     }
 
     #[test]
@@ -2269,37 +2524,31 @@ mod build_tests {
         let repo = book_repo();
         build_editions(repo.path(), &spec("v0.2.0", ""), &FakeToolchain::default()).unwrap();
 
-        let book = repo.path().join("site/book");
-        let v01 = read(book.join("v0.1/schema-link.js"));
-        assert!(
-            v01.contains(r#""own":"v0.1""#) && v01.contains(r#""current":"v0.2""#),
-            "got:\n{v01}"
-        );
-        let main = read(book.join("main/schema-link.js"));
-        assert!(main.contains(r#""own":"main""#), "got:\n{main}");
-        let expected = r#"[{"label":"v0.2","unreleased":false},{"label":"v0.1","unreleased":false},{"label":"main","unreleased":true}]"#;
-        assert!(
-            main.contains(expected),
-            "editions list newest first, then the unreleased one; got:\n{main}"
+        assert_eq!(
+            baked(repo.path().join("site/book/1/schema-link.js")),
+            serde_json::json!({
+                "editions": [
+                    {"label": "2", "unreleased": false},
+                    {"label": "1", "unreleased": false},
+                ],
+                "current": "2",
+                "own": "1",
+            })
         );
     }
 
-    /// A chapter's file name and an edition's label both land in a URL,
-    /// so each segment is percent-encoded, which also keeps `"` and `&`
-    /// out of the attribute. `#` is legal in a git ref and starts a URL
-    /// fragment, which is exactly the case.
+    /// A chapter's file name and an edition's id both land in a URL, so
+    /// each segment is percent-encoded, which also keeps `"` and `&` out
+    /// of the attribute. `#` starts a URL fragment, which is exactly the
+    /// case.
     #[test]
     fn a_canonical_percent_encodes_the_page_and_the_edition() {
         let repo = book_repo();
-        commit(repo.path(), &[("book/src/faq & tips.md", "spaced")], None);
-        git(repo.path(), &["branch", "rc#2"]);
-        let cfg: PublishConfig =
-            "[schema]\nname = \"x\"\nversion = \"0.2.0\"\nlinkml = \"1.7.0\"\n\
-                                  [files]\nmain = \"schema.yaml\"\n\
-                                  [publishing]\nversions = [\"v0.2.0\"]\nedge = \"rc#2\"\n\
-                                  current = \"v0.2.0\"\n[editions]\n"
-                .parse()
-                .unwrap();
+        commit(repo.path(), &[("book/1/src/faq & tips.md", "spaced")], None);
+        let cfg = spec_with(
+            "versions = [\"v0.1.0\"]\nedge = \"main\"\ncurrent = \"v0.1.0\"",
+            &edition("rc#2", "book/1", "v0.1.0"),
+        );
 
         build_editions(repo.path(), &cfg, &FakeToolchain::default()).unwrap();
 
@@ -2315,11 +2564,11 @@ mod build_tests {
     #[test]
     fn the_404_page_gets_no_canonical() {
         let repo = book_repo();
-        commit(repo.path(), &[("book/src/404.md", "missing")], None);
+        commit(repo.path(), &[("book/2/src/404.md", "missing")], None);
 
         build_editions(repo.path(), &spec("main", ""), &FakeToolchain::default()).unwrap();
 
-        for page in ["site/book/main/404.html", "site/404.html"] {
+        for page in ["site/book/2/404.html", "site/404.html"] {
             let text = read(repo.path().join(page));
             assert!(
                 !text.contains("canonical"),
@@ -2328,347 +2577,9 @@ mod build_tests {
         }
         assert_eq!(
             canonical(repo.path().join("site/chapter.html")),
-            "book/main/chapter.html",
+            "book/2/chapter.html",
             "the other pages still get theirs"
         );
-    }
-
-    fn pins_of(toolchain: &FakeToolchain, index: usize) -> ToolchainFile {
-        toolchain.builds.borrow()[index].clone()
-    }
-
-    /// A released edition renders the way it did when it shipped, which
-    /// needs the tools it shipped with; the unreleased edition is the
-    /// working tree's and may use whatever is on `PATH`.
-    #[test]
-    fn a_released_edition_without_a_toolchain_is_refused_and_the_unreleased_one_is_not() {
-        let repo = init_repo();
-        commit(
-            repo.path(),
-            &[
-                ("book/book.toml", "[book]\n"),
-                ("book/src/chapter.md", "no toolchain"),
-            ],
-            Some("v0.1.0"),
-        );
-        let cfg = |versions: &str, current: &str| -> PublishConfig {
-            format!(
-                "[schema]\nname = \"x\"\nversion = \"0.1.0\"\nlinkml = \"1.7.0\"\n\
-                 [files]\nmain = \"schema.yaml\"\n\
-                 [publishing]\nversions = [{versions}]\nedge = \"main\"\ncurrent = \"{current}\"\n\
-                 [editions]\n"
-            )
-            .parse()
-            .unwrap()
-        };
-
-        let err = build_editions(
-            repo.path(),
-            &cfg("\"v0.1.0\"", "v0.1.0"),
-            &FakeToolchain::default(),
-        )
-        .unwrap_err();
-        match err {
-            EditionsError::ToolchainMissing { edition, tag } => {
-                assert_eq!((edition.as_str(), tag.as_str()), ("v0.1", "v0.1.0"))
-            }
-            other => panic!("expected ToolchainMissing, got {other:?}"),
-        }
-
-        let toolchain = FakeToolchain::default();
-        build_editions(repo.path(), &cfg("", "main"), &toolchain).unwrap();
-        assert_eq!(
-            pins_of(&toolchain, 0),
-            ToolchainFile::default(),
-            "the unreleased edition builds with PATH's tools"
-        );
-    }
-
-    #[test]
-    fn each_edition_builds_with_the_pins_its_tag_names() {
-        let repo = book_repo();
-        commit(
-            repo.path(),
-            &[("book/toolchain.toml", "mdbook = \"0.5.3\"\n")],
-            None,
-        );
-        let toolchain = FakeToolchain::default();
-
-        build_editions(repo.path(), &spec("v0.2.0", ""), &toolchain).unwrap();
-
-        let mdbooks: Vec<Option<String>> = toolchain
-            .builds
-            .borrow()
-            .iter()
-            .map(|pins| pins.mdbook.clone())
-            .collect();
-        assert_eq!(
-            mdbooks,
-            vec![
-                Some("0.5.2".into()),
-                Some("0.5.2".into()),
-                Some("0.5.3".into())
-            ],
-            "v0.2, v0.1, then main, each with its own tag's mdbook"
-        );
-    }
-
-    #[test]
-    fn the_override_in_the_publish_spec_wins_over_the_tags_file() {
-        let repo = book_repo();
-        let toolchain = FakeToolchain::default();
-        let cfg = spec(
-            "v0.2.0",
-            "[editions.toolchain.\"v0.1.1\"]\nmdbook = \"0.4.40\"\n\
-             [[editions.toolchain.\"v0.1.1\".plugin]]\nname = \"mdbook-override\"\nversion = \"1.0.0\"\ninstall = [\"install\"]\n",
-        );
-
-        build_editions(repo.path(), &cfg, &toolchain).unwrap();
-
-        assert_eq!(
-            pins_of(&toolchain, 1).mdbook.as_deref(),
-            Some("0.4.40"),
-            "v0.1 builds with the override"
-        );
-        assert_eq!(
-            pins_of(&toolchain, 0).mdbook.as_deref(),
-            Some("0.5.2"),
-            "v0.2 keeps its tag's file"
-        );
-        let assets = read(repo.path().join("site/book/v0.1/assets.txt"));
-        assert!(
-            assets.lines().any(|l| l == "mdbook-override.css"),
-            "the override's plugin installed its assets into v0.1; got {assets}"
-        );
-    }
-
-    #[test]
-    fn a_tag_cut_before_the_toolchain_file_builds_from_the_override() {
-        let repo = init_repo();
-        commit(
-            repo.path(),
-            &[
-                ("book/book.toml", "[book]\n"),
-                ("book/src/chapter.md", "old"),
-            ],
-            Some("v0.1.0"),
-        );
-        let cfg: PublishConfig = "[schema]\nname = \"x\"\nversion = \"0.1.0\"\nlinkml = \"1.7.0\"\n\
-                                  [files]\nmain = \"schema.yaml\"\n\
-                                  [publishing]\nversions = [\"v0.1.0\"]\ncurrent = \"v0.1.0\"\n\
-                                  [editions]\n[editions.toolchain.\"v0.1.0\"]\nmdbook = \"0.4.40\"\n"
-            .parse()
-            .unwrap();
-        let toolchain = FakeToolchain::default();
-
-        build_editions(repo.path(), &cfg, &toolchain).unwrap();
-
-        assert_eq!(pins_of(&toolchain, 0).mdbook.as_deref(), Some("0.4.40"));
-        assert_eq!(body(repo.path().join("site/chapter.html")), "old");
-    }
-
-    #[test]
-    fn a_released_edition_whose_pins_are_not_exact_is_refused_by_tool() {
-        let sha = "0123456789abcdef0123456789abcdef01234567";
-        for (toolchain_toml, tool, problem_word) in [
-            (
-                "[[plugin]]\nname = \"mdbook-x\"\nversion = \"1.0.0\"\n".to_string(),
-                "mdbook",
-                "no mdbook version",
-            ),
-            // A range installs whatever is newest on the day, which is the
-            // drift a released edition exists to prevent.
-            ("mdbook = \"0.5\"\n".to_string(), "mdbook", "not one version"),
-            (
-                "mdbook = \"0.5.2\"\n[[plugin]]\nname = \"mdbook-x\"\nversion = \"^1.0\"\n".to_string(),
-                "mdbook-x",
-                "not one version",
-            ),
-            (
-                "mdbook = \"0.5.2\"\n[[plugin]]\nname = \"mdbook-x\"\ngit = \"https://example.com/r\"\nbranch = \"main\"\n".to_string(),
-                "mdbook-x",
-                "branch",
-            ),
-            // `rev = "main"` is a branch by another name, and a short or
-            // tag-like rev moves too.
-            (
-                "mdbook = \"0.5.2\"\n[[plugin]]\nname = \"mdbook-x\"\ngit = \"https://example.com/r\"\nrev = \"main\"\n".to_string(),
-                "mdbook-x",
-                "not a commit id",
-            ),
-            (
-                "mdbook = \"0.5.2\"\n[[plugin]]\nname = \"mdbook-x\"\n".to_string(),
-                "mdbook-x",
-                "nothing",
-            ),
-            (
-                "mdbook = \"0.5.2\"\n[[plugin]]\nname = \"mdbook-x\"\ngit = \"https://example.com/r\"\n".to_string(),
-                "mdbook-x",
-                "without a rev",
-            ),
-            (
-                format!("mdbook = \"0.5.2\"\n[[plugin]]\nname = \"mdbook-x\"\nversion = \"1.0.0\"\ngit = \"https://example.com/r\"\nrev = \"{sha}\"\n"),
-                "mdbook-x",
-                "both a version and a git repository",
-            ),
-            (
-                format!("mdbook = \"0.5.2\"\n[[plugin]]\nname = \"mdbook-x\"\nversion = \"1.0.0\"\nrev = \"{sha}\"\n"),
-                "mdbook-x",
-                "nothing uses",
-            ),
-            (
-                format!("mdbook = \"0.5.2\"\n[[plugin]]\nname = \"mdbook-x\"\nrev = \"{sha}\"\n"),
-                "mdbook-x",
-                "without a `git`",
-            ),
-            (
-                format!("mdbook = \"0.5.2\"\n[[plugin]]\nname = \"mdbook-x\"\ngit = \"https://example.com/r\"\nrev = \"{sha}\"\nbranch = \"main\"\n"),
-                "mdbook-x",
-                "both a `rev` and a `branch`",
-            ),
-        ] {
-            let toolchain_toml = toolchain_toml.as_str();
-            let repo = book_repo();
-            commit(
-                repo.path(),
-                &[("book/toolchain.toml", toolchain_toml)],
-                Some("v0.3.0"),
-            );
-            let cfg: PublishConfig = "[schema]\nname = \"x\"\nversion = \"0.3.0\"\nlinkml = \"1.7.0\"\n\
-                                      [files]\nmain = \"schema.yaml\"\n\
-                                      [publishing]\nversions = [\"v0.3.0\"]\ncurrent = \"v0.3.0\"\n[editions]\n"
-                .parse()
-                .unwrap();
-
-            let err = build_editions(repo.path(), &cfg, &FakeToolchain::default()).unwrap_err();
-
-            match err {
-                EditionsError::ToolchainNotExact {
-                    edition,
-                    tag,
-                    tool: got,
-                    problem,
-                } => {
-                    assert_eq!(
-                        (edition.as_str(), tag.as_str(), got.as_str()),
-                        ("v0.3", "v0.3.0", tool),
-                        "toolchain:\n{toolchain_toml}"
-                    );
-                    assert!(
-                        problem.contains(problem_word),
-                        "toolchain:\n{toolchain_toml}\nthe problem should mention {problem_word}; got {problem}"
-                    );
-                }
-                other => panic!(
-                    "toolchain:\n{toolchain_toml}\nexpected ToolchainNotExact, got {other:?}"
-                ),
-            }
-        }
-    }
-
-    #[test]
-    fn a_released_edition_may_pin_a_plugin_to_a_git_commit() {
-        let repo = book_repo();
-        let sha = "0123456789abcdef0123456789abcdef01234567";
-        commit(
-            repo.path(),
-            &[(
-                "book/toolchain.toml",
-                &format!(
-                    "mdbook = \"0.5.2\"\n[[plugin]]\nname = \"mdbook-x\"\ngit = \"https://example.com/r\"\nrev = \"{sha}\"\ninstall = [\"install\"]\n"
-                ),
-            )],
-            Some("v0.3.0"),
-        );
-        let cfg: PublishConfig = "[schema]\nname = \"x\"\nversion = \"0.3.0\"\nlinkml = \"1.7.0\"\n\
-                                  [files]\nmain = \"schema.yaml\"\n\
-                                  [publishing]\nversions = [\"v0.3.0\"]\ncurrent = \"v0.3.0\"\n[editions]\n"
-            .parse()
-            .unwrap();
-        let toolchain = FakeToolchain::default();
-
-        build_editions(repo.path(), &cfg, &toolchain).unwrap();
-
-        assert_eq!(pins_of(&toolchain, 0).plugins[0].rev.as_deref(), Some(sha));
-    }
-
-    /// The unreleased edition may be loose, not contradictory: a pin that
-    /// says two things is refused there too, before a tool is installed
-    /// under the wrong one.
-    #[test]
-    fn the_unreleased_edition_still_refuses_a_contradictory_pin() {
-        let repo = book_repo();
-        commit(
-            repo.path(),
-            &[(
-                "book/toolchain.toml",
-                "[[plugin]]\nname = \"mdbook-x\"\nversion = \"1.0.0\"\nbranch = \"main\"\n",
-            )],
-            None,
-        );
-
-        let err = build_editions(repo.path(), &spec("v0.2.0", ""), &FakeToolchain::default())
-            .unwrap_err();
-
-        match err {
-            EditionsError::ToolchainNotExact { edition, tool, .. } => {
-                assert_eq!((edition.as_str(), tool.as_str()), ("main", "mdbook-x"))
-            }
-            other => panic!("expected ToolchainNotExact, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn the_unreleased_edition_may_pin_a_branch() {
-        let repo = book_repo();
-        commit(
-            repo.path(),
-            &[(
-                "book/toolchain.toml",
-                "[[plugin]]\nname = \"mdbook-x\"\ngit = \"https://example.com/r\"\nbranch = \"main\"\ninstall = [\"install\"]\n",
-            )],
-            None,
-        );
-        let toolchain = FakeToolchain::default();
-
-        build_editions(repo.path(), &spec("v0.2.0", ""), &toolchain).unwrap();
-
-        let main = pins_of(&toolchain, 2);
-        assert_eq!(main.plugins[0].branch.as_deref(), Some("main"));
-        assert_eq!(main.mdbook, None, "and may leave mdbook to PATH");
-    }
-
-    #[test]
-    fn a_tool_that_cannot_be_installed_names_the_edition_tag_tool_and_pin() {
-        let repo = book_repo();
-        commit(
-            repo.path(),
-            &[(
-                "book/toolchain.toml",
-                "[[plugin]]\nname = \"uninstallable\"\nversion = \"9.9.9\"\ninstall = [\"install\"]\n",
-            )],
-            None,
-        );
-
-        let err = build_editions(repo.path(), &spec("v0.2.0", ""), &FakeToolchain::default())
-            .unwrap_err();
-
-        match err {
-            EditionsError::ToolchainInstall {
-                edition,
-                tag,
-                tool,
-                pin,
-                output,
-            } => {
-                assert_eq!(
-                    (edition.as_str(), tag.as_str(), tool.as_str(), pin.as_str()),
-                    ("main", "main", "uninstallable", "9.9.9")
-                );
-                assert!(output.contains("no such crate"), "got {output}");
-            }
-            other => panic!("expected ToolchainInstall, got {other:?}"),
-        }
     }
 
     #[test]

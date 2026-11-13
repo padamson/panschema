@@ -26,11 +26,12 @@ enum Command {
         #[arg(default_value = ".")]
         dir: PathBuf,
     },
-    /// Build the book once per schema release line, each from its git
-    /// tag, plus the unreleased edition from `[publishing].edge`. Writes
-    /// `book/<edition>/` under `[editions].output_dir` and copies the
-    /// current edition to its root. Configured by `[editions]` and
-    /// `[publishing]` in `panschema-publish.toml`.
+    /// Build every edition `[[editions.edition]]` declares from
+    /// `[publishing].edge`, each covering the releases from its `from` to
+    /// the next edition's. Writes `book/<id>/` under
+    /// `[editions].output_dir` and copies the current edition to its
+    /// root. Configured by `[editions]` and `[publishing]` in
+    /// `panschema-publish.toml`.
     Editions {
         /// Any directory at or below `panschema-publish.toml`. Defaults
         /// to the current directory.
@@ -64,8 +65,8 @@ fn main() -> Result<()> {
                 println!(
                     "{}/book/{}/  from {}",
                     report.site.display(),
-                    edition.label,
-                    edition.source
+                    edition.id,
+                    edition.book.display()
                 );
             }
             println!(

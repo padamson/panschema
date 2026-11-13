@@ -100,6 +100,8 @@ Input → Reader → LinkML IR → [Filters] → Writer → Output
 ### v0.6.0+ — Future Directions
 *Planned, and further out, aspirational.*
 
+- **Book editions as declared spans** ([feature 54](features/54-book-editions-as-declared-spans.md)): `mdbook-panschema editions` publishes the editions the book's author declares, each a book directory on `main` covering a span of releases, in place of feature 52's one edition per release line. Slice 1 of 4 in progress.
+
 - **Bootstrap LinkML IR from the metaschema** ([feature 08](features/08-bootstrap-linkml-ir.md), inside the `panschema-model` crate of [feature 46](features/46-panschema-model-crate.md)): replace the hand-rolled `panschema-model/src/linkml.rs` types with types generated from the LinkML metaschema YAML via panschema's own `RustWriter`. Closes the drift between panschema's IR and the LinkML spec by construction, and doubles as the most aggressive `RustWriter` dogfood we have — the metaschema is the hardest schema we'll feed it. Pairs with feature 07: once the IR is metaschema-derived, validation rules can be coded against canonical field names. The [LinkML coverage matrix](linkml-coverage.md) tracks today's per-metaslot, per-writer support and the prioritized gaps this would close.
 - **Schema validation** ([feature 07](features/07-schema-validation.md)): a `panschema verify --schema <schema>` form that checks a LinkML schema against the metaschema and surfaces actionable diagnostics. A flag on `fetch --check` can gate CI on it (feature 07 slice 3).
 - **Authoring experience** (feature 10 (spec not yet written)): idiomatic-LinkML and OBO-Foundry-aligned authoring guidance, surfaced as actionable diagnostics. Slice 1 is a friction-gathering pass over a real schema, with no code, so the rule set is grounded in observed pain rather than invented rules.
@@ -171,7 +173,8 @@ Input → Reader → LinkML IR → [Filters] → Writer → Output
 | 50 | [Structured Verify Findings](features/50-structured-verify-findings.md) | Every `verify` finding is a record with a `kind` and fields, not a sentence to parse | **Shipped for v0.4.0** |
 | 48 | CLI distribution for agents ([ADR-012](adr/012-cli-distribution-for-agents.md)) | Prebuilt binaries as npm platform packages, so an agent runs `npx -y panschema` with nothing installed; needs an arm64 Linux target and the crates.io publish first; a feature spec arrives when the prerequisites clear | **Decided, sequenced** |
 | 53 | [Self-Describing Datasets](features/53-self-describing-datasets.md) | Instance graphs name their dataset, version, and schema; one file per dataset; a dependency's merged schema and data as outputs | **Shipped for v0.5.0** |
-| 52 | [Book Editions](features/52-book-editions.md) | `mdbook-panschema editions` publishes the book once per schema release line, each edition built from its tag with the toolchain the tag pins | **Shipped for v0.5.0** |
+| 52 | [Book Editions](features/52-book-editions.md) | `mdbook-panschema editions` publishes the book once per schema release line, each edition built from its tag with the toolchain the tag pins | **Shipped for v0.5.0; superseded by 54** |
+| 54 | [Book Editions as Declared Spans](features/54-book-editions-as-declared-spans.md) | `mdbook-panschema editions` publishes the editions the author declares, each a book directory on `main` covering a span of releases | **In progress: slice 1 of 4** |
 | 51 | [Published Page Information Architecture](features/51-published-page-information-architecture.md) | The schema page grouped into Overview, Schema, and Instances, with a metadata card per dataset | **Slices 1–2 shipped for v0.5.0; slice 3 proposed** |
 
 ## Delivery Approach

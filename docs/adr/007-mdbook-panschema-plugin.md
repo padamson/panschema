@@ -78,3 +78,16 @@ which edition a page belongs to; both read the release list in
 panschema's manifest would mislead. If a book with no schema behind it
 ever wants editions, that is a standalone tool reading tags, not another
 subcommand here.
+
+## Addendum — 2026-11-13: editions are declared, not derived from tags
+
+[Feature 54](../features/54-book-editions-as-declared-spans.md) replaces
+feature 52's edition model. An edition is a book directory on `main` that
+the author declares with the first release it covers, and every edition
+builds from the edge ref with the repo's current tools. Feature 52 tied an
+edition to a release line and rebuilt it from that line's newest tag with
+the tools the tag pinned. That published books nobody wrote (one per line,
+each a prefix of the next) and could not express a rewrite that starts
+mid-line. Building from the edge gives up rendering an old edition exactly
+as it shipped; an old edition is now fixed by an ordinary commit instead.
+The subcommand stays where the 2026-10-12 addendum put it.

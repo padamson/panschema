@@ -805,7 +805,7 @@ pub fn open_package(
             pkg: pkg_dir,
         });
     }
-    let publish = crate::publish::PublishConfig::from_path(&publish_path)?;
+    let publish = crate::publish::PublishConfig::from_dependency_path(&publish_path)?;
 
     let canon_pkg = pkg_dir.canonicalize().map_err(|e| ResolveError::Other {
         name: name.to_string(),
@@ -1530,6 +1530,25 @@ main = "schema/example.yaml"
             LOCKED_PUBLISH,
             "the edit is gone from the cache"
         );
+    }
+
+    /// A released spec cannot be rewritten, so an `[editions]` table in a
+    /// form this build refuses must not make the version unusable.
+    #[test]
+    fn a_dependency_whose_editions_table_would_be_refused_still_opens() {
+        let tmp = TempDir::new().unwrap();
+        let superseded = format!("{LOCKED_PUBLISH}\n[editions]\nbook = \"book\"\n");
+        std::fs::write(tmp.path().join("panschema-publish.toml"), &superseded).unwrap();
+        assert!(
+            superseded.parse::<crate::publish::PublishConfig>().is_err(),
+            "the fixture must be a spec its own parse refuses"
+        );
+
+        let (_, publish) =
+            open_package("dep", tmp.path()).expect("a dependency's [editions] is not read");
+
+        assert_eq!(publish.schema.name, "myrepo");
+        assert_eq!(publish.editions, None);
     }
 
     #[test]

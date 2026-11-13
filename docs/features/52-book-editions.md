@@ -1,5 +1,12 @@
 # Feature 52: Book Editions
 
+> **Superseded by [Feature 54](54-book-editions-as-declared-spans.md).**
+> An edition is now a book directory the author declares, covering a span
+> of releases they choose, not a release line built from its newest tag.
+> Feature 54 keeps this feature's site layout, canonical links, switcher,
+> and schema brand; what follows records the model it replaced, as
+> released in v0.5.0.
+
 **Feature:** `mdbook-panschema editions` publishes a schema repo's book in
 editions, one per schema minor line (a major line after 1.0), each rebuilt
 from its git tag the way `panschema publish` rebuilds schema versions.
