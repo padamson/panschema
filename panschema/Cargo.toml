@@ -125,7 +125,7 @@ syn = { version = "3", features = ["full", "extra-traits"] }
 # `libpg_query`, Postgres's own C parser extracted as a standalone
 # library. Real-Postgres-oracle syntax checking with no running database;
 # a real-Postgres apply/constraint-enforcement tier is not yet built.
-pg_query = "6"
+pg_query = "18"
 
 # E2E browser testing. Tracks the crates.io release; re-pin to
 # `padamson/playwright-rust` `main` when there is pre-release work to
@@ -140,7 +140,7 @@ playwright-rs = "0.20"
 # "renders correctly in Chromium" (the existing Playwright E2E tier)
 # doesn't prove spec validity — this catches what that tier can't.
 html5ever = "0.39.0"
-markup5ever_rcdom = "0.39.0"
+markup5ever_rcdom = "0.40.1"
 
 # Independent oracle for JsonSchemaWriter output: an actual JSON Schema
 # validator. Checks both that the emitted document is a usable schema
