@@ -2131,7 +2131,7 @@ impl LinkmlLoader<'_> {
     /// `display`, the display `literals`/`references`. A scalar becomes a
     /// literal; a class-ranged scalar an id reference, a class-ranged mapping a
     /// nested record plus a reference. Recurses over sequence elements.
-    #[allow(clippy::too_many_arguments)]
+    ///
     /// Record one authored field value, classified by the slot's range
     /// targets.
     ///

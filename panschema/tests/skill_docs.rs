@@ -57,20 +57,6 @@ fn first_toml_block(markdown: &str) -> String {
     after[..end].trim_start_matches('\n').to_string()
 }
 
-fn panschema_bin() -> PathBuf {
-    // The integration-test binary sits alongside the CLI binary.
-    let mut p = std::env::current_exe().expect("test exe");
-    p.pop();
-    if p.ends_with("deps") {
-        p.pop();
-    }
-    p.join(if cfg!(windows) {
-        "panschema.exe"
-    } else {
-        "panschema"
-    })
-}
-
 /// The manifest reference's example, run for real: build a package around it,
 /// invoke `generate`, and require the artifacts it promises.
 #[test]
@@ -99,7 +85,7 @@ fn the_documented_manifest_example_actually_generates() {
     .expect("schema");
     fs::write(root.join("panschema.toml"), &example).expect("manifest");
 
-    let out = Command::new(panschema_bin())
+    let out = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .arg("generate")
         .current_dir(root)
         .output()
@@ -180,7 +166,7 @@ fn every_generate_manifest_key_is_documented() {
 /// may be documented without being in this build's `--help`.
 #[test]
 fn every_subcommand_is_documented() {
-    let help = Command::new(panschema_bin())
+    let help = Command::new(env!("CARGO_BIN_EXE_panschema"))
         .arg("--help")
         .output()
         .expect("run panschema --help");

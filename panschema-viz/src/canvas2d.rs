@@ -452,7 +452,6 @@ impl Canvas2DRenderer {
 
     /// Render the simulation state
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &self,
         sim: &CpuSimulation,
