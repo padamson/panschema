@@ -671,10 +671,6 @@ criteria = "safe-to-run"
 version = "0.8.3"
 criteria = "safe-to-deploy"
 
-[[exemptions.pg_query]]
-version = "6.2.0"
-criteria = "safe-to-run"
-
 [[exemptions.phf]]
 version = "0.8.0"
 criteria = "safe-to-run"

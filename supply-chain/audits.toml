@@ -740,6 +740,13 @@ user-id = 3618 # David Tolnay (dtolnay)
 start = "2019-03-19"
 end = "2027-05-10"
 
+[[trusted.pg_query]]
+criteria = "safe-to-run"
+user-id = 146401 # Sean Linsley (seanlinsley)
+start = "2022-07-20"
+end = "2027-11-14"
+notes = "Trusted for this crate only, at safe-to-run: Sean Linsley maintains pganalyze/pg_query.rs and has published every release since 6.1.0. Releases are mostly regenerated libpg_query C from upstream Postgres, which no line-by-line audit here would honestly cover. Dev-only: the Postgres writer's DDL oracle in tests. A release by another owner still needs an audit."
+
 [[trusted.prettyplease]]
 criteria = "safe-to-deploy"
 user-id = 3618 # David Tolnay (dtolnay)

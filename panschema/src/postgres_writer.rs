@@ -1196,9 +1196,15 @@ mod tests {
     /// not a second copy of this module's own assumptions. Every test
     /// that asserts on rendered DDL calls this too.
     fn assert_valid_postgres_sql(sql: &str) {
-        if let Err(e) = pg_query::parse(sql) {
+        if let Err(e) = pg_query::parse(sql, pg_query::ParserOptions::DEFAULT) {
             panic!("generated DDL is not valid Postgres SQL: {e}\n\nSQL:\n{sql}");
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "generated DDL is not valid Postgres SQL")]
+    fn the_postgres_oracle_rejects_ddl_postgres_would_refuse() {
+        assert_valid_postgres_sql("CREATE TABLE widget (id INTEGER PRIMARY KEY,);");
     }
 
     #[test]
@@ -1407,7 +1413,8 @@ mod tests {
 
         let out = PostgresWriter::new().render(&schema);
         assert_valid_postgres_sql(&out);
-        let parsed = pg_query::parse(&out).expect("already validated above");
+        let parsed = pg_query::parse(&out, pg_query::ParserOptions::DEFAULT)
+            .expect("already validated above");
         let tree = format!("{parsed:?}");
         assert!(
             !tree.contains("DropStmt"),

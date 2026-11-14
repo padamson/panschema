@@ -267,6 +267,13 @@ user-id = 2915
 user-login = "Amanieu"
 user-name = "Amanieu d'Antras"
 
+[[publisher.pg_query]]
+version = "18.1.0"
+when = "2026-10-27"
+user-id = 146401
+user-login = "seanlinsley"
+user-name = "Sean Linsley"
+
 [[publisher.prettyplease]]
 version = "0.2.37"
 when = "2025-08-19"
