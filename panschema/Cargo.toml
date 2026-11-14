@@ -139,8 +139,8 @@ playwright-rs = "0.20"
 # Servo/Firefox use. A real browser silently repairs malformed markup, so
 # "renders correctly in Chromium" (the existing Playwright E2E tier)
 # doesn't prove spec validity — this catches what that tier can't.
-html5ever = "0.39.0"
-markup5ever_rcdom = "0.39.0"
+html5ever = "0.40.1"
+markup5ever_rcdom = "0.40.1"
 
 # Independent oracle for JsonSchemaWriter output: an actual JSON Schema
 # validator. Checks both that the emitted document is a usable schema

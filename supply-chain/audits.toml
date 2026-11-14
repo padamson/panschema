@@ -61,6 +61,12 @@ criteria = "safe-to-deploy"
 delta = "0.4.2 -> 0.4.3"
 notes = 'Patch release. WASI p2/p3 backend swaps the wasip2/wasip3 crate deps for a manual `unsafe extern "C"` binding to the `get-random-u64` host import (declared `safe fn`, forwarding to the platform RNG exactly as the dropped crates did). The wasm cfgs widen from target_arch = "wasm32" to target_family = "wasm" to add wasm64 support. Remainder is CHANGELOG/README docs and import reordering. No randomness logic changes and no new ambient capabilities.'
 
+[[audits.html5ever]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.39.0 -> 0.40.1"
+notes = "Delta audit at safe-to-run, targeted: every added line searched for process, network, filesystem, env, FFI and unsafe APIs; none added. The tokenizer is restructured to follow the WHATWG spec step by step (each branch annotated with the spec text, simplified state macros), the serializer and meta-charset extraction get small fixes, and memchr is a new dependency for character scanning. Pure parsing, no I/O. Dev-only here: the HTML writer's conformance test."
+
 [[audits.jsonschema]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-run"
@@ -135,6 +141,18 @@ who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-run"
 delta = "0.58.5 -> 0.58.6"
 notes = "Version bump and a dev-dependency bump (hegeltest 0.48); no source change."
+
+[[audits.markup5ever]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.39.0 -> 0.40.0"
+notes = "Delta audit at safe-to-run, read in full: the version, rust-version 1.85, and the web_atoms 0.3 requirement in Cargo.toml; no code change. Dev-only here: html5ever's DOM for the HTML writer's conformance test."
+
+[[audits.markup5ever_rcdom]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.39.0+unofficial -> 0.40.1+unofficial"
+notes = "Delta audit at safe-to-run, read in full: html5ever, markup5ever and xml5ever 0.40, a criterion dev-dependency and bench target, and one iterator cleanup in Node's Drop. Dev-only here: the DOM the HTML writer's conformance test parses into."
 
 [[audits.ndarray]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
@@ -237,6 +255,30 @@ who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-run"
 delta = "6.2.0 -> 6.2.1"
 notes = "Delta audit at safe-to-run. Rust side: four generated prost location fields in src/protobuf.rs and a build.rs error message that now includes the bindgen error; no unsafe, process, env, fs or net additions. The bulk is the vendored libpg_query C (regenerated protobuf, deparser and normalizer fixes), compiled by the existing cc/bindgen build as before. Dev-only here: the Postgres writer's DDL oracle in tests."
+
+[[audits.phf]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.13.1 -> 0.14.0"
+notes = "Delta audit at safe-to-run, targeted: every added line searched for process, network, filesystem, env, FFI and unsafe APIs; none added. Map and set lookups adapted to phf_shared 0.14's hash and an optional ptrhash feature, off by default; edition 2024."
+
+[[audits.phf_codegen]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.13.1 -> 0.14.0"
+notes = "Delta audit at safe-to-run, targeted: every added line searched for process, network, filesystem, env, FFI and unsafe APIs; none added. New: optional quote/proc-macro2 output behind a quote feature and a ptrhash feature, both off by default; edition 2024. Runs only in build scripts here."
+
+[[audits.phf_generator]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.13.1 -> 0.14.0"
+notes = "Delta audit at safe-to-run, targeted: every added line searched for process, network, filesystem, env, FFI and unsafe APIs; none added. New: a ptrhash generator behind an off-by-default feature and its benches, the criterion dev-dependency at 0.8, edition 2024. Runs only in build scripts here."
+
+[[audits.phf_shared]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.13.1 -> 0.14.0"
+notes = "Delta audit at safe-to-run, targeted: every added line searched for process, network, filesystem, env, FFI and unsafe APIs. New: a ptrhash module behind an off-by-default feature, a 128-bit hash split, and one unsafe slice-to-bytes cast for hashing primitive slices. No process, network, filesystem or env access. the optional unicase at 2.8.1, edition 2024."
 
 [[audits.playwright-rs]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
@@ -379,6 +421,30 @@ who = "Paul Adamson <paul.adamson.01@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "0.3.6 -> 0.3.7"
 notes = "Delta audit of the oxigraph 2026-09 patch bumps: dependency pins, clippy lint lists, edition-2024 attribute migration, and small parser/optimizer correctness fixes. No new dependencies, build scripts, unsafe, network, or filesystem code."
+
+[[audits.string_cache]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.9.0 -> 0.11.0"
+notes = "Delta audit at safe-to-run, targeted: every added line searched for process, network, filesystem, env, FFI and unsafe APIs, and the unsafe hunks read. The atom store is rewritten with pointer tagging and an intrusive per-bucket list; the new unsafe blocks carry SAFETY comments and touch only the crate's own Entry allocations, and a reference-count overflow aborts as Arc does. No process, network, filesystem or env access. Edition 2024, phf 0.14."
+
+[[audits.string_cache_codegen]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.6.1 -> 0.11.2"
+notes = "Delta audit at safe-to-run, read in full. One new behavior: write_to pipes the generated Rust through rustfmt, spawned from PATH with stdin and stdout piped and no other arguments, and falls back to the unformatted text if that fails; skipped under Miri. It runs from build scripts (web_atoms) on code the crate generated, with no file, network or env access beyond the pipes, so it is acceptable at safe-to-run. Otherwise phf 0.14, edition 2024, a 64-bit hash, and an empty-set dummy in place of the empty-string entry."
+
+[[audits.web_atoms]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.2.5 -> 0.3.0"
+notes = "Delta audit at safe-to-run, read in full: phf 0.14, string_cache 0.11 and their codegen crates in Cargo.toml, and two attribute names (imagesizes, imagesrcset) added to local_names.txt; build.rs unchanged."
+
+[[audits.xml5ever]]
+who = "Paul Adamson <paul.adamson.01@gmail.com>"
+criteria = "safe-to-run"
+delta = "0.39.0 -> 0.40.0"
+notes = "Delta audit at safe-to-run, targeted: every added line searched for process, network, filesystem, env, FFI and unsafe APIs; none added. The tokenizer's state macros are simplified and its states restructured; one tree-builder line. Pure parsing, no I/O. Dev-only here, pulled in by markup5ever_rcdom."
 
 [[audits.zip]]
 who = "Paul Adamson <paul.adamson.01@gmail.com>"
