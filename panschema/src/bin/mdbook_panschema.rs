@@ -1,4 +1,6 @@
+use std::io::Write;
 use std::path::PathBuf;
+use std::process::ExitCode;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -9,7 +11,12 @@ use panschema::mdbook::{InstallReport, run};
 /// book to its panschema-generated schema docs, and publish the book in
 /// editions that track the schema's releases.
 #[derive(Parser)]
-#[command(name = "mdbook-panschema", version, about)]
+#[command(
+    name = "mdbook-panschema",
+    version,
+    about,
+    after_help = "Exit status: 0 when the command did what it was asked, 2 when it could not run."
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -37,11 +44,28 @@ enum Command {
         /// to the current directory.
         #[arg(default_value = ".")]
         dir: PathBuf,
+        /// Print the book directory of the authoring edition, the one
+        /// new chapters and listings go into, and build nothing.
+        #[arg(long)]
+        authoring: bool,
     },
 }
 
-fn main() -> Result<()> {
-    match Cli::parse().command {
+/// Exits 2 for a command that could not run, as clap does on its own
+/// for a bad flag, printing the error the way `anyhow` prints one
+/// returned from `main`.
+fn main() -> ExitCode {
+    match run_command(Cli::parse().command) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("Error: {err:?}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn run_command(command: Command) -> Result<()> {
+    match command {
         Command::Install { dir } => {
             match run(&dir)? {
                 InstallReport::Installed => println!(
@@ -59,7 +83,17 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Command::Editions { dir } => {
+        Command::Editions { dir, authoring } => {
+            if authoring {
+                // The path's own bytes, through a write that can fail:
+                // a script reads this line as a path, and a closed pipe
+                // is an error like any other.
+                let book = editions::authoring_book(&dir)?;
+                let mut out = std::io::stdout().lock();
+                out.write_all(book.as_os_str().as_encoded_bytes())?;
+                out.write_all(b"\n")?;
+                return Ok(());
+            }
             let report = editions::run(&dir, &InstalledToolchain::in_cache()?)?;
             for edition in &report.plan.editions {
                 println!(

@@ -211,16 +211,21 @@ reading about, and reaches any version's schema docs from any edition.
 
 ### Slice 3: The authoring edition for scripts
 
-**Status:** Not Started
+**Status:** Completed
 
 **User Value:** A consumer's freeze and preview scripts find the book that
 new listings go into without parsing the publish spec.
 
 **Acceptance Criteria:**
-- [ ] `mdbook-panschema editions --authoring` prints the authoring
-  edition's book directory and builds nothing.
-- [ ] It fails, exiting 2, when the publish spec cannot be read or has no
-  `[editions]`.
+- [x] `mdbook-panschema editions --authoring` prints the authoring
+  edition's book directory, as an absolute path in one spelling and
+  nothing else, and builds nothing. It reads no tag, so it answers
+  outside a repository.
+- [x] It fails, exiting 2, when the publish spec is missing, cannot be
+  read, or has no `[editions]`, and when the directory holds no
+  `book.toml`, naming the edition and the directory.
+- [x] Every `mdbook-panschema` command exits 2 when it cannot run, as
+  `panschema` does.
 
 ---
 
@@ -249,7 +254,7 @@ start a new edition.
 |-------|----------|------------|--------|
 | Slice 1: Declared editions | Must Have | None | Completed |
 | Slice 2: Toolbar | Must Have | Slice 1 | Completed |
-| Slice 3: Authoring edition | Should Have | Slice 1 | Not Started |
+| Slice 3: Authoring edition | Should Have | Slice 1 | Completed |
 | Slice 4: Integration and docs | Must Have | Slices 1, 2 | Not Started |
 
 ---

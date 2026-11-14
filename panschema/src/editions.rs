@@ -308,10 +308,7 @@ pub(crate) fn editions_of(
     }
 
     let last = spans.len() - 1;
-    let authoring = spans
-        .iter()
-        .position(|s| s.edition.authoring)
-        .unwrap_or(last);
+    let authoring = authoring_index(spans);
     let mut out = Vec::with_capacity(spans.len());
     for (index, (span, mut tags)) in spans.iter().zip(held).enumerate() {
         tags.sort_by(|a, b| a.0.cmp(&b.0));
@@ -340,6 +337,15 @@ pub(crate) fn editions_of(
     Ok(out)
 }
 
+/// Which of `spans`, oldest first and not empty, is the authoring
+/// edition: the one marked, or the last.
+fn authoring_index(spans: &[Span<'_>]) -> usize {
+    spans
+        .iter()
+        .position(|s| s.edition.authoring)
+        .unwrap_or(spans.len() - 1)
+}
+
 /// `version` without its pre-release and build metadata: the release a
 /// span boundary is compared on.
 fn release_of(version: &Version) -> Version {
@@ -365,6 +371,8 @@ pub enum EditionsError {
     Extract { reference: String, message: String },
     #[error("edition `{edition}`: there is no `book.toml` in `{}` at the edge", book.display())]
     NoBook { edition: String, book: PathBuf },
+    #[error("edition `{edition}`: there is no `book.toml` in `{}`", book.display())]
+    NoAuthoringBook { edition: String, book: PathBuf },
     #[error(
         "edition `{edition}`: `{}` is not read; put its pins in [editions.toolchain] of {PUBLISH_FILENAME} and delete it",
         file.display()
@@ -547,15 +555,39 @@ pub fn build_editions(
 /// edition it declares with `toolchain`. What `mdbook-panschema editions`
 /// runs.
 pub fn run(dir: &Path, toolchain: &dyn Toolchain) -> anyhow::Result<EditionsReport> {
-    use anyhow::Context;
-    let spec = crate::manifest::discover_file(dir, PUBLISH_FILENAME)
-        .with_context(|| format!("no {PUBLISH_FILENAME} found at or above {}", dir.display()))?;
-    let cfg =
-        PublishConfig::from_path(&spec).with_context(|| format!("reading {}", spec.display()))?;
-    let spec_dir = spec
-        .parent()
-        .context("the publish spec has no parent directory")?;
-    Ok(build_editions(spec_dir, &cfg, toolchain)?)
+    let (spec_dir, cfg) = crate::mdbook::read_publish_spec(dir)?;
+    Ok(build_editions(&spec_dir, &cfg, toolchain)?)
+}
+
+/// Find `panschema-publish.toml` at or above `dir` and return the book
+/// directory of its authoring edition, the one new chapters and listings
+/// go into. What `mdbook-panschema editions --authoring` prints. The spec
+/// and the working tree answer on their own, so no tag is read and
+/// nothing is built.
+///
+/// Fails when the directory holds no `book.toml`: a script handed a
+/// misspelled path would start a book there.
+pub fn authoring_book(dir: &Path) -> anyhow::Result<PathBuf> {
+    let (spec_dir, cfg) = crate::mdbook::read_publish_spec(dir)?;
+    let editions = cfg
+        .editions
+        .as_ref()
+        .ok_or(EditionsError::MissingEditions)?;
+    let spans = declared(&editions.editions)?;
+    let authoring = spans[authoring_index(&spans)].edition;
+    // One spelling, whatever `dir` and `book` were written as: no `.` or
+    // `..`, and the platform's separator throughout.
+    let book: PathBuf = crate::publish::lexical_components(&spec_dir.join(&authoring.book))
+        .into_iter()
+        .collect();
+    if !book.join("book.toml").is_file() {
+        return Err(EditionsError::NoAuthoringBook {
+            edition: authoring.id.clone(),
+            book,
+        }
+        .into());
+    }
+    Ok(book)
 }
 
 /// Install one edition's assets into its book in the checkout and build
@@ -2266,6 +2298,100 @@ mod build_tests {
 
         assert_eq!(report.plan.current, "1");
         assert_eq!(body(repo.path().join("site/chapter.html")), "first");
+    }
+
+    /// A spec at `dir` declaring editions `3`, `1` and `2` in that order,
+    /// each with its book on disk, and `extra` as further keys of `2`,
+    /// whose `book` is spelled the long way round.
+    fn authoring_fixture(dir: &Path, extra: &str) {
+        for book in ["1", "2", "3"] {
+            fs::create_dir_all(dir.join("book").join(book)).unwrap();
+            fs::write(dir.join("book").join(book).join("book.toml"), "[book]\n").unwrap();
+        }
+        fs::write(
+            dir.join(PUBLISH_FILENAME),
+            spec_declaring(
+                "edge = \"main\"",
+                "",
+                &(edition("3", "book/3", "v0.3.0")
+                    + &edition("1", "book/1", "v0.1.0")
+                    + &edition("2", "book/x/../2", "v0.2.0")
+                    + extra),
+            ),
+        )
+        .unwrap();
+    }
+
+    /// The authoring edition is the one marked, or the last by `from`,
+    /// and its book directory comes back in one spelling. The spec and
+    /// the working tree answer alone: the release list here is left to
+    /// tags, and the directory is not a repository.
+    #[test]
+    fn the_authoring_book_is_the_marked_editions_or_the_last_ones_from_the_spec_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let book = |id: &str| dir.path().join("book").join(id);
+
+        authoring_fixture(dir.path(), "");
+        assert_eq!(
+            authoring_book(&dir.path().join("book/1"))
+                .unwrap()
+                .as_os_str(),
+            book("3").as_os_str(),
+            "unmarked, the edition with the latest `from`, found from below the spec"
+        );
+
+        authoring_fixture(dir.path(), "authoring = true\n");
+        assert_eq!(
+            authoring_book(dir.path()).unwrap().as_os_str(),
+            book("2").as_os_str(),
+            "the marked edition, its `..` resolved"
+        );
+    }
+
+    #[test]
+    fn an_authoring_book_that_cannot_be_answered_says_why() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = format!("{:#}", authoring_book(dir.path()).unwrap_err());
+        assert!(
+            err.contains(&format!("no {PUBLISH_FILENAME} found"))
+                && err.contains(&dir.path().display().to_string()),
+            "no spec at or above the directory, which is named; got: {err}"
+        );
+
+        fs::write(dir.path().join(PUBLISH_FILENAME), "[schema\n").unwrap();
+        let err = authoring_book(dir.path()).unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<PublishError>(),
+                Some(PublishError::Parse(_))
+            ),
+            "expected the parse's error, got: {err:#}"
+        );
+
+        fs::write(
+            dir.path().join(PUBLISH_FILENAME),
+            "[schema]\nname = \"x\"\nversion = \"0.1.0\"\nlinkml = \"1.7.0\"\n\
+             [files]\nmain = \"schema.yaml\"\n",
+        )
+        .unwrap();
+        let err = authoring_book(dir.path()).unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<EditionsError>(),
+                Some(EditionsError::MissingEditions)
+            ),
+            "expected MissingEditions, got: {err:#}"
+        );
+
+        authoring_fixture(dir.path(), "");
+        fs::remove_file(dir.path().join("book/3/book.toml")).unwrap();
+        match authoring_book(dir.path()).unwrap_err().downcast_ref() {
+            Some(EditionsError::NoAuthoringBook { edition, book }) => assert_eq!(
+                (edition.as_str(), book),
+                ("3", &dir.path().join("book").join("3"))
+            ),
+            other => panic!("expected NoAuthoringBook, got {other:?}"),
+        }
     }
 
     /// A ledger line is trusted with a `remove_dir_all`, so a ledger that

@@ -7560,3 +7560,63 @@ fn generate_merges_single_import() {
         "the root's own class should still render"
     );
 }
+
+/// `mdbook-panschema editions --authoring` prints the authoring edition's
+/// book directory and nothing else, so a script can take its output as a
+/// path. Every command of the binary exits 2 when it cannot run.
+#[test]
+fn mdbook_panschema_prints_the_authoring_book_and_exits_2_when_it_cannot_run() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_mdbook-panschema"))
+            .args(args)
+            .arg(dir.path())
+            .output()
+            .expect("run mdbook-panschema")
+    };
+
+    for args in [
+        &["install"][..],
+        &["editions"][..],
+        &["editions", "--authoring"][..],
+    ] {
+        let out = run(args);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            out.status.code(),
+            COULD_NOT_RUN,
+            "{args:?}; stderr:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("panschema-publish.toml") && !stderr.contains("Usage:"),
+            "{args:?} should fail for want of a publish spec, not on its arguments; \
+             stderr:\n{stderr}"
+        );
+        assert!(out.stdout.is_empty(), "{args:?}: an error prints no path");
+    }
+
+    let book = dir.path().join("book").join("editions").join("2");
+    fs::create_dir_all(&book).expect("book dir");
+    fs::write(book.join("book.toml"), "[book]\n").expect("book.toml");
+    fs::write(
+        dir.path().join("panschema-publish.toml"),
+        publish_toml("x", "0.1.0", "schema.yaml")
+            + "[publishing]\nedge = \"main\"\noutput_dir = \"site/schema\"\n\
+               [editions]\noutput_dir = \"site\"\n\
+               [[editions.edition]]\nid = \"1\"\nbook = \"book/editions/1\"\nfrom = \"v0.1.0\"\n\
+               [[editions.edition]]\nid = \"2\"\nbook = \"book/editions/2\"\nfrom = \"v0.3.0\"\n",
+    )
+    .expect("spec");
+    let out = run(&["editions", "--authoring"]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(out.stdout).expect("utf-8 path"),
+        format!("{}\n", book.display()),
+        "stdout is the path alone, in the platform's spelling"
+    );
+}

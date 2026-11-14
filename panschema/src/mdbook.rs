@@ -150,13 +150,7 @@ pub enum InstallReport {
 /// `[book_link]`, and install accordingly. Errors when no publish spec is
 /// found or it fails to parse.
 pub fn run(book_dir: &Path) -> anyhow::Result<InstallReport> {
-    let publish_path = find_publish_toml(book_dir).with_context(|| {
-        format!(
-            "no {PUBLISH_FILENAME} found at or above {}",
-            book_dir.display()
-        )
-    })?;
-    let config = PublishConfig::from_path(&publish_path)?;
+    let (_, config) = read_publish_spec(book_dir)?;
 
     match config.book_link {
         None => Ok(InstallReport::NoBookLink),
@@ -165,6 +159,18 @@ pub fn run(book_dir: &Path) -> anyhow::Result<InstallReport> {
             InstallOutcome::Disabled => InstallReport::Disabled,
         }),
     }
+}
+
+/// The publish spec at or above `dir`, with the directory holding it.
+pub(crate) fn read_publish_spec(dir: &Path) -> anyhow::Result<(PathBuf, PublishConfig)> {
+    let spec = find_publish_toml(dir)
+        .with_context(|| format!("no {PUBLISH_FILENAME} found at or above {}", dir.display()))?;
+    let cfg =
+        PublishConfig::from_path(&spec).with_context(|| format!("reading {}", spec.display()))?;
+    let spec_dir = spec
+        .parent()
+        .context("the publish spec has no parent directory")?;
+    Ok((spec_dir.to_path_buf(), cfg))
 }
 
 /// Locate `panschema-publish.toml` by walking up from `start` (the book

@@ -444,11 +444,13 @@ output_dir = "site"          # the site root; editions land in site/book/
 
 [[editions.edition]]
 id = "1"                     # served at site/book/1/
+name = "First edition"       # what the switcher shows; the id when absent
 book = "book/editions/1"     # the directory holding book.toml
 from = "v0.1.0"              # the first release it covers
 
 [[editions.edition]]
 id = "2"
+name = "Second edition"
 book = "book/editions/2"
 from = "v0.3.0"
 ```
@@ -456,6 +458,14 @@ from = "v0.3.0"
 `from` is the first release an edition covers, and the next edition's `from` closes it, so every release belongs to exactly one edition. Here `v0.1.0` through the last `v0.2.z` belong to edition `1`, and `v0.3.0` onward, with `main`, to edition `2`. A pre-release belongs with the release it precedes (`v0.3.0-rc.1` to edition `2`). A release older than the first edition's `from` is refused, so start the first edition at or before the oldest release you publish.
 
 To start a new edition, add a book directory and an `[[editions.edition]]` whose `from` is the next release. Until that release is tagged the edition is unreleased: it is published at `book/<id>/` from its first build and marked in the switcher, and its URL does not move when the tag is cut. Only the last edition may be unreleased. (A rewrite that changes only the prose still starts at a release, since the spans divide up the releases.)
+
+New chapters and listings go into one edition, the authoring edition: the one marked `authoring = true`, or the last when none is marked. `mdbook-panschema editions --authoring` prints that edition's book directory as an absolute path and builds nothing, so a script finds the book without parsing the spec:
+
+```bash
+mdbook serve "$(mdbook-panschema editions --authoring)"
+```
+
+It reads only `panschema-publish.toml` and the working tree (no tag is read), and exits 2 when the spec is missing, does not parse, or has no `[editions]`, or when the directory holds no `book.toml`.
 
 Every edition builds from `[publishing].edge`, not from a tag. A fix to an old edition is an ordinary commit on `main`, and the next run republishes that edition for every release in its span.
 
